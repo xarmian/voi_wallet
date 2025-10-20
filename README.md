@@ -1,3 +1,5 @@
+![Voi Wallet Logo](assets/voi_wallet_logo_crop.png)
+
 # Voi Wallet
 
 A production-ready mobile wallet for the Voi Network and Algorand blockchain ecosystem. Built with React Native, Expo, and TypeScript.
