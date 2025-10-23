@@ -21,6 +21,7 @@ import algosdk from 'algosdk';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { getFromClipboard } from '@/utils/clipboard';
 
 interface Props {
   onClose: () => void;
@@ -262,6 +263,60 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     );
   };
 
+  const handlePasteUri = async () => {
+    if (scanned || isProcessing) {
+      return;
+    }
+
+    setScanned(true);
+    setIsProcessing(true);
+
+    try {
+      const clipboardText = await getFromClipboard();
+      const rawValue = clipboardText.trim();
+
+      if (!rawValue) {
+        Alert.alert(
+          'Clipboard Empty',
+          'No text found in clipboard. Please copy a WalletConnect URI, payment request, or address and try again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setScanned(false);
+                setIsProcessing(false);
+              },
+            },
+          ]
+        );
+        return;
+      }
+
+      // Process the pasted URI through the same logic as scanned QR codes
+      await handleBarCodeScanned({ type: 'qr', data: rawValue });
+    } catch (error) {
+      let errorMessage = 'Failed to process clipboard content. Please try again.';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+
+      Alert.alert(
+        'Paste Error',
+        errorMessage,
+        [
+          {
+            text: 'Try Again',
+            onPress: () => {
+              setScanned(false);
+              setIsProcessing(false);
+            },
+          },
+          { text: 'Cancel', onPress: onClose },
+        ]
+      );
+    }
+  };
+
   const renderOverlay = () => (
     <View style={styles.overlay}>
       <View style={styles.header}>
@@ -288,6 +343,33 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         <Text style={styles.supportedFormats}>
           Supports WalletConnect and Voi/Algorand/Pera payment requests
         </Text>
+      </View>
+
+      <View style={styles.bottomSection}>
+        <TouchableOpacity
+          style={[
+            styles.pasteButton,
+            (scanned || isProcessing) && styles.pasteButtonDisabled,
+          ]}
+          onPress={handlePasteUri}
+          disabled={scanned || isProcessing}
+        >
+          <Ionicons
+            name="clipboard-outline"
+            size={20}
+            color={
+              scanned || isProcessing ? theme.colors.textMuted : '#FFFFFF'
+            }
+          />
+          <Text
+            style={[
+              styles.pasteButtonText,
+              (scanned || isProcessing) && styles.pasteButtonTextDisabled,
+            ]}
+          >
+            Paste URI from Clipboard
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {scanned && (
@@ -428,7 +510,7 @@ const createStyles = (theme: Theme) =>
     },
     instructions: {
       paddingHorizontal: 40,
-      paddingBottom: 60,
+      paddingBottom: 20,
       alignItems: 'center',
     },
     instructionText: {
@@ -441,6 +523,35 @@ const createStyles = (theme: Theme) =>
       fontSize: 12,
       color: '#CCCCCC',
       textAlign: 'center',
+    },
+    bottomSection: {
+      paddingHorizontal: 40,
+      paddingBottom: 60,
+      alignItems: 'center',
+    },
+    pasteButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(255, 255, 255, 0.15)',
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.3)',
+      gap: 8,
+    },
+    pasteButtonDisabled: {
+      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    pasteButtonText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: '#FFFFFF',
+    },
+    pasteButtonTextDisabled: {
+      color: theme.colors.textMuted,
     },
     processingContainer: {
       position: 'absolute',
