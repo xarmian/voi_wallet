@@ -97,6 +97,7 @@ export default function SendScreen() {
 
   const [recipientInput, setRecipientInput] = useState('');
   const [recipientAddress, setRecipientAddress] = useState('');
+  const [recipientInputFocused, setRecipientInputFocused] = useState(false);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [estimatedFee, setEstimatedFee] = useState<number>(0);
@@ -672,6 +673,14 @@ export default function SendScreen() {
 
       const input = recipientInput.trim();
 
+      // Skip resolution if we already have a valid address that matches the input
+      if (recipientAddress && algosdk.isValidAddress(recipientAddress)) {
+        // If the input matches the resolved address or resolved name, don't re-resolve
+        if (input === recipientAddress || (resolvedName && input === resolvedName)) {
+          return;
+        }
+      }
+
       try {
         setIsResolvingName(true);
         setNameResolutionError(null);
@@ -712,7 +721,7 @@ export default function SendScreen() {
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [recipientInput]);
+  }, [recipientInput, recipientAddress, resolvedName]);
 
   useEffect(() => {
     const trimmed = recipientInput.trim();
@@ -1305,6 +1314,8 @@ export default function SendScreen() {
                   placeholderTextColor={themeColors.placeholder}
                   value={recipientInput}
                   onChangeText={setRecipientInput}
+                  onFocus={() => setRecipientInputFocused(true)}
+                  onBlur={() => setRecipientInputFocused(false)}
                   autoCapitalize="none"
                   autoCorrect={false}
                   editable={!isSending}
@@ -1348,7 +1359,7 @@ export default function SendScreen() {
                   </Text>
                 </View>
               )}
-              {nameResolutionError && (
+              {nameResolutionError && !recipientInputFocused && (
                 <Text style={styles.errorText}>{nameResolutionError}</Text>
               )}
               {isEnvoiEnabled && resolvedName && recipientAddress && (
