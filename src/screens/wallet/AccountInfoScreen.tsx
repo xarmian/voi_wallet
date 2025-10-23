@@ -43,6 +43,9 @@ interface AssetDistribution {
   legendFontColor: string;
   legendFontSize: number;
   networkBadge?: string; // Optional network indicator for unmapped assets
+  percentage: number; // Percentage of total portfolio
+  assetSymbol: string; // Symbol for display in detailed list
+  imageUrl?: string; // Asset image URL for detailed list
 }
 
 interface NetworkStats {
@@ -243,7 +246,18 @@ export default function AccountInfoScreen() {
     const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'];
     let colorIndex = 0;
 
-    // Add assets from multi-network balance
+    // Calculate total portfolio value first
+    let totalValue = 0;
+    if (multiNetworkBalance.assets) {
+      multiNetworkBalance.assets.forEach((asset) => {
+        const assetValue = calculateAssetValue(asset);
+        if (assetValue >= 0.01) { // Filter dust
+          totalValue += assetValue;
+        }
+      });
+    }
+
+    // Add assets from multi-network balance with percentages
     if (multiNetworkBalance.assets) {
       multiNetworkBalance.assets.forEach((asset) => {
         const assetValue = calculateAssetValue(asset);
@@ -253,20 +267,28 @@ export default function AccountInfoScreen() {
             ? asset.sourceBalances[0].networkId === NetworkId.VOI_MAINNET ? 'VOI' : 'ALGO'
             : undefined;
 
+          const percentage = totalValue > 0 ? (assetValue / totalValue) * 100 : 0;
+          const assetSymbol = asset.symbol || asset.name || `Asset ${asset.assetId}`;
+          const displayName = `${assetSymbol} (${percentage.toFixed(1)}%)`;
+
           data.push({
-            name: asset.symbol || asset.name || `Asset ${asset.assetId}`,
+            name: displayName,
             population: Math.round(assetValue * 100) / 100,
             color: colors[colorIndex % colors.length],
             legendFontColor: styles.chartText.color,
-            legendFontSize: 12,
+            legendFontSize: 11,
             networkBadge,
+            percentage,
+            assetSymbol,
+            imageUrl: asset.sourceBalances[0]?.balance?.imageUrl,
           });
           colorIndex++;
         }
       });
     }
 
-    return data;
+    // Sort by value descending
+    return data.sort((a, b) => b.population - a.population);
   }, [multiNetworkBalance, calculateAssetValue, styles.chartText.color]);
 
   const getTotalUsdValue = useCallback((): string => {
@@ -491,6 +513,7 @@ export default function AccountInfoScreen() {
         {/* Account Profile */}
         <EnvoiProfileCard
           address={displayAddress}
+          name={displayEnvoiInfo?.name}
           envoiProfile={displayEnvoiInfo}
           isLoading={displayEnvoiLoading}
           title={isOwnAccount ? "Account Information" : "User Profile"}
@@ -637,7 +660,7 @@ export default function AccountInfoScreen() {
         {assetDistribution.length > 0 && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Asset Distribution</Text>
-            <View style={styles.chartContainer}>
+            <View style={styles.pieChartWrapper}>
               <PieChart
                 data={assetDistribution}
                 width={screenWidth - 60}
@@ -647,14 +670,32 @@ export default function AccountInfoScreen() {
                   backgroundGradientFrom: 'transparent',
                   backgroundGradientTo: 'transparent',
                   color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-                  labelColor: (opacity = 1) => styles.chartText.color,
                 }}
                 accessor="population"
                 backgroundColor="transparent"
                 paddingLeft="15"
+                hasLegend={false}
                 absolute
               />
             </View>
+            <ScrollView
+              style={styles.legendScrollContainer}
+              nestedScrollEnabled={true}
+            >
+              <View style={styles.legendContainer}>
+                {assetDistribution.map((asset, index) => (
+                  <View key={index} style={styles.legendItem}>
+                    <View style={[styles.legendColor, { backgroundColor: asset.color }]} />
+                    <Text style={styles.legendText} numberOfLines={2}>
+                      {asset.name}
+                    </Text>
+                    <Text style={styles.legendValue}>
+                      {formatCurrency(asset.population)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
           </View>
         )}
       </ScrollView>
@@ -787,9 +828,39 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textMuted,
       lineHeight: 20,
     },
-    chartContainer: {
+    pieChartWrapper: {
       alignItems: 'center',
       marginTop: theme.spacing.sm,
+      marginBottom: theme.spacing.md,
+    },
+    legendScrollContainer: {
+      maxHeight: 300,
+    },
+    legendContainer: {
+      paddingVertical: theme.spacing.sm,
+    },
+    legendItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.xs,
+    },
+    legendColor: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      marginRight: theme.spacing.sm,
+    },
+    legendText: {
+      flex: 1,
+      fontSize: 13,
+      color: theme.colors.text,
+      marginRight: theme.spacing.sm,
+    },
+    legendValue: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.text,
     },
     chartText: {
       color: theme.colors.text,
