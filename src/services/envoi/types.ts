@@ -4,6 +4,7 @@ export interface EnvoiNameInfo {
   name: string;
   address: string;
   avatar?: string;
+  bio?: string;
   socialLinks?: Record<string, string>;
 }
 

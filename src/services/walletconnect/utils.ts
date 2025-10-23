@@ -463,39 +463,48 @@ export function getNetworkCurrencyByChainId(chainId: string): string {
 }
 
 /**
- * Extract requested chains from session proposal
+ * Extract requested chains from session proposal and filter to only supported chains
+ * This allows us to connect to dApps that request multiple chains, including some we don't support
  */
 export function detectRequestedChains(proposal: SessionProposal): string[] {
   const chains = new Set<string>();
-
-  // Get chains from required namespaces
-  if (proposal.requiredNamespaces) {
-    Object.values(proposal.requiredNamespaces).forEach((namespace) => {
-      if (namespace.chains) {
-        namespace.chains.forEach((chain: string) => chains.add(chain));
-      }
-    });
-  }
-
-  // Get chains from optional namespaces
-  if (proposal.optionalNamespaces) {
-    Object.values(proposal.optionalNamespaces).forEach((namespace) => {
-      if (namespace.chains) {
-        namespace.chains.forEach((chain: string) => chains.add(chain));
-      }
-    });
-  }
-
-  // Filter to only supported chains
   const supportedChains = [
     VOI_CHAIN_DATA.chainId,
     ALGORAND_MAINNET_CHAIN_DATA.chainId,
   ];
-  return Array.from(chains).filter((chain) => supportedChains.includes(chain));
+
+  // Get chains from required namespaces (only add if supported)
+  if (proposal.requiredNamespaces) {
+    Object.values(proposal.requiredNamespaces).forEach((namespace) => {
+      if (namespace.chains) {
+        namespace.chains.forEach((chain: string) => {
+          if (supportedChains.includes(chain)) {
+            chains.add(chain);
+          }
+        });
+      }
+    });
+  }
+
+  // Get chains from optional namespaces (only add if supported)
+  if (proposal.optionalNamespaces) {
+    Object.values(proposal.optionalNamespaces).forEach((namespace) => {
+      if (namespace.chains) {
+        namespace.chains.forEach((chain: string) => {
+          if (supportedChains.includes(chain)) {
+            chains.add(chain);
+          }
+        });
+      }
+    });
+  }
+
+  return Array.from(chains);
 }
 
 /**
- * Check if we support all required chains in a proposal
+ * Check if we support at least one required chain in a proposal
+ * Returns true if there is at least one supported chain, false if none are supported
  */
 export function areRequiredChainsSupported(proposal: SessionProposal): boolean {
   const supportedChains = [
@@ -503,19 +512,33 @@ export function areRequiredChainsSupported(proposal: SessionProposal): boolean {
     ALGORAND_MAINNET_CHAIN_DATA.chainId,
   ];
 
-  if (proposal.requiredNamespaces) {
-    for (const namespace of Object.values(proposal.requiredNamespaces)) {
-      if (namespace.chains) {
-        for (const chain of namespace.chains) {
-          if (!supportedChains.includes(chain)) {
-            return false;
-          }
-        }
+  // If no required namespaces, we can support it
+  if (!proposal.requiredNamespaces) {
+    return true;
+  }
+
+  // Check if there is at least one supported chain in required namespaces
+  let hasAtLeastOneChain = false;
+  for (const namespace of Object.values(proposal.requiredNamespaces)) {
+    if (namespace.chains && namespace.chains.length > 0) {
+      hasAtLeastOneChain = true;
+      // Check if we support at least one chain from this namespace
+      const hasSupportedChain = namespace.chains.some((chain: string) =>
+        supportedChains.includes(chain)
+      );
+      if (hasSupportedChain) {
+        return true;
       }
     }
   }
 
-  return true;
+  // If no chains were specified in required namespaces, we can support it
+  if (!hasAtLeastOneChain) {
+    return true;
+  }
+
+  // We have required chains but none of them are supported
+  return false;
 }
 
 /**

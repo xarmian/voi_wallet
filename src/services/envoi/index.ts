@@ -162,6 +162,7 @@ export class EnvoiService {
             name: entry.name || '',
             address: entry.address || address,
             avatar: entry.metadata?.avatar,
+            bio: entry.metadata?.bio,
             socialLinks: entry.metadata,
           };
         }
@@ -293,6 +294,7 @@ export class EnvoiService {
         name: entry.name || '',
         address: entry.address || address,
         avatar: entry.metadata?.avatar,
+        bio: entry.metadata?.bio,
         socialLinks: entry.metadata,
       };
 
@@ -406,6 +408,7 @@ export class EnvoiService {
         name: entry.name || normalizedName,
         address: entry.address || '',
         avatar: entry.metadata?.avatar,
+        bio: entry.metadata?.bio,
         socialLinks: entry.metadata,
       };
 

@@ -1,5 +1,5 @@
 import { SignClientTypes, SessionTypes } from '@walletconnect/types';
-import { getSdkError } from '@walletconnect/utils';
+import { getSdkError, buildApprovedNamespaces } from '@walletconnect/utils';
 import { EventEmitter } from 'events';
 import algosdk from 'algosdk';
 
@@ -224,11 +224,6 @@ export class WalletConnectService extends EventEmitter {
     selectedAccounts?: AccountMetadata[]
   ): Promise<void> {
     try {
-      // Check if we support all required chains
-      if (!areRequiredChainsSupported(proposal)) {
-        throw new Error('Unsupported blockchain networks in session proposal');
-      }
-
       const provider = this.client.getProvider();
       const signClient = provider.client;
 
@@ -242,18 +237,31 @@ export class WalletConnectService extends EventEmitter {
         throw new Error('No signable accounts available');
       }
 
-      // Detect which chains are being requested
-      const requestedChains = detectRequestedChains(proposal);
+      // Get ALL requested chains from the proposal (not just supported ones)
+      // We need to include all of them to satisfy WalletConnect validation
+      const allRequestedChains = new Set<string>();
 
-      // If no specific chains detected, default to all supported chains
-      const chainsToSupport =
-        requestedChains.length > 0
-          ? requestedChains
-          : [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
+      if (proposal.requiredNamespaces?.algorand?.chains) {
+        proposal.requiredNamespaces.algorand.chains.forEach((chain: string) =>
+          allRequestedChains.add(chain)
+        );
+      }
 
-      // Format accounts for all requested chains
+      if (proposal.optionalNamespaces?.algorand?.chains) {
+        proposal.optionalNamespaces.algorand.chains.forEach((chain: string) =>
+          allRequestedChains.add(chain)
+        );
+      }
+
+      // If no chains specified, use our defaults
+      const chainsToInclude = allRequestedChains.size > 0
+        ? Array.from(allRequestedChains)
+        : [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
+
+      // Format accounts for ALL requested chains (even ones we don't recognize)
+      // The dApp will only actually use the chains it needs
       const formattedAccounts: string[] = [];
-      for (const chainId of chainsToSupport) {
+      for (const chainId of chainsToInclude) {
         for (const account of accounts) {
           formattedAccounts.push(
             formatAccountAddress(chainId, account.address)
@@ -261,17 +269,35 @@ export class WalletConnectService extends EventEmitter {
         }
       }
 
-      const namespaces = {
+      // Build supported namespaces - include ALL requested chains
+      // This satisfies WalletConnect validation while letting us handle only what we recognize
+      const supportedNamespaces = {
         algorand: {
-          ...DEFAULT_NAMESPACES.algorand,
+          chains: chainsToInclude,
+          methods: DEFAULT_NAMESPACES.algorand.methods,
+          events: DEFAULT_NAMESPACES.algorand.events,
           accounts: formattedAccounts,
-          chains: chainsToSupport,
         },
       };
 
+      console.log('[WalletConnect] Proposal namespaces:', {
+        required: proposal.requiredNamespaces,
+        optional: proposal.optionalNamespaces,
+      });
+      console.log('[WalletConnect] Our supported namespaces:', supportedNamespaces);
+
+      // Use WalletConnect's buildApprovedNamespaces utility
+      // This handles all the complex validation logic for us
+      const approvedNamespaces = buildApprovedNamespaces({
+        proposal: proposal as any, // Type conversion needed for SDK types
+        supportedNamespaces,
+      });
+
+      console.log('[WalletConnect] Approved namespaces built:', approvedNamespaces);
+
       const session = await signClient.approve({
         id: proposal.id,
-        namespaces,
+        namespaces: approvedNamespaces,
       });
 
       // Get the complete session data from the client after approval

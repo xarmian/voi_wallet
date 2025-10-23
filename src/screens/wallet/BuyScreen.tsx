@@ -9,29 +9,17 @@ import { View, Text, StyleSheet, Alert, Linking, Platform, RefreshControl } from
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ThemedWebView, { ThemedWebViewRef } from '@/components/common/ThemedWebView';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import type { CompositeNavigationProp } from '@react-navigation/native';
-import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useWalletStore, useActiveAccount } from '@/store/walletStore';
-import type {
-  MainTabParamList,
-  RootStackParamList,
-} from '@/navigation/AppNavigator';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import { useTheme } from '@/contexts/ThemeContext';
 
-type BuyScreenNavigationProp = CompositeNavigationProp<
-  BottomTabNavigationProp<MainTabParamList, 'Buy'>,
-  StackNavigationProp<RootStackParamList>
->;
-
-type BuyScreenRouteProp = RouteProp<MainTabParamList, 'Buy'>;
-
 export default function BuyScreen() {
-  const navigation = useNavigation<BuyScreenNavigationProp>();
-  const route = useRoute<BuyScreenRouteProp>();
+  const navigation = useNavigation();
+  const route = useRoute();
+  const reloadTimestamp =
+    (route.params as { reload?: number } | undefined)?.reload;
   const wallet = useWalletStore((state) => state.wallet);
   const activeAccount = useActiveAccount();
   const webViewRef = useRef<ThemedWebViewRef>(null);
@@ -110,12 +98,12 @@ export default function BuyScreen() {
 
   // Handle reload when tab is pressed while already on Buy page
   useEffect(() => {
-    if (route.params?.reload && webViewRef.current && iBuyVoiUrl) {
+    if (reloadTimestamp && webViewRef.current && iBuyVoiUrl) {
       console.log('[BuyScreen] Tab reload triggered');
       webViewRef.current.resetLoadingState();
       webViewRef.current.injectJavaScript(`window.location.href = '${iBuyVoiUrl}';`);
     }
-  }, [route.params?.reload, iBuyVoiUrl]);
+  }, [reloadTimestamp, iBuyVoiUrl]);
 
   // Handle reload when active account changes after account selection
   useEffect(() => {

@@ -32,6 +32,7 @@ import { NetworkService } from '@/services/network';
 import { MimirApiService } from '@/services/mimir';
 import { NetworkId } from '@/types/network';
 import { MappedAsset } from '@/services/token-mapping/types';
+import EnvoiService from '@/services/envoi';
 
 type AccountInfoScreenRouteProp = RouteProp<WalletStackParamList, 'AccountInfo'>;
 
@@ -65,15 +66,57 @@ export default function AccountInfoScreen() {
   const styles = useThemedStyles(createStyles);
 
   const activeAccount = useActiveAccount();
+
+  // Use route param address if provided, otherwise use active account
+  const routeParams = route.params as { address?: string } | undefined;
+  const displayAddress = routeParams?.address || activeAccount?.address;
+  const isOwnAccount = !routeParams?.address || routeParams.address === activeAccount?.address;
   const {
     balance: multiNetworkBalance,
     isLoading: isMultiNetworkBalanceLoading,
   } = useMultiNetworkBalance(activeAccount?.id || '');
+
+  // For viewing other accounts, we need to fetch their Envoi name separately
   const {
     nameInfo: envoiNameInfo,
     isLoading: isEnvoiLoading,
     reload: reloadEnvoiName,
   } = useAccountEnvoiName(activeAccount?.id || '');
+
+  const [otherAccountEnvoiInfo, setOtherAccountEnvoiInfo] = useState<any>(null);
+  const [isLoadingOtherAccountEnvoi, setIsLoadingOtherAccountEnvoi] = useState(false);
+
+  // Load Envoi info for other accounts
+  useEffect(() => {
+    if (!isOwnAccount && displayAddress) {
+      const loadOtherAccountEnvoi = async () => {
+        setIsLoadingOtherAccountEnvoi(true);
+        try {
+          const envoiService = EnvoiService.getInstance();
+          // Temporarily enable Envoi service for profile lookups (Envoi is Voi-specific)
+          const wasEnabled = envoiService.isServiceEnabled();
+          envoiService.setEnabled(true);
+
+          const info = await envoiService.getName(displayAddress);
+          console.log('Loaded Envoi info for other account:', info);
+          setOtherAccountEnvoiInfo(info);
+
+          // Restore previous state
+          envoiService.setEnabled(wasEnabled);
+        } catch (error) {
+          console.error('Failed to load Envoi info for other account:', error);
+        } finally {
+          setIsLoadingOtherAccountEnvoi(false);
+        }
+      };
+      loadOtherAccountEnvoi();
+    } else {
+      setOtherAccountEnvoiInfo(null);
+    }
+  }, [isOwnAccount, displayAddress]);
+
+  const displayEnvoiInfo = isOwnAccount ? envoiNameInfo : otherAccountEnvoiInfo;
+  const displayEnvoiLoading = isOwnAccount ? isEnvoiLoading : isLoadingOtherAccountEnvoi;
 
   const loadMultiNetworkBalance = useWalletStore(
     (state) => state.loadMultiNetworkBalance
@@ -128,7 +171,7 @@ export default function AccountInfoScreen() {
   }, []);
 
   const loadAccountInfo = useCallback(async () => {
-    if (!activeAccount) return;
+    if (!displayAddress) return;
 
     setIsLoadingAccountInfo(true);
 
@@ -136,13 +179,13 @@ export default function AccountInfoScreen() {
     const loadVoi = async () => {
       try {
         const voiService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
-        const info = await voiService.getAccountInfo(activeAccount.address);
+        const info = await voiService.getAccountInfo(displayAddress);
         setVoiAccountInfo(info);
       } catch (error) {
         console.error('Failed to load Voi account info:', error);
         if (error instanceof Error && error.message && error.message.includes('account does not exist')) {
           setVoiAccountInfo({
-            address: activeAccount.address,
+            address: displayAddress,
             amount: 0,
             status: 'Offline',
             round: null
@@ -154,13 +197,13 @@ export default function AccountInfoScreen() {
     const loadAlgo = async () => {
       try {
         const algoService = NetworkService.getInstance(NetworkId.ALGORAND_MAINNET);
-        const info = await algoService.getAccountInfo(activeAccount.address);
+        const info = await algoService.getAccountInfo(displayAddress);
         setAlgoAccountInfo(info);
       } catch (error) {
         console.error('Failed to load Algorand account info:', error);
         if (error instanceof Error && error.message && error.message.includes('account does not exist')) {
           setAlgoAccountInfo({
-            address: activeAccount.address,
+            address: displayAddress,
             amount: 0,
             status: 'Offline',
             round: null
@@ -171,7 +214,7 @@ export default function AccountInfoScreen() {
 
     await Promise.allSettled([loadVoi(), loadAlgo()]);
     setIsLoadingAccountInfo(false);
-  }, [activeAccount]);
+  }, [displayAddress]);
 
   // Calculate total USD value for a mapped asset
   const calculateAssetValue = useCallback((asset: MappedAsset): number => {
@@ -312,15 +355,19 @@ export default function AccountInfoScreen() {
   }, [multiNetworkBalance]);
 
   const copyAddressToClipboard = async () => {
-    if (activeAccount) {
+    if (displayAddress) {
       try {
-        await Clipboard.setStringAsync(activeAccount.address);
+        await Clipboard.setStringAsync(displayAddress);
         Alert.alert('Copied', 'Address copied to clipboard');
       } catch (error) {
         console.error('Failed to copy address:', error);
         Alert.alert('Error', 'Failed to copy address');
       }
     }
+  };
+
+  const navigateToMyAccount = () => {
+    navigation.navigate('AccountInfo' as any, {});
   };
 
   const getConsensusStatus = (accountInfo: any) => {
@@ -363,25 +410,31 @@ export default function AccountInfoScreen() {
   };
 
   const onRefresh = async () => {
-    if (!activeAccount) return;
+    if (!displayAddress) return;
 
     setRefreshing(true);
-    await Promise.allSettled([
-      loadMultiNetworkBalance(activeAccount.id, true),
-      reloadEnvoiName(),
-      loadAccountInfo(),
-    ]);
+    if (isOwnAccount && activeAccount) {
+      await Promise.allSettled([
+        loadMultiNetworkBalance(activeAccount.id, true),
+        reloadEnvoiName(),
+        loadAccountInfo(),
+      ]);
+    } else {
+      await loadAccountInfo();
+    }
     setRefreshing(false);
   };
 
   useEffect(() => {
-    if (activeAccount) {
-      reloadEnvoiName();
+    if (displayAddress) {
       loadAccountInfo();
-      calculateAndSetAccountAge(activeAccount.address);
-      loadMultiNetworkBalance(activeAccount.id);
+      calculateAndSetAccountAge(displayAddress);
+      if (isOwnAccount && activeAccount) {
+        reloadEnvoiName();
+        loadMultiNetworkBalance(activeAccount.id);
+      }
     }
-  }, [activeAccount, loadAccountInfo, calculateAndSetAccountAge, reloadEnvoiName, loadMultiNetworkBalance]);
+  }, [displayAddress, isOwnAccount, activeAccount, loadAccountInfo, calculateAndSetAccountAge, reloadEnvoiName, loadMultiNetworkBalance]);
 
   const assetDistribution = generateAssetDistribution();
   const totalValue = getTotalUsdValue();
@@ -390,7 +443,7 @@ export default function AccountInfoScreen() {
   const networksActive = multiNetworkBalance?.sourceNetworks.length || 0;
   const totalMinBalance = multiNetworkBalance?.minBalance || 0n;
 
-  if (!activeAccount) {
+  if (!displayAddress) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
@@ -401,7 +454,7 @@ export default function AccountInfoScreen() {
           <View style={styles.headerSpacer} />
         </View>
         <View style={styles.loadingContainer}>
-          <Text style={styles.errorText}>No active account found</Text>
+          <Text style={styles.errorText}>No account found</Text>
         </View>
       </SafeAreaView>
     );
@@ -413,8 +466,19 @@ export default function AccountInfoScreen() {
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Account Information</Text>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.headerTitle}>
+          {isOwnAccount ? 'Account Information' : 'User Profile'}
+        </Text>
+        {isOwnAccount ? (
+          <View style={styles.headerSpacer} />
+        ) : (
+          <TouchableOpacity
+            style={styles.searchButton}
+            onPress={navigateToMyAccount}
+          >
+            <Ionicons name="person" size={24} color={styles.headerText.color} />
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView
@@ -426,10 +490,10 @@ export default function AccountInfoScreen() {
       >
         {/* Account Profile */}
         <EnvoiProfileCard
-          address={activeAccount.address}
-          envoiProfile={envoiNameInfo}
-          isLoading={isEnvoiLoading}
-          title="Account Information"
+          address={displayAddress}
+          envoiProfile={displayEnvoiInfo}
+          isLoading={displayEnvoiLoading}
+          title={isOwnAccount ? "Account Information" : "User Profile"}
           showVerifiedBadge={false}
         />
 
@@ -779,6 +843,10 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.surface,
     },
     backButton: {
+      padding: theme.spacing.xs,
+      borderRadius: theme.borderRadius.sm,
+    },
+    searchButton: {
       padding: theme.spacing.xs,
       borderRadius: theme.borderRadius.sm,
     },

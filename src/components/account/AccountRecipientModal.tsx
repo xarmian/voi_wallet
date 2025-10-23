@@ -3,22 +3,33 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   TextInput,
+  Image,
+  ListRenderItem,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
+import {
+  useThemedStyles,
+  useThemeColors,
+  useThemeSpacing,
+} from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import BottomSheet, {
   BottomSheetBackdrop,
-  BottomSheetView,
+  BottomSheetFlatList,
 } from '@gorhom/bottom-sheet';
 import { BottomSheetDefaultBackdropProps } from '@gorhom/bottom-sheet/lib/typescript/components/bottomSheetBackdrop/types';
 import { useAccounts, useActiveAccount } from '@/store/walletStore';
 import { AccountMetadata } from '@/types/wallet';
 import AccountAvatar from './AccountAvatar';
 import { formatAddress } from '@/utils/address';
+import { useSortedFriends, useFriendsStore } from '@/store/friendsStore';
+import { Friend } from '@/types/social';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+type TabType = 'accounts' | 'friends';
 
 interface AccountRecipientModalProps {
   isVisible: boolean;
@@ -36,11 +47,32 @@ export default function AccountRecipientModal({
   const bottomSheetRef = useRef<BottomSheet>(null);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
+  const friends = useSortedFriends();
+  const friendsStore = useFriendsStore();
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const { sm: spacingSm, lg: spacingLg } = useThemeSpacing();
 
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [activeTab, setActiveTab] = React.useState<TabType>('accounts');
 
-  // Snap points for the bottom sheet
-  const snapPoints = useMemo(() => ['60%'], []);
+  // Initialize friends store on mount
+  React.useEffect(() => {
+    if (!friendsStore.isInitialized) {
+      friendsStore.initialize();
+    }
+  }, [friendsStore.isInitialized]);
+
+  // Fixed height for the bottom sheet ~80% of viewport
+  const modalHeight = useMemo(() => Math.round(windowHeight * 0.8), [windowHeight]);
+  const snapPoints = useMemo(() => [modalHeight], [modalHeight]);
+
+  const topInset = insets.top + spacingSm;
+
+  const listContentStyle = useMemo(
+    () => [styles.listContent, { paddingBottom: spacingLg + insets.bottom }],
+    [styles.listContent, spacingLg, insets.bottom]
+  );
 
   // Filter accounts to exclude the active account and apply search
   const filteredAccounts = useMemo(() => {
@@ -58,12 +90,27 @@ export default function AccountRecipientModal({
     );
   }, [accounts, activeAccount?.id, searchQuery]);
 
+  // Filter friends by search query
+  const filteredFriends = useMemo(() => {
+    if (!searchQuery.trim()) return friends;
+
+    const lowerQuery = searchQuery.toLowerCase();
+    return friends.filter(
+      (friend) =>
+        friend.envoiName.toLowerCase().includes(lowerQuery) ||
+        friend.address.toLowerCase().includes(lowerQuery) ||
+        friend.bio?.toLowerCase().includes(lowerQuery) ||
+        friend.notes?.toLowerCase().includes(lowerQuery)
+    );
+  }, [friends, searchQuery]);
+
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
       if (index === -1) {
         onClose();
         setSearchQuery(''); // Clear search when closing
+        setActiveTab('accounts'); // Reset to accounts tab when closing
       }
     },
     [onClose]
@@ -87,6 +134,16 @@ export default function AccountRecipientModal({
   const handleAccountSelect = useCallback(
     (account: AccountMetadata) => {
       onAccountSelect(account.address, account.label);
+      onClose();
+      setSearchQuery(''); // Clear search after selection
+    },
+    [onAccountSelect, onClose]
+  );
+
+  // Handle friend selection
+  const handleFriendSelect = useCallback(
+    (friend: Friend) => {
+      onAccountSelect(friend.address, friend.envoiName);
       onClose();
       setSearchQuery(''); // Clear search after selection
     },
@@ -120,6 +177,49 @@ export default function AccountRecipientModal({
     [styles, themeColors, handleAccountSelect]
   );
 
+  // Render friend item
+  const renderFriendItem = useCallback(
+    ({ item }: { item: Friend }) => (
+      <TouchableOpacity
+        style={styles.accountItem}
+        onPress={() => handleFriendSelect(item)}
+        activeOpacity={0.7}
+      >
+        {item.avatar ? (
+          <Image
+            source={{ uri: item.avatar }}
+            style={styles.friendAvatar}
+          />
+        ) : (
+          <View style={styles.friendAvatarFallback}>
+            <Text style={styles.friendAvatarText}>
+              {item.envoiName.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+        )}
+        <View style={styles.accountInfo}>
+          <View style={styles.friendNameRow}>
+            <Text style={styles.accountLabel}>
+              {item.envoiName}
+            </Text>
+            {item.isFavorite && (
+              <Ionicons name="star" size={16} color={themeColors.warning} />
+            )}
+          </View>
+          <Text style={styles.accountAddress}>
+            {formatAddress(item.address)}
+          </Text>
+        </View>
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color={themeColors.textSecondary}
+        />
+      </TouchableOpacity>
+    ),
+    [styles, themeColors, handleFriendSelect]
+  );
+
   // Open/close the bottom sheet based on visibility
   React.useEffect(() => {
     if (isVisible) {
@@ -129,6 +229,19 @@ export default function AccountRecipientModal({
     }
   }, [isVisible]);
 
+  const isAccountsTab = activeTab === 'accounts';
+  const listData = (isAccountsTab
+    ? filteredAccounts
+    : filteredFriends) as Array<AccountMetadata | Friend>;
+
+  const renderListItem = useCallback<ListRenderItem<AccountMetadata | Friend>>(
+    ({ item }) =>
+      isAccountsTab
+        ? renderAccountItem({ item: item as AccountMetadata })
+        : renderFriendItem({ item: item as Friend }),
+    [isAccountsTab, renderAccountItem, renderFriendItem]
+  );
+
   return (
     <BottomSheet
       ref={bottomSheetRef}
@@ -136,114 +249,174 @@ export default function AccountRecipientModal({
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
       backdropComponent={renderBackdrop}
-      enablePanDownToClose
+      enablePanDownToClose={false}
+      enableHandlePanningGesture={false}
+      enableContentPanningGesture={false}
       backgroundStyle={styles.bottomSheetBackground}
       handleIndicatorStyle={styles.bottomSheetIndicator}
+      keyboardBehavior="interactive"
+      keyboardBlurBehavior="restore"
+      android_keyboardInputMode="adjustResize"
+      topInset={topInset}
     >
-      <BottomSheetView style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Select Recipient Account</Text>
-          <TouchableOpacity
-            onPress={onClose}
-            style={styles.closeButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons
-              name="close"
-              size={24}
-              color={themeColors.textSecondary}
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* Search Input */}
-        <View style={styles.searchContainer}>
-          <View style={styles.searchInputContainer}>
-            <Ionicons
-              name="search"
-              size={20}
-              color={themeColors.textSecondary}
-              style={styles.searchIcon}
-            />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search accounts..."
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholderTextColor={themeColors.placeholder}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {searchQuery.length > 0 && (
+      <BottomSheetFlatList<AccountMetadata | Friend>
+        data={listData}
+        renderItem={renderListItem}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={listContentStyle}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        ListHeaderComponent={
+          <View style={styles.listHeader}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Select Recipient</Text>
               <TouchableOpacity
-                onPress={() => setSearchQuery('')}
-                style={styles.clearButton}
+                onPress={onClose}
+                style={styles.closeButton}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
                 <Ionicons
-                  name="close-circle"
-                  size={20}
+                  name="close"
+                  size={24}
                   color={themeColors.textSecondary}
                 />
               </TouchableOpacity>
-            )}
-          </View>
-        </View>
+            </View>
 
-        {/* Account List */}
-        {filteredAccounts.length > 0 ? (
-          <FlatList
-            data={filteredAccounts}
-            renderItem={renderAccountItem}
-            keyExtractor={(item) => item.id}
-            style={styles.accountList}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.accountListContent}
-          />
-        ) : (
+            <View style={styles.tabContainer}>
+              <TouchableOpacity
+                style={[styles.tab, isAccountsTab && styles.tabActive]}
+                onPress={() => setActiveTab('accounts')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="wallet-outline"
+                  size={20}
+                  color={isAccountsTab ? themeColors.primary : themeColors.textSecondary}
+                  style={styles.tabIcon}
+                />
+                <Text
+                  style={[styles.tabText, isAccountsTab && styles.tabTextActive]}
+                >
+                  Accounts
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, !isAccountsTab && styles.tabActive]}
+                onPress={() => setActiveTab('friends')}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="people-outline"
+                  size={20}
+                  color={!isAccountsTab ? themeColors.primary : themeColors.textSecondary}
+                  style={styles.tabIcon}
+                />
+                <Text
+                  style={[styles.tabText, !isAccountsTab && styles.tabTextActive]}
+                >
+                  Friends
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.searchContainer}>
+              <View style={styles.searchInputContainer}>
+                <Ionicons
+                  name="search"
+                  size={20}
+                  color={themeColors.textSecondary}
+                  style={styles.searchIcon}
+                />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholderTextColor={themeColors.placeholder}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => setSearchQuery('')}
+                    style={styles.clearButton}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={20}
+                      color={themeColors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </View>
+        }
+        ListEmptyComponent={
           <View style={styles.emptyState}>
             <Ionicons
-              name="wallet-outline"
+              name={isAccountsTab ? 'wallet-outline' : 'people-outline'}
               size={48}
               color={themeColors.textMuted}
               style={styles.emptyIcon}
             />
             <Text style={styles.emptyTitle}>
-              {searchQuery ? 'No accounts found' : 'No other accounts'}
+              {isAccountsTab
+                ? searchQuery
+                  ? 'No accounts found'
+                  : 'No other accounts'
+                : searchQuery
+                  ? 'No friends found'
+                  : 'No friends yet'}
             </Text>
             <Text style={styles.emptyMessage}>
-              {searchQuery
-                ? 'Try adjusting your search query.'
-                : 'You only have one account in your wallet.'}
+              {isAccountsTab
+                ? searchQuery
+                  ? 'Try adjusting your search query.'
+                  : 'You only have one account in your wallet.'
+                : searchQuery
+                  ? 'Try adjusting your search query.'
+                  : 'Add friends by their Envoi name in the Friends screen.'}
             </Text>
           </View>
-        )}
-      </BottomSheetView>
+        }
+        stickyHeaderIndices={[0]}
+        style={styles.list}
+      />
     </BottomSheet>
   );
 }
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
-    container: {
-      flex: 1,
-      paddingHorizontal: theme.spacing.lg,
-    },
     bottomSheetBackground: {
       backgroundColor: theme.colors.card,
     },
     bottomSheetIndicator: {
       backgroundColor: theme.colors.border,
     },
+    list: {
+      flex: 1,
+    },
+    listContent: {
+      flexGrow: 1,
+      paddingBottom: theme.spacing.lg,
+    },
+    listHeader: {
+      backgroundColor: theme.colors.card,
+      paddingTop: theme.spacing.md,
+      paddingBottom: theme.spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
     header: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      paddingVertical: theme.spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-      marginBottom: theme.spacing.md,
+      paddingHorizontal: theme.spacing.lg,
+      paddingBottom: theme.spacing.md,
     },
     title: {
       fontSize: 18,
@@ -254,7 +427,8 @@ const createStyles = (theme: Theme) =>
       padding: theme.spacing.xs,
     },
     searchContainer: {
-      marginBottom: theme.spacing.md,
+      paddingHorizontal: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
     },
     searchInputContainer: {
       flexDirection: 'row',
@@ -278,12 +452,6 @@ const createStyles = (theme: Theme) =>
     clearButton: {
       marginLeft: theme.spacing.sm,
     },
-    accountList: {
-      flex: 1,
-    },
-    accountListContent: {
-      paddingBottom: theme.spacing.lg,
-    },
     accountItem: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -292,6 +460,7 @@ const createStyles = (theme: Theme) =>
       borderRadius: theme.borderRadius.md,
       marginBottom: theme.spacing.xs,
       backgroundColor: theme.colors.surface,
+      marginHorizontal: theme.spacing.lg,
     },
     accountInfo: {
       flex: 1,
@@ -313,6 +482,7 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       alignItems: 'center',
       paddingVertical: theme.spacing.xl,
+      paddingHorizontal: theme.spacing.lg,
     },
     emptyIcon: {
       marginBottom: theme.spacing.md,
@@ -330,5 +500,58 @@ const createStyles = (theme: Theme) =>
       textAlign: 'center',
       lineHeight: 20,
       maxWidth: 280,
+    },
+    tabContainer: {
+      flexDirection: 'row',
+      paddingHorizontal: theme.spacing.lg,
+      marginBottom: theme.spacing.md,
+    },
+    tab: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: theme.spacing.md,
+      borderBottomWidth: 2,
+      borderBottomColor: 'transparent',
+    },
+    tabActive: {
+      borderBottomColor: theme.colors.primary,
+    },
+    tabIcon: {
+      marginRight: theme.spacing.xs,
+    },
+    tabText: {
+      fontSize: 16,
+      fontWeight: '500',
+      color: theme.colors.textSecondary,
+    },
+    tabTextActive: {
+      color: theme.colors.primary,
+      fontWeight: '600',
+    },
+    friendAvatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      overflow: 'hidden',
+    },
+    friendAvatarFallback: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: theme.colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    friendAvatarText: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: 'white',
+    },
+    friendNameRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs,
     },
   });

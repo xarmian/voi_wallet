@@ -18,6 +18,9 @@ import { RootStackParamList } from '@/navigation/AppNavigator';
 import {
   WalletConnectService,
   SessionProposal,
+  getNetworkNameByChainId,
+  VOI_CHAIN_DATA,
+  ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
 import { WalletConnectV1Client, DEFAULT_CHAIN_ID } from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -171,10 +174,9 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       navigation.goBack();
     } catch (error) {
       console.error('Failed to reject session:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to reject connection'
-      );
+      // If rejection fails (e.g., proposal no longer exists), just navigate back
+      // This can happen if the dApp closed the connection before we rejected
+      navigation.goBack();
     } finally {
       setIsLoading(false);
     }
@@ -213,61 +215,114 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       // v1 has simpler permissions - just show algo_signTxn
       return (
         <View style={styles.permissionsContainer}>
-          <Text style={styles.sectionTitle}>Requested Permissions</Text>
-          <View style={styles.namespaceContainer}>
-            <Text style={styles.namespaceTitle}>ALGORAND (v1)</Text>
-            <View style={styles.permissionItem}>
-              <Ionicons
-                name="construct"
-                size={16}
-                color={theme.colors.textMuted}
-              />
-              <Text style={styles.permissionText}>
-                Methods: algo_signTxn
-              </Text>
-            </View>
+          <Text style={styles.sectionTitle}>Requested Permissions and Networks</Text>
+          <View style={styles.permissionItem}>
+            <Ionicons
+              name="link"
+              size={16}
+              color={theme.colors.textMuted}
+            />
+            <Text style={styles.permissionText}>
+              Networks: Voi Network
+            </Text>
+          </View>
+          <View style={styles.permissionItem}>
+            <Ionicons
+              name="construct"
+              size={16}
+              color={theme.colors.textMuted}
+            />
+            <Text style={styles.permissionText}>
+              Methods: algo_signTxn
+            </Text>
           </View>
         </View>
       );
     }
 
-    // v2 permissions
-    const requiredNamespaces = Object.entries(proposal!.requiredNamespaces);
+    // v2 permissions - collect all chains and methods across namespaces
+    const allChains = new Set<string>();
+    const allRequestedChains = new Set<string>(); // For debug logging
+    const allMethods = new Set<string>();
+    const supportedChainIds = [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
+
+    // Collect from required namespaces
+    if (proposal!.requiredNamespaces) {
+      Object.values(proposal!.requiredNamespaces).forEach((namespace) => {
+        if (namespace.chains) {
+          namespace.chains.forEach((chain: string) => {
+            allRequestedChains.add(chain); // Track all requested chains
+            // Only add supported chains
+            if (supportedChainIds.includes(chain)) {
+              allChains.add(chain);
+            }
+          });
+        }
+        if (namespace.methods) {
+          namespace.methods.forEach((method: string) => allMethods.add(method));
+        }
+      });
+    }
+
+    // Collect from optional namespaces
+    if (proposal!.optionalNamespaces) {
+      Object.values(proposal!.optionalNamespaces).forEach((namespace) => {
+        if (namespace.chains) {
+          namespace.chains.forEach((chain: string) => {
+            allRequestedChains.add(chain); // Track all requested chains
+            // Only add supported chains
+            if (supportedChainIds.includes(chain)) {
+              allChains.add(chain);
+            }
+          });
+        }
+        if (namespace.methods) {
+          namespace.methods.forEach((method: string) => allMethods.add(method));
+        }
+      });
+    }
+
+    // Debug output
+    console.log('[WalletConnect] dApp requested chains:', Array.from(allRequestedChains));
+    console.log('[WalletConnect] Supported chains:', Array.from(allChains));
+    console.log('[WalletConnect] Required namespaces:', proposal!.requiredNamespaces);
+    console.log('[WalletConnect] Optional namespaces:', proposal!.optionalNamespaces);
+
+    // Convert chain IDs to readable names (all chains in the set are already supported)
+    const chainNames = Array.from(allChains).map((chainId) =>
+      getNetworkNameByChainId(chainId)
+    );
+    const methods = Array.from(allMethods);
 
     return (
       <View style={styles.permissionsContainer}>
-        <Text style={styles.sectionTitle}>Requested Permissions</Text>
-        {requiredNamespaces.map(([namespace, permissions]) => (
-          <View key={namespace} style={styles.namespaceContainer}>
-            <Text style={styles.namespaceTitle}>{namespace.toUpperCase()}</Text>
+        <Text style={styles.sectionTitle}>Requested Permissions and Networks</Text>
 
-            {permissions.chains && (
-              <View style={styles.permissionItem}>
-                <Ionicons
-                  name="link"
-                  size={16}
-                  color={theme.colors.textMuted}
-                />
-                <Text style={styles.permissionText}>
-                  Networks: {permissions.chains.join(', ')}
-                </Text>
-              </View>
-            )}
-
-            {permissions.methods && (
-              <View style={styles.permissionItem}>
-                <Ionicons
-                  name="construct"
-                  size={16}
-                  color={theme.colors.textMuted}
-                />
-                <Text style={styles.permissionText}>
-                  Methods: {permissions.methods.join(', ')}
-                </Text>
-              </View>
-            )}
+        {chainNames.length > 0 && (
+          <View style={styles.permissionItem}>
+            <Ionicons
+              name="link"
+              size={16}
+              color={theme.colors.textMuted}
+            />
+            <Text style={styles.permissionText}>
+              Networks: {chainNames.join(', ')}
+            </Text>
           </View>
-        ))}
+        )}
+
+        {methods.length > 0 && (
+          <View style={styles.permissionItem}>
+            <Ionicons
+              name="construct"
+              size={16}
+              color={theme.colors.textMuted}
+            />
+            <Text style={styles.permissionText}>
+              Methods: {methods.join(', ')}
+            </Text>
+          </View>
+        )}
       </View>
     );
   };

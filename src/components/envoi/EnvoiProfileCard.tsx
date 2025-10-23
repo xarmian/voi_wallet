@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Linking,
   Alert,
+  Image,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
@@ -85,11 +86,8 @@ const buildSocialUrl = (platform: string, value: string): string => {
       }
       return value;
     default:
-      // For unknown platforms, treat as generic URL
-      if (!value.startsWith('http')) {
-        return `https://${value}`;
-      }
-      return value;
+      // Return empty string for unsupported platforms
+      return '';
   }
 };
 
@@ -139,6 +137,7 @@ const SocialLinkButton: React.FC<SocialLinkProps> = ({ platform, url }) => {
       return 'logo-facebook';
     }
     if (
+      normalizedPlatform.includes('url') ||
       normalizedPlatform.includes('website') ||
       normalizedPlatform.includes('web') ||
       normalizedPlatform.includes('homepage')
@@ -208,8 +207,20 @@ export default function EnvoiProfileCard({
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
   const displayName = envoiProfile?.name || name;
+  const bio = envoiProfile?.bio;
   const socialLinks = envoiProfile?.socialLinks;
 
+  const renderBio = () => {
+    if (!bio || bio.trim().length === 0) {
+      return null;
+    }
+
+    return (
+      <View style={styles.bioContainer}>
+        <Text style={styles.bioText}>{bio}</Text>
+      </View>
+    );
+  };
 
   const renderSocialLinks = () => {
     if (!socialLinks || Object.keys(socialLinks).length === 0) {
@@ -219,9 +230,11 @@ export default function EnvoiProfileCard({
     // Filter out non-social metadata and build proper URLs
     const validLinks = Object.entries(socialLinks)
       .filter(([key, value]) => {
-        // Skip avatar and other non-social metadata
+        // Skip avatar, bio, location, and other non-social metadata
         if (
           key === 'avatar' ||
+          key === 'bio' ||
+          key === 'location' ||
           !value ||
           typeof value !== 'string' ||
           value.trim().length === 0
@@ -234,6 +247,7 @@ export default function EnvoiProfileCard({
         platform,
         url: buildSocialUrl(platform, value),
       }))
+      .filter(({ url }) => url !== '') // Only keep known platforms with valid URLs
       .slice(0, 5); // Limit to 5 social links to avoid overflow
 
     if (validLinks.length === 0) {
@@ -272,14 +286,21 @@ export default function EnvoiProfileCard({
 
       <View style={styles.profileContainer}>
         <View style={styles.avatarContainer}>
-          <AccountAvatar
-            address={address}
-            size={64}
-            useEnvoiAvatar={true}
-            fallbackToGenerated={true}
-            showActiveIndicator={false}
-            showRekeyIndicator={false}
-          />
+          {envoiProfile?.avatar ? (
+            <Image
+              source={{ uri: envoiProfile.avatar }}
+              style={styles.avatarImage}
+            />
+          ) : (
+            <AccountAvatar
+              address={address}
+              size={64}
+              useEnvoiAvatar={true}
+              fallbackToGenerated={true}
+              showActiveIndicator={false}
+              showRekeyIndicator={false}
+            />
+          )}
         </View>
 
         <View style={styles.profileInfo}>
@@ -293,6 +314,8 @@ export default function EnvoiProfileCard({
           </TouchableOpacity>
         </View>
       </View>
+
+      {renderBio()}
 
       {renderSocialLinks()}
     </View>
@@ -383,5 +406,22 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       alignItems: 'center',
       backgroundColor: theme.colors.card,
+    },
+    bioContainer: {
+      marginTop: theme.spacing.md,
+      paddingTop: theme.spacing.md,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.border,
+    },
+    bioText: {
+      fontSize: 14,
+      color: theme.colors.text,
+      lineHeight: 20,
+    },
+    avatarImage: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: theme.colors.background,
     },
   });

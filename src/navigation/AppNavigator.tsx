@@ -8,7 +8,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -25,7 +25,6 @@ import TransactionConfirmationScreen from '@/screens/wallet/TransactionConfirmat
 import TransactionResultScreen from '@/screens/wallet/TransactionResultScreen';
 import ReceiveScreen from '@/screens/wallet/ReceiveScreen';
 import DiscoverScreen from '@/screens/wallet/DiscoverScreen';
-import BuyScreen from '@/screens/wallet/BuyScreen';
 import NFTScreen from '@/screens/wallet/NFTScreen';
 import NFTDetailScreen from '@/screens/wallet/NFTDetailScreen';
 import SettingsScreen from '@/screens/settings/SettingsScreen';
@@ -55,7 +54,7 @@ import { MultiAccountWalletService } from '@/services/wallet';
 import { WalletConnectService } from '@/services/walletconnect';
 import { DeepLinkService } from '@/services/deeplink';
 import { ledgerTransportService } from '@/services/ledger/transport';
-import { useNetworkStore, useCurrentNetworkConfig } from '@/store/networkStore';
+import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
@@ -88,8 +87,7 @@ export type RootStackParamList = {
 
 export type MainTabParamList = {
   Home: undefined;
-  Buy: { reload?: number } | undefined;
-  AccountInfo: undefined;
+  Friends: undefined;
   NFTs: undefined;
   Discover: { reload?: number } | undefined;
   Settings: undefined;
@@ -162,7 +160,8 @@ export type WalletStackParamList = {
     assetId?: number;
     accountId?: string;
   };
-  AccountInfo: undefined;
+  AccountInfo: { address?: string } | undefined;
+  AccountSearch: undefined;
 };
 
 export type NFTStackParamList = {
@@ -239,14 +238,27 @@ export type SettingsStackParamList = {
   };
 };
 
+export type FriendsStackParamList = {
+  FriendsList: undefined;
+  FriendProfile: { envoiName: string };
+  AddFriend: { initialQuery?: string } | undefined;
+  MyProfile: undefined;
+};
+
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
 import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
 import AccountInfoScreen from '@/screens/wallet/AccountInfoScreen';
+import AccountSearchScreen from '@/screens/wallet/AccountSearchScreen';
+import FriendsScreen from '@/screens/social/FriendsScreen';
+import AddFriendScreen from '@/screens/social/AddFriendScreen';
+import FriendProfileScreen from '@/screens/social/FriendProfileScreen';
+import MyProfileScreen from '@/screens/social/MyProfileScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const WalletStack = createNativeStackNavigator<WalletStackParamList>();
 const NFTStack = createNativeStackNavigator<NFTStackParamList>();
 const SettingsStack = createNativeStackNavigator<SettingsStackParamList>();
+const FriendsStack = createNativeStackNavigator<FriendsStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 function WalletStackNavigator() {
@@ -282,6 +294,7 @@ function WalletStackNavigator() {
       />
       <WalletStack.Screen name="Receive" component={ReceiveScreen} />
       <WalletStack.Screen name="AccountInfo" component={AccountInfoScreen} />
+      <WalletStack.Screen name="AccountSearch" component={AccountSearchScreen} />
     </WalletStack.Navigator>
   );
 }
@@ -358,10 +371,26 @@ function SettingsStackNavigator() {
   );
 }
 
+function FriendsStackNavigator() {
+  return (
+    <FriendsStack.Navigator
+      initialRouteName="FriendsList"
+      screenOptions={{
+        headerShown: false,
+        animation: 'slide_from_right',
+        gestureEnabled: true,
+        gestureDirection: 'horizontal',
+      }}
+    >
+      <FriendsStack.Screen name="FriendsList" component={FriendsScreen} />
+      <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} />
+      <FriendsStack.Screen name="FriendProfile" component={FriendProfileScreen} />
+      <FriendsStack.Screen name="MyProfile" component={MyProfileScreen} />
+    </FriendsStack.Navigator>
+  );
+}
+
 function MainTabNavigator() {
-  const currentNetworkConfig = useCurrentNetworkConfig();
-  const isBuyAvailable = currentNetworkConfig.id === NetworkId.VOI_MAINNET;
-  const isIOS = Platform.OS === 'ios';
   const { updateActivity } = useAuth();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -382,10 +411,8 @@ function MainTabNavigator() {
 
             if (route.name === 'Home') {
               iconName = focused ? 'wallet' : 'wallet-outline';
-            } else if (route.name === 'Buy') {
-              iconName = focused ? 'cash' : 'cash-outline';
-            } else if (route.name === 'AccountInfo') {
-              iconName = focused ? 'person' : 'person-outline';
+            } else if (route.name === 'Friends') {
+              iconName = focused ? 'people' : 'people-outline';
             } else if (route.name === 'NFTs') {
               iconName = focused ? 'images' : 'images-outline';
             } else if (route.name === 'Discover') {
@@ -399,17 +426,6 @@ function MainTabNavigator() {
             return <Ionicons name={iconName} size={size} color={color} />;
           },
           tabBarButton: (props) => {
-            // Disable Buy tab if not on Voi Network
-            if (route.name === 'Buy' && !isBuyAvailable) {
-              return (
-                <TouchableOpacity
-                  {...props}
-                  disabled={true}
-                  style={[props.style, { opacity: 0.3 }]}
-                />
-              );
-            }
-
             if (route.name === 'Discover') {
               return (
                 <View style={styles.centerButtonContainer}>
@@ -457,41 +473,16 @@ function MainTabNavigator() {
             tabPress: () => updateActivity(),
           }}
         />
-        {isIOS ? (
-          <Tab.Screen
-            name="AccountInfo"
-            component={AccountInfoScreen}
-            options={{
-              tabBarLabel: 'Account',
-            }}
-            listeners={{
-              tabPress: () => updateActivity(),
-            }}
-          />
-        ) : (
-          <Tab.Screen
-            name="Buy"
-            component={BuyScreen}
-            listeners={({ navigation, route }) => ({
-              tabPress: (e) => {
-                updateActivity();
-
-                if (!isBuyAvailable) {
-                  // Prevent navigation when Buy is not available (not on Voi Network)
-                  e.preventDefault();
-                  return;
-                }
-
-                // If already on Buy tab, trigger a reload
-                if (navigation.isFocused() && route.name === 'Buy') {
-                  e.preventDefault();
-                  // Trigger a reload by navigating to the same screen with a timestamp
-                  navigation.navigate('Buy', { reload: Date.now() });
-                }
-              },
-            })}
-          />
-        )}
+        <Tab.Screen
+          name="Friends"
+          component={FriendsStackNavigator}
+          options={{
+            tabBarLabel: 'Friends',
+          }}
+          listeners={{
+            tabPress: () => updateActivity(),
+          }}
+        />
         <Tab.Screen
           name="Discover"
           component={DiscoverScreen}
