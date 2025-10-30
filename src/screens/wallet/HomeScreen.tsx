@@ -50,6 +50,8 @@ import AssetFilterModal from '@/components/assets/AssetFilterModal';
 import type { AssetFilterSettings } from '@/components/assets/AssetFilterModal';
 import { AssetBalance } from '@/types/wallet';
 import { MappedAsset } from '@/services/token-mapping/types';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function HomeScreen() {
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(
@@ -70,6 +72,7 @@ export default function HomeScreen() {
   const activeAccount = useActiveAccount();
   const currentNetworkConfig = useCurrentNetworkConfig();
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
 
   const initialize = useWalletStore((state) => state.initialize);
   const wallet = useWalletStore((state) => state.wallet);
@@ -937,74 +940,80 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader
-        title="Voi Wallet"
-        subtitle={isMultiNetworkView ? "All Networks" : `Network: ${currentNetworkConfig.name}`}
-        onAccountSelectorPress={handleAccountSelectorPress}
-      />
+        <UniversalHeader
+          title="Voi Wallet"
+          subtitle={isMultiNetworkView ? "All Networks" : `Network: ${currentNetworkConfig.name}`}
+          onAccountSelectorPress={handleAccountSelectorPress}
+        />
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        onScrollBeginDrag={handleUserInteraction}
-      >
-        {activeAccount && (
-          <>
-            <View style={styles.balanceContainer}>
-              <TouchableOpacity
-                onPress={handleQRScan}
-                style={styles.qrButtonTopRight}
-                accessibilityRole="button"
-                accessibilityLabel="Scan QR code"
-                accessibilityHint="Opens the QR scanner to connect or import"
-              >
-                <Ionicons
-                  name="qr-code-outline"
-                  size={22}
-                  style={styles.qrButtonIcon}
-                />
-              </TouchableOpacity>
-              <View style={styles.balanceHeader}>
-                <View style={styles.balanceHeaderLeft}>
-                  <Text style={styles.balanceLabel}>Account Value</Text>
-                  {isBackgroundRefreshing && (
-                    <ActivityIndicator size="small" color="#007AFF" />
-                  )}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          onScrollBeginDrag={handleUserInteraction}
+        >
+          {activeAccount && (
+            <>
+              <View style={styles.balanceContainerWrapper}>
+                <BlurredContainer
+                  style={styles.balanceContainer}
+                  borderRadius={theme.borderRadius.lg}
+                  opacity={0.6}
+                >
+                  <View style={styles.balanceHeader}>
+                  <View style={styles.balanceHeaderLeft}>
+                    <Text style={styles.balanceLabel}>Account Value</Text>
+                    {isBackgroundRefreshing && (
+                      <ActivityIndicator size="small" color="#007AFF" />
+                    )}
+                  </View>
+                  <TouchableOpacity onPress={handleAccountInfo} style={styles.infoButton}>
+                    <Ionicons name="information-circle-outline" size={20} color="#007AFF" />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity onPress={handleAccountInfo} style={styles.infoButton}>
-                  <Ionicons name="information-circle-outline" size={20} color="#007AFF" />
+                {isBalanceLoading && !accountBalance ? (
+                  <View style={styles.loadingBalance}>
+                    <ActivityIndicator size="small" color="#007AFF" />
+                    <Text style={styles.loadingText}>Loading balance...</Text>
+                  </View>
+                ) : (
+                  <>
+                    <Text style={styles.balance}>{calculateTotalUsdValue}</Text>
+                    {isMultiNetworkView && multiNetworkBalance && (
+                      <View style={styles.networkBalanceBreakdown}>
+                        <View style={styles.networkBalanceItem}>
+                          <Text style={styles.networkBalanceLabel}>Voi</Text>
+                          <Text style={styles.networkBalanceValue}>
+                            {formatCurrency(voiNetworkUsdValue)}
+                          </Text>
+                        </View>
+                        <View style={styles.networkBalanceItem}>
+                          <Text style={styles.networkBalanceLabel}>Algorand</Text>
+                          <Text style={styles.networkBalanceValue}>
+                            {formatCurrency(algorandNetworkUsdValue)}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                  </>
+                )}
+                </BlurredContainer>
+                <TouchableOpacity
+                  onPress={handleQRScan}
+                  style={styles.qrButtonTopRight}
+                  accessibilityRole="button"
+                  accessibilityLabel="Scan QR code"
+                  accessibilityHint="Opens the QR scanner to connect or import"
+                >
+                  <Ionicons
+                    name="qr-code-outline"
+                    size={22}
+                    style={styles.qrButtonIcon}
+                  />
                 </TouchableOpacity>
               </View>
-              {isBalanceLoading && !accountBalance ? (
-                <View style={styles.loadingBalance}>
-                  <ActivityIndicator size="small" color="#007AFF" />
-                  <Text style={styles.loadingText}>Loading balance...</Text>
-                </View>
-              ) : (
-                <>
-                  <Text style={styles.balance}>{calculateTotalUsdValue}</Text>
-                  {isMultiNetworkView && multiNetworkBalance && (
-                    <View style={styles.networkBalanceBreakdown}>
-                      <View style={styles.networkBalanceItem}>
-                        <Text style={styles.networkBalanceLabel}>Voi</Text>
-                        <Text style={styles.networkBalanceValue}>
-                          {formatCurrency(voiNetworkUsdValue)}
-                        </Text>
-                      </View>
-                      <View style={styles.networkBalanceItem}>
-                        <Text style={styles.networkBalanceLabel}>Algorand</Text>
-                        <Text style={styles.networkBalanceValue}>
-                          {formatCurrency(algorandNetworkUsdValue)}
-                        </Text>
-                      </View>
-                    </View>
-                  )}
-                </>
-              )}
-            </View>
 
             {false && (
               <View style={styles.addressContainer}>
@@ -1042,13 +1051,17 @@ export default function HomeScreen() {
               </View>
             )}
 
-            <View style={styles.actionButtonsContainer}>
+            <BlurredContainer
+              style={styles.actionButtonsContainer}
+              borderRadius={theme.borderRadius.lg}
+              opacity={0.6}
+            >
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={handleSend}
               >
                 <Ionicons name="send" size={24} color="#007AFF" />
-                <Text style={styles.actionButtonText}>Send</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text }]}>Send</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1056,7 +1069,7 @@ export default function HomeScreen() {
                 onPress={handleReceive}
               >
                 <Ionicons name="download" size={24} color="#007AFF" />
-                <Text style={styles.actionButtonText}>Receive</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text }]}>Receive</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1064,11 +1077,15 @@ export default function HomeScreen() {
                 onPress={handleHistory}
               >
                 <Ionicons name="time" size={24} color="#007AFF" />
-                <Text style={styles.actionButtonText}>History</Text>
+                <Text style={[styles.actionButtonText, { color: theme.colors.text }]}>History</Text>
               </TouchableOpacity>
-            </View>
+            </BlurredContainer>
 
-            <View style={styles.assetsContainer}>
+            <BlurredContainer
+              style={styles.assetsContainer}
+              borderRadius={theme.borderRadius.lg}
+              opacity={0.6}
+            >
               <View style={styles.assetsHeader}>
                 <View style={styles.assetsHeaderLeft}>
                   <Text style={styles.assetsTitle}>Assets</Text>
@@ -1125,7 +1142,7 @@ export default function HomeScreen() {
                   singleNetworkAssetList
                 )
               )}
-            </View>
+            </BlurredContainer>
           </>
         )}
       </ScrollView>
@@ -1214,7 +1231,7 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     scrollView: {
       flex: 1,
@@ -1247,11 +1264,14 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       paddingVertical: theme.spacing.xl,
     },
+    balanceContainerWrapper: {
+      position: 'relative',
+      marginBottom: theme.spacing.sm,
+    },
     balanceContainer: {
       backgroundColor: theme.colors.card,
       borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
-      marginBottom: theme.spacing.sm,
       alignItems: 'center',
       borderWidth: 1,
       borderColor: theme.colors.border,
@@ -1278,7 +1298,7 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.xs,
       paddingHorizontal: theme.spacing.sm,
       borderRadius: theme.borderRadius.md,
-      zIndex: 1,
+      zIndex: 10,
       ...theme.shadows.md,
     },
     qrButtonIcon: {

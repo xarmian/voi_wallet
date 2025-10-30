@@ -12,12 +12,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import appJson from '../../../app.config.js';
-
-// const packageJson = require('../../../package.json');
 
 export default function AboutScreen() {
   const navigation = useNavigation();
@@ -67,7 +65,7 @@ export default function AboutScreen() {
 
         <View style={styles.appInfoSection}>
           <Text style={styles.appName}>Voi Wallet</Text>
-          <Text style={styles.version}>Version {appJson.expo.version}</Text>
+          <Text style={styles.version}>Version {Constants.expoConfig?.version || Constants.manifest?.version || '1.0.0'}</Text>
           <Text style={styles.description}>
             A secure, decentralized wallet for the Voi Network
           </Text>

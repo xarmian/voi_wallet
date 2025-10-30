@@ -24,11 +24,14 @@ import TransactionListItem from '@/components/transaction/TransactionListItem';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { serializeTransactionForNavigation } from '@/utils/navigationParams';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function TransactionHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation<StackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
 
   const { updateActivity } = useAuth();
   const activeAccount = useActiveAccount();
@@ -214,16 +217,20 @@ export default function TransactionHistoryScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
+        <BlurredContainer
+          style={styles.header}
+          borderRadius={0}
+          opacity={0.8}
         >
-          <Ionicons name="arrow-back" size={24} color={styles.backIcon.color} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Transaction History</Text>
-        <View style={styles.headerSpacer} />
-      </View>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Transaction History</Text>
+          <View style={styles.headerSpacer} />
+        </BlurredContainer>
 
       {accountState.isTransactionsLoading && allTransactions.length === 0 ? (
         <View style={styles.loadingContainer}>
@@ -270,14 +277,13 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.card,
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.border,
     },

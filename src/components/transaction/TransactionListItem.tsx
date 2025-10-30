@@ -8,6 +8,8 @@ import TransactionAddressDisplay from './TransactionAddressDisplay';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface TransactionListItemProps {
   transaction: TransactionInfo;
@@ -29,6 +31,7 @@ const TransactionListItem = React.memo(
     const currentNetworkConfig = useCurrentNetworkConfig();
     const styles = useThemedStyles(createStyles);
     const themeColors = useThemeColors();
+    const { theme } = useTheme();
 
     const isOutgoing = transaction.from === activeAccountAddress;
 
@@ -240,78 +243,84 @@ const TransactionListItem = React.memo(
     ];
 
     return (
-      <TouchableOpacity
+      <BlurredContainer
         style={containerStyle}
-        onPress={() => onPress(transaction)}
+        borderRadius={theme.borderRadius.lg}
+        opacity={0.7}
       >
-        <View style={styles.iconContainer}>
-          {renderAssetIcon()}
-          {status === 'pending' && (
-            <View style={styles.pendingBadge}>
-              <Ionicons name="time" size={10} color="white" />
-            </View>
-          )}
-        </View>
-
-        <View style={styles.details}>
-          <View style={styles.header}>
-            <View
-              style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-            >
-              <Ionicons
-                name={getTransactionTypeIcon(transaction.type) as any}
-                size={16}
-                color={getTransactionTypeColor(transaction.type)}
-                style={{ marginRight: 4 }}
-              />
-              <Text style={styles.transactionType}>
-                {formatTransactionType(transaction.type)}
-              </Text>
-              {status !== 'confirmed' && (
-                <View
-                  style={[
-                    styles.statusBadge,
-                    status === 'pending'
-                      ? styles.pendingStatus
-                      : status === 'failed'
-                        ? styles.failedStatus
-                        : styles.confirmedStatus,
-                  ]}
-                >
-                  <Text style={styles.statusText}>{status}</Text>
-                </View>
-              )}
-            </View>
-            <Text style={styles.transactionDate}>
-              {formatTimestamp(transaction.timestamp)}
-            </Text>
+        <TouchableOpacity
+          onPress={() => onPress(transaction)}
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+        >
+          <View style={styles.iconContainer}>
+            {renderAssetIcon()}
+            {status === 'pending' && (
+              <View style={styles.pendingBadge}>
+                <Ionicons name="time" size={10} color="white" />
+              </View>
+            )}
           </View>
 
-          {transaction.type === 'application-call' ? (
-            <Text style={styles.applicationCall}>
-              {transaction.applicationId
-                ? `App ${transaction.applicationId}`
-                : 'App Call'}
-            </Text>
-          ) : (
-            <TransactionAddressDisplay
-              address={isOutgoing ? transaction.to : transaction.from}
-              isOutgoing={isOutgoing}
-              style={styles.transactionAddress}
-              nameStyle={styles.transactionName}
-              addressStyle={styles.transactionAddressText}
-            />
-          )}
+          <View style={styles.details}>
+            <View style={styles.header}>
+              <View
+                style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+              >
+                <Ionicons
+                  name={getTransactionTypeIcon(transaction.type) as any}
+                  size={16}
+                  color={getTransactionTypeColor(transaction.type)}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={styles.transactionType}>
+                  {formatTransactionType(transaction.type)}
+                </Text>
+                {status !== 'confirmed' && (
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      status === 'pending'
+                        ? styles.pendingStatus
+                        : status === 'failed'
+                          ? styles.failedStatus
+                          : styles.confirmedStatus,
+                    ]}
+                  >
+                    <Text style={styles.statusText}>{status}</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.transactionDate}>
+                {formatTimestamp(transaction.timestamp)}
+              </Text>
+            </View>
 
-          <Text style={amountStyle}>{getTransactionAmount()}</Text>
-        </View>
+            {transaction.type === 'application-call' ? (
+              <Text style={styles.applicationCall}>
+                {transaction.applicationId
+                  ? `App ${transaction.applicationId}`
+                  : 'App Call'}
+              </Text>
+            ) : (
+              <TransactionAddressDisplay
+                address={isOutgoing ? transaction.to : transaction.from}
+                isOutgoing={isOutgoing}
+                style={styles.transactionAddress}
+                nameStyle={styles.transactionName}
+                addressStyle={styles.transactionAddressText}
+              />
+            )}
 
-        <Ionicons
-          name="chevron-forward"
-          size={20}
-          color={styles.chevronIcon.color}
-        />
-      </TouchableOpacity>
+            <Text style={amountStyle}>{getTransactionAmount()}</Text>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color={styles.chevronIcon.color}
+          />
+        </TouchableOpacity>
+      </BlurredContainer>
     );
   }
 );
@@ -321,13 +330,10 @@ TransactionListItem.displayName = 'TransactionListItem';
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
       marginBottom: theme.spacing.md,
       flexDirection: 'row',
       alignItems: 'center',
-      ...theme.shadows.md,
       borderLeftWidth: 3,
       borderLeftColor: 'transparent',
     },

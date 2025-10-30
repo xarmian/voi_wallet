@@ -1,9 +1,11 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import AccountSelector from '../account/AccountSelector';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface UniversalHeaderProps {
   title: string;
@@ -24,9 +26,11 @@ export default function UniversalHeader({
 }: UniversalHeaderProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
+  const { theme } = useTheme();
+  const hasNFTBackground = !!theme.backgroundImageUrl;
 
-  return (
-    <View style={styles.header}>
+  const headerContent = (
+    <>
       {showBackButton && (
         <TouchableOpacity
           style={styles.backButton}
@@ -51,6 +55,36 @@ export default function UniversalHeader({
           />
         </View>
       )}
+    </>
+  );
+
+  if (hasNFTBackground) {
+    const blurTint = theme.mode === 'dark' ? 'dark' : 'light';
+    return (
+      <BlurView
+        tint={blurTint}
+        style={styles.header}
+      >
+        <View
+          style={[
+            styles.overlay,
+            {
+              backgroundColor: theme.mode === 'dark'
+                ? 'rgba(0, 0, 0, 0.3)'
+                : 'rgba(255, 255, 255, 0.4)',
+            },
+          ]}
+        />
+        <View style={styles.headerContent}>
+          {headerContent}
+        </View>
+      </BlurView>
+    );
+  }
+
+  return (
+    <View style={styles.header}>
+      {headerContent}
     </View>
   );
 }
@@ -63,7 +97,23 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
       paddingHorizontal: 20,
       paddingVertical: 15,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.surface,
+      position: 'relative',
+    },
+    overlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+    },
+    headerContent: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      flex: 1,
+      position: 'relative',
+      zIndex: 1,
     },
     backButton: {
       marginRight: 12,

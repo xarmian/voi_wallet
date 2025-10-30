@@ -9,6 +9,7 @@ import {
   Dimensions,
   Alert,
   Share,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,10 +29,11 @@ interface NFTDetailRouteParams {
 
 export default function NFTDetailScreen() {
   const [imageError, setImageError] = useState(false);
+  const [isSettingTheme, setIsSettingTheme] = useState(false);
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<any>>();
   const { nft } = route.params as NFTDetailRouteParams;
-  const { theme } = useTheme();
+  const { theme, setNFTTheme } = useTheme();
 
   const handleBackPress = () => {
     navigation.goBack();
@@ -74,6 +76,32 @@ export default function NFTDetailScreen() {
       nftToken: nft,
       networkId: nft.networkId, // Pass the network ID from the NFT
     } as never);
+  };
+
+  const handleSetAsTheme = async () => {
+    if (!NFTService.hasValidImage(nft) || !nft.imageUrl) {
+      Alert.alert('Cannot Set Theme', 'This NFT does not have a valid image.');
+      return;
+    }
+
+    setIsSettingTheme(true);
+    try {
+      await setNFTTheme({
+        contractId: nft.contractId,
+        tokenId: nft.tokenId,
+        imageUrl: nft.imageUrl!,
+        nftName: NFTService.getDisplayName(nft),
+      });
+      Alert.alert('Success', 'Theme has been set successfully!');
+    } catch (error) {
+      console.error('Failed to set NFT theme:', error);
+      Alert.alert(
+        'Error',
+        'Failed to extract colors from NFT image. Please try another NFT.'
+      );
+    } finally {
+      setIsSettingTheme(false);
+    }
   };
 
   const formatDate = (round: number) => {
@@ -146,6 +174,23 @@ export default function NFTDetailScreen() {
           NFT Details
         </Text>
         <View style={styles.headerActions}>
+          {NFTService.hasValidImage(nft) && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleSetAsTheme}
+              disabled={isSettingTheme}
+            >
+              {isSettingTheme ? (
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+              ) : (
+                <Ionicons
+                  name="color-palette-outline"
+                  size={22}
+                  color={theme.colors.primary}
+                />
+              )}
+            </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.actionButton} onPress={handleSend}>
             <Ionicons
               name="send-outline"

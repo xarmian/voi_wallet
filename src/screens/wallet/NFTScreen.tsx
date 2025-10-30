@@ -42,7 +42,8 @@ export default function NFTScreen() {
 
   const navigation = useNavigation<StackNavigationProp<any>>();
   const activeAccount = useActiveAccount();
-  const { theme } = useTheme();
+  const { theme, setNFTTheme } = useTheme();
+  const [settingThemeNFT, setSettingThemeNFT] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeAccount) {
@@ -89,6 +90,45 @@ export default function NFTScreen() {
 
   const handleNFTPress = (nft: NFTToken) => {
     navigation.navigate('NFTDetail', { nft });
+  };
+
+  const handleNFTPressLong = (nft: NFTToken) => {
+    if (!NFTService.hasValidImage(nft) || !nft.imageUrl) {
+      Alert.alert('Cannot Set Theme', 'This NFT does not have a valid image.');
+      return;
+    }
+
+    Alert.alert(
+      'Set as Theme',
+      `Use "${NFTService.getDisplayName(nft)}" as your app theme?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Set Theme',
+          onPress: async () => {
+            const nftKey = `${nft.contractId}:${nft.tokenId}`;
+            setSettingThemeNFT(nftKey);
+            try {
+              await setNFTTheme({
+                contractId: nft.contractId,
+                tokenId: nft.tokenId,
+                imageUrl: nft.imageUrl!,
+                nftName: NFTService.getDisplayName(nft),
+              });
+              Alert.alert('Success', 'Theme has been set successfully!');
+            } catch (error) {
+              console.error('Failed to set NFT theme:', error);
+              Alert.alert(
+                'Error',
+                'Failed to extract colors from NFT image. Please try another NFT.'
+              );
+            } finally {
+              setSettingThemeNFT(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleImageError = (contractId: number, tokenId: string) => {
@@ -180,14 +220,23 @@ export default function NFTScreen() {
   const renderNFTItem = ({ item }: { item: NFTToken }) => {
     const hasError = hasImageError(item.contractId, item.tokenId);
     const showImage = NFTService.hasValidImage(item) && !hasError;
+    const nftKey = `${item.contractId}:${item.tokenId}`;
+    const isSettingTheme = settingThemeNFT === nftKey;
 
     return (
       <TouchableOpacity
         style={[styles.nftItem, { backgroundColor: theme.colors.card }]}
         onPress={() => handleNFTPress(item)}
+        onLongPress={() => handleNFTPressLong(item)}
         activeOpacity={0.8}
+        disabled={isSettingTheme}
       >
         <View style={styles.nftImageContainer}>
+          {isSettingTheme && (
+            <View style={styles.settingThemeOverlay}>
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            </View>
+          )}
           {showImage ? (
             <Image
               source={{ uri: item.imageUrl! }}
@@ -432,6 +481,18 @@ const styles = StyleSheet.create({
     height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  settingThemeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+    borderRadius: 12,
   },
   nftInfo: {
     padding: 12,

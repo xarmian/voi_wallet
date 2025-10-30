@@ -27,6 +27,7 @@ import AddAccountModal from '@/components/account/AddAccountModal';
 import RenameAccountModal from '@/components/account/RenameAccountModal';
 import ThemeSwitcher from '@/components/common/ThemeSwitcher';
 import LocaleSwitcher from '@/components/common/LocaleSwitcher';
+import NFTThemeSelector from '@/components/common/NFTThemeSelector';
 import { formatAddress } from '@/utils/address';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import {
@@ -38,7 +39,7 @@ import NetworkIndicator from '@/components/network/NetworkIndicator';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
-import { Theme } from '@/constants/themes';
+import { Theme, ThemeMode } from '@/constants/themes';
 
 type SettingsScreenNavigationProp = StackNavigationProp<SettingsStackParamList>;
 
@@ -59,7 +60,13 @@ export default function SettingsScreen() {
   const { authState, enableBiometrics } = useAuth();
   const currentNetworkConfig = useCurrentNetworkConfig();
   const isNetworkHealthy = useIsCurrentNetworkHealthy();
-  const { theme, themeMode, setThemeMode } = useTheme();
+  const {
+    theme,
+    themeMode,
+    setThemeMode,
+    nftThemeData,
+    nftThemeEnabled,
+  } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
   const [isAddAccountModalVisible, setIsAddAccountModalVisible] =
@@ -73,6 +80,7 @@ export default function SettingsScreen() {
     useState(false);
   const [isLocaleModalVisible, setIsLocaleModalVisible] = useState(false);
   const [isThemeModalVisible, setIsThemeModalVisible] = useState(false);
+  const [isNFTThemeModalVisible, setIsNFTThemeModalVisible] = useState(false);
   const currentLocaleValue = walletSettings?.numberLocale ?? null;
   const localeDisplayText = (() => {
     const options = [
@@ -331,16 +339,27 @@ export default function SettingsScreen() {
   };
 
   const getThemeDisplayText = () => {
+    let baseTheme = '';
     switch (themeMode) {
       case 'light':
-        return 'Light';
+        baseTheme = 'Light';
+        break;
       case 'dark':
-        return 'Dark';
+        baseTheme = 'Dark';
+        break;
       case 'system':
-        return 'System Default';
+        baseTheme = 'System Default';
+        break;
       default:
-        return 'System Default';
+        baseTheme = 'System Default';
     }
+
+    // Append NFT theme info if enabled
+    if (nftThemeEnabled && nftThemeData) {
+      return `${baseTheme} • ${nftThemeData.nftName || 'NFT Theme'}`;
+    }
+
+    return baseTheme;
   };
 
   const handleLocalePress = () => {
@@ -361,9 +380,25 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleThemeSelect = (value: 'light' | 'dark' | 'system') => {
-    setIsThemeModalVisible(false);
+  const handleThemeSelect = (value: ThemeMode) => {
     setThemeMode(value);
+  };
+
+  const handleOpenNFTSelector = () => {
+    // Close the theme switcher modal first, then open NFT selector
+    setIsThemeModalVisible(false);
+    // Use setTimeout to ensure the first modal closes before opening the second
+    setTimeout(() => {
+      setIsNFTThemeModalVisible(true);
+    }, 300);
+  };
+
+  const handleNFTThemeModalClose = () => {
+    setIsNFTThemeModalVisible(false);
+    // Reopen the theme modal after NFT selector closes
+    setTimeout(() => {
+      setIsThemeModalVisible(true);
+    }, 300);
   };
 
   return (
@@ -447,7 +482,7 @@ export default function SettingsScreen() {
           >
             <Text style={styles.settingText}>Theme</Text>
             <View style={styles.themeDisplayContainer}>
-              <Text style={styles.themeDisplayText}>
+              <Text style={styles.themeDisplayText} numberOfLines={1}>
                 {getThemeDisplayText()}
               </Text>
               <Text style={styles.arrow}>→</Text>
@@ -542,6 +577,13 @@ export default function SettingsScreen() {
         onClose={() => setIsThemeModalVisible(false)}
         currentTheme={themeMode}
         onThemeSelect={handleThemeSelect}
+        onNFTThemeSelect={handleOpenNFTSelector}
+        theme={theme}
+      />
+
+      <NFTThemeSelector
+        visible={isNFTThemeModalVisible}
+        onClose={handleNFTThemeModalClose}
         theme={theme}
       />
 
@@ -707,6 +749,8 @@ const createStyles = (theme: Theme) =>
     settingText: {
       fontSize: 16,
       color: theme.colors.text,
+      marginRight: 12,
+      flexShrink: 0,
     },
     arrow: {
       fontSize: 18,
@@ -760,9 +804,27 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
+      flex: 1,
+      justifyContent: 'flex-end',
     },
     themeDisplayText: {
       fontSize: 16,
       color: theme.colors.textSecondary,
+      flexShrink: 1,
+      textAlign: 'right',
+    },
+    clearNFTButton: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: theme.colors.error,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    clearNFTButtonText: {
+      color: theme.colors.buttonText,
+      fontSize: 18,
+      fontWeight: '600',
+      lineHeight: 18,
     },
   });

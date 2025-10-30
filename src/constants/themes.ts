@@ -2,6 +2,7 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface Theme {
   mode: 'light' | 'dark';
+  backgroundImageUrl?: string; // NFT image URL for blurred backgrounds
   colors: {
     primary: string;
     primaryDark: string;

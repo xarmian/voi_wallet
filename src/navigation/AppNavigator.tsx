@@ -59,6 +59,7 @@ import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
 import { NFTToken } from '@/types/nft';
+import { NFTBackground } from '@/components/common/NFTBackground';
 
 export type RootStackParamList = {
   Main: undefined;
@@ -263,130 +264,142 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 
 function WalletStackNavigator() {
   return (
-    <WalletStack.Navigator
-      screenOptions={{
-        headerShown: false,
-        animation: 'slide_from_right', // Native iOS-style animation
-        gestureEnabled: true,
-        gestureDirection: 'horizontal',
-      }}
-    >
-      <WalletStack.Screen name="HomeMain" component={HomeScreen} />
-      <WalletStack.Screen name="AssetDetail" component={AssetDetailScreen} />
-      <WalletStack.Screen name="MultiNetworkAsset" component={MultiNetworkAssetScreen} />
-      <WalletStack.Screen
-        name="TransactionDetail"
-        component={TransactionDetailScreen}
-      />
-      <WalletStack.Screen
-        name="TransactionHistory"
-        component={TransactionHistoryScreen}
-      />
-      <WalletStack.Screen name="WebView" component={WebViewScreen} />
-      <WalletStack.Screen name="Send" component={SendScreen} />
-      <WalletStack.Screen
-        name="TransactionConfirmation"
-        component={TransactionConfirmationScreen}
-      />
-      <WalletStack.Screen
-        name="TransactionResult"
-        component={TransactionResultScreen}
-      />
-      <WalletStack.Screen name="Receive" component={ReceiveScreen} />
-      <WalletStack.Screen name="AccountInfo" component={AccountInfoScreen} />
-      <WalletStack.Screen name="AccountSearch" component={AccountSearchScreen} />
-    </WalletStack.Navigator>
+    <NFTBackground>
+      <WalletStack.Navigator
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right', // Native iOS-style animation
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      >
+        <WalletStack.Screen name="HomeMain" component={HomeScreen} />
+        <WalletStack.Screen name="AssetDetail" component={AssetDetailScreen} />
+        <WalletStack.Screen name="MultiNetworkAsset" component={MultiNetworkAssetScreen} />
+        <WalletStack.Screen
+          name="TransactionDetail"
+          component={TransactionDetailScreen}
+        />
+        <WalletStack.Screen
+          name="TransactionHistory"
+          component={TransactionHistoryScreen}
+        />
+        <WalletStack.Screen name="WebView" component={WebViewScreen} />
+        <WalletStack.Screen name="Send" component={SendScreen} />
+        <WalletStack.Screen
+          name="TransactionConfirmation"
+          component={TransactionConfirmationScreen}
+        />
+        <WalletStack.Screen
+          name="TransactionResult"
+          component={TransactionResultScreen}
+        />
+        <WalletStack.Screen name="Receive" component={ReceiveScreen} />
+        <WalletStack.Screen name="AccountInfo" component={AccountInfoScreen} />
+        <WalletStack.Screen name="AccountSearch" component={AccountSearchScreen} />
+      </WalletStack.Navigator>
+    </NFTBackground>
   );
 }
 
 function NFTStackNavigator() {
   return (
-    <NFTStack.Navigator
-      screenOptions={{
-        headerShown: false,
-        animation: 'slide_from_right',
-        gestureEnabled: true,
-        gestureDirection: 'horizontal',
-      }}
-    >
-      <NFTStack.Screen name="NFTMain" component={NFTScreen} />
-      <NFTStack.Screen name="NFTDetail" component={NFTDetailScreen} />
-      <NFTStack.Screen name="Send" component={SendScreen} />
-      <NFTStack.Screen
-        name="TransactionConfirmation"
-        component={TransactionConfirmationScreen}
-      />
-      <NFTStack.Screen
-        name="TransactionResult"
-        component={TransactionResultScreen}
-      />
-    </NFTStack.Navigator>
+    <NFTBackground>
+      <NFTStack.Navigator
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right',
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      >
+        <NFTStack.Screen name="NFTMain" component={NFTScreen} />
+        <NFTStack.Screen name="NFTDetail" component={NFTDetailScreen} />
+        <NFTStack.Screen name="Send" component={SendScreen} />
+        <NFTStack.Screen
+          name="TransactionConfirmation"
+          component={TransactionConfirmationScreen}
+        />
+        <NFTStack.Screen
+          name="TransactionResult"
+          component={TransactionResultScreen}
+        />
+      </NFTStack.Navigator>
+    </NFTBackground>
   );
 }
 
 function SettingsStackNavigator() {
   return (
-    <SettingsStack.Navigator
-      initialRouteName="SettingsMain"
-      screenOptions={{
-        headerShown: false,
-        animation: 'slide_from_right',
-        gestureEnabled: true,
-        gestureDirection: 'horizontal',
-      }}
-    >
-      <SettingsStack.Screen name="SettingsMain" component={SettingsScreen} />
-      <SettingsStack.Screen
-        name="SecuritySettings"
-        component={SecuritySettingsScreen}
-      />
-      <SettingsStack.Screen
-        name="ShowRecoveryPhrase"
-        component={ShowRecoveryPhraseScreen}
-      />
-      <SettingsStack.Screen name="ChangePin" component={ChangePinScreen} />
-      <SettingsStack.Screen
-        name="WalletConnectSessions"
-        component={SessionsScreen}
-      />
-      <SettingsStack.Screen
-        name="AddWatchAccount"
-        component={AddWatchAccountScreen}
-      />
-      <SettingsStack.Screen
-        name="CreateAccount"
-        component={CreateAccountScreen}
-      />
-      <SettingsStack.Screen
-        name="MnemonicImport"
-        component={MnemonicImportScreen}
-      />
-      <SettingsStack.Screen
-        name="RekeyAccount"
-        component={RekeyAccountScreen}
-      />
-      <SettingsStack.Screen name="AboutScreen" component={AboutScreen} />
-      <SettingsStack.Screen name="WebView" component={WebViewScreen} />
-    </SettingsStack.Navigator>
+    <NFTBackground>
+      <SettingsStack.Navigator
+        initialRouteName="SettingsMain"
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right',
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      >
+        <SettingsStack.Screen name="SettingsMain" component={SettingsScreen} />
+        <SettingsStack.Screen
+          name="SecuritySettings"
+          component={SecuritySettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="ShowRecoveryPhrase"
+          component={ShowRecoveryPhraseScreen}
+        />
+        <SettingsStack.Screen name="ChangePin" component={ChangePinScreen} />
+        <SettingsStack.Screen
+          name="WalletConnectSessions"
+          component={SessionsScreen}
+        />
+        <SettingsStack.Screen
+          name="AddWatchAccount"
+          component={AddWatchAccountScreen}
+        />
+        <SettingsStack.Screen
+          name="CreateAccount"
+          component={CreateAccountScreen}
+        />
+        <SettingsStack.Screen
+          name="MnemonicImport"
+          component={MnemonicImportScreen}
+        />
+        <SettingsStack.Screen
+          name="RekeyAccount"
+          component={RekeyAccountScreen}
+        />
+        <SettingsStack.Screen name="AboutScreen" component={AboutScreen} />
+        <SettingsStack.Screen name="WebView" component={WebViewScreen} />
+      </SettingsStack.Navigator>
+    </NFTBackground>
   );
 }
 
 function FriendsStackNavigator() {
   return (
-    <FriendsStack.Navigator
-      initialRouteName="FriendsList"
-      screenOptions={{
-        headerShown: false,
-        animation: 'slide_from_right',
-        gestureEnabled: true,
-        gestureDirection: 'horizontal',
-      }}
-    >
-      <FriendsStack.Screen name="FriendsList" component={FriendsScreen} />
-      <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} />
-      <FriendsStack.Screen name="FriendProfile" component={FriendProfileScreen} />
-      <FriendsStack.Screen name="MyProfile" component={MyProfileScreen} />
-    </FriendsStack.Navigator>
+    <NFTBackground>
+      <FriendsStack.Navigator
+        initialRouteName="FriendsList"
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right',
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      >
+        <FriendsStack.Screen name="FriendsList" component={FriendsScreen} />
+        <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} />
+        <FriendsStack.Screen name="FriendProfile" component={FriendProfileScreen} />
+        <FriendsStack.Screen name="MyProfile" component={MyProfileScreen} />
+      </FriendsStack.Navigator>
+    </NFTBackground>
   );
 }
 

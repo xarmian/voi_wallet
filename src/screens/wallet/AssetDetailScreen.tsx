@@ -41,6 +41,8 @@ import {
 import { MultiAccountWalletService } from '@/services/wallet';
 import NetworkServiceInstance, { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface AssetDetailRouteParams {
   assetName: string;
@@ -53,6 +55,7 @@ interface AssetDetailRouteParams {
 export default function AssetDetailScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
+  const { theme } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -717,15 +720,20 @@ export default function AssetDetailScreen() {
     const isOutgoing = tx.from === currentAccount?.address;
 
     return (
-      <TouchableOpacity
+      <BlurredContainer
         style={[
           styles.transactionItem,
           isOutgoing
             ? styles.outgoingTransaction
             : styles.incomingTransaction,
         ]}
-        onPress={() => handleTransactionPress(tx)}
+        borderRadius={theme.borderRadius.lg}
+        opacity={0.7}
       >
+        <TouchableOpacity
+          style={{ flex: 1 }}
+          onPress={() => handleTransactionPress(tx)}
+        >
         <View style={styles.transactionContent}>
           <View style={styles.transactionHeader}>
             <View style={styles.transactionInfo}>
@@ -809,13 +817,18 @@ export default function AssetDetailScreen() {
             </Text>
           </View>
         </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </BlurredContainer>
     );
   };
 
   const renderListHeader = () => (
     <>
-        <View style={styles.balanceContainer}>
+        <BlurredContainer
+          style={styles.balanceContainer}
+          borderRadius={theme.borderRadius.lg}
+          opacity={0.7}
+        >
           {(() => {
             const asset = getAsset();
             const showImage = asset?.imageUrl && !imageError;
@@ -900,7 +913,7 @@ export default function AssetDetailScreen() {
               </>
             );
           })()}
-        </View>
+        </BlurredContainer>
 
         {/* Per-Network Breakdown for Mapped Assets */}
         {/* Only show breakdown if we're NOT viewing a specific network */}
@@ -912,7 +925,11 @@ export default function AssetDetailScreen() {
 
           if (mappedAsset && mappedAsset.sourceBalances.length >= 1) {
             return (
-              <View style={styles.networkBreakdownContainer}>
+              <BlurredContainer
+                style={styles.networkBreakdownContainer}
+                borderRadius={theme.borderRadius.lg}
+                opacity={0.7}
+              >
                 <Text style={styles.networkBreakdownTitle}>Per-Network Breakdown</Text>
                 {mappedAsset.sourceBalances.map((source, index) => {
                   const networkConfig = getNetworkConfig(source.networkId);
@@ -947,7 +964,7 @@ export default function AssetDetailScreen() {
                     </View>
                   );
                 })}
-              </View>
+              </BlurredContainer>
             );
           }
           return null;
@@ -1031,14 +1048,18 @@ export default function AssetDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
+        <BlurredContainer
+          style={styles.header}
+          borderRadius={0}
+          opacity={0.8}
         >
-          <Ionicons name="arrow-back" size={24} color={themeColors.primary} />
-        </TouchableOpacity>
-        <View style={styles.titleContainer}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
+          </TouchableOpacity>
+          <View style={styles.titleContainer}>
           <Text style={styles.title}>{assetName}</Text>
           {/* Show network badge if we're viewing a specific network within multi-network context */}
           {networkId && (() => {
@@ -1097,9 +1118,9 @@ export default function AssetDetailScreen() {
             }
             return null;
           })()}
-        </View>
-        <View style={styles.placeholder} />
-      </View>
+          </View>
+          <View style={styles.placeholder} />
+        </BlurredContainer>
 
       <FlatList
         data={filteredTransactions}
@@ -1134,7 +1155,7 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     header: {
       flexDirection: 'row',
@@ -1142,10 +1163,8 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'space-between',
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.card,
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.border,
-      ...theme.shadows.sm,
     },
     backButton: {
       padding: theme.spacing.xs,
@@ -1187,12 +1206,9 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.lg,
     },
     balanceContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.xl,
       marginBottom: theme.spacing.lg,
       alignItems: 'center',
-      ...theme.shadows.md,
     },
     assetHeader: {
       flexDirection: 'row',
@@ -1306,6 +1322,9 @@ const createStyles = (theme: Theme) =>
       marginHorizontal: theme.spacing.sm,
       marginBottom: theme.spacing.lg,
       gap: theme.spacing.sm,
+      backgroundColor: theme.colors.card,
+      borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.md,
     },
     sendButton: {
       flex: 1,
@@ -1316,6 +1335,7 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.sm,
       borderRadius: theme.borderRadius.md,
       gap: theme.spacing.xs,
+      opacity: 1,
       ...theme.shadows.sm,
     },
     receiveButton: {
@@ -1327,6 +1347,7 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.sm,
       borderRadius: theme.borderRadius.md,
       gap: theme.spacing.xs,
+      opacity: 1,
       ...theme.shadows.sm,
     },
     optOutButton: {
@@ -1381,11 +1402,8 @@ const createStyles = (theme: Theme) =>
       paddingHorizontal: theme.spacing.md,
     },
     transactionItem: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
       marginBottom: theme.spacing.md,
-      ...theme.shadows.md,
       borderLeftWidth: 4,
       borderLeftColor: 'transparent',
     },
@@ -1478,12 +1496,9 @@ const createStyles = (theme: Theme) =>
       fontFamily: 'monospace',
     },
     networkBreakdownContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
       marginHorizontal: theme.spacing.md,
       marginBottom: theme.spacing.lg,
-      ...theme.shadows.sm,
     },
     networkBreakdownTitle: {
       fontSize: 16,

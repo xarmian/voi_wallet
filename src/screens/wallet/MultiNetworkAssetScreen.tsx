@@ -23,6 +23,8 @@ import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
 import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface MultiNetworkAssetRouteParams {
   assetName: string;
@@ -34,6 +36,7 @@ interface MultiNetworkAssetRouteParams {
 export default function MultiNetworkAssetScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
+  const { theme } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [imageError, setImageError] = useState(false);
   const route = useRoute();
@@ -74,21 +77,25 @@ export default function MultiNetworkAssetScreen() {
   if (!mappedAsset) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
+          <BlurredContainer
+            style={styles.header}
+            borderRadius={0}
+            opacity={0.8}
           >
-            <Ionicons name="arrow-back" size={24} color={themeColors.primary} />
-          </TouchableOpacity>
-          <Text style={styles.title}>Asset Not Found</Text>
-          <View style={styles.placeholder} />
-        </View>
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>
-            This asset could not be found in your balance.
-          </Text>
-        </View>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => navigation.goBack()}
+            >
+              <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
+            </TouchableOpacity>
+            <Text style={styles.title}>Asset Not Found</Text>
+            <View style={styles.placeholder} />
+          </BlurredContainer>
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>
+              This asset could not be found in your balance.
+            </Text>
+          </View>
       </SafeAreaView>
     );
   }
@@ -213,14 +220,18 @@ export default function MultiNetworkAssetScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
+        <BlurredContainer
+          style={styles.header}
+          borderRadius={0}
+          opacity={0.8}
         >
-          <Ionicons name="arrow-back" size={24} color={themeColors.primary} />
-        </TouchableOpacity>
-        <View style={styles.titleContainer}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
+          </TouchableOpacity>
+          <View style={styles.titleContainer}>
           <Text style={styles.title}>{assetName}</Text>
           <View style={styles.headerNetworkBadges}>
             {Array.from(
@@ -245,9 +256,9 @@ export default function MultiNetworkAssetScreen() {
               );
             })}
           </View>
-        </View>
-        <View style={styles.placeholder} />
-      </View>
+          </View>
+          <View style={styles.placeholder} />
+        </BlurredContainer>
 
       <ScrollView
         style={styles.scrollView}
@@ -257,7 +268,11 @@ export default function MultiNetworkAssetScreen() {
         }
       >
         {/* Combined Balance Card */}
-        <View style={styles.balanceContainer}>
+        <BlurredContainer
+          style={styles.balanceContainer}
+          borderRadius={theme.borderRadius.lg}
+          opacity={0.7}
+        >
           <View style={styles.assetHeader}>
             {renderAssetImage()}
             <View style={styles.assetTitleSection}>
@@ -286,10 +301,14 @@ export default function MultiNetworkAssetScreen() {
             {formattedBalance} {mappedAsset.symbol || assetName}
           </Text>
           <Text style={styles.balanceUsd}>{calculateTotalUsdValue} USD</Text>
-        </View>
+        </BlurredContainer>
 
         {/* Per-Network Breakdown */}
-        <View style={styles.networkBreakdownContainer}>
+        <BlurredContainer
+          style={styles.networkBreakdownContainer}
+          borderRadius={theme.borderRadius.lg}
+          opacity={0.7}
+        >
           <Text style={styles.networkBreakdownTitle}>
             Balances by Network
           </Text>
@@ -378,7 +397,7 @@ export default function MultiNetworkAssetScreen() {
               </TouchableOpacity>
             );
           })}
-        </View>
+        </BlurredContainer>
 
         {/* Action Buttons */}
         <View style={styles.actionButtonsContainer}>
@@ -398,7 +417,11 @@ export default function MultiNetworkAssetScreen() {
 
         {/* Info Section - only show if asset is on multiple networks */}
         {mappedAsset.sourceBalances.length > 1 && (
-          <View style={styles.infoContainer}>
+          <BlurredContainer
+            style={styles.infoContainer}
+            borderRadius={theme.borderRadius.md}
+            opacity={0.7}
+          >
             <Ionicons
               name="information-circle-outline"
               size={20}
@@ -408,7 +431,7 @@ export default function MultiNetworkAssetScreen() {
               This asset is available on multiple networks. Tap a network above to
               view its transaction history and network-specific details.
             </Text>
-          </View>
+          </BlurredContainer>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -419,7 +442,7 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     header: {
       flexDirection: 'row',
@@ -427,7 +450,6 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'space-between',
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.card,
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.border,
       ...theme.shadows.sm,
@@ -474,12 +496,9 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.lg,
     },
     balanceContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.xl,
       marginBottom: theme.spacing.lg,
       alignItems: 'center',
-      ...theme.shadows.md,
     },
     assetHeader: {
       flexDirection: 'row',
@@ -540,11 +559,8 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textMuted,
     },
     networkBreakdownContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
       marginBottom: theme.spacing.lg,
-      ...theme.shadows.sm,
     },
     networkBreakdownTitle: {
       fontSize: 18,
@@ -614,6 +630,9 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       gap: theme.spacing.sm,
       marginBottom: theme.spacing.lg,
+      padding: theme.spacing.md,
+      backgroundColor: theme.colors.card,
+      borderRadius: theme.borderRadius.lg,
     },
     sendButton: {
       flex: 1,
@@ -624,6 +643,7 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.md,
       borderRadius: theme.borderRadius.md,
       gap: theme.spacing.xs,
+      opacity: 1,
       ...theme.shadows.sm,
     },
     receiveButton: {
@@ -635,6 +655,7 @@ const createStyles = (theme: Theme) =>
       paddingVertical: theme.spacing.md,
       borderRadius: theme.borderRadius.md,
       gap: theme.spacing.xs,
+      opacity: 1,
       ...theme.shadows.sm,
     },
     actionButtonText: {
@@ -644,8 +665,6 @@ const createStyles = (theme: Theme) =>
     },
     infoContainer: {
       flexDirection: 'row',
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       gap: theme.spacing.sm,
     },
