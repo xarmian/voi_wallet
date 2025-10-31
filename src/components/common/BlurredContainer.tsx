@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { useTheme } from '@/contexts/ThemeContext';
+import { SafeBlurView } from './SafeBlurView';
 
 interface BlurredContainerProps {
   children: React.ReactNode;
@@ -84,8 +84,13 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
       : extractLayoutProps(style)
     : {};
 
+  const overlayBackgroundColor =
+    theme.mode === 'dark'
+      ? `rgba(0, 0, 0, ${Platform.OS === 'android' ? 0.6 : 0.3})`
+      : `rgba(255, 255, 255, ${Platform.OS === 'android' ? 0.6 : 0.3})`;
+
   return (
-    <BlurView
+    <SafeBlurView
       intensity={intensity}
       tint={blurTint}
       style={[
@@ -100,9 +105,7 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
           styles.overlay,
           {
             borderRadius,
-            backgroundColor: theme.mode === 'dark'
-              ? `rgba(0, 0, 0, ${Platform.OS === 'android' ? 0.6 : 0.3})`
-              : `rgba(255, 255, 255, ${Platform.OS === 'android' ? 0.6 : 0.3})`,
+            backgroundColor: overlayBackgroundColor,
           },
         ]}
         pointerEvents="none"
@@ -112,7 +115,7 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
       <View style={[styles.content, layoutStyle, { opacity: 1 }]}>
         {children}
       </View>
-    </BlurView>
+    </SafeBlurView>
   );
 };
 

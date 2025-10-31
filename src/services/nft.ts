@@ -4,6 +4,9 @@ import {
   NFTToken,
   ARC72Token,
   NFTMetadata,
+  NFTCollectionsIndexerResponse,
+  NFTCollectionsResponse,
+  ARC72Collection,
 } from '@/types/nft';
 import { NFT_CONSTANTS, NFT_ERROR_MESSAGES } from '@/constants/nft';
 
@@ -226,5 +229,125 @@ export class NFTService {
       key: key.charAt(0).toUpperCase() + key.slice(1),
       value: String(value),
     }));
+  }
+
+  /**
+   * Fetch NFT collections with optional filtering
+   */
+  static async fetchCollections(params?: {
+    contractId?: string;
+    name?: string;
+    verified?: boolean;
+    blacklisted?: boolean;
+    creator?: string;
+    limit?: number;
+    nextToken?: string;
+  }): Promise<NFTCollectionsResponse> {
+    try {
+      // Build query parameters
+      const queryParams = new URLSearchParams();
+
+      if (params?.contractId) queryParams.append('contractId', params.contractId);
+      if (params?.name) queryParams.append('name', params.name);
+      if (params?.verified !== undefined) queryParams.append('verified', params.verified ? '1' : '0');
+      if (params?.blacklisted !== undefined) queryParams.append('blacklisted', params.blacklisted.toString());
+      if (params?.creator) queryParams.append('creator', params.creator);
+      if (params?.limit) queryParams.append('limit', params.limit.toString());
+      if (params?.nextToken) queryParams.append('next-token', params.nextToken);
+
+      // Default to verified collections and filter out blacklisted
+      /*if (params?.verified === undefined) {
+        queryParams.append('verified', '1');
+      }*/
+      if (params?.blacklisted === undefined) {
+        queryParams.append('blacklisted', 'false');
+      }
+
+      const url = `${NFT_CONSTANTS.BASE_URL}/collections${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      const response = await this.fetchWithTimeout(url);
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch collections: ${response.status} ${response.statusText}`
+        );
+      }
+
+      const data: NFTCollectionsIndexerResponse = await response.json();
+
+      return {
+        currentRound: data['current-round'],
+        totalCount: data['total-count'],
+        nextToken: data['next-token'],
+        collections: data.collections,
+      };
+    } catch (error) {
+      console.error('Error fetching collections:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch tokens from a specific collection
+   */
+  static async fetchTokensByCollection(
+    contractId: number,
+    params?: {
+      limit?: number;
+      nextToken?: string;
+    }
+  ): Promise<NFTCollectionResponse> {
+    try {
+      // Build query parameters
+      const queryParams = new URLSearchParams();
+      queryParams.append('contractId', contractId.toString());
+
+      if (params?.limit) queryParams.append('limit', params.limit.toString());
+      if (params?.nextToken) queryParams.append('next-token', params.nextToken);
+
+      const url = `${NFT_CONSTANTS.BASE_URL}/tokens?${queryParams.toString()}`;
+      const response = await this.fetchWithTimeout(url);
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch collection tokens: ${response.status} ${response.statusText}`
+        );
+      }
+
+      const data: NFTIndexerResponse = await response.json();
+
+      // Transform and parse the NFT data
+      const transformedTokens = data.tokens.map((token) =>
+        this.transformARC72Token(token)
+      );
+
+      return {
+        currentRound: data.currentRound,
+        tokens: transformedTokens,
+        nextToken: data['next-token'],
+      };
+    } catch (error) {
+      console.error('Error fetching collection tokens:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create an ownership map for quick lookup
+   */
+  static createOwnershipMap(tokens: NFTToken[]): Set<string> {
+    return new Set(
+      tokens.map((token) => `${token.contractId}-${token.tokenId}`)
+    );
+  }
+
+  /**
+   * Check if a token is owned based on ownership map
+   */
+  static isTokenOwned(
+    contractId: number,
+    tokenId: string,
+    ownershipMap: Set<string>
+  ): boolean {
+    return ownershipMap.has(`${contractId}-${tokenId}`);
   }
 }

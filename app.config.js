@@ -5,6 +5,7 @@ const WALLETCONNECT_PROJECT_ID =
   '';
 
 const withAndroidJvmTarget = require('./plugins/withAndroidJvmTarget');
+const withExpoModulesProguard = require('./plugins/withExpoModulesProguard');
 
 export default {
   "expo": {
@@ -33,7 +34,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "8",
+      "buildNumber": "10",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -67,7 +68,7 @@ export default {
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "versionCode": 8,
+      "versionCode": 11,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",
@@ -112,13 +113,14 @@ export default {
           android: {
             kotlinVersion: "2.0.0",
             compileSdkVersion: 35,
-            targetSdkVersion: 34,
+            targetSdkVersion: 35,
             buildToolsVersion: "35.0.0",
             minSdkVersion: 24,
           },
         },
       ],
       withAndroidJvmTarget,
+      withExpoModulesProguard,
     ]
   }
 };

@@ -27,6 +27,7 @@ import ReceiveScreen from '@/screens/wallet/ReceiveScreen';
 import DiscoverScreen from '@/screens/wallet/DiscoverScreen';
 import NFTScreen from '@/screens/wallet/NFTScreen';
 import NFTDetailScreen from '@/screens/wallet/NFTDetailScreen';
+import CollectionDetailScreen from '@/screens/wallet/CollectionDetailScreen';
 import SettingsScreen from '@/screens/settings/SettingsScreen';
 import ShowRecoveryPhraseScreen from '@/screens/settings/ShowRecoveryPhraseScreen';
 import ChangePinScreen from '@/screens/settings/ChangePinScreen';
@@ -316,6 +317,7 @@ function NFTStackNavigator() {
         }}
       >
         <NFTStack.Screen name="NFTMain" component={NFTScreen} />
+        <NFTStack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
         <NFTStack.Screen name="NFTDetail" component={NFTDetailScreen} />
         <NFTStack.Screen name="Send" component={SendScreen} />
         <NFTStack.Screen

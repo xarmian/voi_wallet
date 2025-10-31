@@ -1,90 +1,156 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
-  RefreshControl,
-  ActivityIndicator,
-  Image,
-  Dimensions,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
-import { NFTToken } from '@/types/nft';
-import { NFT_CONSTANTS, NFT_ERROR_MESSAGES } from '@/constants/nft';
+import { ARC72Collection, NFTToken } from '@/types/nft';
+import { NFT_CONSTANTS } from '@/constants/nft';
+import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
-import UniversalHeader from '@/components/common/UniversalHeader';
+import NFTGridView from '@/components/nft/NFTGridView';
+import CollectionBrowser from '@/components/nft/CollectionBrowser';
 import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
+import { CommonActions } from '@react-navigation/native';
 
-const { width } = Dimensions.get('window');
-const itemSize = (width - 60) / 2; // 2 columns with padding
-
-type NetworkFilter = 'voi' | 'algorand';
+type TabType = 'my-nfts' | 'browse-collections';
+type ViewMode = 'my-nfts' | 'browse-collections' | 'collection-tokens';
 
 export default function NFTScreen() {
-  const [nfts, setNfts] = useState<NFTToken[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [imageErrors, setImageErrors] = useState<Set<string>>(new Set());
-  const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
-  const [isAddAccountModalVisible, setIsAddAccountModalVisible] =
-    useState(false);
-  const [networkFilter, setNetworkFilter] = useState<NetworkFilter>('voi');
-
   const navigation = useNavigation<StackNavigationProp<any>>();
   const activeAccount = useActiveAccount();
   const { theme, setNFTTheme } = useTheme();
+
+  // Tab and view state
+  const [activeTab, setActiveTab] = useState<TabType>('my-nfts');
+  const [viewMode, setViewMode] = useState<ViewMode>('my-nfts');
+
+  // My NFTs state
+  const [myNFTs, setMyNFTs] = useState<NFTToken[]>([]);
+  const [isLoadingMyNFTs, setIsLoadingMyNFTs] = useState(true);
+  const [imageErrors, setImageErrors] = useState<Set<string>>(new Set());
   const [settingThemeNFT, setSettingThemeNFT] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
+  // Collection tokens state
+  const [selectedCollection, setSelectedCollection] = useState<ARC72Collection | null>(null);
+  const [collectionTokens, setCollectionTokens] = useState<NFTToken[]>([]);
+  const [isLoadingCollectionTokens, setIsLoadingCollectionTokens] = useState(false);
+  const [ownershipMap, setOwnershipMap] = useState<Set<string>>(new Set());
+  const [loadingMoreTokens, setLoadingMoreTokens] = useState(false);
+  const [nextTokensToken, setNextTokensToken] = useState<number | undefined>();
+  const [hasMoreTokens, setHasMoreTokens] = useState(false);
+
+  // Modals
+  const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
+  const [isAddAccountModalVisible, setIsAddAccountModalVisible] = useState(false);
+
+  // Load my NFTs on mount
   useEffect(() => {
-    if (activeAccount) {
-      loadNFTs();
+    if (activeAccount && viewMode === 'my-nfts') {
+      loadMyNFTs();
     }
-  }, [activeAccount?.address]);
+  }, [activeAccount?.address, viewMode]);
 
-  // Cleanup image error tracking on unmount to prevent memory leaks
+  // Reset view when tab changes
   useEffect(() => {
-    return () => {
-      setImageErrors(new Set());
-    };
-  }, []);
+    if (activeTab === 'my-nfts') {
+      setViewMode('my-nfts');
+      setSelectedCollection(null);
+    } else {
+      setViewMode('browse-collections');
+      setSelectedCollection(null);
+    }
+  }, [activeTab]);
 
-  const loadNFTs = async () => {
+  // Load collection tokens when collection is selected
+  useEffect(() => {
+    if (selectedCollection && viewMode === 'collection-tokens') {
+      loadCollectionTokens(true);
+    }
+  }, [selectedCollection, viewMode]);
+
+  const loadMyNFTs = useCallback(async () => {
     if (!activeAccount) return;
 
     try {
-      setIsLoading(true);
+      setIsLoadingMyNFTs(true);
       const response = await NFTService.fetchUserNFTs(activeAccount.address);
-      // Add networkId to each NFT token (currently all are Voi)
-      const tokensWithNetwork = response.tokens.map(token => ({
+      const tokensWithNetwork = response.tokens.map((token) => ({
         ...token,
-        networkId: NetworkId.VOI_MAINNET, // All ARC-72 tokens are currently on Voi
+        networkId: NetworkId.VOI_MAINNET,
       }));
-      setNfts(tokensWithNetwork);
+      setMyNFTs(tokensWithNetwork);
     } catch (error) {
       console.error('Failed to load NFTs:', error);
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : NFT_ERROR_MESSAGES.FETCH_FAILED;
-      Alert.alert('Error', errorMessage);
+      Alert.alert('Error', 'Failed to load your NFTs. Please try again.');
     } finally {
-      setIsLoading(false);
+      setIsLoadingMyNFTs(false);
     }
-  };
+  }, [activeAccount]);
+
+  const loadCollectionTokens = useCallback(async (reset = false) => {
+    if (!selectedCollection) return;
+
+    try {
+      if (reset) {
+        setIsLoadingCollectionTokens(true);
+        setCollectionTokens([]);
+        setNextTokensToken(undefined);
+
+        // Load user's NFTs for ownership check
+        if (activeAccount) {
+          const userNFTs = await NFTService.fetchUserNFTs(activeAccount.address);
+          const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
+          setOwnershipMap(ownership);
+        }
+      } else {
+        setLoadingMoreTokens(true);
+      }
+
+      const response = await NFTService.fetchTokensByCollection(
+        selectedCollection.contractId,
+        {
+          limit: 20,
+          nextToken: reset ? undefined : nextTokensToken,
+        }
+      );
+
+      if (reset) {
+        setCollectionTokens(response.tokens);
+      } else {
+        setCollectionTokens(prev => [...prev, ...response.tokens]);
+      }
+
+      setNextTokensToken(response.nextToken);
+      setHasMoreTokens(!!response.nextToken);
+    } catch (error) {
+      console.error('Failed to load collection tokens:', error);
+      Alert.alert('Error', 'Failed to load collection tokens. Please try again.');
+    } finally {
+      setIsLoadingCollectionTokens(false);
+      setLoadingMoreTokens(false);
+    }
+  }, [selectedCollection, nextTokensToken, activeAccount]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadNFTs();
+    if (viewMode === 'my-nfts') {
+      await loadMyNFTs();
+    } else if (viewMode === 'collection-tokens') {
+      await loadCollectionTokens(true);
+    }
     setRefreshing(false);
   };
 
@@ -92,43 +158,50 @@ export default function NFTScreen() {
     navigation.navigate('NFTDetail', { nft });
   };
 
-  const handleNFTPressLong = (nft: NFTToken) => {
+  const handleNFTPressLong = async (nft: NFTToken) => {
     if (!NFTService.hasValidImage(nft) || !nft.imageUrl) {
       Alert.alert('Cannot Set Theme', 'This NFT does not have a valid image.');
       return;
     }
 
-    Alert.alert(
-      'Set as Theme',
-      `Use "${NFTService.getDisplayName(nft)}" as your app theme?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Set Theme',
-          onPress: async () => {
-            const nftKey = `${nft.contractId}:${nft.tokenId}`;
-            setSettingThemeNFT(nftKey);
-            try {
-              await setNFTTheme({
-                contractId: nft.contractId,
-                tokenId: nft.tokenId,
-                imageUrl: nft.imageUrl!,
-                nftName: NFTService.getDisplayName(nft),
-              });
-              Alert.alert('Success', 'Theme has been set successfully!');
-            } catch (error) {
-              console.error('Failed to set NFT theme:', error);
-              Alert.alert(
-                'Error',
-                'Failed to extract colors from NFT image. Please try another NFT.'
-              );
-            } finally {
-              setSettingThemeNFT(null);
-            }
-          },
-        },
-      ]
-    );
+    const nftKey = `${nft.contractId}:${nft.tokenId}`;
+    setSettingThemeNFT(nftKey);
+
+    try {
+      await setNFTTheme({
+        contractId: nft.contractId,
+        tokenId: nft.tokenId,
+        imageUrl: nft.imageUrl,
+        nftName: NFTService.getDisplayName(nft),
+      });
+      Alert.alert('Success', 'Theme has been set successfully!');
+    } catch (error) {
+      console.error('Failed to set NFT theme:', error);
+      Alert.alert(
+        'Error',
+        'Failed to extract colors from NFT image. Please try another NFT.'
+      );
+    } finally {
+      setSettingThemeNFT(null);
+    }
+  };
+
+  const handleCollectionPress = (collection: ARC72Collection) => {
+    setSelectedCollection(collection);
+    setViewMode('collection-tokens');
+  };
+
+  const handleBackToCollections = () => {
+    setSelectedCollection(null);
+    setViewMode('browse-collections');
+    setCollectionTokens([]);
+    setOwnershipMap(new Set());
+  };
+
+  const handleLoadMoreTokens = () => {
+    if (!loadingMoreTokens && hasMoreTokens && viewMode === 'collection-tokens') {
+      loadCollectionTokens(false);
+    }
   };
 
   const handleImageError = (contractId: number, tokenId: string) => {
@@ -136,193 +209,181 @@ export default function NFTScreen() {
     setImageErrors((prev) => {
       const newSet = new Set(prev);
       newSet.add(key);
-
-      // Prevent memory leaks by limiting cache size
       if (newSet.size > NFT_CONSTANTS.MAX_IMAGE_CACHE_SIZE) {
         const iterator = newSet.values();
-        iterator.next(); // Remove first (oldest) entry
+        iterator.next();
         newSet.delete(iterator.next().value);
       }
-
       return newSet;
     });
   };
 
-  const hasImageError = (contractId: number, tokenId: string) => {
-    const key = `${contractId}:${tokenId}`;
-    return imageErrors.has(key);
-  };
-
-  const handleAccountSelectorPress = () => {
-    setIsAccountModalVisible(true);
-  };
-
-  const handleAccountModalClose = () => {
-    setIsAccountModalVisible(false);
-  };
-
-  const handleAddAccount = () => {
-    setIsAccountModalVisible(false);
-    setIsAddAccountModalVisible(true);
-  };
-
-  // Filter NFTs based on selected network
-  const filteredNfts = nfts.filter(nft => {
-    if (networkFilter === 'voi') {
-      return nft.networkId?.includes('voi') ?? true; // Default to Voi if no networkId
-    } else if (networkFilter === 'algorand') {
-      return nft.networkId?.includes('algorand') ?? false;
-    }
-    return true;
-  });
-
-  const renderNetworkTabs = () => (
-    <View style={styles.networkTabsContainer}>
+  const renderTabs = () => (
+    <View style={[styles.tabContainer, { borderBottomColor: theme.colors.border }]}>
       <TouchableOpacity
         style={[
-          styles.networkTab,
-          networkFilter === 'voi' && styles.networkTabActive,
+          styles.tab,
+          activeTab === 'my-nfts' && [
+            styles.activeTab,
+            { borderBottomColor: theme.colors.primary },
+          ],
         ]}
-        onPress={() => setNetworkFilter('voi')}
-        activeOpacity={0.7}
+        onPress={() => setActiveTab('my-nfts')}
       >
         <Text
           style={[
-            styles.networkTabText,
-            networkFilter === 'voi' && styles.networkTabTextActive,
+            styles.tabText,
+            { color: theme.colors.text },
+            activeTab === 'my-nfts' && [
+              styles.activeTabText,
+              { color: theme.colors.primary },
+            ],
           ]}
         >
-          Voi
+          My NFTs
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
         style={[
-          styles.networkTab,
-          styles.networkTabDisabled,
-          networkFilter === 'algorand' && styles.networkTabActive,
+          styles.tab,
+          activeTab === 'browse-collections' && [
+            styles.activeTab,
+            { borderBottomColor: theme.colors.primary },
+          ],
         ]}
-        disabled={true}
-        activeOpacity={0.7}
+        onPress={() => setActiveTab('browse-collections')}
       >
         <Text
           style={[
-            styles.networkTabText,
-            styles.networkTabTextDisabled,
-            networkFilter === 'algorand' && styles.networkTabTextActive,
+            styles.tabText,
+            { color: theme.colors.text },
+            activeTab === 'browse-collections' && [
+              styles.activeTabText,
+              { color: theme.colors.primary },
+            ],
           ]}
         >
-          Algorand
+          Browse Collections
         </Text>
       </TouchableOpacity>
     </View>
   );
 
-  const renderNFTItem = ({ item }: { item: NFTToken }) => {
-    const hasError = hasImageError(item.contractId, item.tokenId);
-    const showImage = NFTService.hasValidImage(item) && !hasError;
-    const nftKey = `${item.contractId}:${item.tokenId}`;
-    const isSettingTheme = settingThemeNFT === nftKey;
+  const renderCollectionHeader = () => {
+    if (viewMode !== 'collection-tokens' || !selectedCollection) return null;
 
     return (
-      <TouchableOpacity
-        style={[styles.nftItem, { backgroundColor: theme.colors.card }]}
-        onPress={() => handleNFTPress(item)}
-        onLongPress={() => handleNFTPressLong(item)}
-        activeOpacity={0.8}
-        disabled={isSettingTheme}
-      >
-        <View style={styles.nftImageContainer}>
-          {isSettingTheme && (
-            <View style={styles.settingThemeOverlay}>
-              <ActivityIndicator size="small" color={theme.colors.primary} />
-            </View>
-          )}
-          {showImage ? (
-            <Image
-              source={{ uri: item.imageUrl! }}
-              style={styles.nftImage}
-              onError={() => handleImageError(item.contractId, item.tokenId)}
-            />
-          ) : (
-            <View
-              style={[
-                styles.placeholderImage,
-                { backgroundColor: theme.colors.background },
-              ]}
-            >
-              <Ionicons
-                name="image-outline"
-                size={32}
-                color={theme.colors.textSecondary}
-              />
-            </View>
-          )}
-        </View>
-        <View style={styles.nftInfo}>
-          <Text
-            style={[styles.nftName, { color: theme.colors.text }]}
-            numberOfLines={2}
-          >
-            {NFTService.getDisplayName(item)}
-          </Text>
-          <Text
-            style={[styles.nftContract, { color: theme.colors.textSecondary }]}
-            numberOfLines={1}
-          >
-            #{item.tokenId}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
-  const renderEmptyState = () => {
-    const isAlgorandTab = networkFilter === 'algorand';
-    return (
-      <View style={styles.emptyContainer}>
-        <Ionicons
-          name="images-outline"
-          size={64}
-          color={theme.colors.textSecondary}
-        />
-        <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
-          No NFTs Found
-        </Text>
-        <Text
-          style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+      <View style={[styles.collectionHeader, { backgroundColor: theme.colors.surface, borderBottomColor: theme.colors.border }]}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={handleBackToCollections}
+          activeOpacity={0.7}
         >
-          {isAlgorandTab
-            ? 'Algorand NFT support coming soon'
-            : 'Your NFT collection will appear here when you have ARC-72 tokens'}
-        </Text>
+          <Ionicons name="chevron-back" size={24} color={theme.colors.text} />
+        </TouchableOpacity>
+        <View style={styles.collectionHeaderInfo}>
+          <Text style={[styles.collectionHeaderName, { color: theme.colors.text }]} numberOfLines={1}>
+            {selectedCollection.name}
+          </Text>
+          <Text style={[styles.collectionHeaderSub, { color: theme.colors.textSecondary }]}>
+            {selectedCollection.totalSupply.toLocaleString()} items
+          </Text>
+        </View>
       </View>
     );
   };
 
-  const renderLoadingState = () => (
-    <View style={styles.loadingContainer}>
-      <ActivityIndicator size="large" color={theme.colors.primary} />
-      <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
-        Loading your NFTs...
+  const renderEmptyState = () => (
+    <View style={styles.emptyContainer}>
+      <Ionicons
+        name="images-outline"
+        size={64}
+        color={theme.colors.textSecondary}
+      />
+      <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
+        No NFTs Found
+      </Text>
+      <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+        Your NFT collection will appear here when you have ARC-72 tokens
       </Text>
     </View>
   );
 
-  if (isLoading) {
-    return (
-      <SafeAreaView
-        style={[styles.container, { backgroundColor: theme.colors.background }]}
-        edges={['top']}
-      >
-        <UniversalHeader
-          title="My NFTs"
-          subtitle="Your ARC-72 NFT Collection"
-          onAccountSelectorPress={handleAccountSelectorPress}
+  const renderContent = () => {
+    if (viewMode === 'my-nfts') {
+      if (isLoadingMyNFTs) {
+        return (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+              Loading your NFTs...
+            </Text>
+          </View>
+        );
+      }
+
+      return (
+        <NFTGridView
+          nfts={myNFTs}
+          onNFTPress={handleNFTPress}
+          onNFTLongPress={handleNFTPressLong}
+          theme={theme}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          ListEmptyComponent={renderEmptyState()}
+          processingNFTKey={settingThemeNFT}
+          imageErrors={imageErrors}
+          onImageError={handleImageError}
         />
-        {renderLoadingState()}
-      </SafeAreaView>
-    );
-  }
+      );
+    } else if (viewMode === 'browse-collections') {
+      return (
+        <CollectionBrowser
+          theme={theme}
+          onCollectionPress={handleCollectionPress}
+          showSearch={true}
+          searchPlaceholder="Search collections..."
+        />
+      );
+    } else if (viewMode === 'collection-tokens') {
+      if (isLoadingCollectionTokens) {
+        return (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+              Loading tokens...
+            </Text>
+          </View>
+        );
+      }
+
+      return (
+        <NFTGridView
+          nfts={collectionTokens}
+          onNFTPress={handleNFTPress}
+          onNFTLongPress={handleNFTPressLong}
+          theme={theme}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          onEndReached={handleLoadMoreTokens}
+          processingNFTKey={settingThemeNFT}
+          imageErrors={imageErrors}
+          onImageError={handleImageError}
+          showOwnedBadge={true}
+          ownershipMap={ownershipMap}
+          ListFooterComponent={
+            loadingMoreTokens ? (
+              <View style={styles.loadingMoreContainer}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+              </View>
+            ) : undefined
+          }
+        />
+      );
+    }
+
+    return null;
+  };
 
   return (
     <SafeAreaView
@@ -330,39 +391,31 @@ export default function NFTScreen() {
       edges={['top']}
     >
       <UniversalHeader
-        title="My NFTs"
-        subtitle={`${filteredNfts.length} NFT${filteredNfts.length !== 1 ? 's' : ''} found`}
-        onAccountSelectorPress={handleAccountSelectorPress}
-      />
-
-      {renderNetworkTabs()}
-
-      <FlatList
-        data={filteredNfts}
-        renderItem={renderNFTItem}
-        keyExtractor={(item) => `${item.contractId}-${item.tokenId}`}
-        numColumns={2}
-        contentContainerStyle={styles.listContainer}
-        columnWrapperStyle={styles.row}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={theme.colors.primary}
-            colors={[theme.colors.primary]}
-          />
+        title="NFTs"
+        subtitle={
+          viewMode === 'my-nfts'
+            ? `${myNFTs.length} NFT${myNFTs.length !== 1 ? 's' : ''}`
+            : viewMode === 'collection-tokens' && selectedCollection
+            ? selectedCollection.name
+            : 'Browse Collections'
         }
-        ListEmptyComponent={renderEmptyState}
-        showsVerticalScrollIndicator={false}
+        onAccountSelectorPress={() => setIsAccountModalVisible(true)}
+        showAccountSelector={activeTab === 'my-nfts'}
       />
+
+      {renderTabs()}
+      {renderCollectionHeader()}
+      {renderContent()}
 
       <AccountListModal
         isVisible={isAccountModalVisible}
-        onClose={handleAccountModalClose}
-        onAddAccount={handleAddAccount}
+        onClose={() => setIsAccountModalVisible(false)}
+        onAddAccount={() => {
+          setIsAccountModalVisible(false);
+          setIsAddAccountModalVisible(true);
+        }}
       />
 
-      {/* Add Account Modal */}
       <AddAccountModal
         isVisible={isAddAccountModalVisible}
         onClose={() => setIsAddAccountModalVisible(false)}
@@ -371,9 +424,7 @@ export default function NFTScreen() {
           navigation.dispatch(
             CommonActions.navigate({
               name: 'Settings',
-              params: {
-                screen: 'CreateAccount',
-              },
+              params: { screen: 'CreateAccount' },
             })
           );
         }}
@@ -382,9 +433,7 @@ export default function NFTScreen() {
           navigation.dispatch(
             CommonActions.navigate({
               name: 'Settings',
-              params: {
-                screen: 'MnemonicImport',
-              },
+              params: { screen: 'MnemonicImport' },
             })
           );
         }}
@@ -398,10 +447,7 @@ export default function NFTScreen() {
         }}
         onAddWatchAccount={() => {
           setIsAddAccountModalVisible(false);
-          navigation.navigate(
-            'Settings' as never,
-            { screen: 'AddWatchAccount' } as never
-          );
+          navigation.navigate('Settings' as never, { screen: 'AddWatchAccount' } as never);
         }}
       />
     </SafeAreaView>
@@ -412,100 +458,53 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  networkTabsContainer: {
+  tabContainer: {
     flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    gap: 8,
+    marginTop: 12,
+    marginHorizontal: 16,
+    borderBottomWidth: 1,
   },
-  networkTab: {
+  tab: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  activeTab: {
+    borderBottomWidth: 2,
+  },
+  tabText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  activeTabText: {
+    fontWeight: '600',
+  },
+  collectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#ccc',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
   },
-  networkTabActive: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+  backButton: {
+    marginRight: 12,
   },
-  networkTabDisabled: {
-    opacity: 0.4,
+  collectionHeaderInfo: {
+    flex: 1,
   },
-  networkTabText: {
-    fontSize: 14,
+  collectionHeaderName: {
+    fontSize: 18,
     fontWeight: '600',
-    color: '#666',
+    marginBottom: 2,
   },
-  networkTabTextActive: {
-    color: '#fff',
+  collectionHeaderSub: {
+    fontSize: 13,
   },
-  networkTabTextDisabled: {
-    color: '#999',
-  },
-  listContainer: {
-    flexGrow: 1,
-    padding: 20,
-  },
-  row: {
-    justifyContent: 'space-between',
-  },
-  nftItem: {
-    borderRadius: 12,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-    width: itemSize,
-  },
-  nftImageContainer: {
-    width: '100%',
-    height: itemSize,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-    overflow: 'hidden',
-  },
-  nftImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  placeholderImage: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
+  loadingMoreContainer: {
+    paddingVertical: 16,
     alignItems: 'center',
-  },
-  settingThemeOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1,
-    borderRadius: 12,
-  },
-  nftInfo: {
-    padding: 12,
-  },
-  nftName: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 4,
-    lineHeight: 18,
-  },
-  nftContract: {
-    fontSize: 12,
-    fontFamily: 'monospace',
   },
   emptyContainer: {
     flex: 1,

@@ -1,11 +1,11 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import AccountSelector from '../account/AccountSelector';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
+import { SafeBlurView } from './SafeBlurView';
 
 interface UniversalHeaderProps {
   title: string;
@@ -14,6 +14,7 @@ interface UniversalHeaderProps {
   showAccountSelector?: boolean;
   showBackButton?: boolean;
   onBackPress?: () => void;
+  rightAction?: React.ReactNode;
 }
 
 export default function UniversalHeader({
@@ -23,6 +24,7 @@ export default function UniversalHeader({
   showAccountSelector = true,
   showBackButton = false,
   onBackPress,
+  rightAction,
 }: UniversalHeaderProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
@@ -46,7 +48,13 @@ export default function UniversalHeader({
         {subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
       </View>
 
-      {showAccountSelector && (
+      {rightAction && (
+        <View style={styles.rightActionContainer}>
+          {rightAction}
+        </View>
+      )}
+
+      {showAccountSelector && !rightAction && (
         <View style={styles.accountSelectorContainer}>
           <AccountSelector
             onPress={onAccountSelectorPress}
@@ -61,7 +69,7 @@ export default function UniversalHeader({
   if (hasNFTBackground) {
     const blurTint = theme.mode === 'dark' ? 'dark' : 'light';
     return (
-      <BlurView
+      <SafeBlurView
         tint={blurTint}
         style={styles.header}
       >
@@ -78,7 +86,7 @@ export default function UniversalHeader({
         <View style={styles.headerContent}>
           {headerContent}
         </View>
-      </BlurView>
+      </SafeBlurView>
     );
   }
 
@@ -135,5 +143,10 @@ const createStyles = (theme: Theme) =>
     accountSelectorContainer: {
       maxWidth: 200,
       minWidth: 140,
+    },
+    rightActionContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
     },
   });
