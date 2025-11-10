@@ -18,6 +18,7 @@ import {
   parseAlgorandUri,
   convertAmountToDisplay,
 } from '@/utils/algorandUri';
+import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
 
@@ -178,7 +179,7 @@ export class DeepLinkService {
       });
 
       // Listen for transaction signing requests (permanent listener)
-      v1Client.on('call_request', (callRequest) => {
+      v1Client.on('call_request', async (callRequest) => {
         // Transform v1 call_request format to match v2 format
         // v1 format: { id, method, params: transactions[] }
         // v2 format: { id, topic, params: { request: { method, params: [transactions[]] }, chainId } }
@@ -196,7 +197,24 @@ export class DeepLinkService {
           },
         };
 
-        // Navigate to transaction request screen
+        // Check if we're already on the TransactionRequestScreen
+        if (this.navigationRef?.isReady()) {
+          const currentRoute = this.navigationRef.getCurrentRoute();
+
+          if (currentRoute?.name === 'WalletConnectTransactionRequest') {
+            // Enqueue the request instead of navigating immediately
+            console.log('[DeepLinkService] Currently on transaction screen, enqueueing V1 request');
+            await TransactionRequestQueue.enqueue({
+              id: transformedRequest.id,
+              topic: transformedRequest.topic,
+              params: transformedRequest.params,
+              version: 1,
+            });
+            return;
+          }
+        }
+
+        // Navigate to transaction request screen if not already there
         this.navigateToRoute({
           screen: 'WalletConnectTransactionRequest',
           params: {

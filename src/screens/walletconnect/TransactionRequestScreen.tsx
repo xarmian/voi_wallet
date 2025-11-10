@@ -13,6 +13,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
+import Toast from 'react-native-toast-message';
 
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import {
@@ -40,6 +41,7 @@ import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 
 type TransactionRequestScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -291,18 +293,51 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           );
         }
 
-        Alert.alert('Success', 'Transactions signed and returned to the dApp.', [
-          {
-            text: 'OK',
-            onPress: () => {
-              if (navigation.canGoBack()) {
-                navigation.goBack();
-              } else {
-                navigation.navigate('Main', { screen: 'Home' });
-              }
-            },
+        // Check if there are pending requests in the queue
+        const nextRequest = await TransactionRequestQueue.peek();
+        const queueSize = await TransactionRequestQueue.size();
+
+        // Show non-blocking toast with queue info
+        Toast.show({
+          type: 'walletConnectSuccess',
+          text1: 'Transaction Signed Successfully',
+          text2: `Your transaction has been signed and sent back to the dApp. ${queueSize > 0 ? 'Processing next request...' : 'You can now return to the dApp.'}`,
+          visibilityTime: 5000,
+          position: 'top',
+          props: {
+            queueSize,
           },
-        ]);
+        });
+
+        if (nextRequest) {
+          // Atomically dequeue only if the request matches (prevents race conditions)
+          const dequeuedRequest = await TransactionRequestQueue.dequeueIfMatch(
+            nextRequest.id,
+            nextRequest.topic
+          );
+
+          if (dequeuedRequest) {
+            // Navigate to the next transaction request
+            navigation.replace('WalletConnectTransactionRequest', {
+              requestEvent: dequeuedRequest,
+              version: dequeuedRequest.version,
+            });
+          } else {
+            // Queue changed, navigate back
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              navigation.navigate('Main', { screen: 'Home' });
+            }
+          }
+        } else {
+          // No pending requests, navigate back
+          if (navigation.canGoBack()) {
+            navigation.goBack();
+          } else {
+            navigation.navigate('Main', { screen: 'Home' });
+          }
+        }
       } catch (error) {
         console.error('Failed to respond to WalletConnect:', error);
         const errorMessage = error instanceof Error
@@ -338,21 +373,60 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
       }
 
-      Alert.alert('Rejected', 'Transaction request rejected', [
-        {
-          text: 'OK',
-          onPress: () => {
-            if (navigation.canGoBack()) {
-              navigation.goBack();
-            } else {
-              navigation.navigate('Main', { screen: 'Home' });
-            }
-          },
+      // Check if there are pending requests in the queue
+      const nextRequest = await TransactionRequestQueue.peek();
+      const queueSize = await TransactionRequestQueue.size();
+
+      // Show non-blocking toast with queue info
+      Toast.show({
+        type: 'walletConnectRejected',
+        text1: 'Transaction Request Rejected',
+        text2: `You declined to sign this transaction. ${queueSize > 0 ? 'Processing next request...' : 'The dApp has been notified.'}`,
+        visibilityTime: 4000,
+        position: 'top',
+        props: {
+          queueSize,
         },
-      ]);
+      });
+
+      if (nextRequest) {
+        // Atomically dequeue only if the request matches (prevents race conditions)
+        const dequeuedRequest = await TransactionRequestQueue.dequeueIfMatch(
+          nextRequest.id,
+          nextRequest.topic
+        );
+
+        if (dequeuedRequest) {
+          // Navigate to the next transaction request
+          navigation.replace('WalletConnectTransactionRequest', {
+            requestEvent: dequeuedRequest,
+            version: dequeuedRequest.version,
+          });
+        } else {
+          // Queue changed, navigate back
+          if (navigation.canGoBack()) {
+            navigation.goBack();
+          } else {
+            navigation.navigate('Main', { screen: 'Home' });
+          }
+        }
+      } else {
+        // No pending requests, navigate back
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.navigate('Main', { screen: 'Home' });
+        }
+      }
     } catch (error) {
       console.error('Failed to reject request:', error);
-      Alert.alert('Error', 'Failed to reject transaction request');
+      Toast.show({
+        type: 'error',
+        text1: 'Error Rejecting Request',
+        text2: 'Unable to send rejection to the dApp. Please try again or close the app.',
+        visibilityTime: 5000,
+        position: 'top',
+      });
     }
   };
 

@@ -61,6 +61,7 @@ import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
 import { NFTToken } from '@/types/nft';
 import { NFTBackground } from '@/components/common/NFTBackground';
+import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 
 export type RootStackParamList = {
   Main: undefined;
@@ -701,17 +702,32 @@ export default function AppNavigator() {
         };
         wcService.on('session_proposal', onProposal);
 
-        const onRequest = (requestEvent: any) => {
+        const onRequest = async (requestEvent: any) => {
           try {
             if (navigationRef.current?.isReady?.()) {
-              navigationRef.current.navigate(
-                'WalletConnectTransactionRequest',
-                { requestEvent }
-              );
+              // Get current route name
+              const currentRoute = navigationRef.current.getCurrentRoute();
+
+              // Check if we're already on the TransactionRequestScreen
+              if (currentRoute?.name === 'WalletConnectTransactionRequest') {
+                // Enqueue the request instead of navigating immediately
+                console.log('[AppNavigator] Currently on transaction screen, enqueueing request');
+                await TransactionRequestQueue.enqueue({
+                  id: requestEvent.id,
+                  topic: requestEvent.topic,
+                  params: requestEvent.params,
+                });
+              } else {
+                // Navigate immediately if not on transaction screen
+                navigationRef.current.navigate(
+                  'WalletConnectTransactionRequest',
+                  { requestEvent }
+                );
+              }
             }
           } catch (err) {
             console.error(
-              'Failed to navigate to WalletConnectTransactionRequest:',
+              'Failed to handle WalletConnect transaction request:',
               err
             );
           }
@@ -738,6 +754,28 @@ export default function AppNavigator() {
         }
 
         console.log('WalletConnect, DeepLink, and Ledger services initialized');
+
+        // Reset stale processing state from previous session (prevents deadlock after crash)
+        await TransactionRequestQueue.setProcessing(false);
+
+        // Process any pending transaction requests from the queue
+        try {
+          const hasQueuedRequests = !(await TransactionRequestQueue.isEmpty());
+          if (hasQueuedRequests) {
+            console.log('[AppNavigator] Processing queued transaction requests on startup');
+            const nextRequest = await TransactionRequestQueue.peek();
+            if (nextRequest && navigationRef.current) {
+              // Dequeue and navigate to the first request
+              await TransactionRequestQueue.dequeue();
+              navigationRef.current.navigate('WalletConnectTransactionRequest', {
+                requestEvent: nextRequest,
+                version: nextRequest.version,
+              });
+            }
+          }
+        } catch (error) {
+          console.error('[AppNavigator] Failed to process queued requests:', error);
+        }
 
         return () => {
           try {

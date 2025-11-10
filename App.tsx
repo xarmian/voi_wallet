@@ -1,10 +1,12 @@
 import React, { useEffect } from 'react';
 import { View, Platform, StatusBar } from 'react-native';
+import Toast from 'react-native-toast-message';
 import AppNavigator from './src/navigation/AppNavigator';
 import { testCryptoPolyfills } from './src/utils/cryptoTest';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import { ThemeProvider, useTheme } from './src/contexts/ThemeContext';
 import { debugLogger } from './src/services/debug/logger';
+import { toastConfig } from './src/config/toastConfig';
 
 function AppContent() {
   const { theme, themeMode, isDark } = useTheme();
@@ -47,6 +49,7 @@ function AppContent() {
         translucent={false}
       />
       <AppNavigator />
+      <Toast config={toastConfig} />
     </View>
   );
 }
