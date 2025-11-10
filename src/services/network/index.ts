@@ -38,6 +38,8 @@ export class NetworkService {
   private config: NetworkConfiguration;
   private networkStatus: NetworkStatus;
   private mimirService?: MimirApiService;
+  private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> = new Map();
+  private rekeyInfoCacheTTL: number = 10000; // 10 second cache
 
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
@@ -906,11 +908,19 @@ export class NetworkService {
 
   /**
    * Check if an account has been rekeyed and return rekey information
+   * @param skipTimestamp - Skip fetching the rekey timestamp (faster, for signing operations)
    */
-  async getAccountRekeyInfo(address: string): Promise<RekeyInfo> {
+  async getAccountRekeyInfo(address: string, skipTimestamp: boolean = false): Promise<RekeyInfo> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
+      }
+
+      // Check cache first
+      const cached = this.rekeyInfoCache.get(address);
+      const now = Date.now();
+      if (cached && (now - cached.timestamp) < this.rekeyInfoCacheTTL) {
+        return cached.info;
       }
 
       const accountInfo = await this.algodClient
@@ -931,36 +941,47 @@ export class NetworkService {
       const isRekeyed = Boolean(authAddress);
 
       if (!isRekeyed) {
-        return { isRekeyed: false };
+        const result = { isRekeyed: false };
+        // Cache the result
+        this.rekeyInfoCache.set(address, { info: result, timestamp: Date.now() });
+        return result;
       }
 
       // If rekeyed, try to find when it was rekeyed by looking at recent transactions
+      // Skip this for signing operations to improve performance (timestamp not needed for signing)
       let rekeyedAt: number | undefined;
-      try {
-        const txnResponse = await this.indexerClient
-          .lookupAccountTransactions(address)
-          .txType('pay') // Rekey transactions are payment type with rekey-to field
-          .limit(50)
-          .do();
+      if (!skipTimestamp) {
+        try {
+          const txnResponse = await this.indexerClient
+            .lookupAccountTransactions(address)
+            .txType('pay') // Rekey transactions are payment type with rekey-to field
+            .limit(50)
+            .do();
 
-        // Look for the most recent transaction with rekey-to field
-        if (txnResponse.transactions) {
-          for (const txn of txnResponse.transactions) {
-            if (txn['rekey-to'] === authAddress) {
-              rekeyedAt = txn.roundTime ? txn.roundTime * 1000 : undefined;
-              break;
+          // Look for the most recent transaction with rekey-to field
+          if (txnResponse.transactions) {
+            for (const txn of txnResponse.transactions) {
+              if (txn['rekey-to'] === authAddress) {
+                rekeyedAt = txn.roundTime ? txn.roundTime * 1000 : undefined;
+                break;
+              }
             }
           }
+        } catch (error) {
+          console.warn('Failed to fetch rekey timestamp:', error);
         }
-      } catch (error) {
-        console.warn('Failed to fetch rekey timestamp:', error);
       }
 
-      return {
+      const result = {
         isRekeyed: true,
         authAddress,
         rekeyedAt,
       };
+
+      // Cache the result
+      this.rekeyInfoCache.set(address, { info: result, timestamp: Date.now() });
+
+      return result;
     } catch (error) {
       console.error('Failed to check rekey status:', error);
       throw new Error(

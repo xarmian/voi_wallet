@@ -74,6 +74,14 @@ export class AccountSecureStorage {
   private static readonly BIOMETRIC_ENABLED_KEY = 'voi_biometric_enabled';
   private static readonly DEVICE_ID_KEY = 'voi_device_installation_id';
   private static readonly PIN_TIMEOUT_KEY = 'voi_pin_timeout_setting';
+
+  // Private key cache for batch signing performance (keeps keys secure within this module)
+  private static privateKeyCache: Map<string, { key: Uint8Array; timestamp: number }> = new Map();
+  private static readonly CACHE_TTL_MS = 60000; // 60 seconds as suggested
+
+  // In-flight request deduplication to prevent cache stampede
+  private static inFlightRequests: Map<string, Promise<Uint8Array>> = new Map();
+
   // Iteration counts optimized for mobile performance while maintaining security
   // SecureStore provides hardware-backed encryption, so lower iterations are acceptable
   private static readonly ENCRYPTION_KEY_ITERATIONS = 10000;
@@ -318,8 +326,33 @@ export class AccountSecureStorage {
     accountId: string,
     pin?: string
   ): Promise<Uint8Array> {
-    try {
-      let unlockMethod: 'pin' | 'biometric' = 'biometric';
+    const cacheKey = `${accountId}-${pin || 'biometric'}`;
+
+    // Periodically clean up expired entries
+    if (Math.random() < 0.1) { // 10% chance on each call
+      this.cleanupExpiredCacheEntries();
+    }
+
+    // Check cache first to avoid expensive SecureStore access
+    const cached = this.privateKeyCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.timestamp) < this.CACHE_TTL_MS) {
+      // Return a copy to prevent external modification
+      return new Uint8Array(cached.key);
+    }
+
+    // Check if there's already an in-flight request for this key (prevent cache stampede)
+    const inFlight = this.inFlightRequests.get(cacheKey);
+    if (inFlight) {
+      const result = await inFlight;
+      // Return a copy
+      return new Uint8Array(result);
+    }
+
+    // Create a promise for this fetch and store it to deduplicate concurrent requests
+    const fetchPromise = (async () => {
+      try {
+        let unlockMethod: 'pin' | 'biometric' = 'biometric';
 
       if (pin) {
         const isValidPin = await this.verifyPin(pin);
@@ -415,22 +448,72 @@ export class AccountSecureStorage {
         }
       }
 
-      await this.updateLastAccessed(accountId);
+        await this.updateLastAccessed(accountId);
 
-      return privateKey;
-    } catch (error) {
-      if (
-        error instanceof AccountNotFoundError ||
-        error instanceof AccountStorageError ||
-        error instanceof AuthenticationRequiredError ||
-        error instanceof AccountRetrievalError
-      ) {
-        throw error;
+        // Cache the key for subsequent calls (60-second TTL)
+        this.privateKeyCache.set(cacheKey, {
+          key: new Uint8Array(privateKey), // Store a copy
+          timestamp: Date.now()
+        });
+
+        return privateKey;
+      } catch (error) {
+
+        if (
+          error instanceof AccountNotFoundError ||
+          error instanceof AccountStorageError ||
+          error instanceof AuthenticationRequiredError ||
+          error instanceof AccountRetrievalError
+        ) {
+          throw error;
+        }
+        throw new AccountRetrievalError(
+          `Failed to retrieve private key: ${error.message}`
+        );
       }
-      throw new AccountRetrievalError(
-        `Failed to retrieve private key: ${error.message}`
-      );
+    })();
+
+    // Store the in-flight promise
+    this.inFlightRequests.set(cacheKey, fetchPromise);
+
+    try {
+      // Wait for the fetch to complete
+      const result = await fetchPromise;
+      return result;
+    } finally {
+      // Always remove from in-flight requests when done (success or failure)
+      this.inFlightRequests.delete(cacheKey);
     }
+  }
+
+  /**
+   * Clear the private key cache
+   * Call this after batch operations complete or when you want to ensure keys are removed from memory
+   */
+  static clearPrivateKeyCache(): void {
+    // Zero out all cached keys before clearing for security
+    this.privateKeyCache.forEach(cached => {
+      cached.key.fill(0);
+    });
+    this.privateKeyCache.clear();
+
+    // Also clear any in-flight requests
+    this.inFlightRequests.clear();
+  }
+
+  /**
+   * Clean up expired cache entries
+   * Called automatically during cache access, but can be called manually too
+   */
+  static cleanupExpiredCacheEntries(): void {
+    const now = Date.now();
+
+    this.privateKeyCache.forEach((cached, key) => {
+      if ((now - cached.timestamp) >= this.CACHE_TTL_MS) {
+        cached.key.fill(0); // Zero out before removing
+        this.privateKeyCache.delete(key);
+      }
+    });
   }
 
   static async deleteAccount(accountId: string): Promise<void> {

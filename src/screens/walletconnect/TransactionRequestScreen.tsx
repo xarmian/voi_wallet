@@ -78,6 +78,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const [parsedTransactions, setParsedTransactions] = useState<
     ParsedTransaction[]
   >([]);
+  const [decodedTransactions, setDecodedTransactions] = useState<
+    algosdk.Transaction[]
+  >([]);
   const [selectedAccount, setSelectedAccount] =
     useState<AccountMetadata | null>(null);
   const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
@@ -134,14 +137,18 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         }
         setTransactions(txns);
 
-        // Parse transactions for display
+        // Parse transactions for display and cache decoded transactions
         const parsed: ParsedTransaction[] = [];
+        const decoded: algosdk.Transaction[] = [];
 
         for (const wtxn of txns) {
           try {
             const txnBytes = Buffer.from(wtxn.txn, 'base64');
             const txn = algosdk.decodeUnsignedTransaction(txnBytes);
             const txnAny = txn as any;
+
+            // Cache the decoded transaction for later use during signing
+            decoded.push(txn);
 
             if (!derivedChainId) {
               const genesisSource =
@@ -204,10 +211,12 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
               fee: 0,
               type: 'parse_error',
             });
+            // Don't add to decoded array if parsing failed
           }
         }
 
         setParsedTransactions(parsed);
+        setDecodedTransactions(decoded);
 
         // Set default account (first account that can sign for the transaction)
         if (parsed.length > 0) {
@@ -249,6 +258,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       walletConnectParams: {
         transactions,
         accountAddress: selectedAccount.address,
+        // Pass pre-decoded transactions to avoid double-parsing during signing
+        decodedTransactions: decodedTransactions.length === transactions.length ? decodedTransactions : undefined,
       },
     };
 

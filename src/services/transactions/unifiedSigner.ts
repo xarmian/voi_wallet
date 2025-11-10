@@ -88,6 +88,8 @@ export interface UnifiedTransactionRequest {
   walletConnectParams?: {
     transactions: WalletTransaction[];
     accountAddress: string;
+    // Optional: Pre-decoded transactions to avoid double-parsing
+    decodedTransactions?: algosdk.Transaction[];
   };
 
   // Network ID for the transaction (optional, defaults to current network)
@@ -275,7 +277,6 @@ export class UnifiedTransactionSigner {
       throw new Error('WalletConnect parameters required for batch signing');
     }
 
-
     try {
       // Use WalletConnect service but with unified progress tracking
       const wcService = WalletConnectService.getInstance();
@@ -284,16 +285,33 @@ export class UnifiedTransactionSigner {
       // Track signing progress for each transaction
       const signedTxns: string[] = [];
 
-      for (let i = 0; i < request.walletConnectParams.transactions.length; i++) {
+      // Use pre-decoded transactions if available to avoid double-parsing
+      const useDecodedCache =
+        request.walletConnectParams.decodedTransactions &&
+        request.walletConnectParams.decodedTransactions.length === request.walletConnectParams.transactions.length;
+
+      // Detect if this is a Ledger account - Ledger requires sequential signing due to hardware constraints
+      const isLedgerAccount = request.account.type === AccountType.LEDGER;
+
+      // For Ledger accounts: sign sequentially (hardware constraint)
+      // For standard accounts: sign in parallel for better performance
+      if (isLedgerAccount) {
+        // Sequential signing for Ledger
+        for (let i = 0; i < request.walletConnectParams.transactions.length; i++) {
         callbacks?.onLedgerPrompt?.({ index: i + 1, total });
 
         // Sign individual transaction
         const wtxn = request.walletConnectParams.transactions[i];
 
         try {
-          // Decode and sign transaction using SecureKeyManager directly
-          const txnBytes = Buffer.from(wtxn.txn, 'base64');
-          const txn = algosdk.decodeUnsignedTransaction(txnBytes);
+          // Use cached decoded transaction if available, otherwise decode on demand
+          let txn: algosdk.Transaction;
+          if (useDecodedCache) {
+            txn = request.walletConnectParams.decodedTransactions![i];
+          } else {
+            const txnBytes = Buffer.from(wtxn.txn, 'base64');
+            txn = algosdk.decodeUnsignedTransaction(txnBytes);
+          }
 
           // Determine signer address
           let signerAddress = request.walletConnectParams.accountAddress;
@@ -319,7 +337,59 @@ export class UnifiedTransactionSigner {
           callbacks?.onLedgerRejected?.({ index: i + 1, total, error: sanitizedError });
           throw sanitizedError;
         }
+        }
+      } else {
+        // Parallel signing for standard accounts (much faster!)
+        callbacks?.onLedgerPrompt?.({ index: 1, total });
+
+        const signingPromises = request.walletConnectParams.transactions.map(async (wtxn, i) => {
+          try {
+            // Use cached decoded transaction if available, otherwise decode on demand
+            let txn: algosdk.Transaction;
+            if (useDecodedCache) {
+              txn = request.walletConnectParams.decodedTransactions![i];
+            } else {
+              const txnBytes = Buffer.from(wtxn.txn, 'base64');
+              txn = algosdk.decodeUnsignedTransaction(txnBytes);
+            }
+
+            // Determine signer address
+            let signerAddress = request.walletConnectParams.accountAddress;
+            if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
+              signerAddress = wtxn.signers[0];
+            }
+            if (wtxn.authAddr) {
+              signerAddress = wtxn.authAddr;
+            }
+
+            const signedTxnBlob = await SecureKeyManager.signTransaction(
+              txn,
+              signerAddress,
+              request.pin
+            );
+
+            return Buffer.from(signedTxnBlob).toString('base64');
+          } catch (error) {
+            const errorObj = error instanceof Error ? error : new Error(String(error));
+            const sanitizedError = this.sanitizeBLEError(error);
+            callbacks?.onLedgerRejected?.({ index: i + 1, total, error: sanitizedError });
+            throw sanitizedError;
+          }
+        });
+
+        // Sign all transactions in parallel
+        const results = await Promise.all(signingPromises);
+
+        signedTxns.push(...results);
+
+        // Report completion after all parallel signing is done
+        callbacks?.onLedgerSigned?.({ index: total, total });
       }
+
+      // Clear private key cache for security (cache is inside AccountSecureStorage)
+      // Note: Cache auto-expires after 60s, but we clear immediately for security
+      const { AccountSecureStorage } = await import('@/services/secure/AccountSecureStorage');
+      AccountSecureStorage.clearPrivateKeyCache();
 
       // All transactions signed successfully
       callbacks?.onNetworkSubmit?.();
@@ -330,6 +400,9 @@ export class UnifiedTransactionSigner {
       };
 
     } catch (error) {
+      // Clear private key cache on error too for security
+      const { AccountSecureStorage } = await import('@/services/secure/AccountSecureStorage');
+      AccountSecureStorage.clearPrivateKeyCache();
       throw error;
     }
   }

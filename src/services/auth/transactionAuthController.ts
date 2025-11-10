@@ -100,6 +100,8 @@ export class TransactionAuthController {
   private deviceVerificationInProgress: boolean = false;
   private ledgerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private ledgerRecoveryReason: 'app_required' | 'device_locked' | null = null;
+  private lastProgressUpdateTime: number = 0;
+  private progressUpdateThrottleMs: number = 300; // Update progress max every 300ms
 
   constructor() {
     this.currentState = this.getInitialState();
@@ -151,7 +153,9 @@ export class TransactionAuthController {
   private updateState(updates: Partial<TransactionAuthState_Interface>): void {
     // Prevent any state changes after user has explicitly rejected (except setting error state for rejection)
     if (this.userExplicitlyRejected && updates.state !== 'error' && this.currentState.state === 'error') {
-      console.log('🚫 BLOCKING state update - user has rejected transaction:', updates);
+      if (__DEV__) {
+        console.log('🚫 BLOCKING state update - user has rejected transaction:', updates);
+      }
       return;
     }
 
@@ -159,29 +163,31 @@ export class TransactionAuthController {
     const previousLedgerStatus = previous.ledgerStatus;
     const newState = { ...this.currentState, ...updates };
     const nextLedgerStatus = newState.ledgerStatus;
-    
+
     // Check if state actually changed to avoid redundant updates
-    const stateChanged = previous.state !== newState.state || 
+    const stateChanged = previous.state !== newState.state ||
                         previous.ledgerStatus !== newState.ledgerStatus ||
                         previous.ledgerError !== newState.ledgerError ||
                         previous.error !== newState.error ||
                         previous.isLedgerFlow !== newState.isLedgerFlow ||
                         previous.requiresBiometric !== newState.requiresBiometric ||
                         previous.biometricAvailable !== newState.biometricAvailable;
-    
+
     if (!stateChanged) {
       return;
     }
-    
+
     this.currentState = newState;
-    try {
-      console.log('TransactionAuthController.updateState', {
-        from: { state: previous.state, ledgerStatus: previous.ledgerStatus },
-        to: { state: this.currentState.state, ledgerStatus: this.currentState.ledgerStatus },
-        error: (updates as any)?.error?.message ?? null,
-        ledgerError: updates.ledgerError ?? null,
-      });
-    } catch {}
+    if (__DEV__) {
+      try {
+        console.log('TransactionAuthController.updateState', {
+          from: { state: previous.state, ledgerStatus: previous.ledgerStatus },
+          to: { state: this.currentState.state, ledgerStatus: this.currentState.ledgerStatus },
+          error: (updates as any)?.error?.message ?? null,
+          ledgerError: updates.ledgerError ?? null,
+        });
+      } catch {}
+    }
 
     if (previousLedgerStatus !== nextLedgerStatus) {
       this.handleLedgerStatusChange(nextLedgerStatus);
@@ -203,6 +209,31 @@ export class TransactionAuthController {
     }
   }
 
+  /**
+   * Check if enough time has passed to allow a progress update (throttling)
+   */
+  private shouldUpdateProgress(currentIndex: number, total: number): boolean {
+    const now = Date.now();
+    const timeSinceLastUpdate = now - this.lastProgressUpdateTime;
+
+    // Always update for first and last transaction
+    if (currentIndex === 1 || currentIndex === total) {
+      return true;
+    }
+
+    // Update every 3 transactions regardless of time
+    if (currentIndex % 3 === 0) {
+      return true;
+    }
+
+    // Or update if enough time has passed
+    if (timeSinceLastUpdate >= this.progressUpdateThrottleMs) {
+      return true;
+    }
+
+    return false;
+  }
+
   private scheduleLedgerAutoRecovery(status: 'app_required' | 'device_locked'): void {
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
       return;
@@ -217,7 +248,9 @@ export class TransactionAuthController {
     const delay = status === 'device_locked' ? 1000 : 1500;
     this.ledgerRecoveryTimer = setTimeout(() => {
       this.runLedgerAutoRecovery().catch(error => {
-        console.log('Ledger auto recovery loop error:', error);
+        if (__DEV__) {
+          console.log('Ledger auto recovery loop error:', error);
+        }
       });
     }, delay);
   }
@@ -311,7 +344,9 @@ export class TransactionAuthController {
         return;
       }
 
-      console.log('Ledger auto recovery encountered unexpected error:', errorMessage);
+      if (__DEV__) {
+        console.log('Ledger auto recovery encountered unexpected error:', errorMessage);
+      }
       this.scheduleLedgerAutoRecovery(reason);
     }
   }
@@ -483,7 +518,9 @@ export class TransactionAuthController {
           await this.verifyLedgerDeviceReady(connectedDevice, { skipIfSigning: true });
           isDeviceReady = true;
         } catch (verifyError) {
-          console.log('Device connected but not responsive:', verifyError);
+          if (__DEV__) {
+            console.log('Device connected but not responsive:', verifyError);
+          }
           // Device is connected but not ready (likely off or wrong app)
           isDeviceReady = false;
         }
@@ -562,7 +599,9 @@ export class TransactionAuthController {
                 });
                 return;
               }
-              console.error('Ledger connection failed:', errorMessage);
+              if (__DEV__) {
+                console.error('Ledger connection failed:', errorMessage);
+              }
               if (lower.includes('suppressed')) {
                 this.updateState({
                   state: 'authenticating',
@@ -634,34 +673,44 @@ export class TransactionAuthController {
    * Verify that a Ledger device is actually ready to sign
    */
   private async verifyLedgerDeviceReady(device: LedgerDeviceInfo, options: { skipIfSigning?: boolean } = {}): Promise<void> {
-    console.log('🔍 verifyLedgerDeviceReady:', {
-      deviceId: device.id,
-      skipIfSigning: options.skipIfSigning,
-      isSigningInProgress: this.isSigningInProgress,
-      shouldSkip: options.skipIfSigning && this.isSigningInProgress
-    });
-    
+    if (__DEV__) {
+      console.log('🔍 verifyLedgerDeviceReady:', {
+        deviceId: device.id,
+        skipIfSigning: options.skipIfSigning,
+        isSigningInProgress: this.isSigningInProgress,
+        shouldSkip: options.skipIfSigning && this.isSigningInProgress
+      });
+    }
+
     // Avoid race conditions by skipping verification during active signing
     if (options.skipIfSigning && this.isSigningInProgress) {
-      console.log('✅ SKIPPING verification - signing in progress');
+      if (__DEV__) {
+        console.log('✅ SKIPPING verification - signing in progress');
+      }
       return;
     }
 
     // Also skip if user has explicitly rejected to avoid confusion
     if (this.userExplicitlyRejected) {
-      console.log('✅ SKIPPING verification - user has rejected transaction');
+      if (__DEV__) {
+        console.log('✅ SKIPPING verification - user has rejected transaction');
+      }
       return;
     }
 
     // Skip if the current flow has been cancelled to prevent late callbacks
     if (this.activeFlowGeneration !== this.cancelledFlowGeneration) {
-      console.log('✅ SKIPPING verification - flow has been cancelled');
+      if (__DEV__) {
+        console.log('✅ SKIPPING verification - flow has been cancelled');
+      }
       return;
     }
 
     // Prevent concurrent verification calls using semaphore
     if (this.deviceVerificationInProgress) {
-      console.log('✅ SKIPPING verification - already in progress');
+      if (__DEV__) {
+        console.log('✅ SKIPPING verification - already in progress');
+      }
       return;
     }
 
@@ -673,7 +722,9 @@ export class TransactionAuthController {
       this.ledgerVerificationCache.verified;
 
     if (cacheValid) {
-      console.log('Using cached device verification result');
+      if (__DEV__) {
+        console.log('Using cached device verification result');
+      }
       return;
     }
 
@@ -689,29 +740,35 @@ export class TransactionAuthController {
 
       // Check if signing is in progress at the Ledger service level to prevent race conditions
       if (LedgerAlgorandService.isCurrentlySigningTransaction()) {
-        console.log('✅ SKIPPING device verification - Ledger service is signing transaction');
+        if (__DEV__) {
+          console.log('✅ SKIPPING device verification - Ledger service is signing transaction');
+        }
         return;
       }
 
       // Try to verify the app - this will throw specific errors for different states
       await ledgerAlgorandService.verifyApp({ requireAppOpen: true });
-      
+
       // Cache successful verification
       this.ledgerVerificationCache = {
         deviceId: device.id,
         timestamp: now,
         verified: true
       };
-      
-      console.log('Ledger device verified and ready for signing');
+
+      if (__DEV__) {
+        console.log('Ledger device verified and ready for signing');
+      }
 
     } catch (error) {
-      console.log('🚨 Ledger device verification failed during signing!', {
-        error: error,
-        isSigningInProgress: this.isSigningInProgress,
-        currentState: this.currentState.state,
-        stack: new Error().stack?.split('\n').slice(1, 6)
-      });
+      if (__DEV__) {
+        console.log('🚨 Ledger device verification failed during signing!', {
+          error: error,
+          isSigningInProgress: this.isSigningInProgress,
+          currentState: this.currentState.state,
+          stack: new Error().stack?.split('\n').slice(1, 6)
+        });
+      }
       
       // Clear cache on error
       this.ledgerVerificationCache = null;
@@ -1008,6 +1065,7 @@ export class TransactionAuthController {
     try {
       this.isSigningInProgress = true;
       this.signingAbortController = new AbortController(); // Create abort controller for this signing session
+      this.lastProgressUpdateTime = 0; // Reset throttle timer for new signing session
       this.updateState({ state: 'signing' });
 
       const callbacks: UnifiedSigningCallbacks = {
@@ -1017,25 +1075,33 @@ export class TransactionAuthController {
         },
 
         onLedgerPrompt: (ctx) => {
-          // If we're getting a prompt callback, the device is ready for confirmation
-          this.updateState({
-            ledgerStatus: 'waiting_confirmation',
-            signingProgress: {
-              currentStep: ctx.index,
-              totalSteps: ctx.total,
-              message: `Confirm transaction ${ctx.index} of ${ctx.total} on your Ledger device`,
-            },
-          });
+          // Throttle progress updates to reduce re-renders
+          if (this.shouldUpdateProgress(ctx.index, ctx.total)) {
+            // If we're getting a prompt callback, the device is ready for confirmation
+            this.updateState({
+              ledgerStatus: 'waiting_confirmation',
+              signingProgress: {
+                currentStep: ctx.index,
+                totalSteps: ctx.total,
+                message: `Confirm transaction ${ctx.index} of ${ctx.total} on your Ledger device`,
+              },
+            });
+            this.lastProgressUpdateTime = Date.now();
+          }
         },
 
         onLedgerSigned: (ctx) => {
-          this.updateState({
-            signingProgress: {
-              currentStep: ctx.index,
-              totalSteps: ctx.total,
-              message: `Transaction ${ctx.index} of ${ctx.total} signed`,
-            },
-          });
+          // Throttle progress updates to reduce re-renders
+          if (this.shouldUpdateProgress(ctx.index, ctx.total)) {
+            this.updateState({
+              signingProgress: {
+                currentStep: ctx.index,
+                totalSteps: ctx.total,
+                message: `Transaction ${ctx.index} of ${ctx.total} signed`,
+              },
+            });
+            this.lastProgressUpdateTime = Date.now();
+          }
         },
 
         onLedgerRejected: (ctx) => {
@@ -1044,7 +1110,9 @@ export class TransactionAuthController {
           
           // User explicitly rejected - STOP the signing process completely
           if (lower.includes('reject') || lower.includes('denied') || lower.includes('refused') || lower.includes('cancel')) {
-            console.log('🚫 User explicitly rejected transaction in onLedgerRejected');
+            if (__DEV__) {
+              console.log('🚫 User explicitly rejected transaction in onLedgerRejected');
+            }
             this.isSigningInProgress = false;
             this.userExplicitlyRejected = true;
             this.cancel(); // Full stop
@@ -1099,11 +1167,15 @@ export class TransactionAuthController {
           this.isSigningInProgress = false;
           const message = this.sanitizeLedgerError(error);
           const lower = message.toLowerCase();
-          console.log('🚫 Signing onError', message, { hasSubmitted: this.hasSubmittedToNetwork });
-          
+          if (__DEV__) {
+            console.log('🚫 Signing onError', message, { hasSubmitted: this.hasSubmittedToNetwork });
+          }
+
           // User explicitly rejected - STOP completely
           if (lower.includes('rejected') || lower.includes('denied') || lower.includes('refused') || lower.includes('cancel')) {
-            console.log('🚫 User rejected transaction in onError - calling cancel');
+            if (__DEV__) {
+              console.log('🚫 User rejected transaction in onError - calling cancel');
+            }
             this.userExplicitlyRejected = true;
             this.cancel();
             return;
@@ -1143,7 +1215,9 @@ export class TransactionAuthController {
 
         onComplete: (result) => {
           this.isSigningInProgress = false;
-          console.log('Signing onComplete', { success: result.success, hasSubmitted: this.hasSubmittedToNetwork });
+          if (__DEV__) {
+            console.log('Signing onComplete', { success: result.success, hasSubmitted: this.hasSubmittedToNetwork });
+          }
           if (!result.success && !this.hasSubmittedToNetwork) {
             this.updateState({
               state: 'authenticating',
@@ -1192,7 +1266,9 @@ export class TransactionAuthController {
           void ledgerTransportService
             .startDiscovery({ ble: true, usb: true })
             .catch((startError) => {
-              console.warn('Failed to (re)start Ledger discovery during retry preparation', startError);
+              if (__DEV__) {
+                console.warn('Failed to (re)start Ledger discovery during retry preparation', startError);
+              }
             });
         }
 
@@ -1205,7 +1281,9 @@ export class TransactionAuthController {
 
         if (options.restartDiscovery) {
           void this.initializeLedgerFlow().catch((initError) => {
-            console.error('Failed to restart Ledger discovery after signing error', initError);
+            if (__DEV__) {
+              console.error('Failed to restart Ledger discovery after signing error', initError);
+            }
           });
         }
 
@@ -1352,7 +1430,9 @@ export class TransactionAuthController {
     try {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
-      console.warn('Failed to stop Ledger discovery on cancel', stopError);
+      if (__DEV__) {
+        console.warn('Failed to stop Ledger discovery on cancel', stopError);
+      }
     }
 
     // Abort any active signing process
@@ -1400,7 +1480,9 @@ export class TransactionAuthController {
     try {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
-      console.warn('Failed to stop Ledger discovery during reset', stopError);
+      if (__DEV__) {
+        console.warn('Failed to stop Ledger discovery during reset', stopError);
+      }
     }
 
     if (this.signingAbortController) {

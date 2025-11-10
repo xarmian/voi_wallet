@@ -49,7 +49,7 @@ export class SecureKeyManager {
         throw new Error('Account not found');
       }
 
-      // Get private key using AccountSecureStorage (handles authentication internally)
+      // Get private key using AccountSecureStorage (handles authentication and caching internally)
       return await AccountSecureStorage.getPrivateKey(account.id, pin);
     } catch (error) {
       throw new Error(
@@ -87,8 +87,9 @@ export class SecureKeyManager {
       let signingAddress = address;
 
       // Check network-specific rekey status
+      // Skip timestamp lookup for performance - we only need to know IF rekeyed and the auth address
       const networkService = NetworkService.getInstance(networkId);
-      const rekeyInfo = await networkService.getAccountRekeyInfo(address);
+      const rekeyInfo = await networkService.getAccountRekeyInfo(address, true); // skipTimestamp = true
 
       // If account is rekeyed on this network, use the auth address for signing
       if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
@@ -111,9 +112,11 @@ export class SecureKeyManager {
         if (signingAccount.type === AccountType.LEDGER) {
           const ledgerAccount = signingAccount as LedgerAccountMetadata;
           await this.ensureLedgerDeviceReady(ledgerAccount);
+
           if (!transaction) {
             throw new Error('Transaction is null or undefined');
           }
+
           const result = await ledgerAlgorandService.signTransaction({
             transaction: transaction as Transaction | Uint8Array,
             derivationIndex: ledgerAccount.derivationIndex,
