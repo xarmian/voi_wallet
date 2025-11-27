@@ -14,6 +14,8 @@ export interface NetworkFeatures {
   arc72: boolean;
   /** Price data availability */
   pricing: boolean;
+  /** Swap functionality (SnowballSwap for VOI, Deflex for Algorand) */
+  swap: boolean;
 }
 
 export interface NetworkConfiguration {

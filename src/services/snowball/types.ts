@@ -77,6 +77,9 @@ export interface QuoteDetails {
   rate: number;
   priceImpact: number;
   networkFee: string;
+  tokenValues?: Record<string, number>; // Token ID -> USD value per token
+  timestamp?: number;
+  expiresAt?: number;
 }
 
 /**

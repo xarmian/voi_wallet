@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -149,6 +150,32 @@ export default function HomeScreen() {
     initializeWallet();
     updateActivity();
   }, []);
+
+  // Handle Android back button for local modals
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Close modals in order of priority (most recently likely opened first)
+      if (isAssetFilterModalVisible) {
+        setIsAssetFilterModalVisible(false);
+        return true;
+      }
+      if (isAssetOptInModalVisible) {
+        setIsAssetOptInModalVisible(false);
+        return true;
+      }
+      if (isAddAccountModalVisible) {
+        setIsAddAccountModalVisible(false);
+        return true;
+      }
+      if (isAccountModalVisible) {
+        setIsAccountModalVisible(false);
+        return true;
+      }
+      return false; // Let default back behavior happen
+    });
+
+    return () => backHandler.remove();
+  }, [isAccountModalVisible, isAddAccountModalVisible, isAssetOptInModalVisible, isAssetFilterModalVisible]);
 
   // Track the current view mode to prevent race conditions
   const viewModeRef = React.useRef(isMultiNetworkView);

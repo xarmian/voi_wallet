@@ -7,7 +7,8 @@ import {
   useThemeSpacing,
 } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import BottomSheet, {
+import {
+  BottomSheetModal,
   BottomSheetBackdrop,
   BottomSheetFlatList,
 } from '@gorhom/bottom-sheet';
@@ -45,7 +46,7 @@ export default function AccountListModal({
   onEditAccount,
   onAccountSelect,
 }: AccountListModalProps) {
-  const bottomSheetRef = useRef<BottomSheet>(null);
+  const bottomSheetRef = useRef<BottomSheetModal>(null);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
@@ -174,11 +175,11 @@ export default function AccountListModal({
   // Open/close the bottom sheet based on visibility
   React.useEffect(() => {
     if (isVisible) {
-      bottomSheetRef.current?.expand();
+      bottomSheetRef.current?.present();
       // Batch load all account balances when modal opens (single state update)
       refreshAllBalances();
     } else {
-      bottomSheetRef.current?.close();
+      bottomSheetRef.current?.dismiss();
     }
   }, [isVisible, refreshAllBalances]);
 
@@ -309,9 +310,8 @@ export default function AccountListModal({
   );
 
   return (
-    <BottomSheet
+    <BottomSheetModal
       ref={bottomSheetRef}
-      index={-1}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
       backdropComponent={renderBackdrop}
@@ -336,7 +336,7 @@ export default function AccountListModal({
         stickyHeaderIndices={[0]}
         style={styles.list}
       />
-    </BottomSheet>
+    </BottomSheetModal>
   );
 }
 

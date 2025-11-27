@@ -71,7 +71,11 @@ export default function TransactionResultScreen() {
 
   const handleBackToHome = () => {
     const homeRoute = params.homeRoute || 'HomeMain';
-    (navigation as any).navigate(homeRoute);
+    // Reset navigation stack to prevent back navigation to completed transaction
+    navigation.reset({
+      index: 0,
+      routes: [{ name: homeRoute as keyof WalletStackParamList }],
+    });
   };
 
   const getStatusIcon = () => {

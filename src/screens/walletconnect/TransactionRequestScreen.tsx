@@ -137,109 +137,96 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         if (!txns || !Array.isArray(txns)) {
           throw new Error('Malformed request: missing transactions array');
         }
-        setTransactions(txns);
 
-        // Parse transactions for display and cache decoded transactions
-        const parsed: ParsedTransaction[] = [];
-        const decoded: algosdk.Transaction[] = [];
-
-        for (const wtxn of txns) {
+        // Extract chainId from first transaction for network detection
+        if (txns.length > 0) {
           try {
-            const txnBytes = Buffer.from(wtxn.txn, 'base64');
+            const txnBytes = Buffer.from(txns[0].txn, 'base64');
             const txn = algosdk.decodeUnsignedTransaction(txnBytes);
             const txnAny = txn as any;
-
-            // Cache the decoded transaction for later use during signing
-            decoded.push(txn);
-
-            if (!derivedChainId) {
-              const genesisSource =
-                txnAny.genesisHash || txnAny.gh || txn?.genesisHash;
-
-              const chainIdFromGenesis = getChainIdByGenesisHash(genesisSource);
-              if (chainIdFromGenesis) {
-                derivedChainId = chainIdFromGenesis;
-              }
+            const genesisSource = txnAny.genesisHash || txnAny.gh || txn?.genesisHash;
+            const chainIdFromGenesis = getChainIdByGenesisHash(genesisSource);
+            if (chainIdFromGenesis) {
+              derivedChainId = chainIdFromGenesis;
             }
+          } catch (error) {
+            console.error('Failed to extract chainId from transaction:', error);
+          }
+        }
 
-            // Extract transaction details using the correct Algorand structure
+        setTransactions(txns);
+
+        // Set default account (first account that can sign for the first transaction)
+        if (txns.length > 0) {
+          try {
+            const txnBytes = Buffer.from(txns[0].txn, 'base64');
+            const txn = algosdk.decodeUnsignedTransaction(txnBytes);
+            const txnAny = txn as any;
             let fromAddress = 'N/A';
-            let toAddress = 'N/A';
-            let amount = 0;
-
             if (txnAny.sender && txnAny.sender.publicKey) {
               fromAddress = algosdk.encodeAddress(txnAny.sender.publicKey);
             }
-
-            const txnType = txnAny.type || 'unknown';
-
-            if (txnType === 'pay' && txnAny.payment) {
-              if (txnAny.payment.receiver && txnAny.payment.receiver.publicKey) {
-                toAddress = algosdk.encodeAddress(
-                  txnAny.payment.receiver.publicKey
-                );
-              }
-              amount = txnAny.payment.amount ? Number(txnAny.payment.amount) : 0;
-            } else if (txnType === 'axfer' && txnAny.assetTransfer) {
-              if (
-                txnAny.assetTransfer.receiver &&
-                txnAny.assetTransfer.receiver.publicKey
-              ) {
-                toAddress = algosdk.encodeAddress(
-                  txnAny.assetTransfer.receiver.publicKey
-                );
-              }
-              amount = txnAny.assetTransfer.amount
-                ? Number(txnAny.assetTransfer.amount)
-                : 0;
+            const account = allAccounts.find((acc) => acc.address === fromAddress);
+            if (account) {
+              setSelectedAccount(account);
             }
-
-            parsed.push({
-              from: fromAddress,
-              to: toAddress,
-              amount,
-              fee: txnAny.fee ? Number(txnAny.fee) : 0,
-              note: txnAny.note ? Buffer.from(txnAny.note).toString() : undefined,
-              assetId: txnAny.assetIndex,
-              type: txnType,
-            });
           } catch (error) {
-            console.error('Failed to parse transaction:', error);
-            console.error('Transaction data:', wtxn);
-            parsed.push({
-              from: 'Parse Error',
-              to: 'Parse Error',
-              amount: 0,
-              fee: 0,
-              type: 'parse_error',
-            });
-            // Don't add to decoded array if parsing failed
+            console.error('Failed to determine signing account:', error);
           }
         }
 
-        setParsedTransactions(parsed);
-        setDecodedTransactions(decoded);
+        // Determine effective chainId and navigate to UniversalTransactionSigning
+        const effectiveChainId = derivedChainId || initialChainId;
+        if (effectiveChainId) {
+          setNetworkName(getNetworkNameByChainId(effectiveChainId));
+          setNetworkCurrency(getNetworkCurrencyByChainId(effectiveChainId));
+          eventParams.chainId = effectiveChainId;
+        }
 
-        // Set default account (first account that can sign for the transaction)
-        if (parsed.length > 0) {
-          const firstTxn = parsed[0];
-          const account = allAccounts.find(
-            (acc) => acc.address === firstTxn.from
-          );
-          if (account) {
-            setSelectedAccount(account);
+        // Navigate to UniversalTransactionSigning screen
+        // Decode the first transaction to get the sender address (signer)
+        let signingAccount = allAccounts[0]; // Default to first account
+        if (txns.length > 0) {
+          try {
+            const txnBytes = Buffer.from(txns[0].txn, 'base64');
+            const txn = algosdk.decodeUnsignedTransaction(txnBytes);
+            const txnAny = txn as any;
+            let senderAddress: string | null = null;
+            
+            // Extract sender address from decoded transaction
+            if (txnAny.sender && txnAny.sender.publicKey) {
+              senderAddress = algosdk.encodeAddress(txnAny.sender.publicKey);
+            }
+            
+            // Try to find account by sender address, or fall back to signers array if provided
+            if (senderAddress) {
+              signingAccount = allAccounts.find((acc) => acc.address === senderAddress) || allAccounts[0];
+            } else if (txns[0].signers?.[0]) {
+              signingAccount = allAccounts.find((acc) => acc.address === txns[0].signers?.[0]) || allAccounts[0];
+            }
+          } catch (error) {
+            console.error('Failed to decode transaction for signing account:', error);
+            // Fall back to signers array if decoding fails
+            if (txns[0].signers?.[0]) {
+              signingAccount = allAccounts.find((acc) => acc.address === txns[0].signers?.[0]) || allAccounts[0];
+            }
           }
         }
-      }
-
-      const effectiveChainId = derivedChainId || initialChainId;
-      if (effectiveChainId) {
-        setNetworkName(getNetworkNameByChainId(effectiveChainId));
-        setNetworkCurrency(getNetworkCurrencyByChainId(effectiveChainId));
-        eventParams.chainId = effectiveChainId;
-      } else {
-        setNetworkName('Unknown Network');
-        setNetworkCurrency('TOKEN');
+        
+        if (signingAccount) {
+          navigation.replace('UniversalTransactionSigning', {
+            transactions: txns.map((wtxn) => wtxn.txn),
+            account: signingAccount,
+            chainId: effectiveChainId,
+            title: 'WalletConnect Request',
+            onSuccess: async (result: any) => {
+              await handleWalletConnectSuccess(result);
+            },
+            onReject: async () => {
+              await handleReject();
+            },
+          });
+        }
       }
     } catch (error) {
       console.error('Failed to load transaction request:', error);
@@ -269,11 +256,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     setShowAuthModal(true);
   };
 
-  const handleAuthComplete = async (success: boolean, result?: any) => {
-    setShowAuthModal(false);
-    setCurrentRequest(null);
-
-    if (success && result?.signedTransactions) {
+  const handleWalletConnectSuccess = async (result: any) => {
+    if (result?.signedTransactions) {
       try {
         // Use v1 client for v1 requests, otherwise use v2
         if (version === 1) {
@@ -345,6 +329,19 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           : 'Failed to respond to dApp';
         navigation.navigate('WalletConnectError', { error: errorMessage });
       }
+    } else {
+      // Handle signing failure
+      const errorMessage = 'Failed to sign transactions';
+      navigation.navigate('WalletConnectError', { error: errorMessage });
+    }
+  };
+
+  const handleAuthComplete = async (success: boolean, result?: any) => {
+    setShowAuthModal(false);
+    setCurrentRequest(null);
+
+    if (success && result?.signedTransactions) {
+      await handleWalletConnectSuccess(result);
     } else {
       // Handle signing failure
       const errorMessage = result instanceof Error

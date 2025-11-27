@@ -61,7 +61,7 @@ export default function AccountImportPreviewScreen({
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(
     new Set(
       initialAccounts
-        .filter((acc) => acc.isValid && !acc.isDuplicate)
+        .filter((acc) => acc.isValid && (!acc.isDuplicate || acc.isUpgrade))
         .map((acc) => acc.id)
     )
   );
@@ -100,7 +100,7 @@ export default function AccountImportPreviewScreen({
   };
 
   const getValidAccountsCount = () => {
-    return accounts.filter((acc) => acc.isValid && !acc.isDuplicate).length;
+    return accounts.filter((acc) => acc.isValid && (!acc.isDuplicate || acc.isUpgrade)).length;
   };
 
   const handleImportAccounts = async () => {
@@ -114,12 +114,24 @@ export default function AccountImportPreviewScreen({
       return;
     }
 
+    const upgradeCount = selectedAccounts.filter((acc) => acc.isUpgrade).length;
+    const newCount = selectedAccounts.length - upgradeCount;
+
+    let message = '';
+    if (upgradeCount > 0 && newCount > 0) {
+      message = `Import ${newCount} new account${newCount === 1 ? '' : 's'} and upgrade ${upgradeCount} watch account${upgradeCount === 1 ? '' : 's'}?`;
+    } else if (upgradeCount > 0) {
+      message = `Upgrade ${upgradeCount} watch account${upgradeCount === 1 ? '' : 's'} to full account${upgradeCount === 1 ? '' : 's'}?`;
+    } else {
+      message = `Import ${selectedAccounts.length} selected account${selectedAccounts.length === 1 ? '' : 's'}?`;
+    }
+
     Alert.alert(
-      'Import Accounts',
-      `Import ${selectedAccounts.length} selected account${selectedAccounts.length === 1 ? '' : 's'}?`,
+      upgradeCount > 0 ? 'Import & Upgrade Accounts' : 'Import Accounts',
+      message,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Import', onPress: performImport },
+        { text: upgradeCount > 0 && newCount === 0 ? 'Upgrade' : 'Import', onPress: performImport },
       ]
     );
   };
@@ -160,6 +172,11 @@ export default function AccountImportPreviewScreen({
 
             if (!secret || (!secret.mnemonic && !secret.privateKey)) {
               throw new Error('Secure account data unavailable for import');
+            }
+
+            // If upgrading from watch account, delete the watch account first
+            if (account.isUpgrade && account.existingAccountId) {
+              await MultiAccountWalletService.deleteAccount(account.existingAccountId);
             }
 
             const request: ImportAccountRequest = {
@@ -394,11 +411,11 @@ export default function AccountImportPreviewScreen({
         >
           {isImporting ? (
             <>
-              <ActivityIndicator size="small" color={theme.colors.background} />
+              <ActivityIndicator size="small" color={theme.colors.buttonText} />
               <Text
                 style={[
                   styles.importButtonText,
-                  { color: theme.colors.background },
+                  { color: theme.colors.buttonText },
                 ]}
               >
                 Importing...
@@ -409,12 +426,12 @@ export default function AccountImportPreviewScreen({
               <Ionicons
                 name="download"
                 size={20}
-                color={theme.colors.background}
+                color={theme.colors.buttonText}
               />
               <Text
                 style={[
                   styles.importButtonText,
-                  { color: theme.colors.background },
+                  { color: theme.colors.buttonText },
                 ]}
               >
                 Import Selected

@@ -244,8 +244,8 @@ export default function TransactionConfirmationScreen() {
     setCurrentRequest(null);
 
     if (success && result?.transactionId) {
-      // Navigate to success screen
-      navigation.navigate('TransactionResult', {
+      // Replace this screen with result to keep stack cleaner
+      navigation.replace('TransactionResult', {
         transactionId: result.transactionId,
         recipient: params.recipient,
         recipientName: getDisplayName(),
@@ -261,12 +261,12 @@ export default function TransactionConfirmationScreen() {
         networkId: params.networkId,
       });
     } else {
-      // Navigate to error screen
+      // Replace this screen with error result
       const errorMessage = result instanceof Error
         ? result.message
         : 'Transaction failed';
 
-      navigation.navigate('TransactionResult', {
+      navigation.replace('TransactionResult', {
         recipient: params.recipient,
         recipientName: getDisplayName(),
         amount: params.amount,

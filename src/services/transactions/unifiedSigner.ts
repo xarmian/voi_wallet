@@ -63,7 +63,8 @@ export type UnifiedTransactionType =
   | 'arc72_transfer'
   | 'rekey'
   | 'rekey_reverse'
-  | 'walletconnect_batch';
+  | 'batch_transaction'
+  | 'walletconnect_batch'; // Deprecated: use batch_transaction instead
 
 /**
  * Unified transaction request interface
@@ -141,6 +142,7 @@ export class UnifiedTransactionSigner {
           result = await this.signRekeyTransaction(request, callbacks);
           break;
 
+        case 'batch_transaction':
         case 'walletconnect_batch':
           result = await this.signWalletConnectBatch(request, callbacks);
           break;
@@ -298,45 +300,72 @@ export class UnifiedTransactionSigner {
       if (isLedgerAccount) {
         // Sequential signing for Ledger
         for (let i = 0; i < request.walletConnectParams.transactions.length; i++) {
-        callbacks?.onLedgerPrompt?.({ index: i + 1, total });
+          callbacks?.onLedgerPrompt?.({ index: i + 1, total });
 
-        // Sign individual transaction
-        const wtxn = request.walletConnectParams.transactions[i];
+          // Sign individual transaction
+          const wtxn = request.walletConnectParams.transactions[i];
 
-        try {
-          // Use cached decoded transaction if available, otherwise decode on demand
-          let txn: algosdk.Transaction;
-          if (useDecodedCache) {
-            txn = request.walletConnectParams.decodedTransactions![i];
-          } else {
+          try {
             const txnBytes = Buffer.from(wtxn.txn, 'base64');
-            txn = algosdk.decodeUnsignedTransaction(txnBytes);
+
+            // Try to decode as unsigned transaction
+            // If it fails, the transaction is already signed (e.g., logic sig) - pass through
+            let txn: algosdk.Transaction;
+            try {
+              if (useDecodedCache && request.walletConnectParams.decodedTransactions?.[i]) {
+                txn = request.walletConnectParams.decodedTransactions[i];
+              } else {
+                txn = algosdk.decodeUnsignedTransaction(txnBytes);
+              }
+            } catch (decodeError) {
+              // Transaction is already signed (logic sig, etc.) - pass through as-is
+              signedTxns.push(wtxn.txn);
+              callbacks?.onLedgerSigned?.({ index: i + 1, total });
+              continue;
+            }
+
+            // Verify we have a valid transaction with sender info
+            if (!txn || !txn.from || !txn.from.publicKey) {
+              // Invalid or already-signed transaction - pass through
+              signedTxns.push(wtxn.txn);
+              callbacks?.onLedgerSigned?.({ index: i + 1, total });
+              continue;
+            }
+
+            // Get the transaction sender address
+            const txnSender = algosdk.encodeAddress(txn.from.publicKey);
+
+            // Determine signer address
+            let signerAddress = request.walletConnectParams!.accountAddress;
+            if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
+              signerAddress = wtxn.signers[0];
+            }
+            if (wtxn.authAddr) {
+              signerAddress = wtxn.authAddr;
+            }
+
+            // Skip signing if the transaction sender doesn't match our account
+            if (txnSender !== signerAddress) {
+              signedTxns.push(wtxn.txn);
+              callbacks?.onLedgerSigned?.({ index: i + 1, total });
+              continue;
+            }
+
+            const signedTxnBlob = await SecureKeyManager.signTransaction(
+              txn,
+              signerAddress,
+              request.pin // optional; controller supplies for software keys, undefined for Ledger
+            );
+
+            signedTxns.push(Buffer.from(signedTxnBlob).toString('base64'));
+            callbacks?.onLedgerSigned?.({ index: i + 1, total });
+
+          } catch (error) {
+            const errorObj = error instanceof Error ? error : new Error(String(error));
+            const sanitizedError = this.sanitizeBLEError(error);
+            callbacks?.onLedgerRejected?.({ index: i + 1, total, error: sanitizedError });
+            throw sanitizedError;
           }
-
-          // Determine signer address
-          let signerAddress = request.walletConnectParams.accountAddress;
-          if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
-            signerAddress = wtxn.signers[0];
-          }
-          if (wtxn.authAddr) {
-            signerAddress = wtxn.authAddr;
-          }
-
-          const signedTxnBlob = await SecureKeyManager.signTransaction(
-            txn,
-            signerAddress,
-            request.pin // optional; controller supplies for software keys, undefined for Ledger
-          );
-
-          signedTxns.push(Buffer.from(signedTxnBlob).toString('base64'));
-          callbacks?.onLedgerSigned?.({ index: i + 1, total });
-
-        } catch (error) {
-          const errorObj = error instanceof Error ? error : new Error(String(error));
-          const sanitizedError = this.sanitizeBLEError(error);
-          callbacks?.onLedgerRejected?.({ index: i + 1, total, error: sanitizedError });
-          throw sanitizedError;
-        }
         }
       } else {
         // Parallel signing for standard accounts (much faster!)
@@ -344,22 +373,46 @@ export class UnifiedTransactionSigner {
 
         const signingPromises = request.walletConnectParams.transactions.map(async (wtxn, i) => {
           try {
-            // Use cached decoded transaction if available, otherwise decode on demand
+            const txnBytes = Buffer.from(wtxn.txn, 'base64');
+
+            // Try to decode as unsigned transaction
+            // If it fails, the transaction is already signed (e.g., logic sig) - pass through
             let txn: algosdk.Transaction;
-            if (useDecodedCache) {
-              txn = request.walletConnectParams.decodedTransactions![i];
-            } else {
-              const txnBytes = Buffer.from(wtxn.txn, 'base64');
-              txn = algosdk.decodeUnsignedTransaction(txnBytes);
+            try {
+              if (useDecodedCache && request.walletConnectParams.decodedTransactions?.[i]) {
+                txn = request.walletConnectParams.decodedTransactions[i];
+              } else {
+                txn = algosdk.decodeUnsignedTransaction(txnBytes);
+              }
+            } catch (decodeError) {
+              // Transaction is already signed (logic sig, etc.) - pass through as-is
+              return wtxn.txn;
             }
 
+            // Verify we have a valid transaction with sender info
+            // algosdk may use 'from' or 'sender' depending on version
+            const senderField = (txn as any).from || (txn as any).sender;
+            if (!txn || !senderField || !senderField.publicKey) {
+              // Invalid or already-signed transaction - pass through
+              return wtxn.txn;
+            }
+
+            // Get the transaction sender address
+            const txnSender = algosdk.encodeAddress(senderField.publicKey);
+
             // Determine signer address
-            let signerAddress = request.walletConnectParams.accountAddress;
+            let signerAddress = request.walletConnectParams!.accountAddress;
             if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
               signerAddress = wtxn.signers[0];
             }
             if (wtxn.authAddr) {
               signerAddress = wtxn.authAddr;
+            }
+
+            // Skip signing if the transaction sender doesn't match our account
+            // This handles cases where the transaction is for a different signer
+            if (txnSender !== signerAddress) {
+              return wtxn.txn;
             }
 
             const signedTxnBlob = await SecureKeyManager.signTransaction(
@@ -440,9 +493,10 @@ export class UnifiedTransactionSigner {
         }
         break;
 
+      case 'batch_transaction':
       case 'walletconnect_batch':
         if (!request.walletConnectParams) {
-          throw new Error('WalletConnect parameters required for batch signing');
+          throw new Error('Batch parameters required for batch signing');
         }
         break;
     }
@@ -471,9 +525,10 @@ export class UnifiedTransactionSigner {
         const fee = 1000; // Standard Algorand fee in microAlgos
         return { fee, total: fee };
 
+      case 'batch_transaction':
       case 'walletconnect_batch':
         if (!request.walletConnectParams) {
-          throw new Error('WalletConnect parameters required');
+          throw new Error('Batch parameters required');
         }
         // Estimate based on number of transactions
         const transactionCount = request.walletConnectParams.transactions.length;
@@ -523,6 +578,7 @@ export class UnifiedTransactionSigner {
           // Basic validation for reverse rekey
           break;
 
+        case 'batch_transaction':
         case 'walletconnect_batch':
           if (request.walletConnectParams) {
             if (request.walletConnectParams.transactions.length === 0) {

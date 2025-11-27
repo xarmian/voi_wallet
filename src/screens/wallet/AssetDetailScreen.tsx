@@ -43,7 +43,7 @@ import NetworkServiceInstance, { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { useTheme } from '@/contexts/ThemeContext';
-import SnowballApiService from '@/services/snowball';
+import { SwapService } from '@/services/swap';
 
 interface AssetDetailRouteParams {
   assetName: string;
@@ -232,20 +232,29 @@ export default function AssetDetailScreen() {
     };
   }, [networkId, currentAccount, derivedNetworkBalance]);
 
-  // Check if token is swappable on Snowball (only for Voi Network)
+  // Check if token is swappable (VOI via SnowballSwap, Algorand via Deflex)
   useEffect(() => {
     const checkSwappable = async () => {
       setCheckingSwappable(true);
       try {
-        // Only check for Voi Network tokens
-        const isVoiNetwork = !networkId || networkId === 'voi-mainnet' || networkId === 'voi-testnet';
+        const effectiveNetworkId = networkId as NetworkId || NetworkId.VOI_MAINNET;
 
-        if (!isVoiNetwork) {
+        // Check if swap is available on this network
+        if (!SwapService.isSwapAvailable(effectiveNetworkId)) {
           setIsSwappable(false);
           return;
         }
 
-        const swappable = await SnowballApiService.isTokenSwappable(assetId);
+        // For Algorand, enable swap for all ASA tokens without lookup
+        // Deflex handles routing for most tokens
+        if (effectiveNetworkId === NetworkId.ALGORAND_MAINNET) {
+          setIsSwappable(true);
+          return;
+        }
+
+        // For VOI, check with SnowballSwap API
+        const provider = SwapService.getProvider(effectiveNetworkId);
+        const swappable = await provider.isTokenSwappable(assetId);
         setIsSwappable(swappable);
       } catch (error) {
         console.error('Error checking token swappability:', error);

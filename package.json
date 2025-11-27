@@ -25,6 +25,7 @@
     "@react-navigation/native": "^7.1.17",
     "@react-navigation/native-stack": "^7.3.26",
     "@react-navigation/stack": "^7.4.8",
+    "@txnlab/deflex": "^1.5.0",
     "@walletconnect/core": "^2.21.8",
     "@walletconnect/react-native-compat": "^2.21.8",
     "@walletconnect/universal-provider": "^2.21.8",

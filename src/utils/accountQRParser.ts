@@ -64,6 +64,8 @@ export interface ScannedAccount {
   isValid: boolean;
   errorMessage?: string;
   isDuplicate?: boolean;
+  isUpgrade?: boolean; // True when upgrading a watch account to a full account
+  existingAccountId?: string; // ID of the existing account being upgraded
 }
 
 export interface QRAccountData {
@@ -458,10 +460,32 @@ export class AccountQRParser {
         errorMessage = 'No valid account data provided';
       }
 
-      const isDuplicate = address
-        ? existingAccounts.some((acc) => acc.address === address)
-        : false;
+      // Check for existing account with same address
+      const existingAccount = address
+        ? existingAccounts.find((acc) => acc.address === address)
+        : undefined;
 
+      // Determine if this is a duplicate or an upgrade scenario
+      let isDuplicate = false;
+      let isUpgrade = false;
+      let existingAccountId: string | undefined;
+
+      if (existingAccount) {
+        // Check if this is an upgrade from watch to standard
+        const isStandardImport = type === 'standard';
+        const existingIsWatch = existingAccount.type === 'watch';
+
+        if (isStandardImport && existingIsWatch) {
+          // This is an upgrade scenario - allow importing the private key
+          isUpgrade = true;
+          existingAccountId = existingAccount.id;
+        } else {
+          // True duplicate - same type or downgrade (standard exists, importing watch)
+          isDuplicate = true;
+        }
+      }
+
+      // Store secret for valid accounts that are not true duplicates
       if (isValid && !isDuplicate && (sanitizedMnemonic || sanitizedPrivateKey)) {
         secretId = storeAccountSecret({
           mnemonic: sanitizedMnemonic,
@@ -478,6 +502,8 @@ export class AccountQRParser {
         isValid,
         errorMessage,
         isDuplicate,
+        isUpgrade,
+        existingAccountId,
       };
     } catch (error) {
       return {

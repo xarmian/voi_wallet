@@ -3,7 +3,7 @@
  * Allows users to swap tokens on Voi Network using Snowball DEX aggregator
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,13 +14,18 @@ import {
   ActivityIndicator,
   ScrollView,
   Image,
+  Linking,
+  BackHandler,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Toast from 'react-native-toast-message';
 import { Ionicons } from '@expo/vector-icons';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, useNavigation, CommonActions } from '@react-navigation/native';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useActiveAccount, useWalletStore } from '@/store/walletStore';
+import { AccountBalance } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { TokenSelector } from '@/components/swap/TokenSelector';
@@ -31,12 +36,11 @@ import {
   getStoredSlippage,
 } from '@/components/swap/SlippageSettingsModal';
 import AccountListModal from '@/components/account/AccountListModal';
-import SnowballApiService from '@/services/snowball';
-import { SnowballToken, SwapQuote } from '@/services/snowball/types';
+import WaitingForConfirmationModal from '@/components/common/WaitingForConfirmationModal';
+import { SwapService, SwapToken, UnifiedSwapQuote } from '@/services/swap';
 import { NetworkId } from '@/types/network';
-import VoiNetworkService from '@/services/network';
+import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
-import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { getTokenImageSource } from '@/utils/tokenImages';
 
 interface SwapScreenRouteParams {
@@ -46,7 +50,7 @@ interface SwapScreenRouteParams {
   networkId?: NetworkId;
 }
 
-const VOI_TOKEN_ID = 0; // VOI is the native token with ID 0
+const NATIVE_TOKEN_ID = 0; // Native token ID for both VOI and ALGO
 
 export default function SwapScreen() {
   const styles = useThemedStyles(createStyles);
@@ -54,33 +58,73 @@ export default function SwapScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const routeParams = route.params as SwapScreenRouteParams | undefined;
+  const delayedRefreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Network MUST come from route params
+  const currentNetwork = routeParams?.networkId;
 
   const activeAccount = useActiveAccount();
   const accountId = routeParams?.accountId || activeAccount?.id;
 
-  // Get account balance from store
-  const accountBalance = useWalletStore(state =>
+  // Get accounts for address lookup
+  const accounts = useWalletStore(state => state.wallet?.accounts);
+  const currentAccount = accounts?.find(acc => acc.id === accountId);
+
+  // Get account balance from store (for VOI network)
+  const singleNetworkBalance = useWalletStore(state =>
     accountId ? state.accountStates[accountId]?.balance : undefined
   );
+
+  // Network-specific balance state
+  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(null);
 
   // Load balance if not available
   const loadAccountBalance = useWalletStore(state => state.loadAccountBalance);
 
   useEffect(() => {
-    if (accountId && !accountBalance) {
+    if (accountId && !singleNetworkBalance) {
       loadAccountBalance(accountId);
     }
-  }, [accountId, accountBalance, loadAccountBalance]);
+  }, [accountId, singleNetworkBalance, loadAccountBalance]);
+
+  // Load network-specific balance when network or account changes
+  useEffect(() => {
+    const loadNetworkSpecificBalance = async () => {
+      const address = currentAccount?.address;
+      if (!address || !currentNetwork) return;
+
+      try {
+        // For non-VOI networks, fetch directly from NetworkService
+        if (currentNetwork !== NetworkId.VOI_MAINNET) {
+          const networkService = NetworkService.getInstance(currentNetwork);
+          const balance = await networkService.getAccountBalance(address);
+          setNetworkBalance(balance);
+        } else {
+          // For VOI network, use the store balance
+          setNetworkBalance(singleNetworkBalance || null);
+        }
+      } catch (error) {
+        console.error('Error loading network balance:', error);
+      }
+    };
+
+    loadNetworkSpecificBalance();
+  }, [currentAccount, currentNetwork, singleNetworkBalance]);
+
+  // Use network-specific balance - only fall back to store balance for VOI
+  const accountBalance = currentNetwork === NetworkId.VOI_MAINNET
+    ? (networkBalance || singleNetworkBalance)
+    : networkBalance;
 
   // Token selection state
-  const [inputToken, setInputToken] = useState<SnowballToken | null>(null);
-  const [outputToken, setOutputToken] = useState<SnowballToken | null>(null);
+  const [inputToken, setInputToken] = useState<SwapToken | null>(null);
+  const [outputToken, setOutputToken] = useState<SwapToken | null>(null);
   const [showInputTokenSelector, setShowInputTokenSelector] = useState(false);
   const [showOutputTokenSelector, setShowOutputTokenSelector] = useState(false);
 
   // Amount and quote state
   const [inputAmount, setInputAmount] = useState('');
-  const [quote, setQuote] = useState<SwapQuote | null>(null);
+  const [quote, setQuote] = useState<UnifiedSwapQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
@@ -91,7 +135,7 @@ export default function SwapScreen() {
 
   // Transaction state
   const [isSwapping, setIsSwapping] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [isWaitingForConfirmation, setIsWaitingForConfirmation] = useState(false);
 
   // Account selector state
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
@@ -102,21 +146,62 @@ export default function SwapScreen() {
     loadStoredSlippage();
   }, [routeParams]);
 
+  useEffect(() => {
+    return () => {
+      if (delayedRefreshTimeout.current) {
+        clearTimeout(delayedRefreshTimeout.current);
+        delayedRefreshTimeout.current = null;
+      }
+    };
+  }, []);
+
+  // Handle Android back button for local modals
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Close modals in order of priority (don't dismiss waiting modal)
+      if (showRouteModal) {
+        setShowRouteModal(false);
+        return true;
+      }
+      if (showSlippageModal) {
+        setShowSlippageModal(false);
+        return true;
+      }
+      if (showOutputTokenSelector) {
+        setShowOutputTokenSelector(false);
+        return true;
+      }
+      if (showInputTokenSelector) {
+        setShowInputTokenSelector(false);
+        return true;
+      }
+      if (isAccountModalVisible) {
+        setIsAccountModalVisible(false);
+        return true;
+      }
+      return false; // Let default back behavior happen
+    });
+
+    return () => backHandler.remove();
+  }, [showRouteModal, showSlippageModal, showOutputTokenSelector, showInputTokenSelector, isAccountModalVisible]);
+
   const loadInitialTokens = async () => {
     try {
-      // Set input token based on route params or default to VOI
+      const provider = SwapService.getProvider(currentNetwork);
+
+      // Set input token based on route params or default to native token
       if (routeParams?.assetId !== undefined) {
-        const token = await SnowballApiService.getTokenById(routeParams.assetId);
+        const token = await provider.getTokenById(routeParams.assetId);
         if (token) {
           setInputToken(token);
         }
       }
 
-      // Default output token to VOI if input is not VOI
-      if (routeParams?.assetId !== VOI_TOKEN_ID) {
-        const voiToken = await SnowballApiService.getTokenById(VOI_TOKEN_ID);
-        if (voiToken) {
-          setOutputToken(voiToken);
+      // Default output token to native token if input is not native token
+      if (routeParams?.assetId !== NATIVE_TOKEN_ID) {
+        const nativeToken = await provider.getTokenById(NATIVE_TOKEN_ID);
+        if (nativeToken) {
+          setOutputToken(nativeToken);
         }
       }
     } catch (error) {
@@ -152,17 +237,19 @@ export default function SwapScreen() {
     setQuoteError(null);
 
     try {
+      const provider = SwapService.getProvider(currentNetwork);
+
       // Convert amount to base units
       const amountInBaseUnits = BigInt(
         Math.floor(amountValue * Math.pow(10, inputToken.decimals))
       ).toString();
 
-      const quoteResponse = await SnowballApiService.getQuote({
-        inputToken: inputToken.id,
-        outputToken: outputToken.id,
+      const quoteResponse = await provider.getQuote({
+        inputTokenId: inputToken.id,
+        outputTokenId: outputToken.id,
         amount: amountInBaseUnits,
-        address: activeAccount.address,
-        slippageTolerance: slippage / 100, // Convert percentage to decimal
+        userAddress: activeAccount.address,
+        slippageTolerance: slippage, // Unified interface uses percentage
       });
 
       setQuote(quoteResponse);
@@ -180,13 +267,25 @@ export default function SwapScreen() {
   };
 
   const handleSwapTokens = () => {
+    // Get the current output amount to use as new input
+    let newInputAmount = '';
+    if (quote?.outputAmount && outputToken?.decimals !== undefined) {
+      const outputValue = parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals);
+      // Format without trailing zeros
+      newInputAmount = outputValue.toLocaleString('en-US', {
+        useGrouping: false,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: outputToken.decimals,
+      });
+    }
+
     // Swap input and output tokens
     const temp = inputToken;
     setInputToken(outputToken);
     setOutputToken(temp);
 
-    // Clear amount and quote
-    setInputAmount('');
+    // Set the new input amount (previous output) - quote will recalculate via useEffect
+    setInputAmount(newInputAmount);
     setQuote(null);
     setQuoteError(null);
   };
@@ -208,18 +307,19 @@ export default function SwapScreen() {
     try {
       let maxAmount = '0';
 
-      if (inputToken.id === VOI_TOKEN_ID) {
-        // For VOI, account for transaction fees (reserve ~0.1 VOI for fees)
+      if (inputToken.id === NATIVE_TOKEN_ID) {
+        // For native token (VOI/ALGO), account for transaction fees (reserve ~0.1 for fees)
         const balance = BigInt(accountBalance.amount || '0');
-        const reserveForFees = BigInt(100000); // 0.1 VOI in microAlgos
+        const reserveForFees = BigInt(100000); // 0.1 native token in base units
         const maxBalance = balance > reserveForFees ? balance - reserveForFees : BigInt(0);
         const value = Number(maxBalance) / Math.pow(10, 6);
         maxAmount = value.toFixed(6);
       } else {
-        // For ARC-200 tokens
-        const asset = accountBalance.assets?.find(
-          a => a.contractId === inputToken.id && a.assetType === 'arc200'
-        );
+        // Find asset by ID - check multiple possible field names
+        const asset = accountBalance.assets?.find(a => {
+          const assetId = a.assetId ?? a['asset-id'] ?? a.contractId;
+          return assetId === inputToken.id;
+        });
 
         if (asset) {
           const balance = BigInt(asset.amount);
@@ -238,6 +338,22 @@ export default function SwapScreen() {
 
   const handleSlippageSave = (newSlippage: number) => {
     setSlippage(newSlippage);
+  };
+
+  // Get swap provider info for branding
+  const providerInfo = SwapService.getProviderInfo(currentNetwork);
+
+  const handleProviderPress = async () => {
+    try {
+      const supported = await Linking.canOpenURL(providerInfo.url);
+      if (supported) {
+        await Linking.openURL(providerInfo.url);
+      } else {
+        Alert.alert('Error', 'Cannot open this URL');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to open URL');
+    }
   };
 
   // Account selector handlers
@@ -264,85 +380,128 @@ export default function SwapScreen() {
   };
 
   const handleReviewSwap = () => {
-    if (!quote || !quote.quote || !inputToken || !outputToken || !activeAccount) {
+    if (!quote || !inputToken || !outputToken || !activeAccount) {
       Alert.alert('Error', 'Missing required swap information');
       return;
     }
 
-    // Show confirmation alert - convert from base units to display units
-    const outputAmount = parseFloat(quote.quote.outputAmount) / Math.pow(10, outputToken.decimals);
-    const minOutput = parseFloat(quote.quote.minimumOutputAmount) / Math.pow(10, outputToken.decimals);
-
-    Alert.alert(
-      'Confirm Swap',
-      `Swap ${inputAmount} ${inputToken.symbol} for approximately ${outputAmount.toFixed(Math.min(outputToken.decimals, 6))} ${outputToken.symbol}?\n\nMinimum received: ${minOutput.toFixed(Math.min(outputToken.decimals, 6))} ${outputToken.symbol}\nPrice impact: ${quote.quote.priceImpact.toFixed(2)}%`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: () => setShowAuthModal(true),
-        },
-      ]
-    );
+    // Navigate to UniversalTransactionSigning screen with swap transactions
+    // Pass outputTokenId so the signing screen can check/handle opt-in
+    navigation.navigate('UniversalTransactionSigning', {
+      transactions: quote.unsignedTransactions,
+      account: activeAccount,
+      title: 'Confirm Swap',
+      networkId: currentNetwork,
+      outputTokenId: outputToken.id !== NATIVE_TOKEN_ID ? outputToken.id : undefined,
+      outputTokenSymbol: outputToken.symbol,
+      onSuccess: async (result: any) => {
+        await handleSwapSuccess(result);
+      },
+      onReject: async () => {
+        // Just navigate back
+        navigation.goBack();
+      },
+    });
   };
 
-  const handleSwapExecute = async (pin?: string) => {
-    if (!quote || !inputToken || !outputToken || !activeAccount) return;
+  const handleSwapSuccess = async (result: any) => {
+    if (!result?.signedTransactions) {
+      Alert.alert('Error', 'No signed transactions returned');
+      return;
+    }
 
     setIsSwapping(true);
+    setIsWaitingForConfirmation(true);
 
     try {
-      // Get unsigned transactions from quote
-      if (!quote.unsignedTransactions || quote.unsignedTransactions.length === 0) {
-        throw new Error('No transactions returned from quote');
-      }
+      const networkService = NetworkService.getInstance(currentNetwork);
 
-      const networkService = VoiNetworkService.getInstance();
-
-      // Decode and sign each transaction
-      const signedTxns: Uint8Array[] = [];
-
-      for (const txnBase64 of quote.unsignedTransactions) {
-        const txnBytes = Buffer.from(txnBase64, 'base64');
-        const txn = algosdk.decodeUnsignedTransaction(txnBytes);
-
-        // Sign the transaction
-        if (!pin) {
-          throw new Error('PIN required for signing');
+      // Convert signed transactions from base64 strings to Uint8Array if needed
+      const signedTxns = result.signedTransactions.map((txn: string | Uint8Array) => {
+        if (typeof txn === 'string') {
+          return new Uint8Array(Buffer.from(txn, 'base64'));
         }
-
-        // Import the SecureKeyManager for PIN-based signing
-        const { SecureKeyManager } = await import('@/services/secure/keyManager');
-        const keyManager = SecureKeyManager.getInstance();
-        const privateKey = await keyManager.getPrivateKey(activeAccount.id, pin);
-
-        if (!privateKey) {
-          throw new Error('Failed to retrieve private key');
-        }
-
-        const signedTxn = txn.signTxn(privateKey);
-        signedTxns.push(signedTxn);
-      }
+        return txn;
+      });
 
       // Submit transaction group
       const txId = await networkService.submitTransaction(signedTxns);
 
-      // Show success message
-      Alert.alert(
-        'Swap Successful',
-        `Your swap has been submitted!\n\nTransaction ID: ${txId}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              // Refresh balances
-              useWalletStore.getState().refreshAllBalances();
-              // Navigate back
-              navigation.goBack();
-            },
-          },
-        ]
-      );
+      const shortTxId =
+        txId && txId.length > 12
+          ? `${txId.slice(0, 6)}...${txId.slice(-6)}`
+          : txId;
+
+      Toast.show({
+        type: 'success',
+        text1: 'Swap submitted successfully',
+        text2: `Transaction ${shortTxId}`,
+        visibilityTime: 4500,
+        position: 'top',
+      });
+
+      // Refresh balances once after a short delay to allow indexer updates
+      if (delayedRefreshTimeout.current) {
+        clearTimeout(delayedRefreshTimeout.current);
+      }
+      delayedRefreshTimeout.current = setTimeout(() => {
+        const store = useWalletStore.getState();
+        if (accountId) {
+          store.loadAccountBalance(accountId, true);
+        }
+        store.refreshAllBalances();
+        delayedRefreshTimeout.current = null;
+      }, 5000);
+
+      const resolveAssetDetailParams = () => {
+        if (!accountId) {
+          return null;
+        }
+
+        const resolvedAssetId =
+          routeParams?.assetId ??
+          (inputToken
+            ? typeof inputToken.id === 'string'
+              ? parseInt(inputToken.id, 10)
+              : inputToken.id
+            : undefined);
+
+        if (
+          resolvedAssetId === undefined ||
+          Number.isNaN(Number(resolvedAssetId))
+        ) {
+          return null;
+        }
+
+        return {
+          assetName:
+            routeParams?.assetName ||
+            inputToken?.name ||
+            inputToken?.symbol ||
+            'Asset',
+          assetId: Number(resolvedAssetId),
+          accountId,
+          networkId: routeParams?.networkId,
+        };
+      };
+
+      const assetDetailParams = resolveAssetDetailParams();
+
+      navigation.dispatch(state => {
+        const routes: Array<{ name: string; params?: Record<string, any> }> = [
+          { name: 'HomeMain' },
+        ];
+
+        if (assetDetailParams) {
+          routes.push({ name: 'AssetDetail', params: assetDetailParams });
+        }
+
+        return CommonActions.reset({
+          ...state,
+          routes,
+          index: routes.length - 1,
+        });
+      });
     } catch (error) {
       console.error('Error executing swap:', error);
       Alert.alert(
@@ -353,7 +512,7 @@ export default function SwapScreen() {
       );
     } finally {
       setIsSwapping(false);
-      setShowAuthModal(false);
+      setIsWaitingForConfirmation(false);
     }
   };
 
@@ -361,9 +520,10 @@ export default function SwapScreen() {
     if (!inputToken || !accountBalance) return '0';
 
     try {
-      const tokenId = typeof inputToken.id === 'string' ? parseInt(inputToken.id, 10) : inputToken.id;
+      const tokenId = inputToken.id;
 
-      if (tokenId === VOI_TOKEN_ID || inputToken.symbol === 'VOI') {
+      // Check for native token (VOI/ALGO)
+      if (tokenId === NATIVE_TOKEN_ID || inputToken.symbol === 'VOI' || inputToken.symbol === 'ALGO') {
         const balance = BigInt(accountBalance.amount || '0');
         const value = Number(balance) / Math.pow(10, 6);
         return value.toLocaleString(undefined, {
@@ -372,9 +532,11 @@ export default function SwapScreen() {
         });
       }
 
-      const asset = accountBalance.assets?.find(
-        a => a.contractId === tokenId && a.assetType === 'arc200'
-      );
+      // Find asset by ID - check multiple possible field names
+      const asset = accountBalance.assets?.find(a => {
+        const assetId = a.assetId ?? a['asset-id'] ?? a.contractId;
+        return assetId === tokenId;
+      });
 
       if (asset) {
         const balance = BigInt(asset.amount);
@@ -404,10 +566,10 @@ export default function SwapScreen() {
     return false;
   };
 
-  const renderTokenIcon = (token: SnowballToken | null) => {
+  const renderTokenIcon = (token: SwapToken | null) => {
     if (!token) return null;
 
-    const imageSource = getTokenImageSource(token);
+    const imageSource = getTokenImageSource(token, currentNetwork);
 
     if (imageSource) {
       if (imageSource.type === 'uri') {
@@ -436,6 +598,98 @@ export default function SwapScreen() {
     );
   };
 
+  // Skeleton animation for loading state
+  const skeletonAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    let animation: Animated.CompositeAnimation | null = null;
+
+    if (quoteLoading) {
+      animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(skeletonAnim, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(skeletonAnim, {
+            toValue: 0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      animation.start();
+    } else {
+      skeletonAnim.setValue(0);
+    }
+
+    return () => {
+      if (animation) {
+        animation.stop();
+      }
+    };
+  }, [quoteLoading, skeletonAnim]);
+
+  const skeletonOpacity = skeletonAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.3, 0.7],
+  });
+
+  // Format USD value for display
+  const formatUsdValue = (value: number | undefined): string | null => {
+    if (value === undefined || value === 0) return null;
+    return `~$${value.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  };
+
+  // Get USD value for input amount - use usdIn from quote when available
+  const getInputUsdValue = (): string | null => {
+    if (!inputToken || !inputAmount || !quote) return null;
+    const amountValue = parseFloat(inputAmount);
+    if (isNaN(amountValue) || amountValue <= 0) return null;
+
+    // Use usdIn directly from quote if available
+    if (quote.usdIn !== undefined) {
+      return formatUsdValue(quote.usdIn);
+    }
+
+    // Fallback to tokenValues calculation for Snowball
+    if (quote.tokenValues) {
+      const tokenIdStr = String(inputToken.id);
+      const usdPerToken = quote.tokenValues[tokenIdStr];
+      if (usdPerToken !== undefined) {
+        return formatUsdValue(amountValue * usdPerToken);
+      }
+    }
+
+    return null;
+  };
+
+  // Get USD value for output amount - use usdOut from quote when available
+  const getOutputUsdValue = (): string | null => {
+    if (!outputToken || !quote?.outputAmount) return null;
+
+    // Use usdOut directly from quote if available
+    if (quote.usdOut !== undefined) {
+      return formatUsdValue(quote.usdOut);
+    }
+
+    // Fallback to tokenValues calculation for Snowball
+    if (quote.tokenValues) {
+      const tokenIdStr = String(outputToken.id);
+      const usdPerToken = quote.tokenValues[tokenIdStr];
+      if (usdPerToken !== undefined) {
+        const outputValue = parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals);
+        return formatUsdValue(outputValue * usdPerToken);
+      }
+    }
+
+    return null;
+  };
+
   if (!activeAccount || !accountId) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -461,28 +715,19 @@ export default function SwapScreen() {
         <View style={styles.tokenSection}>
           <Text style={styles.sectionLabel}>You pay</Text>
           <View style={styles.tokenCard}>
-            {/* Amount Input */}
-            <View style={styles.amountRow}>
-              <TextInput
-                style={styles.amountInput}
-                value={inputAmount}
-                onChangeText={handleInputAmountChange}
-                placeholder="0.0"
-                placeholderTextColor={themeColors.textMuted}
-                keyboardType="decimal-pad"
-                editable={!!inputToken}
-              />
-              <TouchableOpacity
-                style={styles.maxButton}
-                onPress={handleMaxPress}
-                disabled={!inputToken}
-              >
-                <Text style={styles.maxButtonText}>MAX</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Token Selector and Balance */}
-            <View style={styles.tokenRow}>
+            {/* Top Row: Amount + Token Selector */}
+            <View style={styles.mainRow}>
+              <View style={styles.amountContainer}>
+                <TextInput
+                  style={styles.amountInput}
+                  value={inputAmount}
+                  onChangeText={handleInputAmountChange}
+                  placeholder="0.0"
+                  placeholderTextColor={themeColors.textMuted}
+                  keyboardType="decimal-pad"
+                  editable={!!inputToken}
+                />
+              </View>
               <TouchableOpacity
                 style={styles.tokenSelector}
                 onPress={() => setShowInputTokenSelector(true)}
@@ -493,16 +738,30 @@ export default function SwapScreen() {
                     <Text style={styles.tokenSymbol}>{inputToken.symbol}</Text>
                   </>
                 ) : (
-                  <Text style={styles.selectTokenText}>Select token</Text>
+                  <Text style={styles.selectTokenText}>Select</Text>
                 )}
-                <Ionicons name="chevron-down" size={20} color={themeColors.text} />
+                <Ionicons name="chevron-down" size={18} color={themeColors.text} />
               </TouchableOpacity>
+            </View>
 
-              {inputToken && (
-                <Text style={styles.balanceText}>
-                  Balance: {getInputBalance()}
-                </Text>
-              )}
+            {/* Bottom Row: USD Value + Balance */}
+            <View style={styles.bottomRow}>
+              <Text style={styles.usdValue}>{getInputUsdValue() || ' '}</Text>
+              <View style={styles.balanceRow}>
+                {inputToken && (
+                  <>
+                    <Text style={styles.balanceText}>
+                      Bal: {getInputBalance()}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.maxButton}
+                      onPress={handleMaxPress}
+                    >
+                      <Text style={styles.maxButtonText}>MAX</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
             </View>
           </View>
         </View>
@@ -522,20 +781,28 @@ export default function SwapScreen() {
         <View style={styles.tokenSection}>
           <Text style={styles.sectionLabel}>You receive</Text>
           <View style={styles.tokenCard}>
-            {/* Output Amount Display */}
-            <View style={styles.amountRow}>
-              <Text style={styles.outputAmount}>
-                {quote && quote.quote && outputToken && outputToken.decimals !== undefined
-                  ? (parseFloat(quote.quote.outputAmount) / Math.pow(10, outputToken.decimals)).toLocaleString(undefined, {
-                      minimumFractionDigits: 0,
-                      maximumFractionDigits: Math.min(outputToken.decimals, 6),
-                    })
-                  : '0.0'}
-              </Text>
-            </View>
-
-            {/* Token Selector */}
-            <View style={styles.tokenRow}>
+            {/* Top Row: Amount + Token Selector */}
+            <View style={styles.mainRow}>
+              <View style={styles.amountContainer}>
+                {quoteLoading ? (
+                  <Animated.View
+                    style={[
+                      styles.skeleton,
+                      styles.skeletonAmount,
+                      { opacity: skeletonOpacity },
+                    ]}
+                  />
+                ) : (
+                  <Text style={styles.outputAmount}>
+                    {quote && quote.outputAmount && outputToken && outputToken.decimals !== undefined
+                      ? (parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals)).toLocaleString(undefined, {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: Math.min(outputToken.decimals, 6),
+                        })
+                      : '0.0'}
+                  </Text>
+                )}
+              </View>
               <TouchableOpacity
                 style={styles.tokenSelector}
                 onPress={() => setShowOutputTokenSelector(true)}
@@ -546,10 +813,25 @@ export default function SwapScreen() {
                     <Text style={styles.tokenSymbol}>{outputToken.symbol}</Text>
                   </>
                 ) : (
-                  <Text style={styles.selectTokenText}>Select token</Text>
+                  <Text style={styles.selectTokenText}>Select</Text>
                 )}
-                <Ionicons name="chevron-down" size={20} color={themeColors.text} />
+                <Ionicons name="chevron-down" size={18} color={themeColors.text} />
               </TouchableOpacity>
+            </View>
+
+            {/* Bottom Row: USD Value */}
+            <View style={styles.bottomRow}>
+              {quoteLoading ? (
+                <Animated.View
+                  style={[
+                    styles.skeleton,
+                    styles.skeletonUsd,
+                    { opacity: skeletonOpacity },
+                  ]}
+                />
+              ) : (
+                <Text style={styles.usdValue}>{getOutputUsdValue() || ' '}</Text>
+              )}
             </View>
           </View>
         </View>
@@ -579,14 +861,31 @@ export default function SwapScreen() {
             <Text style={styles.reviewButtonText}>Review Swap</Text>
           )}
         </TouchableOpacity>
+
+        {/* Powered by swap provider */}
+        <View style={styles.poweredByContainer}>
+          <Text style={styles.poweredByText}>Powered by </Text>
+          {providerInfo.provider === 'snowball' && (
+            <Image
+              source={require('../../../assets/snowballSwap.png')}
+              style={styles.poweredByLogo}
+              resizeMode="contain"
+            />
+          )}
+          <TouchableOpacity onPress={handleProviderPress}>
+            <Text style={styles.providerLink}>{providerInfo.name}</Text>
+          </TouchableOpacity>
+        </View>
       </KeyboardAwareScrollView>
 
       {/* Modals */}
       <TokenSelector
         visible={showInputTokenSelector}
         accountId={accountId!}
+        networkId={currentNetwork}
         selectedTokenId={inputToken?.id}
         excludeTokenId={outputToken?.id}
+        ownedOnly={true}
         onClose={() => setShowInputTokenSelector(false)}
         onSelect={setInputToken}
       />
@@ -594,8 +893,10 @@ export default function SwapScreen() {
       <TokenSelector
         visible={showOutputTokenSelector}
         accountId={accountId!}
+        networkId={currentNetwork}
         selectedTokenId={outputToken?.id}
         excludeTokenId={inputToken?.id}
+        ownedOnly={false}
         onClose={() => setShowOutputTokenSelector(false)}
         onSelect={setOutputToken}
       />
@@ -613,16 +914,11 @@ export default function SwapScreen() {
           route={quote.route}
           inputToken={inputToken}
           outputToken={outputToken}
+          estimatedOutput={quote.outputAmount}
+          minimumOutput={quote.minimumOutputAmount}
           onClose={() => setShowRouteModal(false)}
         />
       )}
-
-      {/* Auth Modal for signing */}
-      <UnifiedAuthModal
-        visible={showAuthModal}
-        onSuccess={handleSwapExecute}
-        onCancel={() => setShowAuthModal(false)}
-      />
 
       </SafeAreaView>
 
@@ -632,6 +928,13 @@ export default function SwapScreen() {
         onClose={handleAccountModalClose}
         onAddAccount={handleAddAccount}
         onAccountSelect={handleAccountSelect}
+      />
+
+      <WaitingForConfirmationModal
+        visible={isWaitingForConfirmation}
+        title="Waiting for confirmation"
+        message="Your swap has been submitted. We're waiting for the network to confirm it."
+        subMessage="You can safely leave this screen after confirmation."
       />
     </>
   );
@@ -644,9 +947,9 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.background,
     },
     scrollContent: {
-      paddingHorizontal: theme.spacing.lg,
-      paddingTop: theme.spacing.lg,
-      paddingBottom: theme.spacing.xl * 2, // Extra padding at bottom for scroll space
+      paddingHorizontal: theme.spacing.sm,
+      paddingTop: theme.spacing.sm,
+      paddingBottom: theme.spacing.xl,
     },
     errorContainer: {
       flex: 1,
@@ -658,52 +961,75 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.error,
     },
     tokenSection: {
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.xs,
     },
     sectionLabel: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: '600',
       color: theme.colors.textSecondary,
-      marginBottom: theme.spacing.sm,
+      marginBottom: theme.spacing.xs,
     },
     tokenCard: {
       backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.xl,
-      padding: theme.spacing.lg,
-      gap: theme.spacing.md,
+      borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.md,
+      gap: theme.spacing.xs,
     },
-    amountRow: {
+    mainRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: theme.spacing.sm,
+      justifyContent: 'space-between',
+    },
+    amountContainer: {
+      flex: 1,
+      marginRight: theme.spacing.sm,
     },
     amountInput: {
-      flex: 1,
-      fontSize: 32,
+      fontSize: 28,
       fontWeight: '600',
       color: theme.colors.text,
     },
     outputAmount: {
-      flex: 1,
-      fontSize: 32,
+      fontSize: 28,
       fontWeight: '600',
       color: theme.colors.text,
     },
-    maxButton: {
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.sm,
-      backgroundColor: theme.colors.primary + '20',
+    bottomRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    balanceRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs,
+    },
+    usdValue: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+    },
+    skeleton: {
+      backgroundColor: theme.colors.surface,
       borderRadius: theme.borderRadius.md,
     },
+    skeletonAmount: {
+      height: 34,
+      width: '50%',
+    },
+    skeletonUsd: {
+      height: 16,
+      width: '25%',
+    },
+    maxButton: {
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: theme.spacing.xs,
+      backgroundColor: theme.colors.primary + '20',
+      borderRadius: theme.borderRadius.sm,
+    },
     maxButtonText: {
-      fontSize: 14,
+      fontSize: 12,
       fontWeight: '700',
       color: theme.colors.primary,
-    },
-    tokenRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
     },
     tokenSelector: {
       flexDirection: 'row',
@@ -712,7 +1038,7 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.surface,
       paddingVertical: theme.spacing.sm,
       paddingHorizontal: theme.spacing.md,
-      borderRadius: theme.borderRadius.lg,
+      borderRadius: theme.borderRadius.md,
     },
     tokenIcon: {
       width: 24,
@@ -742,37 +1068,59 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textMuted,
     },
     balanceText: {
-      fontSize: 14,
+      fontSize: 13,
       color: theme.colors.textSecondary,
     },
     swapButtonContainer: {
       alignItems: 'center',
-      marginVertical: theme.spacing.sm,
+      marginVertical: theme.spacing.xs,
     },
     swapButton: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
       backgroundColor: theme.colors.card,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: 4,
+      borderWidth: 3,
       borderColor: theme.colors.background,
     },
     reviewButton: {
       backgroundColor: theme.colors.primary,
-      paddingVertical: theme.spacing.lg,
-      borderRadius: theme.borderRadius.xl,
+      paddingVertical: theme.spacing.md,
+      borderRadius: theme.borderRadius.lg,
       alignItems: 'center',
-      marginTop: theme.spacing.lg,
+      marginTop: theme.spacing.md,
     },
     reviewButtonDisabled: {
       backgroundColor: theme.colors.textMuted,
       opacity: 0.5,
     },
     reviewButtonText: {
-      fontSize: 18,
+      fontSize: 16,
       fontWeight: '700',
       color: 'white',
+    },
+    poweredByContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
+    },
+    poweredByText: {
+      fontSize: 12,
+      color: theme.colors.textSecondary,
+      marginRight: theme.spacing.xs,
+    },
+    providerLink: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.primary,
+    },
+    poweredByLogo: {
+      height: 30,
+      width: 30,
+      marginHorizontal: theme.spacing.xs,
     },
   });

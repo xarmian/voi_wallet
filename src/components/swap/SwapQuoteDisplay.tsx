@@ -9,17 +9,16 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme } from '../../constants/themes';
-import { SwapQuote, SnowballToken } from '../../services/snowball/types';
+import { SwapToken, UnifiedSwapQuote } from '../../services/swap/types';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 
 interface SwapQuoteDisplayProps {
-  quote: SwapQuote | null;
-  inputToken: SnowballToken | null;
-  outputToken: SnowballToken | null;
+  quote: UnifiedSwapQuote | null;
+  inputToken: SwapToken | null;
+  outputToken: SwapToken | null;
   loading: boolean;
   error: string | null;
   slippage: number;
@@ -57,10 +56,10 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
   };
 
   const calculateRate = (): string => {
-    if (!quote || !inputToken || !outputToken || !quote.quote) return '-';
+    if (!quote || !inputToken || !outputToken) return '-';
 
     try {
-      const rate = quote.quote.rate;
+      const rate = quote.rate;
       return `1 ${inputToken.symbol} = ${rate.toLocaleString(undefined, {
         minimumFractionDigits: 0,
         maximumFractionDigits: 6,
@@ -85,27 +84,29 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
       if (pools.length === 1) {
         return `Direct (${pools[0].dex.toUpperCase()})`;
       }
+      // Multiple pools in direct route
+      const dexes = [...new Set(pools.map(pool => pool.dex.toUpperCase()))];
+      return `${pools.length} pools via ${dexes.join(', ')}`;
     }
 
     // Handle multi-hop routes with hops array
     if (quote.route.type === 'multi-hop' && quote.route.hops) {
       const allPools = quote.route.hops.flatMap(hop => hop.pools);
       const dexes = [...new Set(allPools.map(pool => pool.dex.toUpperCase()))];
-      return `${allPools.length} pools via ${dexes.join(', ')}`;
+      return `${quote.route.totalPools} pools via ${dexes.join(', ')}`;
+    }
+
+    // Fallback to totalPools
+    if (quote.route.totalPools > 0) {
+      return `${quote.route.totalPools} pool${quote.route.totalPools > 1 ? 's' : ''}`;
     }
 
     return '-';
   };
 
+  // Don't render anything when loading - skeleton is shown in output amount area
   if (loading) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="small" color={themeColors.primary} />
-          <Text style={styles.loadingText}>Fetching best rate...</Text>
-        </View>
-      </View>
-    );
+    return null;
   }
 
   if (error) {
@@ -180,12 +181,12 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
           <Text
             style={[
               styles.quoteValue,
-              { color: getPriceImpactColor(quote.quote?.priceImpact || 0) },
+              { color: getPriceImpactColor(quote.priceImpact || 0) },
             ]}
           >
-            {quote.quote?.priceImpact !== undefined && quote.quote.priceImpact < 0.01
+            {quote.priceImpact !== undefined && quote.priceImpact < 0.01
               ? '<0.01%'
-              : `${(quote.quote?.priceImpact || 0).toFixed(2)}%`}
+              : `${(quote.priceImpact || 0).toFixed(2)}%`}
           </Text>
         </View>
 
@@ -202,7 +203,7 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
             </TouchableOpacity>
           </View>
           <Text style={styles.quoteValue}>
-            {formatAmount(quote.quote?.minimumOutputAmount || '0', outputToken?.decimals)}{' '}
+            {formatAmount(quote.minimumOutputAmount || '0', outputToken?.decimals)}{' '}
             {outputToken?.symbol}
           </Text>
         </View>
@@ -231,28 +232,10 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
           </View>
         </TouchableOpacity>
 
-        {/* Platform Fee (if exists and > 0) */}
-        {quote.platformFee?.applied && quote.platformFee.feeBps > 0 && (
-          <View style={styles.quoteRow}>
-            <View style={styles.labelWithIcon}>
-              <Text style={styles.quoteLabel}>Platform Fee</Text>
-              <TouchableOpacity>
-                <Ionicons
-                  name="information-circle-outline"
-                  size={16}
-                  color={themeColors.textMuted}
-                />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.quoteValue}>
-              {(quote.platformFee.feeBps / 100).toFixed(2)}%
-            </Text>
-          </View>
-        )}
       </View>
 
       {/* Warning for high price impact */}
-      {quote.quote?.priceImpact !== undefined && quote.quote.priceImpact >= 3 && (
+      {quote.priceImpact !== undefined && quote.priceImpact >= 3 && (
         <View style={styles.warningContainer}>
           <Ionicons name="warning" size={16} color={themeColors.warning} />
           <Text style={styles.warningText}>
@@ -328,17 +311,6 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: 4,
-    },
-    loadingContainer: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: theme.spacing.md,
-      paddingVertical: theme.spacing.lg,
-    },
-    loadingText: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
     },
     errorContainer: {
       alignItems: 'center',

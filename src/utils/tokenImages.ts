@@ -1,9 +1,9 @@
 /**
  * Token Image Utilities
- * Helper functions for resolving token images from SnowballToken objects
+ * Helper functions for resolving token images from SwapToken objects
  */
 
-import { SnowballToken } from '@/services/snowball/types';
+import { SwapToken } from '@/services/swap/types';
 import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 
@@ -13,34 +13,29 @@ export type TokenImageSource =
   | null;
 
 /**
- * Get the image source for a SnowballToken with priority:
- * 1. imageUrl from API (if not null/undefined/empty)
- * 2. For VOI (id === 0): local VOI token image when imageUrl is null
- * 3. logoURI (for backward compatibility)
- * 4. null (no image available)
+ * Get the image source for a SwapToken with priority:
+ * 1. logoUrl from API (if not null/undefined/empty)
+ * 2. For native token (id === 0): local native token image based on network
+ * 3. null (no image available)
  */
-export function getTokenImageSource(token: SnowballToken): TokenImageSource {
-  const tokenId = typeof token.id === 'string' ? parseInt(token.id, 10) : token.id;
+export function getTokenImageSource(
+  token: SwapToken,
+  networkId?: NetworkId
+): TokenImageSource {
+  const tokenId = token.id;
 
-  // Priority 1: Use imageUrl if available (check for both null and undefined, and non-empty string)
-  if (token.imageUrl != null && typeof token.imageUrl === 'string' && token.imageUrl.trim() !== '') {
-    return { type: 'uri', uri: token.imageUrl };
+  // Priority 1: Use logoUrl if available
+  if (token.logoUrl != null && typeof token.logoUrl === 'string' && token.logoUrl.trim() !== '') {
+    return { type: 'uri', uri: token.logoUrl };
   }
 
-  // Priority 2: For VOI (id === 0), use local image when imageUrl is null
+  // Priority 2: For native token (id === 0), use local image based on network
   if (tokenId === 0) {
-    const voiConfig = getNetworkConfig(NetworkId.VOI_MAINNET);
-    return { type: 'local', source: voiConfig.nativeTokenImage };
+    const network = networkId || NetworkId.VOI_MAINNET;
+    const config = getNetworkConfig(network);
+    return { type: 'local', source: config.nativeTokenImage };
   }
 
-  // Priority 3: Fallback to logoURI
-  if (token.logoURI) {
-    return { type: 'uri', uri: token.logoURI };
-  }
-
-  // Priority 4: No image available
+  // Priority 3: No image available
   return null;
 }
-
-
-

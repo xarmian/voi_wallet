@@ -44,18 +44,21 @@ export default function AccountImportItem({
   const getStatusColor = () => {
     if (!account.isValid) return styles.errorColor;
     if (account.isDuplicate) return styles.warningColor;
+    if (account.isUpgrade) return styles.infoColor;
     return styles.successColor;
   };
 
   const getStatusIcon = () => {
     if (!account.isValid) return 'close-circle';
     if (account.isDuplicate) return 'warning';
+    if (account.isUpgrade) return 'arrow-up-circle';
     return 'checkmark-circle';
   };
 
   const getStatusText = () => {
     if (!account.isValid) return account.errorMessage || 'Invalid';
     if (account.isDuplicate) return 'Already exists';
+    if (account.isUpgrade) return 'Upgrade watch account';
     return 'Ready to import';
   };
 
@@ -67,7 +70,7 @@ export default function AccountImportItem({
     return account.type === 'standard' ? 'Full Account' : 'Watch Account';
   };
 
-  const canBeSelected = account.isValid && !account.isDuplicate;
+  const canBeSelected = account.isValid && (!account.isDuplicate || account.isUpgrade);
 
   return (
     <View
@@ -262,4 +265,5 @@ const createStyles = (theme: Theme) =>
     errorColor: theme.colors.error,
     warningColor: theme.colors.warning,
     successColor: theme.colors.success,
+    infoColor: theme.colors.info,
   });

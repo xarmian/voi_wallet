@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import algosdk from 'algosdk';
 import {
   View,
@@ -11,6 +11,7 @@ import {
   ScrollView,
   Image,
   Modal,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons'; // types provided by Expo runtime
@@ -458,6 +459,32 @@ export default function SendScreen() {
   }, [activeAccount?.address, routeParams?.assetId, routeParams?.networkId, contextMappingId, multiNetworkBalance?.assets, currentNetwork]);
 
   // Balance is already in assetOptions - no need to fetch separately
+
+  // Handle Android back button for local modals
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // Close modals in order of priority (most recently likely opened first)
+      if (showAssetSelector) {
+        setShowAssetSelector(false);
+        return true;
+      }
+      if (isAddAccountModalVisible) {
+        setIsAddAccountModalVisible(false);
+        return true;
+      }
+      if (isAccountRecipientModalVisible) {
+        setIsAccountRecipientModalVisible(false);
+        return true;
+      }
+      if (isAccountModalVisible) {
+        setIsAccountModalVisible(false);
+        return true;
+      }
+      return false; // Let default back behavior happen
+    });
+
+    return () => backHandler.remove();
+  }, [isAccountModalVisible, isAddAccountModalVisible, isAccountRecipientModalVisible, showAssetSelector]);
 
   // Determine signing capability and Ledger signer presence for the active account
   useEffect(() => {

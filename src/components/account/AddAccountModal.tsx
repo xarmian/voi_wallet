@@ -1,9 +1,10 @@
-import React, { useCallback, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import React, { useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import BottomSheet, {
+import {
+  BottomSheetModal,
   BottomSheetBackdrop,
   BottomSheetView,
 } from '@gorhom/bottom-sheet';
@@ -30,13 +31,10 @@ export default function AddAccountModal({
   onAddWatchAccount,
   onImportLedgerAccount,
 }: AddAccountModalProps) {
-  const bottomSheetRef = useRef<BottomSheet>(null);
+  const bottomSheetRef = useRef<BottomSheetModal>(null);
   const createAccount = useWalletStore((state) => state.createAccount);
   const importAccount = useWalletStore((state) => state.importAccount);
   const addWatchAccount = useWalletStore((state) => state.addWatchAccount);
-
-  // Snap points for the bottom sheet
-  const snapPoints = useMemo(() => ['40%'], []);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(
@@ -70,9 +68,9 @@ export default function AddAccountModal({
   // Open/close the bottom sheet based on visibility
   React.useEffect(() => {
     if (isVisible) {
-      bottomSheetRef.current?.expand();
+      bottomSheetRef.current?.present();
     } else {
-      bottomSheetRef.current?.close();
+      bottomSheetRef.current?.dismiss();
     }
   }, [isVisible]);
 
@@ -130,10 +128,9 @@ export default function AddAccountModal({
   ];
 
   return (
-    <BottomSheet
+    <BottomSheetModal
       ref={bottomSheetRef}
-      index={-1}
-      snapPoints={snapPoints}
+      enableDynamicSizing
       onChange={handleSheetChanges}
       backdropComponent={renderBackdrop}
       enablePanDownToClose
@@ -174,7 +171,7 @@ export default function AddAccountModal({
           ))}
         </View>
       </BottomSheetView>
-    </BottomSheet>
+    </BottomSheetModal>
   );
 }
 

@@ -19,25 +19,29 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme } from '../../constants/themes';
-import { Route, RoutePool, RouteHop, SnowballToken } from '../../services/snowball/types';
-import SnowballApiService from '../../services/snowball';
+import { SwapToken, UnifiedRoute, UnifiedRoutePool, UnifiedRouteHop } from '../../services/swap/types';
+import { SwapService } from '../../services/swap';
+import { NetworkId } from '../../types/network';
+import { useNetworkStore } from '../../store/networkStore';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { getTokenImageSource } from '../../utils/tokenImages';
 
 interface RouteDetailModalProps {
   visible: boolean;
-  route: Route;
-  inputToken: SnowballToken;
-  outputToken: SnowballToken;
+  route: UnifiedRoute;
+  inputToken: SwapToken;
+  outputToken: SwapToken;
+  estimatedOutput?: string;
+  minimumOutput?: string;
   onClose: () => void;
 }
 
 interface RouteStep {
-  pool: RoutePool;
+  pool: UnifiedRoutePool;
   hopIndex: number;
   poolIndex: number;
-  tokenIn?: SnowballToken;
-  tokenOut?: SnowballToken;
+  tokenIn?: SwapToken;
+  tokenOut?: SwapToken;
 }
 
 export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
@@ -45,15 +49,18 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
   route,
   inputToken,
   outputToken,
+  estimatedOutput,
+  minimumOutput,
   onClose,
 }) => {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
+  const currentNetwork = useNetworkStore(state => state.currentNetwork);
 
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [slideAnim] = useState(new Animated.Value(0));
-  const [intermediateTokens, setIntermediateTokens] = useState<Map<string, SnowballToken>>(new Map());
+  const [intermediateTokens, setIntermediateTokens] = useState<Map<string, SwapToken>>(new Map());
 
   useEffect(() => {
     if (visible) {
@@ -88,156 +95,93 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       }
 
       let steps: RouteStep[] = [];
-      const tokenMap = new Map<string, SnowballToken>();
+      const tokenMap = new Map<string, SwapToken>();
+      const provider = SwapService.getProvider(currentNetwork);
 
       // Fetch intermediate tokens for multi-hop routes
+      // In UnifiedRoute, hops may have inputToken/outputToken as SwapToken | null
       if (route.type === 'multi-hop' && route.hops && Array.isArray(route.hops)) {
-        const tokenIdsToFetch = new Set<string>();
-        
-        // Collect all intermediate token IDs from hops
-        route.hops.forEach((hop, hopIndex) => {
-          // For all hops except the last, the outputToken is an intermediate token
-          if (hopIndex < route.hops!.length - 1) {
-            tokenIdsToFetch.add(hop.outputToken);
+        // Collect intermediate tokens from hops that have them
+        for (const hop of route.hops) {
+          if (hop.inputToken) {
+            tokenMap.set(String(hop.inputToken.id), hop.inputToken);
           }
-        });
-
-        // Fetch intermediate tokens
-        for (const tokenId of tokenIdsToFetch) {
-          try {
-            const tokenIdNum = parseInt(tokenId, 10);
-            if (!isNaN(tokenIdNum)) {
-              const token = await SnowballApiService.getTokenById(tokenIdNum);
-              if (token) {
-                tokenMap.set(tokenId, token);
-              }
-            }
-          } catch (error) {
-            console.warn(`RouteDetailModal: Failed to fetch token ${tokenId}:`, error);
+          if (hop.outputToken) {
+            tokenMap.set(String(hop.outputToken.id), hop.outputToken);
           }
         }
       }
 
       setIntermediateTokens(tokenMap);
 
-      // Check if route has a type property
-      if (!route.type) {
-        console.warn('RouteDetailModal: Route missing type property, attempting to infer from structure');
-        
-        // Try to infer route type from structure
-        if (route.pools && Array.isArray(route.pools) && route.pools.length > 0) {
-          // Treat as direct route if pools exist
-          steps = route.pools.map((pool, index) => {
-            const tokenIn = index === 0 ? inputToken : undefined;
-            const tokenOut = index === route.pools!.length - 1 ? outputToken : undefined;
+      // Handle direct routes with pools array
+      if (route.type === 'direct' && route.pools && Array.isArray(route.pools) && route.pools.length > 0) {
+        steps = route.pools.map((pool, index) => {
+          const tokenIn = index === 0 ? inputToken : undefined;
+          const tokenOut = index === route.pools!.length - 1 ? outputToken : undefined;
 
-            return {
-              pool,
-              hopIndex: 0,
-              poolIndex: index,
-              tokenIn,
-              tokenOut,
-            };
-          });
-        } else if (route.hops && Array.isArray(route.hops) && route.hops.length > 0) {
-          // Treat as multi-hop route if hops exist
-          steps = route.hops.flatMap((hop, hopIndex) => {
-            if (!hop.pools || !Array.isArray(hop.pools) || hop.pools.length === 0) {
-              return [];
-            }
-            return hop.pools.map((pool, poolIndex) => {
-              const isFirstPool = hopIndex === 0 && poolIndex === 0;
-              const isLastPool =
-                hopIndex === route.hops!.length - 1 &&
-                poolIndex === hop.pools.length - 1;
+          return {
+            pool,
+            hopIndex: 0,
+            poolIndex: index,
+            tokenIn,
+            tokenOut,
+          };
+        });
+      }
 
-              // Get intermediate token for this hop
-              const intermediateToken = hopIndex < route.hops!.length - 1 
-                ? tokenMap.get(hop.outputToken) 
-                : undefined;
-
-              return {
-                pool,
-                hopIndex,
-                poolIndex,
-                tokenIn: isFirstPool ? inputToken : intermediateToken,
-                tokenOut: isLastPool ? outputToken : intermediateToken,
-              };
-            });
-          });
-        }
-      } else {
-        // Handle direct routes with pools array
-        if (route.type === 'direct' && route.pools && Array.isArray(route.pools) && route.pools.length > 0) {
-          steps = route.pools.map((pool, index) => {
-            const tokenIn = index === 0 ? inputToken : undefined;
-            const tokenOut = index === route.pools!.length - 1 ? outputToken : undefined;
-
-            return {
-              pool,
-              hopIndex: 0,
-              poolIndex: index,
-              tokenIn,
-              tokenOut,
-            };
-          });
-        }
-
-        // Handle multi-hop routes with hops array
-        if (route.type === 'multi-hop' && route.hops && Array.isArray(route.hops) && route.hops.length > 0) {
-          steps = route.hops.flatMap((hop, hopIndex) => {
-            if (!hop.pools || !Array.isArray(hop.pools) || hop.pools.length === 0) {
-              console.warn(`RouteDetailModal: Hop ${hopIndex} has no pools or invalid pools array`);
-              return [];
-            }
+      // Handle multi-hop routes with hops array
+      if (route.type === 'multi-hop' && route.hops && Array.isArray(route.hops) && route.hops.length > 0) {
+        steps = route.hops.flatMap((hop, hopIndex) => {
+          if (!hop.pools || !Array.isArray(hop.pools) || hop.pools.length === 0) {
+            console.warn(`RouteDetailModal: Hop ${hopIndex} has no pools or invalid pools array`);
+            return [];
+          }
             
-            // Get tokens for this hop
-            // For first hop: inputToken is the swap inputToken, outputToken is intermediate
-            // For subsequent hops: inputToken is previous hop's outputToken (intermediate), outputToken is next intermediate or final outputToken
-            const hopInputToken = hopIndex === 0 
-              ? inputToken 
-              : tokenMap.get(hop.inputToken);
-            const hopOutputToken = hopIndex === route.hops!.length - 1
-              ? outputToken
-              : tokenMap.get(hop.outputToken);
+          // Get tokens for this hop from the hop's inputToken/outputToken (SwapToken | null)
+          const hopInputToken = hopIndex === 0
+            ? inputToken
+            : (hop.inputToken || undefined);
+          const hopOutputToken = hopIndex === route.hops!.length - 1
+            ? outputToken
+            : (hop.outputToken || undefined);
 
-            return hop.pools.map((pool, poolIndex) => {
-              // First pool of hop uses hop's inputToken
-              const isFirstPoolInHop = poolIndex === 0;
-              // Last pool of hop uses hop's outputToken
-              const isLastPoolInHop = poolIndex === hop.pools.length - 1;
+          return hop.pools.map((pool, poolIndex) => {
+            // First pool of hop uses hop's inputToken
+            const isFirstPoolInHop = poolIndex === 0;
+            // Last pool of hop uses hop's outputToken
+            const isLastPoolInHop = poolIndex === hop.pools.length - 1;
 
-              let tokenIn: SnowballToken | undefined;
-              let tokenOut: SnowballToken | undefined;
+            let tokenIn: SwapToken | undefined;
+            let tokenOut: SwapToken | undefined;
 
-              if (isFirstPoolInHop && isLastPoolInHop) {
-                // Single pool in hop
-                tokenIn = hopInputToken;
-                tokenOut = hopOutputToken;
-              } else if (isFirstPoolInHop) {
-                // First pool: input is hop's inputToken, output is intermediate (hop's outputToken)
-                tokenIn = hopInputToken;
-                tokenOut = hopOutputToken;
-              } else if (isLastPoolInHop) {
-                // Last pool: input is intermediate (hop's inputToken), output is hop's outputToken
-                tokenIn = hopInputToken;
-                tokenOut = hopOutputToken;
-              } else {
-                // Middle pools: both are intermediate (hop's outputToken, which is the intermediate)
-                tokenIn = hopOutputToken;
-                tokenOut = hopOutputToken;
-              }
+            if (isFirstPoolInHop && isLastPoolInHop) {
+              // Single pool in hop
+              tokenIn = hopInputToken;
+              tokenOut = hopOutputToken;
+            } else if (isFirstPoolInHop) {
+              // First pool: input is hop's inputToken
+              tokenIn = hopInputToken;
+              tokenOut = hopOutputToken;
+            } else if (isLastPoolInHop) {
+              // Last pool: output is hop's outputToken
+              tokenIn = hopInputToken;
+              tokenOut = hopOutputToken;
+            } else {
+              // Middle pools
+              tokenIn = hopOutputToken;
+              tokenOut = hopOutputToken;
+            }
 
-              return {
-                pool,
-                hopIndex,
-                poolIndex,
-                tokenIn,
-                tokenOut,
-              };
-            });
+            return {
+              pool,
+              hopIndex,
+              poolIndex,
+              tokenIn,
+              tokenOut,
+            };
           });
-        }
+        });
       }
 
       if (steps.length === 0) {
@@ -270,7 +214,7 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
     }
   };
 
-  const renderTokenIcon = (token: SnowballToken | undefined, fallbackSymbol: string) => {
+  const renderTokenIcon = (token: SwapToken | undefined, fallbackSymbol: string) => {
     if (!token) {
       return (
         <View style={styles.tokenIcon}>
@@ -279,7 +223,7 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       );
     }
 
-    const imageSource = getTokenImageSource(token);
+    const imageSource = getTokenImageSource(token, currentNetwork);
 
     if (imageSource) {
       if (imageSource.type === 'uri') {
@@ -446,14 +390,18 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                   {/* Final Output Summary */}
                   <View style={styles.finalSummary}>
                     <View style={styles.finalSummaryContent}>
-                      <Text style={styles.finalSummaryLabel}>You receive</Text>
-                      <Text style={styles.finalSummaryValue}>
-                        {formatAmount(
-                          routeSteps[routeSteps.length - 1]?.pool.outputAmount || '0',
-                          outputToken.decimals
-                        )}{' '}
-                        {outputToken.symbol}
-                      </Text>
+                      <View style={styles.finalSummaryRow}>
+                        <Text style={styles.finalSummaryLabel}>Estimated output</Text>
+                        <Text style={styles.finalSummaryValue}>
+                          {formatAmount(estimatedOutput || '0', outputToken.decimals)} {outputToken.symbol}
+                        </Text>
+                      </View>
+                      <View style={styles.finalSummaryRow}>
+                        <Text style={styles.finalSummaryLabel}>Minimum received</Text>
+                        <Text style={styles.minimumValue}>
+                          {formatAmount(minimumOutput || '0', outputToken.decimals)} {outputToken.symbol}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                 </>
@@ -481,22 +429,22 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.card,
       borderTopLeftRadius: theme.borderRadius.xl,
       borderTopRightRadius: theme.borderRadius.xl,
-      paddingHorizontal: theme.spacing.lg,
-      paddingTop: theme.spacing.lg,
-      paddingBottom: theme.spacing.xxl,
-      height: Dimensions.get('window').height * 0.9,
-      maxHeight: '90%',
+      paddingHorizontal: theme.spacing.md,
+      paddingTop: theme.spacing.md,
+      paddingBottom: theme.spacing.lg,
+      height: Dimensions.get('window').height * 0.85,
+      maxHeight: '85%',
       flexDirection: 'column',
     },
     header: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      marginBottom: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
       flexShrink: 0,
     },
     title: {
-      fontSize: 20,
+      fontSize: 18,
       fontWeight: '600',
       color: theme.colors.text,
     },
@@ -512,13 +460,13 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     scrollContent: {
-      paddingBottom: theme.spacing.lg,
+      paddingBottom: theme.spacing.sm,
     },
     loadingContainer: {
       alignItems: 'center',
       justifyContent: 'center',
-      paddingVertical: theme.spacing.xxl,
-      gap: theme.spacing.md,
+      paddingVertical: theme.spacing.xl,
+      gap: theme.spacing.sm,
     },
     loadingText: {
       fontSize: 14,
@@ -526,10 +474,10 @@ const createStyles = (theme: Theme) =>
     },
     summaryContainer: {
       backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      marginBottom: theme.spacing.lg,
-      gap: theme.spacing.sm,
+      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.sm,
+      marginBottom: theme.spacing.sm,
+      gap: theme.spacing.xs,
     },
     summaryRow: {
       flexDirection: 'row',
@@ -537,40 +485,40 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
     },
     summaryLabel: {
-      fontSize: 14,
+      fontSize: 13,
       color: theme.colors.textSecondary,
     },
     summaryValue: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: '600',
       color: theme.colors.text,
     },
     stepContainer: {
       backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      gap: theme.spacing.md,
+      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.sm,
+      gap: theme.spacing.sm,
     },
     stepHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: theme.spacing.sm,
+      gap: theme.spacing.xs,
     },
     stepNumber: {
-      width: 28,
-      height: 28,
-      borderRadius: 14,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
       backgroundColor: theme.colors.primary,
       alignItems: 'center',
       justifyContent: 'center',
     },
     stepNumberText: {
-      fontSize: 14,
+      fontSize: 12,
       fontWeight: '700',
       color: 'white',
     },
     dexName: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: '600',
       color: theme.colors.primary,
     },
@@ -578,41 +526,40 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingVertical: theme.spacing.sm,
+      paddingVertical: theme.spacing.xs,
     },
     tokenInfo: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: theme.spacing.sm,
+      gap: theme.spacing.xs,
       flex: 1,
     },
     tokenIcon: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
       backgroundColor: theme.colors.primary + '20',
       alignItems: 'center',
       justifyContent: 'center',
     },
     tokenIconText: {
-      fontSize: 16,
+      fontSize: 14,
       fontWeight: '700',
       color: theme.colors.primary,
     },
     tokenSymbol: {
-      fontSize: 14,
+      fontSize: 13,
       fontWeight: '600',
       color: theme.colors.text,
     },
     tokenAmount: {
-      fontSize: 12,
+      fontSize: 11,
       color: theme.colors.textSecondary,
     },
     poolInfo: {
-      paddingTop: theme.spacing.sm,
+      paddingTop: theme.spacing.xs,
       borderTopWidth: 1,
       borderTopColor: theme.colors.border,
-      gap: theme.spacing.xs,
     },
     poolInfoRow: {
       flexDirection: 'row',
@@ -620,35 +567,44 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
     },
     poolInfoLabel: {
-      fontSize: 12,
+      fontSize: 11,
       color: theme.colors.textMuted,
     },
     poolInfoValue: {
-      fontSize: 12,
+      fontSize: 11,
       fontWeight: '600',
       color: theme.colors.text,
     },
     stepArrow: {
       alignItems: 'center',
-      paddingVertical: theme.spacing.sm,
+      paddingVertical: theme.spacing.xs,
     },
     finalSummary: {
-      marginTop: theme.spacing.lg,
-      backgroundColor: `${theme.colors.success}20`,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
+      marginTop: theme.spacing.sm,
+      backgroundColor: `${theme.colors.success}15`,
+      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.sm,
     },
     finalSummaryContent: {
       gap: theme.spacing.xs,
     },
+    finalSummaryRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
     finalSummaryLabel: {
-      fontSize: 12,
+      fontSize: 13,
       color: theme.colors.textSecondary,
-      fontWeight: '600',
     },
     finalSummaryValue: {
-      fontSize: 18,
+      fontSize: 15,
       fontWeight: '700',
       color: theme.colors.success,
+    },
+    minimumValue: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.text,
     },
   });

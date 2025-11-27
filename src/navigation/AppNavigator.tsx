@@ -24,6 +24,7 @@ import SendScreen from '@/screens/wallet/SendScreen';
 import SwapScreen from '@/screens/wallet/SwapScreen';
 import TransactionConfirmationScreen from '@/screens/wallet/TransactionConfirmationScreen';
 import TransactionResultScreen from '@/screens/wallet/TransactionResultScreen';
+import UniversalTransactionSigningScreen from '@/screens/wallet/UniversalTransactionSigningScreen';
 import ReceiveScreen from '@/screens/wallet/ReceiveScreen';
 import DiscoverScreen from '@/screens/wallet/DiscoverScreen';
 import NFTScreen from '@/screens/wallet/NFTScreen';
@@ -81,6 +82,17 @@ export type RootStackParamList = {
   WalletConnectTransactionRequest: { requestEvent: any };
   WalletConnectPairing: { uri: string };
   WalletConnectError: { error: string; uri?: string };
+  UniversalTransactionSigning: {
+    transactions: string[];
+    account: WalletAccount;
+    onSuccess?: (result: any) => Promise<void>;
+    onReject?: () => Promise<void>;
+    title?: string;
+    networkId?: NetworkId;
+    chainId?: string;
+    outputTokenId?: number;
+    outputTokenSymbol?: string;
+  };
   QRScanner: undefined;
   QRAccountImport: undefined;
   AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
@@ -152,6 +164,17 @@ export type WalletStackParamList = {
     estimatedFee: number;
     fromAccount: WalletAccount;
     networkId?: NetworkId;
+  };
+  UniversalTransactionSigning: {
+    transactions: string[]; // Base64 encoded transactions
+    account: WalletAccount;
+    onSuccess?: (result: any) => Promise<void>;
+    onReject?: () => Promise<void>;
+    title?: string;
+    networkId?: NetworkId;
+    chainId?: string;
+    outputTokenId?: number;
+    outputTokenSymbol?: string;
   };
   TransactionResult: {
     transactionId?: string;
@@ -300,6 +323,10 @@ function WalletStackNavigator() {
         <WalletStack.Screen
           name="TransactionConfirmation"
           component={TransactionConfirmationScreen}
+        />
+        <WalletStack.Screen
+          name="UniversalTransactionSigning"
+          component={UniversalTransactionSigningScreen}
         />
         <WalletStack.Screen
           name="TransactionResult"
@@ -627,10 +654,15 @@ function AppStack() {
       <Stack.Screen name="WalletConnectPairing" component={WalletConnectPairingScreen} />
       <Stack.Screen name="WalletConnectError" component={WalletConnectErrorScreen} />
       <Stack.Screen
+        name="UniversalTransactionSigning"
+        component={UniversalTransactionSigningScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
         name="QRScanner"
         component={QRScannerScreen}
         options={{
-          presentation: 'fullScreenModal',
+          presentation: 'modal',
           headerShown: false,
           animation: 'slide_from_bottom',
           gestureEnabled: true,
@@ -641,7 +673,7 @@ function AppStack() {
         name="QRAccountImport"
         component={QRAccountImportScreen}
         options={{
-          presentation: 'fullScreenModal',
+          presentation: 'modal',
           headerShown: false,
           animation: 'slide_from_bottom',
           gestureEnabled: true,

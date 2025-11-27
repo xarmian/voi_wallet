@@ -37,6 +37,7 @@ export const NETWORK_CONFIGURATIONS: Record<NetworkId, NetworkConfiguration> = {
       arc200: true,
       arc72: true,
       pricing: true,
+      swap: true,
     },
   },
 
@@ -73,6 +74,7 @@ export const NETWORK_CONFIGURATIONS: Record<NetworkId, NetworkConfiguration> = {
       arc200: false,
       arc72: false,
       pricing: true, // VestigeLabs pricing API
+      swap: true, // Deflex swap router
     },
   },
 };

@@ -7,7 +7,6 @@ import {
   TextInput,
   Image,
   ListRenderItem,
-  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -16,7 +15,8 @@ import {
   useThemeSpacing,
 } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import BottomSheet, {
+import {
+  BottomSheetModal,
   BottomSheetBackdrop,
   BottomSheetFlatList,
 } from '@gorhom/bottom-sheet';
@@ -44,14 +44,13 @@ export default function AccountRecipientModal({
 }: AccountRecipientModalProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const bottomSheetRef = useRef<BottomSheet>(null);
+  const bottomSheetRef = useRef<BottomSheetModal>(null);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const friends = useSortedFriends();
   const friendsStore = useFriendsStore();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
-  const { sm: spacingSm, lg: spacingLg } = useThemeSpacing();
+  const { lg: spacingLg } = useThemeSpacing();
 
   const [searchQuery, setSearchQuery] = React.useState('');
   const [activeTab, setActiveTab] = React.useState<TabType>('accounts');
@@ -63,14 +62,11 @@ export default function AccountRecipientModal({
     }
   }, [friendsStore.isInitialized]);
 
-  // Fixed height for the bottom sheet ~80% of viewport
-  const modalHeight = useMemo(() => Math.round(windowHeight * 0.8), [windowHeight]);
-  const snapPoints = useMemo(() => [modalHeight], [modalHeight]);
-
-  const topInset = insets.top + spacingSm;
+  // Use percentage-based snap point for better compatibility with BottomSheetModal
+  const snapPoints = useMemo(() => ['90%'], []);
 
   const listContentStyle = useMemo(
-    () => [styles.listContent, { paddingBottom: spacingLg + insets.bottom }],
+    () => [styles.listContent, { paddingBottom: spacingLg + insets.bottom + 100 }],
     [styles.listContent, spacingLg, insets.bottom]
   );
 
@@ -223,9 +219,9 @@ export default function AccountRecipientModal({
   // Open/close the bottom sheet based on visibility
   React.useEffect(() => {
     if (isVisible) {
-      bottomSheetRef.current?.expand();
+      bottomSheetRef.current?.present();
     } else {
-      bottomSheetRef.current?.close();
+      bottomSheetRef.current?.dismiss();
     }
   }, [isVisible]);
 
@@ -243,9 +239,8 @@ export default function AccountRecipientModal({
   );
 
   return (
-    <BottomSheet
+    <BottomSheetModal
       ref={bottomSheetRef}
-      index={-1}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
       backdropComponent={renderBackdrop}
@@ -257,7 +252,6 @@ export default function AccountRecipientModal({
       keyboardBehavior="interactive"
       keyboardBlurBehavior="restore"
       android_keyboardInputMode="adjustResize"
-      topInset={topInset}
     >
       <BottomSheetFlatList<AccountMetadata | Friend>
         data={listData}
@@ -385,7 +379,7 @@ export default function AccountRecipientModal({
         stickyHeaderIndices={[0]}
         style={styles.list}
       />
-    </BottomSheet>
+    </BottomSheetModal>
   );
 }
 
@@ -410,6 +404,7 @@ const createStyles = (theme: Theme) =>
       paddingBottom: theme.spacing.sm,
       borderBottomWidth: 1,
       borderBottomColor: theme.colors.border,
+      marginBottom: theme.spacing.sm,
     },
     header: {
       flexDirection: 'row',
