@@ -355,15 +355,13 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   };
 
   const handleReject = async () => {
+    let rejectionSent = false;
     try {
       // Use v1 client for v1 requests, otherwise use v2
       if (version === 1) {
         // Handle v1 rejection
         const v1Client = WalletConnectV1Client.getInstance();
-        await v1Client.rejectRequest(
-          (requestEvent as any).id,
-          'User rejected the request'
-        );
+        await v1Client.rejectRequest((requestEvent as any).id, 'User rejected the request');
       } else {
         // Handle v2 rejection
         const wcService = WalletConnectService.getInstance();
@@ -372,61 +370,59 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           message: 'User rejected the request',
         });
       }
+      rejectionSent = true;
+    } catch (error) {
+      console.error('Failed to reject request:', error);
+    }
 
-      // Check if there are pending requests in the queue
-      const nextRequest = await TransactionRequestQueue.peek();
-      const queueSize = await TransactionRequestQueue.size();
+    // Check if there are pending requests in the queue
+    const nextRequest = await TransactionRequestQueue.peek();
+    const queueSize = await TransactionRequestQueue.size();
 
-      // Show non-blocking toast with queue info
+    if (rejectionSent) {
+      // Show non-blocking toast with queue info when rejection was sent
       Toast.show({
         type: 'walletConnectRejected',
         text1: 'Transaction Request Rejected',
-        text2: `You declined to sign this transaction. ${queueSize > 0 ? 'Processing next request...' : 'The dApp has been notified.'}`,
+        text2: `You declined to sign this transaction. ${
+          queueSize > 0 ? 'Processing next request...' : 'You can return to the dApp.'
+        }`,
         visibilityTime: 4000,
         position: 'top',
         props: {
           queueSize,
         },
       });
+    }
 
-      if (nextRequest) {
-        // Atomically dequeue only if the request matches (prevents race conditions)
-        const dequeuedRequest = await TransactionRequestQueue.dequeueIfMatch(
-          nextRequest.id,
-          nextRequest.topic
-        );
+    if (nextRequest) {
+      // Atomically dequeue only if the request matches (prevents race conditions)
+      const dequeuedRequest = await TransactionRequestQueue.dequeueIfMatch(
+        nextRequest.id,
+        nextRequest.topic
+      );
 
-        if (dequeuedRequest) {
-          // Navigate to the next transaction request
-          navigation.replace('WalletConnectTransactionRequest', {
-            requestEvent: dequeuedRequest,
-            version: dequeuedRequest.version,
-          });
-        } else {
-          // Queue changed, navigate back
-          if (navigation.canGoBack()) {
-            navigation.goBack();
-          } else {
-            navigation.navigate('Main', { screen: 'Home' });
-          }
-        }
+      if (dequeuedRequest) {
+        // Navigate to the next transaction request
+        navigation.replace('WalletConnectTransactionRequest', {
+          requestEvent: dequeuedRequest,
+          version: dequeuedRequest.version,
+        });
       } else {
-        // No pending requests, navigate back
+        // Queue changed, navigate back
         if (navigation.canGoBack()) {
           navigation.goBack();
         } else {
           navigation.navigate('Main', { screen: 'Home' });
         }
       }
-    } catch (error) {
-      console.error('Failed to reject request:', error);
-      Toast.show({
-        type: 'error',
-        text1: 'Error Rejecting Request',
-        text2: 'Unable to send rejection to the dApp. Please try again or close the app.',
-        visibilityTime: 5000,
-        position: 'top',
-      });
+    } else {
+      // No pending requests, navigate back
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation.navigate('Main', { screen: 'Home' });
+      }
     }
   };
 

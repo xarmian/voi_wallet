@@ -43,6 +43,7 @@ import NetworkServiceInstance, { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { useTheme } from '@/contexts/ThemeContext';
+import SnowballApiService from '@/services/snowball';
 
 interface AssetDetailRouteParams {
   assetName: string;
@@ -60,6 +61,8 @@ export default function AssetDetailScreen() {
   const [imageError, setImageError] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [optingOut, setOptingOut] = useState(false);
+  const [isSwappable, setIsSwappable] = useState(false);
+  const [checkingSwappable, setCheckingSwappable] = useState(true);
   const loadMoreCalledRef = React.useRef(false);
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<any>>();
@@ -228,6 +231,32 @@ export default function AssetDetailScreen() {
       isMounted = false;
     };
   }, [networkId, currentAccount, derivedNetworkBalance]);
+
+  // Check if token is swappable on Snowball (only for Voi Network)
+  useEffect(() => {
+    const checkSwappable = async () => {
+      setCheckingSwappable(true);
+      try {
+        // Only check for Voi Network tokens
+        const isVoiNetwork = !networkId || networkId === 'voi-mainnet' || networkId === 'voi-testnet';
+
+        if (!isVoiNetwork) {
+          setIsSwappable(false);
+          return;
+        }
+
+        const swappable = await SnowballApiService.isTokenSwappable(assetId);
+        setIsSwappable(swappable);
+      } catch (error) {
+        console.error('Error checking token swappability:', error);
+        setIsSwappable(false);
+      } finally {
+        setCheckingSwappable(false);
+      }
+    };
+
+    checkSwappable();
+  }, [assetId, networkId]);
 
   // Build effective balance based on context
   const effectiveBalance = useMemo(() => {
@@ -970,7 +999,7 @@ export default function AssetDetailScreen() {
           return null;
         })()}
 
-        <View style={styles.actionButtonsContainer}>
+        <View style={isSwappable ? styles.actionButtonsContainerThree : styles.actionButtonsContainer}>
           <TouchableOpacity
             style={styles.sendButton}
             onPress={() =>
@@ -986,6 +1015,23 @@ export default function AssetDetailScreen() {
             <Ionicons name="send" size={20} color="white" />
             <Text style={styles.actionButtonText}>Send</Text>
           </TouchableOpacity>
+
+          {isSwappable && (
+            <TouchableOpacity
+              style={styles.swapButton}
+              onPress={() =>
+                navigation.navigate('Swap', {
+                  assetName,
+                  assetId,
+                  accountId,
+                  networkId,
+                })
+              }
+            >
+              <Ionicons name="swap-horizontal" size={20} color="white" />
+              <Text style={styles.actionButtonText}>Swap</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={styles.receiveButton}
@@ -1341,6 +1387,39 @@ const createStyles = (theme: Theme) =>
     receiveButton: {
       flex: 1,
       backgroundColor: theme.colors.success,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: theme.spacing.sm,
+      borderRadius: theme.borderRadius.md,
+      gap: theme.spacing.xs,
+      opacity: 1,
+      ...theme.shadows.sm,
+    },
+    swapButton: {
+      flex: 1,
+      backgroundColor: '#8B5CF6', // Purple/violet color to distinguish from send and receive
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: theme.spacing.sm,
+      borderRadius: theme.borderRadius.md,
+      gap: theme.spacing.xs,
+      opacity: 1,
+      ...theme.shadows.sm,
+    },
+    actionButtonsContainerThree: {
+      flexDirection: 'row',
+      marginHorizontal: theme.spacing.sm,
+      marginBottom: theme.spacing.lg,
+      gap: theme.spacing.sm,
+      backgroundColor: theme.colors.card,
+      borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.md,
+    },
+    actionButtonSmall: {
+      flex: 1,
+      backgroundColor: theme.colors.primary,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',

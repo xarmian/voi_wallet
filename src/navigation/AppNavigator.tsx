@@ -21,6 +21,7 @@ import MultiNetworkAssetScreen from '@/screens/wallet/MultiNetworkAssetScreen';
 import TransactionDetailScreen from '@/screens/wallet/TransactionDetailScreen';
 import WebViewScreen from '@/screens/wallet/WebViewScreen';
 import SendScreen from '@/screens/wallet/SendScreen';
+import SwapScreen from '@/screens/wallet/SwapScreen';
 import TransactionConfirmationScreen from '@/screens/wallet/TransactionConfirmationScreen';
 import TransactionResultScreen from '@/screens/wallet/TransactionResultScreen';
 import ReceiveScreen from '@/screens/wallet/ReceiveScreen';
@@ -133,6 +134,12 @@ export type WalletStackParamList = {
     note?: string;
     label?: string;
     asset?: string;
+  };
+  Swap: {
+    assetName?: string;
+    assetId?: number;
+    accountId: string;
+    networkId?: NetworkId;
   };
   TransactionConfirmation: {
     recipient: string;
@@ -289,6 +296,7 @@ function WalletStackNavigator() {
         />
         <WalletStack.Screen name="WebView" component={WebViewScreen} />
         <WalletStack.Screen name="Send" component={SendScreen} />
+        <WalletStack.Screen name="Swap" component={SwapScreen} />
         <WalletStack.Screen
           name="TransactionConfirmation"
           component={TransactionConfirmationScreen}
