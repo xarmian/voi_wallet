@@ -3,14 +3,20 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
+  Pressable,
   Alert,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, CommonActions } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
 import { ARC72Collection, NFTToken } from '@/types/nft';
@@ -22,7 +28,12 @@ import NFTGridView from '@/components/nft/NFTGridView';
 import CollectionBrowser from '@/components/nft/CollectionBrowser';
 import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
-import { CommonActions } from '@react-navigation/native';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { springConfigs } from '@/utils/animations';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type TabType = 'my-nfts' | 'browse-collections';
 type ViewMode = 'my-nfts' | 'browse-collections' | 'collection-tokens';
@@ -219,53 +230,61 @@ export default function NFTScreen() {
   };
 
   const renderTabs = () => (
-    <View style={[styles.tabContainer, { borderBottomColor: theme.colors.border }]}>
-      <TouchableOpacity
-        style={[
-          styles.tab,
-          activeTab === 'my-nfts' && [
-            styles.activeTab,
-            { borderBottomColor: theme.colors.primary },
-          ],
-        ]}
-        onPress={() => setActiveTab('my-nfts')}
-      >
-        <Text
-          style={[
-            styles.tabText,
-            { color: theme.colors.text },
-            activeTab === 'my-nfts' && [
-              styles.activeTabText,
-              { color: theme.colors.primary },
-            ],
-          ]}
-        >
-          My NFTs
-        </Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[
-          styles.tab,
-          activeTab === 'browse-collections' && [
-            styles.activeTab,
-            { borderBottomColor: theme.colors.primary },
-          ],
-        ]}
-        onPress={() => setActiveTab('browse-collections')}
-      >
-        <Text
-          style={[
-            styles.tabText,
-            { color: theme.colors.text },
-            activeTab === 'browse-collections' && [
-              styles.activeTabText,
-              { color: theme.colors.primary },
-            ],
-          ]}
-        >
-          Browse Collections
-        </Text>
-      </TouchableOpacity>
+    <View style={styles.tabContainer}>
+      <GlassCard variant="light" style={styles.tabCard} padding="none">
+        <View style={styles.tabInner}>
+          <Pressable
+            style={[
+              styles.tab,
+              activeTab === 'my-nfts' && {
+                backgroundColor: `${theme.colors.primary}20`,
+              },
+            ]}
+            onPress={() => setActiveTab('my-nfts')}
+          >
+            <Ionicons
+              name="wallet-outline"
+              size={18}
+              color={activeTab === 'my-nfts' ? theme.colors.primary : theme.colors.textMuted}
+              style={{ marginRight: 6 }}
+            />
+            <Text
+              style={[
+                styles.tabText,
+                { color: activeTab === 'my-nfts' ? theme.colors.primary : theme.colors.text },
+                activeTab === 'my-nfts' && styles.activeTabText,
+              ]}
+            >
+              My NFTs
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.tab,
+              activeTab === 'browse-collections' && {
+                backgroundColor: `${theme.colors.primary}20`,
+              },
+            ]}
+            onPress={() => setActiveTab('browse-collections')}
+          >
+            <Ionicons
+              name="grid-outline"
+              size={18}
+              color={activeTab === 'browse-collections' ? theme.colors.primary : theme.colors.textMuted}
+              style={{ marginRight: 6 }}
+            />
+            <Text
+              style={[
+                styles.tabText,
+                { color: activeTab === 'browse-collections' ? theme.colors.primary : theme.colors.text },
+                activeTab === 'browse-collections' && styles.activeTabText,
+              ]}
+            >
+              Collections
+            </Text>
+          </Pressable>
+        </View>
+      </GlassCard>
     </View>
   );
 
@@ -273,39 +292,54 @@ export default function NFTScreen() {
     if (viewMode !== 'collection-tokens' || !selectedCollection) return null;
 
     return (
-      <View style={[styles.collectionHeader, { backgroundColor: theme.colors.surface, borderBottomColor: theme.colors.border }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={handleBackToCollections}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="chevron-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <View style={styles.collectionHeaderInfo}>
-          <Text style={[styles.collectionHeaderName, { color: theme.colors.text }]} numberOfLines={1}>
-            {selectedCollection.name}
-          </Text>
-          <Text style={[styles.collectionHeaderSub, { color: theme.colors.textSecondary }]}>
-            {selectedCollection.totalSupply.toLocaleString()} items
-          </Text>
-        </View>
+      <View style={styles.collectionHeaderContainer}>
+        <GlassCard variant="medium" style={styles.collectionHeader} padding="none">
+          <View style={styles.collectionHeaderContent}>
+            <Pressable
+              style={[
+                styles.backButton,
+                { backgroundColor: theme.colors.glassBackground },
+              ]}
+              onPress={handleBackToCollections}
+            >
+              <Ionicons name="chevron-back" size={20} color={theme.colors.text} />
+            </Pressable>
+            <View style={styles.collectionHeaderInfo}>
+              <Text style={[styles.collectionHeaderName, { color: theme.colors.text }]} numberOfLines={1}>
+                {selectedCollection.name}
+              </Text>
+              <Text style={[styles.collectionHeaderSub, { color: theme.colors.textSecondary }]}>
+                {selectedCollection.totalSupply.toLocaleString()} items
+              </Text>
+            </View>
+          </View>
+        </GlassCard>
       </View>
     );
   };
 
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
-      <Ionicons
-        name="images-outline"
-        size={64}
-        color={theme.colors.textSecondary}
-      />
-      <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
-        No NFTs Found
-      </Text>
-      <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
-        Your NFT collection will appear here when you have ARC-72 tokens
-      </Text>
+      <GlassCard variant="light" style={styles.emptyCard}>
+        <View
+          style={[
+            styles.emptyIconContainer,
+            { backgroundColor: `${theme.colors.primary}15` },
+          ]}
+        >
+          <Ionicons
+            name="images-outline"
+            size={48}
+            color={theme.colors.primary}
+          />
+        </View>
+        <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
+          No NFTs Found
+        </Text>
+        <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+          Your NFT collection will appear here when you have ARC-72 tokens
+        </Text>
+      </GlassCard>
     </View>
   );
 
@@ -386,71 +420,70 @@ export default function NFTScreen() {
   };
 
   return (
-    <SafeAreaView
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      edges={['top']}
-    >
-      <UniversalHeader
-        title="NFTs"
-        subtitle={
-          viewMode === 'my-nfts'
-            ? `${myNFTs.length} NFT${myNFTs.length !== 1 ? 's' : ''}`
-            : viewMode === 'collection-tokens' && selectedCollection
-            ? selectedCollection.name
-            : 'Browse Collections'
-        }
-        onAccountSelectorPress={() => setIsAccountModalVisible(true)}
-        showAccountSelector={activeTab === 'my-nfts'}
-      />
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="NFTs"
+          subtitle={
+            viewMode === 'my-nfts'
+              ? `${myNFTs.length} NFT${myNFTs.length !== 1 ? 's' : ''}`
+              : viewMode === 'collection-tokens' && selectedCollection
+              ? selectedCollection.name
+              : 'Browse Collections'
+          }
+          onAccountSelectorPress={() => setIsAccountModalVisible(true)}
+          showAccountSelector={activeTab === 'my-nfts'}
+        />
 
-      {renderTabs()}
-      {renderCollectionHeader()}
-      {renderContent()}
+        {renderTabs()}
+        {renderCollectionHeader()}
+        {renderContent()}
 
-      <AccountListModal
-        isVisible={isAccountModalVisible}
-        onClose={() => setIsAccountModalVisible(false)}
-        onAddAccount={() => {
-          setIsAccountModalVisible(false);
-          setIsAddAccountModalVisible(true);
-        }}
-      />
+        <AccountListModal
+          isVisible={isAccountModalVisible}
+          onClose={() => setIsAccountModalVisible(false)}
+          onAddAccount={() => {
+            setIsAccountModalVisible(false);
+            setIsAddAccountModalVisible(true);
+          }}
+        />
 
-      <AddAccountModal
-        isVisible={isAddAccountModalVisible}
-        onClose={() => setIsAddAccountModalVisible(false)}
-        onCreateAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: { screen: 'CreateAccount' },
-            })
-          );
-        }}
-        onImportAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: { screen: 'MnemonicImport' },
-            })
-          );
-        }}
-        onImportLedgerAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('LedgerAccountImport' as never);
-        }}
-        onImportQRAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('QRAccountImport' as never);
-        }}
-        onAddWatchAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('Settings' as never, { screen: 'AddWatchAccount' } as never);
-        }}
-      />
-    </SafeAreaView>
+        <AddAccountModal
+          isVisible={isAddAccountModalVisible}
+          onClose={() => setIsAddAccountModalVisible(false)}
+          onCreateAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: { screen: 'CreateAccount' },
+              })
+            );
+          }}
+          onImportAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: { screen: 'MnemonicImport' },
+              })
+            );
+          }}
+          onImportLedgerAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('LedgerAccountImport' as never);
+          }}
+          onImportQRAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('QRAccountImport' as never);
+          }}
+          onAddWatchAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('Settings' as never, { screen: 'AddWatchAccount' } as never);
+          }}
+        />
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -459,64 +492,91 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   tabContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  tabCard: {
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  tabInner: {
     flexDirection: 'row',
-    marginTop: 12,
-    marginHorizontal: 16,
-    borderBottomWidth: 1,
+    padding: 4,
   },
   tab: {
     flex: 1,
-    paddingVertical: 12,
+    flexDirection: 'row',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  activeTab: {
-    borderBottomWidth: 2,
+    justifyContent: 'center',
+    borderRadius: 12,
   },
   tabText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '500',
   },
   activeTabText: {
     fontWeight: '600',
   },
+  collectionHeaderContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
   collectionHeader: {
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  collectionHeaderContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    padding: 12,
   },
   backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
   collectionHeaderInfo: {
     flex: 1,
   },
   collectionHeaderName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     marginBottom: 2,
   },
   collectionHeaderSub: {
-    fontSize: 13,
+    fontSize: 12,
   },
   loadingMoreContainer: {
     paddingVertical: 16,
     alignItems: 'center',
   },
   emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 40,
-    paddingTop: 60,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+  },
+  emptyCard: {
+    alignItems: 'center',
+    padding: 32,
+    borderRadius: 24,
+  },
+  emptyIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
   },
   emptyTitle: {
     fontSize: 18,
     fontWeight: '600',
-    marginTop: 16,
     marginBottom: 8,
   },
   emptySubtitle: {

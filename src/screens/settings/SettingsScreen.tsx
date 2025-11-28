@@ -1,18 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Alert,
   ScrollView,
-  Switch,
   Modal,
   Pressable,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { Ionicons } from '@expo/vector-icons';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { SettingsStackParamList } from '@/navigation/AppNavigator';
 import {
   useActiveAccount,
@@ -38,12 +43,162 @@ import NetworkSwitcher from '@/components/network/NetworkSwitcher';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme, ThemeMode } from '@/constants/themes';
+import { GlassCard } from '@/components/common/GlassCard';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { springConfigs } from '@/utils/animations';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type SettingsScreenNavigationProp = StackNavigationProp<SettingsStackParamList>;
 
+// Reusable settings row component with glass styling
+interface SettingsRowProps {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value?: string;
+  onPress: () => void;
+  danger?: boolean;
+  showChevron?: boolean;
+  rightElement?: React.ReactNode;
+}
 
+function SettingsRow({
+  icon,
+  label,
+  value,
+  onPress,
+  danger = false,
+  showChevron = true,
+  rightElement,
+}: SettingsRowProps) {
+  const { theme } = useTheme();
+  const themeColors = useThemeColors();
+  const scale = useSharedValue(1);
+
+  const handlePressIn = useCallback(() => {
+    scale.value = withSpring(0.98, springConfigs.snappy);
+  }, [scale]);
+
+  const handlePressOut = useCallback(() => {
+    scale.value = withSpring(1, springConfigs.snappy);
+  }, [scale]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  // Use a more visible red for danger actions - darker in light mode for contrast
+  const dangerColor = theme.mode === 'light' ? '#DC2626' : '#EF4444';
+  const textColor = danger ? dangerColor : themeColors.text;
+  const iconColor = danger ? dangerColor : theme.colors.primary;
+
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={animatedStyle}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingVertical: theme.spacing.md,
+          paddingHorizontal: theme.spacing.md,
+          borderBottomWidth: 1,
+          borderBottomColor: theme.colors.glassBorder,
+        }}
+      >
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: theme.borderRadius.sm,
+            backgroundColor: danger
+              ? `${dangerColor}20`
+              : `${theme.colors.primary}15`,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: theme.spacing.md,
+          }}
+        >
+          <Ionicons name={icon} size={18} color={iconColor} />
+        </View>
+        <Text
+          style={{
+            flex: 1,
+            fontSize: theme.typography.body.fontSize,
+            fontWeight: '600',
+            color: textColor,
+          }}
+        >
+          {label}
+        </Text>
+        {value && (
+          <Text
+            style={{
+              fontSize: theme.typography.bodySmall.fontSize,
+              color: themeColors.textMuted,
+              marginRight: theme.spacing.sm,
+              maxWidth: 150,
+            }}
+            numberOfLines={1}
+          >
+            {value}
+          </Text>
+        )}
+        {rightElement}
+        {showChevron && (
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={themeColors.textMuted}
+          />
+        )}
+      </View>
+    </AnimatedPressable>
+  );
+}
+
+// Section header component
+function SectionHeader({ title, icon }: { title: string; icon: keyof typeof Ionicons.glyphMap }) {
+  const { theme } = useTheme();
+  const themeColors = useThemeColors();
+
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: theme.spacing.md,
+        paddingVertical: theme.spacing.sm,
+        backgroundColor: theme.colors.glassBackground,
+        borderBottomWidth: 1,
+        borderBottomColor: theme.colors.glassBorder,
+      }}
+    >
+      <Ionicons
+        name={icon}
+        size={16}
+        color={theme.colors.primary}
+        style={{ marginRight: theme.spacing.sm }}
+      />
+      <Text
+        style={{
+          fontSize: theme.typography.caption.fontSize,
+          fontWeight: '600',
+          color: themeColors.textMuted,
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+        }}
+      >
+        {title}
+      </Text>
+    </View>
+  );
+}
 
 export default function SettingsScreen() {
   const navigation = useNavigation<SettingsScreenNavigationProp>();
@@ -66,6 +221,9 @@ export default function SettingsScreen() {
     setThemeMode,
     nftThemeData,
     nftThemeEnabled,
+    nftBackgroundEnabled,
+    nftOverlayIntensity,
+    setNFTOverlayIntensity,
   } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
@@ -402,167 +560,171 @@ export default function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader
-        title="Settings"
-        onAccountSelectorPress={handleAccountSelectorPress}
-      />
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="Settings"
+          onAccountSelectorPress={handleAccountSelectorPress}
+        />
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Account Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="Account" icon="person-outline" />
+            <SettingsRow
+              icon="pencil-outline"
+              label="Rename Account"
+              onPress={handleRenameAccountPress}
+            />
+            <SettingsRow
+              icon="key-outline"
+              label="Rekey Account"
+              onPress={handleRekeyAccountPress}
+            />
+          </GlassCard>
 
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleRenameAccountPress}
-          >
-            <Text style={styles.settingText}>Rename Account</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
+          {/* Security Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="Security" icon="shield-outline" />
+            <SettingsRow
+              icon="settings-outline"
+              label="Security Settings"
+              onPress={handleSecuritySettings}
+            />
+            <SettingsRow
+              icon="document-text-outline"
+              label="Show Recovery Phrase"
+              onPress={handleShowRecoveryPhrase}
+            />
+          </GlassCard>
 
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleRekeyAccountPress}
-          >
-            <Text style={styles.settingText}>Rekey Account</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-        </View>
+          {/* Network Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="Network" icon="globe-outline" />
+            <SettingsRow
+              icon="wifi-outline"
+              label="Current Network"
+              onPress={handleNetworkPress}
+              showChevron={true}
+              rightElement={
+                <View style={styles.networkInfo}>
+                  <NetworkIndicator showName={true} size="small" />
+                  <View
+                    style={[
+                      styles.networkStatusIndicator,
+                      {
+                        backgroundColor: isNetworkHealthy
+                          ? theme.colors.success
+                          : theme.colors.error,
+                      },
+                    ]}
+                  />
+                </View>
+              }
+            />
+          </GlassCard>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Security</Text>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleSecuritySettings}
-          >
-            <Text style={styles.settingText}>Security Settings</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleShowRecoveryPhrase}
-          >
-            <Text style={styles.settingText}>Show Recovery Phrase</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Network</Text>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleNetworkPress}
-          >
-            <View style={styles.networkSettingContent}>
-              <Text style={styles.settingText}>Current Network</Text>
-              <View style={styles.networkInfo}>
-                <NetworkIndicator showName={true} size="small" />
-                <View
-                  style={[
-                    styles.networkStatusIndicator,
-                    {
-                      backgroundColor: isNetworkHealthy ? '#10B981' : '#EF4444',
-                    },
-                  ]}
+          {/* Appearance Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="Appearance" icon="color-palette-outline" />
+            <SettingsRow
+              icon="moon-outline"
+              label="Theme"
+              value={getThemeDisplayText()}
+              onPress={handleThemePress}
+            />
+            {nftThemeEnabled && nftBackgroundEnabled && (
+              <View style={styles.sliderRow}>
+                <View style={styles.sliderHeader}>
+                  <View style={styles.sliderIconContainer}>
+                    <Ionicons
+                      name={theme.mode === 'dark' ? 'moon' : 'sunny'}
+                      size={18}
+                      color={theme.colors.primary}
+                    />
+                  </View>
+                  <Text style={styles.sliderLabel}>Background Dim</Text>
+                  <Text style={styles.sliderValue}>
+                    {Math.round(nftOverlayIntensity * 100)}%
+                  </Text>
+                </View>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={0}
+                  maximumValue={1}
+                  value={nftOverlayIntensity}
+                  onValueChange={setNFTOverlayIntensity}
+                  minimumTrackTintColor={theme.colors.primary}
+                  maximumTrackTintColor={theme.colors.glassBorder}
+                  thumbTintColor={theme.colors.primary}
                 />
               </View>
-            </View>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-        </View>
+            )}
+            <SettingsRow
+              icon="calculator-outline"
+              label="Number Format"
+              value={localeDisplayText}
+              onPress={handleLocalePress}
+            />
+          </GlassCard>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Appearance</Text>
+          {/* WalletConnect Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="WalletConnect" icon="link-outline" />
+            <SettingsRow
+              icon="apps-outline"
+              label="Connected dApps"
+              onPress={handleWalletConnectSessions}
+            />
+          </GlassCard>
 
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleThemePress}
-          >
-            <Text style={styles.settingText}>Theme</Text>
-            <View style={styles.themeDisplayContainer}>
-              <Text style={styles.themeDisplayText} numberOfLines={1}>
-                {getThemeDisplayText()}
-              </Text>
-              <Text style={styles.arrow}>→</Text>
-            </View>
-          </TouchableOpacity>
+          {/* Backup Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="Backup" icon="cloud-upload-outline" />
+            <SettingsRow
+              icon="save-outline"
+              label="Backup Wallet"
+              onPress={handleBackupWallet}
+            />
+          </GlassCard>
 
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleLocalePress}
-          >
-            <Text style={styles.settingText}>Number Format</Text>
-            <View style={styles.themeDisplayContainer}>
-              <Text style={styles.themeDisplayText}>{localeDisplayText}</Text>
-              <Text style={styles.arrow}>→</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+          {/* About Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="About" icon="information-circle-outline" />
+            <SettingsRow
+              icon="help-circle-outline"
+              label="About Voi Wallet"
+              onPress={handleAbout}
+            />
+            <SettingsRow
+              icon="document-outline"
+              label="Terms of Service"
+              onPress={handleTermsOfService}
+            />
+            <SettingsRow
+              icon="lock-closed-outline"
+              label="Privacy Policy"
+              onPress={handlePrivacyPolicy}
+            />
+          </GlassCard>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>WalletConnect</Text>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleWalletConnectSessions}
-          >
-            <Text style={styles.settingText}>Connected dApps</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Backup</Text>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleBackupWallet}
-          >
-            <Text style={styles.settingText}>Backup Wallet</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>About</Text>
-
-          <TouchableOpacity style={styles.settingItem} onPress={handleAbout}>
-            <Text style={styles.settingText}>About Voi Wallet</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handleTermsOfService}
-          >
-            <Text style={styles.settingText}>Terms of Service</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.settingItem}
-            onPress={handlePrivacyPolicy}
-          >
-            <Text style={styles.settingText}>Privacy Policy</Text>
-            <Text style={styles.arrow}>→</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.dangerSection}>
-          <TouchableOpacity
-            style={styles.dangerItem}
-            onPress={handleDeleteActiveAccount}
-          >
-            <Text style={styles.dangerText}>
-              {activeAccount
-                ? `Delete Account (${activeAccount.label?.trim() || formatAddress(activeAccount.address)})`
-                : 'Delete Account'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
+          {/* Danger Zone */}
+          <GlassCard variant="light" style={styles.dangerSection} padding="none">
+            <SettingsRow
+              icon="trash-outline"
+              label={
+                activeAccount
+                  ? `Delete "${activeAccount.label?.trim() || formatAddress(activeAccount.address)}"`
+                  : 'Delete Account'
+              }
+              onPress={handleDeleteActiveAccount}
+              danger
+              showChevron={false}
+            />
+          </GlassCard>
+        </ScrollView>
 
       <LocaleSwitcher
         visible={isLocaleModalVisible}
@@ -641,7 +803,8 @@ export default function SettingsScreen() {
           theme={theme}
         />
       )}
-    </SafeAreaView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -694,7 +857,7 @@ function SafeNetworkSwitcher({
             <Text style={{ marginBottom: 20, color: '#666' }}>
               Theme context not available. Please try again.
             </Text>
-            <TouchableOpacity
+            <Pressable
               style={{
                 backgroundColor: '#007AFF',
                 padding: 12,
@@ -704,7 +867,7 @@ function SafeNetworkSwitcher({
               onPress={onClose}
             >
               <Text style={{ color: 'white', fontWeight: '600' }}>Close</Text>
-            </TouchableOpacity>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -716,115 +879,69 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     content: {
       flexGrow: 1,
-      paddingHorizontal: theme.spacing.sm,
-      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.md,
+      paddingTop: theme.spacing.md,
+      paddingBottom: theme.spacing.xxl,
     },
     section: {
-      backgroundColor: theme.colors.card,
-      borderRadius: 15,
-      marginBottom: 20,
+      marginBottom: theme.spacing.md,
+      borderRadius: theme.borderRadius.xl,
       overflow: 'hidden',
-    },
-    sectionTitle: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.textMuted,
-      paddingHorizontal: 20,
-      paddingVertical: 15,
-      backgroundColor: theme.colors.surface,
-    },
-    settingItem: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingVertical: 15,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.borderLight,
-    },
-    settingText: {
-      fontSize: 16,
-      color: theme.colors.text,
-      marginRight: 12,
-      flexShrink: 0,
-    },
-    arrow: {
-      fontSize: 18,
-      color: theme.colors.textMuted,
-    },
-    switchSettingItem: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingVertical: 15,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.borderLight,
-    },
-    disabledText: {
-      color: theme.colors.textMuted,
     },
     dangerSection: {
-      backgroundColor: theme.colors.card,
-      borderRadius: 15,
+      marginBottom: theme.spacing.xl,
+      marginTop: theme.spacing.md,
+      borderRadius: theme.borderRadius.xl,
       overflow: 'hidden',
-      marginBottom: theme.spacing.md,
-    },
-    dangerItem: {
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-    },
-    dangerText: {
-      fontSize: 16,
-      color: theme.colors.error,
-      textAlign: 'center',
-      fontWeight: '500',
-    },
-    networkSettingContent: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
     },
     networkInfo: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
+      gap: theme.spacing.sm,
+      marginRight: theme.spacing.sm,
     },
     networkStatusIndicator: {
       width: 8,
       height: 8,
       borderRadius: 4,
     },
-    themeDisplayContainer: {
+    sliderRow: {
+      paddingVertical: theme.spacing.md,
+      paddingHorizontal: theme.spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.glassBorder,
+    },
+    sliderHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      flex: 1,
-      justifyContent: 'flex-end',
+      marginBottom: theme.spacing.sm,
     },
-    themeDisplayText: {
-      fontSize: 16,
-      color: theme.colors.textSecondary,
-      flexShrink: 1,
+    sliderIconContainer: {
+      width: 32,
+      height: 32,
+      borderRadius: theme.borderRadius.sm,
+      backgroundColor: `${theme.colors.primary}15`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: theme.spacing.md,
+    },
+    sliderLabel: {
+      flex: 1,
+      fontSize: theme.typography.body.fontSize,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    sliderValue: {
+      fontSize: theme.typography.bodySmall.fontSize,
+      color: theme.colors.textMuted,
+      minWidth: 40,
       textAlign: 'right',
     },
-    clearNFTButton: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      backgroundColor: theme.colors.error,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    clearNFTButtonText: {
-      color: theme.colors.buttonText,
-      fontSize: 18,
-      fontWeight: '600',
-      lineHeight: 18,
+    slider: {
+      width: '100%',
+      height: 40,
     },
   });

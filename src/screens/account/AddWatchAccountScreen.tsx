@@ -386,6 +386,12 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
+      // Text shadow for readability over NFT backgrounds
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.8)'
+        : 'rgba(255, 255, 255, 0.9)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 10,
     },
     addressInputContainer: {
       position: 'relative',

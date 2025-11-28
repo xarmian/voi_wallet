@@ -497,13 +497,17 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'flex-end',
     },
     modalContainer: {
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.colors.modalBackground,
       borderTopLeftRadius: theme.borderRadius.xl,
       borderTopRightRadius: theme.borderRadius.xl,
       paddingHorizontal: theme.spacing.lg,
       paddingTop: theme.spacing.lg,
       paddingBottom: theme.spacing.xxl,
       height: '80%',
+      borderTopWidth: 1,
+      borderLeftWidth: 1,
+      borderRightWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     header: {
       flexDirection: 'row',
@@ -522,11 +526,13 @@ const createStyles = (theme: Theme) =>
     searchContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.glass.light.backgroundColor,
       borderRadius: theme.borderRadius.lg,
       paddingHorizontal: theme.spacing.md,
       marginBottom: theme.spacing.md,
       height: 48,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     searchIcon: {
       marginRight: theme.spacing.sm,

@@ -24,6 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation, CommonActions } from '@react-navigation/native';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useActiveAccount, useWalletStore } from '@/store/walletStore';
 import { AccountBalance } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
@@ -42,6 +43,9 @@ import { NetworkId } from '@/types/network';
 import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -394,6 +398,7 @@ export default function SwapScreen() {
       networkId: currentNetwork,
       outputTokenId: outputToken.id !== NATIVE_TOKEN_ID ? outputToken.id : undefined,
       outputTokenSymbol: outputToken.symbol,
+      swapProvider: currentNetwork === NetworkId.ALGORAND_MAINNET ? 'deflex' : 'snowball',
       onSuccess: async (result: any) => {
         await handleSwapSuccess(result);
       },
@@ -701,8 +706,10 @@ export default function SwapScreen() {
     );
   }
 
+  const { theme } = useTheme();
+
   return (
-    <>
+    <NFTBackground>
       <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title="Swap Tokens"
@@ -714,7 +721,7 @@ export default function SwapScreen() {
         {/* Input Token Section */}
         <View style={styles.tokenSection}>
           <Text style={styles.sectionLabel}>You pay</Text>
-          <View style={styles.tokenCard}>
+          <GlassCard variant="medium" style={styles.tokenCard}>
             {/* Top Row: Amount + Token Selector */}
             <View style={styles.mainRow}>
               <View style={styles.amountContainer}>
@@ -763,7 +770,7 @@ export default function SwapScreen() {
                 )}
               </View>
             </View>
-          </View>
+          </GlassCard>
         </View>
 
         {/* Swap Button */}
@@ -780,7 +787,7 @@ export default function SwapScreen() {
         {/* Output Token Section */}
         <View style={styles.tokenSection}>
           <Text style={styles.sectionLabel}>You receive</Text>
-          <View style={styles.tokenCard}>
+          <GlassCard variant="medium" style={styles.tokenCard}>
             {/* Top Row: Amount + Token Selector */}
             <View style={styles.mainRow}>
               <View style={styles.amountContainer}>
@@ -833,7 +840,7 @@ export default function SwapScreen() {
                 <Text style={styles.usdValue}>{getOutputUsdValue() || ' '}</Text>
               )}
             </View>
-          </View>
+          </GlassCard>
         </View>
 
         {/* Quote Display */}
@@ -850,17 +857,17 @@ export default function SwapScreen() {
         />
 
         {/* Review Swap Button */}
-        <TouchableOpacity
-          style={[styles.reviewButton, isSwapDisabled() && styles.reviewButtonDisabled]}
-          onPress={handleReviewSwap}
+        <GlassButton
+          variant="primary"
+          label="Review Swap"
+          icon="swap-horizontal"
+          loading={isSwapping}
           disabled={isSwapDisabled()}
-        >
-          {isSwapping ? (
-            <ActivityIndicator size="small" color="white" />
-          ) : (
-            <Text style={styles.reviewButtonText}>Review Swap</Text>
-          )}
-        </TouchableOpacity>
+          onPress={handleReviewSwap}
+          fullWidth
+          glow
+          size="lg"
+        />
 
         {/* Powered by swap provider */}
         <View style={styles.poweredByContainer}>
@@ -936,7 +943,7 @@ export default function SwapScreen() {
         message="Your swap has been submitted. We're waiting for the network to confirm it."
         subMessage="You can safely leave this screen after confirmation."
       />
-    </>
+    </NFTBackground>
   );
 }
 
@@ -944,7 +951,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollContent: {
       paddingHorizontal: theme.spacing.sm,
@@ -968,11 +974,15 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.textSecondary,
       marginBottom: theme.spacing.xs,
+      // Text shadow for readability over NFT backgrounds
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.8)'
+        : 'rgba(255, 255, 255, 0.9)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 16,
     },
     tokenCard: {
-      backgroundColor: theme.colors.card,
       borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
       gap: theme.spacing.xs,
     },
     mainRow: {
@@ -1009,7 +1019,7 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textSecondary,
     },
     skeleton: {
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.colors.glassBackground,
       borderRadius: theme.borderRadius.md,
     },
     skeletonAmount: {
@@ -1035,10 +1045,12 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: theme.spacing.sm,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.glass.light.backgroundColor,
       paddingVertical: theme.spacing.sm,
       paddingHorizontal: theme.spacing.md,
       borderRadius: theme.borderRadius.md,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     tokenIcon: {
       width: 24,
@@ -1076,14 +1088,14 @@ const createStyles = (theme: Theme) =>
       marginVertical: theme.spacing.xs,
     },
     swapButton: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: theme.colors.card,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: theme.glass.medium.backgroundColor,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: 3,
-      borderColor: theme.colors.background,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     reviewButton: {
       backgroundColor: theme.colors.primary,

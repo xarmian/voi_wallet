@@ -1,11 +1,19 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import AccountSelector from '../account/AccountSelector';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SafeBlurView } from './SafeBlurView';
+import { springConfigs, timingConfigs } from '@/utils/animations';
 
 interface UniversalHeaderProps {
   title: string;
@@ -15,7 +23,15 @@ interface UniversalHeaderProps {
   showBackButton?: boolean;
   onBackPress?: () => void;
   rightAction?: React.ReactNode;
+  /** Make header floating with glass effect */
+  floating?: boolean;
+  /** Show bottom border */
+  showBorder?: boolean;
+  /** Large title style */
+  largeTitle?: boolean;
 }
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export default function UniversalHeader({
   title,
@@ -25,35 +41,106 @@ export default function UniversalHeader({
   showBackButton = false,
   onBackPress,
   rightAction,
+  floating = false,
+  showBorder = false,
+  largeTitle = false,
 }: UniversalHeaderProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
   const { theme } = useTheme();
   const hasNFTBackground = !!theme.backgroundImageUrl;
+  const isDark = theme.mode === 'dark';
+
+  // Back button animation
+  const backButtonScale = useSharedValue(1);
+
+  const handleBackPressIn = useCallback(() => {
+    backButtonScale.value = withSpring(0.9, springConfigs.snappy);
+  }, [backButtonScale]);
+
+  const handleBackPressOut = useCallback(() => {
+    backButtonScale.value = withSpring(1, springConfigs.snappy);
+  }, [backButtonScale]);
+
+  const animatedBackButtonStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: backButtonScale.value }],
+  }));
+
+  // Glass background colors
+  const glassBackgroundColor = useMemo(() => {
+    if (floating || hasNFTBackground) {
+      return isDark
+        ? 'rgba(20, 20, 25, 0.75)'
+        : 'rgba(255, 255, 255, 0.8)';
+    }
+    return 'transparent';
+  }, [floating, hasNFTBackground, isDark]);
+
+  // Highlight gradient for glass effect
+  const highlightColors = useMemo((): [string, string] => {
+    return isDark
+      ? ['rgba(255, 255, 255, 0.08)', 'rgba(255, 255, 255, 0)']
+      : ['rgba(255, 255, 255, 0.5)', 'rgba(255, 255, 255, 0)'];
+  }, [isDark]);
 
   const headerContent = (
     <>
+      {/* Back button with glass pill */}
       {showBackButton && (
-        <TouchableOpacity
-          style={styles.backButton}
+        <AnimatedPressable
+          style={[styles.backButton, animatedBackButtonStyle]}
           onPress={onBackPress}
+          onPressIn={handleBackPressIn}
+          onPressOut={handleBackPressOut}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="chevron-back" size={28} color={themeColors.text} />
-        </TouchableOpacity>
+          <View
+            style={[
+              styles.backButtonInner,
+              {
+                backgroundColor: theme.colors.glassBackground,
+                borderColor: theme.colors.glassBorder,
+              },
+            ]}
+          >
+            <Ionicons
+              name="chevron-back"
+              size={22}
+              color={themeColors.text}
+            />
+          </View>
+        </AnimatedPressable>
       )}
 
+      {/* Title section */}
       <View style={styles.titleContainer}>
-        <Text style={styles.title}>{title}</Text>
-        {subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
+        <Text
+          style={[
+            largeTitle ? styles.largeTitle : styles.title,
+            { color: themeColors.text },
+          ]}
+          numberOfLines={1}
+        >
+          {title}
+        </Text>
+        {subtitle && (
+          <Text
+            style={[styles.subtitle, { color: themeColors.textMuted }]}
+            numberOfLines={1}
+          >
+            {subtitle}
+          </Text>
+        )}
       </View>
 
+      {/* Right action area */}
       {rightAction && (
         <View style={styles.rightActionContainer}>
           {rightAction}
         </View>
       )}
 
+      {/* Account selector with glass styling */}
       {showAccountSelector && !rightAction && (
         <View style={styles.accountSelectorContainer}>
           <AccountSelector
@@ -66,23 +153,41 @@ export default function UniversalHeader({
     </>
   );
 
-  if (hasNFTBackground) {
-    const blurTint = theme.mode === 'dark' ? 'dark' : 'light';
+  // Floating glass header or NFT background header
+  if (hasNFTBackground || floating) {
+    const blurTint = isDark ? 'dark' : 'light';
     return (
       <SafeBlurView
+        intensity={theme.glass.medium.blur}
         tint={blurTint}
-        style={styles.header}
+        style={[
+          styles.header,
+          floating && styles.floatingHeader,
+          {
+            borderBottomColor: showBorder ? theme.colors.glassBorder : 'transparent',
+            borderBottomWidth: showBorder ? 1 : 0,
+          },
+        ]}
       >
+        {/* Glass overlay */}
         <View
           style={[
-            styles.overlay,
-            {
-              backgroundColor: theme.mode === 'dark'
-                ? 'rgba(0, 0, 0, 0.3)'
-                : 'rgba(255, 255, 255, 0.4)',
-            },
+            styles.glassOverlay,
+            { backgroundColor: glassBackgroundColor },
           ]}
+          pointerEvents="none"
         />
+
+        {/* Top highlight gradient for glass depth */}
+        <LinearGradient
+          colors={highlightColors}
+          style={styles.highlightGradient}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          pointerEvents="none"
+        />
+
+        {/* Header content */}
         <View style={styles.headerContent}>
           {headerContent}
         </View>
@@ -90,8 +195,18 @@ export default function UniversalHeader({
     );
   }
 
+  // Standard header (no glass effect)
   return (
-    <View style={styles.header}>
+    <View
+      style={[
+        styles.header,
+        {
+          backgroundColor: theme.colors.background,
+          borderBottomColor: showBorder ? theme.colors.border : 'transparent',
+          borderBottomWidth: showBorder ? 1 : 0,
+        },
+      ]}
+    >
       {headerContent}
     </View>
   );
@@ -103,17 +218,27 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingVertical: 15,
-      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.surface,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.md,
       position: 'relative',
+      overflow: 'hidden',
     },
-    overlay: {
+    floatingHeader: {
+      marginHorizontal: theme.spacing.md,
+      marginTop: theme.spacing.sm,
+      borderRadius: theme.borderRadius.xl,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
+    },
+    glassOverlay: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    highlightGradient: {
       position: 'absolute',
       top: 0,
       left: 0,
       right: 0,
-      bottom: 0,
+      height: 32,
     },
     headerContent: {
       flexDirection: 'row',
@@ -124,29 +249,42 @@ const createStyles = (theme: Theme) =>
       zIndex: 1,
     },
     backButton: {
-      marginRight: 12,
-      padding: 4,
+      marginRight: theme.spacing.sm,
+    },
+    backButtonInner: {
+      width: 36,
+      height: 36,
+      borderRadius: theme.borderRadius.md,
+      borderWidth: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     titleContainer: {
       flex: 1,
+      paddingRight: theme.spacing.sm,
     },
     title: {
-      fontSize: 24,
-      fontWeight: 'bold',
-      color: theme.colors.text,
+      fontSize: theme.typography.heading2.fontSize,
+      fontWeight: theme.typography.heading2.fontWeight,
+      letterSpacing: theme.typography.heading2.letterSpacing,
+    },
+    largeTitle: {
+      fontSize: theme.typography.heading1.fontSize,
+      fontWeight: theme.typography.heading1.fontWeight,
+      letterSpacing: theme.typography.heading1.letterSpacing,
     },
     subtitle: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
+      fontSize: theme.typography.caption.fontSize,
+      fontWeight: theme.typography.caption.fontWeight,
       marginTop: 2,
     },
     accountSelectorContainer: {
       maxWidth: 200,
-      minWidth: 140,
+      minWidth: 120,
     },
     rightActionContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
+      gap: theme.spacing.sm,
     },
   });

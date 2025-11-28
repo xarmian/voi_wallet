@@ -8,6 +8,7 @@ const NFT_THEME_PREFERRED_MODE_KEY = '@voi_wallet_nft_theme_mode';
 const NFT_THEME_ENABLED_KEY = '@voi_wallet_nft_theme_enabled';
 const NFT_THEME_PALETTE_INDEX_KEY = '@voi_wallet_nft_theme_palette_index';
 const NFT_THEME_BACKGROUND_ENABLED_KEY = '@voi_wallet_nft_theme_background_enabled';
+const NFT_THEME_OVERLAY_INTENSITY_KEY = '@voi_wallet_nft_theme_overlay_intensity';
 
 export interface NFTThemeData {
   contractId: number;
@@ -202,6 +203,33 @@ export async function saveBackgroundImageEnabled(enabled: boolean): Promise<void
     await AsyncStorage.setItem(NFT_THEME_BACKGROUND_ENABLED_KEY, enabled ? 'true' : 'false');
   } catch (error) {
     console.error('Failed to save background image enabled state:', error);
+    throw error;
+  }
+}
+
+/**
+ * Load overlay intensity from storage
+ * @returns intensity value between 0 and 1, defaults to 0.5
+ */
+export async function loadOverlayIntensity(): Promise<number> {
+  try {
+    const value = await AsyncStorage.getItem(NFT_THEME_OVERLAY_INTENSITY_KEY);
+    return value !== null ? parseFloat(value) : 0.5;
+  } catch (error) {
+    console.error('Failed to load overlay intensity:', error);
+    return 0.5;
+  }
+}
+
+/**
+ * Save overlay intensity to storage
+ * @param intensity value between 0 and 1
+ */
+export async function saveOverlayIntensity(intensity: number): Promise<void> {
+  try {
+    await AsyncStorage.setItem(NFT_THEME_OVERLAY_INTENSITY_KEY, intensity.toString());
+  } catch (error) {
+    console.error('Failed to save overlay intensity:', error);
     throw error;
   }
 }

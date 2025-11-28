@@ -1,18 +1,89 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
+  Pressable,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+  Easing,
+} from 'react-native-reanimated';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { springConfigs, getStaggerDelay } from '@/utils/animations';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// Animated option card with staggered entrance
+interface OptionCardWithAnimationProps {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+  theme: Theme;
+  styles: ReturnType<typeof createStyles>;
+  index: number;
+}
+
+function OptionCardWithAnimation({ icon, title, subtitle, onPress, theme, styles, index }: OptionCardWithAnimationProps) {
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(20);
+
+  const handlePressIn = useCallback(() => {
+    scale.value = withSpring(0.97, springConfigs.snappy);
+  }, [scale]);
+
+  const handlePressOut = useCallback(() => {
+    scale.value = withSpring(1, springConfigs.snappy);
+  }, [scale]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }, { translateY: translateY.value }],
+    opacity: opacity.value,
+  }));
+
+  // Trigger entrance animation on mount with staggered delay
+  React.useEffect(() => {
+    const delay = getStaggerDelay(index, 80, 400);
+    setTimeout(() => {
+      opacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+      translateY.value = withSpring(0, springConfigs.smooth);
+    }, delay);
+  }, [index, opacity, translateY]);
+
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={animatedStyle}
+    >
+      <GlassCard variant="medium" style={styles.optionButton}>
+        <View style={[styles.optionIcon, { backgroundColor: `${theme.colors.primary}15` }]}>
+          <Ionicons name={icon} size={24} color={theme.colors.primary} />
+        </View>
+        <View style={styles.optionContent}>
+          <Text style={[styles.optionTitle, { color: theme.colors.text }]}>{title}</Text>
+          <Text style={[styles.optionSubtitle, { color: theme.colors.textMuted }]}>{subtitle}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+      </GlassCard>
+    </AnimatedPressable>
+  );
+}
 
 type OnboardingScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -26,6 +97,20 @@ interface Props {
 export default function OnboardingScreen({ navigation }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+
+  // Header entrance animation
+  const headerOpacity = useSharedValue(0);
+  const headerTranslateY = useSharedValue(-20);
+
+  const headerAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: headerOpacity.value,
+    transform: [{ translateY: headerTranslateY.value }],
+  }));
+
+  React.useEffect(() => {
+    headerOpacity.value = withTiming(1, { duration: 500, easing: Easing.out(Easing.ease) });
+    headerTranslateY.value = withSpring(0, springConfigs.smooth);
+  }, [headerOpacity, headerTranslateY]);
 
   const accountOptions = [
     {
@@ -69,45 +154,39 @@ export default function OnboardingScreen({ navigation }: Props) {
   ];
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Welcome to Voi Wallet</Text>
-          <Text style={styles.subtitle}>
-            Your secure gateway to the Voi Network. Choose how you want to get
-            started.
-          </Text>
-        </View>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <Animated.View style={[styles.header, headerAnimatedStyle]}>
+            <Text style={[styles.title, { color: theme.colors.text }]}>
+              Welcome to Voi Wallet
+            </Text>
+            <Text style={[styles.subtitle, { color: theme.colors.textMuted }]}>
+              Your secure gateway to the Voi Network. Choose how you want to get
+              started.
+            </Text>
+          </Animated.View>
 
-        <View style={styles.optionsContainer}>
-          {accountOptions.map((option) => (
-            <TouchableOpacity
-              key={option.id}
-              style={styles.optionButton}
-              onPress={option.onPress}
-              activeOpacity={0.7}
-            >
-              <View style={styles.optionIcon}>
-                <Ionicons
-                  name={option.icon}
-                  size={24}
-                  color={theme.colors.primary}
-                />
-              </View>
-              <View style={styles.optionContent}>
-                <Text style={styles.optionTitle}>{option.title}</Text>
-                <Text style={styles.optionSubtitle}>{option.subtitle}</Text>
-              </View>
-              <Ionicons
-                name="chevron-forward"
-                size={20}
-                color={theme.colors.textMuted}
+          <View style={styles.optionsContainer}>
+            {accountOptions.map((option, index) => (
+              <OptionCardWithAnimation
+                key={option.id}
+                icon={option.icon}
+                title={option.title}
+                subtitle={option.subtitle}
+                onPress={option.onPress}
+                theme={theme}
+                styles={styles}
+                index={index}
               />
-            </TouchableOpacity>
-          ))}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+            ))}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -115,7 +194,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     content: {
       flexGrow: 1,
@@ -128,17 +206,16 @@ const createStyles = (theme: Theme) =>
       marginBottom: theme.spacing.xxl,
     },
     title: {
-      fontSize: 32,
-      fontWeight: 'bold',
-      color: theme.colors.text,
+      fontSize: theme.typography.display.fontSize,
+      fontWeight: '700',
       marginBottom: theme.spacing.sm,
       textAlign: 'center',
+      letterSpacing: theme.typography.display.letterSpacing,
     },
     subtitle: {
-      fontSize: 16,
-      color: theme.colors.textMuted,
+      fontSize: theme.typography.body.fontSize,
       textAlign: 'center',
-      lineHeight: 22,
+      lineHeight: 24,
     },
     optionsContainer: {
       gap: theme.spacing.md,
@@ -146,20 +223,12 @@ const createStyles = (theme: Theme) =>
     optionButton: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.colors.card,
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
       borderRadius: theme.borderRadius.xl,
-      borderWidth: 1,
-      borderColor: theme.colors.borderLight,
-      ...theme.shadows.sm,
     },
     optionIcon: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor:
-        theme.mode === 'dark' ? 'rgba(10, 132, 255, 0.1)' : '#EBF4FF',
+      width: 44,
+      height: 44,
+      borderRadius: theme.borderRadius.lg,
       justifyContent: 'center',
       alignItems: 'center',
       marginRight: theme.spacing.md,
@@ -168,14 +237,12 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     optionTitle: {
-      fontSize: 16,
+      fontSize: theme.typography.body.fontSize,
       fontWeight: '600',
-      color: theme.colors.text,
       marginBottom: 4,
     },
     optionSubtitle: {
-      fontSize: 14,
-      color: theme.colors.textMuted,
+      fontSize: theme.typography.bodySmall.fontSize,
       lineHeight: 18,
     },
   });

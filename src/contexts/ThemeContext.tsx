@@ -18,6 +18,8 @@ import {
   saveSelectedPaletteIndex,
   loadBackgroundImageEnabled,
   saveBackgroundImageEnabled,
+  loadOverlayIntensity,
+  saveOverlayIntensity,
   clearNFTTheme as clearNFTThemeStorage,
   type NFTThemeData,
 } from '../services/theme/themeStorage';
@@ -32,10 +34,12 @@ interface ThemeContextType {
   nftThemeData: NFTThemeData | null;
   nftThemeEnabled: boolean;
   nftBackgroundEnabled: boolean;
+  nftOverlayIntensity: number;
   nftPalettes: ColorPalette[];
   selectedPaletteIndex: number;
   setNFTThemeEnabled: (enabled: boolean) => Promise<void>;
   setNFTBackgroundEnabled: (enabled: boolean) => Promise<void>;
+  setNFTOverlayIntensity: (intensity: number) => Promise<void>;
   setSelectedPaletteIndex: (index: number) => Promise<void>;
   setNFTTheme: (nftData: NFTThemeData) => Promise<void>;
   clearNFTTheme: () => Promise<void>;
@@ -56,6 +60,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   );
   const [nftThemeEnabled, setNftThemeEnabledState] = useState<boolean>(false);
   const [nftBackgroundEnabled, setNftBackgroundEnabledState] = useState<boolean>(true);
+  const [nftOverlayIntensity, setNftOverlayIntensityState] = useState<number>(0.5);
   const [selectedPaletteIndex, setSelectedPaletteIndexState] = useState<number>(0);
   const [nftThemeData, setNftThemeDataState] = useState<NFTThemeData | null>(
     null
@@ -148,6 +153,15 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
       // Theme will regenerate automatically via regenerateNFTTheme
     } catch (error) {
       console.error('Failed to save background image enabled state:', error);
+    }
+  };
+
+  const setNFTOverlayIntensity = async (intensity: number) => {
+    try {
+      await saveOverlayIntensity(intensity);
+      setNftOverlayIntensityState(intensity);
+    } catch (error) {
+      console.error('Failed to save overlay intensity:', error);
     }
   };
 
@@ -294,6 +308,10 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
                 ? storedNFTTheme.backgroundImageEnabled
                 : await loadBackgroundImageEnabled();
               setNftBackgroundEnabledState(bgEnabled);
+
+              // Load overlay intensity
+              const intensity = await loadOverlayIntensity();
+              setNftOverlayIntensityState(intensity);
             } catch (error) {
               console.error('Failed to load NFT theme, clearing theme data:', error);
               // Clear all NFT theme state on error to prevent crash loop
@@ -340,10 +358,12 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     nftThemeData,
     nftThemeEnabled,
     nftBackgroundEnabled,
+    nftOverlayIntensity,
     nftPalettes,
     selectedPaletteIndex,
     setNFTThemeEnabled,
     setNFTBackgroundEnabled,
+    setNFTOverlayIntensity,
     setSelectedPaletteIndex,
     setNFTTheme,
     clearNFTTheme,
@@ -371,10 +391,12 @@ export const useTheme = (): ThemeContextType => {
       nftThemeData: null,
       nftThemeEnabled: false,
       nftBackgroundEnabled: true,
+      nftOverlayIntensity: 0.5,
       nftPalettes: [],
       selectedPaletteIndex: 0,
       setNFTThemeEnabled: async () => {},
       setNFTBackgroundEnabled: async () => {},
+      setNFTOverlayIntensity: async () => {},
       setSelectedPaletteIndex: async () => {},
       setNFTTheme: async () => {},
       clearNFTTheme: async () => {},

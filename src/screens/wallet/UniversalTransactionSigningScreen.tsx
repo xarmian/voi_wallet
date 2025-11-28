@@ -72,6 +72,7 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     chainId,
     outputTokenId,
     outputTokenSymbol,
+    swapProvider,
   } = route.params;
 
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -102,8 +103,8 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
   const checkOptInRequired = async () => {
     if (!outputTokenId || !account || !networkId) return;
 
-    // Only check opt-in for Deflex (Algorand) - Snowball (Voi) includes opt-in transactions automatically
-    if (networkId !== NetworkId.ALGORAND_MAINNET && networkId !== NetworkId.ALGORAND_TESTNET) {
+    // Only check opt-in for Deflex swaps - Snowball (Voi) includes opt-in transactions automatically
+    if (swapProvider !== 'deflex') {
       return;
     }
 

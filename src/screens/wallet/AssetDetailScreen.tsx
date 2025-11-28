@@ -44,6 +44,8 @@ import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SwapService } from '@/services/swap';
+import { GlassButton } from '@/components/common/GlassButton';
+import UniversalHeader from '@/components/common/UniversalHeader';
 
 interface AssetDetailRouteParams {
   assetName: string;
@@ -316,6 +318,38 @@ export default function AssetDetailScreen() {
     currentAccount,
     accountBalance.balance,
   ]);
+
+  // Compute network subtitle for header
+  const networkSubtitle = useMemo(() => {
+    // If viewing a specific network, show that network name
+    if (networkId) {
+      const specificConfig = getNetworkConfig(networkId as NetworkId);
+      return specificConfig.name
+        .replace(' Network', '')
+        .replace(' Mainnet', '')
+        .replace(' Testnet', '')
+        .trim();
+    }
+
+    // If multi-network view, show all networks this asset exists on
+    if (isMultiNetworkView && multiNetworkBalance) {
+      const mappedAsset = multiNetworkBalance.assets.find(
+        (a) => mappingId ? (a.mappingId === mappingId && a.isMapped) : (a.assetId === assetId && a.isMapped)
+      );
+      if (mappedAsset && mappedAsset.sourceBalances.length > 0) {
+        const uniqueNetworks = Array.from(new Set(mappedAsset.sourceBalances.map(s => s.networkId)));
+        return uniqueNetworks
+          .map((nid) => getNetworkConfig(nid).name
+            .replace(' Network', '')
+            .replace(' Mainnet', '')
+            .replace(' Testnet', '')
+            .trim())
+          .join(' + ');
+      }
+    }
+
+    return undefined;
+  }, [networkId, isMultiNetworkView, multiNetworkBalance, mappingId, assetId]);
 
   useEffect(() => {
     const loadTransactions = async () => {
@@ -1008,9 +1042,13 @@ export default function AssetDetailScreen() {
           return null;
         })()}
 
-        <View style={isSwappable ? styles.actionButtonsContainerThree : styles.actionButtonsContainer}>
-          <TouchableOpacity
-            style={styles.sendButton}
+        <View style={styles.actionButtonsContainer}>
+          <GlassButton
+            variant="secondary"
+            size="md"
+            icon="send"
+            label="Send"
+            tint="#007AFF"
             onPress={() =>
               navigation.navigate('Send', {
                 assetName,
@@ -1020,14 +1058,16 @@ export default function AssetDetailScreen() {
                 mappingId,
               })
             }
-          >
-            <Ionicons name="send" size={20} color="white" />
-            <Text style={styles.actionButtonText}>Send</Text>
-          </TouchableOpacity>
+            style={styles.actionButton}
+          />
 
           {isSwappable && (
-            <TouchableOpacity
-              style={styles.swapButton}
+            <GlassButton
+              variant="secondary"
+              size="md"
+              icon="swap-horizontal"
+              label="Swap"
+              tint="#AF52DE"
               onPress={() =>
                 navigation.navigate('Swap', {
                   assetName,
@@ -1036,14 +1076,16 @@ export default function AssetDetailScreen() {
                   networkId,
                 })
               }
-            >
-              <Ionicons name="swap-horizontal" size={20} color="white" />
-              <Text style={styles.actionButtonText}>Swap</Text>
-            </TouchableOpacity>
+              style={styles.actionButton}
+            />
           )}
 
-          <TouchableOpacity
-            style={styles.receiveButton}
+          <GlassButton
+            variant="secondary"
+            size="md"
+            icon="download"
+            label="Receive"
+            tint="#30D158"
             onPress={() =>
               navigation.navigate('Receive', {
                 assetName,
@@ -1051,10 +1093,8 @@ export default function AssetDetailScreen() {
                 accountId,
               })
             }
-          >
-            <Ionicons name="download" size={20} color="white" />
-            <Text style={styles.actionButtonText}>Receive</Text>
-          </TouchableOpacity>
+            style={styles.actionButton}
+          />
         </View>
 
         {canOptOut() && (
@@ -1103,79 +1143,14 @@ export default function AssetDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-        <BlurredContainer
-          style={styles.header}
-          borderRadius={0}
-          opacity={0.8}
-        >
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
-          </TouchableOpacity>
-          <View style={styles.titleContainer}>
-          <Text style={styles.title}>{assetName}</Text>
-          {/* Show network badge if we're viewing a specific network within multi-network context */}
-          {networkId && (() => {
-            const specificConfig = getNetworkConfig(networkId as NetworkId);
-            const shortName = specificConfig.name
-              .replace(' Network', '')
-              .replace(' Mainnet', '')
-              .replace(' Testnet', '')
-              .trim();
-            return (
-              <View style={styles.headerNetworkBadges}>
-                <View
-                  style={[
-                    styles.headerNetworkPill,
-                    { backgroundColor: specificConfig.color },
-                  ]}
-                >
-                  <Text style={styles.headerNetworkText}>{shortName}</Text>
-                </View>
-              </View>
-            );
-          })()}
-          {/* Show all network badges if in multi-network view without specific networkId */}
-          {!networkId && isMultiNetworkView && multiNetworkBalance && (() => {
-            const mappedAsset = multiNetworkBalance.assets.find(
-              (a) => mappingId ? (a.mappingId === mappingId && a.isMapped) : (a.assetId === assetId && a.isMapped)
-            );
-            if (mappedAsset && mappedAsset.sourceBalances.length > 0) {
-              // Deduplicate networks - only show each network once
-              const uniqueNetworks = Array.from(new Set(mappedAsset.sourceBalances.map(s => s.networkId)));
-
-              return (
-                <View style={styles.headerNetworkBadges}>
-                  {uniqueNetworks.map((networkId) => {
-                    const networkConfig = getNetworkConfig(networkId);
-                    // Shorten network name - remove "Network" and other long suffixes
-                    const shortName = networkConfig.name
-                      .replace(' Network', '')
-                      .replace(' Mainnet', '')
-                      .replace(' Testnet', '')
-                      .trim();
-                    return (
-                      <View
-                        key={networkId}
-                        style={[
-                          styles.headerNetworkPill,
-                          { backgroundColor: networkConfig.color },
-                        ]}
-                      >
-                        <Text style={styles.headerNetworkText}>{shortName}</Text>
-                      </View>
-                    );
-                  })}
-                </View>
-              );
-            }
-            return null;
-          })()}
-          </View>
-          <View style={styles.placeholder} />
-        </BlurredContainer>
+        <UniversalHeader
+          title={assetName}
+          subtitle={networkSubtitle}
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+        />
 
       <FlatList
         data={filteredTransactions}
@@ -1211,49 +1186,6 @@ const createStyles = (theme: Theme) =>
     container: {
       flex: 1,
       backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-    },
-    backButton: {
-      padding: theme.spacing.xs,
-    },
-    titleContainer: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 4,
-    },
-    title: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    headerNetworkBadges: {
-      flexDirection: 'row',
-      gap: 4,
-      flexWrap: 'wrap',
-      justifyContent: 'center',
-    },
-    headerNetworkPill: {
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 8,
-    },
-    headerNetworkText: {
-      fontSize: 9,
-      fontWeight: '600',
-      color: '#FFFFFF',
-      textTransform: 'uppercase',
-    },
-    placeholder: {
-      width: 34,
     },
     content: {
       flexGrow: 1,
@@ -1374,69 +1306,11 @@ const createStyles = (theme: Theme) =>
     },
     actionButtonsContainer: {
       flexDirection: 'row',
-      marginHorizontal: theme.spacing.sm,
       marginBottom: theme.spacing.lg,
       gap: theme.spacing.sm,
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
     },
-    sendButton: {
+    actionButton: {
       flex: 1,
-      backgroundColor: theme.colors.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-      opacity: 1,
-      ...theme.shadows.sm,
-    },
-    receiveButton: {
-      flex: 1,
-      backgroundColor: theme.colors.success,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-      opacity: 1,
-      ...theme.shadows.sm,
-    },
-    swapButton: {
-      flex: 1,
-      backgroundColor: '#8B5CF6', // Purple/violet color to distinguish from send and receive
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-      opacity: 1,
-      ...theme.shadows.sm,
-    },
-    actionButtonsContainerThree: {
-      flexDirection: 'row',
-      marginHorizontal: theme.spacing.sm,
-      marginBottom: theme.spacing.lg,
-      gap: theme.spacing.sm,
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-    },
-    actionButtonSmall: {
-      flex: 1,
-      backgroundColor: theme.colors.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-      opacity: 1,
-      ...theme.shadows.sm,
     },
     optOutButton: {
       backgroundColor: theme.colors.card,
@@ -1457,11 +1331,6 @@ const createStyles = (theme: Theme) =>
       fontSize: 16,
       fontWeight: '600',
     },
-    actionButtonText: {
-      color: 'white',
-      fontSize: 16,
-      fontWeight: '600',
-    },
     transactionsContainer: {
       marginTop: 16,
     },
@@ -1470,6 +1339,11 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.text,
       marginBottom: theme.spacing.md,
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 1.0)'
+        : 'rgba(255, 255, 255, 1.0)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 16,
     },
     emptyTransactions: {
       paddingVertical: theme.spacing.xl,

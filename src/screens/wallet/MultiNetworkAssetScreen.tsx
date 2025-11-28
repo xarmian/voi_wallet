@@ -25,6 +25,8 @@ import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { useTheme } from '@/contexts/ThemeContext';
+import { GlassButton } from '@/components/common/GlassButton';
+import UniversalHeader from '@/components/common/UniversalHeader';
 
 interface MultiNetworkAssetRouteParams {
   assetName: string;
@@ -77,20 +79,13 @@ export default function MultiNetworkAssetScreen() {
   if (!mappedAsset) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-          <BlurredContainer
-            style={styles.header}
-            borderRadius={0}
-            opacity={0.8}
-          >
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-            >
-              <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
-            </TouchableOpacity>
-            <Text style={styles.title}>Asset Not Found</Text>
-            <View style={styles.placeholder} />
-          </BlurredContainer>
+          <UniversalHeader
+            title="Asset Not Found"
+            showBackButton
+            onBackPress={() => navigation.goBack()}
+            showAccountSelector={false}
+            onAccountSelectorPress={() => {}}
+          />
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>
               This asset could not be found in your balance.
@@ -218,47 +213,29 @@ export default function MultiNetworkAssetScreen() {
     return formatAssetBalance(mappedAsset.amount, mappedAsset.decimals);
   }, [mappedAsset]);
 
+  // Compute network subtitle for header
+  const networkSubtitle = useMemo(() => {
+    if (!mappedAsset || !mappedAsset.sourceBalances.length) return undefined;
+    const uniqueNetworks = Array.from(new Set(mappedAsset.sourceBalances.map(s => s.networkId)));
+    return uniqueNetworks
+      .map((nid) => getNetworkConfig(nid).name
+        .replace(' Network', '')
+        .replace(' Mainnet', '')
+        .replace(' Testnet', '')
+        .trim())
+      .join(' + ');
+  }, [mappedAsset]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-        <BlurredContainer
-          style={styles.header}
-          borderRadius={0}
-          opacity={0.8}
-        >
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
-          </TouchableOpacity>
-          <View style={styles.titleContainer}>
-          <Text style={styles.title}>{assetName}</Text>
-          <View style={styles.headerNetworkBadges}>
-            {Array.from(
-              new Set(mappedAsset.sourceBalances.map((s) => s.networkId))
-            ).map((networkId) => {
-              const networkConfig = getNetworkConfig(networkId);
-              const shortName = networkConfig.name
-                .replace(' Network', '')
-                .replace(' Mainnet', '')
-                .replace(' Testnet', '')
-                .trim();
-              return (
-                <View
-                  key={networkId}
-                  style={[
-                    styles.headerNetworkPill,
-                    { backgroundColor: networkConfig.color },
-                  ]}
-                >
-                  <Text style={styles.headerNetworkText}>{shortName}</Text>
-                </View>
-              );
-            })}
-          </View>
-          </View>
-          <View style={styles.placeholder} />
-        </BlurredContainer>
+        <UniversalHeader
+          title={assetName}
+          subtitle={networkSubtitle}
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+        />
 
       <ScrollView
         style={styles.scrollView}
@@ -401,18 +378,25 @@ export default function MultiNetworkAssetScreen() {
 
         {/* Action Buttons */}
         <View style={styles.actionButtonsContainer}>
-          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-            <Ionicons name="send" size={20} color="white" />
-            <Text style={styles.actionButtonText}>Send</Text>
-          </TouchableOpacity>
+          <GlassButton
+            variant="secondary"
+            size="md"
+            icon="send"
+            label="Send"
+            tint="#007AFF"
+            onPress={handleSend}
+            style={styles.actionButton}
+          />
 
-          <TouchableOpacity
-            style={styles.receiveButton}
+          <GlassButton
+            variant="secondary"
+            size="md"
+            icon="download"
+            label="Receive"
+            tint="#30D158"
             onPress={handleReceive}
-          >
-            <Ionicons name="download" size={20} color="white" />
-            <Text style={styles.actionButtonText}>Receive</Text>
-          </TouchableOpacity>
+            style={styles.actionButton}
+          />
         </View>
 
         {/* Info Section - only show if asset is on multiple networks */}
@@ -450,9 +434,6 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'space-between',
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-      ...theme.shadows.sm,
     },
     backButton: {
       padding: theme.spacing.xs,
@@ -630,38 +611,9 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       gap: theme.spacing.sm,
       marginBottom: theme.spacing.lg,
-      padding: theme.spacing.md,
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
     },
-    sendButton: {
+    actionButton: {
       flex: 1,
-      backgroundColor: theme.colors.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: theme.spacing.md,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-      opacity: 1,
-      ...theme.shadows.sm,
-    },
-    receiveButton: {
-      flex: 1,
-      backgroundColor: theme.colors.success,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: theme.spacing.md,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-      opacity: 1,
-      ...theme.shadows.sm,
-    },
-    actionButtonText: {
-      color: 'white',
-      fontSize: 16,
-      fontWeight: '600',
     },
     infoContainer: {
       flexDirection: 'row',

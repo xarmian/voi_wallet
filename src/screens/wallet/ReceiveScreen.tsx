@@ -17,14 +17,19 @@ import {
   CommonActions,
 } from '@react-navigation/native';
 import QRCode from 'react-native-qrcode-svg';
+import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useActiveAccount, useActiveAccountBalance } from '@/store/walletStore';
 import { formatVoiBalance } from '@/utils/bigint';
 import AccountSelector from '@/components/account/AccountSelector';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import UniversalHeader from '@/components/common/UniversalHeader';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
 
 interface ReceiveScreenRouteParams {
   assetName?: string;
@@ -109,119 +114,137 @@ export default function ReceiveScreen() {
     setIsAddAccountModalVisible(true);
   };
 
+  const { theme } = useTheme();
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader
-        title={contextAssetName ? `Receive ${contextAssetName}` : 'Receive VOI'}
-        subtitle={
-          contextAssetName
-            ? `Share your address to receive ${contextAssetName}`
-            : 'Share your address to receive VOI payments'
-        }
-        onAccountSelectorPress={handleAccountSelectorPress}
-        showBackButton={true}
-        onBackPress={() => navigation.goBack()}
-      />
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title={contextAssetName ? `Receive ${contextAssetName}` : 'Receive VOI'}
+          onAccountSelectorPress={handleAccountSelectorPress}
+          showBackButton={true}
+          onBackPress={() => navigation.goBack()}
+        />
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        {accountBalance && (
-          <View style={styles.balanceContainer}>
-            <Text style={styles.balanceLabel}>Current Balance</Text>
-            <Text style={styles.balanceAmount}>
-              {formatBalance(accountBalance.amount)} VOI
-            </Text>
-          </View>
-        )}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {accountBalance && (
+            <GlassCard variant="light" style={styles.balanceContainer}>
+              <Text style={[styles.balanceLabel, { color: theme.colors.textSecondary }]}>
+                Current Balance
+              </Text>
+              <Text style={[styles.balanceAmount, { color: theme.colors.text }]}>
+                {formatBalance(accountBalance.amount)} VOI
+              </Text>
+            </GlassCard>
+          )}
 
-        {activeAccount && (
-          <>
-            <View style={styles.qrContainer}>
-              <QRCode
-                value={activeAccount.address}
-                size={180}
-                backgroundColor={themeColors.card}
-                color={themeColors.text}
-              />
-            </View>
+          {activeAccount && (
+            <>
+              <GlassCard variant="medium" style={styles.qrContainer} borderGlow>
+                <QRCode
+                  value={activeAccount.address}
+                  size={180}
+                  backgroundColor="white"
+                  color="#000000"
+                />
+              </GlassCard>
 
-            <View style={styles.addressContainer}>
-              <Text style={styles.addressLabel}>Your Address</Text>
-              <TouchableOpacity style={styles.addressBox} onPress={copyAddress}>
-                <Text style={styles.address}>{activeAccount.address}</Text>
-                <Text style={styles.tapToCopy}>Tap to copy</Text>
-              </TouchableOpacity>
-            </View>
+              <View style={styles.addressContainer}>
+                <Text style={[styles.addressLabel, { color: theme.colors.text }]}>
+                  Your Address
+                </Text>
+                <GlassCard
+                  variant="light"
+                  style={styles.addressBox}
+                  onPress={copyAddress}
+                >
+                  <Text style={[styles.address, { color: theme.colors.text }]}>
+                    {activeAccount.address}
+                  </Text>
+                  <View style={styles.tapToCopyContainer}>
+                    <Ionicons name="copy-outline" size={14} color={theme.colors.primary} />
+                    <Text style={[styles.tapToCopy, { color: theme.colors.primary }]}>
+                      Tap to copy
+                    </Text>
+                  </View>
+                </GlassCard>
+              </View>
 
-            <View style={styles.buttonContainer}>
-              <TouchableOpacity style={styles.copyButton} onPress={copyAddress}>
-                <Text style={styles.buttonText}>Copy Address</Text>
-              </TouchableOpacity>
+              <View style={styles.buttonContainer}>
+                <GlassButton
+                  variant="primary"
+                  label="Copy Address"
+                  icon="copy-outline"
+                  onPress={copyAddress}
+                  style={styles.actionButton}
+                />
+                <GlassButton
+                  variant="secondary"
+                  label="Share Address"
+                  icon="share-outline"
+                  onPress={shareAddress}
+                  style={styles.actionButton}
+                />
+              </View>
+            </>
+          )}
+        </ScrollView>
 
-              <TouchableOpacity
-                style={styles.shareButton}
-                onPress={shareAddress}
-              >
-                <Text style={styles.buttonText}>Share Address</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-      </ScrollView>
-
-      {/* Account List Modal */}
-      <AccountListModal
-        isVisible={isAccountModalVisible}
-        onClose={handleAccountModalClose}
-        onAddAccount={handleAddAccount}
-      />
-      {/* Add Account Modal */}
-      <AddAccountModal
-        isVisible={isAddAccountModalVisible}
-        onClose={() => setIsAddAccountModalVisible(false)}
-        onCreateAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'CreateAccount',
-              },
-            })
-          );
-        }}
-        onImportAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'MnemonicImport',
-              },
-            })
-          );
-        }}
-        onImportLedgerAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('LedgerAccountImport' as never);
-        }}
-        onImportQRAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('QRAccountImport' as never);
-        }}
-        onAddWatchAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate(
-            'Settings' as never,
-            { screen: 'AddWatchAccount' } as never
-          );
-        }}
-      />
-    </SafeAreaView>
+        {/* Account List Modal */}
+        <AccountListModal
+          isVisible={isAccountModalVisible}
+          onClose={handleAccountModalClose}
+          onAddAccount={handleAddAccount}
+        />
+        {/* Add Account Modal */}
+        <AddAccountModal
+          isVisible={isAddAccountModalVisible}
+          onClose={() => setIsAddAccountModalVisible(false)}
+          onCreateAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'CreateAccount',
+                },
+              })
+            );
+          }}
+          onImportAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'MnemonicImport',
+                },
+              })
+            );
+          }}
+          onImportLedgerAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('LedgerAccountImport' as never);
+          }}
+          onImportQRAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('QRAccountImport' as never);
+          }}
+          onAddWatchAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate(
+              'Settings' as never,
+              { screen: 'AddWatchAccount' } as never
+            );
+          }}
+        />
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -229,7 +252,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollView: {
       flex: 1,
@@ -251,64 +273,67 @@ const createStyles = (theme: Theme) =>
       marginTop: theme.spacing.sm,
     },
     balanceContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.md,
-      padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
       alignItems: 'center',
       width: '100%',
-      ...theme.shadows.sm,
+      borderRadius: theme.borderRadius.xl,
     },
     balanceLabel: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
+      fontSize: theme.typography.caption.fontSize,
       marginBottom: theme.spacing.xs,
+      // Text shadow for readability over NFT backgrounds
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.8)'
+        : 'rgba(255, 255, 255, 0.9)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 10,
     },
     balanceAmount: {
-      fontSize: 18,
-      fontWeight: 'bold',
-      color: theme.colors.text,
+      fontSize: theme.typography.heading2.fontSize,
+      fontWeight: '700',
     },
     qrContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
+      borderRadius: theme.borderRadius.xxl,
       padding: theme.spacing.xl,
       marginBottom: theme.spacing.xl,
       alignItems: 'center',
-      ...theme.shadows.md,
     },
     addressContainer: {
       width: '100%',
       marginBottom: theme.spacing.xl,
     },
     addressLabel: {
-      fontSize: 16,
+      fontSize: theme.typography.body.fontSize,
       fontWeight: '600',
-      color: theme.colors.text,
       marginBottom: theme.spacing.sm,
       textAlign: 'center',
+      // Text shadow for readability over NFT backgrounds
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.8)'
+        : 'rgba(255, 255, 255, 0.9)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 10,
     },
     addressBox: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.md,
-      padding: theme.spacing.lg,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      ...theme.shadows.sm,
+      borderRadius: theme.borderRadius.xl,
     },
     address: {
-      fontSize: 14,
-      color: theme.colors.text,
+      fontSize: 13,
       textAlign: 'center',
       fontFamily: 'monospace',
       lineHeight: 20,
-      marginBottom: theme.spacing.xs,
+      marginBottom: theme.spacing.sm,
+    },
+    tapToCopyContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
     },
     tapToCopy: {
       fontSize: 12,
-      color: theme.colors.primary,
       textAlign: 'center',
-      fontStyle: 'italic',
+      fontWeight: '500',
     },
     buttonContainer: {
       width: '100%',
@@ -316,24 +341,7 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'space-between',
       gap: theme.spacing.md,
     },
-    copyButton: {
+    actionButton: {
       flex: 1,
-      backgroundColor: theme.colors.primary,
-      paddingVertical: theme.spacing.md,
-      borderRadius: theme.borderRadius.md,
-      ...theme.shadows.sm,
-    },
-    shareButton: {
-      flex: 1,
-      backgroundColor: theme.colors.success,
-      paddingVertical: theme.spacing.md,
-      borderRadius: theme.borderRadius.md,
-      ...theme.shadows.sm,
-    },
-    buttonText: {
-      color: 'white',
-      fontSize: 16,
-      fontWeight: '600',
-      textAlign: 'center',
     },
   });

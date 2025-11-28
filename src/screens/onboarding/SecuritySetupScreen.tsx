@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   TextInput,
   Alert,
   ActivityIndicator,
@@ -12,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -32,6 +32,11 @@ import { useThemeColors } from '@/hooks/useThemedStyles';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
+import { GlassInput } from '@/components/common/GlassInput';
 
 type SecuritySetupScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -198,108 +203,102 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <KeyboardAwareScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-      >
-        <Text style={styles.title}>Security Setup</Text>
-        <Text style={styles.subtitle}>
-          {source === 'qr'
-            ? 'Secure your imported accounts with a PIN and optional biometric authentication'
-            : source === 'watch'
-              ? 'Secure your watch account with a PIN and optional biometric authentication'
-              : source === 'ledger'
-                ? 'Secure access to your Ledger accounts with a PIN and optional biometric authentication'
-                : 'Secure your wallet with a PIN and optional biometric authentication'}
-        </Text>
-
-        {(source === 'create' || source === 'mnemonic') && (
-          <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Account Name (optional)</Text>
-            <TextInput
-              style={styles.accountNameInput}
-              placeholder="Wallet account name"
-              placeholderTextColor={themeColors.placeholder}
-              value={accountLabel}
-              onChangeText={setAccountLabel}
-              returnKeyType="done"
-              autoCapitalize="words"
-              autoCorrect={false}
-            />
-          </View>
-        )}
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.inputLabel}>Create 6-digit PIN</Text>
-          <TextInput
-            style={styles.pinInput}
-            placeholder="Enter PIN"
-            placeholderTextColor={themeColors.placeholder}
-            value={pin}
-            onChangeText={setPin}
-            keyboardType="numeric"
-            maxLength={6}
-            secureTextEntry
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.inputLabel}>Confirm PIN</Text>
-          <TextInput
-            style={styles.pinInput}
-            placeholder="Confirm PIN"
-            placeholderTextColor={themeColors.placeholder}
-            value={confirmPin}
-            onChangeText={setConfirmPin}
-            keyboardType="numeric"
-            maxLength={6}
-            secureTextEntry
-          />
-        </View>
-
-        {biometricAvailable && (
-          <View style={styles.biometricContainer}>
-            <Text style={styles.biometricLabel}>
-              Enable Biometric Authentication
-            </Text>
-            <Switch
-              value={biometricEnabled}
-              onValueChange={setBiometricEnabled}
-              trackColor={{
-                false: theme.colors.border,
-                true: theme.colors.primary,
-              }}
-              thumbColor={theme.colors.buttonText}
-            />
-          </View>
-        )}
-
-        <TouchableOpacity
-          style={[
-            styles.completeButton,
-            { opacity: pin && confirmPin && !submitting ? 1 : 0.5 },
-          ]}
-          onPress={handleComplete}
-          disabled={!pin || !confirmPin || submitting}
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <UniversalHeader
+          title="Security Setup"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+        />
+        <KeyboardAwareScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
         >
-          {submitting ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator
-                size="small"
-                color="white"
-                style={styles.loadingSpinner}
+          <Text style={[styles.subtitle, { color: theme.colors.textMuted }]}>
+            {source === 'qr'
+              ? 'Secure your imported accounts with a PIN and optional biometric authentication'
+              : source === 'watch'
+                ? 'Secure your watch account with a PIN and optional biometric authentication'
+                : source === 'ledger'
+                  ? 'Secure access to your Ledger accounts with a PIN and optional biometric authentication'
+                  : 'Secure your wallet with a PIN and optional biometric authentication'}
+          </Text>
+
+          <GlassCard variant="medium" style={styles.formCard}>
+            {(source === 'create' || source === 'mnemonic') && (
+              <GlassInput
+                label="Account Name (optional)"
+                placeholder="Wallet account name"
+                value={accountLabel}
+                onChangeText={setAccountLabel}
+                returnKeyType="done"
+                autoCapitalize="words"
+                autoCorrect={false}
+                leftIcon="person-outline"
               />
-              <Text style={styles.completeButtonText}>
-                {setupStep || 'Setting up...'}
-              </Text>
-            </View>
-          ) : (
-            <Text style={styles.completeButtonText}>Complete Setup</Text>
-          )}
-        </TouchableOpacity>
-      </KeyboardAwareScrollView>
-    </SafeAreaView>
+            )}
+
+            <GlassInput
+              label="Create 6-digit PIN"
+              placeholder="Enter PIN"
+              value={pin}
+              onChangeText={setPin}
+              keyboardType="numeric"
+              maxLength={6}
+              secureTextEntry
+              leftIcon="lock-closed-outline"
+            />
+
+            <GlassInput
+              label="Confirm PIN"
+              placeholder="Confirm PIN"
+              value={confirmPin}
+              onChangeText={setConfirmPin}
+              keyboardType="numeric"
+              maxLength={6}
+              secureTextEntry
+              leftIcon="lock-closed-outline"
+            />
+
+            {biometricAvailable && (
+              <View style={styles.biometricContainer}>
+                <View style={styles.biometricLeft}>
+                  <View style={[styles.biometricIcon, { backgroundColor: `${theme.colors.primary}15` }]}>
+                    <Ionicons name="finger-print" size={20} color={theme.colors.primary} />
+                  </View>
+                  <Text style={[styles.biometricLabel, { color: theme.colors.text }]}>
+                    Enable Biometric Authentication
+                  </Text>
+                </View>
+                <Switch
+                  value={biometricEnabled}
+                  onValueChange={setBiometricEnabled}
+                  trackColor={{
+                    false: theme.colors.border,
+                    true: theme.colors.primary,
+                  }}
+                  thumbColor={theme.colors.buttonText}
+                />
+              </View>
+            )}
+          </GlassCard>
+
+          <GlassButton
+            variant="primary"
+            label={submitting ? (setupStep || 'Setting up...') : 'Complete Setup'}
+            icon={submitting ? undefined : 'checkmark-circle'}
+            loading={submitting}
+            disabled={!pin || !confirmPin || submitting}
+            onPress={handleComplete}
+            fullWidth
+            glow
+            size="lg"
+          />
+        </KeyboardAwareScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -307,7 +306,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollView: {
       flex: 1,
@@ -315,84 +313,44 @@ const createStyles = (theme: Theme) =>
     content: {
       flexGrow: 1,
       paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.xxl,
-    },
-    title: {
-      fontSize: 28,
-      fontWeight: 'bold',
-      color: theme.colors.text,
-      marginBottom: theme.spacing.sm,
-      textAlign: 'center',
+      paddingVertical: theme.spacing.lg,
     },
     subtitle: {
-      fontSize: 16,
-      color: theme.colors.textMuted,
+      fontSize: theme.typography.body.fontSize,
       marginBottom: theme.spacing.xl,
       textAlign: 'center',
       lineHeight: 22,
     },
-    inputContainer: {
-      marginBottom: theme.spacing.lg,
-    },
-    inputLabel: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginBottom: theme.spacing.sm,
-    },
-    accountNameInput: {
-      backgroundColor: theme.colors.inputBackground,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      fontSize: 16,
-      borderWidth: 1,
-      borderColor: theme.colors.inputBorder,
-      color: theme.colors.text,
-    },
-    pinInput: {
-      backgroundColor: theme.colors.inputBackground,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      fontSize: 18,
-      textAlign: 'center',
-      borderWidth: 1,
-      borderColor: theme.colors.inputBorder,
-      color: theme.colors.text,
+    formCard: {
+      borderRadius: theme.borderRadius.xxl,
+      marginBottom: theme.spacing.xl,
+      gap: theme.spacing.md,
     },
     biometricContainer: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      marginBottom: theme.spacing.xl,
-      borderWidth: 1,
-      borderColor: theme.colors.borderLight,
+      paddingTop: theme.spacing.md,
+      marginTop: theme.spacing.sm,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.glassBorder,
     },
-    biometricLabel: {
-      fontSize: 16,
-      fontWeight: '500',
-      color: theme.colors.text,
-    },
-    completeButton: {
-      backgroundColor: theme.colors.success,
-      paddingVertical: theme.spacing.md,
-      paddingHorizontal: theme.spacing.xl,
-      borderRadius: theme.borderRadius.lg,
-    },
-    completeButtonText: {
-      color: theme.colors.buttonText,
-      fontSize: 18,
-      fontWeight: '600',
-      textAlign: 'center',
-    },
-    loadingContainer: {
+    biometricLeft: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
+      flex: 1,
     },
-    loadingSpinner: {
-      marginRight: theme.spacing.sm,
+    biometricIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: theme.borderRadius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: theme.spacing.md,
+    },
+    biometricLabel: {
+      fontSize: theme.typography.body.fontSize,
+      fontWeight: '500',
+      flex: 1,
     },
   });

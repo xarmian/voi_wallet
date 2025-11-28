@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, ViewStyle, TextStyle } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
-import { Theme } from '../constants/themes';
+import { Theme, GlassEffect, TypographyStyle } from '../constants/themes';
 
 export const useThemedStyles = <T extends StyleSheet.NamedStyles<T>>(
   styleFactory: (theme: Theme) => T
@@ -57,6 +57,15 @@ export const useThemeColors = () => {
       modalBackground: '#FFFFFF',
       overlay: 'rgba(0, 0, 0, 0.4)',
       shadow: '#000000',
+      glassBackground: 'rgba(255, 255, 255, 0.72)',
+      glassBorder: 'rgba(255, 255, 255, 0.5)',
+      glassHighlight: 'rgba(255, 255, 255, 0.9)',
+      glassShadow: 'rgba(0, 0, 0, 0.08)',
+      glowPrimary: 'rgba(0, 122, 255, 0.35)',
+      glowSuccess: 'rgba(48, 209, 88, 0.35)',
+      glowError: 'rgba(255, 69, 58, 0.35)',
+      surfaceElevated: '#FFFFFF',
+      surfacePressed: 'rgba(0, 0, 0, 0.04)',
     };
   }
 };
@@ -74,4 +83,75 @@ export const useThemeBorderRadius = () => {
 export const useThemeShadows = () => {
   const { theme } = useTheme();
   return theme.shadows;
+};
+
+// Glass effect utilities
+export const useThemeGlass = () => {
+  const { theme } = useTheme();
+  return theme.glass;
+};
+
+export const useThemeGlowShadows = () => {
+  const { theme } = useTheme();
+  return theme.glowShadows;
+};
+
+export const useThemeGradients = () => {
+  const { theme } = useTheme();
+  return theme.gradients;
+};
+
+export const useThemeTypography = () => {
+  const { theme } = useTheme();
+  return theme.typography;
+};
+
+export const useThemeAnimation = () => {
+  const { theme } = useTheme();
+  return theme.animation;
+};
+
+// Utility hook to get glass container styles for a specific variant
+export const useGlassStyle = (
+  variant: 'light' | 'medium' | 'heavy' | 'chromatic' = 'medium'
+): ViewStyle => {
+  const { theme } = useTheme();
+  const glass = theme.glass[variant];
+
+  return useMemo(
+    () => ({
+      backgroundColor: glass.backgroundColor,
+      borderColor: glass.borderColor,
+      borderWidth: glass.borderWidth,
+      overflow: 'hidden' as const,
+    }),
+    [glass]
+  );
+};
+
+// Utility hook to get typography styles
+export const useTypographyStyle = (
+  variant: keyof Theme['typography']
+): TextStyle => {
+  const { theme } = useTheme();
+  const typo = theme.typography[variant];
+
+  return useMemo(
+    () => ({
+      fontSize: typo.fontSize,
+      fontWeight: typo.fontWeight,
+      lineHeight: typo.lineHeight,
+      letterSpacing: typo.letterSpacing,
+      color: theme.colors.text,
+    }),
+    [typo, theme.colors.text]
+  );
+};
+
+// Get glass effect config (blur, tint, etc.) for use with BlurView
+export const useGlassConfig = (
+  variant: 'light' | 'medium' | 'heavy' | 'chromatic' = 'medium'
+): GlassEffect => {
+  const { theme } = useTheme();
+  return theme.glass[variant];
 };

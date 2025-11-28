@@ -6,6 +6,7 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
+  Pressable,
   Alert,
   ActivityIndicator,
   ScrollView,
@@ -14,7 +15,7 @@ import {
   BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons'; // types provided by Expo runtime
+import { Ionicons } from '@expo/vector-icons';
 import {
   useRoute,
   useNavigation,
@@ -23,6 +24,7 @@ import {
 } from '@react-navigation/native';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useTheme } from '@/contexts/ThemeContext';
 import { TransactionService } from '@/services/transactions';
 import VoiNetworkService, { NetworkService } from '@/services/network';
 import tokenMappingService from '@/services/token-mapping';
@@ -57,6 +59,9 @@ import UniversalHeader from '@/components/common/UniversalHeader';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import NetworkAssetSelector from '@/components/send/NetworkAssetSelector';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
 
 interface SendScreenRouteParams {
   assetName?: string;
@@ -1248,31 +1253,25 @@ export default function SendScreen() {
     return [nativeAsset, ...otherAssets];
   };
 
+  const { theme } = useTheme();
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader
-        title={
-          contextNftToken
-            ? 'Send NFT'
-            : hasNoContext
-              ? 'Send'
-              : contextAssetName
-                ? `Send ${contextAssetName}`
-                : `Send ${currentNetworkConfig.nativeToken}`
-        }
-        subtitle={
-          contextNftToken
-            ? `Send ${contextNftToken.metadata.name || `Token #${contextNftToken.tokenId}`}`
-            : hasNoContext
-              ? 'Send tokens to another address'
-              : contextAssetName
-                ? `Send ${contextAssetName} tokens`
-                : `Send ${currentNetworkConfig.nativeToken} to another address`
-        }
-        onAccountSelectorPress={handleAccountSelectorPress}
-        showBackButton={true}
-        onBackPress={() => navigation.goBack()}
-      />
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title={
+            contextNftToken
+              ? 'Send NFT'
+              : hasNoContext
+                ? 'Send'
+                : contextAssetName
+                  ? `Send ${contextAssetName}`
+                  : `Send ${currentNetworkConfig.nativeToken}`
+          }
+          onAccountSelectorPress={handleAccountSelectorPress}
+          showBackButton={true}
+          onBackPress={() => navigation.goBack()}
+        />
 
       <KeyboardAwareScrollView
         style={styles.scrollView}
@@ -1555,42 +1554,22 @@ export default function SendScreen() {
               </View>
             )}
 
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                {
-                  opacity:
-                    recipientAddress &&
-                    (contextNftToken || amount) &&
-                    !isSending &&
-                    !(activeAccount?.type === AccountType.WATCH && !hasLedgerSigner)
-                      ? 1
-                      : 0.5,
-                  backgroundColor:
-                    activeAccount?.type === AccountType.WATCH && !hasLedgerSigner
-                      ? themeColors.textMuted
-                      : isSending
-                        ? themeColors.textMuted
-                        : themeColors.primary,
-                },
-              ]}
-              onPress={handleSend}
+            <GlassButton
+              variant={activeAccount?.type === AccountType.WATCH && !hasLedgerSigner ? 'secondary' : 'primary'}
+              label={isSending ? 'Sending...' : 'Send Transaction'}
+              icon={isSending ? undefined : 'paper-plane'}
+              loading={isSending}
               disabled={
                 !recipientAddress ||
                 (!contextNftToken && !amount) ||
                 isSending ||
                 (activeAccount?.type === AccountType.WATCH && !hasLedgerSigner)
               }
-            >
-              {isSending ? (
-                <View style={styles.sendingContainer}>
-                  <ActivityIndicator size="small" color="white" />
-                  <Text style={styles.sendButtonText}>Sending...</Text>
-                </View>
-              ) : (
-                <Text style={styles.sendButtonText}>Send Transaction</Text>
-              )}
-            </TouchableOpacity>
+              onPress={handleSend}
+              fullWidth
+              glow
+              size="lg"
+            />
         </View>
       </KeyboardAwareScrollView>
 
@@ -1699,7 +1678,8 @@ export default function SendScreen() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -1707,7 +1687,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollView: {
       flex: 1,
@@ -1764,14 +1743,24 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
+      // Text shadow for readability over NFT backgrounds
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 1.0)'
+        : 'rgba(255, 255, 255, 1.0)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 16,
     },
     textInput: {
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       fontSize: 16,
       borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.5)',
       color: theme.colors.text,
     },
     inputWithButton: {
@@ -1780,13 +1769,17 @@ const createStyles = (theme: Theme) =>
       position: 'relative',
     },
     textInputWithButton: {
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       paddingRight: 100, // Make room for both buttons
       fontSize: 16,
       borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.5)',
       flex: 1,
       color: theme.colors.text,
     },
@@ -1823,11 +1816,16 @@ const createStyles = (theme: Theme) =>
       textAlign: 'right',
     },
     feeContainer: {
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
-      ...theme.shadows.sm,
+      borderWidth: 1,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.5)',
     },
     feeLabel: {
       fontSize: 14,
@@ -1845,9 +1843,13 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
     },
     watchAccountWarning: {
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.08)'
+        : 'rgba(255, 255, 255, 0.35)',
       borderWidth: 1,
-      borderColor: theme.colors.borderLight,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.12)'
+        : 'rgba(255, 255, 255, 0.45)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
@@ -1905,12 +1907,15 @@ const createStyles = (theme: Theme) =>
     },
     searchResults: {
       marginTop: theme.spacing.sm,
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(30, 30, 40, 0.9)'
+        : 'rgba(255, 255, 255, 0.85)',
       borderRadius: theme.borderRadius.md,
       borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.5)',
       overflow: 'hidden',
-      ...theme.shadows.sm,
     },
     searchResultItem: {
       flexDirection: 'row',
@@ -2073,13 +2078,17 @@ const createStyles = (theme: Theme) =>
       marginBottom: theme.spacing.lg,
     },
     nftTokenDetails: {
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       flexDirection: 'row',
       alignItems: 'flex-start',
       borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.5)',
     },
     nftTokenImage: {
       width: 80,

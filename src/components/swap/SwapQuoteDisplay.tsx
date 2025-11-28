@@ -9,11 +9,13 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme } from '../../constants/themes';
 import { SwapToken, UnifiedSwapQuote } from '../../services/swap/types';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
+import { GlassCard } from '@/components/common/GlassCard';
 
 interface SwapQuoteDisplayProps {
   quote: UnifiedSwapQuote | null;
@@ -104,14 +106,9 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
     return '-';
   };
 
-  // Don't render anything when loading - skeleton is shown in output amount area
-  if (loading) {
-    return null;
-  }
-
   if (error) {
     return (
-      <View style={styles.container}>
+      <GlassCard variant="medium" style={styles.container} animated={false}>
         <View style={styles.errorContainer}>
           <Ionicons name="alert-circle" size={24} color={themeColors.error} />
           <Text style={styles.errorText}>{error}</Text>
@@ -119,47 +116,67 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
             <Text style={styles.retryButtonText}>Try Again</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </GlassCard>
     );
   }
 
   if (!quote) {
     return (
-      <View style={styles.container}>
+      <GlassCard variant="medium" style={styles.container} animated={false}>
         <View style={styles.placeholderContainer}>
           <Ionicons name="swap-horizontal" size={32} color={themeColors.textMuted} />
           <Text style={styles.placeholderText}>
             Enter an amount to get a quote
           </Text>
         </View>
-      </View>
+      </GlassCard>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <GlassCard variant="medium" style={styles.container} animated={false}>
+      {/* Loading overlay */}
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="small" color={themeColors.primary} />
+          <Text style={styles.loadingOverlayText}>Updating...</Text>
+        </View>
+      )}
+
       {/* Header with Refresh and Slippage */}
-      <View style={styles.header}>
+      <View style={[styles.header, loading && styles.contentLoading]}>
         <Text style={styles.headerTitle}>Quote</Text>
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.headerButton}
             onPress={onSlippagePress}
+            disabled={loading}
           >
             <Ionicons name="settings-outline" size={18} color={themeColors.text} />
             <Text style={styles.headerButtonText}>{slippage}%</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.headerButton}
+            style={[styles.headerButton, loading && styles.refreshButtonLoading]}
             onPress={onRefresh}
+            disabled={loading}
           >
-            <Ionicons name="refresh" size={18} color={themeColors.text} />
+            <ActivityIndicator
+              size={16}
+              color={loading ? themeColors.primary : themeColors.text}
+              style={loading ? undefined : { display: 'none' }}
+            />
+            <Ionicons
+              name="refresh"
+              size={18}
+              color={themeColors.text}
+              style={loading ? { display: 'none' } : undefined}
+            />
           </TouchableOpacity>
         </View>
       </View>
 
       {/* Quote Details */}
-      <View style={styles.quoteDetails}>
+      <View style={[styles.quoteDetails, loading && styles.contentLoading]}>
         {/* Rate */}
         <View style={styles.quoteRow}>
           <Text style={styles.quoteLabel}>Rate</Text>
@@ -243,17 +260,15 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
           </Text>
         </View>
       )}
-    </View>
+    </GlassCard>
   );
 };
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.xl,
-      padding: theme.spacing.lg,
       marginTop: theme.spacing.md,
+      marginBottom: theme.spacing.lg,
     },
     header: {
       flexDirection: 'row',
@@ -276,8 +291,10 @@ const createStyles = (theme: Theme) =>
       gap: 4,
       paddingHorizontal: theme.spacing.sm,
       paddingVertical: theme.spacing.xs,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.glass.light.backgroundColor,
       borderRadius: theme.borderRadius.md,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     headerButtonText: {
       fontSize: 13,
@@ -326,9 +343,11 @@ const createStyles = (theme: Theme) =>
     retryButton: {
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.sm,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.glass.medium.backgroundColor,
       borderRadius: theme.borderRadius.lg,
       marginTop: theme.spacing.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     retryButtonText: {
       fontSize: 14,
@@ -360,5 +379,32 @@ const createStyles = (theme: Theme) =>
       fontSize: 13,
       color: theme.colors.warning,
       lineHeight: 18,
+    },
+    loadingOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.5)'
+        : 'rgba(255, 255, 255, 0.6)',
+      borderRadius: theme.borderRadius.xl,
+      zIndex: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexDirection: 'row',
+      gap: theme.spacing.sm,
+    },
+    loadingOverlayText: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: theme.colors.primary,
+    },
+    contentLoading: {
+      opacity: 0.5,
+    },
+    refreshButtonLoading: {
+      backgroundColor: `${theme.colors.primary}15`,
     },
   });

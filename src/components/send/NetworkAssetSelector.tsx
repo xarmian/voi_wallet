@@ -171,22 +171,34 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
+      // Text shadow for readability over NFT backgrounds
+      textShadowColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.8)'
+        : 'rgba(255, 255, 255, 0.9)',
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 10,
     },
     scrollContent: {
       gap: theme.spacing.sm,
       paddingRight: theme.spacing.md,
     },
     card: {
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(255, 255, 255, 0.45)',
       borderWidth: 2,
-      borderColor: theme.colors.border,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.6)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       minWidth: 140,
     },
     cardSelected: {
       borderColor: theme.colors.primary,
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.18)'
+        : 'rgba(255, 255, 255, 0.65)',
     },
     cardDisabled: {
       opacity: 0.5,
@@ -237,9 +249,13 @@ const createStyles = (theme: Theme) =>
     singleOptionCard: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(255, 255, 255, 0.45)',
       borderWidth: 2,
-      borderColor: theme.colors.border,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.15)'
+        : 'rgba(255, 255, 255, 0.6)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
@@ -254,7 +270,9 @@ const createStyles = (theme: Theme) =>
       width: 48,
       height: 48,
       borderRadius: 24,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.12)'
+        : 'rgba(255, 255, 255, 0.6)',
       justifyContent: 'center',
       alignItems: 'center',
       color: theme.colors.primary,
@@ -278,7 +296,9 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: theme.spacing.xs,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.12)'
+        : 'rgba(255, 255, 255, 0.6)',
       paddingHorizontal: theme.spacing.sm,
       paddingVertical: 4,
       borderRadius: theme.borderRadius.sm,

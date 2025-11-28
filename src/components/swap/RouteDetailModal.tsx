@@ -426,7 +426,7 @@ const createStyles = (theme: Theme) =>
       width: '100%',
     },
     modalContainer: {
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.colors.modalBackground,
       borderTopLeftRadius: theme.borderRadius.xl,
       borderTopRightRadius: theme.borderRadius.xl,
       paddingHorizontal: theme.spacing.md,
@@ -435,6 +435,10 @@ const createStyles = (theme: Theme) =>
       height: Dimensions.get('window').height * 0.85,
       maxHeight: '85%',
       flexDirection: 'column',
+      borderTopWidth: 1,
+      borderLeftWidth: 1,
+      borderRightWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     header: {
       flexDirection: 'row',
@@ -473,11 +477,13 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textSecondary,
     },
     summaryContainer: {
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.glass.light.backgroundColor,
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.sm,
       marginBottom: theme.spacing.sm,
       gap: theme.spacing.xs,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     summaryRow: {
       flexDirection: 'row',
@@ -494,10 +500,12 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
     },
     stepContainer: {
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.glass.light.backgroundColor,
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.sm,
       gap: theme.spacing.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     stepHeader: {
       flexDirection: 'row',

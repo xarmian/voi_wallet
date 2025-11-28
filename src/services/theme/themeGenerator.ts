@@ -1,4 +1,4 @@
-import { Theme } from '@/constants/themes';
+import { Theme, GlassEffect, ShadowStyle, TypographyStyle } from '@/constants/themes';
 import { ExtractedColors, ColorPalette } from './colorExtraction';
 
 /**
@@ -13,6 +13,13 @@ export function generateThemeFromColors(
   // Use the preferred mode directly
   const mode = preferredMode;
   const isDark = mode === 'dark';
+
+  // Helper to create rgba from hex with alpha
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return `rgba(255, 255, 255, ${alpha})`;
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+  };
 
   // Use provided palette or fall back to extracted colors
   const paletteColors = palette || {
@@ -76,7 +83,9 @@ export function generateThemeFromColors(
   const info = primary;
 
   // UI element colors
-  const inputBackground = isDark ? surface : card;
+  const inputBackground = isDark
+    ? 'rgba(255, 255, 255, 0.08)'
+    : 'rgba(255, 255, 255, 0.5)';
   const inputBorder = border;
   const buttonBackground = primary;
   const buttonText = ensureContrast(primary, '#FFFFFF') ? '#FFFFFF' : text;
@@ -89,6 +98,133 @@ export function generateThemeFromColors(
 
   // Status bar
   const statusBar = isDark ? 'light-content' : 'dark-content';
+
+  // Glass-specific colors derived from primary
+  const glassBackground = isDark
+    ? 'rgba(255, 255, 255, 0.20)'
+    : 'rgba(255, 255, 255, 0.55)';
+  const glassBorder = isDark
+    ? 'rgba(255, 255, 255, 0.26)'
+    : 'rgba(255, 255, 255, 0.4)';
+  const glassHighlight = isDark
+    ? 'rgba(255, 255, 255, 0.30)'
+    : 'rgba(255, 255, 255, 0.7)';
+  const glassShadow = isDark
+    ? 'rgba(0, 0, 0, 0.4)'
+    : 'rgba(0, 0, 0, 0.1)';
+
+  // Glow colors derived from theme colors
+  const glowPrimary = hexToRgba(primary, isDark ? 0.45 : 0.35);
+  const glowSuccess = hexToRgba(success, isDark ? 0.45 : 0.35);
+  const glowError = hexToRgba(error, isDark ? 0.45 : 0.35);
+
+  // Surface variations
+  const surfaceElevated = isDark
+    ? lightenColor(surface, 0.05)
+    : surface;
+  const surfacePressed = isDark
+    ? 'rgba(255, 255, 255, 0.08)'
+    : 'rgba(0, 0, 0, 0.04)';
+
+  // Glass effect presets
+  const glass: Theme['glass'] = {
+    light: {
+      blur: 24,
+      opacity: isDark ? 0.18 : 0.75,
+      tint: isDark ? 'dark' : 'light',
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(255, 255, 255, 0.75)',
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.24)' : 'rgba(255, 255, 255, 0.5)',
+      borderWidth: 1,
+    },
+    medium: {
+      blur: 40,
+      opacity: isDark ? 0.22 : 0.80,
+      tint: isDark ? 'dark' : 'light',
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.22)' : 'rgba(255, 255, 255, 0.80)',
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.28)' : 'rgba(255, 255, 255, 0.6)',
+      borderWidth: 1,
+    },
+    heavy: {
+      blur: 60,
+      opacity: isDark ? 0.28 : 0.85,
+      tint: isDark ? 'dark' : 'light',
+      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.28)' : 'rgba(255, 255, 255, 0.85)',
+      borderColor: isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(255, 255, 255, 0.7)',
+      borderWidth: 1,
+    },
+    chromatic: {
+      blur: 40,
+      opacity: isDark ? 0.20 : 0.75,
+      tint: 'chromatic',
+      backgroundColor: isDark ? hexToRgba(primary, 0.20) : hexToRgba(primary, 0.15),
+      borderColor: isDark ? hexToRgba(primary, 0.30) : hexToRgba(primary, 0.30),
+      borderWidth: 1,
+    },
+  };
+
+  // Glow shadows using primary color
+  const glowShadows: Theme['glowShadows'] = {
+    sm: {
+      shadowColor: primary,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: isDark ? 0.35 : 0.25,
+      shadowRadius: 8,
+      elevation: 2,
+    },
+    md: {
+      shadowColor: primary,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: isDark ? 0.45 : 0.35,
+      shadowRadius: 16,
+      elevation: 4,
+    },
+    lg: {
+      shadowColor: primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.55 : 0.45,
+      shadowRadius: 24,
+      elevation: 8,
+    },
+  };
+
+  // Gradients
+  const gradients: Theme['gradients'] = {
+    primary: [primary, primaryDark],
+    glass: isDark
+      ? ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0)']
+      : ['rgba(255, 255, 255, 0.2)', 'rgba(255, 255, 255, 0)'],
+    background: [background, isDark ? darkenColor(background, 0.1) : lightenColor(background, 0.05)],
+    shimmer: isDark
+      ? ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.15)', 'rgba(255, 255, 255, 0)']
+      : ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.6)', 'rgba(255, 255, 255, 0)'],
+  };
+
+  // Typography presets
+  const typography: Theme['typography'] = {
+    display: { fontSize: 48, fontWeight: '700', lineHeight: 56, letterSpacing: -0.5 },
+    heading1: { fontSize: 32, fontWeight: '700', lineHeight: 40, letterSpacing: -0.3 },
+    heading2: { fontSize: 24, fontWeight: '600', lineHeight: 32, letterSpacing: -0.2 },
+    heading3: { fontSize: 20, fontWeight: '600', lineHeight: 28, letterSpacing: 0 },
+    body: { fontSize: 16, fontWeight: '400', lineHeight: 24, letterSpacing: 0 },
+    bodySmall: { fontSize: 14, fontWeight: '400', lineHeight: 20, letterSpacing: 0 },
+    caption: { fontSize: 12, fontWeight: '500', lineHeight: 16, letterSpacing: 0.3 },
+    mono: { fontSize: 14, fontWeight: '500', lineHeight: 20, letterSpacing: 0.5 },
+  };
+
+  // Animation presets
+  const animation: Theme['animation'] = {
+    duration: {
+      instant: 100,
+      fast: 150,
+      normal: 250,
+      slow: 400,
+    },
+    spring: {
+      damping: 20,
+      stiffness: 200,
+      mass: 1,
+    },
+  };
 
   return {
     mode,
@@ -121,6 +257,18 @@ export function generateThemeFromColors(
       modalBackground,
       overlay,
       shadow: '#000000',
+      // Glass-specific colors
+      glassBackground,
+      glassBorder,
+      glassHighlight,
+      glassShadow,
+      // Glow colors
+      glowPrimary,
+      glowSuccess,
+      glowError,
+      // Surface variations
+      surfaceElevated,
+      surfacePressed,
     },
     spacing: {
       xs: 4,
@@ -131,34 +279,41 @@ export function generateThemeFromColors(
       xxl: 48,
     },
     borderRadius: {
-      sm: 4,
-      md: 8,
-      lg: 12,
-      xl: 16,
+      sm: 8,
+      md: 12,
+      lg: 16,
+      xl: 24,
+      xxl: 32,
+      pill: 9999,
     },
     shadows: {
       sm: {
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: isDark ? 0.3 : 0.05,
-        shadowRadius: 6,
+        shadowOpacity: isDark ? 0.3 : 0.06,
+        shadowRadius: 8,
         elevation: 2,
       },
       md: {
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: isDark ? 0.4 : 0.08,
-        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: isDark ? 0.4 : 0.1,
+        shadowRadius: 24,
         elevation: 4,
       },
       lg: {
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: isDark ? 0.5 : 0.12,
-        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 16 },
+        shadowOpacity: isDark ? 0.5 : 0.14,
+        shadowRadius: 48,
         elevation: 8,
       },
     },
+    glass,
+    glowShadows,
+    gradients,
+    typography,
+    animation,
   };
 }
 

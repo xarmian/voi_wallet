@@ -19,6 +19,10 @@ import { copyToClipboard } from '@/utils/clipboard';
 import { getTransactionUrl } from '@/utils/blockExplorer';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useTheme } from '@/contexts/ThemeContext';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
 
 type TransactionResultScreenRouteProp = RouteProp<
   WalletStackParamList,
@@ -48,6 +52,7 @@ export default function TransactionResultScreen() {
   const navigation = useNavigation<TransactionResultScreenNavigationProp>();
   const params = route.params as TransactionResultParams;
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
 
   const handleViewInExplorer = async () => {
     if (!params.transactionId) return;
@@ -102,109 +107,111 @@ export default function TransactionResultScreen() {
     );
   };
 
+  const statusColor = params.isSuccess ? theme.colors.success : theme.colors.error;
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <UniversalHeader
-        title={getStatusTitle()}
-        subtitle={
-          params.isSuccess ? 'Transaction submitted' : 'Please try again'
-        }
-        showAccountSelector={false}
-        onAccountSelectorPress={() => {}}
-      />
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <UniversalHeader
+          title={getStatusTitle()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+        />
 
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Status Icon and Message */}
-        <View style={styles.statusContainer}>
-          <Ionicons
-            name={getStatusIcon()}
-            size={80}
-            color={getStatusColor()}
-            style={styles.statusIcon}
-          />
-          <Text style={[styles.statusTitle, { color: getStatusColor() }]}>
-            {getStatusTitle()}
-          </Text>
-          <Text style={styles.statusMessage}>{getStatusMessage()}</Text>
-        </View>
-
-        {/* Transaction Details */}
-        <View style={styles.detailsContainer}>
-          <Text style={styles.detailsTitle}>Transaction Details</Text>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Amount:</Text>
-            <Text style={styles.detailValue}>
-              {params.amount} {params.assetSymbol}
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={styles.contentContainer}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Status Icon and Message */}
+          <GlassCard variant="medium" style={styles.statusContainer} borderGlow glowColor={statusColor}>
+            <View style={[styles.statusIconContainer, { backgroundColor: `${statusColor}20` }]}>
+              <Ionicons
+                name={getStatusIcon()}
+                size={48}
+                color={statusColor}
+              />
+            </View>
+            <Text style={[styles.statusTitle, { color: theme.colors.text }]}>
+              {getStatusTitle()}
             </Text>
-          </View>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>To:</Text>
-            <Text style={styles.detailValue}>
-              {params.recipientName || formatAddress(params.recipient)}
+            <Text style={[styles.statusMessage, { color: theme.colors.textMuted }]}>
+              {getStatusMessage()}
             </Text>
-          </View>
+          </GlassCard>
 
-          {params.fee && (
+          {/* Transaction Details */}
+          <GlassCard variant="light" style={styles.detailsContainer}>
+            <Text style={[styles.detailsTitle, { color: theme.colors.text }]}>
+              Transaction Details
+            </Text>
+
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Fee:</Text>
-              <Text style={styles.detailValue}>
-                {formatVoiBalance(params.fee)} VOI
+              <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>Amount</Text>
+              <Text style={[styles.detailValue, { color: theme.colors.text }]}>
+                {params.amount} {params.assetSymbol}
               </Text>
             </View>
-          )}
 
-          {params.transactionId && (
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Transaction ID:</Text>
-              <TouchableOpacity
-                style={styles.transactionIdContainer}
-                onPress={handleCopyTransactionId}
-              >
-                <Text style={styles.transactionIdText}>
-                  {params.transactionId.slice(0, 8)}...
-                  {params.transactionId.slice(-8)}
-                </Text>
-                <Ionicons
-                  name="copy-outline"
-                  size={16}
-                  color={styles.primaryIcon.color}
-                />
-              </TouchableOpacity>
+              <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>To</Text>
+              <Text style={[styles.detailValue, { color: theme.colors.text }]}>
+                {params.recipientName || formatAddress(params.recipient)}
+              </Text>
             </View>
-          )}
-        </View>
 
-        {/* Action Buttons */}
-        {params.isSuccess && params.transactionId && (
-          <TouchableOpacity
-            style={styles.explorerButton}
-            onPress={handleViewInExplorer}
-          >
-            <Ionicons
-              name="open-outline"
-              size={20}
-              color={styles.primaryIcon.color}
+            {params.fee && (
+              <View style={styles.detailRow}>
+                <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>Fee</Text>
+                <Text style={[styles.detailValue, { color: theme.colors.text }]}>
+                  {formatVoiBalance(params.fee)} VOI
+                </Text>
+              </View>
+            )}
+
+            {params.transactionId && (
+              <View style={styles.detailRow}>
+                <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>Transaction ID</Text>
+                <TouchableOpacity
+                  style={styles.transactionIdContainer}
+                  onPress={handleCopyTransactionId}
+                >
+                  <Text style={[styles.transactionIdText, { color: theme.colors.primary }]}>
+                    {params.transactionId.slice(0, 8)}...
+                    {params.transactionId.slice(-8)}
+                  </Text>
+                  <Ionicons name="copy-outline" size={14} color={theme.colors.primary} />
+                </TouchableOpacity>
+              </View>
+            )}
+          </GlassCard>
+
+          {/* Action Buttons */}
+          {params.isSuccess && params.transactionId && (
+            <GlassButton
+              variant="secondary"
+              label="View in Block Explorer"
+              icon="open-outline"
+              onPress={handleViewInExplorer}
+              fullWidth
             />
-            <Text style={styles.explorerButtonText}>
-              View in Block Explorer
-            </Text>
-          </TouchableOpacity>
-        )}
-      </ScrollView>
+          )}
+        </ScrollView>
 
-      {/* Bottom Action */}
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.homeButton} onPress={handleBackToHome}>
-          <Text style={styles.homeButtonText}>Back to Home</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+        {/* Bottom Action */}
+        <View style={styles.buttonContainer}>
+          <GlassButton
+            variant="primary"
+            label="Back to Home"
+            icon="home"
+            onPress={handleBackToHome}
+            fullWidth
+            glow
+            size="lg"
+          />
+        </View>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -212,7 +219,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     content: {
       flex: 1,
@@ -220,54 +226,55 @@ const createStyles = (theme: Theme) =>
     },
     contentContainer: {
       paddingBottom: theme.spacing.xl,
+      paddingTop: theme.spacing.md,
     },
     statusContainer: {
       alignItems: 'center',
-      paddingVertical: 40,
+      borderRadius: theme.borderRadius.xxl,
+      marginBottom: theme.spacing.lg,
     },
-    statusIcon: {
+    statusIconContainer: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
       marginBottom: theme.spacing.md,
     },
     statusTitle: {
-      fontSize: 24,
+      fontSize: theme.typography.heading2.fontSize,
       fontWeight: '600',
-      marginBottom: theme.spacing.xs,
+      marginBottom: theme.spacing.sm,
       textAlign: 'center',
     },
     statusMessage: {
-      fontSize: 16,
-      color: theme.colors.textSecondary,
+      fontSize: theme.typography.body.fontSize,
       textAlign: 'center',
       lineHeight: 22,
-      paddingHorizontal: theme.spacing.lg,
     },
     detailsContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
+      borderRadius: theme.borderRadius.xl,
       marginBottom: theme.spacing.lg,
     },
     detailsTitle: {
-      fontSize: 18,
+      fontSize: theme.typography.heading3.fontSize,
       fontWeight: '600',
-      color: theme.colors.text,
       marginBottom: theme.spacing.md,
+      paddingBottom: theme.spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.glassBorder,
     },
     detailRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
       paddingVertical: theme.spacing.sm,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
     },
     detailLabel: {
-      fontSize: 16,
-      color: theme.colors.textSecondary,
+      fontSize: theme.typography.body.fontSize,
     },
     detailValue: {
-      fontSize: 16,
-      color: theme.colors.text,
+      fontSize: theme.typography.body.fontSize,
       fontWeight: '500',
       textAlign: 'right',
       flex: 1,
@@ -281,51 +288,12 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'flex-end',
     },
     transactionIdText: {
-      fontSize: 16,
-      color: theme.colors.primary,
+      fontSize: theme.typography.bodySmall.fontSize,
       fontWeight: '500',
       fontFamily: 'monospace',
-    },
-    explorerButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      paddingVertical: theme.spacing.md,
-      paddingHorizontal: theme.spacing.lg,
-      borderWidth: 2,
-      borderColor: theme.colors.primary,
-      marginBottom: theme.spacing.lg,
-      gap: theme.spacing.xs,
-    },
-    explorerButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.primary,
     },
     buttonContainer: {
       paddingHorizontal: theme.spacing.lg,
       paddingVertical: theme.spacing.md,
-    },
-    homeButton: {
-      backgroundColor: theme.colors.primary,
-      borderRadius: theme.borderRadius.lg,
-      paddingVertical: theme.spacing.md,
-      alignItems: 'center',
-    },
-    homeButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.buttonText,
-    },
-    successColor: {
-      color: theme.colors.success,
-    },
-    errorColor: {
-      color: theme.colors.error,
-    },
-    primaryIcon: {
-      color: theme.colors.primary,
     },
   });

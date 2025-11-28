@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,9 +12,13 @@ import { RootStackParamList } from '@/navigation/AppNavigator';
 import { WalletService } from '@/services/wallet';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
+import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
 
 type CreateWalletScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -80,57 +83,65 @@ export default function CreateWalletScreen({ navigation }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-          <Ionicons name="arrow-back" size={24} color={theme.colors.primary} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Create New Wallet</Text>
-        <View style={styles.placeholder} />
-      </View>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <UniversalHeader
+          title="Create New Wallet"
+          showBackButton
+          onBackPress={handleBack}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+        />
 
-      <KeyboardAwareScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>Your Recovery Phrase</Text>
-        <Text style={styles.subtitle}>
-          Write down these 25 words in order and store them safely. This is the
-          only way to recover your wallet.
-        </Text>
+        <KeyboardAwareScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={[styles.title, { color: theme.colors.text }]}>
+            Your Recovery Phrase
+          </Text>
+          <Text style={[styles.subtitle, { color: theme.colors.textMuted }]}>
+            Write down these 25 words in order and store them safely. This is the
+            only way to recover your wallet.
+          </Text>
 
-        {mnemonic ? (
-          <>
-            <MnemonicDisplay
-              mnemonic={mnemonic}
-              layout="grid"
-              showCopyButton={true}
-            />
+          {mnemonic ? (
+            <>
+              <MnemonicDisplay
+                mnemonic={mnemonic}
+                layout="grid"
+                showCopyButton={true}
+              />
 
-            <View style={styles.warningContainer}>
-              <Ionicons name="warning" size={20} color={theme.colors.warning} />
-              <Text style={styles.warningText}>
-                Never share your recovery phrase with anyone. Store it safely
-                offline.
-              </Text>
-            </View>
+              <GlassCard variant="light" style={styles.warningContainer}>
+                <View style={[styles.warningIconContainer, { backgroundColor: `${theme.colors.warning}20` }]}>
+                  <Ionicons name="warning" size={20} color={theme.colors.warning} />
+                </View>
+                <Text style={[styles.warningText, { color: theme.colors.text }]}>
+                  Never share your recovery phrase with anyone. Store it safely
+                  offline.
+                </Text>
+              </GlassCard>
 
-            <TouchableOpacity
-              style={styles.continueButton}
-              onPress={handleContinue}
-            >
-              <Text style={styles.continueButtonText}>
-                I've Saved My Recovery Phrase
-              </Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <Text style={styles.loading}>Generating your wallet...</Text>
-        )}
-      </KeyboardAwareScrollView>
-    </SafeAreaView>
+              <GlassButton
+                variant="primary"
+                label="I've Saved My Recovery Phrase"
+                icon="checkmark-circle"
+                onPress={handleContinue}
+                fullWidth
+                glow
+                size="lg"
+              />
+            </>
+          ) : (
+            <Text style={[styles.loading, { color: theme.colors.textMuted }]}>
+              Generating your wallet...
+            </Text>
+          )}
+        </KeyboardAwareScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -138,28 +149,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
-    },
-    header: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.card,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.borderLight,
-    },
-    backButton: {
-      padding: theme.spacing.sm,
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    placeholder: {
-      width: 40,
     },
     scrollView: {
       flex: 1,
@@ -169,55 +158,41 @@ const createStyles = (theme: Theme) =>
       paddingBottom: 100,
     },
     title: {
-      fontSize: 24,
-      fontWeight: 'bold',
-      color: theme.colors.text,
+      fontSize: theme.typography.heading1.fontSize,
+      fontWeight: '700',
       marginBottom: theme.spacing.sm,
       textAlign: 'center',
     },
     subtitle: {
-      fontSize: 16,
-      color: theme.colors.textMuted,
+      fontSize: theme.typography.body.fontSize,
       marginBottom: theme.spacing.xl,
       textAlign: 'center',
       lineHeight: 22,
     },
     loading: {
-      fontSize: 16,
-      color: theme.colors.textMuted,
+      fontSize: theme.typography.body.fontSize,
       textAlign: 'center',
       marginTop: theme.spacing.xxl,
     },
     warningContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor:
-        theme.mode === 'dark' ? 'rgba(255, 159, 10, 0.1)' : '#FFF3CD',
-      padding: theme.spacing.md,
-      borderRadius: theme.borderRadius.lg,
+      borderRadius: theme.borderRadius.xl,
       marginTop: theme.spacing.lg,
       marginBottom: theme.spacing.xl,
-      borderLeftWidth: 4,
-      borderLeftColor: theme.colors.warning,
+    },
+    warningIconContainer: {
+      width: 36,
+      height: 36,
+      borderRadius: theme.borderRadius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: theme.spacing.md,
     },
     warningText: {
-      fontSize: 14,
-      color: theme.mode === 'dark' ? theme.colors.warning : '#856404',
-      marginLeft: theme.spacing.sm,
+      fontSize: theme.typography.bodySmall.fontSize,
       flex: 1,
       lineHeight: 18,
       fontWeight: '500',
-    },
-    continueButton: {
-      backgroundColor: theme.colors.success,
-      paddingVertical: theme.spacing.md,
-      paddingHorizontal: theme.spacing.xl,
-      borderRadius: theme.borderRadius.lg,
-      alignSelf: 'center',
-    },
-    continueButtonText: {
-      color: theme.colors.buttonText,
-      fontSize: 18,
-      fontWeight: '600',
     },
   });

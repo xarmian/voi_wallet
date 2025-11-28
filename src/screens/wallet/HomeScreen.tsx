@@ -5,7 +5,7 @@ import {
   StyleSheet,
   RefreshControl,
   ScrollView,
-  TouchableOpacity,
+  Pressable,
   Alert,
   ActivityIndicator,
   BackHandler,
@@ -14,6 +14,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  Easing,
+} from 'react-native-reanimated';
 import { TransactionInfo } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -51,8 +58,13 @@ import AssetFilterModal from '@/components/assets/AssetFilterModal';
 import type { AssetFilterSettings } from '@/components/assets/AssetFilterModal';
 import { AssetBalance } from '@/types/wallet';
 import { MappedAsset } from '@/services/token-mapping/types';
+import { GlassCard } from '@/components/common/GlassCard';
+import { GlassButton } from '@/components/common/GlassButton';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { useTheme } from '@/contexts/ThemeContext';
+import { springConfigs, getStaggerDelay } from '@/utils/animations';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export default function HomeScreen() {
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(
@@ -74,6 +86,52 @@ export default function HomeScreen() {
   const currentNetworkConfig = useCurrentNetworkConfig();
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
+
+  // Entrance animations
+  const balanceOpacity = useSharedValue(0);
+  const balanceTranslateY = useSharedValue(20);
+  const actionsOpacity = useSharedValue(0);
+  const actionsTranslateY = useSharedValue(20);
+  const assetsOpacity = useSharedValue(0);
+  const assetsTranslateY = useSharedValue(20);
+
+  const balanceAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: balanceOpacity.value,
+    transform: [{ translateY: balanceTranslateY.value }],
+  }));
+
+  const actionsAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: actionsOpacity.value,
+    transform: [{ translateY: actionsTranslateY.value }],
+  }));
+
+  const assetsAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: assetsOpacity.value,
+    transform: [{ translateY: assetsTranslateY.value }],
+  }));
+
+  // Trigger entrance animations
+  useEffect(() => {
+    const animateEntrance = () => {
+      // Balance card - immediate
+      balanceOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+      balanceTranslateY.value = withSpring(0, springConfigs.smooth);
+
+      // Actions - slight delay
+      setTimeout(() => {
+        actionsOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+        actionsTranslateY.value = withSpring(0, springConfigs.smooth);
+      }, 100);
+
+      // Assets - more delay
+      setTimeout(() => {
+        assetsOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+        assetsTranslateY.value = withSpring(0, springConfigs.smooth);
+      }, 200);
+    };
+
+    animateEntrance();
+  }, []);
 
   const initialize = useWalletStore((state) => state.initialize);
   const wallet = useWalletStore((state) => state.wallet);
@@ -983,64 +1041,70 @@ export default function HomeScreen() {
         >
           {activeAccount && (
             <>
-              <View style={styles.balanceContainerWrapper}>
-                <BlurredContainer
+              <Animated.View style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}>
+                <GlassCard
+                  variant="medium"
                   style={styles.balanceContainer}
-                  borderRadius={theme.borderRadius.lg}
-                  opacity={0.6}
+                  borderRadius={theme.borderRadius.xl}
+                  padding="lg"
                 >
                   <View style={styles.balanceHeader}>
-                  <View style={styles.balanceHeaderLeft}>
-                    <Text style={styles.balanceLabel}>Account Value</Text>
-                    {isBackgroundRefreshing && (
-                      <ActivityIndicator size="small" color="#007AFF" />
-                    )}
+                    <View style={styles.balanceHeaderLeft}>
+                      <Text style={styles.balanceLabel}>Account Value</Text>
+                      <Pressable onPress={handleAccountInfo} style={styles.infoButtonInline}>
+                        <Ionicons name="information-circle-outline" size={18} color={theme.colors.primary} />
+                      </Pressable>
+                      {isBackgroundRefreshing && (
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                      )}
+                    </View>
                   </View>
-                  <TouchableOpacity onPress={handleAccountInfo} style={styles.infoButton}>
-                    <Ionicons name="information-circle-outline" size={20} color="#007AFF" />
-                  </TouchableOpacity>
-                </View>
-                {isBalanceLoading && !accountBalance ? (
-                  <View style={styles.loadingBalance}>
-                    <ActivityIndicator size="small" color="#007AFF" />
-                    <Text style={styles.loadingText}>Loading balance...</Text>
-                  </View>
-                ) : (
-                  <>
-                    <Text style={styles.balance}>{calculateTotalUsdValue}</Text>
-                    {isMultiNetworkView && multiNetworkBalance && (
-                      <View style={styles.networkBalanceBreakdown}>
-                        <View style={styles.networkBalanceItem}>
-                          <Text style={styles.networkBalanceLabel}>Voi</Text>
-                          <Text style={styles.networkBalanceValue}>
-                            {formatCurrency(voiNetworkUsdValue)}
-                          </Text>
+                  {isBalanceLoading && !accountBalance ? (
+                    <View style={styles.loadingBalance}>
+                      <ActivityIndicator size="small" color={theme.colors.primary} />
+                      <Text style={styles.loadingText}>Loading balance...</Text>
+                    </View>
+                  ) : (
+                    <>
+                      <Text style={styles.balance}>{calculateTotalUsdValue}</Text>
+                      {isMultiNetworkView && multiNetworkBalance && (
+                        <View style={styles.networkBalanceBreakdown}>
+                          <View style={styles.networkBalanceItem}>
+                            <Text style={styles.networkBalanceLabel}>Voi</Text>
+                            <Text style={styles.networkBalanceValue}>
+                              {formatCurrency(voiNetworkUsdValue)}
+                            </Text>
+                          </View>
+                          <View style={styles.networkBalanceDivider} />
+                          <View style={styles.networkBalanceItem}>
+                            <Text style={styles.networkBalanceLabel}>Algorand</Text>
+                            <Text style={styles.networkBalanceValue}>
+                              {formatCurrency(algorandNetworkUsdValue)}
+                            </Text>
+                          </View>
                         </View>
-                        <View style={styles.networkBalanceItem}>
-                          <Text style={styles.networkBalanceLabel}>Algorand</Text>
-                          <Text style={styles.networkBalanceValue}>
-                            {formatCurrency(algorandNetworkUsdValue)}
-                          </Text>
-                        </View>
-                      </View>
-                    )}
-                  </>
-                )}
-                </BlurredContainer>
-                <TouchableOpacity
+                      )}
+                    </>
+                  )}
+                </GlassCard>
+                <GlassCard
+                  variant="light"
                   onPress={handleQRScan}
                   style={styles.qrButtonTopRight}
-                  accessibilityRole="button"
-                  accessibilityLabel="Scan QR code"
-                  accessibilityHint="Opens the QR scanner to connect or import"
+                  borderRadius={theme.borderRadius.md}
+                  padding="none"
+                  borderGlow
+                  glowColor={theme.colors.primary}
                 >
-                  <Ionicons
-                    name="qr-code-outline"
-                    size={22}
-                    style={styles.qrButtonIcon}
-                  />
-                </TouchableOpacity>
-              </View>
+                  <View style={styles.qrButtonInner}>
+                    <Ionicons
+                      name="qr-code-outline"
+                      size={20}
+                      color={theme.colors.text}
+                    />
+                  </View>
+                </GlassCard>
+              </Animated.View>
 
             {false && (
               <View style={styles.addressContainer}>
@@ -1078,40 +1142,45 @@ export default function HomeScreen() {
               </View>
             )}
 
-            <BlurredContainer
-              style={styles.actionButtonsContainer}
-              borderRadius={theme.borderRadius.lg}
-              opacity={0.6}
-            >
-              <TouchableOpacity
-                style={styles.actionButton}
+            <Animated.View style={[styles.actionButtonsRow, actionsAnimatedStyle]}>
+              <GlassButton
+                variant="secondary"
+                size="md"
+                icon="send"
+                label="Send"
                 onPress={handleSend}
-              >
-                <Ionicons name="send" size={24} color="#007AFF" />
-                <Text style={[styles.actionButtonText, { color: theme.colors.text }]}>Send</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
                 style={styles.actionButton}
+                tint="#007AFF"
+                pill
+              />
+              <GlassButton
+                variant="secondary"
+                size="md"
+                icon="download"
+                label="Receive"
                 onPress={handleReceive}
-              >
-                <Ionicons name="download" size={24} color="#007AFF" />
-                <Text style={[styles.actionButtonText, { color: theme.colors.text }]}>Receive</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
                 style={styles.actionButton}
+                tint="#30D158"
+                pill
+              />
+              <GlassButton
+                variant="secondary"
+                size="md"
+                icon="time"
+                label="History"
                 onPress={handleHistory}
-              >
-                <Ionicons name="time" size={24} color="#007AFF" />
-                <Text style={[styles.actionButtonText, { color: theme.colors.text }]}>History</Text>
-              </TouchableOpacity>
-            </BlurredContainer>
+                style={styles.actionButton}
+                tint="#AF52DE"
+                pill
+              />
+            </Animated.View>
 
-            <BlurredContainer
+            <Animated.View style={assetsAnimatedStyle}>
+              <GlassCard
+              variant="medium"
               style={styles.assetsContainer}
-              borderRadius={theme.borderRadius.lg}
-              opacity={0.6}
+              borderRadius={theme.borderRadius.xl}
+              padding="md"
             >
               <View style={styles.assetsHeader}>
                 <View style={styles.assetsHeaderLeft}>
@@ -1121,26 +1190,26 @@ export default function HomeScreen() {
                   {isMultiNetworkView && <NetworkFilterToggle />}
                 </View>
                 <View style={styles.assetsHeaderRight}>
-                  <TouchableOpacity
+                  <Pressable
                     onPress={handleOpenAssetFilter}
-                    style={styles.addAssetButton}
+                    style={styles.headerIconButton}
                   >
                     <Ionicons
                       name="filter-outline"
-                      size={24}
-                      color="#007AFF"
+                      size={22}
+                      color={theme.colors.primary}
                     />
-                  </TouchableOpacity>
-                  <TouchableOpacity
+                  </Pressable>
+                  <Pressable
                     onPress={handleAddAsset}
-                    style={styles.addAssetButton}
+                    style={styles.headerIconButton}
                   >
                     <Ionicons
                       name="add-circle-outline"
-                      size={24}
-                      color="#007AFF"
+                      size={22}
+                      color={theme.colors.primary}
                     />
-                  </TouchableOpacity>
+                  </Pressable>
                 </View>
               </View>
 
@@ -1162,14 +1231,15 @@ export default function HomeScreen() {
                 // Single-network view (existing behavior)
                 isBalanceLoading && !accountBalance ? (
                   <View style={styles.loadingAssets}>
-                    <ActivityIndicator size="small" color="#007AFF" />
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
                     <Text style={styles.loadingText}>Loading assets...</Text>
                   </View>
                 ) : (
                   singleNetworkAssetList
                 )
               )}
-            </BlurredContainer>
+              </GlassCard>
+            </Animated.View>
           </>
         )}
       </ScrollView>
@@ -1265,9 +1335,9 @@ const createStyles = (theme: Theme) =>
     },
     content: {
       flexGrow: 1,
-      paddingHorizontal: theme.spacing.sm,
-      paddingTop: theme.spacing.sm,
-      paddingBottom: theme.spacing.xxl,
+      paddingHorizontal: theme.spacing.md,
+      paddingTop: theme.spacing.md,
+      paddingBottom: theme.spacing.xxl + 20,
     },
     loadingContainer: {
       flex: 1,
@@ -1275,7 +1345,7 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
     },
     loadingText: {
-      fontSize: 14,
+      fontSize: theme.typography.bodySmall.fontSize,
       color: theme.colors.textMuted,
       marginLeft: theme.spacing.sm,
     },
@@ -1283,7 +1353,7 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      paddingVertical: theme.spacing.md,
+      paddingVertical: theme.spacing.lg,
     },
     loadingAssets: {
       flexDirection: 'row',
@@ -1291,105 +1361,113 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       paddingVertical: theme.spacing.xl,
     },
+    // Balance Section
     balanceContainerWrapper: {
       position: 'relative',
-      marginBottom: theme.spacing.sm,
+      marginBottom: theme.spacing.md,
     },
     balanceContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.lg,
       alignItems: 'center',
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      ...theme.shadows.md,
+      width: '100%',
     },
     balanceHeader: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      marginBottom: 5,
+      width: '100%',
+      marginBottom: theme.spacing.sm,
     },
     balanceHeaderLeft: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: theme.spacing.sm,
+      gap: theme.spacing.xs,
     },
-    qrButtonTopRight: {
-      position: 'absolute',
-      top: theme.spacing.md,
-      right: theme.spacing.md,
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: theme.colors.primary,
-      paddingVertical: theme.spacing.xs,
-      paddingHorizontal: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      zIndex: 10,
-      ...theme.shadows.md,
-    },
-    qrButtonIcon: {
-      color: theme.colors.buttonText,
-    },
-    qrButtonText: {
-      color: theme.colors.buttonText,
-      fontSize: 14,
-      fontWeight: '600',
-    },
-    infoButton: {
-      padding: theme.spacing.xs,
+    infoButtonInline: {
+      padding: 4,
+      marginLeft: 2,
     },
     balanceLabel: {
-      fontSize: 16,
+      fontSize: theme.typography.bodySmall.fontSize,
+      fontWeight: '500',
       color: theme.colors.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
     },
     balance: {
-      fontSize: 32,
-      fontWeight: 'bold',
+      fontSize: theme.typography.display.fontSize,
+      fontWeight: theme.typography.display.fontWeight,
+      letterSpacing: theme.typography.display.letterSpacing,
       color: theme.colors.text,
-      marginBottom: 5,
+      marginVertical: theme.spacing.xs,
     },
     networkBalanceBreakdown: {
       flexDirection: 'row',
-      justifyContent: 'space-between',
+      justifyContent: 'center',
+      alignItems: 'center',
       width: '100%',
-      marginTop: theme.spacing.xs,
-      paddingTop: theme.spacing.xs,
+      marginTop: theme.spacing.md,
+      paddingTop: theme.spacing.md,
       borderTopWidth: 1,
-      borderTopColor: theme.colors.border,
+      borderTopColor: theme.colors.glassBorder,
     },
     networkBalanceItem: {
       flex: 1,
       alignItems: 'center',
+      paddingHorizontal: theme.spacing.md,
+    },
+    networkBalanceDivider: {
+      width: 1,
+      height: 32,
+      backgroundColor: theme.colors.glassBorder,
     },
     networkBalanceLabel: {
-      fontSize: 12,
+      fontSize: theme.typography.caption.fontSize,
+      fontWeight: '500',
       color: theme.colors.textSecondary,
-      marginBottom: 2,
+      marginBottom: 4,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
     },
     networkBalanceValue: {
-      fontSize: 14,
+      fontSize: theme.typography.body.fontSize,
       fontWeight: '600',
       color: theme.colors.text,
     },
+    // QR Button
+    qrButtonTopRight: {
+      position: 'absolute',
+      top: theme.spacing.md,
+      right: theme.spacing.md,
+      zIndex: 10,
+    },
+    qrButtonInner: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    // Legacy styles kept for compatibility
     balanceUsd: {
-      fontSize: 16,
+      fontSize: theme.typography.body.fontSize,
       color: theme.colors.textMuted,
     },
     minBalance: {
-      fontSize: 12,
+      fontSize: theme.typography.caption.fontSize,
       color: theme.colors.textMuted,
-      marginTop: 5,
+      marginTop: theme.spacing.xs,
     },
     viewModeContainer: {
-      marginBottom: theme.spacing.sm,
+      marginBottom: theme.spacing.md,
       alignItems: 'center',
     },
+    // Address Section (hidden by default)
     addressContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
+      backgroundColor: theme.colors.glassBackground,
+      borderRadius: theme.borderRadius.xl,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.md,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     addressHeader: {
       flexDirection: 'row',
@@ -1400,75 +1478,61 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     addressLabel: {
-      fontSize: 16,
+      fontSize: theme.typography.body.fontSize,
       fontWeight: '600',
       color: theme.colors.text,
-      marginBottom: 10,
+      marginBottom: theme.spacing.sm,
     },
     envoiName: {
-      fontSize: 20,
+      fontSize: theme.typography.heading3.fontSize,
       fontWeight: '600',
       color: theme.colors.primary,
-      marginBottom: 5,
+      marginBottom: theme.spacing.xs,
     },
     envoiLoading: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: 5,
+      marginBottom: theme.spacing.xs,
     },
     address: {
-      fontSize: 18,
+      fontSize: theme.typography.heading3.fontSize,
       fontWeight: '500',
       color: theme.colors.primary,
-      marginBottom: 5,
+      marginBottom: theme.spacing.xs,
     },
     fullAddress: {
-      fontSize: 12,
+      fontSize: theme.typography.caption.fontSize,
       color: theme.colors.textMuted,
       fontFamily: 'monospace',
     },
-    actionButtonsContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      marginBottom: theme.spacing.sm,
+    // Action Buttons Row
+    actionButtonsRow: {
       flexDirection: 'row',
-      justifyContent: 'space-around',
-      alignItems: 'center',
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      ...theme.shadows.sm,
+      justifyContent: 'space-between',
+      marginBottom: theme.spacing.md,
+      gap: theme.spacing.sm,
     },
     actionButton: {
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 12,
-      paddingHorizontal: theme.spacing.md,
-      minWidth: 80,
+      flex: 1,
     },
     actionButtonText: {
-      fontSize: 14,
+      fontSize: theme.typography.bodySmall.fontSize,
       fontWeight: '600',
-      color: theme.colors.primary,
+      color: theme.colors.text,
       marginTop: 4,
     },
+    // Assets Section
     assetsContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
-      padding: theme.spacing.md,
-      marginBottom: theme.spacing.sm,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      ...theme.shadows.sm,
+      marginBottom: theme.spacing.md,
     },
     assetsHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: 15,
+      marginBottom: theme.spacing.md,
     },
     assetsTitle: {
-      fontSize: 18,
-      fontWeight: '600',
+      fontSize: theme.typography.heading3.fontSize,
+      fontWeight: theme.typography.heading3.fontWeight,
       color: theme.colors.text,
     },
     assetsHeaderLeft: {
@@ -1481,8 +1545,18 @@ const createStyles = (theme: Theme) =>
     assetsHeaderRight: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: theme.spacing.sm,
+      gap: theme.spacing.xs,
       marginLeft: 'auto',
+    },
+    headerIconButton: {
+      width: 36,
+      height: 36,
+      borderRadius: theme.borderRadius.md,
+      backgroundColor: theme.colors.glassBackground,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     addAssetButton: {
       padding: theme.spacing.xs,

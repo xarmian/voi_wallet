@@ -11,7 +11,7 @@ export default {
   "expo": {
     "name": IS_DEV ? "Voi Wallet (Dev)" : "Voi Wallet",
     "slug": "voi-wallet",
-    "version": "0.1.6",
+    "version": "0.1.7",
     "orientation": "portrait",
     "icon": "./assets/voi_wallet_logo.png",
     "userInterfaceStyle": "automatic",
@@ -34,7 +34,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "10",
+      "buildNumber": "12",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -68,7 +68,7 @@ export default {
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "versionCode": 11,
+      "versionCode": 12,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",

@@ -92,6 +92,7 @@ export type RootStackParamList = {
     chainId?: string;
     outputTokenId?: number;
     outputTokenSymbol?: string;
+    swapProvider?: 'deflex' | 'snowball';
   };
   QRScanner: undefined;
   QRAccountImport: undefined;
@@ -175,6 +176,7 @@ export type WalletStackParamList = {
     chainId?: string;
     outputTokenId?: number;
     outputTokenSymbol?: string;
+    swapProvider?: 'deflex' | 'snowball';
   };
   TransactionResult: {
     transactionId?: string;
