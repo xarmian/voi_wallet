@@ -4,7 +4,7 @@ import {
   Text,
   StyleSheet,
   RefreshControl,
-  FlatList,
+  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   ListRenderItem,
@@ -25,6 +25,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { serializeTransactionForNavigation } from '@/utils/navigationParams';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 
 export default function TransactionHistoryScreen() {
@@ -207,16 +208,19 @@ export default function TransactionHistoryScreen() {
 
   if (!activeAccount) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>No active account</Text>
-        </View>
-      </SafeAreaView>
+      <NFTBackground>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>No active account</Text>
+          </View>
+        </SafeAreaView>
+      </NFTBackground>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <BlurredContainer
           style={styles.header}
           borderRadius={0}
@@ -232,44 +236,46 @@ export default function TransactionHistoryScreen() {
           <View style={styles.headerSpacer} />
         </BlurredContainer>
 
-      {accountState.isTransactionsLoading && allTransactions.length === 0 ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator
-            size="large"
-            color={styles.activityIndicator.color}
-          />
-          <Text style={styles.loadingText}>Loading transactions...</Text>
-        </View>
-      ) : allTransactions.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Ionicons
-            name="receipt-outline"
-            size={64}
-            color={styles.emptyIcon.color}
-          />
-          <Text style={styles.emptyTitle}>No Transactions</Text>
-          <Text style={styles.emptySubtitle}>
-            Your transaction history will appear here when you start using your
-            wallet.
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={allTransactions}
-          renderItem={renderTransaction}
-          keyExtractor={keyExtractor}
-          contentContainerStyle={styles.listContainer}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
-          onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={renderFooter}
-          onScrollBeginDrag={() => updateActivity()}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
-    </SafeAreaView>
+        {accountState.isTransactionsLoading && allTransactions.length === 0 ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator
+              size="large"
+              color={styles.activityIndicator.color}
+            />
+            <Text style={styles.loadingText}>Loading transactions...</Text>
+          </View>
+        ) : allTransactions.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons
+              name="receipt-outline"
+              size={64}
+              color={styles.emptyIcon.color}
+            />
+            <Text style={styles.emptyTitle}>No Transactions</Text>
+            <Text style={styles.emptySubtitle}>
+              Your transaction history will appear here when you start using your
+              wallet.
+            </Text>
+          </View>
+        ) : (
+          <ScrollView
+            contentContainerStyle={styles.listContainer}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
+            onScrollBeginDrag={() => updateActivity()}
+            showsVerticalScrollIndicator={false}
+          >
+            {allTransactions.map((item, index) => (
+              <View key={`${item.id}-${index}`}>
+                {renderTransaction({ item, index, separators: {} as any })}
+              </View>
+            ))}
+            {renderFooter()}
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -277,7 +283,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     header: {
       flexDirection: 'row',

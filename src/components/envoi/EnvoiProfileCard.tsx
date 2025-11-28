@@ -15,6 +15,8 @@ import { EnvoiNameInfo } from '@/services/envoi';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import AccountAvatar from '@/components/account/AccountAvatar';
+import { GlassCard } from '@/components/common/GlassCard';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface EnvoiProfileCardProps {
   address: string;
@@ -206,6 +208,7 @@ export default function EnvoiProfileCard({
 }: EnvoiProfileCardProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
+  const { theme } = useTheme();
   const displayName = envoiProfile?.name || name;
   const bio = envoiProfile?.bio;
   const socialLinks = envoiProfile?.socialLinks;
@@ -281,7 +284,10 @@ export default function EnvoiProfileCard({
   };
 
   return (
-    <View style={styles.container}>
+    <GlassCard
+      style={styles.container}
+      variant="medium"
+    >
       {title && <Text style={styles.title}>{title}</Text>}
 
       <View style={styles.profileContainer}>
@@ -318,39 +324,35 @@ export default function EnvoiProfileCard({
       {renderBio()}
 
       {renderSocialLinks()}
-    </View>
+    </GlassCard>
   );
 }
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
-      marginTop: theme.spacing.lg,
-      marginBottom: theme.spacing.lg,
-      ...theme.shadows.md,
+      marginBottom: theme.spacing.sm,
     },
     title: {
       fontSize: 16,
       fontWeight: '600',
       color: theme.colors.textSecondary,
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     profileContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     avatarContainer: {
-      marginRight: theme.spacing.md,
+      marginRight: theme.spacing.sm,
     },
     avatar: {
       width: 64,
       height: 64,
       borderRadius: 32,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.colors.glassBackground,
     },
     profileInfo: {
       flex: 1,
@@ -383,10 +385,10 @@ const createStyles = (theme: Theme) =>
       gap: theme.spacing.xs,
     },
     socialLinksContainer: {
-      marginTop: theme.spacing.lg,
-      paddingTop: theme.spacing.md,
+      marginTop: theme.spacing.sm,
+      paddingTop: theme.spacing.sm,
       borderTopWidth: 1,
-      borderTopColor: theme.colors.border,
+      borderTopColor: theme.colors.glassBorder,
     },
     socialLinksTitle: {
       fontSize: 14,
@@ -405,13 +407,13 @@ const createStyles = (theme: Theme) =>
       borderWidth: 1.5,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: theme.colors.card,
+      backgroundColor: theme.colors.glassBackground,
     },
     bioContainer: {
-      marginTop: theme.spacing.md,
-      paddingTop: theme.spacing.md,
+      marginTop: theme.spacing.sm,
+      paddingTop: theme.spacing.sm,
       borderTopWidth: 1,
-      borderTopColor: theme.colors.border,
+      borderTopColor: theme.colors.glassBorder,
     },
     bioText: {
       fontSize: 14,
@@ -422,6 +424,6 @@ const createStyles = (theme: Theme) =>
       width: 64,
       height: 64,
       borderRadius: 32,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.colors.glassBackground,
     },
   });

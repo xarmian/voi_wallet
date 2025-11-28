@@ -24,6 +24,8 @@ import { formatCurrency } from '@/utils/formatting';
 import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { GlassCard } from '@/components/common/GlassCard';
+import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { GlassButton } from '@/components/common/GlassButton';
 import UniversalHeader from '@/components/common/UniversalHeader';
@@ -78,7 +80,8 @@ export default function MultiNetworkAssetScreen() {
 
   if (!mappedAsset) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <NFTBackground>
+        <SafeAreaView style={styles.container} edges={['top']}>
           <UniversalHeader
             title="Asset Not Found"
             showBackButton
@@ -91,7 +94,8 @@ export default function MultiNetworkAssetScreen() {
               This asset could not be found in your balance.
             </Text>
           </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </NFTBackground>
     );
   }
 
@@ -227,7 +231,8 @@ export default function MultiNetworkAssetScreen() {
   }, [mappedAsset]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title={assetName}
           subtitle={networkSubtitle}
@@ -245,10 +250,9 @@ export default function MultiNetworkAssetScreen() {
         }
       >
         {/* Combined Balance Card */}
-        <BlurredContainer
+        <GlassCard
           style={styles.balanceContainer}
-          borderRadius={theme.borderRadius.lg}
-          opacity={0.7}
+          variant="medium"
         >
           <View style={styles.assetHeader}>
             {renderAssetImage()}
@@ -278,7 +282,7 @@ export default function MultiNetworkAssetScreen() {
             {formattedBalance} {mappedAsset.symbol || assetName}
           </Text>
           <Text style={styles.balanceUsd}>{calculateTotalUsdValue} USD</Text>
-        </BlurredContainer>
+        </GlassCard>
 
         {/* Per-Network Breakdown */}
         <BlurredContainer
@@ -418,7 +422,8 @@ export default function MultiNetworkAssetScreen() {
           </BlurredContainer>
         )}
       </ScrollView>
-    </SafeAreaView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -426,48 +431,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
-    },
-    backButton: {
-      padding: theme.spacing.xs,
-    },
-    titleContainer: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 4,
-    },
-    title: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    headerNetworkBadges: {
-      flexDirection: 'row',
-      gap: 4,
-      flexWrap: 'wrap',
-      justifyContent: 'center',
-    },
-    headerNetworkPill: {
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 8,
-    },
-    headerNetworkText: {
-      fontSize: 9,
-      fontWeight: '600',
-      color: '#FFFFFF',
-      textTransform: 'uppercase',
-    },
-    placeholder: {
-      width: 34,
     },
     scrollView: {
       flex: 1,
@@ -478,7 +441,7 @@ const createStyles = (theme: Theme) =>
     },
     balanceContainer: {
       padding: theme.spacing.xl,
-      marginBottom: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
       alignItems: 'center',
     },
     assetHeader: {

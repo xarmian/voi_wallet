@@ -5,7 +5,7 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  FlatList,
+  ScrollView,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -25,6 +25,11 @@ import { useFriendsStore } from '@/store/friendsStore';
 import { formatAddress } from '@/utils/address';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { useTheme } from '@/contexts/ThemeContext';
+import { GlassButton } from '@/components/common/GlassButton';
 
 interface SearchResultWithStatus extends EnvoiSearchResult {
   isAlreadyFriend: boolean;
@@ -32,6 +37,7 @@ interface SearchResultWithStatus extends EnvoiSearchResult {
 
 export default function AddFriendScreen() {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
   const navigation =
     useNavigation<NativeStackNavigationProp<FriendsStackParamList, 'AddFriend'>>();
   const route = useRoute<RouteProp<FriendsStackParamList, 'AddFriend'>>();
@@ -145,7 +151,7 @@ export default function AddFriendScreen() {
     }
   }, [addFriend, navigation]);
 
-  // Update search term if navigation provides an initial query (e.g., from Friends screen)
+  // Update search term if navigation provides an initial query
   useEffect(() => {
     const nextQuery = route.params?.initialQuery;
     if (nextQuery && nextQuery !== searchQuery) {
@@ -153,8 +159,12 @@ export default function AddFriendScreen() {
     }
   }, [route.params?.initialQuery, searchQuery]);
 
-  const renderSearchResult = useCallback(({ item }: { item: SearchResultWithStatus }) => (
-    <View style={styles.resultItem}>
+  const renderSearchResult = (item: SearchResultWithStatus) => (
+    <BlurredContainer
+      key={item.name || item.address}
+      style={styles.resultItem}
+      borderRadius={theme.borderRadius.lg}
+    >
       <View style={styles.resultContent}>
         {item.avatar ? (
           <Image source={{ uri: item.avatar }} style={styles.avatar} />
@@ -176,21 +186,20 @@ export default function AddFriendScreen() {
 
       {item.isAlreadyFriend ? (
         <View style={styles.alreadyFriendBadge}>
-          <Ionicons name="checkmark-circle" size={20} color={styles.alreadyFriendIcon.color} />
+          <Ionicons name="checkmark-circle" size={20} color={theme.colors.success} />
           <Text style={styles.alreadyFriendText}>Friend</Text>
         </View>
       ) : (
-        <TouchableOpacity
-          style={styles.addButton}
+        <GlassButton
+          variant="primary"
+          size="sm"
+          label="Add"
+          icon="person-add"
           onPress={() => handleAddFriend(item)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="person-add" size={20} color="#FFFFFF" />
-          <Text style={styles.addButtonText}>Add</Text>
-        </TouchableOpacity>
+        />
       )}
-    </View>
-  ), [styles, handleAddFriend]);
+    </BlurredContainer>
+  );
 
   const renderEmptyState = () => {
     if (isLoading) {
@@ -200,7 +209,7 @@ export default function AddFriendScreen() {
     if (!hasSearched) {
       return (
         <View style={styles.emptyState}>
-          <Ionicons name="search" size={64} color={styles.emptyIcon.color} />
+          <Ionicons name="search" size={64} color={theme.colors.textMuted} />
           <Text style={styles.emptyTitle}>Search for Friends</Text>
           <Text style={styles.emptyText}>
             Enter an Envoi name to find users and add them as friends
@@ -212,7 +221,7 @@ export default function AddFriendScreen() {
     if (searchResults.length === 0) {
       return (
         <View style={styles.emptyState}>
-          <Ionicons name="alert-circle-outline" size={64} color={styles.emptyIcon.color} />
+          <Ionicons name="alert-circle-outline" size={64} color={theme.colors.textMuted} />
           <Text style={styles.emptyTitle}>No Results Found</Text>
           <Text style={styles.emptyText}>
             No Envoi names match your search. Make sure the name is spelled correctly.
@@ -225,68 +234,72 @@ export default function AddFriendScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView
-        style={styles.keyboardAvoid}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Add Friend</Text>
-          <View style={styles.headerSpacer} />
-        </View>
-
-        {/* Search Input */}
-        <View style={styles.searchContainer}>
-          <View style={styles.searchInputContainer}>
-            <Ionicons name="search" size={20} color={styles.searchIcon.color} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Enter Envoi name"
-              placeholderTextColor={styles.searchPlaceholder.color}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity
-                onPress={() => {
-                  setSearchQuery('');
-                  setSearchResults([]);
-                  setHasSearched(false);
-                }}
-              >
-                <Ionicons name="close-circle" size={20} color={styles.searchIcon.color} />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-
-        {/* Results */}
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={styles.loader.color} />
-            <Text style={styles.loadingText}>Searching...</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={searchResults}
-            renderItem={renderSearchResult}
-            keyExtractor={(item) => item.name || item.address}
-            contentContainerStyle={styles.resultsList}
-            ListEmptyComponent={renderEmptyState}
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <KeyboardAvoidingView
+          style={styles.keyboardAvoid}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <UniversalHeader
+            title="Add Friend"
+            showBackButton
+            onBackPress={() => navigation.goBack()}
+            showAccountSelector={false}
+            onAccountSelectorPress={() => {}}
           />
-        )}
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+
+          {/* Search Input */}
+          <BlurredContainer
+            style={styles.searchContainer}
+            borderRadius={0}
+          >
+            <View style={styles.searchInputContainer}>
+              <Ionicons name="search" size={20} color={theme.colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Enter Envoi name"
+                placeholderTextColor={theme.colors.textMuted}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setSearchQuery('');
+                    setSearchResults([]);
+                    setHasSearched(false);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </BlurredContainer>
+
+          {/* Results */}
+          {isLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <Text style={styles.loadingText}>Searching...</Text>
+            </View>
+          ) : (
+            <ScrollView
+              contentContainerStyle={styles.resultsList}
+              keyboardShouldPersistTaps="handled"
+            >
+              {searchResults.length === 0 ? (
+                renderEmptyState()
+              ) : (
+                searchResults.map(renderSearchResult)
+              )}
+            </ScrollView>
+          )}
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -294,53 +307,21 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     keyboardAvoid: {
       flex: 1,
     },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.surface,
-    },
-    backButton: {
-      padding: theme.spacing.xs,
-      borderRadius: theme.borderRadius.sm,
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-      flex: 1,
-      textAlign: 'center',
-    },
-    headerSpacer: {
-      width: 32,
-    },
-    headerText: {
-      color: theme.colors.text,
-    },
     searchContainer: {
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: theme.spacing.sm,
     },
     searchInputContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.colors.background,
-      borderRadius: theme.borderRadius.md,
-      paddingHorizontal: theme.spacing.md,
+      backgroundColor: theme.colors.glassBackground,
+      borderRadius: theme.borderRadius.sm,
+      paddingHorizontal: theme.spacing.sm,
       gap: theme.spacing.sm,
-    },
-    searchIcon: {
-      color: theme.colors.textMuted,
     },
     searchInput: {
       flex: 1,
@@ -348,17 +329,11 @@ const createStyles = (theme: Theme) =>
       fontSize: 16,
       color: theme.colors.text,
     },
-    searchPlaceholder: {
-      color: theme.colors.textMuted,
-    },
     loadingContainer: {
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
-      gap: theme.spacing.md,
-    },
-    loader: {
-      color: theme.colors.primary,
+      gap: theme.spacing.sm,
     },
     loadingText: {
       fontSize: 16,
@@ -366,30 +341,26 @@ const createStyles = (theme: Theme) =>
     },
     resultsList: {
       flexGrow: 1,
-      paddingVertical: theme.spacing.sm,
+      padding: theme.spacing.sm,
     },
     resultItem: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.card,
-      marginHorizontal: theme.spacing.md,
-      marginVertical: theme.spacing.xs,
-      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.sm,
+      marginBottom: theme.spacing.sm,
     },
     resultContent: {
       flexDirection: 'row',
       alignItems: 'center',
       flex: 1,
-      gap: theme.spacing.md,
+      gap: theme.spacing.sm,
     },
     avatar: {
       width: 48,
       height: 48,
       borderRadius: 24,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.colors.glassBackground,
     },
     resultInfo: {
       flex: 1,
@@ -405,29 +376,12 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textMuted,
       fontFamily: 'monospace',
     },
-    addButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: theme.colors.primary,
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      gap: theme.spacing.xs,
-    },
-    addButtonText: {
-      fontSize: 14,
-      fontWeight: '600',
-      color: '#FFFFFF',
-    },
     alreadyFriendBadge: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: theme.spacing.xs,
-      paddingHorizontal: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
       paddingVertical: theme.spacing.sm,
-    },
-    alreadyFriendIcon: {
-      color: theme.colors.success,
     },
     alreadyFriendText: {
       fontSize: 14,
@@ -441,14 +395,11 @@ const createStyles = (theme: Theme) =>
       paddingHorizontal: theme.spacing.xl,
       paddingVertical: theme.spacing.xxl,
     },
-    emptyIcon: {
-      color: theme.colors.textMuted,
-      marginBottom: theme.spacing.lg,
-    },
     emptyTitle: {
       fontSize: 20,
       fontWeight: '600',
       color: theme.colors.text,
+      marginTop: theme.spacing.lg,
       marginBottom: theme.spacing.sm,
       textAlign: 'center',
     },

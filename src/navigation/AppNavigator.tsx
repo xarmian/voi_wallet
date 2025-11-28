@@ -445,15 +445,19 @@ function FriendsStackNavigator() {
 
 function MainTabNavigator() {
   const { updateActivity } = useAuth();
-  const { theme } = useTheme();
+  const { theme, nftBackgroundEnabled } = useTheme();
   const styles = useThemedStyles(createStyles);
 
   // Extract theme values to stable variables to avoid context issues in callbacks
   const primaryColor = theme.colors.primary;
   const tabIconActive = theme.colors.tabIconActive;
   const tabIconInactive = theme.colors.tabIconInactive;
-  const tabBackground = theme.colors.tabBackground;
-  const borderColor = theme.colors.border;
+  // Use solid background when no NFT background, semi-transparent when NFT is enabled
+  const hasNFTBackground = !!theme.backgroundImageUrl && nftBackgroundEnabled;
+  const tabBackground = hasNFTBackground
+    ? theme.colors.tabBackground
+    : theme.colors.background;
+  const borderColor = hasNFTBackground ? theme.colors.border : 'transparent';
 
   return (
     <AuthGuard>

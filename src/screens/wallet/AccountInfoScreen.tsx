@@ -33,6 +33,10 @@ import { MimirApiService } from '@/services/mimir';
 import { NetworkId } from '@/types/network';
 import { MappedAsset } from '@/services/token-mapping/types';
 import EnvoiService from '@/services/envoi';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { useTheme } from '@/contexts/ThemeContext';
 
 type AccountInfoScreenRouteProp = RouteProp<WalletStackParamList, 'AccountInfo'>;
 
@@ -67,6 +71,7 @@ export default function AccountInfoScreen() {
   const route = useRoute<AccountInfoScreenRouteProp>();
   const navigation = useNavigation();
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
 
   const activeAccount = useActiveAccount();
 
@@ -467,239 +472,242 @@ export default function AccountInfoScreen() {
 
   if (!displayAddress) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-            <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Account Information</Text>
-          <View style={styles.headerSpacer} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.errorText}>No account found</Text>
-        </View>
-      </SafeAreaView>
+      <NFTBackground>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <UniversalHeader
+            title="Account Information"
+            showBackButton
+            onBackPress={() => navigation.goBack()}
+            showAccountSelector={false}
+            onAccountSelectorPress={() => {}}
+          />
+          <View style={styles.loadingContainer}>
+            <Text style={styles.errorText}>No account found</Text>
+          </View>
+        </SafeAreaView>
+      </NFTBackground>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>
-          {isOwnAccount ? 'Account Information' : 'User Profile'}
-        </Text>
-        {isOwnAccount ? (
-          <View style={styles.headerSpacer} />
-        ) : (
-          <TouchableOpacity
-            style={styles.searchButton}
-            onPress={navigateToMyAccount}
-          >
-            <Ionicons name="person" size={24} color={styles.headerText.color} />
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-      >
-        {/* Account Profile */}
-        <EnvoiProfileCard
-          address={displayAddress}
-          name={displayEnvoiInfo?.name}
-          envoiProfile={displayEnvoiInfo}
-          isLoading={displayEnvoiLoading}
-          title={isOwnAccount ? "Account Information" : "User Profile"}
-          showVerifiedBadge={false}
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title={isOwnAccount ? 'Account Information' : 'User Profile'}
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+          rightAction={
+            !isOwnAccount ? (
+              <TouchableOpacity
+                style={styles.searchButton}
+                onPress={navigateToMyAccount}
+              >
+                <Ionicons name="person" size={24} color={theme.colors.primary} />
+              </TouchableOpacity>
+            ) : undefined
+          }
         />
 
-        {/* Account Stats */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Total Portfolio</Text>
-            {isMultiNetworkBalanceLoading ? (
-              <ActivityIndicator size="small" color="#007AFF" />
-            ) : (
-              <Text style={styles.statValue}>{totalValue}</Text>
-            )}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
+          }
+        >
+          {/* Account Profile */}
+          <EnvoiProfileCard
+            address={displayAddress}
+            name={displayEnvoiInfo?.name}
+            envoiProfile={displayEnvoiInfo}
+            isLoading={displayEnvoiLoading}
+            title={isOwnAccount ? "Account Information" : "User Profile"}
+            showVerifiedBadge={false}
+          />
+
+          {/* Account Stats */}
+          <View style={styles.statsContainer}>
+            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.statLabel}>Total Portfolio</Text>
+              {isMultiNetworkBalanceLoading ? (
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+              ) : (
+                <Text style={styles.statValue}>{totalValue}</Text>
+              )}
+            </BlurredContainer>
+
+            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.statLabel}>Total Assets</Text>
+              <Text style={styles.statValue}>{assetCount}</Text>
+            </BlurredContainer>
+
+            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.statLabel}>Networks Active</Text>
+              <Text style={styles.statValue}>{networksActive}</Text>
+            </BlurredContainer>
+
+            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.statLabel}>Account Age</Text>
+              <Text style={styles.statValue}>{accountAge}</Text>
+            </BlurredContainer>
           </View>
 
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Total Assets</Text>
-            <Text style={styles.statValue}>{assetCount}</Text>
-          </View>
-
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Networks Active</Text>
-            <Text style={styles.statValue}>{networksActive}</Text>
-          </View>
-
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Account Age</Text>
-            <Text style={styles.statValue}>{accountAge}</Text>
-          </View>
-        </View>
-
-        {/* Network Breakdown */}
-        {networkStats.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Network Breakdown</Text>
-            {networkStats.map((network) => (
-              <View key={network.networkId} style={styles.networkRow}>
-                <View style={styles.networkHeader}>
-                  <View style={styles.networkBadge}>
-                    <Text style={styles.networkBadgeText}>{network.nativeSymbol}</Text>
+          {/* Network Breakdown */}
+          {networkStats.length > 0 && (
+            <BlurredContainer style={styles.card} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.cardTitle}>Network Breakdown</Text>
+              {networkStats.map((network) => (
+                <View key={network.networkId} style={styles.networkRow}>
+                  <View style={styles.networkHeader}>
+                    <View style={styles.networkBadge}>
+                      <Text style={styles.networkBadgeText}>{network.nativeSymbol}</Text>
+                    </View>
+                    <Text style={styles.networkName}>
+                      {network.networkId === NetworkId.VOI_MAINNET ? 'Voi Network' : 'Algorand Network'}
+                    </Text>
                   </View>
-                  <Text style={styles.networkName}>
-                    {network.networkId === NetworkId.VOI_MAINNET ? 'Voi Network' : 'Algorand Network'}
+                  <View style={styles.networkStats}>
+                    <View style={styles.networkStatItem}>
+                      <Text style={styles.networkStatLabel}>Balance</Text>
+                      <Text style={styles.networkStatValue}>
+                        {(Number(network.nativeBalance) / 1_000_000).toFixed(2)} {network.nativeSymbol}
+                      </Text>
+                    </View>
+                    <View style={styles.networkStatItem}>
+                      <Text style={styles.networkStatLabel}>Assets</Text>
+                      <Text style={styles.networkStatValue}>{network.assetCount}</Text>
+                    </View>
+                    <View style={styles.networkStatItem}>
+                      <Text style={styles.networkStatLabel}>Value</Text>
+                      <Text style={styles.networkStatValue}>{formatCurrency(network.usdValue)}</Text>
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </BlurredContainer>
+          )}
+
+          {/* Consensus Participation Status - Network Specific */}
+          {(voiAccountInfo || algoAccountInfo) && (
+            <BlurredContainer style={styles.card} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.cardTitle}>Consensus Participation</Text>
+
+              {/* Voi Network Participation */}
+              {voiAccountInfo && (
+                <View style={styles.networkParticipationSection}>
+                  <View style={styles.networkHeader}>
+                    <View style={styles.networkBadge}>
+                      <Text style={styles.networkBadgeText}>VOI</Text>
+                    </View>
+                    <Text style={styles.networkName}>Voi Network</Text>
+                  </View>
+                  <Text style={styles.consensusStatus}>
+                    Status: {getConsensusStatus(voiAccountInfo)}
                   </Text>
-                </View>
-                <View style={styles.networkStats}>
-                  <View style={styles.networkStatItem}>
-                    <Text style={styles.networkStatLabel}>Balance</Text>
-                    <Text style={styles.networkStatValue}>
-                      {(Number(network.nativeBalance) / 1_000_000).toFixed(2)} {network.nativeSymbol}
-                    </Text>
-                  </View>
-                  <View style={styles.networkStatItem}>
-                    <Text style={styles.networkStatLabel}>Assets</Text>
-                    <Text style={styles.networkStatValue}>{network.assetCount}</Text>
-                  </View>
-                  <View style={styles.networkStatItem}>
-                    <Text style={styles.networkStatLabel}>Value</Text>
-                    <Text style={styles.networkStatValue}>{formatCurrency(network.usdValue)}</Text>
-                  </View>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Consensus Participation Status - Network Specific */}
-        {(voiAccountInfo || algoAccountInfo) && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Consensus Participation</Text>
-
-            {/* Voi Network Participation */}
-            {voiAccountInfo && (
-              <View style={styles.networkParticipationSection}>
-                <View style={styles.networkHeader}>
-                  <View style={styles.networkBadge}>
-                    <Text style={styles.networkBadgeText}>VOI</Text>
-                  </View>
-                  <Text style={styles.networkName}>Voi Network</Text>
-                </View>
-                <Text style={styles.consensusStatus}>
-                  Status: {getConsensusStatus(voiAccountInfo)}
-                </Text>
-                {(() => {
-                  const keyExpiration = getKeyExpirationInfo(voiAccountInfo);
-                  return keyExpiration && (
-                    <View style={styles.participationDetails}>
-                      <Text style={styles.participationText}>
-                        Key Expires: Round {keyExpiration.round}
-                      </Text>
-                      <Text style={styles.participationText}>
-                        Expiration: {keyExpiration.date} at {keyExpiration.time}
-                      </Text>
-                      {keyExpiration.secondsUntilExpiration > 0 && (
+                  {(() => {
+                    const keyExpiration = getKeyExpirationInfo(voiAccountInfo);
+                    return keyExpiration && (
+                      <View style={styles.participationDetails}>
                         <Text style={styles.participationText}>
-                          Time Remaining: {Math.floor(keyExpiration.secondsUntilExpiration / 86400)} days, {Math.floor((keyExpiration.secondsUntilExpiration % 86400) / 3600)} hours
+                          Key Expires: Round {keyExpiration.round}
                         </Text>
-                      )}
-                    </View>
-                  );
-                })()}
-              </View>
-            )}
-
-            {/* Algorand Network Participation */}
-            {algoAccountInfo && (
-              <View style={styles.networkParticipationSection}>
-                <View style={styles.networkHeader}>
-                  <View style={styles.networkBadge}>
-                    <Text style={styles.networkBadgeText}>ALGO</Text>
-                  </View>
-                  <Text style={styles.networkName}>Algorand Network</Text>
-                </View>
-                <Text style={styles.consensusStatus}>
-                  Status: {getConsensusStatus(algoAccountInfo)}
-                </Text>
-                {(() => {
-                  const keyExpiration = getKeyExpirationInfo(algoAccountInfo);
-                  return keyExpiration && (
-                    <View style={styles.participationDetails}>
-                      <Text style={styles.participationText}>
-                        Key Expires: Round {keyExpiration.round}
-                      </Text>
-                      <Text style={styles.participationText}>
-                        Expiration: {keyExpiration.date} at {keyExpiration.time}
-                      </Text>
-                      {keyExpiration.secondsUntilExpiration > 0 && (
                         <Text style={styles.participationText}>
-                          Time Remaining: {Math.floor(keyExpiration.secondsUntilExpiration / 86400)} days, {Math.floor((keyExpiration.secondsUntilExpiration % 86400) / 3600)} hours
+                          Expiration: {keyExpiration.date} at {keyExpiration.time}
                         </Text>
-                      )}
+                        {keyExpiration.secondsUntilExpiration > 0 && (
+                          <Text style={styles.participationText}>
+                            Time Remaining: {Math.floor(keyExpiration.secondsUntilExpiration / 86400)} days, {Math.floor((keyExpiration.secondsUntilExpiration % 86400) / 3600)} hours
+                          </Text>
+                        )}
+                      </View>
+                    );
+                  })()}
+                </View>
+              )}
+
+              {/* Algorand Network Participation */}
+              {algoAccountInfo && (
+                <View style={styles.networkParticipationSection}>
+                  <View style={styles.networkHeader}>
+                    <View style={styles.networkBadge}>
+                      <Text style={styles.networkBadgeText}>ALGO</Text>
                     </View>
-                  );
-                })()}
-              </View>
-            )}
-          </View>
-        )}
-
-
-        {/* Asset Distribution Chart */}
-        {assetDistribution.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Asset Distribution</Text>
-            <View style={styles.pieChartWrapper}>
-              <PieChart
-                data={assetDistribution}
-                width={screenWidth - 60}
-                height={220}
-                chartConfig={{
-                  backgroundColor: 'transparent',
-                  backgroundGradientFrom: 'transparent',
-                  backgroundGradientTo: 'transparent',
-                  color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-                }}
-                accessor="population"
-                backgroundColor="transparent"
-                paddingLeft="15"
-                hasLegend={false}
-                absolute
-              />
-            </View>
-            <ScrollView
-              style={styles.legendScrollContainer}
-              nestedScrollEnabled={true}
-            >
-              <View style={styles.legendContainer}>
-                {assetDistribution.map((asset, index) => (
-                  <View key={index} style={styles.legendItem}>
-                    <View style={[styles.legendColor, { backgroundColor: asset.color }]} />
-                    <Text style={styles.legendText} numberOfLines={2}>
-                      {asset.name}
-                    </Text>
-                    <Text style={styles.legendValue}>
-                      {formatCurrency(asset.population)}
-                    </Text>
+                    <Text style={styles.networkName}>Algorand Network</Text>
                   </View>
-                ))}
+                  <Text style={styles.consensusStatus}>
+                    Status: {getConsensusStatus(algoAccountInfo)}
+                  </Text>
+                  {(() => {
+                    const keyExpiration = getKeyExpirationInfo(algoAccountInfo);
+                    return keyExpiration && (
+                      <View style={styles.participationDetails}>
+                        <Text style={styles.participationText}>
+                          Key Expires: Round {keyExpiration.round}
+                        </Text>
+                        <Text style={styles.participationText}>
+                          Expiration: {keyExpiration.date} at {keyExpiration.time}
+                        </Text>
+                        {keyExpiration.secondsUntilExpiration > 0 && (
+                          <Text style={styles.participationText}>
+                            Time Remaining: {Math.floor(keyExpiration.secondsUntilExpiration / 86400)} days, {Math.floor((keyExpiration.secondsUntilExpiration % 86400) / 3600)} hours
+                          </Text>
+                        )}
+                      </View>
+                    );
+                  })()}
+                </View>
+              )}
+            </BlurredContainer>
+          )}
+
+
+          {/* Asset Distribution Chart */}
+          {assetDistribution.length > 0 && (
+            <BlurredContainer style={styles.card} borderRadius={theme.borderRadius.lg}>
+              <Text style={styles.cardTitle}>Asset Distribution</Text>
+              <View style={styles.pieChartWrapper}>
+                <PieChart
+                  data={assetDistribution}
+                  width={screenWidth - 60}
+                  height={220}
+                  chartConfig={{
+                    backgroundColor: 'transparent',
+                    backgroundGradientFrom: 'transparent',
+                    backgroundGradientTo: 'transparent',
+                    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+                  }}
+                  accessor="population"
+                  backgroundColor="transparent"
+                  paddingLeft="15"
+                  hasLegend={false}
+                  absolute
+                />
               </View>
-            </ScrollView>
-          </View>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+              <ScrollView
+                style={styles.legendScrollContainer}
+                nestedScrollEnabled={true}
+              >
+                <View style={styles.legendContainer}>
+                  {assetDistribution.map((asset, index) => (
+                    <View key={index} style={styles.legendItem}>
+                      <View style={[styles.legendColor, { backgroundColor: asset.color }]} />
+                      <Text style={styles.legendText} numberOfLines={2}>
+                        {asset.name}
+                      </Text>
+                      <Text style={styles.legendValue}>
+                        {formatCurrency(asset.population)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            </BlurredContainer>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -707,13 +715,12 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollView: {
       flex: 1,
     },
     content: {
-      padding: theme.spacing.md,
+      padding: theme.spacing.sm,
       paddingBottom: theme.spacing.xxl,
     },
     loadingContainer: {
@@ -769,12 +776,10 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       flexWrap: 'wrap',
       justifyContent: 'space-between',
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     statCard: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.md,
-      padding: theme.spacing.md,
+      padding: theme.spacing.sm,
       width: '48%',
       marginBottom: theme.spacing.sm,
       alignItems: 'center',
@@ -792,16 +797,14 @@ const createStyles = (theme: Theme) =>
       textAlign: 'center',
     },
     card: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     cardTitle: {
       fontSize: 18,
       fontWeight: '600',
       color: theme.colors.text,
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     consensusStatus: {
       fontSize: 16,
@@ -935,10 +938,10 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
     },
     networkRow: {
-      marginBottom: theme.spacing.md,
-      paddingBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
+      paddingBottom: theme.spacing.sm,
       borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
+      borderBottomColor: theme.colors.glassBackground,
     },
     networkHeader: {
       flexDirection: 'row',
@@ -981,9 +984,9 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
     },
     networkParticipationSection: {
-      marginBottom: theme.spacing.md,
-      paddingBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
+      paddingBottom: theme.spacing.sm,
       borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
+      borderBottomColor: theme.colors.glassBackground,
     },
   });

@@ -26,6 +26,11 @@ import type { FriendsStackParamList } from '@/navigation/AppNavigator';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import type { EnvoiNameInfo } from '@/services/envoi/types';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { useTheme } from '@/contexts/ThemeContext';
+import { GlassButton } from '@/components/common/GlassButton';
 
 const formatRelativeTime = (timestamp?: number): string => {
   if (!timestamp) return 'No recent activity';
@@ -58,6 +63,7 @@ export type FriendProfileRouteProp = RouteProp<FriendsStackParamList, 'FriendPro
 
 export default function FriendProfileScreen() {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
   const navigation = useNavigation();
   const route = useRoute<FriendProfileRouteProp>();
   const networkConfig = useCurrentNetworkConfig();
@@ -219,136 +225,155 @@ export default function FriendProfileScreen() {
 
   if (!friend) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Friend Profile</Text>
-          <View style={styles.iconPlaceholder} />
-        </View>
+      <NFTBackground>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <UniversalHeader
+            title="Friend Profile"
+            showBackButton
+            onBackPress={() => navigation.goBack()}
+            showAccountSelector={false}
+            onAccountSelectorPress={() => {}}
+          />
 
-        <View style={styles.emptyState}>
-          <Ionicons name="alert-circle" size={48} color={styles.emptyIcon.color} />
-          <Text style={styles.emptyTitle}>Friend not found</Text>
-          <Text style={styles.emptySubtitle}>
-            This friend may have been removed or is unavailable.
-          </Text>
-        </View>
-      </SafeAreaView>
+          <View style={styles.emptyState}>
+            <Ionicons name="alert-circle" size={48} color={theme.colors.textMuted} />
+            <Text style={styles.emptyTitle}>Friend not found</Text>
+            <Text style={styles.emptySubtitle}>
+              This friend may have been removed or is unavailable.
+            </Text>
+          </View>
+        </SafeAreaView>
+      </NFTBackground>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.iconButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{friend.envoiName}</Text>
-        <TouchableOpacity
-          style={styles.iconButton}
-          onPress={handleToggleFavorite}
-        >
-          <Ionicons
-            name={friend.isFavorite ? 'star' : 'star-outline'}
-            size={24}
-            color={friend.isFavorite ? '#FFA500' : styles.headerText.color}
-          />
-        </TouchableOpacity>
-      </View>
-
-      <KeyboardAwareScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
-        }
-      >
-        <EnvoiProfileCard
-          address={friend.address}
-          envoiProfile={envoiProfile as any}
-          isLoading={false}
-          title="Friend Profile"
-          showVerifiedBadge={false}
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title={friend.envoiName}
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+          rightAction={
+            <TouchableOpacity
+              style={styles.favoriteButton}
+              onPress={handleToggleFavorite}
+            >
+              <Ionicons
+                name={friend.isFavorite ? 'star' : 'star-outline'}
+                size={24}
+                color={friend.isFavorite ? '#FFA500' : theme.colors.text}
+              />
+            </TouchableOpacity>
+          }
         />
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Quick Actions</Text>
-          <View style={styles.actionRow}>
-            <TouchableOpacity style={styles.actionButton} onPress={handleSend}>
-              <Ionicons name="paper-plane" size={20} color={styles.actionIcon.color} />
-              <Text style={styles.actionLabel}>Send</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={handleOpenExplorer}
-            >
-              <Ionicons name="open-outline" size={20} color={styles.actionIcon.color} />
-              <Text style={styles.actionLabel}>Explorer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={handleRemoveFriend}
-            >
-              <Ionicons name="trash" size={20} color={styles.dangerText.color} />
-              <Text style={[styles.actionLabel, styles.dangerText]}>Remove</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Account Details</Text>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Envoi Name</Text>
-            <Text style={styles.detailValue}>{friend.envoiName}</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.addressContainer}
-            onPress={handleCopyAddress}
-          >
-            <View style={styles.addressTextWrapper}>
-              <Text style={styles.addressLabel}>Primary Address</Text>
-              <Text style={styles.addressValue}>{friend.address}</Text>
-            </View>
-            <Ionicons name="copy" size={20} color={styles.actionIcon.color} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Activity</Text>
-          <View style={[styles.detailRow, { display: 'none' }]}>
-            <Text style={styles.detailLabel}>Last Interaction</Text>
-            <Text style={styles.detailValue}>{formatRelativeTime(friend.lastInteraction)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Added</Text>
-            <Text style={styles.detailValue}>{formatDate(friend.addedAt)}</Text>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Private Notes</Text>
-          <Text style={styles.helperText}>
-            Only you can see these notes. They stay on your device.
-          </Text>
-          <TextInput
-            style={styles.notesInput}
-            value={notesDraft}
-            onChangeText={setNotesDraft}
-            multiline
-            placeholder="Add details about this friend"
-            placeholderTextColor={styles.placeholder.color}
+        <KeyboardAwareScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+          }
+        >
+          <EnvoiProfileCard
+            address={friend.address}
+            envoiProfile={envoiProfile as any}
+            isLoading={false}
+            title="Friend Profile"
+            showVerifiedBadge={false}
           />
-        </View>
-      </KeyboardAwareScrollView>
-    </SafeAreaView>
+
+          {/* Quick Actions */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.cardTitle}>Quick Actions</Text>
+            <View style={styles.actionRow}>
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                label="Send"
+                icon="paper-plane"
+                onPress={handleSend}
+                style={styles.actionButton}
+              />
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                label="Explorer"
+                icon="open-outline"
+                onPress={handleOpenExplorer}
+                style={styles.actionButton}
+              />
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                label="Remove"
+                icon="trash"
+                onPress={handleRemoveFriend}
+                style={[styles.actionButton, styles.dangerButton]}
+              />
+            </View>
+          </BlurredContainer>
+
+          {/* Account Details */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.cardTitle}>Account Details</Text>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Envoi Name</Text>
+              <Text style={styles.detailValue}>{friend.envoiName}</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.addressContainer}
+              onPress={handleCopyAddress}
+            >
+              <View style={styles.addressTextWrapper}>
+                <Text style={styles.addressLabel}>Primary Address</Text>
+                <Text style={styles.addressValue}>{friend.address}</Text>
+              </View>
+              <Ionicons name="copy" size={20} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </BlurredContainer>
+
+          {/* Activity */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.cardTitle}>Activity</Text>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Added</Text>
+              <Text style={styles.detailValue}>{formatDate(friend.addedAt)}</Text>
+            </View>
+          </BlurredContainer>
+
+          {/* Private Notes */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.cardTitle}>Private Notes</Text>
+            <Text style={styles.helperText}>
+              Only you can see these notes. They stay on your device.
+            </Text>
+            <TextInput
+              style={styles.notesInput}
+              value={notesDraft}
+              onChangeText={setNotesDraft}
+              multiline
+              placeholder="Add details about this friend"
+              placeholderTextColor={theme.colors.textMuted}
+            />
+          </BlurredContainer>
+        </KeyboardAwareScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -356,7 +381,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollView: {
       flex: 1,
@@ -365,36 +389,12 @@ const createStyles = (theme: Theme) =>
       padding: theme.spacing.sm,
       paddingBottom: theme.spacing.xxl,
     },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.surface,
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-      flex: 1,
-      textAlign: 'center',
-    },
-    headerText: {
-      color: theme.colors.text,
-    },
-    iconButton: {
+    favoriteButton: {
       padding: theme.spacing.xs,
-      borderRadius: theme.borderRadius.sm,
-    },
-    iconPlaceholder: {
-      width: 32,
     },
     card: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     cardTitle: {
       fontSize: 16,
@@ -405,23 +405,13 @@ const createStyles = (theme: Theme) =>
     actionRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      marginTop: theme.spacing.sm,
+      gap: theme.spacing.sm,
     },
     actionButton: {
       flex: 1,
-      alignItems: 'center',
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      backgroundColor: theme.colors.surface,
-      marginHorizontal: theme.spacing.xs,
     },
-    actionLabel: {
-      marginTop: 4,
-      fontSize: 14,
-      color: theme.colors.text,
-    },
-    actionIcon: {
-      color: theme.colors.primary,
+    dangerButton: {
+      // Could add danger styling here if needed
     },
     detailRow: {
       flexDirection: 'row',
@@ -442,8 +432,8 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       padding: theme.spacing.sm,
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.md,
+      backgroundColor: theme.colors.glassBackground,
+      borderRadius: theme.borderRadius.sm,
     },
     addressTextWrapper: {
       flex: 1,
@@ -467,13 +457,10 @@ const createStyles = (theme: Theme) =>
     notesInput: {
       minHeight: 100,
       padding: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      backgroundColor: theme.colors.surface,
+      borderRadius: theme.borderRadius.sm,
+      backgroundColor: theme.colors.glassBackground,
       color: theme.colors.text,
       textAlignVertical: 'top',
-    },
-    placeholder: {
-      color: theme.colors.textMuted,
     },
     emptyState: {
       flex: 1,
@@ -481,22 +468,16 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       padding: theme.spacing.lg,
     },
-    emptyIcon: {
-      color: theme.colors.textMuted,
-    },
     emptyTitle: {
       fontSize: 18,
       fontWeight: '600',
       color: theme.colors.text,
-      marginTop: theme.spacing.md,
+      marginTop: theme.spacing.sm,
     },
     emptySubtitle: {
       fontSize: 14,
       color: theme.colors.textMuted,
       textAlign: 'center',
       marginTop: theme.spacing.sm,
-    },
-    dangerText: {
-      color: theme.colors.error,
     },
   });

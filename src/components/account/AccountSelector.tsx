@@ -8,7 +8,6 @@ import {
 } from '@/store/walletStore';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import AccountAvatar from './AccountAvatar';
-import NetworkIndicator from '@/components/network/NetworkIndicator';
 import {
   formatVoiBalance,
   formatNativeBalance,
@@ -98,18 +97,12 @@ export default function AccountSelector({
         <View
           style={[styles.accountInfo, compact && styles.compactAccountInfo]}
         >
-          <View style={styles.accountNameRow}>
-            <Text
-              style={[styles.accountName, compact && styles.compactAccountName]}
-              numberOfLines={1}
-            >
-              {activeAccount.label || 'Account 1'}
-            </Text>
-            <NetworkIndicator
-              size={compact ? 'small' : 'small'}
-              showName={false}
-            />
-          </View>
+          <Text
+            style={[styles.accountName, compact && styles.compactAccountName]}
+            numberOfLines={1}
+          >
+            {activeAccount.label || 'Account 1'}
+          </Text>
           <Text
             style={[
               styles.accountAddress,
@@ -157,17 +150,10 @@ const createStyles = (theme: Theme) =>
       marginLeft: theme.spacing.md,
       marginRight: theme.spacing.sm,
     },
-    accountNameRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 2,
-    },
     accountName: {
       fontSize: 16,
       fontWeight: '600',
       color: theme.colors.text,
-      flex: 1,
     },
     accountAddress: {
       fontSize: 12,

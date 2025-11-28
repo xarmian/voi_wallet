@@ -1,140 +1,60 @@
 import React, { forwardRef } from 'react';
-import { UIManager, View, type ViewProps } from 'react-native';
-import type { BlurViewProps } from 'expo-blur';
+import { Platform, View, type ViewProps } from 'react-native';
+import { BlurView } from 'expo-blur';
 
-type SafeBlurViewProps = BlurViewProps & ViewProps;
+type SafeBlurViewProps = {
+  /** Blur intensity (0-100) */
+  intensity?: number;
+  /** Blur tint ('light' | 'dark' | 'default') */
+  tint?: 'light' | 'dark' | 'default';
+  /** Children content */
+  children?: React.ReactNode;
+  /** Style prop */
+  style?: ViewProps['style'];
+} & Omit<ViewProps, 'style'>;
 
-type BlurViewComponent = React.ComponentType<BlurViewProps>;
-
-let cachedBlurComponent: BlurViewComponent | null | undefined;
-let nativeAvailability: boolean | undefined;
-let hasLoggedUnavailable = false;
-
-const isNativeViewManagerAvailable = (): boolean => {
-  if (nativeAvailability !== undefined) {
-    return nativeAvailability;
-  }
-
-  let available = false;
-
-  try {
-    // getViewManagerConfig throws if the view manager doesn't exist under Fabric.
-    const config =
-      typeof UIManager.getViewManagerConfig === 'function'
-        ? UIManager.getViewManagerConfig('ExpoBlurView')
-        : null;
-    available = !!config;
-  } catch {
-    available = false;
-  }
-
-  if (!available) {
-    try {
-      const { NativeModulesProxy } = require('expo-modules-core');
-      if (NativeModulesProxy?.ExpoBlurView) {
-        available = true;
-      }
-    } catch {
-      available = false;
-    }
-  }
-
-  if (!available && typeof globalThis.__turboModuleProxy === 'function') {
-    try {
-      const module = globalThis.__turboModuleProxy('ExpoBlurView');
-      available = module != null;
-    } catch {
-      available = false;
-    }
-  }
-
-  if (available) {
-    nativeAvailability = true;
-  }
-  return available;
-};
-
-const resolveBlurComponent = (): BlurViewComponent | null => {
-  if (cachedBlurComponent !== undefined) {
-    return cachedBlurComponent;
-  }
-
-  try {
-    const module = require('expo-blur');
-    const component = module?.BlurView ?? module?.default;
-    if (component) {
-      if (isNativeViewManagerAvailable()) {
-        cachedBlurComponent = component;
-      } else {
-        cachedBlurComponent = null;
-        if (!hasLoggedUnavailable) {
-          hasLoggedUnavailable = true;
-          console.warn(
-            '[SafeBlurView] ExpoBlur native view manager is missing; rendering without blur.'
-          );
-        }
-      }
-    } else {
-      cachedBlurComponent = null;
-    }
-  } catch (error) {
-    cachedBlurComponent = null;
-    if (!hasLoggedUnavailable) {
-      hasLoggedUnavailable = true;
-      const message =
-        '[SafeBlurView] expo-blur is unavailable; falling back to a non-blurred view.';
-      if (__DEV__) {
-        console.warn(message, error);
-      } else {
-        console.warn(message);
-      }
-    }
-  }
-
-  return cachedBlurComponent;
-};
-
-export const isBlurViewAvailable = (): boolean => {
-  return resolveBlurComponent() != null;
-};
-
+/**
+ * SafeBlurView - Cross-platform blur view component
+ *
+ * Wraps expo-blur BlurView with consistent API across platforms.
+ * On Android, uses experimentalBlurMethod='dimezisBlurView' to enable
+ * native blur rendering.
+ *
+ * NOTE: Do not use inside FlatList/VirtualizedList components on Android
+ * as it can cause crashes due to view recycling issues.
+ */
 export const SafeBlurView = forwardRef<View, SafeBlurViewProps>(
   (
     {
-      intensity,
-      tint,
-      blurReductionFactor,
-      experimentalBlurMethod,
+      intensity = 10,
+      tint = 'light',
       children,
       style,
       ...viewProps
     },
     ref
   ) => {
-    const BlurComponent = resolveBlurComponent();
-
-    if (BlurComponent) {
-      return (
-        <BlurComponent
-          intensity={intensity}
-          tint={tint}
-          blurReductionFactor={blurReductionFactor}
-          experimentalBlurMethod={experimentalBlurMethod}
-          style={style}
-          {...viewProps}
-          ref={ref as never}
-        >
-          {children}
-        </BlurComponent>
-      );
-    }
-
     return (
-      <View ref={ref} style={style} {...viewProps}>
+      <BlurView
+        ref={ref}
+        intensity={intensity}
+        tint={tint}
+        experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+        style={style}
+        {...viewProps}
+      >
         {children}
-      </View>
+      </BlurView>
     );
   }
 );
 
 SafeBlurView.displayName = 'SafeBlurView';
+
+/**
+ * Check if blur view is available
+ * Always returns true as expo-blur is a dependency
+ */
+export const isBlurViewAvailable = (): boolean => {
+  return true;
+};

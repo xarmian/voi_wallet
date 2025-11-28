@@ -4,7 +4,7 @@ import {
   Text,
   StyleSheet,
   RefreshControl,
-  FlatList,
+  ScrollView,
   TouchableOpacity,
   Alert,
   Image,
@@ -42,6 +42,8 @@ import { MultiAccountWalletService } from '@/services/wallet';
 import NetworkServiceInstance, { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { GlassCard } from '@/components/common/GlassCard';
+import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SwapService } from '@/services/swap';
 import { GlassButton } from '@/components/common/GlassButton';
@@ -896,10 +898,9 @@ export default function AssetDetailScreen() {
 
   const renderListHeader = () => (
     <>
-        <BlurredContainer
+        <GlassCard
           style={styles.balanceContainer}
-          borderRadius={theme.borderRadius.lg}
-          opacity={0.7}
+          variant="medium"
         >
           {(() => {
             const asset = getAsset();
@@ -985,7 +986,7 @@ export default function AssetDetailScreen() {
               </>
             );
           })()}
-        </BlurredContainer>
+        </GlassCard>
 
         {/* Per-Network Breakdown for Mapped Assets */}
         {/* Only show breakdown if we're NOT viewing a specific network */}
@@ -1142,7 +1143,8 @@ export default function AssetDetailScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title={assetName}
           subtitle={networkSubtitle}
@@ -1152,32 +1154,37 @@ export default function AssetDetailScreen() {
           onAccountSelectorPress={() => {}}
         />
 
-      <FlatList
-        data={filteredTransactions}
-        renderItem={renderTransactionItem}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={renderListHeader}
-        ListFooterComponent={renderListFooter}
-        ListEmptyComponent={renderListEmpty}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.1}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16 }}
-      />
+        <ScrollView
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+        >
+          {renderListHeader()}
+          {filteredTransactions.length === 0 ? (
+            renderListEmpty()
+          ) : (
+            filteredTransactions.map((tx) => (
+              <View key={tx.id}>
+                {renderTransactionItem({ item: tx })}
+              </View>
+            ))
+          )}
+          {renderListFooter()}
+        </ScrollView>
 
-      {/* PIN Entry Modal */}
-      <UnifiedAuthModal
-        visible={showAuthModal}
-        onSuccess={handleAuthSuccess}
-        onCancel={handleAuthCancel}
-        title="Confirm Asset Removal"
-        message={`Authenticate to remove ${assetName} from your wallet`}
-        purpose="sign_transaction"
-        isProcessing={optingOut}
-      />
-    </SafeAreaView>
+        {/* PIN Entry Modal */}
+        <UnifiedAuthModal
+          visible={showAuthModal}
+          onSuccess={handleAuthSuccess}
+          onCancel={handleAuthCancel}
+          title="Confirm Asset Removal"
+          message={`Authenticate to remove ${assetName} from your wallet`}
+          purpose="sign_transaction"
+          isProcessing={optingOut}
+        />
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -1185,7 +1192,6 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     content: {
       flexGrow: 1,
@@ -1194,7 +1200,7 @@ const createStyles = (theme: Theme) =>
     },
     balanceContainer: {
       padding: theme.spacing.xl,
-      marginBottom: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
       alignItems: 'center',
     },
     assetHeader: {

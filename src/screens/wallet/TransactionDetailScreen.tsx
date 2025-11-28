@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Linking,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,7 +14,6 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { TransactionInfo } from '@/types/wallet';
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
-import { formatAddressSync } from '@/utils/address';
 import {
   useCurrentNetwork,
   useCurrentNetworkConfig,
@@ -27,6 +25,10 @@ import {
   SerializableTransactionInfo,
   deserializeTransactionFromNavigation,
 } from '@/utils/navigationParams';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface TransactionDetailRouteParams {
   transaction: SerializableTransactionInfo;
@@ -41,6 +43,7 @@ export default function TransactionDetailScreen() {
   const navigation = useNavigation<StackNavigationProp<any>>();
   const currentNetwork = useCurrentNetwork();
   const currentNetworkConfig = useCurrentNetworkConfig();
+  const { theme } = useTheme();
   const {
     transaction: serializedTransaction,
     assetName,
@@ -165,207 +168,238 @@ export default function TransactionDetailScreen() {
     }
   };
 
+  const direction = getTransactionDirection();
+  const isReceived = direction === 'Received';
+  const isSent = direction === 'Sent';
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons
-            name="arrow-back"
-            size={24}
-            color={styles.headerIcon.color}
-          />
-        </TouchableOpacity>
-        <Text style={styles.title}>Transaction Details</Text>
-        <TouchableOpacity
-          style={styles.explorerButton}
-          onPress={handleOpenExplorer}
-        >
-          <Ionicons
-            name="open-outline"
-            size={24}
-            color={styles.headerIcon.color}
-          />
-        </TouchableOpacity>
-      </View>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="Transaction Details"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+          rightAction={
+            <TouchableOpacity
+              style={styles.explorerButton}
+              onPress={handleOpenExplorer}
+            >
+              <Ionicons
+                name="open-outline"
+                size={22}
+                color={theme.colors.primary}
+              />
+            </TouchableOpacity>
+          }
+        />
 
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.statusContainer}>
-          <View style={styles.statusBadge}>
-            <Ionicons
-              name="checkmark-circle"
-              size={20}
-              color={styles.successIcon.color}
-            />
-            <Text style={styles.statusText}>{getTransactionStatus()}</Text>
-          </View>
-          <Text style={styles.directionText}>
-            Round: {transaction.confirmedRound?.toString() || 'Pending'}
-          </Text>
-        </View>
-
-        <View style={styles.amountContainer}>
-          <Text style={styles.amountLabel}>{getTransactionDirection()}</Text>
-          <Text
-            style={[
-              styles.amount,
-              {
-                color:
-                  getTransactionDirection() === 'Received'
-                    ? themeColors.success
-                    : getTransactionDirection() === 'Sent'
-                      ? themeColors.error
-                      : themeColors.text,
-              },
-            ]}
-            numberOfLines={2}
-            adjustsFontSizeToFit={true}
-            minimumFontScale={0.5}
+        <ScrollView contentContainerStyle={styles.content}>
+          {/* Status Card */}
+          <BlurredContainer
+            style={styles.statusContainer}
+            borderRadius={theme.borderRadius.lg}
           >
-            {getTransactionDirection() === 'Received'
-              ? '+'
-              : getTransactionDirection() === 'Sent'
-                ? '-'
-                : ''}
-            {assetId === 0
-              ? formatBalance(transaction.amount)
-              : formatAssetBalance(transaction.amount, decimals || 0)}{' '}
-            {assetName}
-          </Text>
-        </View>
-
-        <View style={styles.detailsContainer}>
-          <Text style={styles.sectionTitle}>Transaction Details</Text>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Transaction ID</Text>
-            <TouchableOpacity
-              style={styles.detailValueContainer}
-              onPress={() => handleCopyAddress(transaction.id)}
-            >
-              <Text
-                style={styles.detailValue}
-                numberOfLines={1}
-                ellipsizeMode="middle"
-              >
-                {formatAddress(transaction.id)}
-              </Text>
+            <View style={styles.statusBadge}>
               <Ionicons
-                name="copy-outline"
-                size={16}
-                color={styles.primaryIcon.color}
+                name="checkmark-circle"
+                size={24}
+                color={themeColors.success}
               />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Type</Text>
-            <Text style={styles.detailValue}>
-              {formatTransactionType(transaction.type)}
-            </Text>
-          </View>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Date & Time</Text>
-            <Text style={styles.detailValue}>
-              {formatFullTimestamp(transaction.timestamp)}
-            </Text>
-          </View>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Fee</Text>
-            <Text style={styles.detailValue}>
-              {formatBalance(transaction.fee)} VOI
-            </Text>
-          </View>
-
-          {transactionNote && (
-            <View style={[styles.detailRow, styles.detailRowNote]}>
-              <Text style={styles.detailLabel}>Note</Text>
-              <View style={styles.noteContainer}>
-                <Text style={styles.noteValue}>{transactionNote}</Text>
-              </View>
+              <Text style={styles.statusText}>{getTransactionStatus()}</Text>
             </View>
-          )}
-        </View>
+            <Text style={styles.roundText}>
+              Round: {transaction.confirmedRound?.toString() || 'Pending'}
+            </Text>
+          </BlurredContainer>
 
-        <View style={styles.addressesContainer}>
-          <Text style={styles.sectionTitle}>Addresses</Text>
-
-          <View style={styles.addressSection}>
-            <Text style={styles.addressLabel}>From</Text>
-            <TouchableOpacity
-              style={styles.addressContainer}
-              onPress={() => handleCopyAddress(transaction.from)}
+          {/* Amount Card */}
+          <BlurredContainer
+            style={styles.amountContainer}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <View style={[
+              styles.directionBadge,
+              isReceived && styles.receivedBadge,
+              isSent && styles.sentBadge,
+            ]}>
+              <Ionicons
+                name={isReceived ? 'arrow-down' : isSent ? 'arrow-up' : 'swap-horizontal'}
+                size={16}
+                color={isReceived ? themeColors.success : isSent ? themeColors.error : themeColors.text}
+              />
+              <Text style={[
+                styles.directionText,
+                isReceived && styles.receivedText,
+                isSent && styles.sentText,
+              ]}>
+                {direction}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.amount,
+                isReceived && styles.receivedAmount,
+                isSent && styles.sentAmount,
+              ]}
+              numberOfLines={2}
+              adjustsFontSizeToFit={true}
+              minimumFontScale={0.5}
             >
-              <View style={styles.addressInfo}>
-                {fromNameInfo?.name && (
-                  <Text
-                    style={styles.envoiName}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {fromNameInfo.name}
-                  </Text>
-                )}
-                <Text style={styles.addressShort}>
-                  {formatAddress(transaction.from)}
-                </Text>
+              {isReceived ? '+' : isSent ? '-' : ''}
+              {assetId === 0
+                ? formatBalance(transaction.amount)
+                : formatAssetBalance(transaction.amount, decimals || 0)}{' '}
+              {assetName}
+            </Text>
+          </BlurredContainer>
+
+          {/* Transaction Details Card */}
+          <BlurredContainer
+            style={styles.detailsContainer}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.sectionTitle}>Details</Text>
+
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Transaction ID</Text>
+              <TouchableOpacity
+                style={styles.detailValueContainer}
+                onPress={() => handleCopyAddress(transaction.id)}
+              >
                 <Text
-                  style={styles.addressFull}
+                  style={styles.detailValue}
                   numberOfLines={1}
                   ellipsizeMode="middle"
                 >
-                  {formatFullAddress(transaction.from)}
+                  {formatAddress(transaction.id)}
                 </Text>
-              </View>
-              <Ionicons
-                name="copy-outline"
-                size={16}
-                color={styles.primaryIcon.color}
-              />
-            </TouchableOpacity>
-          </View>
+                <Ionicons
+                  name="copy-outline"
+                  size={14}
+                  color={theme.colors.primary}
+                />
+              </TouchableOpacity>
+            </View>
 
-          <View style={styles.addressSection}>
-            <Text style={styles.addressLabel}>To</Text>
-            <TouchableOpacity
-              style={styles.addressContainer}
-              onPress={() => handleCopyAddress(transaction.to)}
-            >
-              <View style={styles.addressInfo}>
-                {toNameInfo?.name && (
-                  <Text
-                    style={styles.envoiName}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {toNameInfo.name}
-                  </Text>
-                )}
-                <Text style={styles.addressShort}>
-                  {formatAddress(transaction.to)}
-                </Text>
-                <Text
-                  style={styles.addressFull}
-                  numberOfLines={1}
-                  ellipsizeMode="middle"
-                >
-                  {formatFullAddress(transaction.to)}
-                </Text>
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Type</Text>
+              <Text style={styles.detailValue}>
+                {formatTransactionType(transaction.type)}
+              </Text>
+            </View>
+
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Date & Time</Text>
+              <Text style={styles.detailValue}>
+                {formatFullTimestamp(transaction.timestamp)}
+              </Text>
+            </View>
+
+            <View style={[styles.detailRow, styles.detailRowLast]}>
+              <Text style={styles.detailLabel}>Fee</Text>
+              <Text style={styles.detailValue}>
+                {formatBalance(transaction.fee)} VOI
+              </Text>
+            </View>
+
+            {transactionNote && (
+              <View style={styles.noteSection}>
+                <Text style={styles.detailLabel}>Note</Text>
+                <View style={styles.noteContainer}>
+                  <Text style={styles.noteValue}>{transactionNote}</Text>
+                </View>
               </View>
-              <Ionicons
-                name="copy-outline"
-                size={16}
-                color={styles.primaryIcon.color}
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+            )}
+          </BlurredContainer>
+
+          {/* Addresses Card */}
+          <BlurredContainer
+            style={styles.addressesContainer}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.sectionTitle}>Addresses</Text>
+
+            <View style={styles.addressSection}>
+              <View style={styles.addressLabelRow}>
+                <Ionicons name="arrow-up-circle-outline" size={18} color={themeColors.error} />
+                <Text style={styles.addressLabel}>From</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.addressContainer}
+                onPress={() => handleCopyAddress(transaction.from)}
+              >
+                <View style={styles.addressInfo}>
+                  {fromNameInfo?.name && (
+                    <Text
+                      style={styles.envoiName}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {fromNameInfo.name}
+                    </Text>
+                  )}
+                  <Text style={styles.addressShort}>
+                    {formatAddress(transaction.from)}
+                  </Text>
+                  <Text
+                    style={styles.addressFull}
+                    numberOfLines={1}
+                    ellipsizeMode="middle"
+                  >
+                    {formatFullAddress(transaction.from)}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="copy-outline"
+                  size={16}
+                  color={theme.colors.primary}
+                />
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.addressSection, styles.addressSectionLast]}>
+              <View style={styles.addressLabelRow}>
+                <Ionicons name="arrow-down-circle-outline" size={18} color={themeColors.success} />
+                <Text style={styles.addressLabel}>To</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.addressContainer}
+                onPress={() => handleCopyAddress(transaction.to)}
+              >
+                <View style={styles.addressInfo}>
+                  {toNameInfo?.name && (
+                    <Text
+                      style={styles.envoiName}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {toNameInfo.name}
+                    </Text>
+                  )}
+                  <Text style={styles.addressShort}>
+                    {formatAddress(transaction.to)}
+                  </Text>
+                  <Text
+                    style={styles.addressFull}
+                    numberOfLines={1}
+                    ellipsizeMode="middle"
+                  >
+                    {formatFullAddress(transaction.to)}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="copy-outline"
+                  size={16}
+                  color={theme.colors.primary}
+                />
+              </TouchableOpacity>
+            </View>
+          </BlurredContainer>
+        </ScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -373,191 +407,180 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 20,
-      paddingVertical: 16,
-      backgroundColor: theme.colors.card,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-    },
-    backButton: {
-      padding: 8,
-    },
-    title: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
     },
     explorerButton: {
       padding: 8,
     },
     content: {
       flexGrow: 1,
-      padding: 16,
+      padding: theme.spacing.sm,
+      paddingBottom: theme.spacing.xxl,
     },
     statusContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: 12,
-      padding: 20,
-      marginBottom: 16,
+      padding: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
       alignItems: 'center',
-      ...theme.shadows.sm,
     },
     statusBadge: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
-      marginBottom: 8,
+      marginBottom: 4,
     },
     statusText: {
-      fontSize: 16,
+      fontSize: 18,
       fontWeight: '600',
       color: theme.colors.success,
     },
-    directionText: {
+    roundText: {
       fontSize: 14,
       color: theme.colors.textSecondary,
     },
     amountContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: 12,
-      padding: 24,
-      marginBottom: 16,
+      padding: theme.spacing.xl,
+      marginBottom: theme.spacing.sm,
       alignItems: 'center',
-      ...theme.shadows.sm,
     },
-    amountLabel: {
-      fontSize: 16,
-      color: theme.colors.textSecondary,
-      marginBottom: 12,
+    directionBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 20,
+      backgroundColor: theme.colors.glassBackground,
+      marginBottom: theme.spacing.sm,
     },
-    amount: {
-      fontSize: 28,
-      fontWeight: 'bold',
-      textAlign: 'center',
-      paddingHorizontal: 16,
+    receivedBadge: {
+      backgroundColor: `${theme.colors.success}20`,
     },
-    detailsContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: 12,
-      padding: 20,
-      marginBottom: 16,
-      ...theme.shadows.sm,
+    sentBadge: {
+      backgroundColor: `${theme.colors.error}20`,
     },
-    sectionTitle: {
-      fontSize: 18,
+    directionText: {
+      fontSize: 14,
       fontWeight: '600',
       color: theme.colors.text,
-      marginBottom: 16,
+    },
+    receivedText: {
+      color: theme.colors.success,
+    },
+    sentText: {
+      color: theme.colors.error,
+    },
+    amount: {
+      fontSize: 32,
+      fontWeight: 'bold',
+      textAlign: 'center',
+      color: theme.colors.text,
+    },
+    receivedAmount: {
+      color: theme.colors.success,
+    },
+    sentAmount: {
+      color: theme.colors.error,
+    },
+    detailsContainer: {
+      padding: theme.spacing.lg,
+      marginBottom: theme.spacing.sm,
+    },
+    sectionTitle: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: theme.spacing.sm,
     },
     detailRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      alignItems: 'flex-start',
-      paddingVertical: 12,
+      alignItems: 'center',
+      paddingVertical: theme.spacing.sm,
       borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-      minHeight: 40,
+      borderBottomColor: theme.colors.glassBorder,
     },
-    detailRowNote: {
-      paddingBottom: 16,
+    detailRowLast: {
+      borderBottomWidth: 0,
     },
     detailLabel: {
       fontSize: 14,
       color: theme.colors.textSecondary,
-      width: '35%',
-      paddingRight: 8,
     },
     detailValue: {
       fontSize: 14,
       color: theme.colors.text,
       fontWeight: '500',
-      textAlign: 'right',
-      width: '65%',
-      flexShrink: 1,
-    },
-    noteContainer: {
-      width: '65%',
-    },
-    noteValue: {
-      fontSize: 14,
-      color: theme.colors.text,
-      fontWeight: '500',
-      lineHeight: 20,
-      textAlign: 'left',
     },
     detailValueContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      width: '65%',
-      justifyContent: 'flex-end',
+      gap: 6,
+    },
+    noteSection: {
+      marginTop: theme.spacing.sm,
+      paddingTop: theme.spacing.sm,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.glassBorder,
+    },
+    noteContainer: {
+      marginTop: theme.spacing.sm,
+      padding: theme.spacing.sm,
+      backgroundColor: theme.colors.glassBackground,
+      borderRadius: theme.borderRadius.sm,
+    },
+    noteValue: {
+      fontSize: 14,
+      color: theme.colors.text,
+      lineHeight: 20,
     },
     addressesContainer: {
-      backgroundColor: theme.colors.card,
-      borderRadius: 12,
-      padding: 20,
-      ...theme.shadows.sm,
+      padding: theme.spacing.lg,
     },
     addressSection: {
-      marginBottom: 20,
+      marginBottom: theme.spacing.lg,
+    },
+    addressSectionLast: {
+      marginBottom: 0,
+    },
+    addressLabelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: theme.spacing.sm,
     },
     addressLabel: {
       fontSize: 14,
       fontWeight: '600',
       color: theme.colors.text,
-      marginBottom: 8,
     },
     addressContainer: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      backgroundColor: theme.colors.background,
-      borderRadius: 8,
-      padding: 16,
+      backgroundColor: theme.colors.glassBackground,
+      borderRadius: theme.borderRadius.sm,
+      padding: theme.spacing.sm,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     addressInfo: {
       flex: 1,
       paddingRight: 8,
     },
     addressShort: {
-      fontSize: 16,
+      fontSize: 15,
       fontWeight: '500',
       color: theme.colors.primary,
-      marginBottom: 4,
+      marginBottom: 2,
     },
     addressFull: {
-      fontSize: 12,
+      fontSize: 11,
       color: theme.colors.textSecondary,
       fontFamily: 'monospace',
     },
     envoiName: {
       fontSize: 14,
       fontWeight: '600',
-      color: theme.colors.primary,
-      marginBottom: 4,
-    },
-    headerIcon: {
-      color: theme.colors.primary,
-    },
-    successIcon: {
-      color: theme.colors.success,
-    },
-    successColor: {
-      color: theme.colors.success,
-    },
-    dangerColor: {
-      color: theme.colors.error,
-    },
-    defaultColor: {
       color: theme.colors.text,
-    },
-    primaryIcon: {
-      color: theme.colors.primary,
+      marginBottom: 4,
     },
   });

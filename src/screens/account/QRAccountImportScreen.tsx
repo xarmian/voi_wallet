@@ -271,51 +271,50 @@ export default function QRAccountImportScreen({ navigation }: Props) {
       {/* Camera View */}
       <View style={styles.cameraContainer}>
         <CameraView
-          style={styles.camera}
+          style={StyleSheet.absoluteFillObject}
           facing={facing}
           onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
           barcodeScannerSettings={{
             barcodeTypes: ['qr'],
           }}
-        >
-          {/* Overlay */}
-          <View style={styles.overlay}>
-            {/* Top overlay */}
-            <View style={styles.overlayTop} />
+        />
+        {/* Overlay - rendered outside CameraView for iOS barcode detection compatibility */}
+        <View style={[StyleSheet.absoluteFillObject, styles.overlay]}>
+          {/* Top overlay */}
+          <View style={styles.overlayTop} />
 
-            {/* Middle section with scanning area */}
-            <View style={styles.overlayMiddle}>
-              <View style={styles.overlaySide} />
-              <View style={styles.scanningArea}>
-                <View style={[styles.corner, styles.cornerTopLeft]} />
-                <View style={[styles.corner, styles.cornerTopRight]} />
-                <View style={[styles.corner, styles.cornerBottomLeft]} />
-                <View style={[styles.corner, styles.cornerBottomRight]} />
+          {/* Middle section with scanning area */}
+          <View style={styles.overlayMiddle}>
+            <View style={styles.overlaySide} />
+            <View style={styles.scanningArea}>
+              <View style={[styles.corner, styles.cornerTopLeft]} />
+              <View style={[styles.corner, styles.cornerTopRight]} />
+              <View style={[styles.corner, styles.cornerBottomLeft]} />
+              <View style={[styles.corner, styles.cornerBottomRight]} />
 
-                {processing && (
-                  <View style={styles.processingOverlay}>
-                    <ActivityIndicator
-                      size="large"
-                      color={theme.colors.background}
-                    />
-                    <Text
-                      style={[
-                        styles.processingText,
-                        { color: theme.colors.background },
-                      ]}
-                    >
-                      Processing...
-                    </Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.overlaySide} />
+              {processing && (
+                <View style={styles.processingOverlay}>
+                  <ActivityIndicator
+                    size="large"
+                    color={theme.colors.background}
+                  />
+                  <Text
+                    style={[
+                      styles.processingText,
+                      { color: theme.colors.background },
+                    ]}
+                  >
+                    Processing...
+                  </Text>
+                </View>
+              )}
             </View>
-
-            {/* Bottom overlay */}
-            <View style={styles.overlayBottom} />
+            <View style={styles.overlaySide} />
           </View>
-        </CameraView>
+
+          {/* Bottom overlay */}
+          <View style={styles.overlayBottom} />
+        </View>
       </View>
 
       {/* Instructions */}

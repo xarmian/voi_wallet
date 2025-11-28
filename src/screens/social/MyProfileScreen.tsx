@@ -20,18 +20,23 @@ import { Theme } from '@/constants/themes';
 import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { useActiveAccount, useAccountEnvoiName } from '@/store/walletStore';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { useTheme } from '@/contexts/ThemeContext';
+import { GlassButton } from '@/components/common/GlassButton';
 
 const ENVOI_WEBSITE = 'https://envoi.sh/';
 
 export default function MyProfileScreen() {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
   const navigation = useNavigation();
   const activeAccount = useActiveAccount();
   const networkConfig = useCurrentNetworkConfig();
 
   const {
     nameInfo,
-    isLoading: isEnvoiLoading,
     reload: reloadEnvoiName,
   } = useAccountEnvoiName(activeAccount?.id || '');
 
@@ -111,118 +116,142 @@ export default function MyProfileScreen() {
 
   if (!activeAccount) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Profile</Text>
-          <View style={styles.iconPlaceholder} />
-        </View>
+      <NFTBackground>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <UniversalHeader
+            title="My Profile"
+            showBackButton
+            onBackPress={() => navigation.goBack()}
+            showAccountSelector={false}
+            onAccountSelectorPress={() => {}}
+          />
 
-        <View style={styles.emptyState}>
-          <Ionicons name="wallet-outline" size={48} color={styles.emptyIcon.color} />
-          <Text style={styles.emptyTitle}>No active account</Text>
-          <Text style={styles.emptySubtitle}>
-            Add or select an account to view your profile.
-          </Text>
-        </View>
-      </SafeAreaView>
+          <View style={styles.emptyState}>
+            <Ionicons name="wallet-outline" size={48} color={theme.colors.textMuted} />
+            <Text style={styles.emptyTitle}>No active account</Text>
+            <Text style={styles.emptySubtitle}>
+              Add or select an account to view your profile.
+            </Text>
+          </View>
+        </SafeAreaView>
+      </NFTBackground>
     );
   }
 
   const hasEnvoiName = Boolean(nameInfo?.name);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.iconButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>My Profile</Text>
-        <View style={styles.iconPlaceholder} />
-      </View>
-
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing || isEnvoiLoading}
-            onRefresh={handleRefresh}
-          />
-        }
-      >
-        <EnvoiProfileCard
-          address={activeAccount.address}
-          envoiProfile={hasEnvoiName ? nameInfo : null}
-          name={hasEnvoiName ? undefined : activeAccount.label || activeAccount.address}
-          isLoading={isEnvoiLoading}
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
           title="My Profile"
-          showVerifiedBadge={false}
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
         />
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Quick Actions</Text>
-          <View style={styles.actionRow}>
-            <TouchableOpacity style={styles.actionButton} onPress={handleOpenExplorer}>
-              <Ionicons name="open-outline" size={20} color={styles.actionIcon.color} />
-              <Text style={styles.actionLabel}>Explorer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton} onPress={handleCopyAddress}>
-              <Ionicons name="copy" size={20} color={styles.actionIcon.color} />
-              <Text style={styles.actionLabel}>Copy</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton} onPress={handleShareProfile}>
-              <Ionicons name="share-social" size={20} color={styles.actionIcon.color} />
-              <Text style={styles.actionLabel}>Share</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              tintColor={theme.colors.primary}
+            />
+          }
+        >
+          <EnvoiProfileCard
+            address={activeAccount.address}
+            envoiProfile={hasEnvoiName ? nameInfo : null}
+            name={hasEnvoiName ? undefined : activeAccount.label || activeAccount.address}
+            isLoading={false}
+            title="My Profile"
+            showVerifiedBadge={false}
+          />
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Envoi Identity</Text>
-          {hasEnvoiName ? (
-            <>
-              <Text style={styles.identityLabel}>Envoi Name</Text>
-              <Text style={styles.identityValue}>{nameInfo?.name}</Text>
-              <Text style={styles.helperText}>
-                Your Envoi profile is how friends find you on Voi.
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text style={styles.helperText}>
-                You have not linked an Envoi name to this account yet.
-              </Text>
-              <TouchableOpacity
-                style={styles.primaryButton}
-                onPress={handleOpenEnvoi}
-              >
-                <Text style={styles.primaryButtonText}>Register at envoi.sh</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Wallet Address</Text>
-          <TouchableOpacity
-            style={styles.addressContainer}
-            onPress={handleCopyAddress}
+          {/* Quick Actions */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
           >
-            <Text style={styles.address}>{activeAccount.address}</Text>
-            <Ionicons name="copy" size={20} color={styles.actionIcon.color} />
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+            <Text style={styles.cardTitle}>Quick Actions</Text>
+            <View style={styles.actionRow}>
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                label="Explorer"
+                icon="open-outline"
+                onPress={handleOpenExplorer}
+                style={styles.actionButton}
+              />
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                label="Copy"
+                icon="copy"
+                onPress={handleCopyAddress}
+                style={styles.actionButton}
+              />
+              <GlassButton
+                variant="secondary"
+                size="sm"
+                label="Share"
+                icon="share-social"
+                onPress={handleShareProfile}
+                style={styles.actionButton}
+              />
+            </View>
+          </BlurredContainer>
+
+          {/* Envoi Identity */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.cardTitle}>Envoi Identity</Text>
+            {hasEnvoiName ? (
+              <>
+                <Text style={styles.identityLabel}>Envoi Name</Text>
+                <Text style={styles.identityValue}>{nameInfo?.name}</Text>
+                <Text style={styles.helperText}>
+                  Your Envoi profile is how friends find you on Voi.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.helperText}>
+                  You have not linked an Envoi name to this account yet.
+                </Text>
+                <GlassButton
+                  variant="primary"
+                  size="md"
+                  label="Register at envoi.sh"
+                  onPress={handleOpenEnvoi}
+                  style={{ marginTop: theme.spacing.sm }}
+                />
+              </>
+            )}
+          </BlurredContainer>
+
+          {/* Wallet Address */}
+          <BlurredContainer
+            style={styles.card}
+            borderRadius={theme.borderRadius.lg}
+          >
+            <Text style={styles.cardTitle}>Wallet Address</Text>
+            <TouchableOpacity
+              style={styles.addressContainer}
+              onPress={handleCopyAddress}
+            >
+              <Text style={styles.address}>{activeAccount.address}</Text>
+              <Ionicons name="copy" size={20} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </BlurredContainer>
+        </ScrollView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -230,45 +259,17 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
     },
     scrollView: {
       flex: 1,
     },
     content: {
-      padding: theme.spacing.md,
+      padding: theme.spacing.sm,
       paddingBottom: theme.spacing.xxl,
     },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.surface,
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '600',
-      color: theme.colors.text,
-      flex: 1,
-      textAlign: 'center',
-    },
-    headerText: {
-      color: theme.colors.text,
-    },
-    iconButton: {
-      padding: theme.spacing.xs,
-      borderRadius: theme.borderRadius.sm,
-    },
-    iconPlaceholder: {
-      width: 32,
-    },
     card: {
-      backgroundColor: theme.colors.card,
-      borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.lg,
-      marginBottom: theme.spacing.md,
+      marginBottom: theme.spacing.sm,
     },
     cardTitle: {
       fontSize: 16,
@@ -279,23 +280,10 @@ const createStyles = (theme: Theme) =>
     actionRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      marginTop: theme.spacing.sm,
+      gap: theme.spacing.sm,
     },
     actionButton: {
       flex: 1,
-      alignItems: 'center',
-      paddingVertical: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      backgroundColor: theme.colors.surface,
-      marginHorizontal: theme.spacing.xs,
-    },
-    actionLabel: {
-      marginTop: 4,
-      fontSize: 14,
-      color: theme.colors.text,
-    },
-    actionIcon: {
-      color: theme.colors.primary,
     },
     identityLabel: {
       fontSize: 14,
@@ -312,30 +300,20 @@ const createStyles = (theme: Theme) =>
       fontSize: 12,
       color: theme.colors.textMuted,
     },
-    primaryButton: {
-      marginTop: theme.spacing.sm,
-      backgroundColor: theme.colors.primary,
-      borderRadius: theme.borderRadius.md,
-      paddingVertical: theme.spacing.sm,
-      alignItems: 'center',
-    },
-    primaryButtonText: {
-      color: theme.colors.buttonText,
-      fontWeight: '600',
-    },
     addressContainer: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       padding: theme.spacing.sm,
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.borderRadius.md,
+      backgroundColor: theme.colors.glassBackground,
+      borderRadius: theme.borderRadius.sm,
     },
     address: {
       flex: 1,
       marginRight: theme.spacing.sm,
       fontFamily: 'monospace',
       color: theme.colors.text,
+      fontSize: 13,
     },
     emptyState: {
       flex: 1,
@@ -343,14 +321,11 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       padding: theme.spacing.lg,
     },
-    emptyIcon: {
-      color: theme.colors.textMuted,
-    },
     emptyTitle: {
       fontSize: 18,
       fontWeight: '600',
       color: theme.colors.text,
-      marginTop: theme.spacing.md,
+      marginTop: theme.spacing.sm,
     },
     emptySubtitle: {
       fontSize: 14,

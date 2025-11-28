@@ -12,6 +12,8 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import { formatAddress } from '@/utils/address';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface FriendListItemProps {
   friend: Friend;
@@ -27,6 +29,7 @@ export default function FriendListItem({
   showAddress = false,
 }: FriendListItemProps) {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
 
   const formatLastInteraction = (timestamp?: number): string => {
     if (!timestamp) return 'No recent activity';
@@ -50,98 +53,102 @@ export default function FriendListItem({
   };
 
   return (
-    <TouchableOpacity
+    <BlurredContainer
       style={styles.container}
-      onPress={() => onPress(friend)}
-      activeOpacity={0.7}
+      borderRadius={theme.borderRadius.lg}
     >
-      <View style={styles.avatarContainer}>
-        {friend.avatar ? (
-          <Image
-            source={{ uri: friend.avatar }}
-            style={styles.avatar}
-          />
-        ) : (
-          <AccountAvatar
-            address={friend.address}
-            size={48}
-            useEnvoiAvatar={false}
-            fallbackToGenerated={true}
-            showActiveIndicator={false}
-            showRekeyIndicator={false}
-          />
-        )}
-        {friend.isFavorite && (
-          <View style={styles.favoriteBadge}>
-            <Ionicons name="star" size={14} color="#FFA500" />
-          </View>
-        )}
-      </View>
-
-      <View style={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.name} numberOfLines={1}>
-            {friend.envoiName}
-          </Text>
+      <TouchableOpacity
+        style={styles.touchable}
+        onPress={() => onPress(friend)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.avatarContainer}>
+          {friend.avatar ? (
+            <Image
+              source={{ uri: friend.avatar }}
+              style={styles.avatar}
+            />
+          ) : (
+            <AccountAvatar
+              address={friend.address}
+              size={48}
+              useEnvoiAvatar={false}
+              fallbackToGenerated={true}
+              showActiveIndicator={false}
+              showRekeyIndicator={false}
+            />
+          )}
+          {friend.isFavorite && (
+            <View style={styles.favoriteBadge}>
+              <Ionicons name="star" size={12} color="#FFA500" />
+            </View>
+          )}
         </View>
 
-        {showAddress && (
-          <Text style={styles.addressText}>
-            {formatAddress(friend.address)}
-          </Text>
-        )}
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Text style={styles.name} numberOfLines={1}>
+              {friend.envoiName}
+            </Text>
+          </View>
 
-        {friend.bio && (
-          <Text style={styles.bio} numberOfLines={1}>
-            {friend.bio}
-          </Text>
-        )}
+          {showAddress && (
+            <Text style={styles.addressText}>
+              {formatAddress(friend.address)}
+            </Text>
+          )}
 
-        {showLastInteraction && (
-          <Text style={styles.lastInteraction}>
-            {formatLastInteraction(friend.lastInteraction)}
-          </Text>
-        )}
-      </View>
+          {friend.bio && (
+            <Text style={styles.bio} numberOfLines={1}>
+              {friend.bio}
+            </Text>
+          )}
 
-      <Ionicons name="chevron-forward" size={20} color={styles.chevron.color} />
-    </TouchableOpacity>
+          {showLastInteraction && (
+            <Text style={styles.lastInteraction}>
+              {formatLastInteraction(friend.lastInteraction)}
+            </Text>
+          )}
+        </View>
+
+        <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+      </TouchableOpacity>
+    </BlurredContainer>
   );
 }
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
+      marginBottom: theme.spacing.sm,
+    },
+    touchable: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingVertical: theme.spacing.md,
-      paddingHorizontal: theme.spacing.md,
-      backgroundColor: theme.colors.card,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
+      padding: theme.spacing.sm,
     },
     avatarContainer: {
       position: 'relative',
-      marginRight: theme.spacing.md,
+      marginRight: theme.spacing.sm,
     },
     avatar: {
       width: 48,
       height: 48,
       borderRadius: 24,
-      backgroundColor: theme.colors.background,
+      backgroundColor: theme.colors.glassBackground,
     },
     favoriteBadge: {
       position: 'absolute',
-      top: -4,
-      right: -4,
-      width: 20,
-      height: 20,
-      borderRadius: 10,
-      backgroundColor: theme.colors.card,
+      top: -2,
+      right: -2,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: theme.colors.glassBackground,
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: 2,
-      borderColor: theme.colors.card,
+      borderWidth: 1,
+      borderColor: theme.colors.glassBorder,
     },
     content: {
       flex: 1,
@@ -167,12 +174,9 @@ const createStyles = (theme: Theme) =>
       fontSize: 12,
       color: theme.colors.textMuted,
     },
-    chevron: {
-      color: theme.colors.textMuted,
-      marginLeft: theme.spacing.sm,
-    },
     addressText: {
       fontSize: 12,
       color: theme.colors.textMuted,
+      fontFamily: 'monospace',
     },
   });

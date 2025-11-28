@@ -24,6 +24,8 @@ interface BlurredContainerProps {
   showInnerBorder?: boolean;
   /** Custom background color (overrides glass effect) */
   backgroundColor?: string;
+  /** Disable blur (use inside FlatList/VirtualizedList to avoid Android crashes) */
+  disableBlur?: boolean;
 }
 
 /**
@@ -46,9 +48,11 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
   showHighlight = false,
   showInnerBorder = false,
   backgroundColor,
+  disableBlur = false,
 }) => {
   const { theme } = useTheme();
-  const hasNFTBackground = !!theme.backgroundImageUrl;
+  // Disable blur when requested (e.g., inside FlatList) to avoid Android crashes
+  const hasNFTBackground = !disableBlur && !!theme.backgroundImageUrl;
 
   // Get glass config from theme based on variant
   const glassConfig: GlassEffect = theme.glass[variant];
@@ -150,8 +154,6 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
           {
             borderRadius: resolvedBorderRadius,
             backgroundColor: backgroundColor ?? theme.colors.glassBackground,
-            borderColor: glassConfig.borderColor,
-            borderWidth: glassConfig.borderWidth,
           },
           containerStyle,
           style,
@@ -194,8 +196,6 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
         styles.container,
         {
           borderRadius: resolvedBorderRadius,
-          borderColor: glassConfig.borderColor,
-          borderWidth: glassConfig.borderWidth,
         },
         containerStyle,
       ]}

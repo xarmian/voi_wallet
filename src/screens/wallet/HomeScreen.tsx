@@ -61,6 +61,7 @@ import { MappedAsset } from '@/services/token-mapping/types';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs, getStaggerDelay } from '@/utils/animations';
 
@@ -1024,7 +1025,8 @@ export default function HomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title="Voi Wallet"
           subtitle={isMultiNetworkView ? "All Networks" : `Network: ${currentNetworkConfig.name}`}
@@ -1190,26 +1192,40 @@ export default function HomeScreen() {
                   {isMultiNetworkView && <NetworkFilterToggle />}
                 </View>
                 <View style={styles.assetsHeaderRight}>
-                  <Pressable
+                  <GlassCard
+                    variant="light"
                     onPress={handleOpenAssetFilter}
                     style={styles.headerIconButton}
+                    borderRadius={theme.borderRadius.md}
+                    padding="none"
+                    borderGlow
+                    glowColor={theme.colors.primary}
                   >
-                    <Ionicons
-                      name="filter-outline"
-                      size={22}
-                      color={theme.colors.primary}
-                    />
-                  </Pressable>
-                  <Pressable
+                    <View style={styles.headerIconButtonInner}>
+                      <Ionicons
+                        name="filter-outline"
+                        size={20}
+                        color={theme.colors.text}
+                      />
+                    </View>
+                  </GlassCard>
+                  <GlassCard
+                    variant="light"
                     onPress={handleAddAsset}
                     style={styles.headerIconButton}
+                    borderRadius={theme.borderRadius.md}
+                    padding="none"
+                    borderGlow
+                    glowColor={theme.colors.primary}
                   >
-                    <Ionicons
-                      name="add-circle-outline"
-                      size={22}
-                      color={theme.colors.primary}
-                    />
-                  </Pressable>
+                    <View style={styles.headerIconButtonInner}>
+                      <Ionicons
+                        name="add-circle-outline"
+                        size={20}
+                        color={theme.colors.text}
+                      />
+                    </View>
+                  </GlassCard>
                 </View>
               </View>
 
@@ -1320,7 +1336,8 @@ export default function HomeScreen() {
         onApply={handleApplyAssetFilter}
         onReset={handleResetAssetFilter}
       />
-    </SafeAreaView>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -1328,14 +1345,13 @@ const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.backgroundImageUrl ? 'transparent' : theme.colors.background,
     },
     scrollView: {
       flex: 1,
     },
     content: {
       flexGrow: 1,
-      paddingHorizontal: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
       paddingTop: theme.spacing.md,
       paddingBottom: theme.spacing.xxl + 20,
     },
@@ -1551,10 +1567,10 @@ const createStyles = (theme: Theme) =>
     headerIconButton: {
       width: 36,
       height: 36,
-      borderRadius: theme.borderRadius.md,
-      backgroundColor: theme.colors.glassBackground,
-      borderWidth: 1,
-      borderColor: theme.colors.glassBorder,
+    },
+    headerIconButtonInner: {
+      width: 36,
+      height: 36,
       alignItems: 'center',
       justifyContent: 'center',
     },

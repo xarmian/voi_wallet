@@ -18,15 +18,6 @@ import {
   useActiveAccount,
   useWalletStore,
 } from '@/store/walletStore';
-import {
-  useCurrentNetwork,
-  useCurrentNetworkConfig,
-  useNetworkStore,
-  useAvailableNetworks,
-  useIsNetworkSwitching,
-} from '@/store/networkStore';
-import { NetworkId } from '@/types/network';
-import { getNetworkConfig } from '@/services/network/config';
 import { AccountMetadata } from '@/types/wallet';
 import AccountListItem from './AccountListItem';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -53,13 +44,6 @@ export default function AccountListModal({
   const refreshAllBalances = useWalletStore(
     (state) => state.refreshAllBalances
   );
-
-  // Network state
-  const currentNetwork = useCurrentNetwork();
-  const currentNetworkConfig = useCurrentNetworkConfig();
-  const availableNetworks = useAvailableNetworks();
-  const isNetworkSwitching = useIsNetworkSwitching();
-  const { switchNetwork } = useNetworkStore();
 
   const [searchQuery, setSearchQuery] = React.useState('');
   const insets = useSafeAreaInsets();
@@ -127,29 +111,6 @@ export default function AccountListModal({
     [deleteAccount]
   );
 
-  // Handle network switch
-  const handleNetworkSwitch = useCallback(
-    async (networkId: NetworkId) => {
-      if (networkId === currentNetwork || isNetworkSwitching) {
-        return;
-      }
-
-      try {
-        await switchNetwork(networkId);
-        // Refresh all balances after network switch since balances will be different
-        await refreshAllBalances();
-        // Note: Don't close modal here - let user continue account selection
-      } catch (error) {
-        console.error('Failed to switch network:', error);
-        Alert.alert(
-          'Network Switch Failed',
-          error instanceof Error ? error.message : 'Failed to switch network'
-        );
-      }
-    },
-    [currentNetwork, isNetworkSwitching, switchNetwork, refreshAllBalances]
-  );
-
   // Render account item
   const renderAccountItem = useCallback(
     ({ item }: { item: AccountMetadata }) => (
@@ -215,55 +176,6 @@ export default function AccountListModal({
           </TouchableOpacity>
         </View>
 
-        <View style={styles.networkSection}>
-          <Text style={styles.networkSectionTitle}>Network</Text>
-          <View style={styles.networkSelector}>
-            {availableNetworks.map((networkId) => {
-              const networkConfig = getNetworkConfig(networkId);
-              const isSelected = networkId === currentNetwork;
-
-              return (
-                <TouchableOpacity
-                  key={networkId}
-                  style={[
-                    styles.networkButton,
-                    isSelected && styles.networkButtonSelected,
-                  ]}
-                  onPress={() => handleNetworkSwitch(networkId)}
-                  disabled={isNetworkSwitching}
-                >
-                  <View
-                    style={[
-                      styles.networkDot,
-                      { backgroundColor: networkConfig.color },
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.networkButtonText,
-                      isSelected && styles.networkButtonTextSelected,
-                    ]}
-                  >
-                    {networkConfig.name}
-                  </Text>
-                  {isSelected && (
-                    <Ionicons
-                      name="checkmark"
-                      size={16}
-                      color={colors.primary}
-                    />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          {isNetworkSwitching && (
-            <View style={styles.switchingIndicator}>
-              <Text style={styles.switchingText}>Switching network...</Text>
-            </View>
-          )}
-        </View>
-
         {showSearchBar ? (
           <View style={styles.searchContainer}>
             <Ionicons
@@ -284,18 +196,7 @@ export default function AccountListModal({
         ) : null}
       </View>
     ),
-    [
-      availableNetworks,
-      colors,
-      currentNetwork,
-      handleNetworkSwitch,
-      isNetworkSwitching,
-      onAddAccount,
-      onClose,
-      searchQuery,
-      showSearchBar,
-      styles,
-    ]
+    [colors, onAddAccount, onClose, searchQuery, showSearchBar, styles]
   );
 
   const renderEmptyComponent = useCallback(
@@ -449,63 +350,5 @@ const createStyles = (theme: Theme) =>
       color: '#FFFFFF',
       fontSize: 14,
       fontWeight: '600',
-    },
-    networkSection: {
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.glassBorder,
-    },
-    networkSectionTitle: {
-      fontSize: theme.typography.caption.fontSize,
-      fontWeight: '600',
-      color: theme.colors.textMuted,
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-      marginBottom: theme.spacing.sm,
-    },
-    networkSelector: {
-      flexDirection: 'row',
-      gap: theme.spacing.sm,
-    },
-    networkButton: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.sm + 2,
-      borderRadius: theme.borderRadius.lg,
-      borderWidth: 1,
-      borderColor: theme.colors.glassBorder,
-      backgroundColor: theme.glass.light.backgroundColor,
-      gap: theme.spacing.xs,
-    },
-    networkButtonSelected: {
-      backgroundColor: `${theme.colors.primary}15`,
-      borderColor: theme.colors.primary,
-    },
-    networkDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
-    },
-    networkButtonText: {
-      fontSize: 14,
-      fontWeight: '600',
-      color: theme.colors.textSecondary,
-    },
-    networkButtonTextSelected: {
-      color: theme.colors.primary,
-    },
-    switchingIndicator: {
-      marginTop: theme.spacing.sm,
-      paddingVertical: theme.spacing.xs,
-    },
-    switchingText: {
-      fontSize: theme.typography.caption.fontSize,
-      color: theme.colors.textMuted,
-      textAlign: 'center',
-      fontStyle: 'italic',
     },
   });

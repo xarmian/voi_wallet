@@ -131,12 +131,10 @@ export const GlassCard: React.FC<GlassCardProps> = ({
     styles.container,
     {
       borderRadius: resolvedBorderRadius,
-      borderColor: glassConfig.borderColor,
-      borderWidth: glassConfig.borderWidth,
     },
     glowShadowStyle,
     style,
-  ], [resolvedBorderRadius, glassConfig, glowShadowStyle, style]);
+  ], [resolvedBorderRadius, glowShadowStyle, style]);
 
   // Blur tint based on variant and theme mode
   const blurTint = useMemo(() => {
@@ -149,12 +147,13 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   // Background overlay color (for when blur is not available or NFT theme)
   const overlayBackgroundColor = useMemo(() => {
     if (hasNFTBackground) {
+      // Light overlay on top of blur for glass tint effect
       return theme.mode === 'dark'
-        ? `rgba(0, 0, 0, 0})`
-        : `rgba(255, 255, 255, 0})`;
+        ? 'rgba(0, 0, 0, 0.25)'
+        : 'rgba(255, 255, 255, 0.35)';
     }
-    return glassConfig.backgroundColor;
-  }, [hasNFTBackground, theme.mode, glassConfig.backgroundColor]);
+    return theme.colors.glassBackground;
+  }, [hasNFTBackground, theme.mode, theme.colors.glassBackground]);
 
   // Highlight gradient colors (subtle top edge highlight for depth)
   const highlightGradientColors = useMemo(() => {
@@ -200,7 +199,6 @@ export const GlassCard: React.FC<GlassCardProps> = ({
       {/* Inner border highlight for glass edge effect */}
       <View
         style={[
-          styles.innerBorder,
           {
             borderRadius: resolvedBorderRadius - 1,
             borderColor: theme.colors.glassHighlight,
@@ -262,12 +260,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 48,
-  },
-  innerBorder: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    opacity: 0.5,
   },
   content: {
     position: 'relative',
