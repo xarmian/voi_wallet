@@ -51,6 +51,8 @@ interface GlassCardProps {
   padding?: 'none' | 'sm' | 'md' | 'lg';
   /** Disable the top highlight gradient */
   noHighlight?: boolean;
+  /** Border color (no border when undefined) */
+  borderColor?: string;
   /** Test ID for testing */
   testID?: string;
 }
@@ -69,6 +71,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   borderRadius,
   padding = 'md',
   noHighlight = false,
+  borderColor,
   testID,
 }) => {
   const { theme } = useTheme();
@@ -131,10 +134,14 @@ export const GlassCard: React.FC<GlassCardProps> = ({
     styles.container,
     {
       borderRadius: resolvedBorderRadius,
+      ...(borderColor && {
+        borderWidth: 1,
+        borderColor,
+      }),
     },
     glowShadowStyle,
     style,
-  ], [resolvedBorderRadius, glowShadowStyle, style]);
+  ], [resolvedBorderRadius, borderColor, glowShadowStyle, style]);
 
   // Blur tint based on variant and theme mode
   const blurTint = useMemo(() => {
@@ -150,7 +157,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({
       // Light overlay on top of blur for glass tint effect
       return theme.mode === 'dark'
         ? 'rgba(0, 0, 0, 0.25)'
-        : 'rgba(255, 255, 255, 0.35)';
+        : 'rgba(255, 255, 255, 0.05)';
     }
     return theme.colors.glassBackground;
   }, [hasNFTBackground, theme.mode, theme.colors.glassBackground]);

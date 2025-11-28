@@ -237,7 +237,7 @@ export default function NFTScreen() {
             style={[
               styles.tab,
               activeTab === 'my-nfts' && {
-                backgroundColor: `${theme.colors.primary}20`,
+                backgroundColor: `${theme.colors.primary}80`,
               },
             ]}
             onPress={() => setActiveTab('my-nfts')}
@@ -245,13 +245,13 @@ export default function NFTScreen() {
             <Ionicons
               name="wallet-outline"
               size={18}
-              color={activeTab === 'my-nfts' ? theme.colors.primary : theme.colors.textMuted}
+              color={theme.colors.textMuted}
               style={{ marginRight: 6 }}
             />
             <Text
               style={[
                 styles.tabText,
-                { color: activeTab === 'my-nfts' ? theme.colors.primary : theme.colors.text },
+                { color: theme.colors.text },
                 activeTab === 'my-nfts' && styles.activeTabText,
               ]}
             >
@@ -262,7 +262,7 @@ export default function NFTScreen() {
             style={[
               styles.tab,
               activeTab === 'browse-collections' && {
-                backgroundColor: `${theme.colors.primary}20`,
+                backgroundColor: `${theme.colors.primary}80`,
               },
             ]}
             onPress={() => setActiveTab('browse-collections')}
@@ -270,13 +270,13 @@ export default function NFTScreen() {
             <Ionicons
               name="grid-outline"
               size={18}
-              color={activeTab === 'browse-collections' ? theme.colors.primary : theme.colors.textMuted}
+              color={theme.colors.textMuted}
               style={{ marginRight: 6 }}
             />
             <Text
               style={[
                 styles.tabText,
-                { color: activeTab === 'browse-collections' ? theme.colors.primary : theme.colors.text },
+                { color: theme.colors.text },
                 activeTab === 'browse-collections' && styles.activeTabText,
               ]}
             >

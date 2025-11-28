@@ -90,9 +90,6 @@ export type RootStackParamList = {
     title?: string;
     networkId?: NetworkId;
     chainId?: string;
-    outputTokenId?: number;
-    outputTokenSymbol?: string;
-    swapProvider?: 'deflex' | 'snowball';
   };
   QRScanner: undefined;
   QRAccountImport: undefined;

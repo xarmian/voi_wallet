@@ -117,8 +117,8 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
 
     // Enhanced overlay for NFT backgrounds
     return theme.mode === 'dark'
-      ? `rgba(0, 0, 0, ${Platform.OS === 'android' ? 0.5 : 0.35})`
-      : `rgba(255, 255, 255, ${Platform.OS === 'android' ? 0.6 : 0.45})`;
+      ? `rgba(0, 0, 0, 0.25)`
+      : `rgba(255, 255, 255, 0.05)`;
   }, [backgroundColor, hasNFTBackground, glassConfig.backgroundColor, theme.mode]);
 
   // Highlight gradient colors (subtle top edge highlight for depth)

@@ -1097,6 +1097,7 @@ export default function HomeScreen() {
                   padding="none"
                   borderGlow
                   glowColor={theme.colors.primary}
+                  borderColor={theme.colors.primary}
                 >
                   <View style={styles.qrButtonInner}>
                     <Ionicons
@@ -1200,6 +1201,7 @@ export default function HomeScreen() {
                     padding="none"
                     borderGlow
                     glowColor={theme.colors.primary}
+                    borderColor={theme.colors.secondary}
                   >
                     <View style={styles.headerIconButtonInner}>
                       <Ionicons
@@ -1217,6 +1219,7 @@ export default function HomeScreen() {
                     padding="none"
                     borderGlow
                     glowColor={theme.colors.primary}
+                    borderColor={theme.colors.secondary}
                   >
                     <View style={styles.headerIconButtonInner}>
                       <Ionicons

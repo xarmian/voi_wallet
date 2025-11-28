@@ -71,6 +71,9 @@ export class DeflexSwapService implements SwapProvider {
       this.client = new DeflexClient({
         apiKey,
         algodUri: networkConfig.algodUrl,
+        referrerAddress: 'BUYVOIJ7RNU7O4Z2F4A5T555FKSR2AMYHL5ZNF65Z5ZDEPSMVMEWXCNTV4',
+        feeBps: 50,
+        autoOptIn: true,
       });
     }
     return this.client;

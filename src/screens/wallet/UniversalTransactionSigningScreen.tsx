@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -32,9 +31,6 @@ import {
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { validateAsaOptIn, buildAsaOptInTransaction } from '@/services/transactions/asa';
-import { NetworkService } from '@/services/network';
-import { SecureKeyManager } from '@/services/secure/keyManager';
 import { NetworkId } from '@/types/network';
 
 type UniversalTransactionSigningScreenNavigationProp = StackNavigationProp<
@@ -70,9 +66,6 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     title = 'Sign Transaction',
     networkId,
     chainId,
-    outputTokenId,
-    outputTokenSymbol,
-    swapProvider,
   } = route.params;
 
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -82,55 +75,16 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
   const [networkCurrency, setNetworkCurrency] = useState<string>('VOI');
 
-  // Opt-in state
-  const [needsOptIn, setNeedsOptIn] = useState(false);
-  const [checkingOptIn, setCheckingOptIn] = useState(false);
-  const [optInTransaction, setOptInTransaction] = useState<algosdk.Transaction | null>(null);
-
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const authController = useTransactionAuthController();
 
   useEffect(() => {
     parseTransactions();
-    checkOptInRequired();
     return () => {
       authController.cleanup();
     };
   }, []);
-
-  // Check if opt-in is required for the output token
-  const checkOptInRequired = async () => {
-    if (!outputTokenId || !account || !networkId) return;
-
-    // Only check opt-in for Deflex swaps - Snowball (Voi) includes opt-in transactions automatically
-    if (swapProvider !== 'deflex') {
-      return;
-    }
-
-    setCheckingOptIn(true);
-    try {
-      const validation = await validateAsaOptIn(account.address, outputTokenId, networkId);
-
-      // If validation is valid, user is NOT opted in and CAN opt in
-      if (validation.valid) {
-        setNeedsOptIn(true);
-        // Build the opt-in transaction
-        const optInTxn = await buildAsaOptInTransaction({
-          assetId: outputTokenId,
-          from: account.address,
-          networkId,
-        });
-        setOptInTransaction(optInTxn);
-      }
-      // If validation failed with "Already opted", user is already opted in - no action needed
-    } catch (error) {
-      console.error('Error checking opt-in status:', error);
-      // If we can't check, proceed without opt-in and let the swap fail with a clearer error
-    } finally {
-      setCheckingOptIn(false);
-    }
-  };
 
   useEffect(() => {
     // Set network information from chainId or networkId
@@ -252,18 +206,9 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
       return;
     }
 
-    // Build the transaction list, prepending opt-in if needed
-    let allTransactions = transactions.map((txn) => ({ txn, signers: [account.address] }));
-    let allDecodedTransactions = decodedTransactions.length === transactions.length ? [...decodedTransactions] : undefined;
-
-    if (needsOptIn && optInTransaction) {
-      // Prepend the opt-in transaction
-      const optInBase64 = Buffer.from(algosdk.encodeUnsignedTransaction(optInTransaction)).toString('base64');
-      allTransactions = [{ txn: optInBase64, signers: [account.address] }, ...allTransactions];
-      if (allDecodedTransactions) {
-        allDecodedTransactions = [optInTransaction, ...allDecodedTransactions];
-      }
-    }
+    // Build the transaction list
+    const allTransactions = transactions.map((txn) => ({ txn, signers: [account.address] }));
+    const allDecodedTransactions = decodedTransactions.length === transactions.length ? [...decodedTransactions] : undefined;
 
     // Create unified transaction request for batch signing
     const request: UnifiedTransactionRequest = {
@@ -285,34 +230,7 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     setCurrentRequest(null);
 
     if (success && onSuccess) {
-      const signedTxns = result?.signedTransactions || [];
-
-      // If we prepended an opt-in transaction, we need to submit it first
-      if (needsOptIn && optInTransaction && signedTxns.length > 0) {
-        try {
-          const networkService = NetworkService.getInstance(networkId);
-
-          // First transaction is the opt-in
-          const optInSignedTxn = signedTxns[0];
-          const optInBytes = typeof optInSignedTxn === 'string'
-            ? new Uint8Array(Buffer.from(optInSignedTxn, 'base64'))
-            : optInSignedTxn;
-
-          // Submit opt-in and wait for confirmation
-          const txId = await networkService.submitTransaction(optInBytes);
-          await networkService.waitForConfirmation(txId, 4);
-
-          // Now return the remaining transactions (the swap) to onSuccess
-          const swapSignedTxns = signedTxns.slice(1);
-          await onSuccess({ signedTransactions: swapSignedTxns });
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Failed to submit opt-in transaction';
-          Alert.alert('Opt-In Failed', errorMessage);
-          return;
-        }
-      } else {
-        await onSuccess(result);
-      }
+      await onSuccess(result);
     } else if (!success) {
       const errorMessage = result instanceof Error ? result.message : 'Failed to sign transactions';
       Alert.alert('Error', errorMessage);
@@ -335,37 +253,9 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     <View style={styles.summaryContainer}>
       <Text style={styles.sectionTitle}>Transaction Summary</Text>
 
-      {/* Show opt-in transaction if needed */}
-      {needsOptIn && outputTokenSymbol && (
-        <View style={styles.transactionItem}>
-          <View style={styles.optInBadge}>
-            <Ionicons name="add-circle" size={16} color={theme.colors.success} />
-            <Text style={styles.optInBadgeText}>Asset Opt-In Required</Text>
-          </View>
-          <Text style={styles.transactionTitle}>Step 1: Opt-In</Text>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Type:</Text>
-            <Text style={styles.detailValue}>Asset Opt-In</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Asset:</Text>
-            <Text style={styles.detailValue}>{outputTokenSymbol} (ID: {outputTokenId})</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Fee:</Text>
-            <Text style={styles.detailValue}>0.001 {networkCurrency}</Text>
-          </View>
-          <Text style={styles.optInNote}>
-            This opt-in is required to receive {outputTokenSymbol} from the swap.
-          </Text>
-        </View>
-      )}
-
       {parsedTransactions.map((txn, index) => (
         <View key={index} style={styles.transactionItem}>
-          <Text style={styles.transactionTitle}>
-            {needsOptIn ? `Step 2: Swap - ` : ''}Transaction {index + 1}
-          </Text>
+          <Text style={styles.transactionTitle}>Transaction {index + 1}</Text>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Type:</Text>
             <Text style={styles.detailValue}>{txn.type}</Text>
@@ -473,15 +363,11 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.button, styles.approveButton, checkingOptIn && styles.buttonDisabled]}
+          style={[styles.button, styles.approveButton]}
           onPress={handleApprove}
-          disabled={!account || checkingOptIn}
+          disabled={!account}
         >
-          {checkingOptIn ? (
-            <ActivityIndicator size="small" color={theme.colors.buttonText} />
-          ) : (
-            <Text style={styles.approveButtonText}>Sign</Text>
-          )}
+          <Text style={styles.approveButtonText}>Sign</Text>
         </TouchableOpacity>
       </View>
 
@@ -566,28 +452,6 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.primary,
       marginBottom: 8,
-    },
-    optInBadge: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: theme.colors.success + '20',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 8,
-      alignSelf: 'flex-start',
-      marginBottom: 8,
-    },
-    optInBadgeText: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: theme.colors.success,
-      marginLeft: 4,
-    },
-    optInNote: {
-      fontSize: 12,
-      color: theme.colors.textMuted,
-      fontStyle: 'italic',
-      marginTop: 8,
     },
     detailRow: {
       flexDirection: 'row',
@@ -686,9 +550,6 @@ const createStyles = (theme: Theme) =>
     },
     approveButton: {
       backgroundColor: theme.colors.primary,
-    },
-    buttonDisabled: {
-      opacity: 0.6,
     },
     approveButtonText: {
       fontSize: 16,

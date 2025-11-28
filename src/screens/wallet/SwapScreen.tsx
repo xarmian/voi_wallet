@@ -390,15 +390,11 @@ export default function SwapScreen() {
     }
 
     // Navigate to UniversalTransactionSigning screen with swap transactions
-    // Pass outputTokenId so the signing screen can check/handle opt-in
     navigation.navigate('UniversalTransactionSigning', {
       transactions: quote.unsignedTransactions,
       account: activeAccount,
       title: 'Confirm Swap',
       networkId: currentNetwork,
-      outputTokenId: outputToken.id !== NATIVE_TOKEN_ID ? outputToken.id : undefined,
-      outputTokenSymbol: outputToken.symbol,
-      swapProvider: currentNetwork === NetworkId.ALGORAND_MAINNET ? 'deflex' : 'snowball',
       onSuccess: async (result: any) => {
         await handleSwapSuccess(result);
       },
