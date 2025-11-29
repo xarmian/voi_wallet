@@ -2,8 +2,10 @@ import { SignClientTypes, SessionTypes } from '@walletconnect/types';
 import { getSdkError, buildApprovedNamespaces } from '@walletconnect/utils';
 import { EventEmitter } from 'events';
 import algosdk from 'algosdk';
+import { Platform } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { detectPlatform } from '@/platform/detection';
 import { WalletConnectClient } from './client';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { SecureKeyManager } from '@/services/secure/keyManager';
@@ -37,6 +39,7 @@ export class WalletConnectService extends EventEmitter {
   private static instance: WalletConnectService;
   private client: WalletConnectClient;
   private activeSessions: Map<string, WalletConnectSession> = new Map();
+  private initialized = false;
 
   static getInstance(): WalletConnectService {
     if (!WalletConnectService.instance) {
@@ -52,6 +55,12 @@ export class WalletConnectService extends EventEmitter {
   }
 
   async initialize(): Promise<void> {
+    // Prevent double initialization
+    if (this.initialized) {
+      console.log('WalletConnect service already initialized, skipping');
+      return;
+    }
+
     try {
       await this.client.initialize();
       await this.loadExistingSessions();
@@ -60,6 +69,7 @@ export class WalletConnectService extends EventEmitter {
       // Set up event handlers directly after initialization
       this.setupEventHandlersDirectly();
 
+      this.initialized = true;
       console.log('WalletConnect service initialized successfully');
     } catch (error) {
       console.error('Failed to initialize WalletConnect service:', error);
@@ -69,6 +79,23 @@ export class WalletConnectService extends EventEmitter {
 
   private async loadV1Sessions(): Promise<void> {
     try {
+      // Skip v1 session restoration in extension mode - WebSocket connections can be problematic
+      // and old sessions shouldn't persist across extension reloads
+      const isExtension = Platform.OS === 'web' && detectPlatform() === 'extension';
+      if (isExtension) {
+        console.log('Skipping v1 session restoration in extension mode');
+        // Clean up any stale v1 sessions in extension mode
+        const allKeys = await AsyncStorage.getAllKeys();
+        const v1SessionKeys = allKeys.filter((key) =>
+          key.startsWith(WC_V1_SESSION_STORAGE_KEY)
+        );
+        if (v1SessionKeys.length > 0) {
+          await AsyncStorage.multiRemove(v1SessionKeys);
+          console.log('Cleared stale v1 sessions in extension mode');
+        }
+        return;
+      }
+
       const v1Client = WalletConnectV1Client.getInstance();
 
       // Get all keys that start with v1 session prefix

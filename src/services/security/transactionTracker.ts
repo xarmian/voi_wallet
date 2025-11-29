@@ -1,5 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
+import { storage, secureStorage } from '../../platform';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 
 /**
@@ -27,13 +26,13 @@ interface RateLimitRecord {
 export class TransactionTracker {
   private static async migrateLegacyItem(key: string): Promise<string | null> {
     try {
-      const legacyValue = await SecureStore.getItemAsync(key);
+      const legacyValue = await secureStorage.getItem(key);
       if (!legacyValue) {
         return null;
       }
 
-      await AsyncStorage.setItem(key, legacyValue);
-      await SecureStore.deleteItemAsync(key).catch(() => {});
+      await storage.setItem(key, legacyValue);
+      await secureStorage.deleteItem(key).catch(() => {});
       return legacyValue;
     } catch (error) {
       console.warn('Failed to migrate legacy SecureStore item', error);
@@ -43,7 +42,7 @@ export class TransactionTracker {
 
   private static async readJson<T>(key: string): Promise<T | null> {
     try {
-      let raw = await AsyncStorage.getItem(key);
+      let raw = await storage.getItem(key);
       if (!raw) {
         raw = await this.migrateLegacyItem(key);
       }
@@ -58,12 +57,12 @@ export class TransactionTracker {
   }
 
   private static async writeJson(key: string, value: unknown): Promise<void> {
-    await AsyncStorage.setItem(key, JSON.stringify(value));
+    await storage.setItem(key, JSON.stringify(value));
   }
 
   private static async removeItem(key: string): Promise<void> {
-    await AsyncStorage.removeItem(key);
-    await SecureStore.deleteItemAsync(key).catch(() => {});
+    await storage.removeItem(key);
+    await secureStorage.deleteItem(key).catch(() => {});
   }
 
   /**

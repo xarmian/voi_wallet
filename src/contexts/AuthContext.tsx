@@ -5,11 +5,43 @@ import React, {
   useEffect,
   useRef,
 } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import { SecurityUtils } from '@/utils/security';
-import * as LocalAuthentication from 'expo-local-authentication';
+
+// Helper to check if biometrics are available (web-safe)
+const checkBiometricAvailability = async (): Promise<{ hasHardware: boolean; isEnrolled: boolean }> => {
+  if (Platform.OS === 'web') {
+    // Biometrics not available on web
+    return { hasHardware: false, isEnrolled: false };
+  }
+  try {
+    const LocalAuthentication = require('expo-local-authentication');
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    return { hasHardware, isEnrolled };
+  } catch {
+    return { hasHardware: false, isEnrolled: false };
+  }
+};
+
+// Helper to authenticate with biometrics (web-safe)
+const authenticateWithBiometrics = async (promptMessage: string): Promise<{ success: boolean }> => {
+  if (Platform.OS === 'web') {
+    return { success: false };
+  }
+  try {
+    const LocalAuthentication = require('expo-local-authentication');
+    return await LocalAuthentication.authenticateAsync({
+      promptMessage,
+      fallbackLabel: 'Use PIN',
+      cancelLabel: 'Cancel',
+    });
+  } catch {
+    return { success: false };
+  }
+};
 
 export interface AuthState {
   isLocked: boolean;
@@ -118,8 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const wallet = await MultiAccountWalletService.getCurrentWallet();
       const hasPin = await AccountSecureStorage.hasPin();
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      const { hasHardware, isEnrolled } = await checkBiometricAvailability();
       const biometricEnabled = await AccountSecureStorage.isBiometricEnabled();
       const biometricAvailable = hasHardware && isEnrolled;
       const timeoutMinutes = await AccountSecureStorage.getPinTimeout();
@@ -152,6 +183,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const setupAppStateListener = () => {
+    // Skip AppState listener on web - it doesn't work correctly and can cause
+    // unexpected lock behavior when switching tabs
+    if (Platform.OS === 'web') {
+      return () => {};
+    }
+
     let previousAppState = AppState.currentState;
 
     const handleAppStateChange = (nextAppState: string) => {
@@ -268,11 +305,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Unlock your wallet',
-        fallbackLabel: 'Use PIN',
-        cancelLabel: 'Cancel',
-      });
+      const result = await authenticateWithBiometrics('Unlock your wallet');
 
       if (result.success) {
         const sessionId = SecurityUtils.generateSessionId();
@@ -323,8 +356,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const enableBiometrics = async (enabled: boolean): Promise<void> => {
     if (enabled) {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      const { hasHardware, isEnrolled } = await checkBiometricAvailability();
 
       if (!hasHardware || !isEnrolled) {
         throw new Error(

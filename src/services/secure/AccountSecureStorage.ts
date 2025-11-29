@@ -1,11 +1,16 @@
-import * as SecureStore from 'expo-secure-store';
-import type { SecureStoreOptions } from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Crypto from 'expo-crypto';
-import * as LocalAuthentication from 'expo-local-authentication';
-import * as Application from 'expo-application';
-import { Platform } from 'react-native';
-// Use crypto-js (pure JS, works in RN/Expo) with explicit side-effect imports
+// Platform-agnostic imports for cross-platform compatibility (mobile + extension)
+import {
+  secureStorage,
+  storage,
+  crypto as platformCrypto,
+  biometrics,
+  deviceId as platformDeviceId,
+} from '../../platform';
+
+// Buffer polyfill for extension compatibility
+import { Buffer } from 'buffer';
+
+// Use crypto-js (pure JS, works in RN/Expo and browser) with explicit side-effect imports
 import CryptoJS from 'crypto-js';
 import 'crypto-js/hmac-sha256';
 import 'crypto-js/sha256';
@@ -14,7 +19,7 @@ import 'crypto-js/mode-ctr';
 import 'crypto-js/pad-nopadding';
 import 'crypto-js/enc-hex';
 import 'crypto-js/pbkdf2';
-// Custom PBKDF2 implementation using CryptoJS (React Native compatible)
+// Custom PBKDF2 implementation using CryptoJS (cross-platform compatible)
 
 import {
   AccountType,
@@ -53,10 +58,7 @@ const customPBKDF2 = (
   return derived.toString(CryptoJS.enc.Hex);
 };
 
-const SECURE_STORE_OPTIONS: SecureStoreOptions =
-  Platform.OS === 'ios'
-    ? { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY }
-    : {};
+// Platform options are now handled internally by the platform adapters
 
 interface StoredPinData {
   hash: string;
@@ -103,7 +105,7 @@ export class AccountSecureStorage {
   private static async readMetadata(
     accountId: string
   ): Promise<PersistedAccountMetadata | null> {
-    const stored = await AsyncStorage.getItem(this.metadataKey(accountId));
+    const stored = await storage.getItem(this.metadataKey(accountId));
     if (stored) {
       try {
         return JSON.parse(stored) as PersistedAccountMetadata;
@@ -113,7 +115,7 @@ export class AccountSecureStorage {
       }
     }
 
-    // Attempt legacy migration if AsyncStorage entry is missing
+    // Attempt legacy migration if storage entry is missing
     return await this.migrateLegacyAccountData(accountId);
   }
 
@@ -121,7 +123,7 @@ export class AccountSecureStorage {
     accountId: string,
     metadata: PersistedAccountMetadata
   ): Promise<void> {
-    await AsyncStorage.setItem(
+    await storage.setItem(
       this.metadataKey(accountId),
       JSON.stringify(metadata)
     );
@@ -131,7 +133,7 @@ export class AccountSecureStorage {
     accountId: string
   ): Promise<AccountSecretPayload | null> {
     try {
-      const stored = await SecureStore.getItemAsync(this.secretKey(accountId));
+      const stored = await secureStorage.getItem(this.secretKey(accountId));
       if (stored) {
         return JSON.parse(stored) as AccountSecretPayload;
       }
@@ -142,7 +144,7 @@ export class AccountSecureStorage {
         return null;
       }
 
-      const migratedSecret = await SecureStore.getItemAsync(
+      const migratedSecret = await secureStorage.getItem(
         this.secretKey(accountId)
       );
       return migratedSecret
@@ -159,10 +161,10 @@ export class AccountSecureStorage {
     secret: AccountSecretPayload | null
   ): Promise<void> {
     if (!secret) {
-      await SecureStore.deleteItemAsync(this.secretKey(accountId)).catch(() => {});
+      await secureStorage.deleteItem(this.secretKey(accountId)).catch(() => {});
       return;
     }
-    await SecureStore.setItemAsync(
+    await secureStorage.setItem(
       this.secretKey(accountId),
       JSON.stringify(secret)
     );
@@ -173,7 +175,7 @@ export class AccountSecureStorage {
   ): Promise<PersistedAccountMetadata | null> {
     try {
       const legacyKey = `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`;
-      const legacyData = await SecureStore.getItemAsync(legacyKey);
+      const legacyData = await secureStorage.getItem(legacyKey);
       if (!legacyData) {
         return null;
       }
@@ -182,7 +184,7 @@ export class AccountSecureStorage {
 
       const { encryptedPrivateKey, ...metadata } = parsed;
       const persistable: PersistedAccountMetadata = metadata;
-      await AsyncStorage.setItem(
+      await storage.setItem(
         this.metadataKey(accountId),
         JSON.stringify(persistable)
       );
@@ -194,15 +196,15 @@ export class AccountSecureStorage {
           encryptedPrivateKey,
           authMethod: parsed.authMethod,
         };
-        await SecureStore.setItemAsync(
+        await secureStorage.setItem(
           this.secretKey(accountId),
           JSON.stringify(secretPayload)
         );
       } else {
-        await SecureStore.deleteItemAsync(this.secretKey(accountId)).catch(() => {});
+        await secureStorage.deleteItem(this.secretKey(accountId)).catch(() => {});
       }
 
-      await SecureStore.deleteItemAsync(legacyKey).catch(() => {});
+      await secureStorage.deleteItem(legacyKey).catch(() => {});
       return persistable;
     } catch (error) {
       console.error('Failed to migrate legacy account data', error);
@@ -366,7 +368,7 @@ export class AccountSecureStorage {
 
       if (unlockMethod === 'pin') {
         try {
-          secretPayloadRaw = await SecureStore.getItemAsync(
+          secretPayloadRaw = await secureStorage.getItem(
             this.secretKey(accountId)
           );
         } catch (error) {
@@ -379,12 +381,9 @@ export class AccountSecureStorage {
 
         if (biometricEnabled) {
           try {
-            secretPayloadRaw = await SecureStore.getItemAsync(
+            secretPayloadRaw = await secureStorage.getItemWithAuth(
               this.secretKey(accountId),
-              {
-                requireAuthentication: true,
-                authenticationPrompt: 'Authenticate to access private key',
-              }
+              { prompt: 'Authenticate to access private key' }
             );
           } catch (error) {
             throw new AuthenticationRequiredError(
@@ -400,7 +399,7 @@ export class AccountSecureStorage {
           }
 
           try {
-            secretPayloadRaw = await SecureStore.getItemAsync(
+            secretPayloadRaw = await secureStorage.getItem(
               this.secretKey(accountId)
             );
           } catch (error) {
@@ -411,7 +410,7 @@ export class AccountSecureStorage {
 
       if (!secretPayloadRaw) {
         await this.migrateLegacyAccountData(accountId);
-        secretPayloadRaw = await SecureStore.getItemAsync(
+        secretPayloadRaw = await secureStorage.getItem(
           this.secretKey(accountId)
         );
       }
@@ -522,8 +521,8 @@ export class AccountSecureStorage {
       await this.saveSecret(accountId, null);
 
       // Remove metadata
-      await AsyncStorage.removeItem(this.metadataKey(accountId));
-      await SecureStore.deleteItemAsync(
+      await storage.removeItem(this.metadataKey(accountId));
+      await secureStorage.deleteItem(
         `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`
       ).catch(() => {});
 
@@ -531,29 +530,29 @@ export class AccountSecureStorage {
       await this.removeFromAccountList(accountId);
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to delete account: ${error.message}`
+        `Failed to delete account: ${(error as Error).message}`
       );
     }
   }
 
   static async getAllAccountIds(): Promise<string[]> {
     try {
-      const stored = await AsyncStorage.getItem(this.METADATA_LIST_KEY);
+      const stored = await storage.getItem(this.METADATA_LIST_KEY);
       if (stored) {
         return JSON.parse(stored) as string[];
       }
 
-      const legacy = await SecureStore.getItemAsync(this.METADATA_LIST_KEY);
+      const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
       if (legacy) {
-        await AsyncStorage.setItem(this.METADATA_LIST_KEY, legacy);
-        await SecureStore.deleteItemAsync(this.METADATA_LIST_KEY).catch(() => {});
+        await storage.setItem(this.METADATA_LIST_KEY, legacy);
+        await secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {});
         return JSON.parse(legacy) as string[];
       }
 
       return [];
     } catch (error) {
       throw new AccountRetrievalError(
-        `Failed to retrieve account list: ${error.message}`
+        `Failed to retrieve account list: ${(error as Error).message}`
       );
     }
   }
@@ -566,8 +565,8 @@ export class AccountSecureStorage {
 
     try {
       // Generate a strong encryption key using device-specific entropy
-      const salt = await Crypto.getRandomBytesAsync(32);
-      const iv = await Crypto.getRandomBytesAsync(16); // 128-bit IV for AES
+      const salt = await platformCrypto.getRandomBytes(32);
+      const iv = await platformCrypto.getRandomBytes(16); // 128-bit IV for AES
       keyMaterial = await this.deriveEncryptionKey(salt);
 
       // Convert private key to hex string for encryption
@@ -739,16 +738,12 @@ export class AccountSecureStorage {
 
   private static async deriveEncryptionKey(salt: Uint8Array): Promise<string> {
     try {
-      // Get a stable, app-scoped device id (stored once in SecureStore)
+      // Get a stable, app-scoped device id
       const deviceId = await this.getStableDeviceId();
 
       // Hash into fixed-size entropy (deterministic across runs)
       const entropyString = `voi_wallet_${deviceId}`;
-      const baseEntropy = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
-        entropyString,
-        { encoding: Crypto.CryptoEncoding.HEX }
-      );
+      const baseEntropy = await platformCrypto.sha256(entropyString);
 
       // Derive key using custom PBKDF2 with high iteration count
       const saltHex = Buffer.from(salt).toString('hex');
@@ -774,11 +769,7 @@ export class AccountSecureStorage {
     try {
       const deviceId = await this.getStableDeviceId();
       const entropyString = `voi_wallet_pin_${pin}_${deviceId}`;
-      const baseEntropy = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
-        entropyString,
-        { encoding: Crypto.CryptoEncoding.HEX }
-      );
+      const baseEntropy = await platformCrypto.sha256(entropyString);
 
       const saltHex = Buffer.from(salt).toString('hex');
       const key = customPBKDF2(
@@ -796,54 +787,9 @@ export class AccountSecureStorage {
     }
   }
 
-  // Ensure a stable installation-scoped id, persisted outside SecureStore
+  // Ensure a stable installation-scoped id using platform adapter
   private static async getStableDeviceId(): Promise<string> {
-    const existing = await SecureStore.getItemAsync(
-      this.DEVICE_ID_KEY,
-      SECURE_STORE_OPTIONS
-    );
-    if (existing) {
-      return existing;
-    }
-
-    const legacy = await AsyncStorage.getItem(this.DEVICE_ID_KEY);
-    if (legacy) {
-      await SecureStore.setItemAsync(
-        this.DEVICE_ID_KEY,
-        legacy,
-        SECURE_STORE_OPTIONS
-      );
-      await AsyncStorage.removeItem(this.DEVICE_ID_KEY).catch(() => {});
-      return legacy;
-    }
-
-    // Try platform-provided identifiers
-    let candidate: string | null = null;
-    try {
-      const iosGetter: any = (Application as any).getIosIdForVendorAsync;
-      if (typeof iosGetter === 'function') {
-        candidate = await iosGetter.call(Application);
-      }
-    } catch {}
-    try {
-      const androidId: any = (Application as any).androidId;
-      if (typeof androidId === 'string' && androidId.length > 0) {
-        candidate = androidId;
-      }
-    } catch {}
-
-    if (!candidate) {
-      const bytes = await Crypto.getRandomBytesAsync(16);
-      candidate = Buffer.from(bytes).toString('hex');
-    }
-
-    await SecureStore.setItemAsync(
-      this.DEVICE_ID_KEY,
-      candidate,
-      SECURE_STORE_OPTIONS
-    );
-    await AsyncStorage.removeItem(this.DEVICE_ID_KEY).catch(() => {});
-    return candidate;
+    return await platformDeviceId.getDeviceId();
   }
 
   private static async storeAccountMetadata(
@@ -864,14 +810,14 @@ export class AccountSecureStorage {
       const accountIds = await this.getAllAccountIds();
       if (!accountIds.includes(accountId)) {
         accountIds.push(accountId);
-        await AsyncStorage.setItem(
+        await storage.setItem(
           this.METADATA_LIST_KEY,
           JSON.stringify(accountIds)
         );
       }
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to update account list: ${error.message}`
+        `Failed to update account list: ${(error as Error).message}`
       );
     }
   }
@@ -880,13 +826,13 @@ export class AccountSecureStorage {
     try {
       const accountIds = await this.getAllAccountIds();
       const updatedIds = accountIds.filter((id) => id !== accountId);
-      await AsyncStorage.setItem(
+      await storage.setItem(
         this.METADATA_LIST_KEY,
         JSON.stringify(updatedIds)
       );
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to update account list: ${error.message}`
+        `Failed to update account list: ${(error as Error).message}`
       );
     }
   }
@@ -912,20 +858,19 @@ export class AccountSecureStorage {
 
   private static async requireAuthentication(purpose: string): Promise<void> {
     try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      const available = await biometrics.isAvailable();
+      const enrolled = await biometrics.isEnrolled();
 
-      if (!hasHardware || !isEnrolled) {
+      if (!available || !enrolled) {
         throw new AuthenticationRequiredError(
           'Biometric authentication not available'
         );
       }
 
-      const result = await LocalAuthentication.authenticateAsync({
+      const result = await biometrics.authenticate({
         promptMessage: this.getAuthMessage(purpose),
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
-        requireConfirmation: true,
       });
 
       if (!result.success) {
@@ -938,7 +883,7 @@ export class AccountSecureStorage {
         throw error;
       }
       throw new AuthenticationRequiredError(
-        `Authentication error: ${error.message}`
+        `Authentication error: ${(error as Error).message}`
       );
     }
   }
@@ -1094,10 +1039,10 @@ export class AccountSecureStorage {
 
   static async deletePin(): Promise<void> {
     try {
-      await AsyncStorage.removeItem(this.PIN_KEY);
-      await SecureStore.deleteItemAsync(this.PIN_KEY).catch(() => {});
-      await AsyncStorage.removeItem(this.SALT_KEY).catch(() => {});
-      await SecureStore.deleteItemAsync(this.SALT_KEY).catch(() => {});
+      await storage.removeItem(this.PIN_KEY);
+      await secureStorage.deleteItem(this.PIN_KEY).catch(() => {});
+      await storage.removeItem(this.SALT_KEY).catch(() => {});
+      await secureStorage.deleteItem(this.SALT_KEY).catch(() => {});
       this.legacyCheckRequired = undefined;
     } catch (error) {
       throw new AccountStorageError('Failed to delete PIN');
@@ -1107,11 +1052,11 @@ export class AccountSecureStorage {
   // Biometric Settings
   static async setBiometricEnabled(enabled: boolean): Promise<void> {
     try {
-      await AsyncStorage.setItem(
+      await storage.setItem(
         this.BIOMETRIC_ENABLED_KEY,
         enabled.toString()
       );
-      await SecureStore.deleteItemAsync(this.BIOMETRIC_ENABLED_KEY).catch(
+      await secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(
         () => {}
       );
     } catch (error) {
@@ -1121,12 +1066,12 @@ export class AccountSecureStorage {
 
   static async isBiometricEnabled(): Promise<boolean> {
     try {
-      let enabled = await AsyncStorage.getItem(this.BIOMETRIC_ENABLED_KEY);
+      let enabled = await storage.getItem(this.BIOMETRIC_ENABLED_KEY);
       if (!enabled) {
-        const legacy = await SecureStore.getItemAsync(this.BIOMETRIC_ENABLED_KEY);
+        const legacy = await secureStorage.getItem(this.BIOMETRIC_ENABLED_KEY);
         if (legacy) {
-          await AsyncStorage.setItem(this.BIOMETRIC_ENABLED_KEY, legacy);
-          await SecureStore.deleteItemAsync(this.BIOMETRIC_ENABLED_KEY).catch(
+          await storage.setItem(this.BIOMETRIC_ENABLED_KEY, legacy);
+          await secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(
             () => {}
           );
           enabled = legacy;
@@ -1141,11 +1086,11 @@ export class AccountSecureStorage {
   // PIN Timeout Settings
   static async setPinTimeout(timeoutMinutes: number | 'never'): Promise<void> {
     try {
-      await AsyncStorage.setItem(
+      await storage.setItem(
         this.PIN_TIMEOUT_KEY,
         String(timeoutMinutes)
       );
-      await SecureStore.deleteItemAsync(this.PIN_TIMEOUT_KEY).catch(() => {});
+      await secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {});
     } catch (error) {
       throw new AccountStorageError('Failed to store PIN timeout setting');
     }
@@ -1153,12 +1098,12 @@ export class AccountSecureStorage {
 
   static async getPinTimeout(): Promise<number | 'never'> {
     try {
-      let timeout = await AsyncStorage.getItem(this.PIN_TIMEOUT_KEY);
+      let timeout = await storage.getItem(this.PIN_TIMEOUT_KEY);
       if (!timeout) {
-        const legacy = await SecureStore.getItemAsync(this.PIN_TIMEOUT_KEY);
+        const legacy = await secureStorage.getItem(this.PIN_TIMEOUT_KEY);
         if (legacy) {
-          await AsyncStorage.setItem(this.PIN_TIMEOUT_KEY, legacy);
-          await SecureStore.deleteItemAsync(this.PIN_TIMEOUT_KEY).catch(() => {});
+          await storage.setItem(this.PIN_TIMEOUT_KEY, legacy);
+          await secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {});
           timeout = legacy;
         }
       }
@@ -1187,10 +1132,7 @@ export class AccountSecureStorage {
 
   private static async getStoredPinData(): Promise<StoredPinData | null> {
     try {
-      const stored = await SecureStore.getItemAsync(
-        this.PIN_KEY,
-        SECURE_STORE_OPTIONS
-      );
+      const stored = await secureStorage.getItem(this.PIN_KEY);
       if (stored) {
         const parsed = this.parseStoredPin(stored);
         if (parsed) {
@@ -1198,14 +1140,10 @@ export class AccountSecureStorage {
         }
       }
 
-      const legacy = await AsyncStorage.getItem(this.PIN_KEY);
+      const legacy = await storage.getItem(this.PIN_KEY);
       if (legacy) {
-        await SecureStore.setItemAsync(
-          this.PIN_KEY,
-          legacy,
-          SECURE_STORE_OPTIONS
-        );
-        await AsyncStorage.removeItem(this.PIN_KEY).catch(() => {});
+        await secureStorage.setItem(this.PIN_KEY, legacy);
+        await storage.removeItem(this.PIN_KEY).catch(() => {});
         const parsed = this.parseStoredPin(legacy);
         if (parsed) {
           return parsed;
@@ -1221,23 +1159,16 @@ export class AccountSecureStorage {
   private static async getOrCreateSalt(regenerate: boolean = false): Promise<string> {
     try {
       if (!regenerate) {
-        const existing = await SecureStore.getItemAsync(
-          this.SALT_KEY,
-          SECURE_STORE_OPTIONS
-        );
+        const existing = await secureStorage.getItem(this.SALT_KEY);
         if (existing) {
           return existing;
         }
       }
 
-      const legacy = await AsyncStorage.getItem(this.SALT_KEY);
+      const legacy = await storage.getItem(this.SALT_KEY);
       if (!regenerate && legacy) {
-        await SecureStore.setItemAsync(
-          this.SALT_KEY,
-          legacy,
-          SECURE_STORE_OPTIONS
-        );
-        await AsyncStorage.removeItem(this.SALT_KEY).catch(() => {});
+        await secureStorage.setItem(this.SALT_KEY, legacy);
+        await storage.removeItem(this.SALT_KEY).catch(() => {});
         return legacy;
       }
 
@@ -1246,12 +1177,8 @@ export class AccountSecureStorage {
       }
 
       const salt = await this.generateRandomHex(32);
-      await SecureStore.setItemAsync(
-        this.SALT_KEY,
-        salt,
-        SECURE_STORE_OPTIONS
-      );
-      await AsyncStorage.removeItem(this.SALT_KEY).catch(() => {});
+      await secureStorage.setItem(this.SALT_KEY, salt);
+      await storage.removeItem(this.SALT_KEY).catch(() => {});
       return salt;
     } catch (error) {
       throw new AccountStorageError('Failed to generate or retrieve salt');
@@ -1259,7 +1186,7 @@ export class AccountSecureStorage {
   }
 
   private static async generateRandomHex(byteLength: number): Promise<string> {
-    const randomBytes = await Crypto.getRandomBytesAsync(byteLength);
+    const randomBytes = await platformCrypto.getRandomBytes(byteLength);
     return Array.from(randomBytes, (byte) =>
       byte.toString(16).padStart(2, '0')
     ).join('');
@@ -1306,15 +1233,11 @@ export class AccountSecureStorage {
   ): Promise<void> {
     const payload = JSON.stringify({ hash, iterations });
 
-    await SecureStore.setItemAsync(
-      this.PIN_KEY,
-      payload,
-      SECURE_STORE_OPTIONS
-    );
-    await SecureStore.setItemAsync(this.SALT_KEY, salt, SECURE_STORE_OPTIONS);
+    await secureStorage.setItem(this.PIN_KEY, payload);
+    await secureStorage.setItem(this.SALT_KEY, salt);
 
-    await AsyncStorage.removeItem(this.PIN_KEY).catch(() => {});
-    await AsyncStorage.removeItem(this.SALT_KEY).catch(() => {});
+    await storage.removeItem(this.PIN_KEY).catch(() => {});
+    await storage.removeItem(this.SALT_KEY).catch(() => {});
   }
 
   static async clearSensitiveData(): Promise<void> {
@@ -1344,8 +1267,8 @@ export class AccountSecureStorage {
         await this.deleteAccount(accountId);
       }
 
-      // Clear PIN and settings
-      await AsyncStorage.multiRemove([
+      // Clear PIN and settings from general storage
+      await storage.multiRemove([
         this.PIN_KEY,
         this.SALT_KEY,
         this.BIOMETRIC_ENABLED_KEY,
@@ -1353,13 +1276,14 @@ export class AccountSecureStorage {
         this.PIN_TIMEOUT_KEY,
         this.DEVICE_ID_KEY,
       ]);
+      // Clear from secure storage
       await Promise.all([
-        SecureStore.deleteItemAsync(this.PIN_KEY).catch(() => {}),
-        SecureStore.deleteItemAsync(this.SALT_KEY).catch(() => {}),
-        SecureStore.deleteItemAsync(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
-        SecureStore.deleteItemAsync(this.METADATA_LIST_KEY).catch(() => {}),
-        SecureStore.deleteItemAsync(this.PIN_TIMEOUT_KEY).catch(() => {}),
-        SecureStore.deleteItemAsync(this.DEVICE_ID_KEY).catch(() => {}),
+        secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),
+        secureStorage.deleteItem(this.SALT_KEY).catch(() => {}),
+        secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
+        secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
+        secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
+        secureStorage.deleteItem(this.DEVICE_ID_KEY).catch(() => {}),
       ]);
     } catch (error) {
       throw new AccountStorageError('Failed to clear all secure storage');

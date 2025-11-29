@@ -6,9 +6,20 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
+
+// Cross-platform alert helper
+const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void}>) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+    buttons?.[0]?.onPress?.();
+  } else {
+    const { Alert } = require('react-native');
+    Alert.alert(title, message, buttons);
+  }
+};
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
@@ -40,7 +51,7 @@ export default function PinCollectionModal({
 
   const handleVerify = async () => {
     if (pin.length !== 6) {
-      Alert.alert('Error', 'PIN must be 6 digits');
+      showAlert('Error', 'PIN must be 6 digits');
       return;
     }
 
@@ -61,13 +72,13 @@ export default function PinCollectionModal({
         setPin('');
 
         if (newAttempts >= 5) {
-          Alert.alert(
+          showAlert(
             'Too Many Attempts',
             'Too many failed PIN attempts. Please try again later.',
             [{ text: 'OK', onPress: onCancel }]
           );
         } else {
-          Alert.alert(
+          showAlert(
             'Incorrect PIN',
             `Incorrect PIN. ${5 - newAttempts} attempts remaining.`
           );
@@ -75,7 +86,7 @@ export default function PinCollectionModal({
       }
     } catch (error) {
       console.error('PIN verification error:', error);
-      Alert.alert('Error', 'Failed to verify PIN');
+      showAlert('Error', 'Failed to verify PIN');
     } finally {
       setIsVerifying(false);
     }

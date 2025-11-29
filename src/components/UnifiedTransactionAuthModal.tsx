@@ -6,12 +6,20 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
-  Vibration,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
+
+// Cross-platform vibration helper
+const vibrate = (duration: number) => {
+  if (Platform.OS !== 'web') {
+    const { Vibration } = require('react-native');
+    Vibration.vibrate(duration);
+  }
+};
 import {
   TransactionAuthController,
   TransactionAuthState_Interface,
@@ -38,6 +46,7 @@ export default function UnifiedTransactionAuthModal({
   title = 'Transaction Authentication',
   message = 'Authenticate to complete this transaction',
 }: UnifiedTransactionAuthModalProps) {
+  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [authState, setAuthState] = useState<TransactionAuthState_Interface>(controller.getState());
   const [pin, setPin] = useState('');
@@ -109,7 +118,7 @@ export default function UnifiedTransactionAuthModal({
       const success = await controller.authenticateWithPin(enteredPin);
       if (!success) {
         setPin('');
-        Vibration.vibrate(500);
+        vibrate(500);
       }
     } catch (error) {
       console.error('PIN authentication error:', error);
@@ -216,7 +225,7 @@ export default function UnifiedTransactionAuthModal({
                     <Ionicons
                       name="backspace-outline"
                       size={20}
-                      color={styles.keypadIconColor}
+                      color={theme.colors.text}
                     />
                   </TouchableOpacity>
                 );
@@ -251,35 +260,35 @@ export default function UnifiedTransactionAuthModal({
           message: deviceConnected
             ? 'Please unlock your Ledger device and open the Algorand app...'
             : 'Looking for your Ledger device. Please unlock it and open the Algorand app...',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'connecting':
         return {
           icon: 'link' as const,
           title: 'Connecting to Ledger',
           message: 'Connecting to your Ledger device. Please ensure it is unlocked and the Algorand app is open.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'app_required':
         return {
           icon: 'apps' as const,
           title: 'Open Algorand App',
           message: 'Please open the Algorand application on your Ledger device.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'ready':
         return {
           icon: 'checkmark-circle' as const,
           title: 'Ledger Ready',
           message: 'Your Ledger device is ready. Preparing transaction...',
-          color: styles.successIconColor,
+          color: theme.colors.success,
         };
       case 'device_locked':
         return {
           icon: 'lock-closed' as const,
           title: 'Unlock Ledger',
           message: 'Please unlock your Ledger device to continue.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'waiting_confirmation':
         return {
@@ -288,21 +297,21 @@ export default function UnifiedTransactionAuthModal({
           message: authState.signingProgress
             ? authState.signingProgress.message || 'Please review and approve the transaction on your Ledger device.'
             : 'Please review and approve the transaction on your Ledger device.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'error':
         return {
           icon: 'link' as const,
           title: 'Connecting to Ledger',
           message: authState.ledgerError || 'Trying to connect to your Ledger device. Please ensure it is connected, unlocked, and the Algorand app is open.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       default:
         return {
           icon: 'hardware-chip' as const,
           title: 'Initializing Ledger',
           message: 'Preparing Ledger connection...',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
     }
   };
@@ -373,7 +382,7 @@ export default function UnifiedTransactionAuthModal({
                 <Ionicons
                   name="finger-print"
                   size={24}
-                  color={styles.primaryIconColor}
+                  color={theme.colors.primary}
                 />
                 <Text style={styles.biometricText}>Use Biometric</Text>
               </TouchableOpacity>
@@ -429,7 +438,7 @@ export default function UnifiedTransactionAuthModal({
 
         return (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color={styles.primaryIconColor as any} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={styles.processingTitle}>Signing Transaction</Text>
             <Text style={styles.processingMessage}>
               Please wait while your transaction is being signed...
@@ -440,7 +449,7 @@ export default function UnifiedTransactionAuthModal({
       case 'processing':
         return (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color={styles.primaryIconColor as any} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={styles.processingTitle}>Processing Transaction</Text>
             <Text style={styles.processingMessage}>
               Please wait while your transaction is being processed...
@@ -454,7 +463,7 @@ export default function UnifiedTransactionAuthModal({
             <Ionicons
               name="checkmark-circle"
               size={48}
-              color={styles.successIconColor}
+              color={theme.colors.success}
             />
             <Text style={styles.successTitle}>Transaction Complete</Text>
             <Text style={styles.successMessage}>
@@ -469,7 +478,7 @@ export default function UnifiedTransactionAuthModal({
             <Ionicons
               name={isUserRejectedError ? 'close-circle' : 'alert-circle'}
               size={48}
-              color={styles.errorIconColor}
+              color={theme.colors.error}
             />
             <Text style={styles.errorTitle}>{getErrorTitle()}</Text>
             <Text style={styles.errorMessage}>{getErrorMessage()}</Text>
@@ -479,7 +488,7 @@ export default function UnifiedTransactionAuthModal({
       default:
         return (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color={styles.primaryIconColor as any} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={styles.processingTitle}>Initializing</Text>
             <Text style={styles.processingMessage}>
               Preparing transaction authentication...
@@ -586,7 +595,7 @@ export default function UnifiedTransactionAuthModal({
             <Ionicons
               name="shield-checkmark"
               size={32}
-              color={styles.primaryIconColor}
+              color={theme.colors.primary}
             />
             <Text style={styles.title}>{title}</Text>
             <Text style={styles.message}>{message}</Text>
@@ -876,10 +885,4 @@ const createStyles = (theme: Theme) =>
       textAlign: 'center',
       marginTop: theme.spacing.sm,
     },
-
-    // Colors
-    primaryIconColor: theme.colors.primary as any,
-    successIconColor: theme.colors.success as any,
-    errorIconColor: theme.colors.error as any,
-    keypadIconColor: theme.colors.text as any,
   });

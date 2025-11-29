@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Voi Wallet",
+  "version": "0.1.17",
+  "description": "Voi Wallet is a self-custody mobile wallet built to provide a seamless, secure, and powerful experience on Voi Network, as well as other AVM-compatible (Algorand Virtual Machine) networks such as Algorand.",
+  "action": {
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage"
+  ]
+}

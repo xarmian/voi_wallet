@@ -1,6 +1,6 @@
 import algosdk from 'algosdk';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
+import { Buffer } from 'buffer';
+import { storage, secureStorage } from '../../platform';
 import {
   WalletAccount,
   WalletInfo,
@@ -1189,10 +1189,10 @@ export class MultiAccountWalletService {
     };
   }
 
-  // Storage methods using AsyncStorage
+  // Storage methods using platform adapters
   private static async getStoredValue(key: string): Promise<string | null> {
     try {
-      const value = await AsyncStorage.getItem(key);
+      const value = await storage.getItem(key);
       if (value) {
         return value;
       }
@@ -1206,7 +1206,7 @@ export class MultiAccountWalletService {
 
   private static async storeValue(key: string, value: string): Promise<void> {
     try {
-      await AsyncStorage.setItem(key, value);
+      await storage.setItem(key, value);
       await this.clearLegacyValue(key);
     } catch (error) {
       console.error(`Failed to store value for key ${key}:`, error);
@@ -1233,7 +1233,8 @@ export class MultiAccountWalletService {
 
   private static async migrateLegacyValue(key: string): Promise<string | null> {
     try {
-      const legacyValue = await SecureStore.getItemAsync(key);
+      // Try to get from secure storage (legacy location)
+      const legacyValue = await secureStorage.getItem(key);
       if (!legacyValue) {
         return null;
       }
@@ -1250,8 +1251,8 @@ export class MultiAccountWalletService {
         }
       }
 
-      await AsyncStorage.setItem(key, valueToPersist);
-      await SecureStore.deleteItemAsync(key).catch(() => {});
+      await storage.setItem(key, valueToPersist);
+      await secureStorage.deleteItem(key).catch(() => {});
       return valueToPersist;
     } catch (error) {
       console.error(`Failed to migrate legacy value for key ${key}:`, error);
@@ -1261,7 +1262,7 @@ export class MultiAccountWalletService {
 
   private static async clearLegacyValue(key: string): Promise<void> {
     try {
-      await SecureStore.deleteItemAsync(key).catch(() => {});
+      await secureStorage.deleteItem(key).catch(() => {});
     } catch {
       // Ignore errors when clearing legacy storage
     }

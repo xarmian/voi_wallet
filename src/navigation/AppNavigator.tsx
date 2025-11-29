@@ -8,7 +8,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { detectPlatform } from '@/platform/detection';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -480,11 +481,25 @@ function MainTabNavigator() {
             return <Ionicons name={iconName} size={size} color={color} />;
           },
           tabBarButton: (props) => {
+            // Wrap all tab buttons in TouchableOpacity to prevent default web anchor behavior
+            // which can cause full page navigation in Chrome extensions
+            const handlePress = (e: any) => {
+              // Prevent default browser navigation
+              if (e?.preventDefault) {
+                e.preventDefault();
+              }
+              // Call the original onPress
+              if (props.onPress) {
+                props.onPress(e);
+              }
+            };
+
             if (route.name === 'Discover') {
               return (
                 <View style={styles.centerButtonContainer}>
                   <TouchableOpacity
                     {...props}
+                    onPress={handlePress}
                     style={[
                       styles.centerButton,
                       props.accessibilityState?.selected &&
@@ -509,7 +524,7 @@ function MainTabNavigator() {
                 </View>
               );
             }
-            return <TouchableOpacity {...props} />;
+            return <TouchableOpacity {...props} onPress={handlePress} />;
           },
           tabBarActiveTintColor: tabIconActive,
           tabBarInactiveTintColor: tabIconInactive,
@@ -711,9 +726,23 @@ function NavigationActivityWrapper() {
 
 export default function AppNavigator() {
   const navigationRef = useRef<any>(null);
+  const initializationRef = useRef<boolean>(false);
   const { initializeNetwork } = useNetworkStore();
 
+  // Disable URL-based linking for Chrome extensions to prevent "file couldn't be accessed" errors
+  const isExtension = Platform.OS === 'web' && detectPlatform() === 'extension';
+
+  // For extensions, don't use any linking config - this completely disables URL-based navigation
+  // which prevents full page reloads when switching tabs
+  const linkingConfig = undefined;
+
   useEffect(() => {
+    // Prevent double initialization (can happen with StrictMode or fast remounts)
+    if (initializationRef.current) {
+      return;
+    }
+    initializationRef.current = true;
+
     const initializeServices = async () => {
       try {
         // Initialize Network store
@@ -838,7 +867,11 @@ export default function AppNavigator() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
         <BottomSheetModalProvider>
-          <NavigationContainer ref={navigationRef}>
+          <NavigationContainer
+            ref={navigationRef}
+            linking={linkingConfig}
+            documentTitle={{ enabled: false }}
+          >
             <NavigationActivityWrapper />
           </NavigationContainer>
         </BottomSheetModalProvider>
