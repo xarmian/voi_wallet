@@ -57,7 +57,9 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { WalletConnectService } from '@/services/walletconnect';
 import { DeepLinkService } from '@/services/deeplink';
+import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { ledgerTransportService } from '@/services/ledger/transport';
+import { isWalletConnectUri } from '@/services/walletconnect/utils';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
@@ -813,6 +815,16 @@ export default function AppNavigator() {
         }
         await deepLinkService.initialize();
 
+        // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
+        if (Platform.OS === 'web' && detectPlatform() === 'extension') {
+          extensionDeepLinkHandler.initialize(async (uri: string) => {
+            console.log('[AppNavigator] Extension received WC URI:', uri);
+            if (isWalletConnectUri(uri)) {
+              await deepLinkService.testDeepLink(uri);
+            }
+          });
+        }
+
         // Initialize Ledger transport service to load persisted devices
         try {
           await ledgerTransportService.initialize({
@@ -853,6 +865,7 @@ export default function AppNavigator() {
           try {
             wcService.off?.('session_proposal', onProposal);
             wcService.off?.('session_request', onRequest);
+            extensionDeepLinkHandler.cleanup();
           } catch {}
         };
       } catch (error) {

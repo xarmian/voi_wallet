@@ -20,5 +20,8 @@
   },
   "permissions": [
     "storage"
-  ]
+  ],
+  "externally_connectable": {
+    "matches": ["https://www.getvoi.app/*", "https://*.getvoi.app/*"]
+  }
 }
