@@ -67,6 +67,7 @@ import { ScannedAccount } from '@/utils/accountQRParser';
 import { NFTToken } from '@/types/nft';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
 
 export type RootStackParamList = {
   Main: undefined;
@@ -461,158 +462,128 @@ function MainTabNavigator() {
 
   return (
     <AuthGuard>
-      <Tab.Navigator
-        screenOptions={({ route }) => ({
-          tabBarIcon: ({ focused, color, size }) => {
-            let iconName: keyof typeof Ionicons.glyphMap;
+      <View style={{ flex: 1 }}>
+        <Tab.Navigator
+          screenOptions={({ route }) => ({
+            tabBarIcon: ({ focused, color, size }) => {
+              let iconName: keyof typeof Ionicons.glyphMap;
 
-            if (route.name === 'Home') {
-              iconName = focused ? 'wallet' : 'wallet-outline';
-            } else if (route.name === 'Friends') {
-              iconName = focused ? 'people' : 'people-outline';
-            } else if (route.name === 'NFTs') {
-              iconName = focused ? 'images' : 'images-outline';
-            } else if (route.name === 'Discover') {
-              iconName = focused ? 'compass' : 'compass-outline';
-            } else if (route.name === 'Settings') {
-              iconName = focused ? 'settings' : 'settings-outline';
-            } else {
-              iconName = 'help-outline';
-            }
-
-            return <Ionicons name={iconName} size={size} color={color} />;
-          },
-          tabBarButton: (props) => {
-            // Wrap all tab buttons in TouchableOpacity to prevent default web anchor behavior
-            // which can cause full page navigation in Chrome extensions
-            const handlePress = (e: any) => {
-              // Prevent default browser navigation
-              if (e?.preventDefault) {
-                e.preventDefault();
+              if (route.name === 'Home') {
+                iconName = focused ? 'wallet' : 'wallet-outline';
+              } else if (route.name === 'Friends') {
+                iconName = focused ? 'people' : 'people-outline';
+              } else if (route.name === 'NFTs') {
+                iconName = focused ? 'images' : 'images-outline';
+              } else if (route.name === 'Discover') {
+                // Hidden - FABRadialMenu handles this
+                iconName = 'compass-outline';
+              } else if (route.name === 'Settings') {
+                iconName = focused ? 'settings' : 'settings-outline';
+              } else {
+                iconName = 'help-outline';
               }
-              // Call the original onPress
-              if (props.onPress) {
-                props.onPress(e);
-              }
-            };
 
-            if (route.name === 'Discover') {
-              return (
-                <View style={styles.centerButtonContainer}>
-                  <TouchableOpacity
-                    {...props}
-                    onPress={handlePress}
-                    style={[
-                      styles.centerButton,
-                      props.accessibilityState?.selected &&
-                        styles.centerButtonActive,
-                    ]}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={
-                        props.accessibilityState?.selected
-                          ? 'compass'
-                          : 'compass-outline'
-                      }
-                      size={28}
-                      color={
-                        props.accessibilityState?.selected
-                          ? primaryColor
-                          : 'white'
-                      }
-                    />
-                  </TouchableOpacity>
-                </View>
-              );
-            }
-            return <TouchableOpacity {...props} onPress={handlePress} />;
-          },
-          tabBarActiveTintColor: tabIconActive,
-          tabBarInactiveTintColor: tabIconInactive,
-          tabBarStyle: {
-            backgroundColor: tabBackground,
-            borderTopColor: borderColor,
-          },
-          headerShown: false,
-        })}
-      >
-        <Tab.Screen
-          name="Home"
-          component={WalletStackNavigator}
-          listeners={{
-            tabPress: () => updateActivity(),
-          }}
-        />
-        <Tab.Screen
-          name="Friends"
-          component={FriendsStackNavigator}
-          options={{
-            tabBarLabel: 'Friends',
-          }}
-          listeners={{
-            tabPress: () => updateActivity(),
-          }}
-        />
-        <Tab.Screen
-          name="Discover"
-          component={DiscoverScreen}
-          options={{
-            tabBarLabel: '',
-          }}
-          listeners={({ navigation, route }) => ({
-            tabPress: (e) => {
-              updateActivity();
-
-              // If already on Discover tab, trigger a reload
-              if (navigation.isFocused() && route.name === 'Discover') {
-                e.preventDefault();
-                // Trigger a reload by navigating to the same screen with a timestamp
-                navigation.navigate('Discover', { reload: Date.now() });
-              }
+              return <Ionicons name={iconName} size={size} color={color} />;
             },
+            tabBarButton: (props) => {
+              // Wrap all tab buttons in TouchableOpacity to prevent default web anchor behavior
+              // which can cause full page navigation in Chrome extensions
+              const handlePress = (e: any) => {
+                // Prevent default browser navigation
+                if (e?.preventDefault) {
+                  e.preventDefault();
+                }
+                // Call the original onPress
+                if (props.onPress) {
+                  props.onPress(e);
+                }
+              };
+
+              if (route.name === 'Discover') {
+                // Invisible placeholder to reserve space for FABRadialMenu
+                return (
+                  <View style={styles.centerButtonPlaceholder} />
+                );
+              }
+              return <TouchableOpacity {...props} onPress={handlePress} />;
+            },
+            tabBarActiveTintColor: tabIconActive,
+            tabBarInactiveTintColor: tabIconInactive,
+            tabBarStyle: {
+              backgroundColor: tabBackground,
+              borderTopColor: borderColor,
+            },
+            headerShown: false,
           })}
-        />
-        <Tab.Screen
-          name="NFTs"
-          component={NFTStackNavigator}
-          listeners={{
-            tabPress: () => updateActivity(),
-          }}
-        />
-        <Tab.Screen
-          name="Settings"
-          component={SettingsStackNavigator}
-          listeners={({ navigation, route }) => ({
-            tabPress: () => {
-              updateActivity();
+        >
+          <Tab.Screen
+            name="Home"
+            component={WalletStackNavigator}
+            listeners={{
+              tabPress: () => updateActivity(),
+            }}
+          />
+          <Tab.Screen
+            name="Friends"
+            component={FriendsStackNavigator}
+            options={{
+              tabBarLabel: 'Friends',
+            }}
+            listeners={{
+              tabPress: () => updateActivity(),
+            }}
+          />
+          <Tab.Screen
+            name="Discover"
+            component={DiscoverScreen}
+            options={{
+              tabBarLabel: '',
+            }}
+          />
+          <Tab.Screen
+            name="NFTs"
+            component={NFTStackNavigator}
+            listeners={{
+              tabPress: () => updateActivity(),
+            }}
+          />
+          <Tab.Screen
+            name="Settings"
+            component={SettingsStackNavigator}
+            listeners={({ navigation, route }) => ({
+              tabPress: () => {
+                updateActivity();
 
-              const state = navigation.getState();
-              const settingsRoute = state.routes.find(
-                (r) => r.key === route.key
-              );
-              const stackState = settingsRoute?.state as
-                | {
-                    key: string;
-                    type: string;
-                    index: number;
-                  }
-                | undefined;
+                const state = navigation.getState();
+                const settingsRoute = state.routes.find(
+                  (r) => r.key === route.key
+                );
+                const stackState = settingsRoute?.state as
+                  | {
+                      key: string;
+                      type: string;
+                      index: number;
+                    }
+                  | undefined;
 
-              if (stackState?.type === 'stack' && stackState.index > 0) {
-                navigation.dispatch({
-                  ...StackActions.popToTop(),
-                  target: stackState.key,
+                if (stackState?.type === 'stack' && stackState.index > 0) {
+                  navigation.dispatch({
+                    ...StackActions.popToTop(),
+                    target: stackState.key,
+                  });
+                }
+
+                navigation.navigate('Settings', {
+                  screen: 'SettingsMain',
                 });
-              }
+              },
+            })}
+          />
+        </Tab.Navigator>
 
-              navigation.navigate('Settings', {
-                screen: 'SettingsMain',
-              });
-            },
-          })}
-        />
-      </Tab.Navigator>
+        {/* FAB Radial Menu - rendered as overlay above tab bar */}
+        <FABRadialMenu />
+      </View>
     </AuthGuard>
   );
 }
@@ -895,26 +866,9 @@ export default function AppNavigator() {
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
-    centerButtonContainer: {
-      position: 'absolute',
-      top: -8,
-      left: 0,
-      right: 0,
-      justifyContent: 'center',
-      alignItems: 'center',
-      pointerEvents: 'box-none',
-    },
-    centerButton: {
+    centerButtonPlaceholder: {
       width: 60,
       height: 60,
-      borderRadius: 30,
-      backgroundColor: theme.colors.primary,
-      justifyContent: 'center',
-      alignItems: 'center',
-      pointerEvents: 'auto',
-      ...theme.shadows.md,
-    },
-    centerButtonActive: {
-      backgroundColor: theme.colors.primaryDark,
+      // Invisible placeholder to reserve space for FABRadialMenu
     },
   });
