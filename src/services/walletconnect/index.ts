@@ -441,8 +441,8 @@ export class WalletConnectService extends EventEmitter {
           metadata: v1SessionData.clientMeta || {
             name: 'Voi Wallet',
             description: 'Mobile wallet for Voi Network',
-            url: 'https://voiapp.com',
-            icons: [],
+            url: 'https://getvoi.app',
+            icons: ['https://getvoi.app/android-chrome-192x192.png', 'https://getvoi.app/android-chrome-512x512.png'],
           },
         },
         peer: {

@@ -7,6 +7,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { formatAssetBalance } from '@/utils/bigint';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
 
 interface AssetOption {
   networkId: NetworkId;
@@ -85,7 +86,11 @@ export default function NetworkAssetSelector({
     const config = getNetworkConfig(option.networkId);
 
     return (
-      <View style={styles.singleOptionCard}>
+      <BlurredContainer
+        variant="light"
+        borderRadius={styles.singleOptionCard.borderRadius}
+        style={styles.singleOptionCard}
+      >
         {renderAssetImage(option)}
         <View style={styles.singleOptionContent}>
           <View style={styles.singleOptionHeader}>
@@ -107,7 +112,7 @@ export default function NetworkAssetSelector({
             <Text style={styles.singleOptionAssetId}>ID: {option.assetId}</Text>
           )}
         </View>
-      </View>
+      </BlurredContainer>
     );
   }
 
@@ -126,33 +131,38 @@ export default function NetworkAssetSelector({
           return (
             <TouchableOpacity
               key={`${option.networkId}-${option.assetId}`}
-              style={[
-                styles.card,
-                isSelected && styles.cardSelected,
-                disabled && styles.cardDisabled,
-              ]}
               onPress={() => !disabled && onSelect(option.networkId, option.assetId)}
               disabled={disabled}
               activeOpacity={0.7}
+              style={disabled ? styles.cardDisabled : undefined}
             >
-              <View style={styles.cardHeader}>
-                <View style={[styles.networkDot, { backgroundColor: config.color }]} />
-                <Text style={[styles.networkName, isSelected && styles.networkNameSelected]}>
-                  {config.name.replace(' Network', '').replace(' Mainnet', '')}
+              <BlurredContainer
+                variant={isSelected ? 'medium' : 'light'}
+                borderRadius={styles.card.borderRadius}
+                style={[
+                  styles.card,
+                  isSelected && styles.cardSelected,
+                ]}
+              >
+                <View style={styles.cardHeader}>
+                  <View style={[styles.networkDot, { backgroundColor: config.color }]} />
+                  <Text style={[styles.networkName, !isSelected && styles.networkNameMuted]}>
+                    {config.name.replace(' Network', '').replace(' Mainnet', '')}
+                  </Text>
+                </View>
+
+                <Text style={[styles.assetName, !isSelected && styles.assetNameMuted]}>
+                  {option.name}
                 </Text>
-              </View>
 
-              <Text style={[styles.assetName, isSelected && styles.assetNameSelected]}>
-                {option.name}
-              </Text>
+                <Text style={[styles.balance, !isSelected && styles.balanceMuted]}>
+                  {formatAssetBalance(option.balance, option.decimals)} {option.symbol}
+                </Text>
 
-              <Text style={[styles.balance, isSelected && styles.balanceSelected]}>
-                {formatAssetBalance(option.balance, option.decimals)} {option.symbol}
-              </Text>
-
-              <Text style={styles.assetId}>
-                ID: {option.assetId}
-              </Text>
+                <Text style={[styles.assetId, !isSelected && styles.assetIdMuted]}>
+                  ID: {option.assetId}
+                </Text>
+              </BlurredContainer>
             </TouchableOpacity>
           );
         })}
@@ -183,22 +193,14 @@ const createStyles = (theme: Theme) =>
       paddingRight: theme.spacing.md,
     },
     card: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(255, 255, 255, 0.45)',
       borderWidth: 2,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.6)',
+      borderColor: 'transparent',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       minWidth: 140,
     },
     cardSelected: {
       borderColor: theme.colors.primary,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.18)'
-        : 'rgba(255, 255, 255, 0.65)',
     },
     cardDisabled: {
       opacity: 0.5,
@@ -217,11 +219,11 @@ const createStyles = (theme: Theme) =>
     networkName: {
       fontSize: 10,
       fontWeight: '600',
-      color: theme.colors.textSecondary,
+      color: theme.colors.primary,
       textTransform: 'uppercase',
     },
-    networkNameSelected: {
-      color: theme.colors.primary,
+    networkNameMuted: {
+      color: theme.colors.textMuted,
     },
     assetName: {
       fontSize: 14,
@@ -229,8 +231,8 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginBottom: 4,
     },
-    assetNameSelected: {
-      color: theme.colors.primary,
+    assetNameMuted: {
+      color: theme.colors.textSecondary,
     },
     balance: {
       fontSize: 16,
@@ -238,24 +240,20 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginBottom: theme.spacing.xs,
     },
-    balanceSelected: {
-      color: theme.colors.primary,
+    balanceMuted: {
+      color: theme.colors.textSecondary,
     },
     assetId: {
       fontSize: 10,
+      color: theme.colors.textSecondary,
+    },
+    assetIdMuted: {
       color: theme.colors.textMuted,
     },
     // Single option card styles
     singleOptionCard: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(255, 255, 255, 0.45)',
-      borderWidth: 2,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.6)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
