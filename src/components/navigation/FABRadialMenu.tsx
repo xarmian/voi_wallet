@@ -24,11 +24,12 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, CommonActions, TabActions } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs, timingConfigs } from '@/utils/animations';
 import { GlassCard } from '@/components/common/GlassCard';
 import { useActiveAccount } from '@/store/walletStore';
+import { useTotalUnreadCount } from '@/store/messagesStore';
 
 // Menu item configuration
 interface MenuItem {
@@ -44,6 +45,7 @@ const MENU_ITEMS: MenuItem[] = [
   { id: 'swap', label: 'Swap Tokens', icon: 'swap-horizontal', screen: 'Home', stackScreen: 'Swap' },
   { id: 'send', label: 'Send Tokens', icon: 'arrow-up', screen: 'Home', stackScreen: 'Send' },
   { id: 'receive', label: 'Receive Tokens', icon: 'arrow-down', screen: 'Home', stackScreen: 'Receive' },
+  { id: 'messages', label: 'Messages', icon: 'chatbubbles', screen: 'Friends', stackScreen: 'MessagesInbox' },
 ];
 
 // Vertical stack positioning constants
@@ -126,6 +128,7 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
   const { theme } = useTheme();
   const navigation = useNavigation<any>();
   const activeAccount = useActiveAccount();
+  const unreadCount = useTotalUnreadCount();
 
   // Animation shared values
   const menuProgress = useSharedValue(0);
@@ -162,16 +165,18 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
     // Navigate after a short delay for visual feedback
     const navigateToScreen = () => {
       if (item.stackScreen) {
-        // Navigate to nested stack screen (Send, Swap, Receive in WalletStack)
-        // Use Main -> Tab -> Stack screen navigation path
+        // Navigate to nested stack screen
         const params = item.stackScreen === 'Swap' && activeAccount
           ? { accountId: activeAccount.address }
           : {};
+
+        // Use Main -> Tab -> Stack screen navigation path
         navigation.navigate('Main', {
           screen: item.screen,
           params: {
             screen: item.stackScreen,
             params,
+            initial: false, // Prevents showing initial route first
           },
         });
       } else {
@@ -246,29 +251,40 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
           />
         ))}
 
-        {/* Center FAB button */}
-        <TouchableOpacity
-          style={[
-            styles.fabButton,
-            { backgroundColor: theme.colors.primary },
-            theme.shadows.md,
-          ]}
-          onPress={toggleMenu}
-          activeOpacity={0.8}
-        >
-          <Animated.View style={buttonIconStyle}>
-            {/* Compass icon (visible when closed) */}
-            <Animated.View style={compassOpacityStyle}>
-              <Ionicons name="compass" size={28} color="white" />
+        {/* Center FAB button with badge wrapper */}
+        <View style={styles.fabButtonWrapper}>
+          <TouchableOpacity
+            style={[
+              styles.fabButton,
+              { backgroundColor: theme.colors.primary },
+              theme.shadows.md,
+            ]}
+            onPress={toggleMenu}
+            activeOpacity={0.8}
+          >
+            <Animated.View style={buttonIconStyle}>
+              {/* Compass icon (visible when closed) */}
+              <Animated.View style={compassOpacityStyle}>
+                <Ionicons name="compass" size={28} color="white" />
+              </Animated.View>
+              {/* Close icon (visible when open) */}
+              <Animated.View style={closeIconOpacityStyle}>
+                <Ionicons name="close" size={28} color="white" />
+              </Animated.View>
+              {/* Invisible placeholder for sizing */}
+              <Ionicons name="compass" size={28} color="transparent" />
             </Animated.View>
-            {/* Close icon (visible when open) */}
-            <Animated.View style={closeIconOpacityStyle}>
-              <Ionicons name="close" size={28} color="white" />
-            </Animated.View>
-            {/* Invisible placeholder for sizing */}
-            <Ionicons name="compass" size={28} color="transparent" />
-          </Animated.View>
-        </TouchableOpacity>
+          </TouchableOpacity>
+
+          {/* Unread messages badge */}
+          {unreadCount > 0 && (
+            <View style={[styles.unreadBadge, { backgroundColor: theme.colors.error || '#EF4444' }]}>
+              <Text style={styles.unreadBadgeText}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </Text>
+            </View>
+          )}
+        </View>
       </Animated.View>
     </>
   );
@@ -287,6 +303,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1000,
+  },
+  fabButtonWrapper: {
+    position: 'relative',
   },
   fabButton: {
     width: 60,
@@ -318,6 +337,22 @@ const styles = StyleSheet.create({
   menuItemLabel: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  unreadBadge: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  unreadBadgeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });
 

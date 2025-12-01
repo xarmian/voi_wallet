@@ -289,8 +289,8 @@ export class TransactionService {
         throw new Error('Invalid recipient address');
       }
 
-      if (params.amount <= 0) {
-        throw new Error('Amount must be greater than 0');
+      if (params.amount < 0) {
+        throw new Error('Amount cannot be negative');
       }
 
       const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
@@ -741,9 +741,13 @@ export class TransactionService {
       errors.push('Invalid recipient address');
     }
 
-    // Skip amount validation for ARC-72 NFT transfers
-    if (params.assetType !== 'arc72' && params.amount <= 0) {
+    // Skip amount validation for ARC-72 NFT transfers and allow 0-amount VOI transactions
+    if (params.assetType !== 'arc72' && params.assetType !== 'voi' && params.amount <= 0) {
       errors.push('Amount must be greater than 0');
+    }
+
+    if (params.amount < 0) {
+      errors.push('Amount cannot be negative');
     }
 
     // Dust attack protection

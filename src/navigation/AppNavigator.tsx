@@ -279,6 +279,9 @@ export type FriendsStackParamList = {
   FriendProfile: { envoiName: string };
   AddFriend: { initialQuery?: string } | undefined;
   MyProfile: undefined;
+  MessagesInbox: undefined;
+  NewMessage: undefined;
+  Chat: { friendAddress: string; friendEnvoiName?: string };
 };
 
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
@@ -289,6 +292,9 @@ import FriendsScreen from '@/screens/social/FriendsScreen';
 import AddFriendScreen from '@/screens/social/AddFriendScreen';
 import FriendProfileScreen from '@/screens/social/FriendProfileScreen';
 import MyProfileScreen from '@/screens/social/MyProfileScreen';
+import MessagesInboxScreen from '@/screens/social/MessagesInboxScreen';
+import NewMessageScreen from '@/screens/social/NewMessageScreen';
+import ChatScreen from '@/screens/social/ChatScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const WalletStack = createNativeStackNavigator<WalletStackParamList>();
@@ -439,6 +445,9 @@ function FriendsStackNavigator() {
         <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} />
         <FriendsStack.Screen name="FriendProfile" component={FriendProfileScreen} />
         <FriendsStack.Screen name="MyProfile" component={MyProfileScreen} />
+        <FriendsStack.Screen name="MessagesInbox" component={MessagesInboxScreen} />
+        <FriendsStack.Screen name="NewMessage" component={NewMessageScreen} />
+        <FriendsStack.Screen name="Chat" component={ChatScreen} />
       </FriendsStack.Navigator>
     </NFTBackground>
   );

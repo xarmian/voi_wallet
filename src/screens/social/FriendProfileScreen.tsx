@@ -207,6 +207,17 @@ export default function FriendProfileScreen() {
     });
   }, [friend?.address, networkConfig?.blockExplorerUrl]);
 
+  const handleMessage = useCallback(() => {
+    if (!friend?.address) {
+      return;
+    }
+
+    (navigation as any).navigate('Chat', {
+      friendAddress: friend.address,
+      friendEnvoiName: friend.envoiName,
+    });
+  }, [navigation, friend]);
+
   const handleSend = useCallback(() => {
     const parentNavigator = navigation.getParent() as any;
     if (!friend?.address || !parentNavigator) {
@@ -295,6 +306,14 @@ export default function FriendProfileScreen() {
               <GlassButton
                 variant="secondary"
                 size="sm"
+                label="Message"
+                icon="chatbubble"
+                onPress={handleMessage}
+                style={styles.actionButton}
+              />
+              <GlassButton
+                variant="secondary"
+                size="sm"
                 label="Send"
                 icon="paper-plane"
                 onPress={handleSend}
@@ -308,6 +327,8 @@ export default function FriendProfileScreen() {
                 onPress={handleOpenExplorer}
                 style={styles.actionButton}
               />
+            </View>
+            <View style={[styles.actionRow, { marginTop: theme.spacing.sm }]}>
               <GlassButton
                 variant="secondary"
                 size="sm"

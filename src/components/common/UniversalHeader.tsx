@@ -133,23 +133,26 @@ export default function UniversalHeader({
         )}
       </View>
 
-      {/* Right action area */}
-      {rightAction && (
-        <View style={styles.rightActionContainer}>
-          {rightAction}
-        </View>
-      )}
+      {/* Right side: account selector and/or right action */}
+      <View style={styles.rightSideContainer}>
+        {/* Account selector with glass styling */}
+        {showAccountSelector && (
+          <View style={styles.accountSelectorContainer}>
+            <AccountSelector
+              onPress={onAccountSelectorPress}
+              compact={true}
+              showBalance={false}
+            />
+          </View>
+        )}
 
-      {/* Account selector with glass styling */}
-      {showAccountSelector && !rightAction && (
-        <View style={styles.accountSelectorContainer}>
-          <AccountSelector
-            onPress={onAccountSelectorPress}
-            compact={true}
-            showBalance={false}
-          />
-        </View>
-      )}
+        {/* Right action area */}
+        {rightAction && (
+          <View style={styles.rightActionContainer}>
+            {rightAction}
+          </View>
+        )}
+      </View>
     </>
   );
 
@@ -278,6 +281,11 @@ const createStyles = (theme: Theme) =>
       fontWeight: theme.typography.caption.fontWeight,
       marginTop: 2,
     },
+    rightSideContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.sm,
+    },
     accountSelectorContainer: {
       maxWidth: 200,
       minWidth: 120,
@@ -285,6 +293,5 @@ const createStyles = (theme: Theme) =>
     rightActionContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: theme.spacing.sm,
     },
   });
