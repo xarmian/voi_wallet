@@ -10,14 +10,18 @@ import {
   Image,
   BackHandler,
   ActivityIndicator,
+  ActionSheetIOS,
+  Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useMessagesStore, useSortedThreads } from '@/store/messagesStore';
+import { useMessagesStore, useSortedThreads, useHiddenThreadsCount, useShowHiddenThreads } from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
 import { useActiveAccount, useAccounts } from '@/store/walletStore';
 import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
@@ -45,6 +49,8 @@ export default function MessagesInboxScreen() {
   const activeAccount = useActiveAccount();
   const allAccounts = useAccounts();
   const sortedThreads = useSortedThreads();
+  const hiddenThreadsCount = useHiddenThreadsCount();
+  const showHiddenThreads = useShowHiddenThreads();
   const [isCheckingRegistration, setIsCheckingRegistration] = useState(true);
   const {
     initialize,
@@ -56,6 +62,10 @@ export default function MessagesInboxScreen() {
     registerMessagingKey,
     startPolling,
     stopPolling,
+    hideThread,
+    unhideThread,
+    toggleShowHiddenThreads,
+    hiddenThreads,
   } = useMessagesStore();
   const friends = useFriendsStore((state) => state.friends);
   const friendsInitialize = useFriendsStore((state) => state.initialize);
@@ -204,6 +214,56 @@ export default function MessagesInboxScreen() {
     }
   }, [activeAccount?.address, isRegistering, registerMessagingKey, fetchAllThreads]);
 
+  // Handle hiding/unhiding a thread
+  const handleHideThread = useCallback(
+    (friendAddress: string, friendName: string) => {
+      const isHidden = hiddenThreads.has(friendAddress);
+      const action = isHidden ? 'Unhide' : 'Hide';
+      const actionLower = isHidden ? 'unhide' : 'hide';
+
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: ['Cancel', `${action} Conversation`],
+            cancelButtonIndex: 0,
+            destructiveButtonIndex: isHidden ? undefined : 1,
+            title: friendName,
+            message: `Do you want to ${actionLower} this conversation?`,
+          },
+          (buttonIndex) => {
+            if (buttonIndex === 1) {
+              if (isHidden) {
+                unhideThread(friendAddress);
+              } else {
+                hideThread(friendAddress);
+              }
+            }
+          }
+        );
+      } else {
+        Alert.alert(
+          friendName,
+          `Do you want to ${actionLower} this conversation?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: `${action} Conversation`,
+              style: isHidden ? 'default' : 'destructive',
+              onPress: () => {
+                if (isHidden) {
+                  unhideThread(friendAddress);
+                } else {
+                  hideThread(friendAddress);
+                }
+              },
+            },
+          ]
+        );
+      }
+    },
+    [hiddenThreads, hideThread, unhideThread]
+  );
+
   // Format timestamp
   const formatTimestamp = (timestamp: number): string => {
     const now = Date.now();
@@ -222,79 +282,136 @@ export default function MessagesInboxScreen() {
   };
 
   // Get friend info for a thread
-  const getFriendInfo = (thread: MessageThread) => {
-    const friend = friends.find((f) => f.address === thread.friendAddress);
-    return {
-      name: friend?.envoiName || thread.friendEnvoiName || formatAddress(thread.friendAddress),
-      avatar: friend?.avatar,
-      address: thread.friendAddress,
-    };
-  };
+  const getFriendInfo = useCallback(
+    (thread: MessageThread) => {
+      const friend = friends.find((f) => f.address === thread.friendAddress);
+      return {
+        name: friend?.envoiName || thread.friendEnvoiName || formatAddress(thread.friendAddress),
+        avatar: friend?.avatar,
+        address: thread.friendAddress,
+      };
+    },
+    [friends]
+  );
+
+  // Handle long press on thread
+  const handleThreadLongPress = useCallback(
+    (thread: MessageThread) => {
+      const friendInfo = getFriendInfo(thread);
+      handleHideThread(thread.friendAddress, friendInfo.name);
+    },
+    [getFriendInfo, handleHideThread]
+  );
+
+  // Render swipe action for hide/unhide
+  const renderRightActions = useCallback(
+    (friendAddress: string) => {
+      const isHidden = hiddenThreads.has(friendAddress);
+      return (
+        <TouchableOpacity
+          style={[
+            styles.swipeAction,
+            { backgroundColor: isHidden ? theme.colors.primary : '#DC2626' },
+          ]}
+          onPress={() => {
+            if (isHidden) {
+              unhideThread(friendAddress);
+            } else {
+              hideThread(friendAddress);
+            }
+          }}
+        >
+          <Ionicons
+            name={isHidden ? 'eye-outline' : 'eye-off-outline'}
+            size={24}
+            color="white"
+          />
+          <Text style={styles.swipeActionText}>
+            {isHidden ? 'Unhide' : 'Hide'}
+          </Text>
+        </TouchableOpacity>
+      );
+    },
+    [hiddenThreads, hideThread, unhideThread, styles, theme.colors.primary]
+  );
 
   // Render thread item
   const renderThreadItem = (thread: MessageThread) => {
     const friendInfo = getFriendInfo(thread);
     const hasUnread = thread.unreadCount > 0;
+    const isHidden = hiddenThreads.has(thread.friendAddress);
 
     return (
-      <BlurredContainer
+      <Swipeable
         key={thread.friendAddress}
-        style={styles.threadItem}
-        borderRadius={theme.borderRadius.lg}
+        renderRightActions={() => renderRightActions(thread.friendAddress)}
+        overshootRight={false}
       >
-        <TouchableOpacity
-          style={styles.threadTouchable}
-          onPress={() => handleThreadPress(thread)}
-          activeOpacity={0.7}
+        <BlurredContainer
+          style={[styles.threadItem, isHidden && showHiddenThreads && styles.threadItemHidden]}
+          borderRadius={theme.borderRadius.lg}
         >
-          <View style={styles.avatarContainer}>
-            {friendInfo.avatar ? (
-              <Image source={{ uri: friendInfo.avatar }} style={styles.avatar} />
-            ) : (
-              <AccountAvatar
-                address={friendInfo.address}
-                size={48}
-                useEnvoiAvatar={false}
-                fallbackToGenerated
-                showActiveIndicator={false}
-                showRekeyIndicator={false}
-              />
-            )}
-          </View>
-
-          <View style={styles.threadContent}>
-            <View style={styles.threadHeader}>
-              <Text
-                style={[styles.threadName, hasUnread && styles.threadNameUnread]}
-                numberOfLines={1}
-              >
-                {friendInfo.name}
-              </Text>
-              <Text style={styles.threadTime}>
-                {thread.lastMessageTimestamp
-                  ? formatTimestamp(thread.lastMessageTimestamp)
-                  : ''}
-              </Text>
-            </View>
-            <View style={styles.threadPreview}>
-              <Text
-                style={[styles.threadMessage, hasUnread && styles.threadMessageUnread]}
-                numberOfLines={1}
-              >
-                {thread.lastMessage?.direction === 'sent' ? 'You: ' : ''}
-                {thread.lastMessage?.content || 'No messages yet'}
-              </Text>
-              {hasUnread && (
-                <View style={[styles.unreadBadge, { backgroundColor: theme.colors.primary }]}>
-                  <Text style={styles.unreadBadgeText}>
-                    {thread.unreadCount > 99 ? '99+' : thread.unreadCount}
-                  </Text>
+          <TouchableOpacity
+            style={styles.threadTouchable}
+            onPress={() => handleThreadPress(thread)}
+            onLongPress={() => handleThreadLongPress(thread)}
+            activeOpacity={0.7}
+            delayLongPress={500}
+          >
+            <View style={styles.avatarContainer}>
+              {friendInfo.avatar ? (
+                <Image source={{ uri: friendInfo.avatar }} style={styles.avatar} />
+              ) : (
+                <AccountAvatar
+                  address={friendInfo.address}
+                  size={48}
+                  useEnvoiAvatar={false}
+                  fallbackToGenerated
+                  showActiveIndicator={false}
+                  showRekeyIndicator={false}
+                />
+              )}
+              {isHidden && showHiddenThreads && (
+                <View style={styles.hiddenIndicator}>
+                  <Ionicons name="eye-off" size={12} color="white" />
                 </View>
               )}
             </View>
-          </View>
-        </TouchableOpacity>
-      </BlurredContainer>
+
+            <View style={styles.threadContent}>
+              <View style={styles.threadHeader}>
+                <Text
+                  style={[styles.threadName, hasUnread && styles.threadNameUnread]}
+                  numberOfLines={1}
+                >
+                  {friendInfo.name}
+                </Text>
+                <Text style={styles.threadTime}>
+                  {thread.lastMessageTimestamp
+                    ? formatTimestamp(thread.lastMessageTimestamp)
+                    : ''}
+                </Text>
+              </View>
+              <View style={styles.threadPreview}>
+                <Text
+                  style={[styles.threadMessage, hasUnread && styles.threadMessageUnread]}
+                  numberOfLines={1}
+                >
+                  {thread.lastMessage?.direction === 'sent' ? 'You: ' : ''}
+                  {thread.lastMessage?.content || 'No messages yet'}
+                </Text>
+                {hasUnread && (
+                  <View style={[styles.unreadBadge, { backgroundColor: theme.colors.primary }]}>
+                    <Text style={styles.unreadBadgeText}>
+                      {thread.unreadCount > 99 ? '99+' : thread.unreadCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </BlurredContainer>
+      </Swipeable>
     );
   };
 
@@ -421,14 +538,34 @@ export default function MessagesInboxScreen() {
     <NFTBackground>
       <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
-          title="Messages"
+          title={showHiddenThreads ? 'Hidden Messages' : 'Messages'}
           showAccountSelector
           onAccountSelectorPress={handleAccountSelectorPress}
           rightAction={
             !isLedgerBacked && isKeyRegistered ? (
-              <TouchableOpacity style={styles.newMessageButton} onPress={handleNewMessage}>
-                <Ionicons name="create-outline" size={24} color={theme.colors.primary} />
-              </TouchableOpacity>
+              <View style={styles.headerActions}>
+                {/* Hidden conversations toggle - only show if there are hidden threads */}
+                {hiddenThreadsCount > 0 && (
+                  <TouchableOpacity
+                    style={styles.headerActionButton}
+                    onPress={toggleShowHiddenThreads}
+                  >
+                    <Ionicons
+                      name={showHiddenThreads ? 'eye-outline' : 'eye-off-outline'}
+                      size={22}
+                      color={showHiddenThreads ? theme.colors.primary : theme.colors.textMuted}
+                    />
+                    {!showHiddenThreads && (
+                      <View style={[styles.hiddenCountBadge, { backgroundColor: theme.colors.textMuted }]}>
+                        <Text style={styles.hiddenCountText}>{hiddenThreadsCount}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.headerActionButton} onPress={handleNewMessage}>
+                  <Ionicons name="create-outline" size={24} color={theme.colors.primary} />
+                </TouchableOpacity>
+              </View>
             ) : undefined
           }
         />
@@ -615,5 +752,61 @@ const createStyles = (theme: Theme) =>
       color: 'white',
       fontSize: 11,
       fontWeight: '700',
+    },
+    // Header action styles
+    headerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs,
+    },
+    headerActionButton: {
+      padding: theme.spacing.sm,
+      position: 'relative',
+    },
+    hiddenCountBadge: {
+      position: 'absolute',
+      top: 4,
+      right: 4,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 4,
+    },
+    hiddenCountText: {
+      color: 'white',
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    // Swipe action styles
+    swipeAction: {
+      justifyContent: 'center',
+      alignItems: 'center',
+      width: 80,
+      marginBottom: theme.spacing.xs,
+      borderTopRightRadius: theme.borderRadius.lg,
+      borderBottomRightRadius: theme.borderRadius.lg,
+    },
+    swipeActionText: {
+      color: 'white',
+      fontSize: 12,
+      fontWeight: '600',
+      marginTop: 4,
+    },
+    // Hidden thread styles
+    threadItemHidden: {
+      opacity: 0.7,
+    },
+    hiddenIndicator: {
+      position: 'absolute',
+      bottom: -2,
+      right: -2,
+      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+      borderRadius: 10,
+      width: 20,
+      height: 20,
+      justifyContent: 'center',
+      alignItems: 'center',
     },
   });

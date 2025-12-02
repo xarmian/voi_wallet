@@ -16,11 +16,13 @@ import MessagingService from '@/services/messaging';
 import { useFriendsStore } from './friendsStore';
 
 const STORAGE_KEY_PREFIX = '@messages/';
+const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
 
 const POLLING_INTERVAL_MS = 30000; // 30 seconds
 
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) => `${STORAGE_KEY_PREFIX}${userAddress}`;
+const getHiddenStorageKey = (userAddress: string) => `${HIDDEN_THREADS_STORAGE_KEY_PREFIX}${userAddress}`;
 
 interface MessagesState {
   // State
@@ -32,6 +34,8 @@ interface MessagesState {
   lastError: string | null;
   pollingInterval: NodeJS.Timeout | null;
   lastSyncRound: number | null;
+  hiddenThreads: Set<string>; // Set of hidden friend addresses
+  showHiddenThreads: boolean; // Toggle to show hidden threads in the list
 
   // Computed getters
   getTotalUnreadCount: () => number;
@@ -45,6 +49,11 @@ interface MessagesState {
   removePendingMessage: (tempId: string) => void;
   updateMessageStatus: (txId: string, status: MessageStatus) => void;
   markThreadAsRead: (friendAddress: string) => Promise<void>;
+
+  // Hidden threads
+  hideThread: (friendAddress: string) => Promise<void>;
+  unhideThread: (friendAddress: string) => Promise<void>;
+  toggleShowHiddenThreads: () => void;
 
   // Key registration
   checkKeyRegistration: (userAddress: string) => Promise<boolean>;
@@ -78,6 +87,8 @@ export const useMessagesStore = create<MessagesState>()(
     lastError: null,
     pollingInterval: null,
     lastSyncRound: null,
+    hiddenThreads: new Set<string>(),
+    showHiddenThreads: false,
 
     /**
      * Get total count of unread messages across all threads
@@ -99,12 +110,13 @@ export const useMessagesStore = create<MessagesState>()(
 
     /**
      * Get all threads sorted by most recent message
+     * Filters out hidden threads unless showHiddenThreads is true
      */
     getSortedThreads: () => {
-      const { threads } = get();
-      return Object.values(threads).sort(
-        (a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp
-      );
+      const { threads, hiddenThreads, showHiddenThreads } = get();
+      return Object.values(threads)
+        .filter(thread => showHiddenThreads || !hiddenThreads.has(thread.friendAddress))
+        .sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
     },
 
     /**
@@ -286,6 +298,39 @@ export const useMessagesStore = create<MessagesState>()(
     },
 
     /**
+     * Hide a conversation thread from the inbox
+     */
+    hideThread: async (friendAddress: string) => {
+      const { hiddenThreads, currentUserAddress } = get();
+      const newHidden = new Set(hiddenThreads);
+      newHidden.add(friendAddress);
+      set({ hiddenThreads: newHidden });
+      if (currentUserAddress) {
+        await persistHiddenThreads(currentUserAddress, newHidden);
+      }
+    },
+
+    /**
+     * Unhide a conversation thread
+     */
+    unhideThread: async (friendAddress: string) => {
+      const { hiddenThreads, currentUserAddress } = get();
+      const newHidden = new Set(hiddenThreads);
+      newHidden.delete(friendAddress);
+      set({ hiddenThreads: newHidden });
+      if (currentUserAddress) {
+        await persistHiddenThreads(currentUserAddress, newHidden);
+      }
+    },
+
+    /**
+     * Toggle showing hidden threads in the list
+     */
+    toggleShowHiddenThreads: () => {
+      set({ showHiddenThreads: !get().showHiddenThreads });
+    },
+
+    /**
      * Check if the user has registered their messaging key on-chain
      */
     checkKeyRegistration: async (userAddress: string) => {
@@ -353,23 +398,32 @@ export const useMessagesStore = create<MessagesState>()(
 
         const lastMsg = allMessages[allMessages.length - 1];
 
-        set({
-          threads: {
-            ...threads,
-            [friendAddress]: {
-              friendAddress,
-              friendEnvoiName: friend?.envoiName,
-              messages: allMessages,
-              lastMessage: lastMsg,
-              lastMessageTimestamp: lastMsg?.timestamp || 0,
-              unreadCount: 0, // Reset when explicitly fetching
+        // Only create/update thread if there are actual messages
+        // This prevents empty threads from being created when navigating to a chat
+        if (allMessages.length > 0) {
+          set({
+            threads: {
+              ...threads,
+              [friendAddress]: {
+                friendAddress,
+                friendEnvoiName: friend?.envoiName,
+                messages: allMessages,
+                lastMessage: lastMsg,
+                lastMessageTimestamp: lastMsg?.timestamp || 0,
+                unreadCount: 0, // Reset when explicitly fetching
+              },
             },
-          },
-          currentUserAddress: userAddress,
-          isLoading: false,
-        });
+            currentUserAddress: userAddress,
+            isLoading: false,
+          });
 
-        await persistThreads(userAddress, get().threads);
+          await persistThreads(userAddress, get().threads);
+        } else {
+          set({
+            currentUserAddress: userAddress,
+            isLoading: false,
+          });
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unknown error';
@@ -391,11 +445,19 @@ export const useMessagesStore = create<MessagesState>()(
           const storageKey = getStorageKey(userAddress);
           const storedThreadsJson = await AsyncStorage.getItem(storageKey);
           const storedThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
+
+          // Also load hidden threads for the new account
+          const hiddenStorageKey = getHiddenStorageKey(userAddress);
+          const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
+          const storedHidden = storedHiddenJson ? new Set<string>(JSON.parse(storedHiddenJson)) : new Set<string>();
+
           set({
             threads: storedThreads,
             currentUserAddress: userAddress,
             lastSyncRound: null,
             isKeyRegistered: false, // Will be checked below
+            hiddenThreads: storedHidden,
+            showHiddenThreads: false, // Reset to default when switching accounts
           });
         }
 
@@ -540,9 +602,12 @@ export const useMessagesStore = create<MessagesState>()(
         isInitialized: false,
         isKeyRegistered: false,
         lastSyncRound: null,
+        hiddenThreads: new Set<string>(),
+        showHiddenThreads: false,
       });
       if (currentUserAddress) {
         await AsyncStorage.removeItem(getStorageKey(currentUserAddress));
+        await AsyncStorage.removeItem(getHiddenStorageKey(currentUserAddress));
       }
     },
   }))
@@ -562,6 +627,7 @@ function createEmptyThread(friendAddress: string): MessageThread {
 
 /**
  * Persist threads to AsyncStorage for a specific account
+ * Filters out empty threads (threads with no messages) to prevent clutter
  */
 async function persistThreads(
   userAddress: string,
@@ -569,9 +635,29 @@ async function persistThreads(
 ): Promise<void> {
   try {
     const storageKey = getStorageKey(userAddress);
-    await AsyncStorage.setItem(storageKey, JSON.stringify(threads));
+    // Only persist threads that have actual messages
+    const threadsToSave = Object.fromEntries(
+      Object.entries(threads).filter(([, thread]) => thread.messages.length > 0)
+    );
+    await AsyncStorage.setItem(storageKey, JSON.stringify(threadsToSave));
   } catch (error) {
     console.error('Failed to persist messages:', error);
+  }
+}
+
+/**
+ * Persist hidden threads to AsyncStorage for a specific account
+ */
+async function persistHiddenThreads(
+  userAddress: string,
+  hiddenThreads: Set<string>
+): Promise<void> {
+  try {
+    const storageKey = getHiddenStorageKey(userAddress);
+    // Convert Set to array for JSON serialization
+    await AsyncStorage.setItem(storageKey, JSON.stringify([...hiddenThreads]));
+  } catch (error) {
+    console.error('Failed to persist hidden threads:', error);
   }
 }
 
@@ -596,11 +682,38 @@ export function useThread(friendAddress: string): MessageThread | null {
 
 /**
  * Hook to get sorted threads (reactive)
- * Uses stable selector, then sorts in component
+ * Filters out hidden threads unless showHiddenThreads is true
  */
 export function useSortedThreads(): MessageThread[] {
   const threads = useMessagesStore((state) => state.threads);
-  return Object.values(threads).sort(
-    (a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp
-  );
+  const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
+  const showHiddenThreads = useMessagesStore((state) => state.showHiddenThreads);
+
+  return Object.values(threads)
+    .filter(thread => showHiddenThreads || !hiddenThreads.has(thread.friendAddress))
+    .sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
+}
+
+/**
+ * Hook to get count of hidden threads (reactive)
+ */
+export function useHiddenThreadsCount(): number {
+  const threads = useMessagesStore((state) => state.threads);
+  const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
+  return Object.keys(threads).filter(addr => hiddenThreads.has(addr)).length;
+}
+
+/**
+ * Hook to check if a specific thread is hidden (reactive)
+ */
+export function useIsThreadHidden(friendAddress: string): boolean {
+  const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
+  return hiddenThreads.has(friendAddress);
+}
+
+/**
+ * Hook to get showHiddenThreads state (reactive)
+ */
+export function useShowHiddenThreads(): boolean {
+  return useMessagesStore((state) => state.showHiddenThreads);
 }

@@ -271,13 +271,13 @@ export class MessagingService {
    *
    * @param userAddress - Current user's address
    * @param messagingKeyPair - User's derived messaging keypair
-   * @param limit - Maximum number of transactions to fetch
+   * @param limit - Maximum number of transactions to fetch (increased to 500 to better discover messages from unknown senders)
    * @returns Map of friend address to array of messages
    */
   async fetchAllConversations(
     userAddress: string,
     messagingKeyPair: MessagingKeyPair,
-    limit = 100
+    limit = 500
   ): Promise<Map<string, Message[]>> {
     const networkService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     const indexer = networkService.getIndexerClient();
