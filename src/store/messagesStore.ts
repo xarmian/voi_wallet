@@ -14,11 +14,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Message, MessageThread, MessageStatus, MessagingKeyPair } from '@/services/messaging/types';
 import MessagingService from '@/services/messaging';
 import { useFriendsStore } from './friendsStore';
+import { realtimeService } from '@/services/realtime';
 
 const STORAGE_KEY_PREFIX = '@messages/';
 const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
 
 const POLLING_INTERVAL_MS = 30000; // 30 seconds
+const REALTIME_FALLBACK_POLLING_MS = 60000; // 60 seconds fallback when realtime is disconnected
 
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) => `${STORAGE_KEY_PREFIX}${userAddress}`;
@@ -36,6 +38,7 @@ interface MessagesState {
   lastSyncRound: number | null;
   hiddenThreads: Set<string>; // Set of hidden friend addresses
   showHiddenThreads: boolean; // Toggle to show hidden threads in the list
+  realtimeConnected: boolean; // Whether realtime subscription is active
 
   // Computed getters
   getTotalUnreadCount: () => number;
@@ -60,6 +63,7 @@ interface MessagesState {
   registerMessagingKey: (userAddress: string, pin?: string) => Promise<string>;
 
   // Fetch operations
+  loadCachedThreads: (userAddress: string) => Promise<void>;
   fetchThreadMessages: (
     userAddress: string,
     friendAddress: string,
@@ -70,6 +74,10 @@ interface MessagesState {
   // Polling
   startPolling: (userAddress: string, intervalMs?: number) => void;
   stopPolling: () => void;
+
+  // Realtime
+  initializeRealtime: (userAddress: string) => Promise<void>;
+  cleanupRealtime: () => Promise<void>;
 
   // Utilities
   clearError: () => void;
@@ -89,6 +97,7 @@ export const useMessagesStore = create<MessagesState>()(
     lastSyncRound: null,
     hiddenThreads: new Set<string>(),
     showHiddenThreads: false,
+    realtimeConnected: false,
 
     /**
      * Get total count of unread messages across all threads
@@ -361,6 +370,35 @@ export const useMessagesStore = create<MessagesState>()(
     },
 
     /**
+     * Load cached threads from AsyncStorage for a specific account.
+     * Call this before fetchThreadMessages when switching accounts.
+     */
+    loadCachedThreads: async (userAddress: string) => {
+      const { currentUserAddress } = get();
+
+      // Only load if switching to a different account
+      if (currentUserAddress === userAddress) {
+        return;
+      }
+
+      const storageKey = getStorageKey(userAddress);
+      const storedThreadsJson = await AsyncStorage.getItem(storageKey);
+      const storedThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
+
+      // Also load hidden threads for the new account
+      const hiddenStorageKey = getHiddenStorageKey(userAddress);
+      const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
+      const storedHidden = storedHiddenJson ? new Set<string>(JSON.parse(storedHiddenJson)) : new Set<string>();
+
+      set({
+        threads: storedThreads,
+        currentUserAddress: userAddress,
+        hiddenThreads: storedHidden,
+        showHiddenThreads: false,
+      });
+    },
+
+    /**
      * Fetch messages for a specific thread from the blockchain
      */
     fetchThreadMessages: async (userAddress, friendAddress, pin) => {
@@ -587,10 +625,65 @@ export const useMessagesStore = create<MessagesState>()(
     },
 
     /**
+     * Initialize realtime subscription for instant message updates
+     * Falls back to polling if realtime is unavailable or disconnects
+     */
+    initializeRealtime: async (userAddress: string) => {
+      // Check if realtime is available
+      if (!realtimeService.isAvailable()) {
+        console.log('Realtime not available, using polling only');
+        get().startPolling(userAddress);
+        return;
+      }
+
+      // Set up realtime event handlers
+      realtimeService.setHandlers({
+        onMessage: (event) => {
+          // New message received - refresh threads
+          console.log('Realtime: New message received, refreshing threads');
+          get().fetchAllThreads(userAddress);
+        },
+        onConnectionChange: (status) => {
+          if (status === 'connected') {
+            console.log('Realtime connected, stopping frequent polling');
+            set({ realtimeConnected: true });
+            // Stop frequent polling when realtime is connected
+            get().stopPolling();
+            // Start slower fallback polling just in case
+            get().startPolling(userAddress, REALTIME_FALLBACK_POLLING_MS);
+          } else {
+            console.log('Realtime disconnected, switching to frequent polling');
+            set({ realtimeConnected: false });
+            // Switch to frequent polling when realtime disconnects
+            get().stopPolling();
+            get().startPolling(userAddress, POLLING_INTERVAL_MS);
+          }
+        },
+      });
+
+      // Subscribe to events for this address
+      const subscribed = await realtimeService.subscribeToAddresses([userAddress]);
+
+      if (!subscribed) {
+        console.log('Failed to subscribe to realtime, using polling');
+        get().startPolling(userAddress, POLLING_INTERVAL_MS);
+      }
+    },
+
+    /**
+     * Clean up realtime subscription
+     */
+    cleanupRealtime: async () => {
+      await realtimeService.unsubscribe();
+      set({ realtimeConnected: false });
+    },
+
+    /**
      * Clear all cached messages for the current account
      */
     clearCache: async () => {
       get().stopPolling();
+      await get().cleanupRealtime();
       const { currentUserAddress } = get();
 
       // Clear messaging key cache in the service
@@ -604,6 +697,7 @@ export const useMessagesStore = create<MessagesState>()(
         lastSyncRound: null,
         hiddenThreads: new Set<string>(),
         showHiddenThreads: false,
+        realtimeConnected: false,
       });
       if (currentUserAddress) {
         await AsyncStorage.removeItem(getStorageKey(currentUserAddress));
@@ -716,4 +810,11 @@ export function useIsThreadHidden(friendAddress: string): boolean {
  */
 export function useShowHiddenThreads(): boolean {
   return useMessagesStore((state) => state.showHiddenThreads);
+}
+
+/**
+ * Hook to get realtime connection status (reactive)
+ */
+export function useRealtimeConnected(): boolean {
+  return useMessagesStore((state) => state.realtimeConnected);
 }

@@ -58,3 +58,5 @@ CLAUDE.md
 AGENTS.md
 .git.bak
 .claude/
+google-services.json
+google-services-dev.json

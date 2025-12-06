@@ -37,6 +37,11 @@ import {
   AssetFilterStorage,
   DEFAULT_ASSET_FILTER_SETTINGS,
 } from '@/utils/assetFilterStorage';
+import {
+  notificationService,
+  DEFAULT_NOTIFICATION_PREFERENCES,
+} from '@/services/notifications';
+import { realtimeService } from '@/services/realtime';
 
 // Account-specific state for UI
 interface AccountUIState {
@@ -509,6 +514,14 @@ export const useWalletStore = create<WalletState>()(
           accountStates: { ...accountStates },
         });
 
+        // Auto-subscribe new account to notifications if service is initialized
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(newAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
+            .catch(err => console.warn('Failed to subscribe new account to notifications:', err));
+          realtimeService.addAddress(newAccount.address);
+        }
+
         return newAccount;
       } catch (error) {
         const errorMessage =
@@ -537,6 +550,14 @@ export const useWalletStore = create<WalletState>()(
           accountStates: { ...accountStates },
         });
 
+        // Auto-subscribe imported account to notifications if service is initialized
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(importedAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
+            .catch(err => console.warn('Failed to subscribe imported account to notifications:', err));
+          realtimeService.addAddress(importedAccount.address);
+        }
+
         return importedAccount;
       } catch (error) {
         const errorMessage =
@@ -564,6 +585,17 @@ export const useWalletStore = create<WalletState>()(
           wallet,
           accountStates: { ...accountStates },
         });
+
+        // Auto-subscribe watch account to notifications (with messages disabled)
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(watchAccount.address, {
+              ...DEFAULT_NOTIFICATION_PREFERENCES,
+              messages: false, // Watch accounts can't decrypt messages
+            })
+            .catch(err => console.warn('Failed to subscribe watch account to notifications:', err));
+          realtimeService.addAddress(watchAccount.address);
+        }
 
         return watchAccount;
       } catch (error) {
@@ -595,6 +627,14 @@ export const useWalletStore = create<WalletState>()(
           accountStates: { ...accountStates },
         });
 
+        // Auto-subscribe rekeyed account to notifications if service is initialized
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(rekeyedAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
+            .catch(err => console.warn('Failed to subscribe rekeyed account to notifications:', err));
+          realtimeService.addAddress(rekeyedAccount.address);
+        }
+
         return rekeyedAccount;
       } catch (error) {
         const errorMessage =
@@ -612,6 +652,11 @@ export const useWalletStore = create<WalletState>()(
       try {
         set({ isLoading: true, lastError: null });
 
+        // Get the account address before deletion for unsubscribing
+        const { wallet: currentWallet } = get();
+        const accountToDelete = currentWallet?.accounts.find(a => a.id === accountId);
+        const addressToUnsubscribe = accountToDelete?.address;
+
         await MultiAccountWalletService.deleteAccount(accountId);
         const wallet = await MultiAccountWalletService.getCurrentWallet();
 
@@ -623,6 +668,14 @@ export const useWalletStore = create<WalletState>()(
           wallet,
           accountStates: { ...accountStates },
         });
+
+        // Unsubscribe deleted account from notifications
+        if (addressToUnsubscribe && notificationService.getDeviceId()) {
+          notificationService
+            .unsubscribeAccount(addressToUnsubscribe)
+            .catch(err => console.warn('Failed to unsubscribe deleted account from notifications:', err));
+          realtimeService.removeAddress(addressToUnsubscribe);
+        }
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to delete account';

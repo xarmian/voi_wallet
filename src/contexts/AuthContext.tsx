@@ -9,6 +9,7 @@ import { AppState, Platform } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import { SecurityUtils } from '@/utils/security';
+import { DeepLinkService } from '@/services/deeplink';
 
 // Helper to check if biometrics are available (web-safe)
 const checkBiometricAvailability = async (): Promise<{ hasHardware: boolean; isEnrolled: boolean }> => {
@@ -96,6 +97,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (backgroundTimer.current) clearTimeout(backgroundTimer.current);
     };
   }, []);
+
+  // Sync auth state to DeepLinkService for pending notification handling
+  useEffect(() => {
+    const isUnlocked = authState.isAuthenticated && !authState.isLocked;
+    console.log(`[AuthContext] Syncing unlock state: isAuthenticated=${authState.isAuthenticated}, isLocked=${authState.isLocked}, isUnlocked=${isUnlocked}`);
+    DeepLinkService.getInstance().setUnlockState(isUnlocked);
+  }, [authState.isAuthenticated, authState.isLocked]);
 
   useEffect(() => {
     // Update activity monitoring when timeout setting changes

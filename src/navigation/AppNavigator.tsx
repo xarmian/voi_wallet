@@ -36,6 +36,7 @@ import ShowRecoveryPhraseScreen from '@/screens/settings/ShowRecoveryPhraseScree
 import ChangePinScreen from '@/screens/settings/ChangePinScreen';
 import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
+import NotificationSettingsScreen from '@/screens/settings/NotificationSettingsScreen';
 import AddWatchAccountScreen from '@/screens/account/AddWatchAccountScreen';
 import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
@@ -61,6 +62,8 @@ import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
 import { useNetworkStore } from '@/store/networkStore';
+import { notificationService } from '@/services/notifications';
+import { realtimeService } from '@/services/realtime';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
@@ -268,6 +271,7 @@ export type SettingsStackParamList = {
     accountId: string;
   };
   AboutScreen: undefined;
+  NotificationSettings: undefined;
   WebView: {
     url: string;
     title: string;
@@ -281,7 +285,7 @@ export type FriendsStackParamList = {
   MyProfile: undefined;
   MessagesInbox: undefined;
   NewMessage: undefined;
-  Chat: { friendAddress: string; friendEnvoiName?: string };
+  Chat: { friendAddress: string; friendEnvoiName?: string; userAddress?: string };
 };
 
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
@@ -422,6 +426,10 @@ function SettingsStackNavigator() {
           component={RekeyAccountScreen}
         />
         <SettingsStack.Screen name="AboutScreen" component={AboutScreen} />
+        <SettingsStack.Screen
+          name="NotificationSettings"
+          component={NotificationSettingsScreen}
+        />
         <SettingsStack.Screen name="WebView" component={WebViewScreen} />
       </SettingsStack.Navigator>
     </NFTBackground>
@@ -819,6 +827,31 @@ export default function AppNavigator() {
 
         console.log('WalletConnect, DeepLink, and Ledger services initialized');
 
+        // Initialize push notification service
+        try {
+          await notificationService.initialize();
+          console.log('Notification service initialized');
+
+          // Check if user has a wallet and auto-subscribe all accounts to notifications
+          const wallet = await MultiAccountWalletService.getCurrentWallet();
+          if (wallet && wallet.accounts.length > 0) {
+            // Register push token if permissions granted
+            const token = await notificationService.registerPushToken();
+            if (token) {
+              // Subscribe ALL accounts to notifications (not just active one)
+              // Watch accounts will have message notifications disabled by default
+              await notificationService.subscribeAllAccounts(wallet.accounts);
+
+              // Initialize realtime subscription for ALL account addresses
+              const allAddresses = wallet.accounts.map(a => a.address);
+              await realtimeService.subscribeToAddresses(allAddresses);
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to initialize notification services:', error);
+          // Don't block app startup for notification initialization failures
+        }
+
         // Reset stale processing state from previous session (prevents deadlock after crash)
         await TransactionRequestQueue.setProcessing(false);
 
@@ -846,6 +879,8 @@ export default function AppNavigator() {
             wcService.off?.('session_proposal', onProposal);
             wcService.off?.('session_request', onRequest);
             extensionDeepLinkHandler.cleanup();
+            notificationService.cleanup();
+            realtimeService.cleanup();
           } catch {}
         };
       } catch (error) {

@@ -19,6 +19,8 @@ import {
   convertAmountToDisplay,
 } from '@/utils/algorandUri';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import { notificationService, NotificationData } from '@/services/notifications';
+import { useWalletStore } from '@/store/walletStore';
 
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
 
@@ -31,6 +33,8 @@ export class DeepLinkService {
   private static instance: DeepLinkService;
   private navigationRef: NavigationContainerRef<any> | null = null;
   private handlers: Map<string, DeepLinkHandler> = new Map();
+  private pendingNotification: NotificationData | null = null;
+  private isAppUnlocked: boolean = false;
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -45,6 +49,31 @@ export class DeepLinkService {
 
   setNavigationRef(ref: NavigationContainerRef<any>): void {
     this.navigationRef = ref;
+  }
+
+  /**
+   * Set the app's unlock state. Call this from AuthContext when unlock state changes.
+   * When the app becomes unlocked, any pending notification navigation will be executed.
+   */
+  setUnlockState(isUnlocked: boolean): void {
+    const wasUnlocked = this.isAppUnlocked;
+    this.isAppUnlocked = isUnlocked;
+    console.log(`[DeepLink] setUnlockState: ${wasUnlocked} -> ${isUnlocked}, pendingNotification: ${!!this.pendingNotification}`);
+
+    // If app just unlocked and we have a pending notification, process it now
+    if (isUnlocked && !wasUnlocked && this.pendingNotification) {
+      console.log('[DeepLink] App unlocked, processing pending notification:', this.pendingNotification);
+      const pendingData = this.pendingNotification;
+      this.pendingNotification = null;
+      this.handleNotificationNavigation(pendingData);
+    }
+  }
+
+  /**
+   * Check if there's a pending notification waiting to be processed
+   */
+  hasPendingNotification(): boolean {
+    return this.pendingNotification !== null;
   }
 
   async initialize(): Promise<void> {
@@ -64,12 +93,125 @@ export class DeepLinkService {
         });
       });
 
+      // Set up notification tap handler for navigation
+      this.setupNotificationHandler();
+
       return () => {
         linkingListener?.remove();
       };
     } catch (error) {
       console.error('Failed to initialize deep link service:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Set up handler for notification taps to navigate to relevant screens
+   */
+  private setupNotificationHandler(): void {
+    notificationService.setNotificationTapHandler(async (data: NotificationData) => {
+      console.log('[DeepLink] Notification tap handler called, isAppUnlocked:', this.isAppUnlocked, 'data:', data);
+
+      // If app is locked, store the notification for later processing after unlock
+      if (!this.isAppUnlocked) {
+        console.log('[DeepLink] App is locked, storing notification for after unlock');
+        this.pendingNotification = data;
+        return;
+      }
+
+      await this.handleNotificationNavigation(data);
+    });
+  }
+
+  /**
+   * Handle navigation for a notification tap
+   * This is called either immediately (if app is unlocked) or after unlock
+   */
+  private async handleNotificationNavigation(data: NotificationData): Promise<void> {
+    console.log('Processing notification navigation:', data);
+
+    switch (data.type) {
+      case 'message':
+        // Navigate to MessagesInbox first (handles initialization), then to Chat
+        if (data.sender) {
+          // If receiver is provided, switch to that account first
+          if (data.receiver) {
+            const walletStore = useWalletStore.getState();
+            const receiverAccount = walletStore.wallet?.accounts.find(
+              acc => acc.address === data.receiver
+            );
+            if (receiverAccount && walletStore.wallet?.activeAccountId !== receiverAccount.id) {
+              console.log('Switching to receiver account:', receiverAccount.address);
+              await walletStore.setActiveAccount(receiverAccount.id);
+            }
+          }
+
+          // Navigate to MessagesInbox, then immediately push Chat on top
+          // This ensures the messages store is properly initialized
+          this.navigateToRoute({
+            screen: 'Main',
+            params: {
+              screen: 'Friends',
+              params: {
+                screen: 'MessagesInbox',
+              },
+            },
+          });
+
+          // Small delay to let MessagesInbox initialize, then navigate to Chat
+          setTimeout(() => {
+            this.navigateToRoute({
+              screen: 'Main',
+              params: {
+                screen: 'Friends',
+                params: {
+                  screen: 'Chat',
+                  params: {
+                    friendAddress: data.sender,
+                  },
+                },
+              },
+            });
+          }, 100);
+        }
+        break;
+
+      case 'voi_payment':
+      case 'arc200_transfer':
+      case 'arc72_transfer':
+        // Navigate to transaction detail or home
+        // Since we don't have full transaction info in notification,
+        // navigate to home screen which shows recent activity
+        this.navigateToRoute({
+          screen: 'Main',
+          params: {
+            screen: 'Home',
+            params: {
+              screen: 'HomeMain',
+            },
+          },
+        });
+        break;
+
+      case 'price_alert':
+        // Navigate to home/discover screen
+        this.navigateToRoute({
+          screen: 'Main',
+          params: {
+            screen: 'Home',
+            params: {
+              screen: 'HomeMain',
+            },
+          },
+        });
+        break;
+
+      default:
+        // Navigate to main screen
+        this.navigateToRoute({
+          screen: 'Main',
+        });
+        break;
     }
   }
 

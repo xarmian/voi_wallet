@@ -21,7 +21,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useMessagesStore, useSortedThreads, useHiddenThreadsCount, useShowHiddenThreads } from '@/store/messagesStore';
+import { useMessagesStore, useSortedThreads, useHiddenThreadsCount, useShowHiddenThreads, useRealtimeConnected } from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
 import { useActiveAccount, useAccounts } from '@/store/walletStore';
 import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
@@ -51,6 +51,7 @@ export default function MessagesInboxScreen() {
   const sortedThreads = useSortedThreads();
   const hiddenThreadsCount = useHiddenThreadsCount();
   const showHiddenThreads = useShowHiddenThreads();
+  const realtimeConnected = useRealtimeConnected();
   const [isCheckingRegistration, setIsCheckingRegistration] = useState(true);
   const {
     initialize,
@@ -62,6 +63,8 @@ export default function MessagesInboxScreen() {
     registerMessagingKey,
     startPolling,
     stopPolling,
+    initializeRealtime,
+    cleanupRealtime,
     hideThread,
     unhideThread,
     toggleShowHiddenThreads,
@@ -123,10 +126,11 @@ export default function MessagesInboxScreen() {
           const registered = await checkKeyRegistration(activeAccount.address);
           setIsCheckingRegistration(false);
 
-          // Only fetch threads and start polling if registered
+          // Only fetch threads and initialize realtime if registered
           if (registered) {
             fetchAllThreads(activeAccount.address);
-            startPolling(activeAccount.address);
+            // Use realtime for instant updates (falls back to polling if unavailable)
+            initializeRealtime(activeAccount.address);
           }
         }
       };
@@ -134,9 +138,12 @@ export default function MessagesInboxScreen() {
       initializeMessaging();
 
       return () => {
+        // Cleanup realtime and polling when screen loses focus
         stopPolling();
+        // Note: We don't cleanup realtime here to keep receiving updates
+        // Realtime is cleaned up when the user logs out or changes accounts
       };
-    }, [activeAccount?.address, isInitialized, checkIsLedgerBacked, checkKeyRegistration, fetchAllThreads, startPolling, stopPolling])
+    }, [activeAccount?.address, isInitialized, checkIsLedgerBacked, checkKeyRegistration, fetchAllThreads, initializeRealtime, stopPolling])
   );
 
   // Handle back button for modals

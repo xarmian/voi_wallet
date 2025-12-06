@@ -1159,7 +1159,11 @@ export class TransactionAuthController {
           this.isSigningInProgress = false;
           this.updateState({
             state: 'completed',
-            ledgerStatus: this.currentState.isLedgerFlow ? 'ready' : 'idle', // Fix final state
+            ledgerStatus: this.currentState.isLedgerFlow ? 'ready' : 'idle',
+            result: {
+              success: true,
+              transactionId: txId,
+            },
           });
         },
 

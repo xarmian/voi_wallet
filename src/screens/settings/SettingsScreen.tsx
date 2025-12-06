@@ -670,6 +670,16 @@ export default function SettingsScreen() {
             />
           </GlassCard>
 
+          {/* Notifications Section */}
+          <GlassCard variant="medium" style={styles.section} padding="none">
+            <SectionHeader title="Notifications" icon="notifications-outline" />
+            <SettingsRow
+              icon="notifications-outline"
+              label="Push Notifications"
+              onPress={() => navigation.navigate('NotificationSettings')}
+            />
+          </GlassCard>
+
           {/* WalletConnect Section */}
           <GlassCard variant="medium" style={styles.section} padding="none">
             <SectionHeader title="WalletConnect" icon="link-outline" />

@@ -71,13 +71,23 @@ export default function UnifiedTransactionAuthModal({
     }
   }, [visible, request, controller, authState.state, initialized, userCancelled, authState.error, authState.ledgerError]);
 
-  // Handle completion state and certain error states that should close the modal
+  // Handle completion state - wait for result to be populated before calling onComplete
   useEffect(() => {
-    if (authState.state === 'completed') {
+    if (authState.state === 'completed' && authState.result) {
       onComplete(true, authState.result);
+    }
+  }, [authState.state, authState.result, onComplete]);
+
+  // Reset controller when modal is hidden (after parent closes it)
+  // Use a ref to track previous visibility and only reset on transition from visible to hidden
+  const wasVisibleRef = React.useRef(visible);
+  useEffect(() => {
+    if (wasVisibleRef.current && !visible) {
+      // Modal was just hidden - reset controller
       controller.resetAfterDismiss();
     }
-  }, [authState.state, authState.result, onComplete, controller]);
+    wasVisibleRef.current = visible;
+  }, [visible, controller]);
 
   // Auto-prompt for biometric auth when available (only once per open)
   useEffect(() => {
