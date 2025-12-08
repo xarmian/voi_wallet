@@ -27,6 +27,9 @@ import TransactionConfirmationScreen from '@/screens/wallet/TransactionConfirmat
 import TransactionResultScreen from '@/screens/wallet/TransactionResultScreen';
 import UniversalTransactionSigningScreen from '@/screens/wallet/UniversalTransactionSigningScreen';
 import ReceiveScreen from '@/screens/wallet/ReceiveScreen';
+import ClaimableTokensScreen from '@/screens/wallet/ClaimableTokensScreen';
+import ClaimTokenScreen from '@/screens/wallet/ClaimTokenScreen';
+import ClaimAllConfirmationScreen from '@/screens/wallet/ClaimAllConfirmationScreen';
 import DiscoverScreen from '@/screens/wallet/DiscoverScreen';
 import NFTScreen from '@/screens/wallet/NFTScreen';
 import NFTDetailScreen from '@/screens/wallet/NFTDetailScreen';
@@ -37,6 +40,7 @@ import ChangePinScreen from '@/screens/settings/ChangePinScreen';
 import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
 import NotificationSettingsScreen from '@/screens/settings/NotificationSettingsScreen';
+import ExperimentalFeaturesScreen from '@/screens/settings/ExperimentalFeaturesScreen';
 import AddWatchAccountScreen from '@/screens/account/AddWatchAccountScreen';
 import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
@@ -68,6 +72,7 @@ import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
 import { NFTToken } from '@/types/nft';
+import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
@@ -201,6 +206,14 @@ export type WalletStackParamList = {
   };
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
+  ClaimableTokens: { pendingRefresh?: boolean } | undefined;
+  ClaimToken: {
+    claimableItem: SerializableClaimableItem;
+  };
+  ClaimAllConfirmation: {
+    items: SerializableClaimableItem[];
+    recipient?: string;
+  };
 };
 
 export type NFTStackParamList = {
@@ -272,6 +285,7 @@ export type SettingsStackParamList = {
   };
   AboutScreen: undefined;
   NotificationSettings: undefined;
+  ExperimentalFeatures: undefined;
   WebView: {
     url: string;
     title: string;
@@ -346,6 +360,9 @@ function WalletStackNavigator() {
           component={TransactionResultScreen}
         />
         <WalletStack.Screen name="Receive" component={ReceiveScreen} />
+        <WalletStack.Screen name="ClaimableTokens" component={ClaimableTokensScreen} />
+        <WalletStack.Screen name="ClaimToken" component={ClaimTokenScreen} />
+        <WalletStack.Screen name="ClaimAllConfirmation" component={ClaimAllConfirmationScreen} />
         <WalletStack.Screen name="AccountInfo" component={AccountInfoScreen} />
         <WalletStack.Screen name="AccountSearch" component={AccountSearchScreen} />
       </WalletStack.Navigator>
@@ -429,6 +446,10 @@ function SettingsStackNavigator() {
         <SettingsStack.Screen
           name="NotificationSettings"
           component={NotificationSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="ExperimentalFeatures"
+          component={ExperimentalFeaturesScreen}
         />
         <SettingsStack.Screen name="WebView" component={WebViewScreen} />
       </SettingsStack.Navigator>

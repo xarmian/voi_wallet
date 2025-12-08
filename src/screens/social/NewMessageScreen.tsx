@@ -32,6 +32,7 @@ import { BlurredContainer } from '@/components/common/BlurredContainer';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Friend } from '@/types/social';
+import { useIsMessagingEnabled } from '@/store/experimentalStore';
 
 interface RecipientOption {
   address: string;
@@ -49,6 +50,14 @@ export default function NewMessageScreen() {
   const [searchResults, setSearchResults] = useState<RecipientOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isValidAddress, setIsValidAddress] = useState(false);
+
+  // Experimental feature guard - redirect if messaging is not enabled
+  const isMessagingEnabled = useIsMessagingEnabled();
+  useEffect(() => {
+    if (!isMessagingEnabled) {
+      navigation.goBack();
+    }
+  }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
   const allAccounts = useAccounts();

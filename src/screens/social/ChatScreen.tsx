@@ -31,6 +31,7 @@ import { formatAddress } from '@/utils/address';
 import MessageBubble from '@/components/social/MessageBubble';
 import MessageInput from '@/components/social/MessageInput';
 import MessagingInfoModal from '@/components/social/MessagingInfoModal';
+import { useIsMessagingEnabled } from '@/store/experimentalStore';
 
 export default function ChatScreen() {
   const styles = useThemedStyles(createStyles);
@@ -45,6 +46,14 @@ export default function ChatScreen() {
   const [isCheckingRecipient, setIsCheckingRecipient] = useState(true);
   const [recipientCanReceive, setRecipientCanReceive] = useState(false);
   const flatListRef = useRef<FlatList>(null);
+
+  // Experimental feature guard - redirect if messaging is not enabled
+  const isMessagingEnabled = useIsMessagingEnabled();
+  useEffect(() => {
+    if (!isMessagingEnabled) {
+      navigation.goBack();
+    }
+  }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
   const allAccounts = useAccounts();

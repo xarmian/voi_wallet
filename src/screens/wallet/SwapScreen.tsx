@@ -48,6 +48,7 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import NetworkSelector from '@/components/network/NetworkSelector';
+import { useIsSwapEnabled } from '@/store/experimentalStore';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -65,6 +66,14 @@ export default function SwapScreen() {
   const route = useRoute();
   const routeParams = route.params as SwapScreenRouteParams | undefined;
   const delayedRefreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Experimental feature guard - redirect if swap is not enabled
+  const isSwapEnabled = useIsSwapEnabled();
+  useEffect(() => {
+    if (!isSwapEnabled) {
+      navigation.goBack();
+    }
+  }, [isSwapEnabled, navigation]);
 
   // Network state - initialized from route params or defaults to VOI_MAINNET
   const [selectedNetwork, setSelectedNetwork] = useState<NetworkId>(

@@ -37,6 +37,7 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { GlassButton } from '@/components/common/GlassButton';
 import UniversalHeader from '@/components/common/UniversalHeader';
+import { useIsSwapEnabled } from '@/store/experimentalStore';
 
 interface MultiNetworkAssetRouteParams {
   assetName: string;
@@ -57,6 +58,7 @@ export default function MultiNetworkAssetScreen() {
   const [imageError, setImageError] = useState(false);
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<any>>();
+  const isSwapEnabled = useIsSwapEnabled();
   const { assetName, assetId, accountId, mappingId } =
     route.params as MultiNetworkAssetRouteParams;
 
@@ -646,7 +648,7 @@ export default function MultiNetworkAssetScreen() {
             style={styles.actionButton}
           />
 
-          {isSwappable && (
+          {isSwappable && isSwapEnabled && (
             <GlassButton
               variant="secondary"
               size="md"

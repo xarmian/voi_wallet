@@ -31,6 +31,7 @@ import { BlurredContainer } from '@/components/common/BlurredContainer';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { GlassButton } from '@/components/common/GlassButton';
+import { useIsMessagingEnabled } from '@/store/experimentalStore';
 
 const formatRelativeTime = (timestamp?: number): string => {
   if (!timestamp) return 'No recent activity';
@@ -67,6 +68,7 @@ export default function FriendProfileScreen() {
   const navigation = useNavigation();
   const route = useRoute<FriendProfileRouteProp>();
   const networkConfig = useCurrentNetworkConfig();
+  const isMessagingEnabled = useIsMessagingEnabled();
 
   const { envoiName } = route.params;
 
@@ -303,14 +305,16 @@ export default function FriendProfileScreen() {
           >
             <Text style={styles.cardTitle}>Quick Actions</Text>
             <View style={styles.actionRow}>
-              <GlassButton
-                variant="secondary"
-                size="sm"
-                label="Message"
-                icon="chatbubble"
-                onPress={handleMessage}
-                style={styles.actionButton}
-              />
+              {isMessagingEnabled && (
+                <GlassButton
+                  variant="secondary"
+                  size="sm"
+                  label="Message"
+                  icon="chatbubble"
+                  onPress={handleMessage}
+                  style={styles.actionButton}
+                />
+              )}
               <GlassButton
                 variant="secondary"
                 size="sm"

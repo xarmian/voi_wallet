@@ -48,6 +48,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { SwapService } from '@/services/swap';
 import { GlassButton } from '@/components/common/GlassButton';
 import UniversalHeader from '@/components/common/UniversalHeader';
+import { useIsSwapEnabled } from '@/store/experimentalStore';
 
 interface AssetDetailRouteParams {
   assetName: string;
@@ -70,6 +71,7 @@ export default function AssetDetailScreen() {
   const loadMoreCalledRef = React.useRef(false);
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<any>>();
+  const isSwapEnabled = useIsSwapEnabled();
   const { assetName, assetId, accountId, mappingId, networkId } =
     route.params as AssetDetailRouteParams;
   const currentNetworkConfig = useCurrentNetworkConfig();
@@ -1062,7 +1064,7 @@ export default function AssetDetailScreen() {
             style={styles.actionButton}
           />
 
-          {isSwappable && (
+          {isSwappable && isSwapEnabled && (
             <GlassButton
               variant="secondary"
               size="md"

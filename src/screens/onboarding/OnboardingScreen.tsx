@@ -184,6 +184,15 @@ export default function OnboardingScreen({ navigation }: Props) {
               />
             ))}
           </View>
+
+          <Pressable
+            onPress={() => navigation.navigate('Main')}
+            style={styles.skipButton}
+          >
+            <Text style={[styles.skipText, { color: theme.colors.textMuted }]}>
+              Continue without account
+            </Text>
+          </Pressable>
         </ScrollView>
       </SafeAreaView>
     </NFTBackground>
@@ -244,5 +253,13 @@ const createStyles = (theme: Theme) =>
     optionSubtitle: {
       fontSize: theme.typography.bodySmall.fontSize,
       lineHeight: 18,
+    },
+    skipButton: {
+      marginTop: theme.spacing.xl,
+      paddingVertical: theme.spacing.md,
+    },
+    skipText: {
+      textAlign: 'center',
+      fontSize: theme.typography.bodySmall.fontSize,
     },
   });

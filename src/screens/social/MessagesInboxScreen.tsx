@@ -35,6 +35,7 @@ import { GlassButton } from '@/components/common/GlassButton';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import AccountListModal from '@/components/account/AccountListModal';
 import { formatAddress } from '@/utils/address';
+import { useIsMessagingEnabled } from '@/store/experimentalStore';
 
 export default function MessagesInboxScreen() {
   const styles = useThemedStyles(createStyles);
@@ -45,6 +46,14 @@ export default function MessagesInboxScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
+
+  // Experimental feature guard - redirect if messaging is not enabled
+  const isMessagingEnabled = useIsMessagingEnabled();
+  useEffect(() => {
+    if (!isMessagingEnabled) {
+      navigation.goBack();
+    }
+  }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
   const allAccounts = useAccounts();

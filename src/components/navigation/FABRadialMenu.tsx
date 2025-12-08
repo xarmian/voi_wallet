@@ -6,6 +6,7 @@
  */
 
 import React, { useCallback, useMemo } from 'react';
+import { useIsSwapEnabled, useIsMessagingEnabled } from '@/store/experimentalStore';
 import {
   View,
   StyleSheet,
@@ -45,6 +46,7 @@ const MENU_ITEMS: MenuItem[] = [
   { id: 'swap', label: 'Swap Tokens', icon: 'swap-horizontal', screen: 'Home', stackScreen: 'Swap' },
   { id: 'send', label: 'Send Tokens', icon: 'arrow-up', screen: 'Home', stackScreen: 'Send' },
   { id: 'receive', label: 'Receive Tokens', icon: 'arrow-down', screen: 'Home', stackScreen: 'Receive' },
+  { id: 'claim', label: 'Claim Tokens', icon: 'gift-outline', screen: 'Home', stackScreen: 'ClaimableTokens' },
   { id: 'messages', label: 'Messages', icon: 'chatbubbles', screen: 'Friends', stackScreen: 'MessagesInbox' },
 ];
 
@@ -129,6 +131,19 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
   const navigation = useNavigation<any>();
   const activeAccount = useActiveAccount();
   const unreadCount = useTotalUnreadCount();
+
+  // Experimental feature flags
+  const swapEnabled = useIsSwapEnabled();
+  const messagingEnabled = useIsMessagingEnabled();
+
+  // Filter menu items based on enabled experimental features
+  const visibleMenuItems = useMemo(() => {
+    return MENU_ITEMS.filter((item) => {
+      if (item.id === 'swap' && !swapEnabled) return false;
+      if (item.id === 'messages' && !messagingEnabled) return false;
+      return true;
+    });
+  }, [swapEnabled, messagingEnabled]);
 
   // Animation shared values
   const menuProgress = useSharedValue(0);
@@ -240,12 +255,12 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
         pointerEvents="box-none"
       >
         {/* Menu items - positioned radially around center */}
-        {MENU_ITEMS.map((item, index) => (
+        {visibleMenuItems.map((item, index) => (
           <FABMenuItem
             key={item.id}
             item={item}
             index={index}
-            totalItems={MENU_ITEMS.length}
+            totalItems={visibleMenuItems.length}
             menuProgress={menuProgress}
             onPress={() => handleItemPress(item)}
           />

@@ -598,11 +598,16 @@ export default function SettingsScreen() {
               label="Show Recovery Phrase"
               onPress={handleShowRecoveryPhrase}
             />
+            <SettingsRow
+              icon="save-outline"
+              label="Backup Wallet"
+              onPress={handleBackupWallet}
+            />
           </GlassCard>
 
-          {/* Network Section */}
+          {/* Network & Connections Section */}
           <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Network" icon="globe-outline" />
+            <SectionHeader title="Network & Connections" icon="globe-outline" />
             <SettingsRow
               icon="wifi-outline"
               label="Current Network"
@@ -624,11 +629,16 @@ export default function SettingsScreen() {
                 </View>
               }
             />
+            <SettingsRow
+              icon="apps-outline"
+              label="Connected dApps"
+              onPress={handleWalletConnectSessions}
+            />
           </GlassCard>
 
-          {/* Appearance Section */}
+          {/* Preferences Section */}
           <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Appearance" icon="color-palette-outline" />
+            <SectionHeader title="Preferences" icon="options-outline" />
             <SettingsRow
               icon="moon-outline"
               label="Theme"
@@ -668,35 +678,15 @@ export default function SettingsScreen() {
               value={localeDisplayText}
               onPress={handleLocalePress}
             />
-          </GlassCard>
-
-          {/* Notifications Section */}
-          <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Notifications" icon="notifications-outline" />
             <SettingsRow
               icon="notifications-outline"
               label="Push Notifications"
               onPress={() => navigation.navigate('NotificationSettings')}
             />
-          </GlassCard>
-
-          {/* WalletConnect Section */}
-          <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="WalletConnect" icon="link-outline" />
             <SettingsRow
-              icon="apps-outline"
-              label="Connected dApps"
-              onPress={handleWalletConnectSessions}
-            />
-          </GlassCard>
-
-          {/* Backup Section */}
-          <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Backup" icon="cloud-upload-outline" />
-            <SettingsRow
-              icon="save-outline"
-              label="Backup Wallet"
-              onPress={handleBackupWallet}
+              icon="flask-outline"
+              label="Experimental Features"
+              onPress={() => navigation.navigate('ExperimentalFeatures')}
             />
           </GlassCard>
 
