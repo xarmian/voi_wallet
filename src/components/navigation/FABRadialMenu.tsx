@@ -157,10 +157,14 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
     buttonRotation.value = withSpring(180, springConfigs.snappy);
   }, [menuProgress, buttonRotation, isOpen]);
 
-  // Close menu animation
-  const closeMenu = useCallback(() => {
+  // Close menu animation with optional completion callback
+  const closeMenu = useCallback((onComplete?: () => void) => {
     isOpen.value = false;
-    menuProgress.value = withSpring(0, springConfigs.snappy);
+    menuProgress.value = withSpring(0, springConfigs.snappy, (finished) => {
+      if (finished && onComplete) {
+        runOnJS(onComplete)();
+      }
+    });
     buttonRotation.value = withSpring(0, springConfigs.snappy);
   }, [menuProgress, buttonRotation, isOpen]);
 
@@ -175,9 +179,6 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
 
   // Handle menu item press
   const handleItemPress = useCallback((item: MenuItem) => {
-    closeMenu();
-
-    // Navigate after a short delay for visual feedback
     const navigateToScreen = () => {
       if (item.stackScreen) {
         // Navigate to nested stack screen
@@ -203,7 +204,8 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
       }
     };
 
-    setTimeout(navigateToScreen, 150);
+    // Close menu and navigate after animation completes
+    closeMenu(navigateToScreen);
   }, [navigation, activeAccount, closeMenu]);
 
   // Backdrop animated style
@@ -240,7 +242,7 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
       <Animated.View
         style={[styles.backdrop, backdropAnimatedStyle]}
       >
-        <TouchableWithoutFeedback onPress={closeMenu}>
+        <TouchableWithoutFeedback onPress={() => closeMenu()}>
           <View style={StyleSheet.absoluteFill} />
         </TouchableWithoutFeedback>
       </Animated.View>

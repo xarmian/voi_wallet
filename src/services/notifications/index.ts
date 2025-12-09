@@ -18,6 +18,7 @@ import {
 } from './types';
 import Toast from 'react-native-toast-message';
 import { AccountMetadata, AccountType } from '@/types/wallet';
+import { deviceId } from '../../platform';
 
 const LAST_HANDLED_NOTIFICATION_KEY = '@voi_wallet/last_handled_notification';
 
@@ -68,8 +69,8 @@ class NotificationService {
       return;
     }
 
-    // Generate device ID and configure Supabase client with it
-    this.deviceId = await this.generateDeviceId();
+    // Get unique device ID and configure Supabase client with it
+    this.deviceId = await deviceId.getDeviceId();
     setDeviceId(this.deviceId);
 
     // Set up notification listeners
@@ -449,30 +450,6 @@ class NotificationService {
   }
 
   // Private methods
-
-  private async generateDeviceId(): Promise<string> {
-    // Try to get a unique device identifier
-    const deviceName = Device.deviceName;
-    const modelId = Device.modelId;
-    const osVersion = Device.osVersion;
-
-    // Create a semi-unique device ID from available information
-    // In production, consider using expo-secure-store to persist a UUID
-    const baseId = `${Platform.OS}-${modelId || 'unknown'}-${deviceName || 'device'}`;
-
-    // Hash the ID to create a consistent identifier
-    // For simplicity, we'll use a basic encoding
-    const encoder = new TextEncoder();
-    const data = encoder.encode(baseId + osVersion);
-
-    // Convert to hex string
-    let hash = '';
-    for (let i = 0; i < data.length; i++) {
-      hash += data[i].toString(16).padStart(2, '0');
-    }
-
-    return hash.slice(0, 32); // Truncate to 32 chars
-  }
 
   private setupListeners(): void {
     // Handle notifications received while app is foregrounded
