@@ -20,6 +20,15 @@ export default {
     "newArchEnabled": true,
     "scheme": "voi",
     "platforms": ["ios", "android"],
+    "updates": {
+      "enabled": true,
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD",
+      "url": "https://u.expo.dev/48f3eead-a427-4651-9b06-6b952fc8b84d"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "splash": {
       "image": "./assets/voi_wallet_logo.png",
       "resizeMode": "contain",
@@ -36,7 +45,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "17",
+      "buildNumber": "18",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -72,7 +81,7 @@ export default {
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
       "googleServicesFile": IS_DEV ? "./google-services-dev.json" : "./google-services.json",
-      "versionCode": 17,
+      "versionCode": 18,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",
@@ -117,7 +126,7 @@ export default {
         "expo-build-properties",
         {
           android: {
-            kotlinVersion: "2.0.0",
+            kotlinVersion: "2.1.20",
             compileSdkVersion: 35,
             targetSdkVersion: 35,
             buildToolsVersion: "35.0.0",
