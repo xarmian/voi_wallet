@@ -60,6 +60,7 @@ export default function ClaimableTokensScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isPendingRefresh, setIsPendingRefresh] = useState(false);
   const pendingRefreshHandled = useRef(false);
+  const pendingRefreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeAccount = useActiveAccount();
   const displayedItems = useDisplayedClaimableItems();
@@ -96,23 +97,29 @@ export default function ClaimableTokensScreen() {
         true
       );
 
-      // Schedule refresh after delay
-      const timeoutId = setTimeout(async () => {
+      // Clear the param immediately to prevent re-triggering
+      navigation.setParams({ pendingRefresh: undefined });
+
+      // Schedule refresh after delay (store in ref so it persists across effect re-runs)
+      pendingRefreshTimeoutRef.current = setTimeout(async () => {
         await fetchApprovals(activeAccount.address);
         setIsPendingRefresh(false);
         cancelAnimation(pulseOpacity);
         pulseOpacity.value = 1;
+        pendingRefreshTimeoutRef.current = null;
       }, PENDING_REFRESH_DELAY);
-
-      // Clear the param to prevent re-triggering
-      navigation.setParams({ pendingRefresh: undefined });
-
-      return () => {
-        clearTimeout(timeoutId);
-        cancelAnimation(pulseOpacity);
-      };
     }
   }, [route.params?.pendingRefresh, activeAccount?.address, fetchApprovals, navigation, pulseOpacity]);
+
+  // Cleanup timeout on unmount only (separate effect with empty deps)
+  useEffect(() => {
+    return () => {
+      if (pendingRefreshTimeoutRef.current) {
+        clearTimeout(pendingRefreshTimeoutRef.current);
+      }
+      cancelAnimation(pulseOpacity);
+    };
+  }, [pulseOpacity]);
 
   // Fetch claimable tokens when screen comes into focus (but not during pending refresh)
   useFocusEffect(

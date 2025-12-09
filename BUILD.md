@@ -22,3 +22,7 @@ eas submit --platform ios --profile production
 
 # Manage EAS Keys/credentials
 eas credentials -p ios
+
+# Push update to preview channel
+eas update --channel preview --message "Test update"
+
