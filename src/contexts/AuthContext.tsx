@@ -52,6 +52,7 @@ export interface AuthState {
   biometricEnabled: boolean;
   backgroundedAt: number | null;
   timeoutMinutes: number | 'never';
+  hasPin: boolean;
 }
 
 export interface AuthContextType {
@@ -81,6 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     biometricEnabled: false,
     backgroundedAt: null,
     timeoutMinutes: 5,
+    hasPin: false,
   });
 
   const activityTimer = useRef<NodeJS.Timeout>();
@@ -120,6 +122,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     activityTimer.current = setInterval(() => {
       setAuthState((currentState) => {
+        // Don't lock if no PIN is set - user won't be able to unlock
+        if (!currentState.hasPin) {
+          return currentState;
+        }
+
         const now = Date.now();
         const timeSinceLastActivity = now - currentState.lastActivity;
 
@@ -172,6 +179,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           biometricEnabled: biometricEnabled && biometricAvailable,
           backgroundedAt: null,
           timeoutMinutes,
+          hasPin,
         }));
         return;
       }
@@ -184,6 +192,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         biometricEnabled: biometricEnabled && biometricAvailable,
         backgroundedAt: null,
         timeoutMinutes,
+        hasPin,
       }));
     } catch (error) {
       console.error('Failed to check initial auth state:', error);
@@ -336,13 +345,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const lock = () => {
-    setAuthState((prev) => ({
-      ...prev,
-      isLocked: true,
-      isAuthenticated: false,
-      sessionId: null,
-      backgroundedAt: null,
-    }));
+    setAuthState((prev) => {
+      // Don't lock if user hasn't set up a PIN - they won't be able to unlock
+      if (!prev.hasPin) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        isLocked: true,
+        isAuthenticated: false,
+        sessionId: null,
+        backgroundedAt: null,
+      };
+    });
 
     if (sessionTimer.current) {
       clearTimeout(sessionTimer.current);
@@ -360,6 +376,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     await AccountSecureStorage.storePin(pin);
+    setAuthState((prev) => ({
+      ...prev,
+      hasPin: true,
+    }));
   };
 
   const enableBiometrics = async (enabled: boolean): Promise<void> => {

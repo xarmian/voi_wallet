@@ -71,6 +71,10 @@ export default function AccountListItem({
         return '';
       case AccountType.WATCH:
         return 'Watch Only';
+      case AccountType.LEDGER:
+        return 'Ledger';
+      case AccountType.REMOTE_SIGNER:
+        return 'Remote';
       case AccountType.REKEYED:
         const rekeyedAccount = account as RekeyedAccountMetadata;
         const hasLedgerSigner =
@@ -82,6 +86,18 @@ export default function AccountListItem({
 
         if (hasLedgerSigner) {
           return 'Ledger';
+        }
+
+        // Check if rekeyed to a remote signer account
+        const hasRemoteSignerAuth =
+          walletAccounts?.some(
+            (candidate) =>
+              candidate.type === AccountType.REMOTE_SIGNER &&
+              candidate.address === rekeyedAccount.authAddress
+          ) ?? false;
+
+        if (hasRemoteSignerAuth) {
+          return 'Remote';
         }
 
         if (rekeyedAccount.canSign) {

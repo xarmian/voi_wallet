@@ -424,6 +424,10 @@ export default function SettingsScreen() {
     navigation.navigate('WalletConnectSessions');
   };
 
+  const handleRemoteSignerSettings = () => {
+    navigation.navigate('RemoteSignerSettings');
+  };
+
   const handleBackupWallet = () => {
     Alert.alert('Backup Wallet', 'Backup functionality will be implemented');
   };
@@ -633,6 +637,11 @@ export default function SettingsScreen() {
               icon="apps-outline"
               label="Connected dApps"
               onPress={handleWalletConnectSessions}
+            />
+            <SettingsRow
+              icon="qr-code-outline"
+              label="Remote Signer"
+              onPress={handleRemoteSignerSettings}
             />
           </GlassCard>
 

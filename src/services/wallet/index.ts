@@ -10,6 +10,7 @@ import {
   WatchAccountMetadata,
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
   CreateAccountRequest,
   ImportAccountRequest,
   ImportLedgerAccountRequest,
@@ -17,6 +18,7 @@ import {
   LedgerAccountDiscoveryResult,
   AddWatchAccountRequest,
   DetectRekeyedAccountRequest,
+  ImportRemoteSignerAccountRequest,
   AccountNotFoundError,
   AccountExistsError,
   InvalidAddressError,
@@ -538,6 +540,60 @@ export class MultiAccountWalletService {
         `Failed to detect rekeyed account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  static async addRemoteSignerAccount(
+    request: ImportRemoteSignerAccountRequest
+  ): Promise<RemoteSignerAccountMetadata> {
+    try {
+      if (!algosdk.isValidAddress(request.address)) {
+        throw new InvalidAddressError('Invalid Algorand address');
+      }
+
+      // Check if account already exists
+      const existingAccount = await this.findAccountByAddress(request.address);
+      if (existingAccount) {
+        throw new AccountExistsError('Account already exists in wallet');
+      }
+
+      const accountMetadata: RemoteSignerAccountMetadata = {
+        id: this.generateAccountId(),
+        address: request.address,
+        publicKey: request.publicKey,
+        type: AccountType.REMOTE_SIGNER,
+        label:
+          request.label ||
+          `Remote Signer ${(await this.getRemoteSignerAccountCount()) + 1}`,
+        color: request.color || this.generateAccountColor(),
+        isHidden: false,
+        createdAt: new Date().toISOString(),
+        importedAt: new Date().toISOString(),
+        lastUsed: new Date().toISOString(),
+        signerDeviceId: request.signerDeviceId,
+        signerDeviceName: request.signerDeviceName,
+        pairedAt: new Date().toISOString(),
+      };
+
+      await this.addAccountToWallet(accountMetadata);
+      return accountMetadata;
+    } catch (error) {
+      if (
+        error instanceof InvalidAddressError ||
+        error instanceof AccountExistsError
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Failed to add remote signer account: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  static async getRemoteSignerAccountCount(): Promise<number> {
+    const wallet = await this.getCurrentWallet();
+    if (!wallet) return 0;
+    return wallet.accounts.filter((a) => a.type === AccountType.REMOTE_SIGNER)
+      .length;
   }
 
   // Wallet Management
@@ -1155,13 +1211,35 @@ export class MultiAccountWalletService {
       // If no wallet exists, create one with this account
       if (accountMetadata.type === AccountType.STANDARD) {
         await this.createWallet(accountMetadata as StandardAccountMetadata);
+      } else if (
+        accountMetadata.type === AccountType.REMOTE_SIGNER ||
+        accountMetadata.type === AccountType.WATCH_ONLY
+      ) {
+        // Create wallet with non-standard account (no mnemonic required)
+        await this.createWalletWithAccount(accountMetadata);
       } else {
-        throw new Error('Cannot create wallet with non-standard account');
+        throw new Error('Cannot create wallet with this account type');
       }
     } else {
       wallet.accounts.push(accountMetadata);
       await this.storeWallet(wallet);
     }
+  }
+
+  private static async createWalletWithAccount(
+    accountMetadata: AccountMetadata
+  ): Promise<Wallet> {
+    const wallet: Wallet = {
+      id: this.generateWalletId(),
+      version: '1.0',
+      createdAt: new Date().toISOString(),
+      accounts: [accountMetadata],
+      activeAccountId: accountMetadata.id,
+      settings: this.getDefaultWalletSettings(),
+    };
+
+    await this.storeWallet(wallet);
+    return wallet;
   }
 
   private static async storeWallet(wallet: Wallet): Promise<void> {

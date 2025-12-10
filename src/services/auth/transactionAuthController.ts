@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import algosdk from 'algosdk';
 import {
   UnifiedTransactionSigner,
   UnifiedTransactionRequest,
@@ -7,10 +8,12 @@ import {
 } from '@/services/transactions/unifiedSigner';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { LedgerSigningInfo, WalletAccount } from '@/types/wallet';
+import { LedgerSigningInfo, WalletAccount, AccountType } from '@/types/wallet';
 import { ledgerTransportService, LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService, LedgerAlgorandService } from '@/services/ledger/algorand';
 import * as LocalAuthentication from 'expo-local-authentication';
+import { RemoteSignerRequest, RemoteSignerResponse } from '@/types/remoteSigner';
+import { RemoteSignerService } from '@/services/remoteSigner';
 
 /**
  * Authentication states for transaction signing
@@ -34,6 +37,16 @@ export type LedgerSigningStatus =
   | 'device_locked'
   | 'ready'
   | 'waiting_confirmation'
+  | 'error';
+
+/**
+ * Remote signer status during QR signing flow
+ */
+export type RemoteSignerStatus =
+  | 'idle'
+  | 'displaying_request'    // Showing QR code for signer to scan
+  | 'waiting_signature'     // Waiting for user to scan signed response
+  | 'processing_response'   // Processing the scanned response
   | 'error';
 
 /**
@@ -66,6 +79,12 @@ export interface TransactionAuthState_Interface {
   ledgerStatus: LedgerSigningStatus;
   ledgerDevice: LedgerDeviceInfo | null;
   ledgerError: string | null;
+
+  // Remote signer-specific (QR-based air-gapped signing)
+  isRemoteSignerFlow: boolean;
+  remoteSignerStatus: RemoteSignerStatus;
+  remoteSignerRequest: RemoteSignerRequest | null;
+  remoteSignerError: string | null;
 
   // Progress tracking
   signingProgress: SigningProgress | null;
@@ -121,6 +140,10 @@ export class TransactionAuthController {
       ledgerStatus: 'idle',
       ledgerDevice: null,
       ledgerError: null,
+      isRemoteSignerFlow: false,
+      remoteSignerStatus: 'idle',
+      remoteSignerRequest: null,
+      remoteSignerError: null,
       signingProgress: null,
       result: null,
     };
@@ -170,8 +193,15 @@ export class TransactionAuthController {
                         previous.ledgerError !== newState.ledgerError ||
                         previous.error !== newState.error ||
                         previous.isLedgerFlow !== newState.isLedgerFlow ||
+                        previous.isRemoteSignerFlow !== newState.isRemoteSignerFlow ||
+                        previous.remoteSignerStatus !== newState.remoteSignerStatus ||
+                        previous.remoteSignerRequest !== newState.remoteSignerRequest ||
+                        previous.remoteSignerError !== newState.remoteSignerError ||
+                        previous.requiresPin !== newState.requiresPin ||
                         previous.requiresBiometric !== newState.requiresBiometric ||
-                        previous.biometricAvailable !== newState.biometricAvailable;
+                        previous.biometricAvailable !== newState.biometricAvailable ||
+                        previous.result !== newState.result ||
+                        previous.signingProgress !== newState.signingProgress;
 
     if (!stateChanged) {
       return;
@@ -388,23 +418,40 @@ export class TransactionAuthController {
     this.signingAbortController = null; // Clear any previous abort controller
     this.deviceVerificationInProgress = false; // Reset verification semaphore
     this.cancelLedgerAutoRecovery();
-    // Only reset necessary fields, don't use getInitialState() which resets isLedgerFlow
+    // Reset to a clean state first, but stay in 'idle' until we determine auth requirements
     this.updateState({
-      state: 'authenticating',
+      state: 'idle',
       error: null,
       pinAttempts: 0,
       isLocked: false,
       signingProgress: null,
       result: null,
+      // Reset flow-specific flags
+      isLedgerFlow: false,
+      isRemoteSignerFlow: false,
+      remoteSignerStatus: 'idle',
+      remoteSignerRequest: null,
+      remoteSignerError: null,
     });
 
     try {
-      // Determine authentication requirements
+      // Determine authentication requirements BEFORE transitioning to authenticating state
+      // This ensures the correct flow flags are set before the UI renders
       await this.determineAuthRequirements(request.account);
+
+      // Now transition to authenticating state with correct flow flags already set
+      this.updateState({
+        state: 'authenticating',
+      });
 
       // Setup Ledger flow if needed
       if (this.currentState.isLedgerFlow) {
         await this.initializeLedgerFlow();
+      }
+
+      // Setup Remote Signer flow if needed
+      if (this.currentState.isRemoteSignerFlow) {
+        await this.initializeRemoteSignerFlow();
       }
 
     } catch (error) {
@@ -425,6 +472,20 @@ export class TransactionAuthController {
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
       const biometricAvailable = hasHardware && isEnrolled;
+
+      // Check if this is a remote signer (air-gapped QR) account
+      // This takes precedence over other flow types
+      if (account.type === AccountType.REMOTE_SIGNER) {
+        this.updateState({
+          requiresPin: false, // Remote signer handles its own auth
+          requiresBiometric: false,
+          biometricAvailable,
+          isLedgerFlow: false,
+          isRemoteSignerFlow: true,
+          remoteSignerStatus: 'idle',
+        });
+        return;
+      }
 
       // Check if this is a Ledger signing flow
       let isLedgerFlow = false;
@@ -465,6 +526,7 @@ export class TransactionAuthController {
         requiresBiometric: biometricAvailable,
         biometricAvailable,
         isLedgerFlow,
+        isRemoteSignerFlow: false,
         ledgerDevice: isLedgerFlow ? this.getCurrentLedgerDevice() : null,
         ledgerStatus: isLedgerFlow ? 'idle' : 'idle', // Start as idle, will be set to searching when signing starts
       });
@@ -1566,6 +1628,244 @@ export class TransactionAuthController {
       return 'Failed to connect to Ledger device. Please check your connection and try again.';
     }
   }
+
+  // ============ Remote Signer Flow Methods ============
+
+  /**
+   * Initialize remote signer flow - creates the signing request
+   */
+  private async initializeRemoteSignerFlow(): Promise<void> {
+    if (!this.currentRequest) {
+      throw new Error('No transaction request available');
+    }
+
+    try {
+      this.updateState({
+        state: 'signing',
+        remoteSignerStatus: 'displaying_request',
+      });
+
+      // Build the unsigned transactions based on request type
+      const unsignedTxns = await this.buildUnsignedTransactions();
+
+      // Create the remote signer request
+      const signerRequest = await RemoteSignerService.createSigningRequest(
+        unsignedTxns,
+        [this.currentRequest.account.address], // signer addresses
+        {
+          description: this.getTransactionDescription(),
+        }
+      );
+
+      this.updateState({
+        remoteSignerRequest: signerRequest,
+        remoteSignerStatus: 'displaying_request',
+      });
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create signing request';
+      this.updateState({
+        state: 'error',
+        remoteSignerStatus: 'error',
+        remoteSignerError: errorMessage,
+        error: new Error(errorMessage),
+      });
+    }
+  }
+
+  /**
+   * Build unsigned transactions from the current request
+   */
+  private async buildUnsignedTransactions(): Promise<algosdk.Transaction[]> {
+    if (!this.currentRequest) {
+      throw new Error('No transaction request available');
+    }
+
+    const { TransactionService } = await import('@/services/transactions');
+
+    switch (this.currentRequest.type) {
+      case 'voi_transfer':
+      case 'asa_transfer':
+      case 'arc200_transfer':
+      case 'arc72_transfer':
+        if (!this.currentRequest.transferParams) {
+          throw new Error('Transfer parameters required');
+        }
+        const txnResult = await TransactionService.buildTransaction(
+          this.currentRequest.transferParams
+        );
+        // Handle both single transaction and transaction group
+        if ('transactions' in txnResult) {
+          return txnResult.transactions;
+        }
+        return [txnResult.txn];
+
+      case 'rekey':
+        if (!this.currentRequest.rekeyParams) {
+          throw new Error('Rekey parameters required');
+        }
+        const rekeyTxn = await TransactionService.buildRekeyTransaction({
+          fromAddress: this.currentRequest.rekeyParams.fromAddress,
+          rekeyToAddress: this.currentRequest.rekeyParams.rekeyToAddress || this.currentRequest.rekeyParams.fromAddress,
+          networkId: this.currentRequest.rekeyParams.networkId,
+          note: this.currentRequest.rekeyParams.note,
+        });
+        return [rekeyTxn.txn];
+
+      case 'rekey_reverse':
+        if (!this.currentRequest.rekeyParams) {
+          throw new Error('Rekey parameters required');
+        }
+        const reverseRekeyTxn = await TransactionService.buildRekeyReverseTransaction({
+          fromAddress: this.currentRequest.rekeyParams.fromAddress,
+          networkId: this.currentRequest.rekeyParams.networkId,
+          note: this.currentRequest.rekeyParams.note,
+        });
+        return [reverseRekeyTxn.txn];
+
+      case 'batch_transaction':
+      case 'walletconnect_batch':
+        if (!this.currentRequest.walletConnectParams?.transactions) {
+          throw new Error('Batch transactions required');
+        }
+        // Decode the WalletConnect transactions
+        return this.currentRequest.walletConnectParams.transactions.map((wtxn) => {
+          const txnBytes = Buffer.from(wtxn.txn, 'base64');
+          return algosdk.decodeUnsignedTransaction(txnBytes);
+        });
+
+      default:
+        throw new Error(`Unsupported transaction type for remote signing: ${this.currentRequest.type}`);
+    }
+  }
+
+  /**
+   * Get a human-readable description of the transaction
+   */
+  private getTransactionDescription(): string {
+    if (!this.currentRequest) return 'Transaction';
+
+    switch (this.currentRequest.type) {
+      case 'voi_transfer':
+        return 'VOI Transfer';
+      case 'asa_transfer':
+        return 'Asset Transfer';
+      case 'arc200_transfer':
+        return 'ARC-200 Token Transfer';
+      case 'arc72_transfer':
+        return 'NFT Transfer';
+      case 'rekey':
+        return 'Account Rekey';
+      case 'rekey_reverse':
+        return 'Rekey Reversal';
+      case 'batch_transaction':
+      case 'walletconnect_batch':
+        return 'dApp Transaction';
+      default:
+        return 'Transaction';
+    }
+  }
+
+  /**
+   * Called when user is ready to scan the signed response
+   */
+  public startRemoteSignerScan(): void {
+    if (!this.currentState.isRemoteSignerFlow) return;
+
+    this.updateState({
+      remoteSignerStatus: 'waiting_signature',
+    });
+  }
+
+  /**
+   * Process a scanned remote signer response
+   */
+  public async processRemoteSignerResponse(response: RemoteSignerResponse): Promise<void> {
+    if (!this.currentState.isRemoteSignerFlow || !this.currentState.remoteSignerRequest) {
+      throw new Error('No active remote signer flow');
+    }
+
+    this.updateState({
+      remoteSignerStatus: 'processing_response',
+    });
+
+    try {
+      // Validate the response matches our request
+      if (response.id !== this.currentState.remoteSignerRequest.id) {
+        throw new Error('Response does not match the pending request');
+      }
+
+      // Check if signing was rejected
+      if (!response.ok) {
+        const errorMessage = response.err?.m || 'Signing was rejected';
+        throw new Error(errorMessage);
+      }
+
+      // Extract signed transactions
+      const signedTxns = RemoteSignerService.extractSignedTransactions(response);
+
+      if (!signedTxns || signedTxns.length === 0) {
+        throw new Error('No signed transactions in response');
+      }
+
+      // Submit to network
+      this.updateState({ state: 'processing' });
+
+      const { NetworkService } = await import('@/services/network');
+      const networkService = NetworkService.getInstance();
+
+      // Submit the signed transactions
+      const transactionId = await networkService.submitTransaction(
+        signedTxns.length === 1 ? signedTxns[0] : signedTxns
+      );
+
+      // Success!
+      const successResult: UnifiedSigningResult = {
+        success: true,
+        transactionId,
+        signedTransactions: signedTxns,
+      };
+
+      this.updateState({
+        state: 'completed',
+        remoteSignerStatus: 'idle',
+        result: successResult,
+      });
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to process signed response';
+      this.updateState({
+        state: 'error',
+        remoteSignerStatus: 'error',
+        remoteSignerError: errorMessage,
+        error: new Error(errorMessage),
+      });
+    }
+  }
+
+  /**
+   * Cancel the remote signer flow
+   */
+  public cancelRemoteSignerFlow(): void {
+    if (!this.currentState.isRemoteSignerFlow) return;
+
+    this.userExplicitlyRejected = true;
+    this.updateState({
+      state: 'error',
+      remoteSignerStatus: 'idle',
+      remoteSignerRequest: null,
+      error: new Error('Remote signing cancelled by user'),
+    });
+  }
+
+  /**
+   * Get the current remote signer request (for displaying QR code)
+   */
+  public getRemoteSignerRequest(): RemoteSignerRequest | null {
+    return this.currentState.remoteSignerRequest;
+  }
+
+  // ============ End Remote Signer Flow Methods ============
 
   /**
    * Clean up resources

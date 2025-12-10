@@ -56,6 +56,18 @@ import QRAccountImportScreen from '@/screens/account/QRAccountImportScreen';
 import AccountImportPreviewScreen from '@/screens/account/AccountImportPreviewScreen';
 import LedgerAccountImportScreen from '@/screens/account/LedgerAccountImportScreen';
 import CreateWalletScreen from '@/screens/onboarding/CreateWalletScreen';
+// Remote Signer screens
+import {
+  ExportAccountsScreen,
+  ImportRemoteSignerScreen,
+  RemoteSignerSettingsScreen,
+  SignRequestScannerScreen,
+  TransactionReviewScreen,
+  SignatureDisplayScreen,
+  SignRequestDisplayScreen,
+  SignatureScannerScreen,
+} from '@/screens/remoteSigner';
+import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
@@ -109,6 +121,21 @@ export type RootStackParamList = {
   LedgerAccountImport:
     | { deviceId?: string; isOnboarding?: boolean }
     | undefined;
+  // Remote Signer signing flow screens
+  SignRequestDisplay: {
+    request: RemoteSignerRequest;
+    onComplete?: (signedTxns: Uint8Array[]) => void;
+  };
+  SignatureScanner: {
+    requestId: string;
+  };
+  SignRequestScanner: undefined;
+  RemoteSignerTransactionReview: {
+    request: RemoteSignerRequest;
+  };
+  SignatureDisplay: {
+    request: RemoteSignerRequest;
+  };
 };
 
 export type MainTabParamList = {
@@ -290,6 +317,10 @@ export type SettingsStackParamList = {
     url: string;
     title: string;
   };
+  // Remote Signer settings & account management
+  RemoteSignerSettings: undefined;
+  ExportAccounts: undefined;
+  ImportRemoteSigner: undefined;
 };
 
 export type FriendsStackParamList = {
@@ -452,6 +483,19 @@ function SettingsStackNavigator() {
           component={ExperimentalFeaturesScreen}
         />
         <SettingsStack.Screen name="WebView" component={WebViewScreen} />
+        {/* Remote Signer settings & account management */}
+        <SettingsStack.Screen
+          name="RemoteSignerSettings"
+          component={RemoteSignerSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="ExportAccounts"
+          component={ExportAccountsScreen}
+        />
+        <SettingsStack.Screen
+          name="ImportRemoteSigner"
+          component={ImportRemoteSignerScreen}
+        />
       </SettingsStack.Navigator>
     </NFTBackground>
   );
@@ -725,6 +769,54 @@ function AppStack() {
           animation: 'slide_from_bottom',
           gestureEnabled: true,
           gestureDirection: 'vertical',
+        }}
+      />
+      {/* Remote Signer signing flow screens */}
+      <Stack.Screen
+        name="SignRequestDisplay"
+        component={SignRequestDisplayScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
+        name="SignatureScanner"
+        component={SignatureScannerScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
+        name="SignRequestScanner"
+        component={SignRequestScannerScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
+        name="RemoteSignerTransactionReview"
+        component={TransactionReviewScreen}
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="SignatureDisplay"
+        component={SignatureDisplayScreen}
+        options={{
+          headerShown: false,
         }}
       />
     </Stack.Navigator>

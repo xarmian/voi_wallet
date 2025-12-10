@@ -7,12 +7,14 @@ import {
   StandardAccountMetadata,
   WatchAccountMetadata,
   RekeyedAccountMetadata,
+  RemoteSignerAccountMetadata,
   Wallet,
   WalletSettings,
   CreateAccountRequest,
   ImportAccountRequest,
   AddWatchAccountRequest,
   DetectRekeyedAccountRequest,
+  ImportRemoteSignerAccountRequest,
   AccountBalance,
   TransactionInfo,
   AccountNotFoundError,
@@ -123,6 +125,9 @@ interface WalletState {
   detectRekeyedAccount: (
     request: DetectRekeyedAccountRequest
   ) => Promise<RekeyedAccountMetadata>;
+  addRemoteSignerAccount: (
+    request: ImportRemoteSignerAccountRequest
+  ) => Promise<RemoteSignerAccountMetadata>;
   deleteAccount: (accountId: string) => Promise<void>;
 
   // Account operations
@@ -641,6 +646,47 @@ export const useWalletStore = create<WalletState>()(
           error instanceof Error
             ? error.message
             : 'Failed to detect rekeyed account';
+        set({ lastError: errorMessage });
+        throw error;
+      } finally {
+        set({ isLoading: false });
+      }
+    },
+
+    addRemoteSignerAccount: async (request: ImportRemoteSignerAccountRequest) => {
+      try {
+        set({ isLoading: true, lastError: null });
+
+        const remoteSignerAccount =
+          await MultiAccountWalletService.addRemoteSignerAccount(request);
+        const wallet = await MultiAccountWalletService.getCurrentWallet();
+
+        // Initialize account state
+        const { accountStates } = get();
+        accountStates[remoteSignerAccount.id] = createInitialAccountState();
+
+        set({
+          wallet,
+          accountStates: { ...accountStates },
+        });
+
+        // Auto-subscribe remote signer account to notifications (with messages disabled)
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(remoteSignerAccount.address, {
+              ...DEFAULT_NOTIFICATION_PREFERENCES,
+              messages: false, // Remote signer accounts can't decrypt messages locally
+            })
+            .catch(err => console.warn('Failed to subscribe remote signer account to notifications:', err));
+          realtimeService.addAddress(remoteSignerAccount.address);
+        }
+
+        return remoteSignerAccount;
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'Failed to add remote signer account';
         set({ lastError: errorMessage });
         throw error;
       } finally {

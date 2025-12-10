@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Modal,
   View,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -24,8 +25,12 @@ import {
   TransactionAuthController,
   TransactionAuthState_Interface,
   LedgerSigningStatus,
+  RemoteSignerStatus,
 } from '@/services/auth/transactionAuthController';
 import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
+import { AnimatedQRCode, AnimatedQRScanner } from '@/components/remoteSigner';
+import { RemoteSignerService } from '@/services/remoteSigner';
+import { isRemoteSignerResponse, RemoteSignerResponse } from '@/types/remoteSigner';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -156,6 +161,72 @@ export default function UnifiedTransactionAuthModal({
 
   const handleLedgerRetry = () => {
     controller.retryLedgerConnection();
+  };
+
+  // Remote signer handlers
+  const handleRemoteSignerScanResponse = useCallback(() => {
+    controller.startRemoteSignerScan();
+  }, [controller]);
+
+  const handleRemoteSignerScanned = useCallback(async (data: string) => {
+    try {
+      // Decode the scanned data
+      const payload = RemoteSignerService.decodePayload(data);
+
+      if (!isRemoteSignerResponse(payload)) {
+        console.error('Scanned data is not a valid remote signer response');
+        return;
+      }
+
+      await controller.processRemoteSignerResponse(payload as RemoteSignerResponse);
+    } catch (error) {
+      console.error('Failed to process remote signer response:', error);
+    }
+  }, [controller]);
+
+  const handleRemoteSignerCancel = useCallback(() => {
+    controller.cancelRemoteSignerFlow();
+    handleCancel();
+  }, [controller, handleCancel]);
+
+  const getRemoteSignerStatusDisplay = (status: RemoteSignerStatus) => {
+    switch (status) {
+      case 'displaying_request':
+        return {
+          icon: 'qr-code' as const,
+          title: 'Scan with Signer Device',
+          message: 'Use your air-gapped signer device to scan this QR code and sign the transaction.',
+          color: theme.colors.primary,
+        };
+      case 'waiting_signature':
+        return {
+          icon: 'scan' as const,
+          title: 'Scan Signed Response',
+          message: 'After signing on your signer device, scan the response QR code below.',
+          color: theme.colors.primary,
+        };
+      case 'processing_response':
+        return {
+          icon: 'hourglass' as const,
+          title: 'Processing',
+          message: 'Verifying and submitting your signed transaction...',
+          color: theme.colors.primary,
+        };
+      case 'error':
+        return {
+          icon: 'alert-circle' as const,
+          title: 'Signing Error',
+          message: authState.remoteSignerError || 'Failed to complete remote signing.',
+          color: theme.colors.error,
+        };
+      default:
+        return {
+          icon: 'qr-code' as const,
+          title: 'Remote Signer',
+          message: 'Preparing remote signing request...',
+          color: theme.colors.primary,
+        };
+    }
   };
 
   const errorMessageLower = (
@@ -326,9 +397,109 @@ export default function UnifiedTransactionAuthModal({
     }
   };
 
+  // Render remote signer content
+  const renderRemoteSignerContent = () => {
+    const remoteDisplay = getRemoteSignerStatusDisplay(authState.remoteSignerStatus);
+
+    // Show QR scanner when waiting for signature
+    if (authState.remoteSignerStatus === 'waiting_signature') {
+      return (
+        <View style={styles.remoteSignerContainer}>
+          <Text style={styles.remoteSignerTitle}>{remoteDisplay.title}</Text>
+          <Text style={styles.remoteSignerMessage}>{remoteDisplay.message}</Text>
+          <View style={styles.scannerContainer}>
+            <AnimatedQRScanner
+              onScan={handleRemoteSignerScanned}
+              onError={(error) => console.error('Remote signer scan error:', error)}
+              instructionsText="Scan the signed response from your signer device"
+              showProgress={true}
+            />
+          </View>
+        </View>
+      );
+    }
+
+    // Show processing state
+    if (authState.remoteSignerStatus === 'processing_response') {
+      return (
+        <View style={styles.processingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.processingTitle}>{remoteDisplay.title}</Text>
+          <Text style={styles.processingMessage}>{remoteDisplay.message}</Text>
+        </View>
+      );
+    }
+
+    // Show error state
+    if (authState.remoteSignerStatus === 'error') {
+      return (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle" size={48} color={theme.colors.error} />
+          <Text style={styles.errorTitle}>{remoteDisplay.title}</Text>
+          <Text style={styles.errorMessage}>{remoteDisplay.message}</Text>
+        </View>
+      );
+    }
+
+    // Default: Show QR code for signer to scan (displaying_request)
+    const qrData = authState.remoteSignerRequest
+      ? RemoteSignerService.encodePayload(authState.remoteSignerRequest)
+      : null;
+
+    return (
+      <View style={styles.remoteSignerContainer}>
+        <Text style={styles.remoteSignerTitle}>{remoteDisplay.title}</Text>
+        <Text style={styles.remoteSignerMessage}>{remoteDisplay.message}</Text>
+
+        {qrData ? (
+          <View style={styles.qrWrapper}>
+            <AnimatedQRCode
+              data={qrData}
+              size={180}
+              showControls={true}
+              showFrameCounter={true}
+            />
+          </View>
+        ) : (
+          <View style={styles.loadingQR}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={styles.loadingQRText}>Preparing QR code...</Text>
+          </View>
+        )}
+
+        {/* Instructions for the signer flow */}
+        <View style={styles.remoteSignerInstructions}>
+          <View style={styles.instructionStep}>
+            <View style={styles.stepNumber}>
+              <Text style={styles.stepNumberText}>1</Text>
+            </View>
+            <Text style={styles.stepText}>Scan this QR with your signer device</Text>
+          </View>
+          <View style={styles.instructionStep}>
+            <View style={styles.stepNumber}>
+              <Text style={styles.stepNumberText}>2</Text>
+            </View>
+            <Text style={styles.stepText}>Review and sign on the signer</Text>
+          </View>
+          <View style={styles.instructionStep}>
+            <View style={styles.stepNumber}>
+              <Text style={styles.stepNumberText}>3</Text>
+            </View>
+            <Text style={styles.stepText}>Tap "Scan Response" below</Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   const renderContent = () => {
     switch (authState.state) {
       case 'authenticating':
+        // Remote signer flow - show QR immediately (no PIN required)
+        if (authState.isRemoteSignerFlow) {
+          return renderRemoteSignerContent();
+        }
+
         if (authState.isLedgerFlow) {
           // Always show Ledger status flow for Ledger accounts (never PIN/biometric)
           const ledgerDisplay = getLedgerStatusDisplay(authState.ledgerStatus);
@@ -411,6 +582,11 @@ export default function UnifiedTransactionAuthModal({
         );
 
       case 'signing':
+        // Remote signer uses the same content rendering for signing state
+        if (authState.isRemoteSignerFlow) {
+          return renderRemoteSignerContent();
+        }
+
         if (authState.isLedgerFlow) {
           const ledgerDisplay = getLedgerStatusDisplay(authState.ledgerStatus);
           return (
@@ -515,6 +691,59 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const renderButtons = () => {
+    // Remote signer flow buttons
+    if (authState.isRemoteSignerFlow) {
+      // Show different buttons based on remote signer status
+      if (authState.remoteSignerStatus === 'displaying_request') {
+        return (
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={handleRemoteSignerCancel}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.button, styles.primaryButton]}
+              onPress={handleRemoteSignerScanResponse}
+            >
+              <Ionicons name="scan-outline" size={18} color={theme.colors.buttonText} style={{ marginRight: 6 }} />
+              <Text style={styles.primaryButtonText}>Scan Response</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      if (authState.remoteSignerStatus === 'waiting_signature') {
+        return (
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={handleRemoteSignerCancel}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      if (authState.remoteSignerStatus === 'error') {
+        return (
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={handleRemoteSignerCancel}
+            >
+              <Text style={styles.cancelButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      // No buttons during processing
+      return null;
+    }
+
     if (authState.state === 'processing' || authState.state === 'signing') {
       if (authState.isLedgerFlow && (authState.ledgerStatus === 'error' || authState.ledgerStatus === 'app_required')) {
         return (
@@ -611,9 +840,13 @@ export default function UnifiedTransactionAuthModal({
             <Text style={styles.message}>{message}</Text>
           </View>
 
-          <View style={styles.content}>
+          <ScrollView
+            style={styles.content}
+            contentContainerStyle={styles.contentContainer}
+            showsVerticalScrollIndicator={true}
+          >
             {renderContent()}
-          </View>
+          </ScrollView>
 
           {renderButtons()}
 
@@ -665,8 +898,13 @@ const createStyles = (theme: Theme) =>
       lineHeight: 20,
     },
     content: {
+      flexGrow: 1,
+      flexShrink: 1,
+    },
+    contentContainer: {
       minHeight: 200,
       justifyContent: 'center',
+      paddingBottom: theme.spacing.md,
     },
 
     // PIN Input
@@ -887,6 +1125,16 @@ const createStyles = (theme: Theme) =>
       fontSize: 16,
       fontWeight: '600',
     },
+    primaryButton: {
+      backgroundColor: theme.colors.primary,
+      flexDirection: 'row',
+      justifyContent: 'center',
+    },
+    primaryButtonText: {
+      color: theme.colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
 
     // Attempts
     attemptsText: {
@@ -894,5 +1142,76 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.error,
       textAlign: 'center',
       marginTop: theme.spacing.sm,
+    },
+
+    // Remote signer styles
+    remoteSignerContainer: {
+      alignItems: 'center',
+      paddingVertical: theme.spacing.md,
+    },
+    remoteSignerTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: theme.spacing.xs,
+      textAlign: 'center',
+    },
+    remoteSignerMessage: {
+      fontSize: 14,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginBottom: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    qrWrapper: {
+      alignItems: 'center',
+      marginVertical: theme.spacing.md,
+    },
+    loadingQR: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: 200,
+      gap: theme.spacing.md,
+    },
+    loadingQRText: {
+      fontSize: 14,
+      color: theme.colors.textSecondary,
+    },
+    remoteSignerInstructions: {
+      width: '100%',
+      marginTop: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    instructionStep: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: theme.spacing.sm,
+    },
+    stepNumber: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: theme.colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: theme.spacing.sm,
+    },
+    stepNumberText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: theme.colors.buttonText,
+    },
+    stepText: {
+      flex: 1,
+      fontSize: 13,
+      color: theme.colors.text,
+    },
+    scannerContainer: {
+      width: '100%',
+      height: 300,
+      borderRadius: theme.borderRadius.lg,
+      overflow: 'hidden',
+      marginVertical: theme.spacing.md,
     },
   });

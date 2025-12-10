@@ -67,6 +67,8 @@ import { springConfigs, getStaggerDelay } from '@/utils/animations';
 import ClaimableBanner from '@/components/claimable/ClaimableBanner';
 import { useClaimableStore, useVisibleClaimableCount } from '@/store/claimableStore';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
+import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
+import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -96,6 +98,11 @@ export default function HomeScreen() {
   // Claimable tokens
   const visibleClaimableCount = useVisibleClaimableCount();
   const { fetchApprovals } = useClaimableStore();
+
+  // Remote signer mode
+  const appMode = useAppMode();
+  const isRemoteSignerInitialized = useRemoteSignerStore((state) => state.isInitialized);
+  const initializeRemoteSigner = useRemoteSignerStore((state) => state.initialize);
 
   // Entrance animations
   const balanceOpacity = useSharedValue(0);
@@ -217,7 +224,11 @@ export default function HomeScreen() {
   useEffect(() => {
     initializeWallet();
     updateActivity();
-  }, []);
+    // Initialize remote signer store to get app mode
+    if (!isRemoteSignerInitialized) {
+      initializeRemoteSigner();
+    }
+  }, [isRemoteSignerInitialized, initializeRemoteSigner]);
 
   // Handle Android back button for local modals
   useEffect(() => {
@@ -771,6 +782,11 @@ export default function HomeScreen() {
     navigation.navigate('ClaimableTokens');
   }, [navigation]);
 
+  // Navigate to sign request scanner (signer mode)
+  const handleScanSigningRequest = useCallback(() => {
+    navigation.navigate('SignRequestScanner' as never);
+  }, [navigation]);
+
   const handleAccountSelectorPress = () => {
     setIsAccountModalVisible(true);
   };
@@ -1063,6 +1079,11 @@ export default function HomeScreen() {
           }
           onScrollBeginDrag={handleUserInteraction}
         >
+          {/* Signer Mode Banner */}
+          {appMode === 'signer' && (
+            <SignerModeBanner onScanPress={handleScanSigningRequest} />
+          )}
+
           {activeAccount && (
             <>
               <Animated.View style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}>
@@ -1084,10 +1105,18 @@ export default function HomeScreen() {
                     </View>
                   </View>
                   {isBalanceLoading && !accountBalance ? (
-                    <View style={styles.loadingBalance}>
-                      <ActivityIndicator size="small" color={theme.colors.primary} />
-                      <Text style={styles.loadingText}>Loading balance...</Text>
-                    </View>
+                    appMode === 'signer' ? (
+                      // In signer mode, show offline fallback instead of spinner
+                      <View style={styles.loadingBalance}>
+                        <Ionicons name="cloud-offline-outline" size={16} color={theme.colors.textMuted} />
+                        <Text style={styles.loadingText}>Offline</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.loadingBalance}>
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <Text style={styles.loadingText}>Loading balance...</Text>
+                      </View>
+                    )
                   ) : (
                     <>
                       <Text style={styles.balance}>{calculateTotalUsdValue}</Text>

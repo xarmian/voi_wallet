@@ -18,6 +18,16 @@ import { NetworkId } from '@/types/network';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 
 /**
+ * Error thrown when attempting to sign with a remote signer account directly
+ */
+export class RemoteSignerRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RemoteSignerRequiredError';
+  }
+}
+
+/**
  * Unified callback interface for ALL signing operations
  */
 export interface UnifiedSigningCallbacks {
@@ -470,6 +480,19 @@ export class UnifiedTransactionSigner {
 
     if (!request.type) {
       throw new Error('Transaction type is required');
+    }
+
+    // Check for REMOTE_SIGNER accounts - these cannot be signed directly
+    if (request.account.type === AccountType.REMOTE_SIGNER) {
+      throw new RemoteSignerRequiredError(
+        'This account uses remote signing via QR codes. ' +
+        'Please use the remote signer flow instead of direct signing.'
+      );
+    }
+
+    // Check for WATCH accounts - these cannot sign at all
+    if (request.account.type === AccountType.WATCH) {
+      throw new Error('Watch accounts cannot sign transactions');
     }
 
     // Type-specific validation

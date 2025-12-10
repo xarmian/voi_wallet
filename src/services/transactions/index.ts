@@ -930,7 +930,7 @@ export class TransactionService {
       errors.push('Failed to validate account balance');
     }
 
-    await TransactionService.appendLedgerValidation(errors, account, params.networkId);
+    await TransactionService.appendSigningValidation(errors, account, params.networkId);
 
     return errors;
   }
@@ -1003,12 +1003,18 @@ export class TransactionService {
     }
   }
 
-  private static async appendLedgerValidation(
+  private static async appendSigningValidation(
     errors: string[],
     account: WalletAccount,
     networkId?: NetworkId
   ): Promise<void> {
     try {
+      // Check if this is a remote signer account - these are always valid
+      // (signing will be handled via QR code flow)
+      if (account.type === AccountType.REMOTE_SIGNER) {
+        return;
+      }
+
       const info = await SecureKeyManager.getSigningInfo(account.address, networkId);
 
       // If we can sign, no error
