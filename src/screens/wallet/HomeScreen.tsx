@@ -66,6 +66,9 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs, getStaggerDelay } from '@/utils/animations';
 import ClaimableBanner from '@/components/claimable/ClaimableBanner';
 import { useClaimableStore, useVisibleClaimableCount } from '@/store/claimableStore';
+import UpdateBanner from '@/components/update/UpdateBanner';
+import { useUpdateStore } from '@/store/updateStore';
+import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -96,6 +99,28 @@ export default function HomeScreen() {
   // Claimable tokens
   const visibleClaimableCount = useVisibleClaimableCount();
   const { fetchApprovals } = useClaimableStore();
+
+  // OTA Updates
+  const {
+    isUpdateAvailable,
+    isInstalling,
+    installAndRestart,
+    dismissUpdate,
+    setUpdateAvailable,
+  } = useUpdateStore();
+
+  // Use expo-updates hook to detect when update is pending
+  const { isUpdatePending, downloadedUpdate } = useUpdates();
+
+  // Sync expo-updates state with our store
+  useEffect(() => {
+    if (!__DEV__) {
+      const updateId = downloadedUpdate?.updateId || null;
+      if (isUpdatePending && updateId) {
+        setUpdateAvailable(updateId);
+      }
+    }
+  }, [isUpdatePending, downloadedUpdate, setUpdateAvailable]);
 
   // Entrance animations
   const balanceOpacity = useSharedValue(0);
@@ -1199,6 +1224,15 @@ export default function HomeScreen() {
                 pill
               />
             </Animated.View>
+
+            {/* Update Available Banner */}
+            {isUpdateAvailable && (
+              <UpdateBanner
+                onInstall={installAndRestart}
+                onDismiss={dismissUpdate}
+                isInstalling={isInstalling}
+              />
+            )}
 
             {/* Claimable Tokens Banner */}
             {visibleClaimableCount > 0 && (

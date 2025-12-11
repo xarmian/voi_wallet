@@ -76,6 +76,8 @@ import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
+import { useUpdates } from 'expo-updates';
+import { useUpdateStore } from '@/store/updateStore';
 
 export type RootStackParamList = {
   Main: undefined;
@@ -914,6 +916,13 @@ export default function AppNavigator() {
     };
 
     initializeServices();
+  }, []);
+
+  // Load dismissed update ID from storage on mount
+  useEffect(() => {
+    if (!__DEV__) {
+      useUpdateStore.getState().loadDismissedUpdateId();
+    }
   }, []);
 
   return (
