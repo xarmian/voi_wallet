@@ -42,6 +42,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 
 type TransactionRequestScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -214,17 +215,22 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         }
         
         if (signingAccount) {
-          navigation.replace('UniversalTransactionSigning', {
-            transactions: txns.map((wtxn) => wtxn.txn),
-            account: signingAccount,
-            chainId: effectiveChainId,
-            title: 'WalletConnect Request',
+          // Register callbacks in the callback registry to avoid serialization warnings
+          const callbackId = registerNavigationCallbacks({
             onSuccess: async (result: any) => {
               await handleWalletConnectSuccess(result);
             },
             onReject: async () => {
               await handleReject();
             },
+          });
+
+          navigation.replace('UniversalTransactionSigning', {
+            transactions: txns.map((wtxn) => wtxn.txn),
+            account: signingAccount,
+            chainId: effectiveChainId,
+            title: 'WalletConnect Request',
+            callbackId,
           });
         }
       }

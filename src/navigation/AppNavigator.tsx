@@ -97,8 +97,12 @@ export type RootStackParamList = {
   UniversalTransactionSigning: {
     transactions: string[];
     account: WalletAccount;
+    /** @deprecated Use callbackId instead to avoid serialization warnings */
     onSuccess?: (result: any) => Promise<void>;
+    /** @deprecated Use callbackId instead to avoid serialization warnings */
     onReject?: () => Promise<void>;
+    /** ID to retrieve callbacks from registry (preferred over onSuccess/onReject) */
+    callbackId?: string;
     title?: string;
     networkId?: NetworkId;
     chainId?: string;
@@ -206,7 +210,7 @@ export type WalletStackParamList = {
   };
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
-  ClaimableTokens: { pendingRefresh?: boolean } | undefined;
+  ClaimableTokens: { pendingRefresh?: boolean; claimedItemIds?: string[] } | undefined;
   ClaimToken: {
     claimableItem: SerializableClaimableItem;
   };

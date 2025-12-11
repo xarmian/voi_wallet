@@ -51,6 +51,7 @@ type NavigationProp = NativeStackNavigationProp<WalletStackParamList, 'Claimable
 type ClaimableTokensRouteProp = RouteProp<WalletStackParamList, 'ClaimableTokens'>;
 
 const PENDING_REFRESH_DELAY = 8000; // 8 seconds
+const RETRY_REFRESH_DELAY = 5000; // 5 seconds for retry if claimed items still present
 
 export default function ClaimableTokensScreen() {
   const styles = useThemedStyles(createStyles);
@@ -86,6 +87,8 @@ export default function ClaimableTokensScreen() {
   // Handle pending refresh after successful claim
   useEffect(() => {
     const pendingRefresh = route.params?.pendingRefresh;
+    const claimedItemIds = route.params?.claimedItemIds;
+
     if (pendingRefresh && !pendingRefreshHandled.current && activeAccount?.address) {
       pendingRefreshHandled.current = true;
       setIsPendingRefresh(true);
@@ -97,19 +100,37 @@ export default function ClaimableTokensScreen() {
         true
       );
 
-      // Clear the param immediately to prevent re-triggering
-      navigation.setParams({ pendingRefresh: undefined });
+      // Clear the params immediately to prevent re-triggering
+      navigation.setParams({ pendingRefresh: undefined, claimedItemIds: undefined });
 
       // Schedule refresh after delay (store in ref so it persists across effect re-runs)
       pendingRefreshTimeoutRef.current = setTimeout(async () => {
         await fetchApprovals(activeAccount.address);
-        setIsPendingRefresh(false);
-        cancelAnimation(pulseOpacity);
-        pulseOpacity.value = 1;
-        pendingRefreshTimeoutRef.current = null;
+
+        // Check if any claimed items are still present in the list
+        const { claimableItems } = useClaimableStore.getState();
+        const claimedStillPresent = claimedItemIds?.some(id =>
+          claimableItems.some(item => item.id === id)
+        );
+
+        if (claimedStillPresent) {
+          // Retry once after additional delay if indexer hasn't updated yet
+          pendingRefreshTimeoutRef.current = setTimeout(async () => {
+            await fetchApprovals(activeAccount.address);
+            setIsPendingRefresh(false);
+            cancelAnimation(pulseOpacity);
+            pulseOpacity.value = 1;
+            pendingRefreshTimeoutRef.current = null;
+          }, RETRY_REFRESH_DELAY);
+        } else {
+          setIsPendingRefresh(false);
+          cancelAnimation(pulseOpacity);
+          pulseOpacity.value = 1;
+          pendingRefreshTimeoutRef.current = null;
+        }
       }, PENDING_REFRESH_DELAY);
     }
-  }, [route.params?.pendingRefresh, activeAccount?.address, fetchApprovals, navigation, pulseOpacity]);
+  }, [route.params?.pendingRefresh, route.params?.claimedItemIds, activeAccount?.address, fetchApprovals, navigation, pulseOpacity]);
 
   // Cleanup timeout on unmount only (separate effect with empty deps)
   useEffect(() => {

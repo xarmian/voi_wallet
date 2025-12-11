@@ -280,14 +280,10 @@ export class Arc200TransactionService {
       // Simulate the transaction to get box references
       const algodClient = networkService.getAlgodClient();
 
-      // Create the simulation request using the correct algosdk format
-      // First encode the transaction, then create a signed transaction for simulation
-      const encodedTxn = algosdk.encodeUnsignedTransaction(simulationTxn);
-
       // Create a mock signed transaction with a 64-byte signature
       const mockSignedTxn = new algosdk.SignedTransaction({
         txn: simulationTxn,
-        sig: new Uint8Array(64), // 64-byte signature filled with zeros
+        sig: new Uint8Array(64),
       });
 
       const simulateRequest = new algosdk.modelsv2.SimulateRequest({
@@ -299,6 +295,7 @@ export class Arc200TransactionService {
         allowEmptySignatures: true,
         allowMoreLogging: true,
         allowUnnamedResources: true,
+        fixSigners: true, // Automatically resolve signers for rekeyed accounts
       });
 
       let boxes: Array<{ appIndex: number; name: Uint8Array }> = [];
@@ -557,6 +554,7 @@ export class Arc200TransactionService {
         allowEmptySignatures: true,
         allowMoreLogging: true,
         allowUnnamedResources: true,
+        fixSigners: true, // Automatically resolve signers for rekeyed accounts
       });
 
       let boxes: Array<{ appIndex: number; name: Uint8Array }> = [];

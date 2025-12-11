@@ -49,6 +49,7 @@ import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import NetworkSelector from '@/components/network/NetworkSelector';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
+import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -573,12 +574,8 @@ export default function SwapScreen() {
       return;
     }
 
-    // Navigate to UniversalTransactionSigning screen with swap transactions
-    navigation.navigate('UniversalTransactionSigning', {
-      transactions: quote.unsignedTransactions,
-      account: activeAccount,
-      title: 'Confirm Swap',
-      networkId: selectedNetwork,
+    // Register callbacks in the callback registry to avoid serialization warnings
+    const callbackId = registerNavigationCallbacks({
       onSuccess: async (result: any) => {
         await handleSwapSuccess(result);
       },
@@ -586,6 +583,15 @@ export default function SwapScreen() {
         // Just navigate back
         navigation.goBack();
       },
+    });
+
+    // Navigate to UniversalTransactionSigning screen with swap transactions
+    navigation.navigate('UniversalTransactionSigning', {
+      transactions: quote.unsignedTransactions,
+      account: activeAccount,
+      title: 'Confirm Swap',
+      networkId: selectedNetwork,
+      callbackId,
     });
   };
 
