@@ -9,6 +9,7 @@ import {
   Alert,
   ImageBackground,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,6 +46,11 @@ export default function ChatScreen() {
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [isCheckingRecipient, setIsCheckingRecipient] = useState(true);
   const [recipientCanReceive, setRecipientCanReceive] = useState(false);
+  const [isCheckingSender, setIsCheckingSender] = useState(true);
+  const [isSenderRegistered, setIsSenderRegistered] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const flatListRef = useRef<FlatList>(null);
 
   // Experimental feature guard - redirect if messaging is not enabled
@@ -60,10 +66,13 @@ export default function ChatScreen() {
   const thread = useThread(friendAddress);
   const {
     fetchThreadMessages,
+    fetchOlderMessages,
     markThreadAsRead,
     addPendingMessage,
     updateMessageStatus,
     isInitialized,
+    registerMessagingKey,
+    checkKeyRegistration,
   } = useMessagesStore();
   const friends = useFriendsStore((state) => state.friends);
 
@@ -74,32 +83,45 @@ export default function ChatScreen() {
   // Messages sorted newest first for inverted FlatList
   const messages = thread?.messages.slice().reverse() || [];
 
-  // Check if current account is backed by a Ledger (either directly or via rekey)
-  const isLedgerBacked = (() => {
+  // Check if current account can use messaging (whitelist approach for future-proofing)
+  const canUseMessaging = (() => {
     if (!activeAccount) return false;
 
-    // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER || activeAccount.type === 'ledger') {
+    // Standard accounts can always use messaging
+    if (activeAccount.type === AccountType.STANDARD) {
       return true;
     }
 
-    // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED || activeAccount.type === 'rekeyed') {
+    // Rekeyed accounts can use messaging if the auth account is a Standard account we control
+    if (activeAccount.type === AccountType.REKEYED) {
       const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
       const authAccount = allAccounts.find(acc => acc.address === rekeyedAccount.authAddress);
-      if (authAccount?.type === AccountType.LEDGER || authAccount?.type === 'ledger') {
+      if (authAccount?.type === AccountType.STANDARD) {
         return true;
       }
     }
 
+    // All other account types (Watch, Ledger, future types) cannot use messaging
     return false;
   })();
 
-  // Check if recipient can receive messages on mount
+  // Check if sender and recipient can use messaging on mount
   useFocusEffect(
     useCallback(() => {
       const initializeChat = async () => {
         if (activeAccount?.address) {
+          // Check if sender (current user) has registered their messaging key
+          setIsCheckingSender(true);
+          try {
+            const senderRegistered = await checkKeyRegistration(activeAccount.address);
+            setIsSenderRegistered(senderRegistered);
+          } catch (error) {
+            console.error('Failed to check sender registration:', error);
+            setIsSenderRegistered(false);
+          } finally {
+            setIsCheckingSender(false);
+          }
+
           // Always check if recipient has registered their messaging key
           setIsCheckingRecipient(true);
           try {
@@ -112,8 +134,8 @@ export default function ChatScreen() {
             setIsCheckingRecipient(false);
           }
 
-          // Only fetch messages and mark as read if not a Ledger account and store is initialized
-          if (!isLedgerBacked && isInitialized) {
+          // Only fetch messages and mark as read if account can use messaging and store is initialized
+          if (canUseMessaging && isInitialized) {
             fetchThreadMessages(activeAccount.address, friendAddress);
             markThreadAsRead(friendAddress);
           }
@@ -121,7 +143,7 @@ export default function ChatScreen() {
       };
 
       initializeChat();
-    }, [activeAccount?.address, isLedgerBacked, friendAddress, isInitialized, fetchThreadMessages, markThreadAsRead])
+    }, [activeAccount?.address, canUseMessaging, friendAddress, isInitialized, fetchThreadMessages, markThreadAsRead, checkKeyRegistration])
   );
 
   // Mark as read when messages change
@@ -210,6 +232,22 @@ export default function ChatScreen() {
     [sendMessageAsync]
   );
 
+  // Handle key registration
+  const handleRegisterKey = useCallback(async () => {
+    if (!activeAccount?.address || isRegistering) return;
+
+    setIsRegistering(true);
+    try {
+      await registerMessagingKey(activeAccount.address);
+      setIsSenderRegistered(true);
+    } catch (error) {
+      console.error('Failed to register messaging key:', error);
+      Alert.alert('Registration Failed', 'Failed to enable messaging. Please try again.');
+    } finally {
+      setIsRegistering(false);
+    }
+  }, [activeAccount?.address, isRegistering, registerMessagingKey]);
+
   // Handle retrying a failed message
   const handleRetry = useCallback(
     (message: Message) => {
@@ -217,6 +255,33 @@ export default function ChatScreen() {
     },
     [sendMessageAsync]
   );
+
+  // Handle loading older messages when scrolling up (inverted list - onEndReached = top)
+  const handleLoadMore = useCallback(async () => {
+    if (!activeAccount?.address || isLoadingMore || !hasMoreMessages) {
+      return;
+    }
+
+    // Get the oldest message's round to fetch messages before it
+    const oldestMessage = thread?.messages[0];
+    if (!oldestMessage?.confirmedRound) {
+      // No confirmed messages yet or no round info
+      setHasMoreMessages(false);
+      return;
+    }
+
+    setIsLoadingMore(true);
+    try {
+      const result = await fetchOlderMessages(
+        activeAccount.address,
+        friendAddress,
+        oldestMessage.confirmedRound
+      );
+      setHasMoreMessages(result.hasMore);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [activeAccount?.address, isLoadingMore, hasMoreMessages, thread?.messages, fetchOlderMessages, friendAddress]);
 
   // Render message item
   const renderMessage = useCallback(
@@ -252,12 +317,12 @@ export default function ChatScreen() {
         onAccountSelectorPress={() => {}}
       />
 
-      {/* Warning banner when using Ledger-backed account */}
-      {isLedgerBacked && (
+      {/* Warning banner when account type doesn't support messaging */}
+      {!canUseMessaging && (
         <View style={styles.warningBanner}>
-          <Ionicons name="hardware-chip-outline" size={16} color="white" />
+          <Ionicons name="alert-circle" size={16} color="white" />
           <Text style={styles.warningText}>
-            Ledger accounts cannot use encrypted messaging
+            Only standard accounts can use encrypted messaging
           </Text>
         </View>
       )}
@@ -269,6 +334,32 @@ export default function ChatScreen() {
           <Text style={styles.warningText}>
             {displayName} hasn't enabled encrypted messaging yet
           </Text>
+        </View>
+      )}
+
+      {/* Registration prompt when sender hasn't enabled messaging */}
+      {!isCheckingSender && !isSenderRegistered && canUseMessaging && (
+        <View style={styles.registrationBanner}>
+          <View style={styles.registrationContent}>
+            <Ionicons name="key-outline" size={20} color={theme.colors.primary} />
+            <View style={styles.registrationTextContainer}>
+              <Text style={styles.registrationTitle}>Enable Messaging</Text>
+              <Text style={styles.registrationText}>
+                Register your key to send and receive messages
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.registrationButton}
+            onPress={handleRegisterKey}
+            disabled={isRegistering}
+          >
+            {isRegistering ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Text style={styles.registrationButtonText}>Enable</Text>
+            )}
+          </TouchableOpacity>
         </View>
       )}
 
@@ -290,6 +381,15 @@ export default function ChatScreen() {
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={
+            isLoadingMore ? (
+              <View style={styles.loadingMore}>
+                <ActivityIndicator size="small" color={theme.colors.primary} />
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <View style={styles.emptyStateInner}>
@@ -307,11 +407,18 @@ export default function ChatScreen() {
           }
         />
 
-        {/* Message Input - disabled if Ledger account or recipient hasn't enabled messaging */}
+        {/* Message Input - disabled if account can't use messaging, sender not registered, or recipient hasn't enabled messaging */}
         <MessageInput
           onSend={handleSend}
           isSending={isSending}
-          disabled={!activeAccount?.address || isLedgerBacked || isCheckingRecipient || !recipientCanReceive}
+          disabled={
+            !activeAccount?.address ||
+            !canUseMessaging ||
+            isCheckingRecipient ||
+            !recipientCanReceive ||
+            isCheckingSender ||
+            !isSenderRegistered
+          }
           onInfoPress={() => setShowInfoModal(true)}
         />
       </KeyboardAvoidingView>
@@ -385,6 +492,10 @@ const createStyles = (theme: Theme) =>
     messagesContent: {
       paddingVertical: theme.spacing.md,
     },
+    loadingMore: {
+      paddingVertical: theme.spacing.md,
+      alignItems: 'center',
+    },
     emptyListContent: {
       flexGrow: 1,
       justifyContent: 'center',
@@ -409,5 +520,46 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textMuted,
       textAlign: 'center',
       marginTop: theme.spacing.sm,
+    },
+    registrationBanner: {
+      backgroundColor: theme.colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.md,
+    },
+    registrationContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+      gap: theme.spacing.sm,
+    },
+    registrationTextContainer: {
+      flex: 1,
+    },
+    registrationTitle: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    registrationText: {
+      fontSize: 12,
+      color: theme.colors.textMuted,
+    },
+    registrationButton: {
+      backgroundColor: theme.colors.primary,
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: theme.spacing.xs,
+      borderRadius: theme.borderRadius.sm,
+      minWidth: 70,
+      alignItems: 'center',
+    },
+    registrationButtonText: {
+      color: 'white',
+      fontSize: 13,
+      fontWeight: '600',
     },
   });

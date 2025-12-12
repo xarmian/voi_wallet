@@ -103,24 +103,37 @@ export default function HomeScreen() {
   // OTA Updates
   const {
     isUpdateAvailable,
+    isDownloading,
     isInstalling,
-    installAndRestart,
+    downloadAndInstall,
     dismissUpdate,
     setUpdateAvailable,
+    checkForUpdate,
   } = useUpdateStore();
 
-  // Use expo-updates hook to detect when update is pending
+  // Use expo-updates hook to detect when update is pending (already downloaded by Expo)
   const { isUpdatePending, downloadedUpdate } = useUpdates();
 
   // Sync expo-updates state with our store
+  // Note: isUpdatePending means Expo has already downloaded an update
   useEffect(() => {
     if (!__DEV__) {
       const updateId = downloadedUpdate?.updateId || null;
       if (isUpdatePending && updateId) {
-        setUpdateAvailable(updateId);
+        // Pass true for isDownloaded since Expo has already downloaded it
+        setUpdateAvailable(updateId, true);
       }
     }
   }, [isUpdatePending, downloadedUpdate, setUpdateAvailable]);
+
+  // Check for updates on app startup (silent - no toasts, just show banner if available)
+  useEffect(() => {
+    if (!__DEV__) {
+      checkForUpdate({ silent: true });
+    }
+    // Only run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Entrance animations
   const balanceOpacity = useSharedValue(0);
@@ -1090,6 +1103,16 @@ export default function HomeScreen() {
         >
           {activeAccount && (
             <>
+              {/* Update Available Banner */}
+              {isUpdateAvailable && (
+                <UpdateBanner
+                  onInstall={downloadAndInstall}
+                  onDismiss={dismissUpdate}
+                  isDownloading={isDownloading}
+                  isInstalling={isInstalling}
+                />
+              )}
+
               <Animated.View style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}>
                 <GlassCard
                   variant="medium"
@@ -1224,15 +1247,6 @@ export default function HomeScreen() {
                 pill
               />
             </Animated.View>
-
-            {/* Update Available Banner */}
-            {isUpdateAvailable && (
-              <UpdateBanner
-                onInstall={installAndRestart}
-                onDismiss={dismissUpdate}
-                isInstalling={isInstalling}
-              />
-            )}
 
             {/* Claimable Tokens Banner */}
             {visibleClaimableCount > 0 && (

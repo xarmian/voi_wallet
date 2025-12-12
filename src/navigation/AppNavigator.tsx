@@ -869,9 +869,10 @@ export default function AppNavigator() {
               // Watch accounts will have message notifications disabled by default
               await notificationService.subscribeAllAccounts(wallet.accounts);
 
-              // Initialize realtime subscription for ALL account addresses
-              const allAddresses = wallet.accounts.map(a => a.address);
-              await realtimeService.subscribeToAddresses(allAddresses);
+              // TODO: Re-enable realtime subscription when needed
+              // Currently disabled to reduce server load - using polling instead
+              // const allAddresses = wallet.accounts.map(a => a.address);
+              // await realtimeService.subscribeToAddresses(allAddresses);
             }
           }
         } catch (error) {
@@ -907,7 +908,7 @@ export default function AppNavigator() {
             wcService.off?.('session_request', onRequest);
             extensionDeepLinkHandler.cleanup();
             notificationService.cleanup();
-            realtimeService.cleanup();
+            // realtimeService.cleanup(); // Disabled - realtime subscription not active
           } catch {}
         };
       } catch (error) {

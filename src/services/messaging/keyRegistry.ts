@@ -9,17 +9,35 @@
  *   voi-msg-key:v1:<base64_public_key>
  *
  * The registration is a self-transfer (sender = receiver) with minimal amount.
+ *
+ * Key lookup uses MIMIR (voiwallet.message_keys table) for efficient queries,
+ * with fallback to indexer if MIMIR is unavailable.
  */
 
 import { encodeBase64, decodeBase64 } from 'tweetnacl-util';
 import { NetworkService } from '@/services/network';
 import { TransactionService, TransactionParams } from '@/services/transactions';
+import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import {
   KEY_REGISTRATION_PREFIX,
   MessagingKeyRegistration,
 } from './types';
+
+/**
+ * MIMIR message_keys table row structure
+ */
+interface MimirMessageKey {
+  id: number;
+  address: string;
+  messaging_public_key: string;
+  txid: string;
+  round: number;
+  intra: number;
+  timestamp: number;
+  created_at: string;
+}
 
 /**
  * In-memory cache for looked-up messaging keys.
@@ -90,12 +108,13 @@ export function createKeyRegistrationNote(publicKey: Uint8Array): string {
 }
 
 /**
- * Look up a user's messaging public key from the blockchain.
+ * Look up a user's messaging public key from MIMIR.
  *
- * Searches for the most recent key registration transaction.
+ * Queries the voiwallet.message_keys table for the most recent key registration.
+ * Falls back to indexer if MIMIR is unavailable.
  *
  * @param address - Algorand/Voi address to look up
- * @param forceRefresh - Bypass cache and fetch from blockchain
+ * @param forceRefresh - Bypass cache and fetch fresh data
  * @returns MessagingKeyRegistration or null if not registered
  */
 export async function lookupMessagingKey(
@@ -108,12 +127,91 @@ export async function lookupMessagingKey(
   }
 
   try {
+    const supabase = getSupabaseClient();
+
+    // Try MIMIR first if Supabase is configured
+    if (supabase) {
+      const result = await lookupMessagingKeyViaMimir(address, supabase);
+      if (result !== undefined) {
+        return result;
+      }
+      // If MIMIR query failed, fall back to indexer
+      console.warn(`MIMIR lookup failed for ${address}, falling back to indexer`);
+    }
+
+    // Fallback to indexer
+    return lookupMessagingKeyViaIndexer(address);
+  } catch (error) {
+    console.error(`Failed to lookup messaging key for ${address}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Look up messaging key via MIMIR (voiwallet.message_keys table)
+ * Returns undefined if query fails (to trigger fallback)
+ */
+async function lookupMessagingKeyViaMimir(
+  address: string,
+  supabase: ReturnType<typeof getSupabaseClient>
+): Promise<MessagingKeyRegistration | null | undefined> {
+  if (!supabase) return undefined;
+
+  try {
+    // Query the latest key registration for this address from voiwallet schema
+    const { data, error } = await supabase
+      .schema('voiwallet')
+      .from('message_keys')
+      .select('*')
+      .eq('address', address)
+      .order('round', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`MIMIR query error for ${address}:`, error);
+      return undefined; // Trigger fallback
+    }
+
+    if (!data) {
+      // No registration found - cache negative result
+      keyLookupCache.delete(address);
+      cacheTimestamps.delete(address);
+      return null;
+    }
+
+    const mimirKey = data as MimirMessageKey;
+    const registration: MessagingKeyRegistration = {
+      address: mimirKey.address,
+      messagingPublicKey: mimirKey.messaging_public_key,
+      registrationTxId: mimirKey.txid,
+      registrationRound: mimirKey.round,
+      registeredAt: mimirKey.timestamp * 1000, // Convert seconds to ms
+    };
+
+    // Update cache
+    keyLookupCache.set(address, registration);
+    cacheTimestamps.set(address, Date.now());
+
+    return registration;
+  } catch (error) {
+    console.error(`MIMIR lookup error for ${address}:`, error);
+    return undefined; // Trigger fallback
+  }
+}
+
+/**
+ * Look up messaging key via indexer (fallback method)
+ */
+async function lookupMessagingKeyViaIndexer(
+  address: string
+): Promise<MessagingKeyRegistration | null> {
+  try {
     const networkService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     const indexer = networkService.getIndexerClient();
 
     // Query payment transactions for this address
     // Key registrations are self-transfers with the key in the note
-    // We filter for self-transfers (sender === receiver) in the loop below
     const response = await indexer
       .lookupAccountTransactions(address)
       .txType('pay')
@@ -121,7 +219,6 @@ export async function lookupMessagingKey(
       .do();
 
     // Search for the most recent key registration
-    // (Latest registration overwrites previous ones)
     let latestRegistration: MessagingKeyRegistration | null = null;
     let latestRound = 0;
 
@@ -178,7 +275,7 @@ export async function lookupMessagingKey(
 
     return latestRegistration;
   } catch (error) {
-    console.error(`Failed to lookup messaging key for ${address}:`, error);
+    console.error(`Indexer lookup failed for ${address}:`, error);
     return null;
   }
 }

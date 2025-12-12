@@ -19,10 +19,12 @@ import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
 
 interface UpdateBannerProps {
-  /** Called when user taps to install the update */
+  /** Called when user taps to download and install the update */
   onInstall: () => void;
   /** Called when user dismisses the banner */
   onDismiss: () => void;
+  /** Whether the update is currently being downloaded */
+  isDownloading?: boolean;
   /** Whether the update is currently being installed */
   isInstalling?: boolean;
 }
@@ -30,14 +32,17 @@ interface UpdateBannerProps {
 export default function UpdateBanner({
   onInstall,
   onDismiss,
+  isDownloading = false,
   isInstalling = false,
 }: UpdateBannerProps) {
   const styles = useThemedStyles(createStyles);
   const iconScale = useSharedValue(1);
 
-  // Subtle pulsing animation on the icon (only when not installing)
+  const isBusy = isDownloading || isInstalling;
+
+  // Subtle pulsing animation on the icon (only when not busy)
   useEffect(() => {
-    if (!isInstalling) {
+    if (!isBusy) {
       iconScale.value = withRepeat(
         withSequence(
           withTiming(1.1, { duration: 800 }),
@@ -49,22 +54,35 @@ export default function UpdateBanner({
     } else {
       iconScale.value = 1;
     }
-  }, [iconScale, isInstalling]);
+  }, [iconScale, isBusy]);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: iconScale.value }],
   }));
 
   const handlePress = () => {
-    if (!isInstalling) {
+    if (!isBusy) {
       onInstall();
     }
   };
 
   const handleDismiss = () => {
-    if (!isInstalling) {
+    if (!isBusy) {
       onDismiss();
     }
+  };
+
+  // Determine title and subtitle based on state
+  const getTitle = () => {
+    if (isDownloading) return 'Downloading update...';
+    if (isInstalling) return 'Installing update...';
+    return 'Update available';
+  };
+
+  const getSubtitle = () => {
+    if (isDownloading) return 'Please wait';
+    if (isInstalling) return 'Restarting app';
+    return 'Tap to download and install';
   };
 
   return (
@@ -82,21 +100,17 @@ export default function UpdateBanner({
       >
         <View style={styles.content}>
           <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>
-            {isInstalling ? (
+            {isBusy ? (
               <ActivityIndicator size="small" color={styles.icon.color} />
             ) : (
               <Ionicons name="download" size={28} color={styles.icon.color} />
             )}
           </Animated.View>
           <View style={styles.textContainer}>
-            <Text style={styles.title}>
-              {isInstalling ? 'Installing update...' : 'Update available'}
-            </Text>
-            <Text style={styles.subtitle}>
-              {isInstalling ? 'Please wait' : 'Tap to install and restart'}
-            </Text>
+            <Text style={styles.title}>{getTitle()}</Text>
+            <Text style={styles.subtitle}>{getSubtitle()}</Text>
           </View>
-          {!isInstalling && (
+          {!isBusy && (
             <TouchableOpacity
               onPress={handleDismiss}
               style={styles.dismissButton}

@@ -23,7 +23,7 @@ const VALIDATION_CACHE_KEY = '@update/validationCache';
 const VALIDATION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 interface ValidUpdateEntry {
-  id: string;           // Update UUID
+  ids: string[];        // Array of Update UUIDs (iOS ID, Android ID, and/or updateGroup ID)
   runtimeVersion?: string;
   createdAt?: string;
   description?: string; // Optional: human-readable description
@@ -104,8 +104,8 @@ async function validateUpdate(updateId: string): Promise<boolean | null> {
     return false;
   }
 
-  // Check if update is in the valid list
-  const isValid = validUpdates.validUpdates.some(entry => entry.id === updateId);
+  // Check if update ID matches any ID in any valid update entry's ids array
+  const isValid = validUpdates.validUpdates.some(entry => entry.ids.includes(updateId));
 
   if (!isValid) {
     console.warn(`Update ${updateId} not found in valid updates list`);
@@ -115,11 +115,15 @@ async function validateUpdate(updateId: string): Promise<boolean | null> {
 }
 
 interface UpdateState {
-  // Update availability (set by component watching useUpdates hook)
+  // Update availability (set by component watching useUpdates hook or manual check)
   isUpdateAvailable: boolean;
   updateId: string | null;
 
+  // Track whether update has been downloaded (ready to install)
+  isDownloaded: boolean;
+
   // UI state
+  isDownloading: boolean;
   isInstalling: boolean;
   isChecking: boolean;
   isValidating: boolean;
@@ -132,10 +136,10 @@ interface UpdateState {
   dismissedUpdateId: string | null;
 
   // Actions
-  setUpdateAvailable: (updateId: string | null) => void;
+  setUpdateAvailable: (updateId: string | null, isDownloaded?: boolean) => void;
   loadDismissedUpdateId: () => Promise<void>;
-  checkForUpdate: () => Promise<boolean>;
-  installAndRestart: () => Promise<void>;
+  checkForUpdate: (options?: { silent?: boolean }) => Promise<boolean>;
+  downloadAndInstall: () => Promise<void>;
   dismissUpdate: () => void;
   clearError: () => void;
   clearValidationCache: () => Promise<void>;
@@ -146,6 +150,8 @@ export const useUpdateStore = create<UpdateState>()(
     // Initial state
     isUpdateAvailable: false,
     updateId: null,
+    isDownloaded: false,
+    isDownloading: false,
     isInstalling: false,
     isChecking: false,
     isValidating: false,
@@ -154,15 +160,19 @@ export const useUpdateStore = create<UpdateState>()(
     dismissedUpdateId: null,
 
     /**
-     * Called by component when useUpdates() hook indicates an update is pending.
+     * Called by component when useUpdates() hook indicates an update is pending,
+     * or when checkForUpdate() detects an available update.
      * Validates the update against the remote allowlist before showing.
+     *
+     * @param updateId - The update ID to mark as available
+     * @param isDownloaded - Whether the update has already been downloaded (default: false)
      */
-    setUpdateAvailable: async (updateId: string | null) => {
+    setUpdateAvailable: async (updateId: string | null, isDownloaded: boolean = false) => {
       const { dismissedUpdateId } = get();
 
       // If no update or this update was previously dismissed, don't show the banner
       if (!updateId || (dismissedUpdateId && dismissedUpdateId === updateId)) {
-        set({ isUpdateAvailable: false, updateId: null, validationStatus: 'pending' });
+        set({ isUpdateAvailable: false, updateId: null, isDownloaded: false, validationStatus: 'pending' });
         return;
       }
 
@@ -203,6 +213,7 @@ export const useUpdateStore = create<UpdateState>()(
         set({
           isUpdateAvailable: true,
           updateId,
+          isDownloaded,
           isValidating: false,
           validationStatus: 'valid',
           error: null,
@@ -213,6 +224,7 @@ export const useUpdateStore = create<UpdateState>()(
         set({
           isUpdateAvailable: false,
           updateId: null,
+          isDownloaded: false,
           isValidating: false,
           validationStatus: 'unknown',
           error: null,
@@ -235,82 +247,110 @@ export const useUpdateStore = create<UpdateState>()(
     },
 
     /**
-     * Manually check for updates (used in About screen)
-     * Returns true if an update is available and validated
+     * Check for updates. Only checks if an update exists - does NOT download it.
+     * Returns true if an update is available and validated.
+     *
+     * @param options.silent - If true, don't show toast notifications (for startup checks)
      */
-    checkForUpdate: async () => {
+    checkForUpdate: async (options?: { silent?: boolean }) => {
       const { dismissedUpdateId } = get();
+      const silent = options?.silent ?? false;
+
       set({ isChecking: true, error: null, validationStatus: 'pending' });
 
       try {
         const update = await Updates.checkForUpdateAsync();
 
         if (update.isAvailable) {
-          // Fetch the update
-          const fetchResult = await Updates.fetchUpdateAsync();
+          // Get the update ID from the manifest (without downloading)
+          const updateId = update.manifest?.id;
 
-          if (fetchResult.isNew) {
-            const updateId = fetchResult.manifest?.id;
-
-            if (!updateId) {
-              set({ isChecking: false });
+          if (!updateId) {
+            set({ isChecking: false });
+            if (!silent) {
               Toast.show({
                 type: 'error',
                 text1: 'Update error',
                 text2: 'Update has no identifier',
               });
-              return false;
             }
+            return false;
+          }
 
-            // Validate the update
-            set({ isValidating: true });
-            const isValid = await validateUpdate(updateId);
-            set({ isValidating: false });
+          // Validate the update against our allowlist
+          set({ isValidating: true });
+          const isValid = await validateUpdate(updateId);
+          set({ isValidating: false });
 
-            if (isValid === false) {
-              // Update failed validation
-              set({
-                isChecking: false,
-                validationStatus: 'invalid',
-                error: 'Update failed security validation',
-              });
+          if (isValid === false) {
+            // Update failed validation
+            set({
+              isChecking: false,
+              validationStatus: 'invalid',
+              error: 'Update failed security validation',
+            });
+            if (!silent) {
               Toast.show({
                 type: 'error',
                 text1: 'Update rejected',
                 text2: 'This update failed security validation',
               });
-              return false;
             }
+            return false;
+          }
 
-            // Clear dismissed ID if this is a new update
-            if (dismissedUpdateId !== updateId) {
-              await AsyncStorage.removeItem(DISMISSED_UPDATE_KEY);
-              set({ dismissedUpdateId: null });
-            }
-
+          if (isValid === null) {
+            // Couldn't validate (network error, file not found, etc.)
+            console.warn(`Could not validate update ${updateId} - blocking until validation succeeds`);
             set({
-              isUpdateAvailable: true,
-              updateId,
               isChecking: false,
-              validationStatus: isValid === true ? 'valid' : 'unknown',
+              validationStatus: 'unknown',
+              error: null,
             });
+            if (!silent) {
+              Toast.show({
+                type: 'error',
+                text1: 'Validation unavailable',
+                text2: 'Unable to verify update security. Try again later.',
+              });
+            }
+            return false;
+          }
 
+          // Clear dismissed ID if this is a new update
+          if (dismissedUpdateId !== updateId) {
+            await AsyncStorage.removeItem(DISMISSED_UPDATE_KEY);
+            set({ dismissedUpdateId: null });
+          }
+
+          // Mark update as available but NOT downloaded
+          set({
+            isUpdateAvailable: true,
+            updateId,
+            isDownloaded: false,
+            isChecking: false,
+            validationStatus: 'valid',
+          });
+
+          if (!silent) {
             Toast.show({
               type: 'success',
               text1: 'Update available',
-              text2: 'Go to Home to install the update',
+              text2: 'Go to Home to download and install',
             });
-
-            return true;
           }
+
+          return true;
         }
 
         set({ isChecking: false });
-        Toast.show({
-          type: 'info',
-          text1: 'No updates available',
-          text2: 'You are running the latest version',
-        });
+        if (!silent) {
+          Toast.show({
+            type: 'info',
+            text1: 'No updates available',
+            text2: 'You are running the latest version',
+          });
+        }
 
         return false;
       } catch (error) {
@@ -323,23 +363,48 @@ export const useUpdateStore = create<UpdateState>()(
           isValidating: false,
         });
 
-        Toast.show({
-          type: 'error',
-          text1: 'Update check failed',
-          text2: message,
-        });
+        if (!silent) {
+          Toast.show({
+            type: 'error',
+            text1: 'Update check failed',
+            text2: message,
+          });
+        }
 
         return false;
       }
     },
 
     /**
-     * Apply the downloaded update and restart the app
+     * Download the update (if needed) and install it.
+     * This is the user-triggered action from the UpdateBanner.
      */
-    installAndRestart: async () => {
-      set({ isInstalling: true, error: null });
+    downloadAndInstall: async () => {
+      const { isDownloaded } = get();
 
       try {
+        // If update is not yet downloaded, download it first
+        if (!isDownloaded) {
+          set({ isDownloading: true, error: null });
+
+          const fetchResult = await Updates.fetchUpdateAsync();
+
+          if (!fetchResult.isNew) {
+            set({ isDownloading: false });
+            Toast.show({
+              type: 'error',
+              text1: 'Download failed',
+              text2: 'Could not download the update',
+            });
+            return;
+          }
+
+          set({ isDownloading: false, isDownloaded: true });
+        }
+
+        // Now install the downloaded update
+        set({ isInstalling: true, error: null });
+
         // Clear dismissed update since user is installing
         await AsyncStorage.removeItem(DISMISSED_UPDATE_KEY);
         set({ dismissedUpdateId: null });
@@ -347,11 +412,12 @@ export const useUpdateStore = create<UpdateState>()(
         // Reload the app with the new update
         await Updates.reloadAsync();
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to install update';
-        console.error('Failed to install update:', error);
+        const message = error instanceof Error ? error.message : 'Failed to download/install update';
+        console.error('Failed to download/install update:', error);
 
         set({
           error: message,
+          isDownloading: false,
           isInstalling: false,
         });
 
@@ -410,6 +476,13 @@ export const useUpdateStore = create<UpdateState>()(
  */
 export function useIsUpdateAvailable(): boolean {
   return useUpdateStore((state) => state.isUpdateAvailable);
+}
+
+/**
+ * Hook to check if currently downloading (reactive)
+ */
+export function useIsDownloading(): boolean {
+  return useUpdateStore((state) => state.isDownloading);
 }
 
 /**
