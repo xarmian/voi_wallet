@@ -88,6 +88,16 @@ export interface BackupAccountData {
   ledgerDerivationPath?: string;
   /** User-friendly device alias */
   deviceName?: string;
+
+  // Remote Signer account fields (type === 'remote_signer')
+  /** Unique identifier of the signer device */
+  signerDeviceId?: string;
+  /** User-friendly signer device name */
+  signerDeviceName?: string;
+  /** ISO timestamp when account was paired */
+  pairedAt?: string;
+  /** ISO timestamp of last signing activity */
+  lastSigningActivity?: string;
 }
 
 /**
@@ -102,6 +112,48 @@ export interface BackupSettings {
   network: NetworkId | null;
   /** Asset filter/sort preferences */
   assetFilters: BackupAssetFilterSettings;
+  /** Remote signer settings (optional for backward compatibility) */
+  remoteSigner?: BackupRemoteSignerSettings;
+}
+
+/**
+ * Remote signer settings for backup
+ */
+export interface BackupRemoteSignerSettings {
+  /** App mode: 'wallet' or 'signer' */
+  appMode: 'wallet' | 'signer';
+  /** Signer device configuration (when in signer mode) */
+  signerConfig: BackupSignerConfig | null;
+  /** Paired signer devices (when in wallet mode) */
+  pairedSigners: BackupPairedSigner[];
+}
+
+/**
+ * Signer device configuration for backup
+ */
+export interface BackupSignerConfig {
+  /** Unique device identifier */
+  deviceId: string;
+  /** User-defined device name */
+  deviceName: string;
+  /** Whether to require PIN for each transaction */
+  requirePinPerTxn: boolean;
+}
+
+/**
+ * Paired signer device info for backup
+ */
+export interface BackupPairedSigner {
+  /** Unique device identifier */
+  deviceId: string;
+  /** Device name from pairing */
+  deviceName?: string;
+  /** Timestamp of initial pairing (Unix ms) */
+  pairedAt: number;
+  /** Addresses managed by this signer */
+  addresses: string[];
+  /** Last successful signing activity (Unix ms) */
+  lastActivity?: number;
 }
 
 /**
@@ -223,10 +275,14 @@ export interface RestoreResult {
   watchAccountCount: number;
   /** Number of rekeyed accounts */
   rekeyedAccountCount: number;
+  /** Number of remote signer accounts */
+  remoteSignerAccountCount: number;
   /** Whether settings were restored */
   settingsRestored: boolean;
   /** Number of friends restored */
   friendsCount: number;
+  /** Whether remote signer settings were restored */
+  remoteSignerSettingsRestored: boolean;
 }
 
 /**
@@ -245,11 +301,14 @@ export interface BackupInfo {
     watch: number;
     rekeyed: number;
     ledger: number;
+    remoteSigner: number;
   };
   /** Whether backup contains friends */
   hasFriends: boolean;
   /** Number of friends in backup */
   friendsCount: number;
+  /** Whether backup contains remote signer settings */
+  hasRemoteSignerSettings: boolean;
 }
 
 /**

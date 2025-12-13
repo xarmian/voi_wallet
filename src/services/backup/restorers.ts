@@ -7,6 +7,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
+import * as Crypto from 'expo-crypto';
 import { storage } from '@/platform';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
@@ -16,6 +17,7 @@ import {
   WatchAccountMetadata,
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
   Wallet,
 } from '@/types/wallet';
 import { Friend } from '@/types/social';
@@ -23,6 +25,7 @@ import {
   BackupAccountData,
   BackupSettings,
   BackupExperimentalFlags,
+  BackupRemoteSignerSettings,
   BackupError,
   RestoreResult,
 } from './types';
@@ -55,6 +58,27 @@ const STORAGE_KEYS = {
   ACCOUNT_LIST: 'voi_account_list',
 };
 
+// Remote signer storage keys
+const REMOTE_SIGNER_STORAGE_KEYS = {
+  APP_MODE: '@voi_remote_signer_mode',
+  SIGNER_CONFIG: '@voi_signer_config',
+  PAIRED_SIGNERS: '@voi_paired_signers',
+  PROCESSED_REQUESTS: '@voi_processed_requests',
+};
+
+/**
+ * Generate a unique device ID for signer devices
+ * Uses cryptographically secure random bytes for security
+ * Used when restoring to ensure each physical device has a unique ID
+ */
+function generateDeviceId(): string {
+  const timestamp = Date.now().toString(36);
+  // Use cryptographically secure random bytes instead of Math.random()
+  const randomBytes = Crypto.getRandomBytes(8);
+  const randomPart = Buffer.from(randomBytes).toString('hex').substring(0, 10);
+  return `voi-signer-${timestamp}-${randomPart}`;
+}
+
 /**
  * Clear all existing wallet data before restore
  * This ensures a clean slate for the restore operation
@@ -85,6 +109,14 @@ export async function clearAllData(): Promise<void> {
       STORAGE_KEYS.ASSET_NATIVE_FIRST,
       STORAGE_KEYS.FRIENDS_LIST,
       STORAGE_KEYS.EXPERIMENTAL,
+      // Remote signer storage keys
+      // NOTE: PROCESSED_REQUESTS is intentionally cleared and NOT restored from backup
+      // to prevent replay attacks. The request timestamp validation in the remote signer
+      // protocol provides protection against old requests being re-processed after restore.
+      REMOTE_SIGNER_STORAGE_KEYS.APP_MODE,
+      REMOTE_SIGNER_STORAGE_KEYS.SIGNER_CONFIG,
+      REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS,
+      REMOTE_SIGNER_STORAGE_KEYS.PROCESSED_REQUESTS,
     ]);
 
     // Clear balance caches
@@ -118,6 +150,7 @@ export async function restoreAccounts(
   watch: number;
   rekeyed: number;
   ledger: number;
+  remoteSigner: number;
 }> {
   const counts = {
     total: 0,
@@ -125,6 +158,7 @@ export async function restoreAccounts(
     watch: 0,
     rekeyed: 0,
     ledger: 0,
+    remoteSigner: 0,
   };
 
   if (accounts.length === 0) {
@@ -137,6 +171,7 @@ export async function restoreAccounts(
       | WatchAccountMetadata
       | RekeyedAccountMetadata
       | LedgerAccountMetadata
+      | RemoteSignerAccountMetadata
     )[] = [];
 
     for (const backupAccount of accounts) {
@@ -254,6 +289,48 @@ export async function restoreAccounts(
           await AccountSecureStorage.storeAccount(ledgerAccount);
           restoredAccounts.push(ledgerAccount);
           counts.ledger++;
+          counts.total++;
+          break;
+        }
+
+        case AccountType.REMOTE_SIGNER: {
+          // Validate required fields for remote signer accounts
+          if (!backupAccount.signerDeviceId) {
+            console.warn(
+              `Skipping remote signer account ${backupAccount.address} - missing signerDeviceId`
+            );
+            continue;
+          }
+
+          if (!backupAccount.pairedAt) {
+            console.warn(
+              `Skipping remote signer account ${backupAccount.address} - missing pairedAt`
+            );
+            continue;
+          }
+
+          // Remote signer accounts only have metadata - keys are on signer device
+          const remoteSignerAccount: RemoteSignerAccountMetadata = {
+            id: backupAccount.id,
+            address: backupAccount.address,
+            publicKey: backupAccount.publicKey,
+            type: AccountType.REMOTE_SIGNER,
+            label: backupAccount.label,
+            color: backupAccount.color,
+            isHidden: backupAccount.isHidden,
+            createdAt: backupAccount.createdAt,
+            importedAt: backupAccount.importedAt,
+            lastUsed: new Date().toISOString(),
+            avatarUrl: backupAccount.avatarUrl,
+            signerDeviceId: backupAccount.signerDeviceId,
+            signerDeviceName: backupAccount.signerDeviceName,
+            pairedAt: backupAccount.pairedAt,
+            lastSigningActivity: backupAccount.lastSigningActivity,
+          };
+
+          await AccountSecureStorage.storeAccount(remoteSignerAccount);
+          restoredAccounts.push(remoteSignerAccount);
+          counts.remoteSigner++;
           counts.total++;
           break;
         }
@@ -435,6 +512,106 @@ export async function restoreExperimental(
 }
 
 /**
+ * Restore remote signer settings from backup
+ *
+ * SECURITY NOTE: When restoring in signer mode, a new deviceId is generated
+ * to ensure each physical device has a unique identity. This prevents issues
+ * where multiple devices might share the same deviceId after a backup is
+ * restored to a different device.
+ */
+export async function restoreRemoteSignerSettings(
+  settings: BackupRemoteSignerSettings | undefined
+): Promise<boolean> {
+  // If no settings in backup, skip (backward compatibility)
+  if (!settings) {
+    return false;
+  }
+
+  try {
+    const keyValuePairs: [string, string][] = [];
+
+    // Restore app mode
+    keyValuePairs.push([REMOTE_SIGNER_STORAGE_KEYS.APP_MODE, settings.appMode]);
+
+    // Restore signer config (if present)
+    if (settings.signerConfig) {
+      // SECURITY: Always generate a new deviceId when restoring signer config
+      // This ensures each physical device has a unique identity, even if:
+      // - The same backup is restored to multiple devices
+      // - The user switches from wallet mode to signer mode after restore
+      const newDeviceId = generateDeviceId();
+      const restoredConfig = {
+        ...settings.signerConfig,
+        deviceId: newDeviceId,
+      };
+      keyValuePairs.push([
+        REMOTE_SIGNER_STORAGE_KEYS.SIGNER_CONFIG,
+        JSON.stringify(restoredConfig),
+      ]);
+      console.log(
+        `[Restore] Generated new device ID for restored signer config: ${newDeviceId}`
+      );
+    }
+
+    // Restore paired signers (if present)
+    if (settings.pairedSigners && settings.pairedSigners.length > 0) {
+      // Validate and filter paired signers before restoring
+      const validSigners = settings.pairedSigners.filter((signer) => {
+        // Validate required fields
+        if (!signer.deviceId) {
+          console.warn('Skipping paired signer - missing deviceId');
+          return false;
+        }
+        if (typeof signer.pairedAt !== 'number') {
+          console.warn(`Skipping paired signer ${signer.deviceId} - invalid pairedAt`);
+          return false;
+        }
+        // Validate addresses array
+        if (!Array.isArray(signer.addresses) || signer.addresses.length === 0) {
+          console.warn(`Skipping paired signer ${signer.deviceId} - invalid or empty addresses`);
+          return false;
+        }
+        return true;
+      });
+
+      if (validSigners.length > 0) {
+        // Convert back to Map serialization format [deviceId, info][]
+        const mapEntries = validSigners.map((signer) => [
+          signer.deviceId,
+          {
+            deviceId: signer.deviceId,
+            deviceName: signer.deviceName,
+            pairedAt: signer.pairedAt,
+            addresses: signer.addresses,
+            lastActivity: signer.lastActivity,
+          },
+        ]);
+        keyValuePairs.push([
+          REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS,
+          JSON.stringify(mapEntries),
+        ]);
+
+        if (validSigners.length < settings.pairedSigners.length) {
+          console.warn(
+            `Restored ${validSigners.length} of ${settings.pairedSigners.length} paired signers (some were invalid)`
+          );
+        }
+      }
+    }
+
+    // Write all settings at once
+    if (keyValuePairs.length > 0) {
+      await AsyncStorage.multiSet(keyValuePairs);
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to restore remote signer settings:', error);
+    return false;
+  }
+}
+
+/**
  * Full restore operation
  * Clears existing data and restores from backup
  */
@@ -453,6 +630,11 @@ export async function performFullRestore(
   // Restore settings
   await restoreSettings(settings);
 
+  // Restore remote signer settings (check if present for backward compatibility)
+  const remoteSignerSettingsRestored = await restoreRemoteSignerSettings(
+    settings.remoteSigner
+  );
+
   // Restore friends
   const friendsCount = await restoreFriends(friends);
 
@@ -465,7 +647,9 @@ export async function performFullRestore(
     standardAccountCount: accountCounts.standard,
     watchAccountCount: accountCounts.watch,
     rekeyedAccountCount: accountCounts.rekeyed,
+    remoteSignerAccountCount: accountCounts.remoteSigner,
     settingsRestored: true,
     friendsCount,
+    remoteSignerSettingsRestored,
   };
 }

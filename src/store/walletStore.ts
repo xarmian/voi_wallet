@@ -7,6 +7,7 @@ import {
   StandardAccountMetadata,
   WatchAccountMetadata,
   RekeyedAccountMetadata,
+  LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
   Wallet,
   WalletSettings,
@@ -2314,6 +2315,8 @@ const EMPTY_ACCOUNTS: AccountMetadata[] = [];
 const EMPTY_STANDARD_ACCOUNTS: StandardAccountMetadata[] = [];
 const EMPTY_WATCH_ACCOUNTS: WatchAccountMetadata[] = [];
 const EMPTY_REKEYED_ACCOUNTS: RekeyedAccountMetadata[] = [];
+// Signable accounts are those that can directly sign transactions (STANDARD or LEDGER)
+const EMPTY_SIGNABLE_ACCOUNTS: (StandardAccountMetadata | LedgerAccountMetadata)[] = [];
 const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   isLoading: false,
   lastError: null,
@@ -2334,6 +2337,7 @@ let lastWalletForDerived: Wallet | null | undefined = undefined;
 let cachedStandardAccounts: StandardAccountMetadata[] = EMPTY_STANDARD_ACCOUNTS;
 let cachedWatchAccounts: WatchAccountMetadata[] = EMPTY_WATCH_ACCOUNTS;
 let cachedRekeyedAccounts: RekeyedAccountMetadata[] = EMPTY_REKEYED_ACCOUNTS;
+let cachedSignableAccounts: (StandardAccountMetadata | LedgerAccountMetadata)[] = EMPTY_SIGNABLE_ACCOUNTS;
 
 function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
   if (wallet === lastWalletForDerived) return;
@@ -2343,6 +2347,7 @@ function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
     cachedStandardAccounts = EMPTY_STANDARD_ACCOUNTS;
     cachedWatchAccounts = EMPTY_WATCH_ACCOUNTS;
     cachedRekeyedAccounts = EMPTY_REKEYED_ACCOUNTS;
+    cachedSignableAccounts = EMPTY_SIGNABLE_ACCOUNTS;
     return;
   }
 
@@ -2356,6 +2361,9 @@ function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
   cachedRekeyedAccounts = accounts.filter(
     (acc) => acc.type === AccountType.REKEYED
   ) as RekeyedAccountMetadata[];
+  cachedSignableAccounts = accounts.filter(
+    (acc) => acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER
+  ) as (StandardAccountMetadata | LedgerAccountMetadata)[];
 }
 
 export const useActiveAccount = () =>
@@ -2387,6 +2395,14 @@ export const useRekeyedAccounts = () =>
   useWalletStore((state) => {
     ensureDerivedAccountCaches(state.wallet);
     return cachedRekeyedAccounts;
+  });
+
+// Signable accounts are those that can directly sign transactions (STANDARD or LEDGER)
+// Used in airgap/signer mode to filter out watch, rekeyed, and remote signer accounts
+export const useSignableAccounts = () =>
+  useWalletStore((state) => {
+    ensureDerivedAccountCaches(state.wallet);
+    return cachedSignableAccounts;
   });
 
 export const useAccountState = (accountId: string) =>

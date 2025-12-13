@@ -34,6 +34,7 @@ import {
   usePairedSignersArray,
 } from '@/store/remoteSignerStore';
 import { AppMode } from '@/types/remoteSigner';
+import * as Updates from 'expo-updates';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -108,20 +109,37 @@ export default function RemoteSignerSettingsScreen() {
       return;
     }
 
-    setIsModeSwitching(true);
-    try {
-      await setAppMode(newMode);
-      showAlert(
-        'Mode Changed',
-        newMode === 'signer'
-          ? 'You are now in Signer Mode. This device will be used to sign transactions via QR codes.'
-          : 'You are now in Wallet Mode. You can send and receive transactions normally.'
-      );
-    } catch (error) {
-      showAlert('Error', 'Failed to switch mode. Please try again.');
-    } finally {
-      setIsModeSwitching(false);
-    }
+    // Show restart confirmation dialog
+    showAlert(
+      'Restart Required',
+      newMode === 'signer'
+        ? 'Switching to Signer Mode will restart the app. Network services will be disabled for enhanced security.'
+        : 'Switching to Wallet Mode will restart the app. Network services will be enabled for full functionality.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Restart',
+          onPress: async () => {
+            setIsModeSwitching(true);
+            try {
+              await setAppMode(newMode);
+              if (__DEV__) {
+                showAlert(
+                  'Development Mode',
+                  'Please manually restart the app for changes to take effect.'
+                );
+                setIsModeSwitching(false);
+              } else {
+                await Updates.reloadAsync();
+              }
+            } catch (error) {
+              showAlert('Error', 'Failed to switch mode. Please try again.');
+              setIsModeSwitching(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleSetupSignerMode = async () => {
@@ -135,13 +153,18 @@ export default function RemoteSignerSettingsScreen() {
       await initializeSignerConfig(setupDeviceName.trim());
       await setAppMode('signer');
       setShowSetupModal(false);
-      showAlert(
-        'Signer Mode Activated',
-        'This device is now configured as a signer. You can export your accounts to pair with other devices.'
-      );
+      // Restart the app to disable network services
+      if (__DEV__) {
+        showAlert(
+          'Signer Mode Activated',
+          'Please manually restart the app to complete setup. Network services will be disabled for enhanced security.'
+        );
+        setIsModeSwitching(false);
+      } else {
+        await Updates.reloadAsync();
+      }
     } catch (error) {
       showAlert('Error', 'Failed to set up signer mode. Please try again.');
-    } finally {
       setIsModeSwitching(false);
     }
   };
@@ -182,7 +205,7 @@ export default function RemoteSignerSettingsScreen() {
         >
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.title}>Remote Signer</Text>
+        <Text style={styles.title}>Air-gapped Signing</Text>
         <View style={styles.placeholder} />
       </View>
 
@@ -236,7 +259,7 @@ export default function RemoteSignerSettingsScreen() {
                 Wallet Mode
               </Text>
               <Text style={styles.modeDescription}>
-                Full wallet functionality. Use remote signer accounts for enhanced
+                Full wallet functionality. Use air-gapped signer accounts for enhanced
                 security.
               </Text>
             </View>

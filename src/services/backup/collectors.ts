@@ -14,6 +14,7 @@ import {
   WatchAccountMetadata,
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
 } from '@/types/wallet';
 import { Friend } from '@/types/social';
 import { NetworkId } from '@/types/network';
@@ -25,6 +26,9 @@ import {
   BackupAssetFilterSettings,
   BackupExperimentalFlags,
   BackupNFTTheme,
+  BackupRemoteSignerSettings,
+  BackupSignerConfig,
+  BackupPairedSigner,
   BackupError,
 } from './types';
 
@@ -52,6 +56,13 @@ const STORAGE_KEYS = {
   FRIENDS_LIST: '@friends/list',
   // Experimental (Zustand persist key)
   EXPERIMENTAL: 'experimental-features',
+};
+
+// Remote signer storage keys
+const REMOTE_SIGNER_STORAGE_KEYS = {
+  APP_MODE: '@voi_remote_signer_mode',
+  SIGNER_CONFIG: '@voi_signer_config',
+  PAIRED_SIGNERS: '@voi_paired_signers',
 };
 
 /**
@@ -140,9 +151,26 @@ export async function collectAccounts(pin?: string): Promise<BackupAccountData[]
           break;
         }
 
-        default:
-          // Unknown account type - include base data only
+        case AccountType.REMOTE_SIGNER: {
+          const remoteSignerAccount = account as RemoteSignerAccountMetadata;
+          // Metadata only for remote signer accounts - keys are on signer device
+          backupAccounts.push({
+            ...baseData,
+            signerDeviceId: remoteSignerAccount.signerDeviceId,
+            signerDeviceName: remoteSignerAccount.signerDeviceName,
+            pairedAt: remoteSignerAccount.pairedAt,
+            lastSigningActivity: remoteSignerAccount.lastSigningActivity,
+          });
+          break;
+        }
+
+        default: {
+          // Unknown account type - include base data only with warning
+          // This handles future account types that may be added
+          const unknownAccount = account as { type: string };
+          console.warn(`Unknown account type during backup: ${unknownAccount.type}`);
           backupAccounts.push(baseData);
+        }
       }
     }
 
@@ -167,12 +195,14 @@ export async function collectSettings(): Promise<BackupSettings> {
     const security = await collectSecuritySettings();
     const network = await collectNetworkSetting();
     const assetFilters = await collectAssetFilterSettings();
+    const remoteSigner = await collectRemoteSignerSettings();
 
     return {
       theme,
       security,
       network,
       assetFilters,
+      remoteSigner,
     };
   } catch (error) {
     throw new BackupError(
@@ -306,6 +336,66 @@ export async function collectExperimental(): Promise<BackupExperimentalFlags> {
     return {
       swapEnabled: false,
       messagingEnabled: false,
+    };
+  }
+}
+
+/**
+ * Collect remote signer settings
+ */
+async function collectRemoteSignerSettings(): Promise<BackupRemoteSignerSettings> {
+  try {
+    // Get app mode
+    const storedMode = await AsyncStorage.getItem(REMOTE_SIGNER_STORAGE_KEYS.APP_MODE);
+    const appMode: 'wallet' | 'signer' = storedMode === 'signer' ? 'signer' : 'wallet';
+
+    // Get signer config (when in signer mode)
+    let signerConfig: BackupSignerConfig | null = null;
+    const storedConfig = await AsyncStorage.getItem(REMOTE_SIGNER_STORAGE_KEYS.SIGNER_CONFIG);
+    if (storedConfig) {
+      try {
+        signerConfig = JSON.parse(storedConfig) as BackupSignerConfig;
+      } catch {
+        console.warn('Failed to parse signer config');
+      }
+    }
+
+    // Get paired signers (when in wallet mode)
+    let pairedSigners: BackupPairedSigner[] = [];
+    const storedSigners = await AsyncStorage.getItem(REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS);
+    if (storedSigners) {
+      try {
+        // Stored as array of [deviceId, SignerDeviceInfo] tuples (Map serialization)
+        const parsed = JSON.parse(storedSigners) as [string, {
+          deviceId: string;
+          deviceName?: string;
+          pairedAt: number;
+          addresses: string[];
+          lastActivity?: number;
+        }][];
+        pairedSigners = parsed.map(([, info]) => ({
+          deviceId: info.deviceId,
+          deviceName: info.deviceName,
+          pairedAt: info.pairedAt,
+          addresses: info.addresses || [],
+          lastActivity: info.lastActivity,
+        }));
+      } catch {
+        console.warn('Failed to parse paired signers');
+      }
+    }
+
+    return {
+      appMode,
+      signerConfig,
+      pairedSigners,
+    };
+  } catch (error) {
+    console.warn('Failed to collect remote signer settings:', error);
+    return {
+      appMode: 'wallet',
+      signerConfig: null,
+      pairedSigners: [],
     };
   }
 }

@@ -27,6 +27,7 @@ interface AccountListItemProps {
   onEdit?: (accountId: string) => void;
   onDelete?: (accountId: string) => void;
   shouldLoadBalance?: boolean;
+  hideBalance?: boolean;
 }
 
 export default function AccountListItem({
@@ -37,6 +38,7 @@ export default function AccountListItem({
   onEdit,
   onDelete,
   shouldLoadBalance = true,
+  hideBalance = false,
 }: AccountListItemProps) {
   const setActiveAccount = useWalletStore((state) => state.setActiveAccount);
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
@@ -74,7 +76,7 @@ export default function AccountListItem({
       case AccountType.LEDGER:
         return 'Ledger';
       case AccountType.REMOTE_SIGNER:
-        return 'Remote';
+        return 'Airgap';
       case AccountType.REKEYED:
         const rekeyedAccount = account as RekeyedAccountMetadata;
         const hasLedgerSigner =
@@ -97,7 +99,7 @@ export default function AccountListItem({
           ) ?? false;
 
         if (hasRemoteSignerAuth) {
-          return 'Remote';
+          return 'Airgap';
         }
 
         if (rekeyedAccount.canSign) {
@@ -218,11 +220,13 @@ export default function AccountListItem({
         </View>
 
         <View style={styles.balanceContainer}>
-          <Text style={[styles.balance, isActive && styles.activeText]}>
-            {isBalanceLoading || formatBalance(displayBalance) === null
-              ? 'Loading...'
-              : `${formatBalance(displayBalance)} ${currentNetworkConfig.nativeToken}`}
-          </Text>
+          {!hideBalance && (
+            <Text style={[styles.balance, isActive && styles.activeText]}>
+              {isBalanceLoading || formatBalance(displayBalance) === null
+                ? 'Loading...'
+                : `${formatBalance(displayBalance)} ${currentNetworkConfig.nativeToken}`}
+            </Text>
+          )}
 
           <View style={styles.actions}>
             <TouchableOpacity

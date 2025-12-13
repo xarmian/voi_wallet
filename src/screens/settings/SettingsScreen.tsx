@@ -649,7 +649,7 @@ export default function SettingsScreen() {
             />
             <SettingsRow
               icon="qr-code-outline"
-              label="Remote Signer"
+              label="Air-gapped Signing"
               onPress={handleRemoteSignerSettings}
             />
           </GlassCard>

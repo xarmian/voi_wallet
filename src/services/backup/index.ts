@@ -346,6 +346,7 @@ export class BackupService {
         watch: 0,
         rekeyed: 0,
         ledger: 0,
+        remoteSigner: 0,
       };
 
       for (const account of backup.accounts) {
@@ -362,6 +363,9 @@ export class BackupService {
           case 'ledger':
             accountTypes.ledger++;
             break;
+          case 'remote_signer':
+            accountTypes.remoteSigner++;
+            break;
         }
       }
 
@@ -372,6 +376,7 @@ export class BackupService {
         accountTypes,
         hasFriends: backup.friends && backup.friends.length > 0,
         friendsCount: backup.friends?.length || 0,
+        hasRemoteSignerSettings: !!backup.settings?.remoteSigner,
       };
     } catch (error) {
       if (error instanceof BackupError) {

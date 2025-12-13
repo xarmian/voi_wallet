@@ -185,7 +185,7 @@ export default function ExportAccountsScreen() {
             <Text style={styles.infoTitle}>Export to Wallet</Text>
             <Text style={styles.infoDescription}>
               Scan this QR code with your online wallet device to import these
-              accounts as remote signer accounts. You'll be able to approve
+              accounts as air-gapped signer accounts. You'll be able to approve
               transactions from this device.
             </Text>
           </View>

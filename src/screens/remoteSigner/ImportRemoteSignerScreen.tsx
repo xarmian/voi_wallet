@@ -119,7 +119,7 @@ export default function ImportRemoteSignerScreen() {
       const payload = RemoteSignerService.decodePayload(data);
 
       if (!isRemoteSignerPairing(payload)) {
-        showAlert('Invalid QR Code', 'This QR code is not a remote signer pairing code.');
+        showAlert('Invalid QR Code', 'This QR code is not an air-gapped signer pairing code.');
         setScanned(false);
         return;
       }
@@ -138,7 +138,7 @@ export default function ImportRemoteSignerScreen() {
       console.error('Failed to parse QR data:', error);
       showAlert(
         'Invalid QR Code',
-        'Could not read the QR code. Make sure you are scanning a remote signer pairing QR code.'
+        'Could not read the QR code. Make sure you are scanning an air-gapped signer pairing QR code.'
       );
       setScanned(false);
     }
@@ -240,7 +240,7 @@ export default function ImportRemoteSignerScreen() {
 
       showAlert(
         'Success',
-        `Successfully imported ${selectedAccounts.length} account${selectedAccounts.length > 1 ? 's' : ''} from the remote signer.`,
+        `Successfully imported ${selectedAccounts.length} account${selectedAccounts.length > 1 ? 's' : ''} from the air-gapped signer.`,
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
     } catch (error) {
@@ -271,7 +271,7 @@ export default function ImportRemoteSignerScreen() {
               size={64}
               color={theme.colors.primary}
             />
-            <Text style={styles.webTitle}>Import Remote Signer</Text>
+            <Text style={styles.webTitle}>Import Air-gapped Signer</Text>
             <Text style={styles.webDescription}>
               Upload an image of the QR code from your signer device, or paste the
               pairing data from clipboard.
@@ -451,7 +451,7 @@ export default function ImportRemoteSignerScreen() {
         <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.title}>Import Remote Signer</Text>
+        <Text style={styles.title}>Import Air-gapped Signer</Text>
         <View style={styles.placeholder} />
       </View>
 

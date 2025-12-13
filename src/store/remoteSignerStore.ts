@@ -21,6 +21,24 @@ const STORAGE_KEYS = {
   PROCESSED_REQUESTS: '@voi_processed_requests',
 } as const;
 
+// Module-level promise for early mode detection (before store hydration)
+let appModePromise: Promise<AppMode> | null = null;
+
+/**
+ * Get app mode early, before store hydration completes.
+ * Used by AppNavigator to determine which services to initialize.
+ * This avoids a race condition where services start before the store is ready.
+ */
+export async function getAppModeEarly(): Promise<AppMode> {
+  if (appModePromise) return appModePromise;
+
+  appModePromise = AsyncStorage.getItem(STORAGE_KEYS.APP_MODE)
+    .then((value) => (value === 'signer' ? 'signer' : 'wallet') as AppMode)
+    .catch(() => 'wallet' as AppMode);
+
+  return appModePromise;
+}
+
 /**
  * Generate a unique device ID for this signer device
  */

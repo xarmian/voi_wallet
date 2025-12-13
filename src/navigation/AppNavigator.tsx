@@ -60,6 +60,7 @@ import LedgerAccountImportScreen from '@/screens/account/LedgerAccountImportScre
 import CreateWalletScreen from '@/screens/onboarding/CreateWalletScreen';
 // Remote Signer screens
 import {
+  AirgapHomeScreen,
   ExportAccountsScreen,
   ImportRemoteSignerScreen,
   RemoteSignerSettingsScreen,
@@ -69,6 +70,7 @@ import {
   SignRequestDisplayScreen,
   SignatureScannerScreen,
 } from '@/screens/remoteSigner';
+import { useAppMode, getAppModeEarly, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
@@ -344,6 +346,23 @@ export type FriendsStackParamList = {
   Chat: { friendAddress: string; friendEnvoiName?: string; userAddress?: string };
 };
 
+// Airgap mode stack - minimal screens for offline signing device
+// Note: Some screens are shared with RootStackParamList and have their own type expectations
+export type AirgapStackParamList = {
+  AirgapHome: undefined;
+  ExportAccounts: undefined;
+  SignRequestScanner: undefined;
+  RemoteSignerTransactionReview: { request: RemoteSignerRequest };
+  SignatureDisplay: { request: RemoteSignerRequest };
+  // Account management screens (accessible in airgap mode)
+  // These use RootStackParamList types internally
+  CreateAccount: undefined;
+  MnemonicImport: { isOnboarding?: boolean };
+  QRAccountImport: undefined;
+  AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
+  LedgerAccountImport: { deviceId?: string; isOnboarding?: boolean } | undefined;
+};
+
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
 import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
 import AccountInfoScreen from '@/screens/wallet/AccountInfoScreen';
@@ -361,6 +380,7 @@ const WalletStack = createNativeStackNavigator<WalletStackParamList>();
 const NFTStack = createNativeStackNavigator<NFTStackParamList>();
 const SettingsStack = createNativeStackNavigator<SettingsStackParamList>();
 const FriendsStack = createNativeStackNavigator<FriendsStackParamList>();
+const AirgapStack = createNativeStackNavigator<AirgapStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 function WalletStackNavigator() {
@@ -539,10 +559,69 @@ function FriendsStackNavigator() {
   );
 }
 
+// Airgap mode stack navigator - minimal screens for offline signing device
+function AirgapStackNavigator() {
+  return (
+    <NFTBackground>
+      <AirgapStack.Navigator
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right',
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      >
+        <AirgapStack.Screen name="AirgapHome" component={AirgapHomeScreen} />
+        <AirgapStack.Screen name="ExportAccounts" component={ExportAccountsScreen} />
+        <AirgapStack.Screen name="SignRequestScanner" component={SignRequestScannerScreen} />
+        <AirgapStack.Screen
+          name="RemoteSignerTransactionReview"
+          component={TransactionReviewScreen}
+        />
+        <AirgapStack.Screen name="SignatureDisplay" component={SignatureDisplayScreen} />
+        {/* Account management screens */}
+        <AirgapStack.Screen name="CreateAccount" component={CreateAccountScreen} />
+        <AirgapStack.Screen name="MnemonicImport" component={MnemonicImportScreen} />
+        <AirgapStack.Screen name="QRAccountImport" component={QRAccountImportScreen} />
+        <AirgapStack.Screen
+          name="AccountImportPreview"
+          component={AccountImportPreviewScreen}
+        />
+        <AirgapStack.Screen
+          name="LedgerAccountImport"
+          component={LedgerAccountImportScreen}
+        />
+      </AirgapStack.Navigator>
+    </NFTBackground>
+  );
+}
+
 function MainTabNavigator() {
   const { updateActivity } = useAuth();
   const { theme, nftBackgroundEnabled } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const appMode = useAppMode();
+  const isInitialized = useRemoteSignerStore((state) => state.isInitialized);
+  const initStartedRef = useRef(false);
+
+  // Initialize remote signer store on mount to get the correct app mode
+  useEffect(() => {
+    if (!isInitialized && !initStartedRef.current) {
+      initStartedRef.current = true;
+      useRemoteSignerStore.getState().initialize();
+    }
+  }, [isInitialized]);
+
+  // Wait for remote signer store to initialize before rendering
+  // This prevents briefly showing the wrong navigator and triggering unnecessary network calls
+  if (!isInitialized) {
+    return (
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }} />
+    );
+  }
+
+  const isSignerMode = appMode === 'signer';
 
   // Extract theme values to stable variables to avoid context issues in callbacks
   const primaryColor = theme.colors.primary;
@@ -555,6 +634,97 @@ function MainTabNavigator() {
     : theme.colors.background;
   const borderColor = hasNFTBackground ? theme.colors.border : 'transparent';
 
+  // In signer/airgap mode, show simplified 2-tab layout (Home + Settings)
+  // No Friends, Discover, NFTs tabs - no FAB menu
+  if (isSignerMode) {
+    return (
+      <AuthGuard>
+        <View style={{ flex: 1 }}>
+          <Tab.Navigator
+            screenOptions={({ route }) => ({
+              tabBarIcon: ({ focused, color, size }) => {
+                let iconName: keyof typeof Ionicons.glyphMap;
+
+                if (route.name === 'Home') {
+                  iconName = focused ? 'shield-checkmark' : 'shield-checkmark-outline';
+                } else if (route.name === 'Settings') {
+                  iconName = focused ? 'settings' : 'settings-outline';
+                } else {
+                  iconName = 'help-outline';
+                }
+
+                return <Ionicons name={iconName} size={size} color={color} />;
+              },
+              tabBarButton: (props) => {
+                const handlePress = (e: any) => {
+                  if (e?.preventDefault) {
+                    e.preventDefault();
+                  }
+                  if (props.onPress) {
+                    props.onPress(e);
+                  }
+                };
+                return <TouchableOpacity {...props} onPress={handlePress} />;
+              },
+              tabBarActiveTintColor: tabIconActive,
+              tabBarInactiveTintColor: tabIconInactive,
+              tabBarStyle: {
+                backgroundColor: tabBackground,
+                borderTopColor: borderColor,
+              },
+              headerShown: false,
+            })}
+          >
+            <Tab.Screen
+              name="Home"
+              component={AirgapStackNavigator}
+              options={{
+                tabBarLabel: 'Signer',
+              }}
+              listeners={{
+                tabPress: () => updateActivity(),
+              }}
+            />
+            <Tab.Screen
+              name="Settings"
+              component={SettingsStackNavigator}
+              listeners={({ navigation, route }) => ({
+                tabPress: () => {
+                  updateActivity();
+
+                  const state = navigation.getState();
+                  const settingsRoute = state.routes.find(
+                    (r) => r.key === route.key
+                  );
+                  const stackState = settingsRoute?.state as
+                    | {
+                        key: string;
+                        type: string;
+                        index: number;
+                      }
+                    | undefined;
+
+                  if (stackState?.type === 'stack' && stackState.index > 0) {
+                    navigation.dispatch({
+                      ...StackActions.popToTop(),
+                      target: stackState.key,
+                    });
+                  }
+
+                  navigation.navigate('Settings', {
+                    screen: 'SettingsMain',
+                  });
+                },
+              })}
+            />
+          </Tab.Navigator>
+          {/* No FAB menu in signer mode */}
+        </View>
+      </AuthGuard>
+    );
+  }
+
+  // Normal wallet mode - full tab layout
   return (
     <AuthGuard>
       <View style={{ flex: 1 }}>
@@ -872,85 +1042,150 @@ export default function AppNavigator() {
 
     const initializeServices = async () => {
       try {
-        // Initialize Network store
+        // Get app mode BEFORE initializing network services
+        // This avoids a race condition with store hydration
+        const appMode = await getAppModeEarly();
+        const isSignerMode = appMode === 'signer';
+
+        // Initialize Network store (needed in both modes for basic config)
         await initializeNetwork();
 
-        // Initialize WalletConnect service
-        const wcService = WalletConnectService.getInstance();
-        await wcService.initialize();
+        // Variables for cleanup - only defined if services are initialized
+        let wcService: WalletConnectService | null = null;
+        let onProposal: ((proposal: any) => void) | null = null;
+        let onRequest: ((requestEvent: any) => Promise<void>) | null = null;
 
-        // Listen for WalletConnect session proposals and navigate to approval screen
-        const onProposal = (proposal: any) => {
-          try {
-            if (navigationRef.current?.isReady?.()) {
-              // Close any open QR scanner first when possible
-              if (navigationRef.current.canGoBack?.()) {
-                navigationRef.current.goBack();
-              }
-              // Then navigate to session proposal
-              navigationRef.current.navigate('WalletConnectSessionProposal', {
-                proposal,
-              });
-            }
-          } catch (err) {
-            console.error(
-              'Failed to navigate to WalletConnectSessionProposal:',
-              err
-            );
-          }
-        };
-        wcService.on('session_proposal', onProposal);
+        // Skip internet-dependent services in signer mode (air-gapped device)
+        if (!isSignerMode) {
+          // Initialize WalletConnect service
+          wcService = WalletConnectService.getInstance();
+          await wcService.initialize();
 
-        const onRequest = async (requestEvent: any) => {
-          try {
-            if (navigationRef.current?.isReady?.()) {
-              // Get current route name
-              const currentRoute = navigationRef.current.getCurrentRoute();
-
-              // Check if we're already on the TransactionRequestScreen
-              if (currentRoute?.name === 'WalletConnectTransactionRequest') {
-                // Enqueue the request instead of navigating immediately
-                console.log('[AppNavigator] Currently on transaction screen, enqueueing request');
-                await TransactionRequestQueue.enqueue({
-                  id: requestEvent.id,
-                  topic: requestEvent.topic,
-                  params: requestEvent.params,
+          // Listen for WalletConnect session proposals and navigate to approval screen
+          onProposal = (proposal: any) => {
+            try {
+              if (navigationRef.current?.isReady?.()) {
+                // Close any open QR scanner first when possible
+                if (navigationRef.current.canGoBack?.()) {
+                  navigationRef.current.goBack();
+                }
+                // Then navigate to session proposal
+                navigationRef.current.navigate('WalletConnectSessionProposal', {
+                  proposal,
                 });
-              } else {
-                // Navigate immediately if not on transaction screen
-                navigationRef.current.navigate(
-                  'WalletConnectTransactionRequest',
-                  { requestEvent }
-                );
+              }
+            } catch (err) {
+              console.error(
+                'Failed to navigate to WalletConnectSessionProposal:',
+                err
+              );
+            }
+          };
+          wcService.on('session_proposal', onProposal);
+
+          onRequest = async (requestEvent: any) => {
+            try {
+              if (navigationRef.current?.isReady?.()) {
+                // Get current route name
+                const currentRoute = navigationRef.current.getCurrentRoute();
+
+                // Check if we're already on the TransactionRequestScreen
+                if (currentRoute?.name === 'WalletConnectTransactionRequest') {
+                  // Enqueue the request instead of navigating immediately
+                  console.log('[AppNavigator] Currently on transaction screen, enqueueing request');
+                  await TransactionRequestQueue.enqueue({
+                    id: requestEvent.id,
+                    topic: requestEvent.topic,
+                    params: requestEvent.params,
+                  });
+                } else {
+                  // Navigate immediately if not on transaction screen
+                  navigationRef.current.navigate(
+                    'WalletConnectTransactionRequest',
+                    { requestEvent }
+                  );
+                }
+              }
+            } catch (err) {
+              console.error(
+                'Failed to handle WalletConnect transaction request:',
+                err
+              );
+            }
+          };
+          wcService.on('session_request', onRequest);
+
+          // Initialize DeepLink service
+          const deepLinkService = DeepLinkService.getInstance();
+          if (navigationRef.current) {
+            deepLinkService.setNavigationRef(navigationRef.current);
+          }
+          await deepLinkService.initialize();
+
+          // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
+          if (Platform.OS === 'web' && detectPlatform() === 'extension') {
+            extensionDeepLinkHandler.initialize(async (uri: string) => {
+              console.log('[AppNavigator] Extension received WC URI:', uri);
+              if (isWalletConnectUri(uri)) {
+                await deepLinkService.testDeepLink(uri);
+              }
+            });
+          }
+
+          console.log('WalletConnect and DeepLink services initialized');
+
+          // Initialize push notification service
+          try {
+            await notificationService.initialize();
+            console.log('Notification service initialized');
+
+            // Check if user has a wallet and auto-subscribe all accounts to notifications
+            const wallet = await MultiAccountWalletService.getCurrentWallet();
+            if (wallet && wallet.accounts.length > 0) {
+              // Register push token if permissions granted
+              const token = await notificationService.registerPushToken();
+              if (token) {
+                // Subscribe ALL accounts to notifications (not just active one)
+                // Watch accounts will have message notifications disabled by default
+                await notificationService.subscribeAllAccounts(wallet.accounts);
+
+                // TODO: Re-enable realtime subscription when needed
+                // Currently disabled to reduce server load - using polling instead
+                // const allAddresses = wallet.accounts.map(a => a.address);
+                // await realtimeService.subscribeToAddresses(allAddresses);
               }
             }
-          } catch (err) {
-            console.error(
-              'Failed to handle WalletConnect transaction request:',
-              err
-            );
+          } catch (error) {
+            console.warn('Failed to initialize notification services:', error);
+            // Don't block app startup for notification initialization failures
           }
-        };
-        wcService.on('session_request', onRequest);
 
-        // Initialize DeepLink service
-        const deepLinkService = DeepLinkService.getInstance();
-        if (navigationRef.current) {
-          deepLinkService.setNavigationRef(navigationRef.current);
-        }
-        await deepLinkService.initialize();
+          // Reset stale processing state from previous session (prevents deadlock after crash)
+          await TransactionRequestQueue.setProcessing(false);
 
-        // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
-        if (Platform.OS === 'web' && detectPlatform() === 'extension') {
-          extensionDeepLinkHandler.initialize(async (uri: string) => {
-            console.log('[AppNavigator] Extension received WC URI:', uri);
-            if (isWalletConnectUri(uri)) {
-              await deepLinkService.testDeepLink(uri);
+          // Process any pending transaction requests from the queue
+          try {
+            const hasQueuedRequests = !(await TransactionRequestQueue.isEmpty());
+            if (hasQueuedRequests) {
+              console.log('[AppNavigator] Processing queued transaction requests on startup');
+              const nextRequest = await TransactionRequestQueue.peek();
+              if (nextRequest && navigationRef.current) {
+                // Dequeue and navigate to the first request
+                await TransactionRequestQueue.dequeue();
+                navigationRef.current.navigate('WalletConnectTransactionRequest', {
+                  requestEvent: nextRequest,
+                  version: nextRequest.version,
+                });
+              }
             }
-          });
+          } catch (error) {
+            console.error('[AppNavigator] Failed to process queued requests:', error);
+          }
+        } else {
+          console.log('[AppNavigator] Signer mode: skipping network services (WalletConnect, DeepLink, Notifications)');
         }
 
-        // Initialize Ledger transport service to load persisted devices
+        // Initialize Ledger transport service (useful in BOTH modes for hardware wallet signing)
         try {
           await ledgerTransportService.initialize({
             enableBle: true,
@@ -962,62 +1197,18 @@ export default function AppNavigator() {
           // Don't block app startup for Ledger initialization failures
         }
 
-        console.log('WalletConnect, DeepLink, and Ledger services initialized');
-
-        // Initialize push notification service
-        try {
-          await notificationService.initialize();
-          console.log('Notification service initialized');
-
-          // Check if user has a wallet and auto-subscribe all accounts to notifications
-          const wallet = await MultiAccountWalletService.getCurrentWallet();
-          if (wallet && wallet.accounts.length > 0) {
-            // Register push token if permissions granted
-            const token = await notificationService.registerPushToken();
-            if (token) {
-              // Subscribe ALL accounts to notifications (not just active one)
-              // Watch accounts will have message notifications disabled by default
-              await notificationService.subscribeAllAccounts(wallet.accounts);
-
-              // TODO: Re-enable realtime subscription when needed
-              // Currently disabled to reduce server load - using polling instead
-              // const allAddresses = wallet.accounts.map(a => a.address);
-              // await realtimeService.subscribeToAddresses(allAddresses);
-            }
-          }
-        } catch (error) {
-          console.warn('Failed to initialize notification services:', error);
-          // Don't block app startup for notification initialization failures
-        }
-
-        // Reset stale processing state from previous session (prevents deadlock after crash)
-        await TransactionRequestQueue.setProcessing(false);
-
-        // Process any pending transaction requests from the queue
-        try {
-          const hasQueuedRequests = !(await TransactionRequestQueue.isEmpty());
-          if (hasQueuedRequests) {
-            console.log('[AppNavigator] Processing queued transaction requests on startup');
-            const nextRequest = await TransactionRequestQueue.peek();
-            if (nextRequest && navigationRef.current) {
-              // Dequeue and navigate to the first request
-              await TransactionRequestQueue.dequeue();
-              navigationRef.current.navigate('WalletConnectTransactionRequest', {
-                requestEvent: nextRequest,
-                version: nextRequest.version,
-              });
-            }
-          }
-        } catch (error) {
-          console.error('[AppNavigator] Failed to process queued requests:', error);
-        }
-
         return () => {
           try {
-            wcService.off?.('session_proposal', onProposal);
-            wcService.off?.('session_request', onRequest);
-            extensionDeepLinkHandler.cleanup();
-            notificationService.cleanup();
+            if (wcService && onProposal) {
+              wcService.off?.('session_proposal', onProposal);
+            }
+            if (wcService && onRequest) {
+              wcService.off?.('session_request', onRequest);
+            }
+            if (!isSignerMode) {
+              extensionDeepLinkHandler.cleanup();
+              notificationService.cleanup();
+            }
             // realtimeService.cleanup(); // Disabled - realtime subscription not active
           } catch {}
         };
