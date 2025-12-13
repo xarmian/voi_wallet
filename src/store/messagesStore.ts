@@ -6,6 +6,9 @@
  *
  * V2: Uses signature-derived encryption. The messaging keypair is derived
  * once per session from signing a challenge message.
+ *
+ * Message fetching uses MIMIR for efficient queries. Push notifications
+ * trigger message refresh when the app is open.
  */
 
 import { create } from 'zustand';
@@ -14,13 +17,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Message, MessageThread, MessageStatus, MessagingKeyPair } from '@/services/messaging/types';
 import MessagingService from '@/services/messaging';
 import { useFriendsStore } from './friendsStore';
-import { realtimeService } from '@/services/realtime';
 
 const STORAGE_KEY_PREFIX = '@messages/';
 const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
 
-const POLLING_INTERVAL_MS = 30000; // 30 seconds
-const REALTIME_FALLBACK_POLLING_MS = 60000; // 60 seconds fallback when realtime is disconnected
+const POLLING_INTERVAL_MS = 30000; // 30 seconds (used when chat is open)
 
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) => `${STORAGE_KEY_PREFIX}${userAddress}`;
@@ -38,7 +39,6 @@ interface MessagesState {
   lastSyncRound: number | null;
   hiddenThreads: Set<string>; // Set of hidden friend addresses
   showHiddenThreads: boolean; // Toggle to show hidden threads in the list
-  realtimeConnected: boolean; // Whether realtime subscription is active
 
   // Computed getters
   getTotalUnreadCount: () => number;
@@ -69,15 +69,17 @@ interface MessagesState {
     friendAddress: string,
     pin?: string
   ) => Promise<void>;
+  fetchOlderMessages: (
+    userAddress: string,
+    friendAddress: string,
+    beforeRound: number,
+    pin?: string
+  ) => Promise<{ hasMore: boolean }>;
   fetchAllThreads: (userAddress: string, pin?: string) => Promise<void>;
 
   // Polling
   startPolling: (userAddress: string, intervalMs?: number) => void;
   stopPolling: () => void;
-
-  // Realtime
-  initializeRealtime: (userAddress: string) => Promise<void>;
-  cleanupRealtime: () => Promise<void>;
 
   // Utilities
   clearError: () => void;
@@ -97,7 +99,6 @@ export const useMessagesStore = create<MessagesState>()(
     lastSyncRound: null,
     hiddenThreads: new Set<string>(),
     showHiddenThreads: false,
-    realtimeConnected: false,
 
     /**
      * Get total count of unread messages across all threads
@@ -383,19 +384,28 @@ export const useMessagesStore = create<MessagesState>()(
 
       const storageKey = getStorageKey(userAddress);
       const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-      const storedThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
+      const rawStoredThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
 
       // Also load hidden threads for the new account
       const hiddenStorageKey = getHiddenStorageKey(userAddress);
       const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
       const storedHidden = storedHiddenJson ? new Set<string>(JSON.parse(storedHiddenJson)) : new Set<string>();
 
+      // Deduplicate messages and calculate lastSyncRound
+      const { threads: storedThreads, maxRound } = deduplicateThreads(rawStoredThreads);
+
       set({
         threads: storedThreads,
         currentUserAddress: userAddress,
+        lastSyncRound: maxRound || null,
         hiddenThreads: storedHidden,
         showHiddenThreads: false,
       });
+
+      // Re-persist if deduplication changed anything
+      if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
+        await persistThreads(userAddress, storedThreads);
+      }
     },
 
     /**
@@ -470,6 +480,75 @@ export const useMessagesStore = create<MessagesState>()(
     },
 
     /**
+     * Fetch older messages for a thread (pagination - load more when scrolling up)
+     * @returns hasMore - whether there might be more messages to load
+     */
+    fetchOlderMessages: async (userAddress, friendAddress, beforeRound, pin) => {
+      try {
+        // Don't set global isLoading to avoid UI flicker during pagination
+        const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
+          userAddress,
+          pin
+        );
+
+        const messages = await MessagingService.fetchMessages(
+          userAddress,
+          friendAddress,
+          messagingKeyPair,
+          50, // limit
+          undefined, // afterRound
+          beforeRound // beforeRound - fetch older messages
+        );
+
+        if (messages.length === 0) {
+          return { hasMore: false };
+        }
+
+        const { threads } = get();
+        const existingThread = threads[friendAddress];
+
+        // Get friend's Envoi name if available
+        const friend = useFriendsStore.getState().friends.find(
+          (f) => f.address === friendAddress
+        );
+
+        // Merge with existing messages (deduplicate by ID)
+        const allMessages = [...(existingThread?.messages || [])];
+        for (const msg of messages) {
+          if (!allMessages.some((m) => m.id === msg.id)) {
+            allMessages.push(msg);
+          }
+        }
+        allMessages.sort((a, b) => a.timestamp - b.timestamp);
+
+        const lastMsg = allMessages[allMessages.length - 1];
+
+        set({
+          threads: {
+            ...threads,
+            [friendAddress]: {
+              ...existingThread,
+              friendAddress,
+              friendEnvoiName: friend?.envoiName || existingThread?.friendEnvoiName,
+              messages: allMessages,
+              lastMessage: lastMsg,
+              lastMessageTimestamp: lastMsg?.timestamp || 0,
+              unreadCount: existingThread?.unreadCount || 0,
+            },
+          },
+        });
+
+        await persistThreads(userAddress, get().threads);
+
+        // If we got fewer messages than the limit, there are no more
+        return { hasMore: messages.length >= 50 };
+      } catch (error) {
+        console.error('Failed to fetch older messages:', error);
+        return { hasMore: false };
+      }
+    },
+
+    /**
      * Fetch all conversations from the blockchain
      */
     fetchAllThreads: async (userAddress, pin) => {
@@ -482,21 +561,29 @@ export const useMessagesStore = create<MessagesState>()(
         if (currentUserAddress !== userAddress) {
           const storageKey = getStorageKey(userAddress);
           const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-          const storedThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
+          const rawStoredThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
 
           // Also load hidden threads for the new account
           const hiddenStorageKey = getHiddenStorageKey(userAddress);
           const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
           const storedHidden = storedHiddenJson ? new Set<string>(JSON.parse(storedHiddenJson)) : new Set<string>();
 
+          // Deduplicate messages and calculate lastSyncRound from cached messages
+          const { threads: storedThreads, maxRound: cachedMaxRound } = deduplicateThreads(rawStoredThreads);
+
           set({
             threads: storedThreads,
             currentUserAddress: userAddress,
-            lastSyncRound: null,
+            lastSyncRound: cachedMaxRound || null,
             isKeyRegistered: false, // Will be checked below
             hiddenThreads: storedHidden,
             showHiddenThreads: false, // Reset to default when switching accounts
           });
+
+          // Re-persist if deduplication changed anything
+          if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
+            await persistThreads(userAddress, storedThreads);
+          }
         }
 
         // Check key registration status
@@ -517,7 +604,8 @@ export const useMessagesStore = create<MessagesState>()(
 
         const conversationMap = await MessagingService.fetchAllConversations(
           userAddress,
-          messagingKeyPair
+          messagingKeyPair,
+          100
         );
 
         const { threads: existingThreads } = get();
@@ -625,65 +713,10 @@ export const useMessagesStore = create<MessagesState>()(
     },
 
     /**
-     * Initialize realtime subscription for instant message updates
-     * Falls back to polling if realtime is unavailable or disconnects
-     */
-    initializeRealtime: async (userAddress: string) => {
-      // Check if realtime is available
-      if (!realtimeService.isAvailable()) {
-        console.log('Realtime not available, using polling only');
-        get().startPolling(userAddress);
-        return;
-      }
-
-      // Set up realtime event handlers
-      realtimeService.setHandlers({
-        onMessage: (event) => {
-          // New message received - refresh threads
-          console.log('Realtime: New message received, refreshing threads');
-          get().fetchAllThreads(userAddress);
-        },
-        onConnectionChange: (status) => {
-          if (status === 'connected') {
-            console.log('Realtime connected, stopping frequent polling');
-            set({ realtimeConnected: true });
-            // Stop frequent polling when realtime is connected
-            get().stopPolling();
-            // Start slower fallback polling just in case
-            get().startPolling(userAddress, REALTIME_FALLBACK_POLLING_MS);
-          } else {
-            console.log('Realtime disconnected, switching to frequent polling');
-            set({ realtimeConnected: false });
-            // Switch to frequent polling when realtime disconnects
-            get().stopPolling();
-            get().startPolling(userAddress, POLLING_INTERVAL_MS);
-          }
-        },
-      });
-
-      // Subscribe to events for this address
-      const subscribed = await realtimeService.subscribeToAddresses([userAddress]);
-
-      if (!subscribed) {
-        console.log('Failed to subscribe to realtime, using polling');
-        get().startPolling(userAddress, POLLING_INTERVAL_MS);
-      }
-    },
-
-    /**
-     * Clean up realtime subscription
-     */
-    cleanupRealtime: async () => {
-      await realtimeService.unsubscribe();
-      set({ realtimeConnected: false });
-    },
-
-    /**
      * Clear all cached messages for the current account
      */
     clearCache: async () => {
       get().stopPolling();
-      await get().cleanupRealtime();
       const { currentUserAddress } = get();
 
       // Clear messaging key cache in the service
@@ -697,7 +730,6 @@ export const useMessagesStore = create<MessagesState>()(
         lastSyncRound: null,
         hiddenThreads: new Set<string>(),
         showHiddenThreads: false,
-        realtimeConnected: false,
       });
       if (currentUserAddress) {
         await AsyncStorage.removeItem(getStorageKey(currentUserAddress));
@@ -717,6 +749,46 @@ function createEmptyThread(friendAddress: string): MessageThread {
     unreadCount: 0,
     messages: [],
   };
+}
+
+/**
+ * Deduplicate messages in threads loaded from storage
+ * Returns the deduplicated threads and the max round for lastSyncRound
+ */
+function deduplicateThreads(threads: Record<string, MessageThread>): {
+  threads: Record<string, MessageThread>;
+  maxRound: number;
+} {
+  let maxRound = 0;
+  const deduped: Record<string, MessageThread> = {};
+
+  for (const [friendAddress, thread] of Object.entries(threads)) {
+    // Deduplicate messages by ID
+    const seen = new Set<string>();
+    const uniqueMessages: Message[] = [];
+    for (const msg of thread.messages) {
+      if (!seen.has(msg.id)) {
+        seen.add(msg.id);
+        uniqueMessages.push(msg);
+        if (msg.confirmedRound && msg.confirmedRound > maxRound) {
+          maxRound = msg.confirmedRound;
+        }
+      }
+    }
+
+    // Sort by timestamp
+    uniqueMessages.sort((a, b) => a.timestamp - b.timestamp);
+    const lastMsg = uniqueMessages[uniqueMessages.length - 1];
+
+    deduped[friendAddress] = {
+      ...thread,
+      messages: uniqueMessages,
+      lastMessage: lastMsg,
+      lastMessageTimestamp: lastMsg?.timestamp || 0,
+    };
+  }
+
+  return { threads: deduped, maxRound };
 }
 
 /**
@@ -810,11 +882,4 @@ export function useIsThreadHidden(friendAddress: string): boolean {
  */
 export function useShowHiddenThreads(): boolean {
   return useMessagesStore((state) => state.showHiddenThreads);
-}
-
-/**
- * Hook to get realtime connection status (reactive)
- */
-export function useRealtimeConnected(): boolean {
-  return useMessagesStore((state) => state.realtimeConnected);
 }

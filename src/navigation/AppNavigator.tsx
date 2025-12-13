@@ -41,6 +41,8 @@ import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
 import NotificationSettingsScreen from '@/screens/settings/NotificationSettingsScreen';
 import ExperimentalFeaturesScreen from '@/screens/settings/ExperimentalFeaturesScreen';
+import BackupWalletScreen from '@/screens/settings/BackupWalletScreen';
+import RestoreWalletScreen from '@/screens/settings/RestoreWalletScreen';
 import AddWatchAccountScreen from '@/screens/account/AddWatchAccountScreen';
 import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
@@ -88,6 +90,8 @@ import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
+import { useUpdates } from 'expo-updates';
+import { useUpdateStore } from '@/store/updateStore';
 
 export type RootStackParamList = {
   Main: undefined;
@@ -109,8 +113,12 @@ export type RootStackParamList = {
   UniversalTransactionSigning: {
     transactions: string[];
     account: WalletAccount;
+    /** @deprecated Use callbackId instead to avoid serialization warnings */
     onSuccess?: (result: any) => Promise<void>;
+    /** @deprecated Use callbackId instead to avoid serialization warnings */
     onReject?: () => Promise<void>;
+    /** ID to retrieve callbacks from registry (preferred over onSuccess/onReject) */
+    callbackId?: string;
     title?: string;
     networkId?: NetworkId;
     chainId?: string;
@@ -136,6 +144,7 @@ export type RootStackParamList = {
   SignatureDisplay: {
     request: RemoteSignerRequest;
   };
+  RestoreWallet: { isOnboarding?: boolean };
 };
 
 export type MainTabParamList = {
@@ -233,7 +242,7 @@ export type WalletStackParamList = {
   };
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
-  ClaimableTokens: { pendingRefresh?: boolean } | undefined;
+  ClaimableTokens: { pendingRefresh?: boolean; claimedItemIds?: string[] } | undefined;
   ClaimToken: {
     claimableItem: SerializableClaimableItem;
   };
@@ -313,6 +322,8 @@ export type SettingsStackParamList = {
   AboutScreen: undefined;
   NotificationSettings: undefined;
   ExperimentalFeatures: undefined;
+  BackupWallet: undefined;
+  RestoreWallet: { isOnboarding?: boolean };
   WebView: {
     url: string;
     title: string;
@@ -482,6 +493,8 @@ function SettingsStackNavigator() {
           name="ExperimentalFeatures"
           component={ExperimentalFeaturesScreen}
         />
+        <SettingsStack.Screen name="BackupWallet" component={BackupWalletScreen} />
+        <SettingsStack.Screen name="RestoreWallet" component={RestoreWalletScreen} />
         <SettingsStack.Screen name="WebView" component={WebViewScreen} />
         {/* Remote Signer settings & account management */}
         <SettingsStack.Screen
@@ -784,6 +797,17 @@ function AppStack() {
         }}
       />
       <Stack.Screen
+        name="RestoreWallet"
+        component={RestoreWalletScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
         name="SignatureScanner"
         component={SignatureScannerScreen}
         options={{
@@ -955,9 +979,10 @@ export default function AppNavigator() {
               // Watch accounts will have message notifications disabled by default
               await notificationService.subscribeAllAccounts(wallet.accounts);
 
-              // Initialize realtime subscription for ALL account addresses
-              const allAddresses = wallet.accounts.map(a => a.address);
-              await realtimeService.subscribeToAddresses(allAddresses);
+              // TODO: Re-enable realtime subscription when needed
+              // Currently disabled to reduce server load - using polling instead
+              // const allAddresses = wallet.accounts.map(a => a.address);
+              // await realtimeService.subscribeToAddresses(allAddresses);
             }
           }
         } catch (error) {
@@ -993,7 +1018,7 @@ export default function AppNavigator() {
             wcService.off?.('session_request', onRequest);
             extensionDeepLinkHandler.cleanup();
             notificationService.cleanup();
-            realtimeService.cleanup();
+            // realtimeService.cleanup(); // Disabled - realtime subscription not active
           } catch {}
         };
       } catch (error) {
@@ -1002,6 +1027,13 @@ export default function AppNavigator() {
     };
 
     initializeServices();
+  }, []);
+
+  // Load dismissed update ID from storage on mount
+  useEffect(() => {
+    if (!__DEV__) {
+      useUpdateStore.getState().loadDismissedUpdateId();
+    }
   }, []);
 
   return (

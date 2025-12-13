@@ -66,6 +66,9 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs, getStaggerDelay } from '@/utils/animations';
 import ClaimableBanner from '@/components/claimable/ClaimableBanner';
 import { useClaimableStore, useVisibleClaimableCount } from '@/store/claimableStore';
+import UpdateBanner from '@/components/update/UpdateBanner';
+import { useUpdateStore } from '@/store/updateStore';
+import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
@@ -103,6 +106,40 @@ export default function HomeScreen() {
   const appMode = useAppMode();
   const isRemoteSignerInitialized = useRemoteSignerStore((state) => state.isInitialized);
   const initializeRemoteSigner = useRemoteSignerStore((state) => state.initialize);
+  // OTA Updates
+  const {
+    isUpdateAvailable,
+    isDownloading,
+    isInstalling,
+    downloadAndInstall,
+    dismissUpdate,
+    setUpdateAvailable,
+    checkForUpdate,
+  } = useUpdateStore();
+
+  // Use expo-updates hook to detect when update is pending (already downloaded by Expo)
+  const { isUpdatePending, downloadedUpdate } = useUpdates();
+
+  // Sync expo-updates state with our store
+  // Note: isUpdatePending means Expo has already downloaded an update
+  useEffect(() => {
+    if (!__DEV__) {
+      const updateId = downloadedUpdate?.updateId || null;
+      if (isUpdatePending && updateId) {
+        // Pass true for isDownloaded since Expo has already downloaded it
+        setUpdateAvailable(updateId, true);
+      }
+    }
+  }, [isUpdatePending, downloadedUpdate, setUpdateAvailable]);
+
+  // Check for updates on app startup (silent - no toasts, just show banner if available)
+  useEffect(() => {
+    if (!__DEV__) {
+      checkForUpdate({ silent: true });
+    }
+    // Only run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Entrance animations
   const balanceOpacity = useSharedValue(0);
@@ -1086,6 +1123,16 @@ export default function HomeScreen() {
 
           {activeAccount && (
             <>
+              {/* Update Available Banner */}
+              {isUpdateAvailable && (
+                <UpdateBanner
+                  onInstall={downloadAndInstall}
+                  onDismiss={dismissUpdate}
+                  isDownloading={isDownloading}
+                  isInstalling={isInstalling}
+                />
+              )}
+
               <Animated.View style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}>
                 <GlassCard
                   variant="medium"

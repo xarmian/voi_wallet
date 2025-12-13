@@ -251,6 +251,7 @@ export class Arc72TransactionService {
         allowEmptySignatures: true,
         allowMoreLogging: true,
         allowUnnamedResources: true,
+        fixSigners: true,
       });
 
       let boxes: Array<{ appIndex: number; name: Uint8Array }> = [];

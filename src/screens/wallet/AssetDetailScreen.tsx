@@ -967,7 +967,7 @@ export default function AssetDetailScreen() {
                     : `${calculateAssetUsdValue()} USD`}
                 </Text>
 
-                {asset?.contractId && asset.assetType === 'arc200' && (
+                {asset?.contractId !== undefined && asset.assetType === 'arc200' && (
                   <View style={styles.contractInfo}>
                     <Text style={styles.contractLabel}>Contract ID:</Text>
                     <Text style={styles.contractId}>{asset.contractId}</Text>
@@ -979,7 +979,7 @@ export default function AssetDetailScreen() {
                     <Text style={styles.contractId}>{asset.assetId}</Text>
                   </View>
                 )}
-                {asset?.decimals && (
+                {asset?.decimals !== undefined && (
                   <View style={styles.decimalsInfo}>
                     <Text style={styles.decimalsLabel}>Decimals:</Text>
                     <Text style={styles.decimalsId}>{asset.decimals}</Text>

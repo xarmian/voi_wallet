@@ -41,6 +41,7 @@ import { normalizeAssetImageUrl } from '@/utils/assetImages';
 import { resolveAddressOrName, isLikelyEnvoiName, formatAddress } from '@/utils/address';
 import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
+import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
 
 // Claimable tokens are always on Voi network
@@ -322,12 +323,8 @@ export default function ClaimAllConfirmationScreen() {
         Buffer.from(txnBytes).toString('base64')
       );
 
-      // Navigate to UniversalTransactionSigning screen with Voi network
-      navigation.navigate('UniversalTransactionSigning' as any, {
-        transactions: base64Transactions,
-        account: activeAccount,
-        title: `Claim ${items.length} Token${items.length > 1 ? 's' : ''}`,
-        networkId: CLAIM_NETWORK_ID,
+      // Register callbacks in the callback registry to avoid serialization warnings
+      const callbackId = registerNavigationCallbacks({
         onSuccess: async (result: any) => {
           // Guard against double submission
           if (hasSubmittedRef.current) {
@@ -344,14 +341,14 @@ export default function ClaimAllConfirmationScreen() {
               (txn: string) => new Uint8Array(Buffer.from(txn, 'base64'))
             );
             await algodClient.sendRawTransaction(signedTxns).do();
-            
+
             // Navigate back to claimable tokens list with pending refresh
             navigation.dispatch(
               CommonActions.reset({
                 index: 1,
                 routes: [
                   { name: 'HomeMain' },
-                  { name: 'ClaimableTokens', params: { pendingRefresh: true } },
+                  { name: 'ClaimableTokens', params: { pendingRefresh: true, claimedItemIds: items.map(item => item.id) } },
                 ],
               })
             );
@@ -364,6 +361,15 @@ export default function ClaimAllConfirmationScreen() {
           // User cancelled - just go back
           navigation.goBack();
         },
+      });
+
+      // Navigate to UniversalTransactionSigning screen with Voi network
+      navigation.navigate('UniversalTransactionSigning' as any, {
+        transactions: base64Transactions,
+        account: activeAccount,
+        title: `Claim ${items.length} Token${items.length > 1 ? 's' : ''}`,
+        networkId: CLAIM_NETWORK_ID,
+        callbackId,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to build claim transactions';

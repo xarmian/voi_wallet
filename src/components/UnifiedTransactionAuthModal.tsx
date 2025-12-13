@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Modal,
   View,
@@ -59,6 +59,10 @@ export default function UnifiedTransactionAuthModal({
   const [biometricAttempted, setBiometricAttempted] = useState(false);
   const [userCancelled, setUserCancelled] = useState(false);
 
+  // Guard to prevent onComplete from being called multiple times per auth flow
+  // This prevents double-submission when the onComplete prop reference changes during re-renders
+  const hasCalledOnComplete = useRef(false);
+
   // Subscribe to controller state changes
   useEffect(() => {
     const unsubscribe = controller.subscribe(setAuthState);
@@ -77,8 +81,10 @@ export default function UnifiedTransactionAuthModal({
   }, [visible, request, controller, authState.state, initialized, userCancelled, authState.error, authState.ledgerError]);
 
   // Handle completion state - wait for result to be populated before calling onComplete
+  // The hasCalledOnComplete guard prevents double-calls when onComplete prop reference changes
   useEffect(() => {
-    if (authState.state === 'completed' && authState.result) {
+    if (authState.state === 'completed' && authState.result && !hasCalledOnComplete.current) {
+      hasCalledOnComplete.current = true;
       onComplete(true, authState.result);
     }
   }, [authState.state, authState.result, onComplete]);
@@ -109,6 +115,7 @@ export default function UnifiedTransactionAuthModal({
       setInitialized(false);
       setBiometricAttempted(false);
       setUserCancelled(false);
+      hasCalledOnComplete.current = false;
     }
   }, [visible, authState.state]);
 
@@ -252,8 +259,10 @@ export default function UnifiedTransactionAuthModal({
     if (
       authState.state === 'error' &&
       !isUserRejectedError &&
-      (authState.error || authState.ledgerError)
+      (authState.error || authState.ledgerError) &&
+      !hasCalledOnComplete.current
     ) {
+      hasCalledOnComplete.current = true;
       const err =
         authState.error ||
         new Error(authState.ledgerError || 'Transaction failed');

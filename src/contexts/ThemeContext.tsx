@@ -43,6 +43,7 @@ interface ThemeContextType {
   setSelectedPaletteIndex: (index: number) => Promise<void>;
   setNFTTheme: (nftData: NFTThemeData) => Promise<void>;
   clearNFTTheme: () => Promise<void>;
+  reloadTheme: () => Promise<void>;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -245,102 +246,112 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     }
   };
 
-  useEffect(() => {
-    const loadThemeData = async () => {
-      try {
-        // Load theme mode
-        const savedMode = await AsyncStorage.getItem(THEME_STORAGE_KEY);
-        
-        // Migration: Handle old 'nft' theme mode
-        if (savedMode === 'nft') {
-          // Load NFT theme to get preferred mode
-          const storedNFTTheme = await loadNFTTheme();
-          if (storedNFTTheme) {
-            // Migrate to base theme based on preferred mode
-            const baseMode = storedNFTTheme.preferredMode === 'dark' ? 'dark' : 'light';
-            await AsyncStorage.setItem(THEME_STORAGE_KEY, baseMode);
-            setThemeModeState(baseMode);
+  const loadThemeData = useCallback(async () => {
+    try {
+      // Load theme mode
+      const savedMode = await AsyncStorage.getItem(THEME_STORAGE_KEY);
 
-            // Set NFT theme data and enable it
+      // Migration: Handle old 'nft' theme mode
+      if (savedMode === 'nft') {
+        // Load NFT theme to get preferred mode
+        const storedNFTTheme = await loadNFTTheme();
+        if (storedNFTTheme) {
+          // Migrate to base theme based on preferred mode
+          const baseMode = storedNFTTheme.preferredMode === 'dark' ? 'dark' : 'light';
+          await AsyncStorage.setItem(THEME_STORAGE_KEY, baseMode);
+          setThemeModeState(baseMode);
+
+          // Set NFT theme data and enable it
+          setNftThemeDataState(storedNFTTheme.nftData);
+          setNftExtractedColors(storedNFTTheme.extractedColors);
+          setNftThemeEnabledState(true);
+          await saveNFTThemeEnabled(true);
+        } else {
+          // No NFT theme found, fallback to system
+          await AsyncStorage.setItem(THEME_STORAGE_KEY, 'system');
+          setThemeModeState('system');
+        }
+      } else {
+        // Normal mode (not migration) - set theme mode if valid
+        if (savedMode && ['light', 'dark', 'system'].includes(savedMode)) {
+          setThemeModeState(savedMode as ThemeMode);
+        } else {
+          // No saved mode or invalid - reset to system default
+          setThemeModeState('system');
+        }
+
+        // Load NFT theme if available (only when not migrating to avoid double-load)
+        const storedNFTTheme = await loadNFTTheme();
+        if (storedNFTTheme) {
+          try {
             setNftThemeDataState(storedNFTTheme.nftData);
             setNftExtractedColors(storedNFTTheme.extractedColors);
-            setNftThemeEnabledState(true);
-            await saveNFTThemeEnabled(true);
-          } else {
-            // No NFT theme found, fallback to system
-            await AsyncStorage.setItem(THEME_STORAGE_KEY, 'system');
-            setThemeModeState('system');
+
+            // Load palettes if available, or generate them for legacy themes
+            if (storedNFTTheme.palettes && storedNFTTheme.palettes.length > 0) {
+              setNftPalettes(storedNFTTheme.palettes);
+              setSelectedPaletteIndexState(storedNFTTheme.selectedPaletteIndex || 0);
+            } else {
+              // Migration: Generate palettes for existing NFT themes
+              try {
+                const extractedData = await extractColorsWithPalettes(storedNFTTheme.nftData.imageUrl);
+                setNftPalettes(extractedData.palettes);
+                setSelectedPaletteIndexState(0);
+              } catch (error) {
+                console.error('Failed to generate palettes for existing NFT theme:', error);
+                // Clear corrupted theme data to prevent crash loop
+                await clearNFTThemeStorage();
+                await saveNFTThemeEnabled(false);
+                throw error; // Re-throw to trigger outer catch block
+              }
+            }
+
+            // Load background enabled state
+            const bgEnabled = storedNFTTheme.backgroundImageEnabled !== undefined
+              ? storedNFTTheme.backgroundImageEnabled
+              : await loadBackgroundImageEnabled();
+            setNftBackgroundEnabledState(bgEnabled);
+
+            // Load overlay intensity
+            const intensity = await loadOverlayIntensity();
+            setNftOverlayIntensityState(intensity);
+          } catch (error) {
+            console.error('Failed to load NFT theme, clearing theme data:', error);
+            // Clear all NFT theme state on error to prevent crash loop
+            setNftThemeDataState(null);
+            setNftExtractedColors(null);
+            setNftPalettes([]);
+            setNftThemeEnabledState(false);
+            setNftBackgroundEnabledState(true);
+            setSelectedPaletteIndexState(0);
           }
         } else {
-          // Normal mode (not migration) - set theme mode if valid
-          if (savedMode && ['light', 'dark', 'system'].includes(savedMode)) {
-            setThemeModeState(savedMode as ThemeMode);
-          }
-
-          // Load NFT theme if available (only when not migrating to avoid double-load)
-          const storedNFTTheme = await loadNFTTheme();
-          if (storedNFTTheme) {
-            try {
-              setNftThemeDataState(storedNFTTheme.nftData);
-              setNftExtractedColors(storedNFTTheme.extractedColors);
-
-              // Load palettes if available, or generate them for legacy themes
-              if (storedNFTTheme.palettes && storedNFTTheme.palettes.length > 0) {
-                setNftPalettes(storedNFTTheme.palettes);
-                setSelectedPaletteIndexState(storedNFTTheme.selectedPaletteIndex || 0);
-              } else {
-                // Migration: Generate palettes for existing NFT themes
-                try {
-                  const extractedData = await extractColorsWithPalettes(storedNFTTheme.nftData.imageUrl);
-                  setNftPalettes(extractedData.palettes);
-                  setSelectedPaletteIndexState(0);
-                } catch (error) {
-                  console.error('Failed to generate palettes for existing NFT theme:', error);
-                  // Clear corrupted theme data to prevent crash loop
-                  await clearNFTThemeStorage();
-                  await saveNFTThemeEnabled(false);
-                  throw error; // Re-throw to trigger outer catch block
-                }
-              }
-
-              // Load background enabled state
-              const bgEnabled = storedNFTTheme.backgroundImageEnabled !== undefined
-                ? storedNFTTheme.backgroundImageEnabled
-                : await loadBackgroundImageEnabled();
-              setNftBackgroundEnabledState(bgEnabled);
-
-              // Load overlay intensity
-              const intensity = await loadOverlayIntensity();
-              setNftOverlayIntensityState(intensity);
-            } catch (error) {
-              console.error('Failed to load NFT theme, clearing theme data:', error);
-              // Clear all NFT theme state on error to prevent crash loop
-              setNftThemeDataState(null);
-              setNftExtractedColors(null);
-              setNftPalettes([]);
-              setNftThemeEnabledState(false);
-              setNftBackgroundEnabledState(true);
-              setSelectedPaletteIndexState(0);
-            }
-          }
-
-          // Load NFT theme enabled state
-          const enabled = await loadNFTThemeEnabled();
-          setNftThemeEnabledState(enabled);
-
-          // Load palette index if not loaded from stored theme
-          if (!storedNFTTheme?.selectedPaletteIndex) {
-            const paletteIndex = await loadSelectedPaletteIndex();
-            setSelectedPaletteIndexState(paletteIndex);
-          }
+          // No NFT theme stored - clear any stale state
+          setNftThemeDataState(null);
+          setNftExtractedColors(null);
+          setNftPalettes([]);
+          setNftBackgroundEnabledState(true);
+          setSelectedPaletteIndexState(0);
         }
-      } catch (error) {
-        console.error('Failed to load theme data:', error);
-      }
-    };
 
-    loadThemeData();
+        // Load NFT theme enabled state
+        const enabled = await loadNFTThemeEnabled();
+        setNftThemeEnabledState(enabled);
+
+        // Load palette index if not loaded from stored theme
+        if (!storedNFTTheme?.selectedPaletteIndex) {
+          const paletteIndex = await loadSelectedPaletteIndex();
+          setSelectedPaletteIndexState(paletteIndex);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load theme data:', error);
+    }
   }, []);
+
+  useEffect(() => {
+    loadThemeData();
+  }, [loadThemeData]);
 
   useEffect(() => {
     const subscription = Appearance.addChangeListener(({ colorScheme }) => {
@@ -367,6 +378,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     setSelectedPaletteIndex,
     setNFTTheme,
     clearNFTTheme,
+    reloadTheme: loadThemeData,
   };
 
   return (
@@ -400,6 +412,7 @@ export const useTheme = (): ThemeContextType => {
       setSelectedPaletteIndex: async () => {},
       setNFTTheme: async () => {},
       clearNFTTheme: async () => {},
+      reloadTheme: async () => {},
     };
   }
   return context;

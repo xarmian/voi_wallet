@@ -6,12 +6,16 @@
  *
  * V2: Uses signature-derived encryption for hardware wallet compatibility
  * and improved security (private key never directly used in ECDH).
+ *
+ * Message fetching uses MIMIR (voiwallet.messages table) for efficient queries,
+ * with fallback to indexer if MIMIR is unavailable.
  */
 
 import { NetworkService } from '@/services/network';
 import { TransactionService, TransactionParams } from '@/services/transactions';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import {
@@ -23,6 +27,22 @@ import {
   EncryptedMessagePayloadV2,
   MessagingKeyPair,
 } from './types';
+
+/**
+ * MIMIR messages table row structure
+ */
+interface MimirMessage {
+  id: number;
+  sender: string;
+  receiver: string;
+  txid: string;
+  round: number;
+  intra: number;
+  timestamp: number;
+  version: number;
+  note: string;
+  created_at: string;
+}
 import {
   encryptMessageV2,
   decryptMessageV2,
@@ -92,6 +112,14 @@ export class MessagingService {
       throw new Error('Sender account not found');
     }
 
+    // Verify sender has registered their messaging key (defense in depth)
+    const senderRegistered = await isMessagingKeyRegistered(request.senderAddress);
+    if (!senderRegistered) {
+      throw new Error(
+        'You must register for encrypted messaging before sending messages. Please enable messaging first.'
+      );
+    }
+
     // Look up recipient's messaging public key
     const recipientMessagingKey = await getMessagingPublicKey(request.recipientAddress);
     if (!recipientMessagingKey) {
@@ -155,11 +183,15 @@ export class MessagingService {
   /**
    * Fetch and decrypt messages between user and a specific friend.
    *
+   * Uses MIMIR (voiwallet.messages table) for efficient queries,
+   * with fallback to indexer if MIMIR is unavailable.
+   *
    * @param userAddress - Current user's address
    * @param friendAddress - Friend's address
    * @param messagingKeyPair - User's derived messaging keypair
-   * @param limit - Maximum number of transactions to fetch
-   * @param afterRound - Only fetch messages after this round (for pagination)
+   * @param limit - Maximum number of messages to fetch
+   * @param afterRound - Only fetch messages after this round (for polling new messages)
+   * @param beforeRound - Only fetch messages before this round (for loading older messages)
    * @returns Array of decrypted messages sorted by timestamp
    */
   async fetchMessages(
@@ -167,13 +199,161 @@ export class MessagingService {
     friendAddress: string,
     messagingKeyPair: MessagingKeyPair,
     limit = 50,
-    afterRound?: number
+    afterRound?: number,
+    beforeRound?: number
+  ): Promise<Message[]> {
+    const supabase = getSupabaseClient();
+
+    // Try MIMIR first if Supabase is configured
+    if (supabase) {
+      try {
+        const mimirMessages = await this.fetchMessagesFromMimir(
+          userAddress,
+          friendAddress,
+          limit,
+          afterRound,
+          beforeRound
+        );
+
+        return this.decryptMimirMessages(
+          mimirMessages,
+          userAddress,
+          friendAddress,
+          messagingKeyPair
+        );
+      } catch (error) {
+        console.warn('MIMIR fetch failed, falling back to indexer:', error);
+      }
+    }
+
+    // Fallback to indexer
+    return this.fetchMessagesFromIndexer(
+      userAddress,
+      friendAddress,
+      messagingKeyPair,
+      limit,
+      afterRound,
+      beforeRound
+    );
+  }
+
+  /**
+   * Fetch messages from MIMIR (voiwallet.messages table)
+   */
+  private async fetchMessagesFromMimir(
+    userAddress: string,
+    friendAddress: string,
+    limit: number,
+    afterRound?: number,
+    beforeRound?: number
+  ): Promise<MimirMessage[]> {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error('Supabase not configured');
+    }
+
+    // Build query for messages between user and friend (bidirectional) from voiwallet schema
+    let query = supabase
+      .schema('voiwallet')
+      .from('messages')
+      .select('*')
+      .or(
+        `and(sender.eq.${userAddress},receiver.eq.${friendAddress}),` +
+        `and(sender.eq.${friendAddress},receiver.eq.${userAddress})`
+      )
+      .order('round', { ascending: false })
+      .limit(limit);
+
+    if (afterRound) {
+      query = query.gt('round', afterRound);
+    }
+
+    if (beforeRound) {
+      query = query.lt('round', beforeRound);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`MIMIR query failed: ${error.message}`);
+    }
+
+    return (data as MimirMessage[]) || [];
+  }
+
+  /**
+   * Decrypt messages fetched from MIMIR
+   */
+  private decryptMimirMessages(
+    mimirMessages: MimirMessage[],
+    userAddress: string,
+    friendAddress: string,
+    messagingKeyPair: MessagingKeyPair
+  ): Message[] {
+    const messages: Message[] = [];
+
+    for (const msg of mimirMessages) {
+      // Only process v2 messages
+      if (msg.version !== 2) {
+        console.warn(`Skipping v1 message ${msg.txid} - v1 format not supported`);
+        continue;
+      }
+
+      // The note in MIMIR is already decoded (UTF-8 string)
+      // We need to convert it back to base64 for parseMessageNoteAny
+      const noteBase64 = Buffer.from(msg.note).toString('base64');
+      const parsed = parseMessageNoteAny(noteBase64);
+      if (!parsed || parsed.version !== 2) {
+        continue;
+      }
+
+      const payload = parsed.payload;
+      const direction: MessageDirection =
+        msg.sender === userAddress ? 'sent' : 'received';
+
+      // Verify sender matches payload public key
+      if (!verifySender(msg.sender, payload)) {
+        console.warn(`Sender verification failed for message ${msg.txid}`);
+        continue;
+      }
+
+      try {
+        const content = decryptMessageV2(payload, messagingKeyPair.secretKey);
+
+        messages.push({
+          id: msg.txid,
+          threadId: friendAddress,
+          direction,
+          content,
+          timestamp: msg.timestamp * 1000, // Convert seconds to ms
+          status: 'confirmed',
+          confirmedRound: msg.round,
+          fee: MESSAGE_FEE_MICRO,
+        });
+      } catch (error) {
+        console.warn(`Failed to decrypt message ${msg.txid}:`, error);
+      }
+    }
+
+    // Sort by timestamp (oldest first for chat display)
+    return messages.sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  /**
+   * Fetch messages from indexer (fallback method)
+   */
+  private async fetchMessagesFromIndexer(
+    userAddress: string,
+    friendAddress: string,
+    messagingKeyPair: MessagingKeyPair,
+    limit: number,
+    afterRound?: number,
+    beforeRound?: number
   ): Promise<Message[]> {
     const networkService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     const indexer = networkService.getIndexerClient();
 
     // Fetch payment transactions for the user
-    // We filter by friend address in the loop below
     let query = indexer
       .lookupAccountTransactions(userAddress)
       .txType('pay')
@@ -183,13 +363,16 @@ export class MessagingService {
       query = query.minRound(afterRound);
     }
 
+    if (beforeRound) {
+      query = query.maxRound(beforeRound - 1);
+    }
+
     const response = await query.do();
 
     // Filter for transactions between user and friend
     const allTxns = (response.transactions || []).filter((txn: Record<string, unknown>) => {
       const receiver = (txn['payment-transaction'] as Record<string, unknown>)?.receiver ||
         (txn.paymentTransaction as Record<string, unknown>)?.receiver;
-      // Include if user sent to friend OR friend sent to user
       return (
         (txn.sender === userAddress && receiver === friendAddress) ||
         (txn.sender === friendAddress && receiver === userAddress)
@@ -199,42 +382,33 @@ export class MessagingService {
     const messages: Message[] = [];
 
     for (const txn of allTxns) {
-      // Skip transactions without notes
       if (!txn.note) continue;
 
-      // Get note as base64 string
       const noteBase64 =
         typeof txn.note === 'string'
           ? txn.note
           : Buffer.from(txn.note).toString('base64');
 
-      // Try to parse as message note (v1 or v2)
       const parsed = parseMessageNoteAny(noteBase64);
       if (!parsed) continue;
 
-      // Only process v2 messages
       if (parsed.version !== 2) {
         console.warn(`Skipping v1 message ${txn.id} - v1 format not supported`);
         continue;
       }
 
       const payload = parsed.payload;
-
-      // Determine direction based on sender
       const direction: MessageDirection =
         txn.sender === userAddress ? 'sent' : 'received';
 
-      // Verify sender matches payload public key
       if (!verifySender(txn.sender, payload)) {
         console.warn(`Sender verification failed for transaction ${txn.id}`);
         continue;
       }
 
       try {
-        // Decrypt the message using v2 decryption
         const content = decryptMessageV2(payload, messagingKeyPair.secretKey);
 
-        // Convert BigInt values to numbers for JSON serialization
         const confirmedRound = txn.confirmedRound
           ? typeof txn.confirmedRound === 'bigint'
             ? Number(txn.confirmedRound)
@@ -257,87 +431,207 @@ export class MessagingService {
           fee,
         });
       } catch (error) {
-        // Log but skip messages that fail to decrypt
         console.warn(`Failed to decrypt message ${txn.id}:`, error);
       }
     }
 
-    // Sort by timestamp (oldest first for chat display)
     return messages.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   /**
    * Fetch all conversations (messages grouped by conversation partner).
    *
+   * Uses MIMIR (voiwallet.messages table) for efficient queries,
+   * with fallback to indexer if MIMIR is unavailable.
+   *
    * @param userAddress - Current user's address
    * @param messagingKeyPair - User's derived messaging keypair
-   * @param limit - Maximum number of transactions to fetch (increased to 500 to better discover messages from unknown senders)
+   * @param limit - Maximum number of messages to fetch
+   * @param afterRound - Only fetch messages after this round (for incremental sync)
    * @returns Map of friend address to array of messages
    */
   async fetchAllConversations(
     userAddress: string,
     messagingKeyPair: MessagingKeyPair,
-    limit = 500
+    limit = 100,
+    afterRound?: number
+  ): Promise<Map<string, Message[]>> {
+    const supabase = getSupabaseClient();
+
+    // Try MIMIR first if Supabase is configured
+    if (supabase) {
+      try {
+        const mimirMessages = await this.fetchAllConversationsFromMimir(
+          userAddress,
+          limit,
+          afterRound
+        );
+
+        return this.groupAndDecryptMimirMessages(
+          mimirMessages,
+          userAddress,
+          messagingKeyPair
+        );
+      } catch (error) {
+        console.warn('MIMIR fetch failed, falling back to indexer:', error);
+      }
+    }
+
+    // Fallback to indexer
+    return this.fetchAllConversationsFromIndexer(
+      userAddress,
+      messagingKeyPair,
+      limit,
+      afterRound
+    );
+  }
+
+  /**
+   * Fetch all conversations from MIMIR
+   */
+  private async fetchAllConversationsFromMimir(
+    userAddress: string,
+    limit: number,
+    afterRound?: number
+  ): Promise<MimirMessage[]> {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error('Supabase not configured');
+    }
+
+    // Query all messages where user is sender or receiver from voiwallet schema
+    let query = supabase
+      .schema('voiwallet')
+      .from('messages')
+      .select('*')
+      .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+      .order('round', { ascending: false })
+      .limit(limit);
+
+    if (afterRound) {
+      query = query.gt('round', afterRound);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`MIMIR query failed: ${error.message}`);
+    }
+
+    return (data as MimirMessage[]) || [];
+  }
+
+  /**
+   * Group and decrypt messages from MIMIR into conversations
+   */
+  private groupAndDecryptMimirMessages(
+    mimirMessages: MimirMessage[],
+    userAddress: string,
+    messagingKeyPair: MessagingKeyPair
+  ): Map<string, Message[]> {
+    const conversationMap = new Map<string, Message[]>();
+
+    for (const msg of mimirMessages) {
+      // Only process v2 messages
+      if (msg.version !== 2) continue;
+
+      // Determine friend address (the other party)
+      const friendAddress = msg.sender === userAddress ? msg.receiver : msg.sender;
+      const direction: MessageDirection =
+        msg.sender === userAddress ? 'sent' : 'received';
+
+      // Parse and verify the message
+      const noteBase64 = Buffer.from(msg.note).toString('base64');
+      const parsed = parseMessageNoteAny(noteBase64);
+      if (!parsed || parsed.version !== 2) continue;
+
+      if (!verifySender(msg.sender, parsed.payload)) continue;
+
+      try {
+        const content = decryptMessageV2(parsed.payload, messagingKeyPair.secretKey);
+
+        const message: Message = {
+          id: msg.txid,
+          threadId: friendAddress,
+          direction,
+          content,
+          timestamp: msg.timestamp * 1000, // Convert seconds to ms
+          status: 'confirmed',
+          confirmedRound: msg.round,
+          fee: MESSAGE_FEE_MICRO,
+        };
+
+        const existing = conversationMap.get(friendAddress) || [];
+        existing.push(message);
+        conversationMap.set(friendAddress, existing);
+      } catch {
+        // Skip messages that fail to decrypt
+      }
+    }
+
+    // Sort messages in each conversation by timestamp
+    for (const [addr, msgs] of conversationMap) {
+      conversationMap.set(addr, msgs.sort((a, b) => a.timestamp - b.timestamp));
+    }
+
+    return conversationMap;
+  }
+
+  /**
+   * Fetch all conversations from indexer (fallback method)
+   */
+  private async fetchAllConversationsFromIndexer(
+    userAddress: string,
+    messagingKeyPair: MessagingKeyPair,
+    limit: number,
+    afterRound?: number
   ): Promise<Map<string, Message[]>> {
     const networkService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     const indexer = networkService.getIndexerClient();
 
-    // Fetch all recent payment transactions for the user
-    const response = await indexer
+    let query = indexer
       .lookupAccountTransactions(userAddress)
       .txType('pay')
-      .limit(limit)
-      .do();
+      .limit(limit);
+
+    if (afterRound) {
+      query = query.minRound(afterRound);
+    }
+
+    const response = await query.do();
 
     const conversationMap = new Map<string, Message[]>();
 
     for (const txn of response.transactions || []) {
-      // Skip transactions without notes
       if (!txn.note) continue;
 
-      // Get note as base64 string
       const noteBase64 =
         typeof txn.note === 'string'
           ? txn.note
           : Buffer.from(txn.note).toString('base64');
 
-      // Try to parse as message note (v1 or v2)
       const parsed = parseMessageNoteAny(noteBase64);
-      if (!parsed) continue;
-
-      // Only process v2 messages
-      if (parsed.version !== 2) continue;
+      if (!parsed || parsed.version !== 2) continue;
 
       const payload = parsed.payload;
-
-      // Determine direction and friend address
       const direction: MessageDirection =
         txn.sender === userAddress ? 'sent' : 'received';
 
-      // Get the friend address (the other party)
       let friendAddress: string;
       if (direction === 'sent') {
-        // For sent messages, friend is the receiver
         friendAddress = txn['payment-transaction']?.receiver ||
           txn.paymentTransaction?.receiver ||
           txn.receiver;
       } else {
-        // For received messages, friend is the sender
         friendAddress = txn.sender;
       }
 
       if (!friendAddress) continue;
-
-      // Verify sender matches payload public key
-      if (!verifySender(txn.sender, payload)) {
-        continue;
-      }
+      if (!verifySender(txn.sender, payload)) continue;
 
       try {
-        // Decrypt the message using v2 decryption
         const content = decryptMessageV2(payload, messagingKeyPair.secretKey);
 
-        // Convert BigInt values to numbers for JSON serialization
         const confirmedRound = txn.confirmedRound
           ? typeof txn.confirmedRound === 'bigint'
             ? Number(txn.confirmedRound)
@@ -360,7 +654,6 @@ export class MessagingService {
           fee,
         };
 
-        // Add to conversation map
         const existing = conversationMap.get(friendAddress) || [];
         existing.push(message);
         conversationMap.set(friendAddress, existing);
