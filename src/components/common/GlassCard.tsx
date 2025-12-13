@@ -271,6 +271,7 @@ const styles = StyleSheet.create({
   content: {
     position: 'relative',
     zIndex: 1,
+    width: '100%',
   },
 });
 

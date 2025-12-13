@@ -425,7 +425,11 @@ export default function SettingsScreen() {
   };
 
   const handleBackupWallet = () => {
-    Alert.alert('Backup Wallet', 'Backup functionality will be implemented');
+    navigation.navigate('BackupWallet');
+  };
+
+  const handleRestoreWallet = () => {
+    navigation.navigate('RestoreWallet');
   };
 
   const handleNetworkPress = () => {
@@ -602,6 +606,11 @@ export default function SettingsScreen() {
               icon="save-outline"
               label="Backup Wallet"
               onPress={handleBackupWallet}
+            />
+            <SettingsRow
+              icon="cloud-download-outline"
+              label="Restore from Backup"
+              onPress={handleRestoreWallet}
             />
           </GlassCard>
 

@@ -185,14 +185,24 @@ export default function OnboardingScreen({ navigation }: Props) {
             ))}
           </View>
 
-          <Pressable
-            onPress={() => navigation.navigate('Main')}
-            style={styles.skipButton}
-          >
-            <Text style={[styles.skipText, { color: theme.colors.textMuted }]}>
-              Continue without account
-            </Text>
-          </Pressable>
+          <View style={styles.bottomLinks}>
+            <Pressable
+              onPress={() => navigation.navigate('Main')}
+              style={styles.skipButton}
+            >
+              <Text style={[styles.skipText, { color: theme.colors.textMuted }]}>
+                Continue without account
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => navigation.navigate('RestoreWallet', { isOnboarding: true })}
+              style={styles.restoreButton}
+            >
+              <Text style={[styles.restoreText, { color: theme.colors.primary }]}>
+                or restore from backup
+              </Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </SafeAreaView>
     </NFTBackground>
@@ -254,12 +264,23 @@ const createStyles = (theme: Theme) =>
       fontSize: theme.typography.bodySmall.fontSize,
       lineHeight: 18,
     },
-    skipButton: {
+    bottomLinks: {
+      alignItems: 'center',
       marginTop: theme.spacing.xl,
+    },
+    skipButton: {
       paddingVertical: theme.spacing.md,
     },
     skipText: {
       textAlign: 'center',
       fontSize: theme.typography.bodySmall.fontSize,
+    },
+    restoreButton: {
+      paddingVertical: theme.spacing.sm,
+    },
+    restoreText: {
+      textAlign: 'center',
+      fontSize: theme.typography.bodySmall.fontSize,
+      fontWeight: '500',
     },
   });

@@ -41,6 +41,8 @@ import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
 import NotificationSettingsScreen from '@/screens/settings/NotificationSettingsScreen';
 import ExperimentalFeaturesScreen from '@/screens/settings/ExperimentalFeaturesScreen';
+import BackupWalletScreen from '@/screens/settings/BackupWalletScreen';
+import RestoreWalletScreen from '@/screens/settings/RestoreWalletScreen';
 import AddWatchAccountScreen from '@/screens/account/AddWatchAccountScreen';
 import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
@@ -115,6 +117,7 @@ export type RootStackParamList = {
   LedgerAccountImport:
     | { deviceId?: string; isOnboarding?: boolean }
     | undefined;
+  RestoreWallet: { isOnboarding?: boolean };
 };
 
 export type MainTabParamList = {
@@ -292,6 +295,8 @@ export type SettingsStackParamList = {
   AboutScreen: undefined;
   NotificationSettings: undefined;
   ExperimentalFeatures: undefined;
+  BackupWallet: undefined;
+  RestoreWallet: { isOnboarding?: boolean };
   WebView: {
     url: string;
     title: string;
@@ -457,6 +462,8 @@ function SettingsStackNavigator() {
           name="ExperimentalFeatures"
           component={ExperimentalFeaturesScreen}
         />
+        <SettingsStack.Screen name="BackupWallet" component={BackupWalletScreen} />
+        <SettingsStack.Screen name="RestoreWallet" component={RestoreWalletScreen} />
         <SettingsStack.Screen name="WebView" component={WebViewScreen} />
       </SettingsStack.Navigator>
     </NFTBackground>
@@ -725,6 +732,17 @@ function AppStack() {
       <Stack.Screen
         name="LedgerAccountImport"
         component={LedgerAccountImportScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
+        name="RestoreWallet"
+        component={RestoreWalletScreen}
         options={{
           headerShown: false,
           presentation: 'modal',
