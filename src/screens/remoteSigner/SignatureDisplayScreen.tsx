@@ -178,9 +178,6 @@ export default function SignatureDisplayScreen() {
     <View style={styles.signingContainer}>
       <ActivityIndicator size="large" color={theme.colors.primary} />
       <Text style={styles.signingTitle}>Signing Transactions</Text>
-      <Text style={styles.signingProgress}>
-        {signingProgress.current} of {signingProgress.total}
-      </Text>
       <View style={styles.progressBar}>
         <View
           style={[

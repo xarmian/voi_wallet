@@ -70,6 +70,10 @@ import {
   SignRequestDisplayScreen,
   SignatureScannerScreen,
 } from '@/screens/remoteSigner';
+// ARC-0090 transaction screens
+import KeyregConfirmScreen from '@/screens/transaction/KeyregConfirmScreen';
+import AppCallConfirmScreen from '@/screens/transaction/AppCallConfirmScreen';
+import AppInfoModal from '@/screens/app/AppInfoModal';
 import { useAppMode, getAppModeEarly, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
@@ -147,6 +151,44 @@ export type RootStackParamList = {
     request: RemoteSignerRequest;
   };
   RestoreWallet: { isOnboarding?: boolean };
+  // ARC-0090 deep link screens
+  KeyregConfirm: {
+    address: string;
+    votekey?: string;
+    selkey?: string;
+    sprfkey?: string;
+    votefst?: number;
+    votelst?: number;
+    votekd?: number;
+    fee?: number;
+    note?: string;
+    isOnline: boolean;
+    networkId?: NetworkId;
+  };
+  AppCallConfirm: {
+    senderAddress: string;
+    appId: number;
+    foreignApps?: number[];
+    method?: string;
+    args?: string[];
+    boxes?: string[];
+    foreignAssets?: number[];
+    foreignAccounts?: string[];
+    fee?: number;
+    note?: string;
+    networkId?: NetworkId;
+  };
+  AppInfoModal: {
+    appId: number;
+    networkId?: NetworkId;
+    queryParams?: {
+      box?: string;
+      global?: string;
+      local?: string;
+      algorandaddress?: string;
+      tealcode?: boolean;
+    };
+  };
 };
 
 export type MainTabParamList = {
@@ -188,12 +230,14 @@ export type WalletStackParamList = {
     assetId?: number;
     accountId?: string;
     networkId?: NetworkId;
-    // Payment request parameters from Algorand URIs
+    // Payment request parameters from ARC-0090 URIs
     recipient?: string;
     amount?: string;
     note?: string;
     label?: string;
     asset?: string;
+    fee?: string; // Transaction fee in microunits
+    isXnote?: boolean; // Whether the note is non-modifiable
   };
   Swap: {
     assetName?: string;
@@ -1011,6 +1055,40 @@ function AppStack() {
         component={SignatureDisplayScreen}
         options={{
           headerShown: false,
+        }}
+      />
+      {/* ARC-0090 deep link screens */}
+      <Stack.Screen
+        name="KeyregConfirm"
+        component={KeyregConfirmScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
+        name="AppCallConfirm"
+        component={AppCallConfirmScreen}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
+        }}
+      />
+      <Stack.Screen
+        name="AppInfoModal"
+        component={AppInfoModal}
+        options={{
+          headerShown: false,
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          gestureEnabled: true,
+          gestureDirection: 'vertical',
         }}
       />
     </Stack.Navigator>

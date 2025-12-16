@@ -12,7 +12,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { DeepLinkService } from '@/services/deeplink';
 import { isWalletConnectUri, isVoiUri } from '@/services/walletconnect/utils';
-import { isAlgorandPaymentUri, parseAlgorandUri } from '@/utils/algorandUri';
+import {
+  isArc0090Uri,
+  getArc0090UriType,
+  isLegacyVoiUri,
+} from '@/utils/arc0090Uri';
 import {
   parseArc0300AccountImportUri,
   Arc0300AccountImportResult,
@@ -295,10 +299,13 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
 
       if (isWalletConnectUri(rawValue)) {
         await handleWalletConnectUri(rawValue);
-      } else if (isVoiUri(rawValue)) {
-        await handleVoiUri(rawValue);
-      } else if (isAlgorandPaymentUri(rawValue)) {
-        await handleAlgorandPaymentUri(rawValue);
+      } else if (isArc0090Uri(rawValue)) {
+        // Handle ARC-0090 URIs (algorand://, voi://, perawallet://)
+        // This includes payment, keyreg, appl, and query URIs
+        await handleArc0090Uri(rawValue);
+      } else if (isVoiUri(rawValue) && isLegacyVoiUri(rawValue)) {
+        // Handle legacy voi://action?params format
+        await handleLegacyVoiUri(rawValue);
       } else {
         // Try to handle as a regular URL or address
         await handleGenericUri(rawValue);
@@ -349,7 +356,43 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     }
   };
 
-  const handleVoiUri = async (uri: string) => {
+  /**
+   * Handle ARC-0090 URIs (algorand://, voi://, perawallet://)
+   * Routes to appropriate screens via DeepLinkService
+   */
+  const handleArc0090Uri = async (uri: string) => {
+    try {
+      const uriType = getArc0090UriType(uri);
+      console.log('[QRScanner] handleArc0090Uri - uriType:', uriType, 'uri:', uri);
+
+      const deepLinkService = DeepLinkService.getInstance();
+      const handled = await deepLinkService.testDeepLink(uri);
+      console.log('[QRScanner] handleArc0090Uri - handled:', handled);
+
+      if (handled) {
+        // NOTE: Don't call onSuccess() or onClose() here - the deep link handler
+        // has already navigated to a new screen using StackActions.replace.
+        // Calling onSuccess() would trigger handleSuccess in QRScannerScreen
+        // which has a setTimeout that calls goBack(), dismissing the new screen.
+        console.log('[QRScanner] handleArc0090Uri - navigation handled by deep link service');
+      } else {
+        console.log('[QRScanner] handleArc0090Uri - not handled, resetting scanner');
+        // Reset scanner state so user can try again
+        setScanned(false);
+        setIsProcessing(false);
+      }
+    } catch (error) {
+      console.error('[QRScanner] handleArc0090Uri - error:', error);
+      throw new Error(
+        `URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  };
+
+  /**
+   * Handle legacy voi://action?params format
+   */
+  const handleLegacyVoiUri = async (uri: string) => {
     try {
       const deepLinkService = DeepLinkService.getInstance();
       const handled = await deepLinkService.testDeepLink(uri);
@@ -357,30 +400,12 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       if (handled) {
         onSuccess?.(uri);
         onClose();
-        showAlert('Success', 'Processing Voi URI...');
       } else {
         throw new Error('Failed to process Voi URI');
       }
     } catch (error) {
       throw new Error(
         `Voi URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
-  };
-
-  const handleAlgorandPaymentUri = async (uri: string) => {
-    try {
-      const parsed = parseAlgorandUri(uri);
-
-      if (!parsed || !parsed.isValid) {
-        throw new Error('Invalid Algorand payment URI format');
-      }
-
-      // Let the parent screen handle navigation directly
-      onSuccess?.(uri);
-    } catch (error) {
-      throw new Error(
-        `Algorand payment URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   };
@@ -713,7 +738,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         style={StyleSheet.absoluteFillObject}
         facing="back"
         onBarcodeScanned={
-          scanned && !isProcessing ? undefined : handleBarCodeScanned
+          scanned || isProcessing ? undefined : handleBarCodeScanned
         }
         barcodeScannerSettings={{
           barcodeTypes: ['qr'],

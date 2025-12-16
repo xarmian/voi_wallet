@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import SignerAuthModal from '@/components/remoteSigner/SignerAuthModal';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -101,6 +101,13 @@ export default function TransactionReviewScreen() {
   const [showFullDetails, setShowFullDetails] = useState(false);
   const [isSigning, setIsSigning] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Reset isSigning when screen comes into focus (handles back navigation from SignatureDisplayScreen)
+  useFocusEffect(
+    useCallback(() => {
+      setIsSigning(false);
+    }, [])
+  );
 
   // Decode all transactions
   const decodedTransactions = useMemo(() => {

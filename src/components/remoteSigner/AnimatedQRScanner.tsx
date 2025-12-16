@@ -15,6 +15,7 @@ import {
   Platform,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { URDecoder } from '@ngraveio/bc-ur';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -25,6 +26,7 @@ import {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SCAN_AREA_SIZE = SCREEN_WIDTH * 0.75;
+const SCAN_AREA_SIZE_COMPACT = Math.min(SCREEN_WIDTH * 0.55, 220);
 
 interface AnimatedQRScannerProps {
   /** Called when a complete payload is decoded (static or animated) */
@@ -39,6 +41,10 @@ interface AnimatedQRScannerProps {
   showProgress?: boolean;
   /** Instructions text */
   instructionsText?: string;
+  /** Whether to auto-reset the scanner when the screen gains focus (default: true) */
+  autoResetOnFocus?: boolean;
+  /** Use compact layout with smaller scan area (for embedding in modals) */
+  compact?: boolean;
 }
 
 /**
@@ -54,8 +60,11 @@ export function AnimatedQRScanner({
   overlayContent,
   showProgress = true,
   instructionsText = 'Position the QR code within the frame',
+  autoResetOnFocus = true,
+  compact = false,
 }: AnimatedQRScannerProps) {
   const { theme } = useTheme();
+  const scanAreaSize = compact ? SCAN_AREA_SIZE_COMPACT : SCAN_AREA_SIZE;
   const [permission, requestPermission] = useCameraPermissions();
 
   // Decoder state
@@ -93,6 +102,15 @@ export function AnimatedQRScanner({
   useEffect(() => {
     resetDecoder();
   }, [resetDecoder]);
+
+  // Auto-reset decoder when screen gains focus (handles back navigation after successful scan)
+  useFocusEffect(
+    useCallback(() => {
+      if (autoResetOnFocus) {
+        resetDecoder();
+      }
+    }, [autoResetOnFocus, resetDecoder])
+  );
 
   // Handle barcode scan
   const handleBarCodeScanned = useCallback(
@@ -223,9 +241,9 @@ export function AnimatedQRScanner({
         </View>
 
         {/* Middle section with scan frame */}
-        <View style={styles.middleSection}>
+        <View style={[styles.middleSection, { height: scanAreaSize }]}>
           <View style={styles.overlaySection} />
-          <View style={styles.scanArea}>
+          <View style={[styles.scanArea, { width: scanAreaSize, height: scanAreaSize }]}>
             {/* Corner markers */}
             <View style={[styles.corner, styles.topLeft, { borderColor: theme.colors.primary }]} />
             <View style={[styles.corner, styles.topRight, { borderColor: theme.colors.primary }]} />
@@ -254,7 +272,7 @@ export function AnimatedQRScanner({
 
           {/* Progress bar for animated QR */}
           {isAnimatedMode && showProgress && (
-            <View style={styles.progressContainer}>
+            <View style={[styles.progressContainer, { width: scanAreaSize }]}>
               <View style={[styles.progressBar, { backgroundColor: 'rgba(255,255,255,0.3)' }]}>
                 <View
                   style={[

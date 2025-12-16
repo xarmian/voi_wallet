@@ -596,7 +596,9 @@ export default function SwapScreen() {
   };
 
   const handleSwapSuccess = async (result: any) => {
-    if (!result?.signedTransactions) {
+    // Check if transaction was already submitted by auth controller (remote signer flow)
+    // or if we have signed transactions to submit (standard flow)
+    if (!result?.transactionId && !result?.signedTransactions) {
       Alert.alert('Error', 'No signed transactions returned');
       return;
     }
@@ -605,18 +607,26 @@ export default function SwapScreen() {
     setIsWaitingForConfirmation(true);
 
     try {
-      const networkService = NetworkService.getInstance(selectedNetwork);
+      let txId: string;
 
-      // Convert signed transactions from base64 strings to Uint8Array if needed
-      const signedTxns = result.signedTransactions.map((txn: string | Uint8Array) => {
-        if (typeof txn === 'string') {
-          return new Uint8Array(Buffer.from(txn, 'base64'));
-        }
-        return txn;
-      });
+      if (result?.transactionId) {
+        // Transaction already submitted by auth controller (remote signer flow)
+        txId = result.transactionId;
+      } else {
+        // Standard flow - need to submit signed transactions
+        const networkService = NetworkService.getInstance(selectedNetwork);
 
-      // Submit transaction group
-      const txId = await networkService.submitTransaction(signedTxns);
+        // Convert signed transactions from base64 strings to Uint8Array if needed
+        const signedTxns = result.signedTransactions.map((txn: string | Uint8Array) => {
+          if (typeof txn === 'string') {
+            return new Uint8Array(Buffer.from(txn, 'base64'));
+          }
+          return txn;
+        });
+
+        // Submit transaction group
+        txId = await networkService.submitTransaction(signedTxns);
+      }
 
       const shortTxId =
         txId && txId.length > 12

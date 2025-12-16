@@ -242,6 +242,8 @@ export function getSignableAccounts(
         return true;
       case AccountType.LEDGER:
         return true;
+      case AccountType.REMOTE_SIGNER:
+        return true;
       case AccountType.REKEYED:
         // Can sign if we have the signing authority
         const rekeyedAccount = account as RekeyedAccountMetadata;

@@ -1268,13 +1268,14 @@ export class AccountSecureStorage {
       }
 
       // Clear PIN and settings from general storage
+      // NOTE: DEVICE_ID_KEY is intentionally NOT cleared - it's used for key derivation
+      // and must remain consistent across restore operations to decrypt private keys
       await storage.multiRemove([
         this.PIN_KEY,
         this.SALT_KEY,
         this.BIOMETRIC_ENABLED_KEY,
         this.METADATA_LIST_KEY,
         this.PIN_TIMEOUT_KEY,
-        this.DEVICE_ID_KEY,
       ]);
       // Clear from secure storage
       await Promise.all([
@@ -1283,7 +1284,6 @@ export class AccountSecureStorage {
         secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
         secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
         secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
-        secureStorage.deleteItem(this.DEVICE_ID_KEY).catch(() => {}),
       ]);
     } catch (error) {
       throw new AccountStorageError('Failed to clear all secure storage');

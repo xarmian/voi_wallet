@@ -8,12 +8,13 @@ import {
 } from '@/services/transactions/unifiedSigner';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { LedgerSigningInfo, WalletAccount, AccountType } from '@/types/wallet';
+import { LedgerSigningInfo, WalletAccount, AccountType, RekeyedAccountMetadata } from '@/types/wallet';
 import { ledgerTransportService, LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService, LedgerAlgorandService } from '@/services/ledger/algorand';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { RemoteSignerRequest, RemoteSignerResponse } from '@/types/remoteSigner';
 import { RemoteSignerService } from '@/services/remoteSigner';
+import { MultiAccountWalletService } from '@/services/wallet';
 
 /**
  * Authentication states for transaction signing
@@ -444,6 +445,15 @@ export class TransactionAuthController {
         state: 'authenticating',
       });
 
+      // If no PIN required and no biometric required (and not ledger/remote signer flow),
+      // auto-proceed to signing since user has already confirmed the transaction
+      if (!this.currentState.requiresPin && !this.currentState.requiresBiometric &&
+          !this.currentState.isLedgerFlow && !this.currentState.isRemoteSignerFlow) {
+        this.updateState({ state: 'signing' });
+        await this.startSigning();
+        return;
+      }
+
       // Setup Ledger flow if needed
       if (this.currentState.isLedgerFlow) {
         await this.initializeLedgerFlow();
@@ -475,7 +485,37 @@ export class TransactionAuthController {
 
       // Check if this is a remote signer (air-gapped QR) account
       // This takes precedence over other flow types
-      if (account.type === AccountType.REMOTE_SIGNER) {
+      // Also look up the account from storage to handle cases where type might be lost
+      // during navigation param serialization (e.g., WalletConnect flows)
+      let isRemoteSigner = account.type === AccountType.REMOTE_SIGNER;
+
+      if (!isRemoteSigner && account.address) {
+        try {
+          const allAccounts = await MultiAccountWalletService.getAllAccounts();
+          const storedAccount = allAccounts.find(acc => acc.address === account.address);
+          if (storedAccount?.type === AccountType.REMOTE_SIGNER) {
+            isRemoteSigner = true;
+          }
+
+          // For rekeyed accounts, check if the auth address is a REMOTE_SIGNER
+          // This enables unrekey/re-rekey transactions to route through the airgap flow
+          if (!isRemoteSigner && storedAccount?.type === AccountType.REKEYED) {
+            const rekeyedAccount = storedAccount as RekeyedAccountMetadata;
+            if (rekeyedAccount.authAddress) {
+              const authAccount = allAccounts.find(
+                acc => acc.address === rekeyedAccount.authAddress
+              );
+              if (authAccount?.type === AccountType.REMOTE_SIGNER) {
+                isRemoteSigner = true;
+              }
+            }
+          }
+        } catch {
+          // Ignore lookup errors, continue with passed account type
+        }
+      }
+
+      if (isRemoteSigner) {
         this.updateState({
           requiresPin: false, // Remote signer handles its own auth
           requiresBiometric: false,
@@ -521,9 +561,12 @@ export class TransactionAuthController {
         // Ledger info not available, continue with regular flow
       }
 
+      // Check if user has a PIN set - only require PIN if one exists
+      const hasPin = await AccountSecureStorage.hasPin();
+
       this.updateState({
-        requiresPin: true,
-        requiresBiometric: biometricAvailable,
+        requiresPin: hasPin,
+        requiresBiometric: biometricAvailable && hasPin, // Biometric is PIN fallback, only relevant if PIN exists
         biometricAvailable,
         isLedgerFlow,
         isRemoteSignerFlow: false,
@@ -1648,11 +1691,26 @@ export class TransactionAuthController {
       // Build the unsigned transactions based on request type
       const unsignedTxns = await this.buildUnsignedTransactions();
 
+      // Determine the actual signer address
+      // For rekeyed accounts, we need to use the auth address as the signer
+      let signerAddress = this.currentRequest.account.address;
+      const account = this.currentRequest.account;
+
+      if (account.type === AccountType.REKEYED) {
+        const rekeyedAccount = account as RekeyedAccountMetadata;
+        if (rekeyedAccount.authAddress) {
+          signerAddress = rekeyedAccount.authAddress;
+        }
+      }
+
       // Create the remote signer request
       const signerRequest = await RemoteSignerService.createSigningRequest(
         unsignedTxns,
-        [this.currentRequest.account.address], // signer addresses
+        [signerAddress], // signer addresses - use auth address for rekeyed accounts
         {
+          authAddresses: account.type === AccountType.REKEYED
+            ? [(account as RekeyedAccountMetadata).authAddress]
+            : undefined,
           description: this.getTransactionDescription(),
         }
       );

@@ -72,12 +72,14 @@ interface SendScreenRouteParams {
   mappingId?: string; // For multi-network assets
   // ARC-72 NFT token for transfer
   nftToken?: NFTToken;
-  // Payment request parameters from Algorand URIs
+  // Payment request parameters from ARC-0090 URIs
   recipient?: string;
   amount?: string;
   note?: string;
   label?: string;
   asset?: string;
+  fee?: string; // Transaction fee in microunits from URI
+  isXnote?: boolean; // Whether the note is non-modifiable (xnote)
 }
 
 export default function SendScreen() {
@@ -194,6 +196,11 @@ export default function SendScreen() {
     setEstimatedFee(0);
   };
 
+  // Track if note is non-modifiable (xnote from ARC-0090)
+  const [isNoteReadOnly, setIsNoteReadOnly] = useState(false);
+  // Track if fee was specified in URI
+  const [uriFee, setUriFee] = useState<number | null>(null);
+
   // Pre-fill form fields from payment request parameters
   useEffect(() => {
     if (routeParams) {
@@ -232,11 +239,23 @@ export default function SendScreen() {
         // Sanitize note to prevent potential issues
         const sanitizedNote = routeParams.note.slice(0, 1000); // Limit length
         setNote(sanitizedNote);
+        // If isXnote is set, make note field read-only
+        if (routeParams.isXnote) {
+          setIsNoteReadOnly(true);
+        }
       }
       // label is display only, used for recipient name
       if (routeParams.label && routeParams.recipient) {
         const sanitizedLabel = routeParams.label.slice(0, 100); // Limit label length
         setResolvedName(sanitizedLabel);
+      }
+      // Fee parameter from ARC-0090 URI
+      if (routeParams.fee && /^\d+$/.test(routeParams.fee)) {
+        const feeInMicrounits = parseInt(routeParams.fee);
+        if (feeInMicrounits >= 1000) { // Minimum fee is 1000 microunits
+          setUriFee(feeInMicrounits);
+          setEstimatedFee(feeInMicrounits);
+        }
       }
     }
   }, [routeParams]);
@@ -1501,16 +1520,21 @@ export default function SendScreen() {
               borderRadius={theme.borderRadius.md}
               style={styles.inputContainer}
             >
-              <Text style={styles.inputLabelInContainer}>Note (Optional)</Text>
+              <Text style={styles.inputLabelInContainer}>
+                Note (Optional){isNoteReadOnly ? ' - Fixed' : ''}
+              </Text>
               <TextInput
-                style={styles.textInputInContainer}
+                style={[
+                  styles.textInputInContainer,
+                  isNoteReadOnly && styles.readOnlyInput,
+                ]}
                 placeholder="Add a note..."
                 placeholderTextColor={themeColors.placeholder}
                 value={note}
-                onChangeText={setNote}
+                onChangeText={isNoteReadOnly ? undefined : setNote}
                 multiline
                 numberOfLines={3}
-                editable={!isSending}
+                editable={!isSending && !isNoteReadOnly}
               />
             </BlurredContainer>
 
@@ -1801,6 +1825,13 @@ const createStyles = (theme: Theme) =>
         ? 'rgba(255, 255, 255, 0.1)'
         : 'rgba(0, 0, 0, 0.05)',
       color: theme.colors.text,
+    },
+    // Style for read-only inputs (e.g., xnote from ARC-0090)
+    readOnlyInput: {
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.3)'
+        : 'rgba(0, 0, 0, 0.05)',
+      opacity: 0.8,
     },
     inputWithButton: {
       flexDirection: 'row',

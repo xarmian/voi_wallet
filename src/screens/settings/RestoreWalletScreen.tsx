@@ -169,29 +169,19 @@ export default function RestoreWalletScreen() {
           {
             text: 'OK',
             onPress: () => {
-              // Navigate based on context
-              if (isOnboarding) {
-                // Go to security setup to set PIN
-                navigation.dispatch(
-                  CommonActions.reset({
-                    index: 0,
-                    routes: [
-                      {
-                        name: 'SecuritySetup',
-                        params: { source: 'restore' },
-                      },
-                    ],
-                  })
-                );
-              } else {
-                // Go back to main - force app to reload state
-                navigation.dispatch(
-                  CommonActions.reset({
-                    index: 0,
-                    routes: [{ name: 'Main' }],
-                  })
-                );
-              }
+              // Always go to security setup to set PIN after restore
+              // (restore clears existing PIN, so user must set a new one)
+              navigation.dispatch(
+                CommonActions.reset({
+                  index: 0,
+                  routes: [
+                    {
+                      name: 'SecuritySetup',
+                      params: { source: 'restore' },
+                    },
+                  ],
+                })
+              );
             },
           },
         ]
@@ -207,7 +197,7 @@ export default function RestoreWalletScreen() {
       setIsRestoring(false);
       setPassword('');
     }
-  }, [selectedFile, password, isOnboarding, navigation, reloadTheme]);
+  }, [selectedFile, password, navigation, reloadTheme]);
 
   const handleCancelPassword = useCallback(() => {
     setShowPasswordModal(false);

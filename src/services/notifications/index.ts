@@ -25,7 +25,8 @@ const LAST_HANDLED_NOTIFICATION_KEY = '@voi_wallet/last_handled_notification';
 // Configure notification handler for foreground notifications
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
@@ -247,6 +248,13 @@ class NotificationService {
     address: string,
     preferences: Partial<NotificationPreferences> = {}
   ): Promise<boolean> {
+    // Validate address parameter to prevent data corruption
+    const validatedAddress = this.validateAddress(address, 'subscribeAccount');
+    if (!validatedAddress) {
+      console.error('[NotificationService] subscribeAccount called with invalid address, skipping subscription');
+      return false;
+    }
+
     const supabase = getSupabaseClient();
     if (!supabase || !this.deviceId) {
       console.warn('Cannot subscribe: Supabase or device ID not available');
@@ -258,7 +266,7 @@ class NotificationService {
     const { error } = await supabase.schema('voiwallet').from('account_subscriptions').upsert(
       {
         device_id: this.deviceId,
-        account_address: address,  // Use Algorand address directly
+        account_address: validatedAddress,
         notify_messages: prefs.messages,
         notify_voi_payments: prefs.voiPayments,
         notify_arc200_transfers: prefs.arc200Transfers,
@@ -280,7 +288,7 @@ class NotificationService {
       return false;
     }
 
-    console.log('Account subscribed to notifications:', address);
+    console.log('Account subscribed to notifications:', validatedAddress);
     return true;
   }
 
@@ -316,6 +324,13 @@ class NotificationService {
    * @param address - Algorand address to unsubscribe (58-char format)
    */
   async unsubscribeAccount(address: string): Promise<boolean> {
+    // Validate address parameter
+    const validatedAddress = this.validateAddress(address, 'unsubscribeAccount');
+    if (!validatedAddress) {
+      console.error('[NotificationService] unsubscribeAccount called with invalid address, skipping');
+      return false;
+    }
+
     const supabase = getSupabaseClient();
     if (!supabase || !this.deviceId) return false;
 
@@ -324,14 +339,14 @@ class NotificationService {
       .from('account_subscriptions')
       .delete()
       .eq('device_id', this.deviceId)
-      .eq('account_address', address);
+      .eq('account_address', validatedAddress);
 
     if (error) {
       console.error('Failed to unsubscribe account:', error);
       return false;
     }
 
-    console.log('Account unsubscribed from notifications:', address);
+    console.log('Account unsubscribed from notifications:', validatedAddress);
     return true;
   }
 
@@ -344,6 +359,13 @@ class NotificationService {
     address: string,
     preferences: Partial<NotificationPreferences>
   ): Promise<boolean> {
+    // Validate address parameter
+    const validatedAddress = this.validateAddress(address, 'updatePreferences');
+    if (!validatedAddress) {
+      console.error('[NotificationService] updatePreferences called with invalid address, skipping');
+      return false;
+    }
+
     const supabase = getSupabaseClient();
     if (!supabase || !this.deviceId) return false;
 
@@ -384,7 +406,7 @@ class NotificationService {
       .from('account_subscriptions')
       .update(updates)
       .eq('device_id', this.deviceId)
-      .eq('account_address', address);
+      .eq('account_address', validatedAddress);
 
     if (error) {
       console.error('Failed to update preferences:', error);
@@ -399,6 +421,12 @@ class NotificationService {
    * @param address - Algorand address (58-char format)
    */
   async getPreferences(address: string): Promise<NotificationPreferences | null> {
+    // Validate address parameter
+    const validatedAddress = this.validateAddress(address, 'getPreferences');
+    if (!validatedAddress) {
+      return null;
+    }
+
     const supabase = getSupabaseClient();
     if (!supabase || !this.deviceId) return null;
 
@@ -407,7 +435,7 @@ class NotificationService {
       .from('account_subscriptions')
       .select('*')
       .eq('device_id', this.deviceId)
-      .eq('account_address', address)
+      .eq('account_address', validatedAddress)
       .single();
 
     if (error || !data) {
@@ -450,6 +478,42 @@ class NotificationService {
   }
 
   // Private methods
+
+  /**
+   * Validate and normalize an address parameter.
+   * Logs a warning and attempts recovery if an object is passed instead of a string.
+   * @param address - The address parameter to validate
+   * @param context - Method name for logging context
+   * @returns Validated address string, or null if invalid
+   */
+  private validateAddress(address: unknown, context: string): string | null {
+    // Already a valid address string
+    if (typeof address === 'string' && address.length === 58) {
+      return address;
+    }
+
+    // Object with address property (AccountMetadata or similar mistakenly passed)
+    if (address && typeof address === 'object') {
+      const obj = address as Record<string, unknown>;
+
+      // Log warning with details for debugging
+      console.warn(
+        `[NotificationService] ${context}: Received object instead of address string.`,
+        'Keys:', Object.keys(obj),
+        'Has address:', 'address' in obj,
+        'Has publicKey:', 'publicKey' in obj
+      );
+
+      // Try to extract address from the object
+      if ('address' in obj && typeof obj.address === 'string' && obj.address.length === 58) {
+        console.warn(`[NotificationService] ${context}: Recovered address from object:`, obj.address);
+        return obj.address;
+      }
+    }
+
+    console.error(`[NotificationService] ${context}: Invalid address parameter:`, address);
+    return null;
+  }
 
   private setupListeners(): void {
     // Handle notifications received while app is foregrounded

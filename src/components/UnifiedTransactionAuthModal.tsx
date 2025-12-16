@@ -58,6 +58,7 @@ export default function UnifiedTransactionAuthModal({
   const [initialized, setInitialized] = useState(false);
   const [biometricAttempted, setBiometricAttempted] = useState(false);
   const [userCancelled, setUserCancelled] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Guard to prevent onComplete from being called multiple times per auth flow
   // This prevents double-submission when the onComplete prop reference changes during re-renders
@@ -136,6 +137,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handlePinSubmit = async (enteredPin: string) => {
+    setIsVerifying(true);
     try {
       const success = await controller.authenticateWithPin(enteredPin);
       if (!success) {
@@ -145,6 +147,8 @@ export default function UnifiedTransactionAuthModal({
     } catch (error) {
       console.error('PIN authentication error:', error);
       setPin('');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -245,12 +249,22 @@ export default function UnifiedTransactionAuthModal({
     (errorMessageLower.includes('cancelled by user') ||
       errorMessageLower.includes('rejected on ledger'));
 
-  const getErrorTitle = () =>
-    isUserRejectedError ? 'Transaction Cancelled' : 'Transaction Failed';
+  const isRequestMismatchError =
+    authState.state === 'error' &&
+    errorMessageLower.includes('does not match');
+
+  const getErrorTitle = () => {
+    if (isUserRejectedError) return 'Transaction Cancelled';
+    if (isRequestMismatchError) return 'Wrong QR Code';
+    return 'Transaction Failed';
+  };
 
   const getErrorMessage = () => {
     if (isUserRejectedError) {
       return 'You rejected this transaction on your Ledger device.';
+    }
+    if (isRequestMismatchError) {
+      return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
     return authState.error?.message || authState.ledgerError || 'An unknown error occurred.';
   };
@@ -273,13 +287,14 @@ export default function UnifiedTransactionAuthModal({
 
   const renderPinDots = () => {
     return (
-      <View style={styles.pinContainer}>
-        {[0, 1, 2, 3, 4, 5].map((index) => (
+      <View style={styles.pinDots}>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
           <View
-            key={index}
+            key={i}
             style={[
               styles.pinDot,
-              index < pin.length ? styles.pinDotFilled : null,
+              i < pin.length && styles.pinDotFilled,
+              { backgroundColor: i < pin.length ? theme.colors.primary : 'transparent' },
             ]}
           />
         ))}
@@ -288,34 +303,51 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const renderKeypad = () => {
-    const numbers = [
+    // Use SignerAuthModal-style keypad with integrated biometric button
+    const rows = [
       ['1', '2', '3'],
       ['4', '5', '6'],
       ['7', '8', '9'],
-      ['', '0', 'backspace'],
+      ['bio', '0', 'del'],
     ];
 
     return (
-      <View style={styles.keypad}>
-        {numbers.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.keypadRow}>
-            {row.map((item, itemIndex) => {
-              if (item === '') {
-                return <View key={itemIndex} style={styles.keypadButton} />;
-              }
-
-              if (item === 'backspace') {
+      <View style={styles.numberPad}>
+        {rows.map((row, rowIndex) => (
+          <View key={rowIndex} style={styles.numberRow}>
+            {row.map((key) => {
+              if (key === 'bio') {
+                if (!authState.biometricAvailable) {
+                  return <View key={key} style={styles.numberButton} />;
+                }
                 return (
                   <TouchableOpacity
-                    key={itemIndex}
-                    style={styles.keypadButton}
+                    key={key}
+                    style={styles.numberButton}
+                    onPress={handleBiometricAuth}
+                    disabled={authState.isLocked || authState.state !== 'authenticating'}
+                  >
+                    <Ionicons
+                      name="finger-print"
+                      size={28}
+                      color={authState.isLocked ? theme.colors.textMuted : theme.colors.primary}
+                    />
+                  </TouchableOpacity>
+                );
+              }
+
+              if (key === 'del') {
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.numberButton}
                     onPress={handleBackspace}
                     disabled={authState.isLocked || authState.state !== 'authenticating'}
                   >
                     <Ionicons
                       name="backspace-outline"
-                      size={20}
-                      color={theme.colors.text}
+                      size={24}
+                      color={authState.isLocked ? theme.colors.textMuted : theme.colors.text}
                     />
                   </TouchableOpacity>
                 );
@@ -323,12 +355,19 @@ export default function UnifiedTransactionAuthModal({
 
               return (
                 <TouchableOpacity
-                  key={itemIndex}
-                  style={styles.keypadButton}
-                  onPress={() => handleNumberPress(item)}
+                  key={key}
+                  style={[styles.numberButton, styles.numberButtonWithBg]}
+                  onPress={() => handleNumberPress(key)}
                   disabled={authState.isLocked || authState.state !== 'authenticating'}
                 >
-                  <Text style={styles.keypadButtonText}>{item}</Text>
+                  <Text
+                    style={[
+                      styles.numberText,
+                      authState.isLocked && styles.numberTextDisabled,
+                    ]}
+                  >
+                    {key}
+                  </Text>
                 </TouchableOpacity>
               );
             })}
@@ -422,6 +461,7 @@ export default function UnifiedTransactionAuthModal({
               onError={(error) => console.error('Remote signer scan error:', error)}
               instructionsText="Scan the signed response from your signer device"
               showProgress={true}
+              compact={true}
             />
           </View>
         </View>
@@ -559,25 +599,11 @@ export default function UnifiedTransactionAuthModal({
           );
         }
 
-        // Show PIN/biometric authentication (non-Ledger only)
+        // Standard PIN/biometric now uses bottom sheet, so this shouldn't be reached
+        // Keep as fallback just in case
         return (
           <>
             {renderPinDots()}
-
-            {authState.biometricAvailable && !authState.isLocked && (
-              <TouchableOpacity
-                style={styles.biometricButton}
-                onPress={handleBiometricAuth}
-              >
-                <Ionicons
-                  name="finger-print"
-                  size={24}
-                  color={theme.colors.primary}
-                />
-                <Text style={styles.biometricText}>Use Biometric</Text>
-              </TouchableOpacity>
-            )}
-
             {renderKeypad()}
 
             {authState.isLocked && (
@@ -824,11 +850,16 @@ export default function UnifiedTransactionAuthModal({
   };
 
 
+  // Use bottom sheet style for standard PIN/biometric auth, centered modal for other flows
+  const useBottomSheet = authState.state === 'authenticating' &&
+    !authState.isLedgerFlow &&
+    !authState.isRemoteSignerFlow;
+
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType={useBottomSheet ? 'slide' : 'fade'}
       onRequestClose={() => {
         // Only allow closing if not processing
         if (authState.state !== 'processing' && authState.state !== 'signing') {
@@ -837,32 +868,78 @@ export default function UnifiedTransactionAuthModal({
         }
       }}
     >
-      <View style={styles.overlay}>
-        <View style={styles.modal}>
-          <View style={styles.header}>
-            <Ionicons
-              name="shield-checkmark"
-              size={32}
-              color={theme.colors.primary}
-            />
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.message}>{message}</Text>
-          </View>
+      <View style={useBottomSheet ? styles.bottomSheetOverlay : styles.overlay}>
+        <View style={useBottomSheet ? styles.bottomSheetContainer : styles.modal}>
+          {useBottomSheet ? (
+            // Bottom sheet header for PIN entry
+            <>
+              <View style={styles.bottomSheetHeader}>
+                <TouchableOpacity style={styles.bottomSheetCancelButton} onPress={handleCancel}>
+                  <Text style={styles.bottomSheetCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <Text style={styles.bottomSheetTitle}>Authenticate</Text>
+                <View style={styles.bottomSheetPlaceholder} />
+              </View>
+              <View style={styles.bottomSheetContent}>
+                <View style={styles.bottomSheetIconContainer}>
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={48}
+                    color={theme.colors.primary}
+                  />
+                </View>
+                <Text style={styles.bottomSheetMessage}>{message}</Text>
+                {isVerifying && (
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.primary}
+                    style={styles.verifying}
+                  />
+                )}
+                {authState.isLocked ? (
+                  <Text style={styles.bottomSheetError}>
+                    Too many attempts. Try again in 30 seconds.
+                  </Text>
+                ) : authState.pinAttempts > 0 ? (
+                  <Text style={styles.bottomSheetError}>
+                    Incorrect PIN. {authState.maxPinAttempts - authState.pinAttempts} attempts remaining.
+                  </Text>
+                ) : null}
+                {renderPinDots()}
+                {renderKeypad()}
+              </View>
+            </>
+          ) : (
+            // Original centered modal for Ledger, Remote Signer, and other states
+            <>
+              {!authState.isRemoteSignerFlow && (
+                <View style={styles.header}>
+                  <Ionicons
+                    name="shield-checkmark"
+                    size={32}
+                    color={theme.colors.primary}
+                  />
+                  <Text style={styles.title}>{title}</Text>
+                  <Text style={styles.message}>{message}</Text>
+                </View>
+              )}
 
-          <ScrollView
-            style={styles.content}
-            contentContainerStyle={styles.contentContainer}
-            showsVerticalScrollIndicator={true}
-          >
-            {renderContent()}
-          </ScrollView>
+              <ScrollView
+                style={styles.content}
+                contentContainerStyle={styles.contentContainer}
+                showsVerticalScrollIndicator={true}
+              >
+                {renderContent()}
+              </ScrollView>
 
-          {renderButtons()}
+              {renderButtons()}
 
-          {authState.pinAttempts > 0 && authState.state === 'authenticating' && (
-            <Text style={styles.attemptsText}>
-              Failed attempts: {authState.pinAttempts}/{authState.maxPinAttempts}
-            </Text>
+              {authState.pinAttempts > 0 && authState.state === 'authenticating' && (
+                <Text style={styles.attemptsText}>
+                  Failed attempts: {authState.pinAttempts}/{authState.maxPinAttempts}
+                </Text>
+              )}
+            </>
           )}
         </View>
       </View>
@@ -916,64 +993,118 @@ const createStyles = (theme: Theme) =>
       paddingBottom: theme.spacing.md,
     },
 
-    // PIN Input
-    pinContainer: {
+    // Bottom sheet styles (for PIN entry)
+    bottomSheetOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      justifyContent: 'flex-end',
+    },
+    bottomSheetContainer: {
+      backgroundColor: theme.colors.surface,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    },
+    bottomSheetHeader: {
       flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 16,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.colors.border,
+    },
+    bottomSheetCancelButton: {
+      padding: 8,
+    },
+    bottomSheetCancelText: {
+      fontSize: 16,
+      color: theme.colors.primary,
+    },
+    bottomSheetTitle: {
+      fontSize: 17,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    bottomSheetPlaceholder: {
+      width: 60,
+    },
+    bottomSheetContent: {
+      alignItems: 'center',
+      paddingTop: 24,
+      paddingHorizontal: 20,
+    },
+    bottomSheetIconContainer: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      backgroundColor: theme.colors.primary + '15',
       justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-      gap: theme.spacing.md,
+      marginBottom: 16,
+    },
+    bottomSheetMessage: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: 24,
+      textAlign: 'center',
+    },
+    bottomSheetError: {
+      fontSize: 14,
+      color: theme.colors.error,
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    verifying: {
+      marginBottom: 8,
+    },
+
+    // PIN dots (shared style)
+    pinDots: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 24,
     },
     pinDot: {
-      width: 12,
-      height: 12,
-      borderRadius: 6,
-      borderWidth: 2,
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      borderWidth: 1,
       borderColor: theme.colors.border,
-      backgroundColor: 'transparent',
     },
     pinDotFilled: {
-      backgroundColor: theme.colors.primary,
-      borderColor: theme.colors.primary,
+      borderWidth: 0,
     },
 
-    // Biometric
-    biometricButton: {
-      alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
+    // Number pad (SignerAuthModal style)
+    numberPad: {
+      width: '100%',
+      maxWidth: 300,
+      gap: 12,
     },
-    biometricText: {
-      fontSize: 14,
-      color: theme.colors.primary,
-      marginTop: 6,
-      fontWeight: '500',
-    },
-
-    // Keypad
-    keypad: {
-      alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-    },
-    keypadRow: {
+    numberRow: {
       flexDirection: 'row',
-      marginBottom: theme.spacing.lg,
+      justifyContent: 'space-between',
     },
-    keypadButton: {
-      width: 50,
-      height: 50,
-      borderRadius: 25,
-      backgroundColor: theme.colors.surface,
-      marginHorizontal: theme.spacing.lg,
+    numberButton: {
+      width: 80,
+      height: 60,
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: 1,
-      borderColor: theme.colors.borderLight,
+      borderRadius: 12,
     },
-    keypadButtonText: {
-      fontSize: 18,
+    numberButtonWithBg: {
+      backgroundColor: theme.colors.card,
+    },
+    numberText: {
+      fontSize: 28,
       fontWeight: '500',
       color: theme.colors.text,
+    },
+    numberTextDisabled: {
+      color: theme.colors.textMuted,
     },
 
     // States
@@ -1218,7 +1349,7 @@ const createStyles = (theme: Theme) =>
     },
     scannerContainer: {
       width: '100%',
-      height: 300,
+      height: 450,
       borderRadius: theme.borderRadius.lg,
       overflow: 'hidden',
       marginVertical: theme.spacing.md,

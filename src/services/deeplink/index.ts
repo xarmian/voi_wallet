@@ -1,4 +1,4 @@
-import { Linking } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { NavigationContainerRef } from '@react-navigation/native';
 import { WalletConnectService } from '@/services/walletconnect';
 import {
@@ -9,18 +9,34 @@ import {
   parseWalletConnectRequestUri,
   isVoiUri,
   detectWalletConnectVersion,
-  isWalletConnectV1Uri,
   parseWalletConnectV1Uri,
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import {
-  isAlgorandPaymentUri,
-  parseAlgorandUri,
+  isArc0090Uri,
+  parseArc0090Uri,
+  getArc0090UriType,
+  resolveNetworkFromAuthority,
   convertAmountToDisplay,
-} from '@/utils/algorandUri';
+  isLegacyVoiUri,
+  Arc0090PaymentUri,
+  Arc0090KeyregUri,
+  Arc0090ApplUri,
+  Arc0090AppQueryUri,
+  Arc0090AssetQueryUri,
+  validatePaymentUri,
+  validateKeyregUri,
+  validateApplUri,
+} from '@/utils/arc0090Uri';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
-import { notificationService, NotificationData } from '@/services/notifications';
+import {
+  notificationService,
+  NotificationData,
+} from '@/services/notifications';
 import { useWalletStore } from '@/store/walletStore';
+import { useNetworkStore } from '@/store/networkStore';
+import { NetworkId } from '@/types/network';
+import { getNetworkConfig } from '@/services/network/config';
 
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
 
@@ -29,12 +45,55 @@ export interface DeepLinkRoute {
   params?: any;
 }
 
+// Cross-platform alert helper
+const showAlert = (
+  title: string,
+  message: string,
+  buttons?: Array<{ text: string; onPress?: () => void; style?: string }>
+): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (Platform.OS === 'web') {
+      if (buttons && buttons.length > 1) {
+        const confirmed = window.confirm(`${title}\n\n${message}`);
+        if (confirmed) {
+          const confirmButton =
+            buttons.find((b) => b.style !== 'cancel') || buttons[0];
+          confirmButton?.onPress?.();
+          resolve(true);
+        } else {
+          const cancelButton = buttons.find((b) => b.style === 'cancel');
+          cancelButton?.onPress?.();
+          resolve(false);
+        }
+      } else {
+        window.alert(`${title}\n\n${message}`);
+        buttons?.[0]?.onPress?.();
+        resolve(true);
+      }
+    } else {
+      Alert.alert(
+        title,
+        message,
+        buttons?.map((b) => ({
+          text: b.text,
+          onPress: () => {
+            b.onPress?.();
+            resolve(b.style !== 'cancel');
+          },
+          style: b.style as any,
+        })) || [{ text: 'OK', onPress: () => resolve(true) }]
+      );
+    }
+  });
+};
+
 export class DeepLinkService {
   private static instance: DeepLinkService;
   private navigationRef: NavigationContainerRef<any> | null = null;
   private handlers: Map<string, DeepLinkHandler> = new Map();
   private pendingNotification: NotificationData | null = null;
   private isAppUnlocked: boolean = false;
+  private linkingSubscription: { remove: () => void } | null = null;
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -58,11 +117,16 @@ export class DeepLinkService {
   setUnlockState(isUnlocked: boolean): void {
     const wasUnlocked = this.isAppUnlocked;
     this.isAppUnlocked = isUnlocked;
-    console.log(`[DeepLink] setUnlockState: ${wasUnlocked} -> ${isUnlocked}, pendingNotification: ${!!this.pendingNotification}`);
+    console.log(
+      `[DeepLink] setUnlockState: ${wasUnlocked} -> ${isUnlocked}, pendingNotification: ${!!this.pendingNotification}`
+    );
 
     // If app just unlocked and we have a pending notification, process it now
     if (isUnlocked && !wasUnlocked && this.pendingNotification) {
-      console.log('[DeepLink] App unlocked, processing pending notification:', this.pendingNotification);
+      console.log(
+        '[DeepLink] App unlocked, processing pending notification:',
+        this.pendingNotification
+      );
       const pendingData = this.pendingNotification;
       this.pendingNotification = null;
       this.handleNotificationNavigation(pendingData);
@@ -79,14 +143,17 @@ export class DeepLinkService {
   async initialize(): Promise<void> {
     try {
       // Handle initial URL if app was opened via deep link
-      const initialUrl = await Linking.getInitialURL();
+      const initialUrl = await import('react-native').then((rn) =>
+        rn.Linking.getInitialURL()
+      );
       if (initialUrl) {
         console.log('Handling initial deep link:', initialUrl);
         await this.handleUrl(initialUrl);
       }
 
       // Listen for incoming deep links
-      const linkingListener = Linking.addEventListener('url', ({ url }) => {
+      const { Linking } = await import('react-native');
+      this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
         console.log('Received deep link:', url);
         this.handleUrl(url).catch((error) => {
           console.error('Failed to handle deep link:', error);
@@ -95,10 +162,6 @@ export class DeepLinkService {
 
       // Set up notification tap handler for navigation
       this.setupNotificationHandler();
-
-      return () => {
-        linkingListener?.remove();
-      };
     } catch (error) {
       console.error('Failed to initialize deep link service:', error);
       throw error;
@@ -109,25 +172,36 @@ export class DeepLinkService {
    * Set up handler for notification taps to navigate to relevant screens
    */
   private setupNotificationHandler(): void {
-    notificationService.setNotificationTapHandler(async (data: NotificationData) => {
-      console.log('[DeepLink] Notification tap handler called, isAppUnlocked:', this.isAppUnlocked, 'data:', data);
+    notificationService.setNotificationTapHandler(
+      async (data: NotificationData) => {
+        console.log(
+          '[DeepLink] Notification tap handler called, isAppUnlocked:',
+          this.isAppUnlocked,
+          'data:',
+          data
+        );
 
-      // If app is locked, store the notification for later processing after unlock
-      if (!this.isAppUnlocked) {
-        console.log('[DeepLink] App is locked, storing notification for after unlock');
-        this.pendingNotification = data;
-        return;
+        // If app is locked, store the notification for later processing after unlock
+        if (!this.isAppUnlocked) {
+          console.log(
+            '[DeepLink] App is locked, storing notification for after unlock'
+          );
+          this.pendingNotification = data;
+          return;
+        }
+
+        await this.handleNotificationNavigation(data);
       }
-
-      await this.handleNotificationNavigation(data);
-    });
+    );
   }
 
   /**
    * Handle navigation for a notification tap
    * This is called either immediately (if app is unlocked) or after unlock
    */
-  private async handleNotificationNavigation(data: NotificationData): Promise<void> {
+  private async handleNotificationNavigation(
+    data: NotificationData
+  ): Promise<void> {
     console.log('Processing notification navigation:', data);
 
     switch (data.type) {
@@ -138,10 +212,16 @@ export class DeepLinkService {
           if (data.receiver) {
             const walletStore = useWalletStore.getState();
             const receiverAccount = walletStore.wallet?.accounts.find(
-              acc => acc.address === data.receiver
+              (acc) => acc.address === data.receiver
             );
-            if (receiverAccount && walletStore.wallet?.activeAccountId !== receiverAccount.id) {
-              console.log('Switching to receiver account:', receiverAccount.address);
+            if (
+              receiverAccount &&
+              walletStore.wallet?.activeAccountId !== receiverAccount.id
+            ) {
+              console.log(
+                'Switching to receiver account:',
+                receiverAccount.address
+              );
               await walletStore.setActiveAccount(receiverAccount.id);
             }
           }
@@ -176,9 +256,9 @@ export class DeepLinkService {
         }
         break;
 
-      case 'voi_payment':
-      case 'arc200_transfer':
-      case 'arc72_transfer':
+      case 'payment':
+      case 'arc200':
+      case 'arc72':
         // Navigate to transaction detail or home
         // Since we don't have full transaction info in notification,
         // navigate to home screen which shows recent activity
@@ -193,8 +273,9 @@ export class DeepLinkService {
         });
         break;
 
-      case 'price_alert':
-        // Navigate to home/discover screen
+      case 'key_registration':
+      case 'test':
+        // Navigate to home screen
         this.navigateToRoute({
           screen: 'Main',
           params: {
@@ -225,19 +306,19 @@ export class DeepLinkService {
       return this.handleWalletConnectUri(url);
     });
 
-    // Voi URI handler
+    // Voi URI handler (ARC-0090)
     this.registerHandler('voi', async (url: string) => {
-      return this.handlePaymentUri(url);
+      return this.handleArc0090Uri(url);
     });
 
-    // Algorand URI handler
+    // Algorand URI handler (ARC-0090)
     this.registerHandler('algorand', async (url: string) => {
-      return this.handlePaymentUri(url);
+      return this.handleArc0090Uri(url);
     });
 
-    // Pera Wallet URI handler
+    // Pera Wallet URI handler (ARC-0090)
     this.registerHandler('perawallet', async (url: string) => {
-      return this.handlePaymentUri(url);
+      return this.handleArc0090Uri(url);
     });
 
     // HTTPS universal link handler
@@ -345,7 +426,9 @@ export class DeepLinkService {
 
           if (currentRoute?.name === 'WalletConnectTransactionRequest') {
             // Enqueue the request instead of navigating immediately
-            console.log('[DeepLinkService] Currently on transaction screen, enqueueing V1 request');
+            console.log(
+              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
+            );
             await TransactionRequestQueue.enqueue({
               id: transformedRequest.id,
               topic: transformedRequest.topic,
@@ -430,31 +513,141 @@ export class DeepLinkService {
     }
   }
 
-  private async handlePaymentUri(url: string): Promise<boolean> {
+  /**
+   * Handle ARC-0090 URIs (voi://, algorand://, perawallet://)
+   * Supports payment, keyreg, appl, app-query, and asset-query types
+   */
+  private async handleArc0090Uri(url: string): Promise<boolean> {
     try {
-      // Check if it's an Algorand/Voi payment request URI
-      if (isAlgorandPaymentUri(url)) {
-        return await this.handleAlgorandPaymentRequest(url);
-      }
+      console.log('[DeepLink] handleArc0090Uri - url:', url);
 
-      // Fall back to legacy Voi URI format for backwards compatibility
-      if (isVoiUri(url)) {
+      // Check for legacy voi:// format first (voi://send?to=...)
+      if (isLegacyVoiUri(url)) {
+        console.log('[DeepLink] handleArc0090Uri - detected legacy voi:// format');
         return await this.handleLegacyVoiUri(url);
       }
 
-      return false;
+      // Check if it's a valid ARC-0090 URI
+      if (!isArc0090Uri(url)) {
+        console.log('[DeepLink] handleArc0090Uri - not a valid ARC-0090 URI');
+        return false;
+      }
+
+      const uriType = getArc0090UriType(url);
+      console.log('[DeepLink] handleArc0090Uri - uriType:', uriType);
+      if (!uriType) {
+        console.warn('Unknown ARC-0090 URI type:', url);
+        return false;
+      }
+
+      const parsed = parseArc0090Uri(url);
+      console.log('[DeepLink] handleArc0090Uri - parsed:', JSON.stringify(parsed, null, 2));
+      if (!parsed) {
+        console.error('Failed to parse ARC-0090 URI:', url);
+        return false;
+      }
+
+      // Resolve target network from URI
+      const targetNetwork = resolveNetworkFromAuthority(
+        parsed.network,
+        parsed.scheme
+      );
+      console.log('[DeepLink] handleArc0090Uri - targetNetwork:', targetNetwork);
+
+      // Check network compatibility and prompt for switch if needed
+      const networkOk = await this.ensureCorrectNetwork(targetNetwork);
+      console.log('[DeepLink] handleArc0090Uri - networkOk:', networkOk);
+      if (!networkOk) {
+        return false;
+      }
+
+      // Route to appropriate handler based on URI type
+      console.log('[DeepLink] handleArc0090Uri - routing to handler for type:', parsed.type);
+      switch (parsed.type) {
+        case 'payment':
+          return await this.handlePaymentUri(parsed as Arc0090PaymentUri);
+        case 'keyreg':
+          return await this.handleKeyregUri(parsed as Arc0090KeyregUri);
+        case 'appl':
+          return await this.handleApplUri(parsed as Arc0090ApplUri);
+        case 'app-query':
+          return await this.handleAppQueryUri(parsed as Arc0090AppQueryUri);
+        case 'asset-query':
+          return await this.handleAssetQueryUri(parsed as Arc0090AssetQueryUri);
+        default:
+          console.warn('Unhandled ARC-0090 URI type:', uriType);
+          return false;
+      }
     } catch (error) {
-      console.error('Failed to handle payment URI:', error);
+      console.error('[DeepLink] handleArc0090Uri - error:', error);
+      await showAlert(
+        'Invalid Deep Link',
+        error instanceof Error ? error.message : 'Failed to process URI'
+      );
       return false;
     }
   }
 
-  private async handleAlgorandPaymentRequest(url: string): Promise<boolean> {
-    try {
-      const parsed = parseAlgorandUri(url);
+  /**
+   * Ensures the app is on the correct network for the URI
+   * Prompts user to switch if necessary
+   */
+  private async ensureCorrectNetwork(
+    targetNetwork: NetworkId | null
+  ): Promise<boolean> {
+    if (!targetNetwork) {
+      // No specific network required, use current
+      return true;
+    }
 
-      if (!parsed || !parsed.isValid) {
-        console.error('Invalid Algorand payment URI:', url);
+    const networkStore = useNetworkStore.getState();
+    const currentNetwork = networkStore.currentNetwork;
+
+    if (currentNetwork === targetNetwork) {
+      return true;
+    }
+
+    // Get network display names
+    const currentConfig = getNetworkConfig(currentNetwork);
+    const targetConfig = getNetworkConfig(targetNetwork);
+
+    // Prompt user to switch networks
+    const shouldSwitch = await showAlert(
+      'Switch Network?',
+      `This request is for ${targetConfig.name}, but you're currently on ${currentConfig.name}. Would you like to switch networks?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Switch', style: 'default' },
+      ]
+    );
+
+    if (!shouldSwitch) {
+      return false;
+    }
+
+    try {
+      await networkStore.switchNetwork(targetNetwork);
+      return true;
+    } catch (error) {
+      console.error('Failed to switch network:', error);
+      await showAlert(
+        'Network Switch Failed',
+        `Failed to switch to ${targetConfig.name}. Please try again.`
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Handle payment URI
+   */
+  private async handlePaymentUri(parsed: Arc0090PaymentUri): Promise<boolean> {
+    try {
+      // Validate payment URI
+      const validation = validatePaymentUri(parsed);
+      if (!validation.valid) {
+        console.error('Invalid payment URI:', validation.errors);
+        await showAlert('Invalid Payment Request', validation.errors.join('\n'));
         return false;
       }
 
@@ -468,7 +661,7 @@ export class DeepLinkService {
         // Convert from smallest units to display format
         const assetId = parsed.params.asset ? parseInt(parsed.params.asset) : 0;
         const isNativeToken = assetId === 0;
-        const decimals = isNativeToken ? 6 : 0; // VOI has 6 decimals, other assets default to 0
+        const decimals = isNativeToken ? 6 : 0; // VOI/ALGO has 6 decimals, other assets default to 0
         params.amount = convertAmountToDisplay(parsed.params.amount, decimals);
       }
 
@@ -483,10 +676,16 @@ export class DeepLinkService {
       if (parsed.params.note || parsed.params.xnote) {
         // Prefer xnote (non-modifiable) over note
         params.note = parsed.params.xnote || parsed.params.note;
+        params.isXnote = !!parsed.params.xnote;
       }
 
       if (parsed.params.label) {
         params.label = parsed.params.label;
+      }
+
+      // NEW: Pass fee parameter if provided
+      if (parsed.params.fee) {
+        params.fee = parsed.params.fee;
       }
 
       await this.navigateToRoute({
@@ -502,7 +701,162 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle Algorand payment request:', error);
+      console.error('Failed to handle payment URI:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle key registration URI
+   */
+  private async handleKeyregUri(parsed: Arc0090KeyregUri): Promise<boolean> {
+    try {
+      console.log('[DeepLink] handleKeyregUri - parsed:', JSON.stringify(parsed, null, 2));
+
+      // Validate keyreg URI
+      const validation = validateKeyregUri(parsed);
+      console.log('[DeepLink] handleKeyregUri - validation:', validation);
+      if (!validation.valid) {
+        console.error('Invalid keyreg URI:', validation.errors);
+        await showAlert(
+          'Invalid Key Registration Request',
+          validation.errors.join('\n')
+        );
+        return false;
+      }
+
+      const currentNetwork = useNetworkStore.getState().currentNetwork;
+      console.log('[DeepLink] handleKeyregUri - currentNetwork:', currentNetwork);
+
+      const navParams = {
+        address: parsed.address,
+        votekey: parsed.params.votekey,
+        selkey: parsed.params.selkey,
+        sprfkey: parsed.params.sprfkey,
+        votefst: parsed.params.votefst
+          ? parseInt(parsed.params.votefst)
+          : undefined,
+        votelst: parsed.params.votelst
+          ? parseInt(parsed.params.votelst)
+          : undefined,
+        votekd: parsed.params.votekd
+          ? parseInt(parsed.params.votekd)
+          : undefined,
+        fee: parsed.params.fee ? parseInt(parsed.params.fee) : undefined,
+        note: parsed.params.xnote || parsed.params.note,
+        isOnline: parsed.isOnline,
+        networkId: currentNetwork,
+      };
+      console.log('[DeepLink] handleKeyregUri - navigating to KeyregConfirm with params:', navParams);
+
+      // Use replace to dismiss the QRScanner and show KeyregConfirm in its place
+      await this.navigateToRoute({
+        screen: 'KeyregConfirm',
+        params: navParams,
+      }, { replace: true });
+
+      console.log('[DeepLink] handleKeyregUri - navigation complete');
+      return true;
+    } catch (error) {
+      console.error('[DeepLink] handleKeyregUri - error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle application call URI
+   */
+  private async handleApplUri(parsed: Arc0090ApplUri): Promise<boolean> {
+    try {
+      // Validate appl URI
+      const validation = validateApplUri(parsed);
+      if (!validation.valid) {
+        console.error('Invalid appl URI:', validation.errors);
+        await showAlert(
+          'Invalid Application Call Request',
+          validation.errors.join('\n')
+        );
+        return false;
+      }
+
+      const currentNetwork = useNetworkStore.getState().currentNetwork;
+
+      // Use replace to dismiss the QRScanner and show AppCallConfirm in its place
+      await this.navigateToRoute({
+        screen: 'AppCallConfirm',
+        params: {
+          senderAddress: parsed.address,
+          appId: parseInt(parsed.params.app[0]),
+          foreignApps: parsed.params.app.slice(1).map((id) => parseInt(id)),
+          method: parsed.params.method,
+          args: parsed.params.arg,
+          boxes: parsed.params.box,
+          foreignAssets: parsed.params.asset?.map((id) => parseInt(id)),
+          foreignAccounts: parsed.params.account,
+          fee: parsed.params.fee ? parseInt(parsed.params.fee) : undefined,
+          note: parsed.params.xnote || parsed.params.note,
+          networkId: currentNetwork,
+        },
+      }, { replace: true });
+
+      return true;
+    } catch (error) {
+      console.error('Failed to handle appl URI:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle application query URI
+   */
+  private async handleAppQueryUri(
+    parsed: Arc0090AppQueryUri
+  ): Promise<boolean> {
+    try {
+      const currentNetwork = useNetworkStore.getState().currentNetwork;
+
+      // Use replace to dismiss the QRScanner and show AppInfoModal in its place
+      await this.navigateToRoute({
+        screen: 'AppInfoModal',
+        params: {
+          appId: parseInt(parsed.appId),
+          networkId: currentNetwork,
+          queryParams: parsed.params,
+        },
+      }, { replace: true });
+
+      return true;
+    } catch (error) {
+      console.error('Failed to handle app query URI:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle asset query URI
+   */
+  private async handleAssetQueryUri(
+    parsed: Arc0090AssetQueryUri
+  ): Promise<boolean> {
+    try {
+      const currentNetwork = useNetworkStore.getState().currentNetwork;
+      const walletStore = useWalletStore.getState();
+      const activeAccountId = walletStore.wallet?.activeAccountId;
+
+      // Use replace to dismiss the QRScanner and show AssetDetail in its place
+      await this.navigateToRoute({
+        screen: 'AssetDetail',
+        params: {
+          assetId: parseInt(parsed.assetId),
+          assetName: `Asset ${parsed.assetId}`,
+          accountId: activeAccountId,
+          networkId: currentNetwork,
+        },
+      }, { replace: true });
+
+      return true;
+    } catch (error) {
+      console.error('Failed to handle asset query URI:', error);
       return false;
     }
   }
@@ -577,7 +931,10 @@ export class DeepLinkService {
         if (wcUri) {
           // Decode and handle the WalletConnect URI
           const decodedUri = decodeURIComponent(wcUri);
-          console.log('Handling WalletConnect URI from universal link:', decodedUri);
+          console.log(
+            'Handling WalletConnect URI from universal link:',
+            decodedUri
+          );
           return await this.handleWalletConnectUri(decodedUri);
         } else {
           console.warn('No WalletConnect URI found in universal link:', url);
@@ -617,21 +974,35 @@ export class DeepLinkService {
     return match ? match[1] : null;
   }
 
-  private async navigateToRoute(route: DeepLinkRoute): Promise<void> {
+  private async navigateToRoute(route: DeepLinkRoute, options?: { replace?: boolean }): Promise<void> {
+    console.log('[DeepLink] navigateToRoute - route:', route.screen, 'params:', JSON.stringify(route.params), 'replace:', options?.replace);
+    console.log('[DeepLink] navigateToRoute - navigationRef:', !!this.navigationRef, 'isReady:', this.navigationRef?.isReady());
+
     if (!this.navigationRef?.isReady()) {
-      console.warn('Navigation not ready, waiting...');
+      console.warn('[DeepLink] Navigation not ready, waiting...');
       // Wait a bit for navigation to be ready
       await new Promise((resolve) => setTimeout(resolve, 100));
       if (!this.navigationRef?.isReady()) {
-        console.error('Navigation still not ready after waiting');
+        console.error('[DeepLink] Navigation still not ready after waiting');
         return;
       }
     }
 
     try {
-      this.navigationRef.navigate(route.screen as never, route.params as never);
+      console.log('[DeepLink] navigateToRoute - calling', options?.replace ? 'dispatch replace' : 'navigate');
+      // Use type assertion to handle React Navigation's complex generic types
+      if (options?.replace) {
+        // Use StackActions.replace to replace current screen in stack
+        const { StackActions } = require('@react-navigation/native');
+        this.navigationRef.dispatch(
+          StackActions.replace(route.screen, route.params)
+        );
+      } else {
+        (this.navigationRef as any).navigate(route.screen, route.params);
+      }
+      console.log('[DeepLink] navigateToRoute - navigation called successfully');
     } catch (error) {
-      console.error('Failed to navigate to route:', route, error);
+      console.error('[DeepLink] navigateToRoute - Failed to navigate:', route, error);
       throw error;
     }
   }

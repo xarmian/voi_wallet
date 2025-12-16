@@ -509,7 +509,8 @@ export class SecureKeyManager {
       }
 
       // Check if it's a standard account with mnemonic
-      if (account.type !== 'standard') {
+      // TEMPORARY: Allow any account type to check if private key exists
+      if (account.type !== 'standard' && account.type !== 'watch') {
         throw new Error('This account type does not have a recovery phrase');
       }
 
