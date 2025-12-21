@@ -22,15 +22,29 @@ import { deviceId } from '../../platform';
 
 const LAST_HANDLED_NOTIFICATION_KEY = '@voi_wallet/last_handled_notification';
 
-// Configure notification handler for foreground notifications
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+// Flag to track if notification handler has been configured
+let notificationHandlerConfigured = false;
+
+/**
+ * Configure the notification handler for foreground notifications.
+ * This is called lazily during initialize() to avoid triggering native module
+ * access at module import time, which can crash on iOS simulator.
+ */
+function configureNotificationHandler(): void {
+  if (notificationHandlerConfigured) {
+    return;
+  }
+  notificationHandlerConfigured = true;
+
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}
 
 /**
  * Notification Service
@@ -65,6 +79,10 @@ class NotificationService {
    * Call this early in app startup
    */
   async initialize(): Promise<void> {
+    // Configure notification handler lazily to avoid iOS simulator crashes
+    // This must happen before any notification operations
+    configureNotificationHandler();
+
     if (!isSupabaseConfigured()) {
       console.log('Supabase not configured, skipping notification initialization');
       return;

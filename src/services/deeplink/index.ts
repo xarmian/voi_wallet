@@ -1,4 +1,4 @@
-import { Alert, Platform } from 'react-native';
+import { Alert, Platform, Linking } from 'react-native';
 import { NavigationContainerRef } from '@react-navigation/native';
 import { WalletConnectService } from '@/services/walletconnect';
 import {
@@ -143,16 +143,13 @@ export class DeepLinkService {
   async initialize(): Promise<void> {
     try {
       // Handle initial URL if app was opened via deep link
-      const initialUrl = await import('react-native').then((rn) =>
-        rn.Linking.getInitialURL()
-      );
+      const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
         console.log('Handling initial deep link:', initialUrl);
         await this.handleUrl(initialUrl);
       }
 
       // Listen for incoming deep links
-      const { Linking } = await import('react-native');
       this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
         console.log('Received deep link:', url);
         this.handleUrl(url).catch((error) => {
