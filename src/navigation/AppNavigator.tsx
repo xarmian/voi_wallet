@@ -69,6 +69,7 @@ import {
   SignatureDisplayScreen,
   SignRequestDisplayScreen,
   SignatureScannerScreen,
+  ImportFromOnlineWalletScreen,
 } from '@/screens/remoteSigner';
 // ARC-0090 transaction screens
 import KeyregConfirmScreen from '@/screens/transaction/KeyregConfirmScreen';
@@ -398,6 +399,7 @@ export type AirgapStackParamList = {
   SignRequestScanner: undefined;
   RemoteSignerTransactionReview: { request: RemoteSignerRequest };
   SignatureDisplay: { request: RemoteSignerRequest };
+  ImportFromOnlineWallet: undefined;
   // Account management screens (accessible in airgap mode)
   // These use RootStackParamList types internally
   CreateAccount: undefined;
@@ -619,6 +621,7 @@ function AirgapStackNavigator() {
         <AirgapStack.Screen name="AirgapHome" component={AirgapHomeScreen} />
         <AirgapStack.Screen name="ExportAccounts" component={ExportAccountsScreen} />
         <AirgapStack.Screen name="SignRequestScanner" component={SignRequestScannerScreen} />
+        <AirgapStack.Screen name="ImportFromOnlineWallet" component={ImportFromOnlineWalletScreen} />
         <AirgapStack.Screen
           name="RemoteSignerTransactionReview"
           component={TransactionReviewScreen}

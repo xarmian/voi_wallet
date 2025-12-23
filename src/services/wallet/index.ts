@@ -596,6 +596,69 @@ export class MultiAccountWalletService {
       .length;
   }
 
+  /**
+   * Convert a STANDARD account to a REMOTE_SIGNER account.
+   * This removes the private key and converts the account type.
+   * Used when transferring an account to an airgap device.
+   *
+   * @param accountId - The ID of the STANDARD account to convert
+   * @param signerDeviceId - The device ID of the airgap signer
+   * @param signerDeviceName - Optional friendly name for the signer device
+   * @returns The new RemoteSignerAccountMetadata
+   */
+  static async convertStandardToRemoteSigner(
+    accountId: string,
+    signerDeviceId: string,
+    signerDeviceName?: string
+  ): Promise<RemoteSignerAccountMetadata> {
+    const wallet = await this.getCurrentWallet();
+    if (!wallet) {
+      throw new Error('No wallet found');
+    }
+
+    // Find the account
+    const accountIndex = wallet.accounts.findIndex((acc) => acc.id === accountId);
+    if (accountIndex === -1) {
+      throw new AccountNotFoundError('Account not found');
+    }
+
+    const existingAccount = wallet.accounts[accountIndex];
+
+    // Validate it's a STANDARD account
+    if (existingAccount.type !== AccountType.STANDARD) {
+      throw new Error(
+        `Cannot convert account type ${existingAccount.type} to remote signer. Only STANDARD accounts can be converted.`
+      );
+    }
+
+    // Delete the private key from secure storage
+    await AccountSecureStorage.deleteAccount(accountId);
+
+    // Create the new RemoteSignerAccountMetadata
+    const remoteSignerAccount: RemoteSignerAccountMetadata = {
+      id: accountId, // Keep the same ID for continuity
+      address: existingAccount.address,
+      publicKey: existingAccount.publicKey,
+      type: AccountType.REMOTE_SIGNER,
+      label: existingAccount.label,
+      color: existingAccount.color,
+      isHidden: existingAccount.isHidden,
+      createdAt: existingAccount.createdAt,
+      lastUsed: new Date().toISOString(),
+      signerDeviceId,
+      signerDeviceName,
+      pairedAt: new Date().toISOString(),
+    };
+
+    // Replace the account in the wallet
+    wallet.accounts[accountIndex] = remoteSignerAccount;
+
+    // Store the updated wallet
+    await this.storeWallet(wallet);
+
+    return remoteSignerAccount;
+  }
+
   // Wallet Management
   static async getCurrentWallet(): Promise<Wallet | null> {
     try {

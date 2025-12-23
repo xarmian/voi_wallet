@@ -10,6 +10,7 @@ export { default as AirgapHomeScreen } from './AirgapHomeScreen';
 export { default as SignRequestScannerScreen } from './SignRequestScannerScreen';
 export { default as TransactionReviewScreen } from './TransactionReviewScreen';
 export { default as SignatureDisplayScreen } from './SignatureDisplayScreen';
+export { default as ImportFromOnlineWalletScreen } from './ImportFromOnlineWalletScreen';
 
 // Wallet mode screens
 export { default as SignRequestDisplayScreen } from './SignRequestDisplayScreen';

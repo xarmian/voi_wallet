@@ -101,6 +101,11 @@ export default function AirgapHomeScreen() {
     // Navigate to settings tab
     (navigation as any).navigate('Settings', { screen: 'SettingsMain' });
   }, [navigation]);
+
+  const handleImportFromWallet = useCallback(() => {
+    navigation.navigate('ImportFromOnlineWallet' as any);
+  }, [navigation]);
+
   const handleEditAccount = useCallback((accountId: string) => {
     // For now, just close the modal - edit functionality can be accessed via Settings
     setIsAccountListVisible(false);
@@ -243,9 +248,9 @@ export default function AirgapHomeScreen() {
               <GlassButton
                 variant="secondary"
                 size="md"
-                icon="share-outline"
-                label="Export Accounts"
-                onPress={handleExportAccounts}
+                icon="download-outline"
+                label="Import from Wallet"
+                onPress={handleImportFromWallet}
                 fullWidth
               />
             </View>
@@ -253,12 +258,26 @@ export default function AirgapHomeScreen() {
               <GlassButton
                 variant="secondary"
                 size="md"
-                icon="settings-outline"
-                label="Settings"
-                onPress={handleOpenSettings}
+                icon="share-outline"
+                label="Export Accounts"
+                onPress={handleExportAccounts}
                 fullWidth
               />
             </View>
+          </Animated.View>
+
+          {/* Settings action */}
+          <Animated.View
+            entering={FadeInDown.delay(350).springify()}
+          >
+            <GlassButton
+              variant="secondary"
+              size="md"
+              icon="settings-outline"
+              label="Settings"
+              onPress={handleOpenSettings}
+              fullWidth
+            />
           </Animated.View>
 
           {/* Signable accounts section */}

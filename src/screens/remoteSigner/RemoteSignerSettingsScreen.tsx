@@ -33,8 +33,12 @@ import {
   useRemoteSignerInitialized,
   usePairedSignersArray,
 } from '@/store/remoteSignerStore';
+import { useAccounts, useWalletStore } from '@/store/walletStore';
 import { AppMode } from '@/types/remoteSigner';
+import { AccountType, StandardAccountMetadata, AccountMetadata } from '@/types/wallet';
 import * as Updates from 'expo-updates';
+import AccountListModal from '@/components/account/AccountListModal';
+import { TransferToAirgapFlow } from '@/components/remoteSigner/TransferToAirgapFlow';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -71,6 +75,13 @@ export default function RemoteSignerSettingsScreen() {
   const appMode = useAppMode();
   const signerConfig = useSignerConfig();
   const pairedSigners = usePairedSignersArray();
+  const accounts = useAccounts();
+  const refresh = useWalletStore((state) => state.refresh);
+
+  // Filter to only STANDARD accounts (which can be transferred to airgap)
+  const standardAccounts = accounts.filter(
+    (acc): acc is StandardAccountMetadata => acc.type === AccountType.STANDARD
+  );
 
   const initialize = useRemoteSignerStore((state) => state.initialize);
   const setAppMode = useRemoteSignerStore((state) => state.setAppMode);
@@ -86,6 +97,11 @@ export default function RemoteSignerSettingsScreen() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [setupDeviceName, setSetupDeviceName] = useState('');
+
+  // Transfer to Airgap state
+  const [showAccountSelector, setShowAccountSelector] = useState(false);
+  const [selectedAccountForTransfer, setSelectedAccountForTransfer] = useState<StandardAccountMetadata | null>(null);
+  const [showTransferFlow, setShowTransferFlow] = useState(false);
 
   useEffect(() => {
     if (!isInitialized) {
@@ -451,6 +467,50 @@ export default function RemoteSignerSettingsScreen() {
                 />
               </TouchableOpacity>
 
+              <TouchableOpacity
+                style={[
+                  styles.actionItem,
+                  standardAccounts.length === 0 && { opacity: 0.5 },
+                ]}
+                onPress={() => {
+                  if (standardAccounts.length === 0) {
+                    showAlert(
+                      'No Accounts Available',
+                      'You need at least one standard account to transfer to an airgap device.'
+                    );
+                    return;
+                  }
+                  if (standardAccounts.length === 1) {
+                    // Only one account, select it directly
+                    setSelectedAccountForTransfer(standardAccounts[0]);
+                    setShowTransferFlow(true);
+                  } else {
+                    // Multiple accounts, show selector
+                    setShowAccountSelector(true);
+                  }
+                }}
+                disabled={standardAccounts.length === 0}
+              >
+                <View style={styles.actionIcon}>
+                  <Ionicons
+                    name="arrow-forward-circle-outline"
+                    size={24}
+                    color={theme.colors.primary}
+                  />
+                </View>
+                <View style={styles.actionContent}>
+                  <Text style={styles.actionTitle}>Transfer to Airgap Device</Text>
+                  <Text style={styles.actionDescription}>
+                    Move an existing account to your signer device
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={20}
+                  color={theme.colors.textSecondary}
+                />
+              </TouchableOpacity>
+
               {pairedSigners.length > 0 && (
                 <View style={styles.pairedSignersSection}>
                   <Text style={styles.subsectionTitle}>
@@ -544,6 +604,43 @@ export default function RemoteSignerSettingsScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Account Selector for Transfer */}
+      <AccountListModal
+        isVisible={showAccountSelector}
+        onClose={() => setShowAccountSelector(false)}
+        onAddAccount={() => {}}
+        onAccountSelect={(accountId: string) => {
+          const account = standardAccounts.find((acc) => acc.id === accountId);
+          if (account) {
+            setSelectedAccountForTransfer(account);
+            setShowAccountSelector(false);
+            setShowTransferFlow(true);
+          }
+        }}
+        filterSignable
+      />
+
+      {/* Transfer to Airgap Flow */}
+      {showTransferFlow && selectedAccountForTransfer && (
+        <TransferToAirgapFlow
+          account={selectedAccountForTransfer}
+          onSuccess={() => {
+            setShowTransferFlow(false);
+            setSelectedAccountForTransfer(null);
+            // Refresh wallet to reflect the change
+            refresh();
+            showAlert(
+              'Transfer Complete',
+              'The account has been transferred to your airgap device and will now sign transactions via QR codes.'
+            );
+          }}
+          onCancel={() => {
+            setShowTransferFlow(false);
+            setSelectedAccountForTransfer(null);
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
