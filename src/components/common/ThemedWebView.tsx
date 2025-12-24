@@ -4,12 +4,31 @@ import React, {
   useImperativeHandle,
   forwardRef,
   useMemo,
+  useCallback,
 } from 'react';
-import { View, Text, StyleSheet, Alert, Platform, Linking } from 'react-native';
-import { WebView, WebViewProps } from 'react-native-webview';
+import { View, Text, StyleSheet, Platform, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// Conditionally import WebView - it doesn't work on web
+let WebView: any = null;
+let WebViewProps: any = {};
+if (Platform.OS !== 'web') {
+  const webviewModule = require('react-native-webview');
+  WebView = webviewModule.WebView;
+  WebViewProps = webviewModule.WebViewProps;
+}
+
+// Cross-platform alert helper
+const showAlert = (title: string, message: string) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    const { Alert } = require('react-native');
+    Alert.alert(title, message, [{ text: 'OK' }]);
+  }
+};
 
 export interface ThemedWebViewRef {
   reload: () => void;
@@ -19,12 +38,22 @@ export interface ThemedWebViewRef {
   resetLoadingState: () => void; // Reset to show loading on next navigation
 }
 
-interface ThemedWebViewProps extends Omit<WebViewProps, 'startInLoadingState' | 'renderLoading'> {
+interface ThemedWebViewProps {
+  source?: { uri: string } | { html: string };
+  style?: any;
   loadingIcon?: keyof typeof Ionicons.glyphMap;
   loadingText?: string;
   onLoadError?: (errorDescription: string) => void;
   showDefaultErrorAlert?: boolean;
   showLoadingOnlyOnce?: boolean; // Only show loading on initial load, not on subsequent navigations
+  onLoadStart?: (event: any) => void;
+  onLoadEnd?: (event: any) => void;
+  onError?: (event: any) => void;
+  onShouldStartLoadWithRequest?: (request: any) => boolean;
+  contentInset?: { top?: number; left?: number; right?: number; bottom?: number };
+  contentInsetAdjustmentBehavior?: string;
+  // Additional props passed to native WebView
+  [key: string]: any;
 }
 
 const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(({
@@ -46,7 +75,8 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(({
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [initialUrl, setInitialUrl] = useState<string | null>(null);
-  const webViewRef = useRef<WebView>(null);
+  const webViewRef = useRef<any>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const allowedOriginsRef = useRef<Set<string>>(new Set());
   const sourceUri = useMemo(() => {
     if (source && typeof source === 'object' && 'uri' in source) {
@@ -104,10 +134,49 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(({
 
   // Expose WebView methods to parent components
   useImperativeHandle(ref, () => ({
-    reload: () => webViewRef.current?.reload(),
-    goBack: () => webViewRef.current?.goBack(),
-    goForward: () => webViewRef.current?.goForward(),
-    injectJavaScript: (script: string) => webViewRef.current?.injectJavaScript(script),
+    reload: () => {
+      if (Platform.OS === 'web') {
+        if (iframeRef.current) {
+          iframeRef.current.src = iframeRef.current.src;
+        }
+      } else {
+        webViewRef.current?.reload();
+      }
+    },
+    goBack: () => {
+      if (Platform.OS === 'web') {
+        try {
+          iframeRef.current?.contentWindow?.history.back();
+        } catch (e) {
+          // Cross-origin restrictions may prevent this
+        }
+      } else {
+        webViewRef.current?.goBack();
+      }
+    },
+    goForward: () => {
+      if (Platform.OS === 'web') {
+        try {
+          iframeRef.current?.contentWindow?.history.forward();
+        } catch (e) {
+          // Cross-origin restrictions may prevent this
+        }
+      } else {
+        webViewRef.current?.goForward();
+      }
+    },
+    injectJavaScript: (script: string) => {
+      if (Platform.OS === 'web') {
+        try {
+          iframeRef.current?.contentWindow?.eval(script);
+        } catch (e) {
+          // Cross-origin restrictions may prevent this
+          console.warn('Cannot inject JavaScript into iframe due to cross-origin restrictions');
+        }
+      } else {
+        webViewRef.current?.injectJavaScript(script);
+      }
+    },
     resetLoadingState: () => {
       setHasLoadedOnce(false);
       setIsLoading(true);
@@ -191,45 +260,95 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(({
     setIsLoading(false);
 
     // Call custom error handler if provided
-    onLoadError?.(nativeEvent.description);
+    const errorDescription = nativeEvent?.description || 'Unknown error';
+    onLoadError?.(errorDescription);
 
     // Show default error alert if enabled
     if (showDefaultErrorAlert) {
-      Alert.alert(
-        'Loading Error',
-        `Unable to load page: ${nativeEvent.description}`,
-        [{ text: 'OK' }]
-      );
+      showAlert('Loading Error', `Unable to load page: ${errorDescription}`);
     }
 
     // Call original onError handler
     onError?.(syntheticEvent);
   };
 
+  // Handle iframe load for web
+  const handleIframeLoad = useCallback(() => {
+    setIsLoading(false);
+    setHasLoadedOnce(true);
+    onLoadEnd?.({});
+  }, [onLoadEnd]);
+
+  const handleIframeError = useCallback(() => {
+    setIsLoading(false);
+    onLoadError?.('Failed to load page');
+    if (showDefaultErrorAlert) {
+      showAlert('Loading Error', 'Unable to load page');
+    }
+    onError?.({ nativeEvent: { description: 'Failed to load page' } });
+  }, [onLoadError, showDefaultErrorAlert, onError]);
+
+  // Get the URL from source
+  const url = useMemo(() => {
+    if (source && typeof source === 'object' && 'uri' in source) {
+      return source.uri;
+    }
+    return null;
+  }, [source]);
+
+  // Render loading state
+  const renderLoading = () => (
+    <View
+      style={[
+        styles.loadingContainer,
+        { backgroundColor: theme.colors.background },
+      ]}
+    >
+      <Ionicons
+        name={loadingIcon}
+        size={50}
+        color={theme.colors.textSecondary}
+      />
+      <Text
+        style={[
+          styles.loadingText,
+          { color: theme.colors.textSecondary },
+        ]}
+      >
+        {loadingText}
+      </Text>
+    </View>
+  );
+
+  // Web: Use iframe
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[styles.webview, style]}>
+        {isLoading && renderLoading()}
+        {url && (
+          <iframe
+            ref={iframeRef as any}
+            src={url}
+            style={{
+              flex: 1,
+              width: '100%',
+              height: '100%',
+              border: 'none',
+              display: isLoading ? 'none' : 'block',
+            }}
+            onLoad={handleIframeLoad}
+            onError={handleIframeError}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+          />
+        )}
+      </View>
+    );
+  }
+
+  // Native: Use WebView
   return (
     <>
-      {isLoading && (
-        <View
-          style={[
-            styles.loadingContainer,
-            { backgroundColor: theme.colors.background },
-          ]}
-        >
-          <Ionicons
-            name={loadingIcon}
-            size={50}
-            color={theme.colors.textSecondary}
-          />
-          <Text
-            style={[
-              styles.loadingText,
-              { color: theme.colors.textSecondary },
-            ]}
-          >
-            {loadingText}
-          </Text>
-        </View>
-      )}
+      {isLoading && renderLoading()}
       <WebView
         ref={webViewRef}
         {...restWebViewProps}

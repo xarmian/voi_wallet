@@ -1,5 +1,4 @@
-import * as Clipboard from 'expo-clipboard';
-import { Alert } from 'react-native';
+import { clipboard, alert } from '../platform';
 
 /**
  * Copy text to clipboard with user feedback
@@ -11,13 +10,13 @@ export const copyToClipboard = async (
   successMessage?: string
 ): Promise<void> => {
   try {
-    await Clipboard.setStringAsync(text);
+    await clipboard.setString(text);
     if (successMessage) {
-      Alert.alert('Copied!', successMessage);
+      alert.show('Copied!', successMessage);
     }
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
-    Alert.alert('Error', 'Failed to copy to clipboard');
+    alert.show('Error', 'Failed to copy to clipboard');
   }
 };
 
@@ -27,7 +26,7 @@ export const copyToClipboard = async (
  */
 export const getFromClipboard = async (): Promise<string> => {
   try {
-    return await Clipboard.getStringAsync();
+    return await clipboard.getString();
   } catch (error) {
     console.error('Failed to get from clipboard:', error);
     return '';

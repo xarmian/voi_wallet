@@ -152,3 +152,42 @@ export function collectArc0300Entries(
 export function isArc0300AccountImportUri(uri: string): boolean {
   return parseArc0300AccountImportUri(uri) !== null;
 }
+
+/**
+ * Generate an ARC-0300 account export URI containing a private key.
+ * Used for transferring an account to an air-gapped device.
+ *
+ * @param params.privateKeyBytes - The 64-byte Ed25519 secret key
+ * @param params.name - Optional account name/label
+ * @returns ARC-0300 URI string (e.g., avm://account/import?privatekey=<base64>&name=<name>)
+ */
+export function generateArc0300AccountExportUri(params: {
+  privateKeyBytes: Uint8Array;
+  name?: string;
+}): string {
+  const { privateKeyBytes, name } = params;
+
+  // Validate key length (should be 64 bytes for Ed25519 secret key)
+  if (privateKeyBytes.length !== 64) {
+    throw new Error(
+      `Invalid private key length: expected 64 bytes, got ${privateKeyBytes.length}`
+    );
+  }
+
+  // Convert to URL-safe base64 (RFC 4648 §5)
+  // Replace + with -, / with _, and remove padding =
+  const privateKeyBase64 = Buffer.from(privateKeyBytes)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  // Build the URI
+  let uri = `avm://account/import?privatekey=${privateKeyBase64}`;
+
+  if (name) {
+    uri += `&name=${encodeURIComponent(name)}`;
+  }
+
+  return uri;
+}

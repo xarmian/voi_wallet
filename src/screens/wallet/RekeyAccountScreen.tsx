@@ -20,6 +20,7 @@ import {
   StandardAccountMetadata,
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
   LedgerSigningInfo,
 } from '@/types/wallet';
 import { TransactionService } from '@/services/transactions';
@@ -36,6 +37,7 @@ import {
   UnifiedTransactionRequest,
 } from '@/services/transactions/unifiedSigner';
 import RekeyToLedger from '@/components/ledger/RekeyToLedger';
+import AirgapVerificationFlow from '@/components/rekey/AirgapVerificationFlow';
 import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig, NETWORK_CONFIGURATIONS } from '@/services/network/config';
@@ -54,7 +56,7 @@ interface RekeyAccountParams {
   accountId: string;
 }
 
-type RekeyFlow = 'standard' | 'ledger' | 'reverse';
+type RekeyFlow = 'standard' | 'ledger' | 'reverse' | 'airgap';
 
 export default function RekeyAccountScreen() {
   const route = useRoute<RekeyAccountScreenRouteProp>();
@@ -72,6 +74,8 @@ export default function RekeyAccountScreen() {
     useState<StandardAccountMetadata | null>(null);
   const [selectedLedgerAccount, setSelectedLedgerAccount] =
     useState<LedgerAccountMetadata | null>(null);
+  const [selectedAirgapAccount, setSelectedAirgapAccount] =
+    useState<RemoteSignerAccountMetadata | null>(null);
   const [isLedgerReady, setIsLedgerReady] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -80,6 +84,9 @@ export default function RekeyAccountScreen() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [networkRekeyInfo, setNetworkRekeyInfo] = useState<any>(null);
   const [loadingRekeyInfo, setLoadingRekeyInfo] = useState(false);
+  // Airgap verification state
+  const [showVerificationFlow, setShowVerificationFlow] = useState(false);
+  const [airgapVerified, setAirgapVerified] = useState(false);
 
   // Use the unified auth controller
   const authController = useTransactionAuthController();
@@ -93,6 +100,9 @@ export default function RekeyAccountScreen() {
   const ledgerAccounts = (wallet?.accounts.filter(
     (acc) => acc.type === AccountType.LEDGER
   ) ?? []) as LedgerAccountMetadata[];
+  const airgapAccounts = (wallet?.accounts.filter(
+    (acc) => acc.type === AccountType.REMOTE_SIGNER && acc.id !== params.accountId
+  ) ?? []) as RemoteSignerAccountMetadata[];
 
   // Check if source account is rekeyed on the selected network
   const isSourceRekeyed = networkRekeyInfo?.isRekeyed === true;
@@ -104,7 +114,7 @@ export default function RekeyAccountScreen() {
   const authSignerAccount = isSourceRekeyed && networkAuthAddress ?
     wallet?.accounts.find(
       (acc) => acc.address.toUpperCase() === networkAuthAddress.toUpperCase() &&
-      (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER)
+      (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER || acc.type === AccountType.REMOTE_SIGNER)
     ) : undefined;
 
   // Check if we have the source account in our wallet (to maintain control after rekey)
@@ -119,20 +129,26 @@ export default function RekeyAccountScreen() {
 
   const isReverseFlow = rekeyFlow === 'reverse';
   const isLedgerFlow = rekeyFlow === 'ledger';
+  const isAirgapFlow = rekeyFlow === 'airgap';
   const hasTargetSelection =
     rekeyFlow === 'standard'
       ? !!selectedStandardAccount
       : rekeyFlow === 'ledger'
       ? !!selectedLedgerAccount
+      : rekeyFlow === 'airgap'
+      ? !!selectedAirgapAccount
       : true;
   const isProceedDisabled =
     (rekeyFlow !== 'reverse' && !hasTargetSelection) ||
     validationErrors.length > 0 ||
     isValidating;
+  // Show "Verify Airgap Signer" when not yet verified, otherwise "Rekey to Airgap Signer"
   const proceedLabel = isReverseFlow
     ? 'Remove Rekey'
     : isLedgerFlow
     ? 'Rekey to Ledger'
+    : isAirgapFlow
+    ? (airgapVerified ? 'Rekey to Airgap Signer' : 'Verify Airgap Signer')
     : 'Rekey Account';
 
   useEffect(() => {
@@ -200,7 +216,11 @@ export default function RekeyAccountScreen() {
       targetAddress = sourceAccount.address; // Rekey back to self
     } else {
       const targetAccount =
-        rekeyFlow === 'ledger' ? selectedLedgerAccount : selectedStandardAccount;
+        rekeyFlow === 'ledger'
+          ? selectedLedgerAccount
+          : rekeyFlow === 'airgap'
+          ? selectedAirgapAccount
+          : selectedStandardAccount;
       if (!targetAccount) {
         setValidationErrors([]);
         return;
@@ -243,6 +263,7 @@ export default function RekeyAccountScreen() {
     rekeyFlow,
     selectedLedgerAccount,
     selectedStandardAccount,
+    selectedAirgapAccount,
     sourceAccount,
     wallet,
     isLedgerReady,
@@ -257,7 +278,15 @@ export default function RekeyAccountScreen() {
     ) {
       setSelectedLedgerAccount(ledgerAccounts[0]);
     }
-  }, [ledgerAccounts, rekeyFlow, selectedLedgerAccount]);
+    // Auto-select airgap account if only one available
+    if (
+      rekeyFlow === 'airgap' &&
+      !selectedAirgapAccount &&
+      airgapAccounts.length === 1
+    ) {
+      setSelectedAirgapAccount(airgapAccounts[0]);
+    }
+  }, [ledgerAccounts, airgapAccounts, rekeyFlow, selectedLedgerAccount, selectedAirgapAccount]);
 
   const handleStandardAccountSelect = (account: StandardAccountMetadata) => {
     setSelectedStandardAccount(account);
@@ -265,6 +294,12 @@ export default function RekeyAccountScreen() {
 
   const handleLedgerAccountSelect = (account: LedgerAccountMetadata | null) => {
     setSelectedLedgerAccount(account);
+  };
+
+  const handleAirgapAccountSelect = (account: RemoteSignerAccountMetadata) => {
+    setSelectedAirgapAccount(account);
+    // Reset verification when a different account is selected
+    setAirgapVerified(false);
   };
 
   const handleLedgerStatusUpdate = useCallback(
@@ -301,28 +336,42 @@ export default function RekeyAccountScreen() {
     }
 
     const targetAccount =
-      rekeyFlow === 'ledger' ? selectedLedgerAccount : selectedStandardAccount;
+      rekeyFlow === 'ledger'
+        ? selectedLedgerAccount
+        : rekeyFlow === 'airgap'
+        ? selectedAirgapAccount
+        : selectedStandardAccount;
 
     if (!targetAccount) {
       Alert.alert(
         'Select Account',
         rekeyFlow === 'ledger'
           ? 'Select a Ledger account to continue.'
+          : rekeyFlow === 'airgap'
+          ? 'Select an airgap signer account to continue.'
           : 'Select a signing account to continue.'
       );
       return;
     }
 
-    const ledgerNotice =
+    // For airgap flow, if not verified, show verification flow instead of proceeding
+    if (rekeyFlow === 'airgap' && !airgapVerified) {
+      setShowVerificationFlow(true);
+      return;
+    }
+
+    const deviceNotice =
       rekeyFlow === 'ledger'
         ? '\n\nAfter rekeying, future transactions must be approved with your Ledger device.'
+        : rekeyFlow === 'airgap'
+        ? '\n\nAfter rekeying, future transactions must be signed with your airgap signer device via QR codes.'
         : '\n\nThis action can be reversed later.';
 
     Alert.alert(
       'Confirm Rekey Operation',
       `Are you sure you want to rekey this account?\n\nThis will transfer signing authority from:\n${formatAddress(
         sourceAccount.address
-      )}\n\nTo:\n${formatAddress(targetAccount.address)}${ledgerNotice}`,
+      )}\n\nTo:\n${formatAddress(targetAccount.address)}${deviceNotice}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -364,6 +413,16 @@ export default function RekeyAccountScreen() {
     setValidationErrors([]);
   };
 
+  const handleAirgapRekey = () => {
+    if (rekeyFlow === 'airgap') {
+      // Already in airgap flow, don't reset state
+      return;
+    }
+    setRekeyFlow('airgap');
+    setValidationErrors([]);
+    setAirgapVerified(false);
+  };
+
   const applyLedgerMetadataUpdate = useCallback(
     async (account: AccountMetadata, ledgerAccount: LedgerAccountMetadata) => {
       if (!wallet) {
@@ -397,13 +456,50 @@ export default function RekeyAccountScreen() {
     [wallet]
   );
 
+  const applyAirgapMetadataUpdate = useCallback(
+    async (account: AccountMetadata, airgapAccount: RemoteSignerAccountMetadata) => {
+      if (!wallet) {
+        return;
+      }
+
+      try {
+        const updatedAccount = await rekeyManager.rekeyToAirgap(
+          account,
+          airgapAccount,
+          wallet
+        );
+
+        await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
+
+        const currentState = useWalletStore.getState();
+        if (currentState.wallet) {
+          useWalletStore.setState({
+            wallet: {
+              ...currentState.wallet,
+              accounts: currentState.wallet.accounts.map((candidate) =>
+                candidate.id === updatedAccount.id ? updatedAccount : candidate
+              ),
+            },
+          });
+        }
+      } catch (metadataError) {
+        console.warn('Failed to update airgap rekey metadata immediately:', metadataError);
+      }
+    },
+    [wallet]
+  );
+
   const handleStartRekey = () => {
     if (!sourceAccount) {
       return;
     }
 
     const targetAccount =
-      rekeyFlow === 'ledger' ? selectedLedgerAccount : selectedStandardAccount;
+      rekeyFlow === 'ledger'
+        ? selectedLedgerAccount
+        : rekeyFlow === 'airgap'
+        ? selectedAirgapAccount
+        : selectedStandardAccount;
 
     // Create unified transaction request
     const request: UnifiedTransactionRequest = {
@@ -438,6 +534,46 @@ export default function RekeyAccountScreen() {
         }
       }
 
+      // Apply Airgap metadata update if needed
+      if (rekeyFlow === 'airgap' && selectedAirgapAccount && sourceAccount) {
+        try {
+          await applyAirgapMetadataUpdate(sourceAccount, selectedAirgapAccount);
+        } catch (metadataError) {
+          console.warn('Failed to update airgap rekey metadata:', metadataError);
+        }
+      }
+
+      // Apply reverse rekey metadata update - convert back to standard account
+      if (rekeyFlow === 'reverse' && sourceAccount) {
+        try {
+          // Convert the rekeyed account back to standard
+          const rekeyInfo = { isRekeyed: false, authAddress: undefined };
+          const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
+            sourceAccount,
+            rekeyInfo,
+            wallet!
+          );
+
+          if (updatedAccount.type !== sourceAccount.type) {
+            await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
+
+            const currentState = useWalletStore.getState();
+            if (currentState.wallet) {
+              useWalletStore.setState({
+                wallet: {
+                  ...currentState.wallet,
+                  accounts: currentState.wallet.accounts.map((candidate) =>
+                    candidate.id === updatedAccount.id ? updatedAccount : candidate
+                  ),
+                },
+              });
+            }
+          }
+        } catch (metadataError) {
+          console.warn('Failed to update reverse rekey metadata:', metadataError);
+        }
+      }
+
       // Refresh account data
       if (sourceAccount) {
         setTimeout(async () => {
@@ -454,6 +590,8 @@ export default function RekeyAccountScreen() {
           ? 'Rekey Removed'
           : rekeyFlow === 'ledger'
           ? 'Ledger Rekey Successful'
+          : rekeyFlow === 'airgap'
+          ? 'Airgap Rekey Successful'
           : 'Rekey Successful';
 
       const message =
@@ -461,6 +599,8 @@ export default function RekeyAccountScreen() {
           ? `Account rekey has been removed successfully!\n\nYou now have full control of this account again.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
           : rekeyFlow === 'ledger'
           ? `Account has been rekeyed to your Ledger device successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
+          : rekeyFlow === 'airgap'
+          ? `Account has been rekeyed to your airgap signer successfully!\n\nFuture transactions will require signing via QR code.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
           : `Account has been rekeyed successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`;
 
       Alert.alert(title, message, [
@@ -738,6 +878,44 @@ export default function RekeyAccountScreen() {
               </Text>
             </TouchableOpacity>
 
+            {airgapAccounts.length > 0 && (
+              <TouchableOpacity
+                style={[
+                  styles.rekeyTypeOption,
+                  {
+                    backgroundColor: theme.colors.card,
+                    borderColor: theme.colors.border,
+                  },
+                  rekeyFlow === 'airgap' && {
+                    borderColor: theme.colors.primary,
+                    backgroundColor: theme.colors.primaryLight,
+                  },
+                ]}
+                onPress={handleAirgapRekey}
+              >
+                <Ionicons
+                  name="phone-portrait-outline"
+                  size={20}
+                  color={
+                    rekeyFlow === 'airgap' ? theme.colors.primary : '#6B7280'
+                  }
+                />
+                <Text
+                  style={[
+                    styles.rekeyTypeText,
+                    {
+                      color:
+                        rekeyFlow === 'airgap'
+                          ? theme.colors.primary
+                          : theme.colors.textSecondary,
+                    },
+                  ]}
+                >
+                  Rekey to Airgap Signer
+                </Text>
+              </TouchableOpacity>
+            )}
+
             {isSourceRekeyed ? (
               <TouchableOpacity
                 style={[
@@ -881,6 +1059,118 @@ export default function RekeyAccountScreen() {
               }
               isBusy={isProcessing}
             />
+          </View>
+        )}
+
+        {/* Airgap Signer Selection */}
+        {rekeyFlow === 'airgap' && (
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+              Select Airgap Signer
+            </Text>
+            <Text
+              style={[
+                styles.sectionSubtitle,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
+              Choose which airgap signer device will have signing authority
+            </Text>
+
+            {airgapAccounts.length === 0 ? (
+              <View
+                style={[
+                  styles.noAccountsContainer,
+                  {
+                    backgroundColor: theme.colors.card,
+                    borderColor: theme.colors.border,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="phone-portrait-outline"
+                  size={48}
+                  color={theme.colors.warning}
+                />
+                <Text
+                  style={[
+                    styles.noAccountsText,
+                    { color: theme.colors.textSecondary },
+                  ]}
+                >
+                  No airgap signer accounts available. Import an airgap signer first.
+                </Text>
+              </View>
+            ) : (
+              airgapAccounts.map((account) => (
+                <TouchableOpacity
+                  key={account.id}
+                  style={[
+                    styles.targetAccountCard,
+                    {
+                      backgroundColor: theme.colors.card,
+                      borderColor: theme.colors.border,
+                    },
+                    selectedAirgapAccount?.id === account.id && {
+                      borderColor: airgapVerified ? theme.colors.success : theme.colors.primary,
+                      backgroundColor: airgapVerified ? theme.colors.successLight : theme.colors.primaryLight,
+                    },
+                  ]}
+                  onPress={() => handleAirgapAccountSelect(account)}
+                >
+                  <AccountAvatar address={account.address} size={36} />
+                  <View style={styles.accountInfo}>
+                    <Text
+                      style={[
+                        styles.targetAccountName,
+                        { color: theme.colors.text },
+                      ]}
+                    >
+                      {account.label || account.signerDeviceName || 'Airgap Signer'}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.targetAccountAddress,
+                        { color: theme.colors.textSecondary },
+                      ]}
+                    >
+                      {formatAddress(account.address)}
+                    </Text>
+                  </View>
+                  {selectedAirgapAccount?.id === account.id && airgapVerified && (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={24}
+                      color={theme.colors.success}
+                    />
+                  )}
+                </TouchableOpacity>
+              ))
+            )}
+
+            {/* Verified success message */}
+            {selectedAirgapAccount && airgapVerified && (
+              <View
+                style={[
+                  styles.reverseRekeyInfo,
+                  { backgroundColor: theme.colors.successLight, marginTop: 12 },
+                ]}
+              >
+                <Ionicons
+                  name="checkmark-circle"
+                  size={20}
+                  color={theme.colors.success}
+                />
+                <Text
+                  style={[
+                    styles.reverseRekeyInfoText,
+                    { color: theme.colors.success },
+                  ]}
+                >
+                  Device verified! You can now proceed with the rekey.
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -1074,6 +1364,25 @@ export default function RekeyAccountScreen() {
         title="Confirm Rekey"
         message="Authenticate to confirm the rekey transaction"
       />
+
+      {/* Airgap Verification Flow Modal */}
+      {showVerificationFlow && selectedAirgapAccount && (
+        <AirgapVerificationFlow
+          targetAccount={selectedAirgapAccount}
+          networkId={selectedNetworkId}
+          onVerificationSuccess={() => {
+            setAirgapVerified(true);
+            setShowVerificationFlow(false);
+            // Don't auto-proceed - let user see the updated state and click proceed button
+            // This allows them to see any validation errors first
+          }}
+          onVerificationFailure={(error) => {
+            Alert.alert('Verification Failed', error);
+            setShowVerificationFlow(false);
+          }}
+          onCancel={() => setShowVerificationFlow(false)}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -1287,5 +1596,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     fontWeight: '500',
+  },
+  verificationBadge: {
+    marginLeft: 8,
+  },
+  verificationNeeded: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

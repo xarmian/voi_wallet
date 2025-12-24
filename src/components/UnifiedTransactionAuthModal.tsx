@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Modal,
   View,
@@ -6,18 +6,31 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
-  Vibration,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
+
+// Cross-platform vibration helper
+const vibrate = (duration: number) => {
+  if (Platform.OS !== 'web') {
+    const { Vibration } = require('react-native');
+    Vibration.vibrate(duration);
+  }
+};
 import {
   TransactionAuthController,
   TransactionAuthState_Interface,
   LedgerSigningStatus,
+  RemoteSignerStatus,
 } from '@/services/auth/transactionAuthController';
 import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
+import { AnimatedQRCode, AnimatedQRScanner } from '@/components/remoteSigner';
+import { RemoteSignerService } from '@/services/remoteSigner';
+import { isRemoteSignerResponse, RemoteSignerResponse } from '@/types/remoteSigner';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -38,12 +51,18 @@ export default function UnifiedTransactionAuthModal({
   title = 'Transaction Authentication',
   message = 'Authenticate to complete this transaction',
 }: UnifiedTransactionAuthModalProps) {
+  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [authState, setAuthState] = useState<TransactionAuthState_Interface>(controller.getState());
   const [pin, setPin] = useState('');
   const [initialized, setInitialized] = useState(false);
   const [biometricAttempted, setBiometricAttempted] = useState(false);
   const [userCancelled, setUserCancelled] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+
+  // Guard to prevent onComplete from being called multiple times per auth flow
+  // This prevents double-submission when the onComplete prop reference changes during re-renders
+  const hasCalledOnComplete = useRef(false);
 
   // Subscribe to controller state changes
   useEffect(() => {
@@ -62,13 +81,25 @@ export default function UnifiedTransactionAuthModal({
     }
   }, [visible, request, controller, authState.state, initialized, userCancelled, authState.error, authState.ledgerError]);
 
-  // Handle completion state and certain error states that should close the modal
+  // Handle completion state - wait for result to be populated before calling onComplete
+  // The hasCalledOnComplete guard prevents double-calls when onComplete prop reference changes
   useEffect(() => {
-    if (authState.state === 'completed') {
+    if (authState.state === 'completed' && authState.result && !hasCalledOnComplete.current) {
+      hasCalledOnComplete.current = true;
       onComplete(true, authState.result);
+    }
+  }, [authState.state, authState.result, onComplete]);
+
+  // Reset controller when modal is hidden (after parent closes it)
+  // Use a ref to track previous visibility and only reset on transition from visible to hidden
+  const wasVisibleRef = React.useRef(visible);
+  useEffect(() => {
+    if (wasVisibleRef.current && !visible) {
+      // Modal was just hidden - reset controller
       controller.resetAfterDismiss();
     }
-  }, [authState.state, authState.result, onComplete, controller]);
+    wasVisibleRef.current = visible;
+  }, [visible, controller]);
 
   // Auto-prompt for biometric auth when available (only once per open)
   useEffect(() => {
@@ -85,6 +116,7 @@ export default function UnifiedTransactionAuthModal({
       setInitialized(false);
       setBiometricAttempted(false);
       setUserCancelled(false);
+      hasCalledOnComplete.current = false;
     }
   }, [visible, authState.state]);
 
@@ -105,15 +137,18 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handlePinSubmit = async (enteredPin: string) => {
+    setIsVerifying(true);
     try {
       const success = await controller.authenticateWithPin(enteredPin);
       if (!success) {
         setPin('');
-        Vibration.vibrate(500);
+        vibrate(500);
       }
     } catch (error) {
       console.error('PIN authentication error:', error);
       setPin('');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -139,6 +174,72 @@ export default function UnifiedTransactionAuthModal({
     controller.retryLedgerConnection();
   };
 
+  // Remote signer handlers
+  const handleRemoteSignerScanResponse = useCallback(() => {
+    controller.startRemoteSignerScan();
+  }, [controller]);
+
+  const handleRemoteSignerScanned = useCallback(async (data: string) => {
+    try {
+      // Decode the scanned data
+      const payload = RemoteSignerService.decodePayload(data);
+
+      if (!isRemoteSignerResponse(payload)) {
+        console.error('Scanned data is not a valid remote signer response');
+        return;
+      }
+
+      await controller.processRemoteSignerResponse(payload as RemoteSignerResponse);
+    } catch (error) {
+      console.error('Failed to process remote signer response:', error);
+    }
+  }, [controller]);
+
+  const handleRemoteSignerCancel = useCallback(() => {
+    controller.cancelRemoteSignerFlow();
+    handleCancel();
+  }, [controller, handleCancel]);
+
+  const getRemoteSignerStatusDisplay = (status: RemoteSignerStatus) => {
+    switch (status) {
+      case 'displaying_request':
+        return {
+          icon: 'qr-code' as const,
+          title: 'Scan with Signer Device',
+          message: 'Use your air-gapped signer device to scan this QR code and sign the transaction.',
+          color: theme.colors.primary,
+        };
+      case 'waiting_signature':
+        return {
+          icon: 'scan' as const,
+          title: 'Scan Signed Response',
+          message: 'After signing on your signer device, scan the response QR code below.',
+          color: theme.colors.primary,
+        };
+      case 'processing_response':
+        return {
+          icon: 'hourglass' as const,
+          title: 'Processing',
+          message: 'Verifying and submitting your signed transaction...',
+          color: theme.colors.primary,
+        };
+      case 'error':
+        return {
+          icon: 'alert-circle' as const,
+          title: 'Signing Error',
+          message: authState.remoteSignerError || 'Failed to complete remote signing.',
+          color: theme.colors.error,
+        };
+      default:
+        return {
+          icon: 'qr-code' as const,
+          title: 'Remote Signer',
+          message: 'Preparing remote signing request...',
+          color: theme.colors.primary,
+        };
+    }
+  };
+
   const errorMessageLower = (
     authState.error?.message || authState.ledgerError || ''
   ).toLowerCase();
@@ -148,12 +249,22 @@ export default function UnifiedTransactionAuthModal({
     (errorMessageLower.includes('cancelled by user') ||
       errorMessageLower.includes('rejected on ledger'));
 
-  const getErrorTitle = () =>
-    isUserRejectedError ? 'Transaction Cancelled' : 'Transaction Failed';
+  const isRequestMismatchError =
+    authState.state === 'error' &&
+    errorMessageLower.includes('does not match');
+
+  const getErrorTitle = () => {
+    if (isUserRejectedError) return 'Transaction Cancelled';
+    if (isRequestMismatchError) return 'Wrong QR Code';
+    return 'Transaction Failed';
+  };
 
   const getErrorMessage = () => {
     if (isUserRejectedError) {
       return 'You rejected this transaction on your Ledger device.';
+    }
+    if (isRequestMismatchError) {
+      return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
     return authState.error?.message || authState.ledgerError || 'An unknown error occurred.';
   };
@@ -162,8 +273,10 @@ export default function UnifiedTransactionAuthModal({
     if (
       authState.state === 'error' &&
       !isUserRejectedError &&
-      (authState.error || authState.ledgerError)
+      (authState.error || authState.ledgerError) &&
+      !hasCalledOnComplete.current
     ) {
+      hasCalledOnComplete.current = true;
       const err =
         authState.error ||
         new Error(authState.ledgerError || 'Transaction failed');
@@ -174,13 +287,14 @@ export default function UnifiedTransactionAuthModal({
 
   const renderPinDots = () => {
     return (
-      <View style={styles.pinContainer}>
-        {[0, 1, 2, 3, 4, 5].map((index) => (
+      <View style={styles.pinDots}>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
           <View
-            key={index}
+            key={i}
             style={[
               styles.pinDot,
-              index < pin.length ? styles.pinDotFilled : null,
+              i < pin.length && styles.pinDotFilled,
+              { backgroundColor: i < pin.length ? theme.colors.primary : 'transparent' },
             ]}
           />
         ))}
@@ -189,34 +303,51 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const renderKeypad = () => {
-    const numbers = [
+    // Use SignerAuthModal-style keypad with integrated biometric button
+    const rows = [
       ['1', '2', '3'],
       ['4', '5', '6'],
       ['7', '8', '9'],
-      ['', '0', 'backspace'],
+      ['bio', '0', 'del'],
     ];
 
     return (
-      <View style={styles.keypad}>
-        {numbers.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.keypadRow}>
-            {row.map((item, itemIndex) => {
-              if (item === '') {
-                return <View key={itemIndex} style={styles.keypadButton} />;
-              }
-
-              if (item === 'backspace') {
+      <View style={styles.numberPad}>
+        {rows.map((row, rowIndex) => (
+          <View key={rowIndex} style={styles.numberRow}>
+            {row.map((key) => {
+              if (key === 'bio') {
+                if (!authState.biometricAvailable) {
+                  return <View key={key} style={styles.numberButton} />;
+                }
                 return (
                   <TouchableOpacity
-                    key={itemIndex}
-                    style={styles.keypadButton}
+                    key={key}
+                    style={styles.numberButton}
+                    onPress={handleBiometricAuth}
+                    disabled={authState.isLocked || authState.state !== 'authenticating'}
+                  >
+                    <Ionicons
+                      name="finger-print"
+                      size={28}
+                      color={authState.isLocked ? theme.colors.textMuted : theme.colors.primary}
+                    />
+                  </TouchableOpacity>
+                );
+              }
+
+              if (key === 'del') {
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.numberButton}
                     onPress={handleBackspace}
                     disabled={authState.isLocked || authState.state !== 'authenticating'}
                   >
                     <Ionicons
                       name="backspace-outline"
-                      size={20}
-                      color={styles.keypadIconColor}
+                      size={24}
+                      color={authState.isLocked ? theme.colors.textMuted : theme.colors.text}
                     />
                   </TouchableOpacity>
                 );
@@ -224,12 +355,19 @@ export default function UnifiedTransactionAuthModal({
 
               return (
                 <TouchableOpacity
-                  key={itemIndex}
-                  style={styles.keypadButton}
-                  onPress={() => handleNumberPress(item)}
+                  key={key}
+                  style={[styles.numberButton, styles.numberButtonWithBg]}
+                  onPress={() => handleNumberPress(key)}
                   disabled={authState.isLocked || authState.state !== 'authenticating'}
                 >
-                  <Text style={styles.keypadButtonText}>{item}</Text>
+                  <Text
+                    style={[
+                      styles.numberText,
+                      authState.isLocked && styles.numberTextDisabled,
+                    ]}
+                  >
+                    {key}
+                  </Text>
                 </TouchableOpacity>
               );
             })}
@@ -251,35 +389,35 @@ export default function UnifiedTransactionAuthModal({
           message: deviceConnected
             ? 'Please unlock your Ledger device and open the Algorand app...'
             : 'Looking for your Ledger device. Please unlock it and open the Algorand app...',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'connecting':
         return {
           icon: 'link' as const,
           title: 'Connecting to Ledger',
           message: 'Connecting to your Ledger device. Please ensure it is unlocked and the Algorand app is open.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'app_required':
         return {
           icon: 'apps' as const,
           title: 'Open Algorand App',
           message: 'Please open the Algorand application on your Ledger device.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'ready':
         return {
           icon: 'checkmark-circle' as const,
           title: 'Ledger Ready',
           message: 'Your Ledger device is ready. Preparing transaction...',
-          color: styles.successIconColor,
+          color: theme.colors.success,
         };
       case 'device_locked':
         return {
           icon: 'lock-closed' as const,
           title: 'Unlock Ledger',
           message: 'Please unlock your Ledger device to continue.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'waiting_confirmation':
         return {
@@ -288,28 +426,129 @@ export default function UnifiedTransactionAuthModal({
           message: authState.signingProgress
             ? authState.signingProgress.message || 'Please review and approve the transaction on your Ledger device.'
             : 'Please review and approve the transaction on your Ledger device.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       case 'error':
         return {
           icon: 'link' as const,
           title: 'Connecting to Ledger',
           message: authState.ledgerError || 'Trying to connect to your Ledger device. Please ensure it is connected, unlocked, and the Algorand app is open.',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
       default:
         return {
           icon: 'hardware-chip' as const,
           title: 'Initializing Ledger',
           message: 'Preparing Ledger connection...',
-          color: styles.primaryIconColor,
+          color: theme.colors.primary,
         };
     }
+  };
+
+  // Render remote signer content
+  const renderRemoteSignerContent = () => {
+    const remoteDisplay = getRemoteSignerStatusDisplay(authState.remoteSignerStatus);
+
+    // Show QR scanner when waiting for signature
+    if (authState.remoteSignerStatus === 'waiting_signature') {
+      return (
+        <View style={styles.remoteSignerContainer}>
+          <Text style={styles.remoteSignerTitle}>{remoteDisplay.title}</Text>
+          <Text style={styles.remoteSignerMessage}>{remoteDisplay.message}</Text>
+          <View style={styles.scannerContainer}>
+            <AnimatedQRScanner
+              onScan={handleRemoteSignerScanned}
+              onError={(error) => console.error('Remote signer scan error:', error)}
+              instructionsText="Scan the signed response from your signer device"
+              showProgress={true}
+              compact={true}
+            />
+          </View>
+        </View>
+      );
+    }
+
+    // Show processing state
+    if (authState.remoteSignerStatus === 'processing_response') {
+      return (
+        <View style={styles.processingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.processingTitle}>{remoteDisplay.title}</Text>
+          <Text style={styles.processingMessage}>{remoteDisplay.message}</Text>
+        </View>
+      );
+    }
+
+    // Show error state
+    if (authState.remoteSignerStatus === 'error') {
+      return (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle" size={48} color={theme.colors.error} />
+          <Text style={styles.errorTitle}>{remoteDisplay.title}</Text>
+          <Text style={styles.errorMessage}>{remoteDisplay.message}</Text>
+        </View>
+      );
+    }
+
+    // Default: Show QR code for signer to scan (displaying_request)
+    const qrData = authState.remoteSignerRequest
+      ? RemoteSignerService.encodePayload(authState.remoteSignerRequest)
+      : null;
+
+    return (
+      <View style={styles.remoteSignerContainer}>
+        <Text style={styles.remoteSignerTitle}>{remoteDisplay.title}</Text>
+        <Text style={styles.remoteSignerMessage}>{remoteDisplay.message}</Text>
+
+        {qrData ? (
+          <View style={styles.qrWrapper}>
+            <AnimatedQRCode
+              data={qrData}
+              size={180}
+              showControls={true}
+              showFrameCounter={true}
+            />
+          </View>
+        ) : (
+          <View style={styles.loadingQR}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={styles.loadingQRText}>Preparing QR code...</Text>
+          </View>
+        )}
+
+        {/* Instructions for the signer flow */}
+        <View style={styles.remoteSignerInstructions}>
+          <View style={styles.instructionStep}>
+            <View style={styles.stepNumber}>
+              <Text style={styles.stepNumberText}>1</Text>
+            </View>
+            <Text style={styles.stepText}>Scan this QR with your signer device</Text>
+          </View>
+          <View style={styles.instructionStep}>
+            <View style={styles.stepNumber}>
+              <Text style={styles.stepNumberText}>2</Text>
+            </View>
+            <Text style={styles.stepText}>Review and sign on the signer</Text>
+          </View>
+          <View style={styles.instructionStep}>
+            <View style={styles.stepNumber}>
+              <Text style={styles.stepNumberText}>3</Text>
+            </View>
+            <Text style={styles.stepText}>Tap "Scan Response" below</Text>
+          </View>
+        </View>
+      </View>
+    );
   };
 
   const renderContent = () => {
     switch (authState.state) {
       case 'authenticating':
+        // Remote signer flow - show QR immediately (no PIN required)
+        if (authState.isRemoteSignerFlow) {
+          return renderRemoteSignerContent();
+        }
+
         if (authState.isLedgerFlow) {
           // Always show Ledger status flow for Ledger accounts (never PIN/biometric)
           const ledgerDisplay = getLedgerStatusDisplay(authState.ledgerStatus);
@@ -360,25 +599,11 @@ export default function UnifiedTransactionAuthModal({
           );
         }
 
-        // Show PIN/biometric authentication (non-Ledger only)
+        // Standard PIN/biometric now uses bottom sheet, so this shouldn't be reached
+        // Keep as fallback just in case
         return (
           <>
             {renderPinDots()}
-
-            {authState.biometricAvailable && !authState.isLocked && (
-              <TouchableOpacity
-                style={styles.biometricButton}
-                onPress={handleBiometricAuth}
-              >
-                <Ionicons
-                  name="finger-print"
-                  size={24}
-                  color={styles.primaryIconColor}
-                />
-                <Text style={styles.biometricText}>Use Biometric</Text>
-              </TouchableOpacity>
-            )}
-
             {renderKeypad()}
 
             {authState.isLocked && (
@@ -392,6 +617,11 @@ export default function UnifiedTransactionAuthModal({
         );
 
       case 'signing':
+        // Remote signer uses the same content rendering for signing state
+        if (authState.isRemoteSignerFlow) {
+          return renderRemoteSignerContent();
+        }
+
         if (authState.isLedgerFlow) {
           const ledgerDisplay = getLedgerStatusDisplay(authState.ledgerStatus);
           return (
@@ -429,7 +659,7 @@ export default function UnifiedTransactionAuthModal({
 
         return (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color={styles.primaryIconColor as any} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={styles.processingTitle}>Signing Transaction</Text>
             <Text style={styles.processingMessage}>
               Please wait while your transaction is being signed...
@@ -440,7 +670,7 @@ export default function UnifiedTransactionAuthModal({
       case 'processing':
         return (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color={styles.primaryIconColor as any} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={styles.processingTitle}>Processing Transaction</Text>
             <Text style={styles.processingMessage}>
               Please wait while your transaction is being processed...
@@ -454,7 +684,7 @@ export default function UnifiedTransactionAuthModal({
             <Ionicons
               name="checkmark-circle"
               size={48}
-              color={styles.successIconColor}
+              color={theme.colors.success}
             />
             <Text style={styles.successTitle}>Transaction Complete</Text>
             <Text style={styles.successMessage}>
@@ -469,7 +699,7 @@ export default function UnifiedTransactionAuthModal({
             <Ionicons
               name={isUserRejectedError ? 'close-circle' : 'alert-circle'}
               size={48}
-              color={styles.errorIconColor}
+              color={theme.colors.error}
             />
             <Text style={styles.errorTitle}>{getErrorTitle()}</Text>
             <Text style={styles.errorMessage}>{getErrorMessage()}</Text>
@@ -479,7 +709,7 @@ export default function UnifiedTransactionAuthModal({
       default:
         return (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color={styles.primaryIconColor as any} />
+            <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={styles.processingTitle}>Initializing</Text>
             <Text style={styles.processingMessage}>
               Preparing transaction authentication...
@@ -496,6 +726,59 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const renderButtons = () => {
+    // Remote signer flow buttons
+    if (authState.isRemoteSignerFlow) {
+      // Show different buttons based on remote signer status
+      if (authState.remoteSignerStatus === 'displaying_request') {
+        return (
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={handleRemoteSignerCancel}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.button, styles.primaryButton]}
+              onPress={handleRemoteSignerScanResponse}
+            >
+              <Ionicons name="scan-outline" size={18} color={theme.colors.buttonText} style={{ marginRight: 6 }} />
+              <Text style={styles.primaryButtonText}>Scan Response</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      if (authState.remoteSignerStatus === 'waiting_signature') {
+        return (
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={handleRemoteSignerCancel}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      if (authState.remoteSignerStatus === 'error') {
+        return (
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={handleRemoteSignerCancel}
+            >
+              <Text style={styles.cancelButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      // No buttons during processing
+      return null;
+    }
+
     if (authState.state === 'processing' || authState.state === 'signing') {
       if (authState.isLedgerFlow && (authState.ledgerStatus === 'error' || authState.ledgerStatus === 'app_required')) {
         return (
@@ -567,11 +850,16 @@ export default function UnifiedTransactionAuthModal({
   };
 
 
+  // Use bottom sheet style for standard PIN/biometric auth, centered modal for other flows
+  const useBottomSheet = authState.state === 'authenticating' &&
+    !authState.isLedgerFlow &&
+    !authState.isRemoteSignerFlow;
+
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType={useBottomSheet ? 'slide' : 'fade'}
       onRequestClose={() => {
         // Only allow closing if not processing
         if (authState.state !== 'processing' && authState.state !== 'signing') {
@@ -580,28 +868,78 @@ export default function UnifiedTransactionAuthModal({
         }
       }}
     >
-      <View style={styles.overlay}>
-        <View style={styles.modal}>
-          <View style={styles.header}>
-            <Ionicons
-              name="shield-checkmark"
-              size={32}
-              color={styles.primaryIconColor}
-            />
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.message}>{message}</Text>
-          </View>
+      <View style={useBottomSheet ? styles.bottomSheetOverlay : styles.overlay}>
+        <View style={useBottomSheet ? styles.bottomSheetContainer : styles.modal}>
+          {useBottomSheet ? (
+            // Bottom sheet header for PIN entry
+            <>
+              <View style={styles.bottomSheetHeader}>
+                <TouchableOpacity style={styles.bottomSheetCancelButton} onPress={handleCancel}>
+                  <Text style={styles.bottomSheetCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <Text style={styles.bottomSheetTitle}>Authenticate</Text>
+                <View style={styles.bottomSheetPlaceholder} />
+              </View>
+              <View style={styles.bottomSheetContent}>
+                <View style={styles.bottomSheetIconContainer}>
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={48}
+                    color={theme.colors.primary}
+                  />
+                </View>
+                <Text style={styles.bottomSheetMessage}>{message}</Text>
+                {isVerifying && (
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.primary}
+                    style={styles.verifying}
+                  />
+                )}
+                {authState.isLocked ? (
+                  <Text style={styles.bottomSheetError}>
+                    Too many attempts. Try again in 30 seconds.
+                  </Text>
+                ) : authState.pinAttempts > 0 ? (
+                  <Text style={styles.bottomSheetError}>
+                    Incorrect PIN. {authState.maxPinAttempts - authState.pinAttempts} attempts remaining.
+                  </Text>
+                ) : null}
+                {renderPinDots()}
+                {renderKeypad()}
+              </View>
+            </>
+          ) : (
+            // Original centered modal for Ledger, Remote Signer, and other states
+            <>
+              {!authState.isRemoteSignerFlow && (
+                <View style={styles.header}>
+                  <Ionicons
+                    name="shield-checkmark"
+                    size={32}
+                    color={theme.colors.primary}
+                  />
+                  <Text style={styles.title}>{title}</Text>
+                  <Text style={styles.message}>{message}</Text>
+                </View>
+              )}
 
-          <View style={styles.content}>
-            {renderContent()}
-          </View>
+              <ScrollView
+                style={styles.content}
+                contentContainerStyle={styles.contentContainer}
+                showsVerticalScrollIndicator={true}
+              >
+                {renderContent()}
+              </ScrollView>
 
-          {renderButtons()}
+              {renderButtons()}
 
-          {authState.pinAttempts > 0 && authState.state === 'authenticating' && (
-            <Text style={styles.attemptsText}>
-              Failed attempts: {authState.pinAttempts}/{authState.maxPinAttempts}
-            </Text>
+              {authState.pinAttempts > 0 && authState.state === 'authenticating' && (
+                <Text style={styles.attemptsText}>
+                  Failed attempts: {authState.pinAttempts}/{authState.maxPinAttempts}
+                </Text>
+              )}
+            </>
           )}
         </View>
       </View>
@@ -646,68 +984,127 @@ const createStyles = (theme: Theme) =>
       lineHeight: 20,
     },
     content: {
+      flexGrow: 1,
+      flexShrink: 1,
+    },
+    contentContainer: {
       minHeight: 200,
       justifyContent: 'center',
+      paddingBottom: theme.spacing.md,
     },
 
-    // PIN Input
-    pinContainer: {
+    // Bottom sheet styles (for PIN entry)
+    bottomSheetOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      justifyContent: 'flex-end',
+    },
+    bottomSheetContainer: {
+      backgroundColor: theme.colors.surface,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    },
+    bottomSheetHeader: {
       flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 16,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.colors.border,
+    },
+    bottomSheetCancelButton: {
+      padding: 8,
+    },
+    bottomSheetCancelText: {
+      fontSize: 16,
+      color: theme.colors.primary,
+    },
+    bottomSheetTitle: {
+      fontSize: 17,
+      fontWeight: '600',
+      color: theme.colors.text,
+    },
+    bottomSheetPlaceholder: {
+      width: 60,
+    },
+    bottomSheetContent: {
+      alignItems: 'center',
+      paddingTop: 24,
+      paddingHorizontal: 20,
+    },
+    bottomSheetIconContainer: {
+      width: 80,
+      height: 80,
+      borderRadius: 40,
+      backgroundColor: theme.colors.primary + '15',
       justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-      gap: theme.spacing.md,
+      marginBottom: 16,
+    },
+    bottomSheetMessage: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: 24,
+      textAlign: 'center',
+    },
+    bottomSheetError: {
+      fontSize: 14,
+      color: theme.colors.error,
+      textAlign: 'center',
+      marginBottom: 16,
+    },
+    verifying: {
+      marginBottom: 8,
+    },
+
+    // PIN dots (shared style)
+    pinDots: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 24,
     },
     pinDot: {
-      width: 12,
-      height: 12,
-      borderRadius: 6,
-      borderWidth: 2,
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      borderWidth: 1,
       borderColor: theme.colors.border,
-      backgroundColor: 'transparent',
     },
     pinDotFilled: {
-      backgroundColor: theme.colors.primary,
-      borderColor: theme.colors.primary,
+      borderWidth: 0,
     },
 
-    // Biometric
-    biometricButton: {
-      alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
+    // Number pad (SignerAuthModal style)
+    numberPad: {
+      width: '100%',
+      maxWidth: 300,
+      gap: 12,
     },
-    biometricText: {
-      fontSize: 14,
-      color: theme.colors.primary,
-      marginTop: 6,
-      fontWeight: '500',
-    },
-
-    // Keypad
-    keypad: {
-      alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-    },
-    keypadRow: {
+    numberRow: {
       flexDirection: 'row',
-      marginBottom: theme.spacing.lg,
+      justifyContent: 'space-between',
     },
-    keypadButton: {
-      width: 50,
-      height: 50,
-      borderRadius: 25,
-      backgroundColor: theme.colors.surface,
-      marginHorizontal: theme.spacing.lg,
+    numberButton: {
+      width: 80,
+      height: 60,
       justifyContent: 'center',
       alignItems: 'center',
-      borderWidth: 1,
-      borderColor: theme.colors.borderLight,
+      borderRadius: 12,
     },
-    keypadButtonText: {
-      fontSize: 18,
+    numberButtonWithBg: {
+      backgroundColor: theme.colors.card,
+    },
+    numberText: {
+      fontSize: 28,
       fontWeight: '500',
       color: theme.colors.text,
+    },
+    numberTextDisabled: {
+      color: theme.colors.textMuted,
     },
 
     // States
@@ -868,6 +1265,16 @@ const createStyles = (theme: Theme) =>
       fontSize: 16,
       fontWeight: '600',
     },
+    primaryButton: {
+      backgroundColor: theme.colors.primary,
+      flexDirection: 'row',
+      justifyContent: 'center',
+    },
+    primaryButtonText: {
+      color: theme.colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
 
     // Attempts
     attemptsText: {
@@ -877,9 +1284,74 @@ const createStyles = (theme: Theme) =>
       marginTop: theme.spacing.sm,
     },
 
-    // Colors
-    primaryIconColor: theme.colors.primary as any,
-    successIconColor: theme.colors.success as any,
-    errorIconColor: theme.colors.error as any,
-    keypadIconColor: theme.colors.text as any,
+    // Remote signer styles
+    remoteSignerContainer: {
+      alignItems: 'center',
+      paddingVertical: theme.spacing.md,
+    },
+    remoteSignerTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: theme.spacing.xs,
+      textAlign: 'center',
+    },
+    remoteSignerMessage: {
+      fontSize: 14,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginBottom: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    qrWrapper: {
+      alignItems: 'center',
+      marginVertical: theme.spacing.md,
+    },
+    loadingQR: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: 200,
+      gap: theme.spacing.md,
+    },
+    loadingQRText: {
+      fontSize: 14,
+      color: theme.colors.textSecondary,
+    },
+    remoteSignerInstructions: {
+      width: '100%',
+      marginTop: theme.spacing.md,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    instructionStep: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: theme.spacing.sm,
+    },
+    stepNumber: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: theme.colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: theme.spacing.sm,
+    },
+    stepNumberText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: theme.colors.buttonText,
+    },
+    stepText: {
+      flex: 1,
+      fontSize: 13,
+      color: theme.colors.text,
+    },
+    scannerContainer: {
+      width: '100%',
+      height: 450,
+      borderRadius: theme.borderRadius.lg,
+      overflow: 'hidden',
+      marginVertical: theme.spacing.md,
+    },
   });

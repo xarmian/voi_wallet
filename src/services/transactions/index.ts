@@ -289,8 +289,8 @@ export class TransactionService {
         throw new Error('Invalid recipient address');
       }
 
-      if (params.amount <= 0) {
-        throw new Error('Amount must be greater than 0');
+      if (params.amount < 0) {
+        throw new Error('Amount cannot be negative');
       }
 
       const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
@@ -741,9 +741,13 @@ export class TransactionService {
       errors.push('Invalid recipient address');
     }
 
-    // Skip amount validation for ARC-72 NFT transfers
-    if (params.assetType !== 'arc72' && params.amount <= 0) {
+    // Skip amount validation for ARC-72 NFT transfers and allow 0-amount VOI transactions
+    if (params.assetType !== 'arc72' && params.assetType !== 'voi' && params.amount <= 0) {
       errors.push('Amount must be greater than 0');
+    }
+
+    if (params.amount < 0) {
+      errors.push('Amount cannot be negative');
     }
 
     // Dust attack protection
@@ -926,7 +930,7 @@ export class TransactionService {
       errors.push('Failed to validate account balance');
     }
 
-    await TransactionService.appendLedgerValidation(errors, account, params.networkId);
+    await TransactionService.appendSigningValidation(errors, account, params.networkId);
 
     return errors;
   }
@@ -999,12 +1003,18 @@ export class TransactionService {
     }
   }
 
-  private static async appendLedgerValidation(
+  private static async appendSigningValidation(
     errors: string[],
     account: WalletAccount,
     networkId?: NetworkId
   ): Promise<void> {
     try {
+      // Check if this is a remote signer account - these are always valid
+      // (signing will be handled via QR code flow)
+      if (account.type === AccountType.REMOTE_SIGNER) {
+        return;
+      }
+
       const info = await SecureKeyManager.getSigningInfo(account.address, networkId);
 
       // If we can sign, no error
@@ -1187,6 +1197,54 @@ export class TransactionService {
   }
 
   /**
+   * Build a verification transaction for airgap signer verification.
+   * Creates a zero-amount self-payment that will NOT be submitted to the network.
+   * Used to verify that an airgap device can sign for a given address before rekeying.
+   *
+   * @param signerAddress - The airgap signer address to verify
+   * @param networkId - Optional network ID for suggested params
+   */
+  static async buildVerificationTransaction(params: {
+    signerAddress: string;
+    networkId?: NetworkId;
+  }): Promise<UnsignedTransaction> {
+    try {
+      const networkService = params.networkId
+        ? NetworkService.getInstance(params.networkId)
+        : VoiNetworkService;
+      const suggestedParams = await networkService.getSuggestedParams();
+
+      if (!algosdk.isValidAddress(params.signerAddress)) {
+        throw new Error('Invalid signer address');
+      }
+
+      // Create a zero-amount self-payment for verification purposes
+      // This transaction will be signed by the airgap device but NOT submitted to the network
+      const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: params.signerAddress,
+        receiver: params.signerAddress, // Self-payment
+        amount: 0,
+        note: new Uint8Array(
+          Buffer.from('Airgap signer verification - DO NOT SUBMIT')
+        ),
+        suggestedParams,
+      });
+
+      const txnBytes = algosdk.encodeUnsignedTransaction(txn);
+
+      return {
+        txn,
+        txnBytes,
+      };
+    } catch (error) {
+      console.error('Failed to build verification transaction:', error);
+      throw new Error(
+        `Verification transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
    * Validate a rekey transaction before building
    * @param fromAddress - The account to be rekeyed
    * @param rekeyToAddress - The target address for rekeying
@@ -1232,12 +1290,14 @@ export class TransactionService {
             acc.address === rekeyToAddress &&
             (acc.type === AccountType.STANDARD ||
               acc.type === AccountType.LEDGER ||
+              acc.type === AccountType.REMOTE_SIGNER ||
               acc.type === 'standard' ||
-              acc.type === 'ledger')
+              acc.type === 'ledger' ||
+              acc.type === 'remote_signer')
         );
 
         if (!targetAccount) {
-          errors.push('Target address must be a standard or Ledger account in your wallet');
+          errors.push('Target address must be a standard, Ledger, or airgap signer account in your wallet');
         }
 
         if (targetAccount && (targetAccount.type === AccountType.LEDGER || targetAccount.type === 'ledger')) {
@@ -1281,8 +1341,10 @@ export class TransactionService {
             acc.address === authAddress &&
             (acc.type === AccountType.STANDARD ||
               acc.type === AccountType.LEDGER ||
+              acc.type === AccountType.REMOTE_SIGNER ||
               acc.type === 'standard' ||
-              acc.type === 'ledger')
+              acc.type === 'ledger' ||
+              acc.type === 'remote_signer')
         );
 
         if (!authSigner) {
@@ -1304,6 +1366,8 @@ export class TransactionService {
             errors.push('Unable to verify Ledger device availability for the controlling account.');
           }
         }
+        // Note: For REMOTE_SIGNER, we don't need to verify device availability here
+        // The QR signing flow will handle that when the user scans the transaction
       }
 
       if (compareBigIntSafe(accountBalance.amount, estimatedFee) < 0) {

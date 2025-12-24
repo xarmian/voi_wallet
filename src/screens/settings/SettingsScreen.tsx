@@ -62,6 +62,8 @@ interface SettingsRowProps {
   danger?: boolean;
   showChevron?: boolean;
   rightElement?: React.ReactNode;
+  disabled?: boolean;
+  subtitle?: string;
 }
 
 function SettingsRow({
@@ -72,18 +74,22 @@ function SettingsRow({
   danger = false,
   showChevron = true,
   rightElement,
+  disabled = false,
+  subtitle,
 }: SettingsRowProps) {
   const { theme } = useTheme();
   const themeColors = useThemeColors();
   const scale = useSharedValue(1);
 
   const handlePressIn = useCallback(() => {
+    if (disabled) return;
     scale.value = withSpring(0.98, springConfigs.snappy);
-  }, [scale]);
+  }, [scale, disabled]);
 
   const handlePressOut = useCallback(() => {
+    if (disabled) return;
     scale.value = withSpring(1, springConfigs.snappy);
-  }, [scale]);
+  }, [scale, disabled]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -91,15 +97,24 @@ function SettingsRow({
 
   // Use a more visible red for danger actions - darker in light mode for contrast
   const dangerColor = theme.mode === 'light' ? '#DC2626' : '#EF4444';
-  const textColor = danger ? dangerColor : themeColors.text;
-  const iconColor = danger ? dangerColor : theme.colors.primary;
+  const textColor = disabled
+    ? themeColors.textMuted
+    : danger
+      ? dangerColor
+      : themeColors.text;
+  const iconColor = disabled
+    ? themeColors.textMuted
+    : danger
+      ? dangerColor
+      : theme.colors.primary;
 
   return (
     <AnimatedPressable
-      onPress={onPress}
+      onPress={disabled ? undefined : onPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
-      style={animatedStyle}
+      disabled={disabled}
+      style={[animatedStyle, disabled && { opacity: 0.5 }]}
     >
       <View
         style={{
@@ -116,9 +131,11 @@ function SettingsRow({
             width: 32,
             height: 32,
             borderRadius: theme.borderRadius.sm,
-            backgroundColor: danger
-              ? `${dangerColor}20`
-              : `${theme.colors.primary}15`,
+            backgroundColor: disabled
+              ? `${themeColors.textMuted}15`
+              : danger
+                ? `${dangerColor}20`
+                : `${theme.colors.primary}15`,
             alignItems: 'center',
             justifyContent: 'center',
             marginRight: theme.spacing.md,
@@ -126,16 +143,28 @@ function SettingsRow({
         >
           <Ionicons name={icon} size={18} color={iconColor} />
         </View>
-        <Text
-          style={{
-            flex: 1,
-            fontSize: theme.typography.body.fontSize,
-            fontWeight: '600',
-            color: textColor,
-          }}
-        >
-          {label}
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text
+            style={{
+              fontSize: theme.typography.body.fontSize,
+              fontWeight: '600',
+              color: textColor,
+            }}
+          >
+            {label}
+          </Text>
+          {subtitle && (
+            <Text
+              style={{
+                fontSize: theme.typography.caption.fontSize,
+                color: themeColors.textMuted,
+                marginTop: 2,
+              }}
+            >
+              {subtitle}
+            </Text>
+          )}
+        </View>
         {value && (
           <Text
             style={{
@@ -424,8 +453,16 @@ export default function SettingsScreen() {
     navigation.navigate('WalletConnectSessions');
   };
 
+  const handleRemoteSignerSettings = () => {
+    navigation.navigate('RemoteSignerSettings');
+  };
+
   const handleBackupWallet = () => {
-    Alert.alert('Backup Wallet', 'Backup functionality will be implemented');
+    navigation.navigate('BackupWallet');
+  };
+
+  const handleRestoreWallet = () => {
+    navigation.navigate('RestoreWallet');
   };
 
   const handleNetworkPress = () => {
@@ -597,12 +634,28 @@ export default function SettingsScreen() {
               icon="document-text-outline"
               label="Show Recovery Phrase"
               onPress={handleShowRecoveryPhrase}
+              disabled={activeAccount?.type !== AccountType.STANDARD}
+              subtitle={
+                activeAccount?.type !== AccountType.STANDARD
+                  ? 'Not available for this account type'
+                  : undefined
+              }
+            />
+            <SettingsRow
+              icon="save-outline"
+              label="Backup Wallet"
+              onPress={handleBackupWallet}
+            />
+            <SettingsRow
+              icon="cloud-download-outline"
+              label="Restore from Backup"
+              onPress={handleRestoreWallet}
             />
           </GlassCard>
 
-          {/* Network Section */}
+          {/* Network & Connections Section */}
           <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Network" icon="globe-outline" />
+            <SectionHeader title="Network & Connections" icon="globe-outline" />
             <SettingsRow
               icon="wifi-outline"
               label="Current Network"
@@ -624,11 +677,21 @@ export default function SettingsScreen() {
                 </View>
               }
             />
+            <SettingsRow
+              icon="apps-outline"
+              label="Connected dApps"
+              onPress={handleWalletConnectSessions}
+            />
+            <SettingsRow
+              icon="qr-code-outline"
+              label="Air-gapped Signing"
+              onPress={handleRemoteSignerSettings}
+            />
           </GlassCard>
 
-          {/* Appearance Section */}
+          {/* Preferences Section */}
           <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Appearance" icon="color-palette-outline" />
+            <SectionHeader title="Preferences" icon="options-outline" />
             <SettingsRow
               icon="moon-outline"
               label="Theme"
@@ -668,25 +731,15 @@ export default function SettingsScreen() {
               value={localeDisplayText}
               onPress={handleLocalePress}
             />
-          </GlassCard>
-
-          {/* WalletConnect Section */}
-          <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="WalletConnect" icon="link-outline" />
             <SettingsRow
-              icon="apps-outline"
-              label="Connected dApps"
-              onPress={handleWalletConnectSessions}
+              icon="notifications-outline"
+              label="Push Notifications"
+              onPress={() => navigation.navigate('NotificationSettings')}
             />
-          </GlassCard>
-
-          {/* Backup Section */}
-          <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Backup" icon="cloud-upload-outline" />
             <SettingsRow
-              icon="save-outline"
-              label="Backup Wallet"
-              onPress={handleBackupWallet}
+              icon="flask-outline"
+              label="Experimental Features"
+              onPress={() => navigation.navigate('ExperimentalFeatures')}
             />
           </GlassCard>
 

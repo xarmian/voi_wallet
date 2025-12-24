@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,52 +34,96 @@ export default function CreateWalletScreen({ navigation }: Props) {
   const styles = useThemedStyles(createStyles);
   const [mnemonic, setMnemonic] = useState<string>('');
 
+  // Cross-platform alert helper
+  const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void, style?: string}>) => {
+    if (Platform.OS === 'web') {
+      if (buttons && buttons.length > 1) {
+        // For confirmation dialogs
+        const confirmed = window.confirm(`${title}\n\n${message}`);
+        if (confirmed) {
+          const confirmButton = buttons.find(b => b.style !== 'cancel' && b.style !== 'destructive') || buttons[buttons.length - 1];
+          confirmButton?.onPress?.();
+        }
+      } else {
+        window.alert(`${title}\n\n${message}`);
+        buttons?.[0]?.onPress?.();
+      }
+    } else {
+      const { Alert } = require('react-native');
+      Alert.alert(title, message, buttons);
+    }
+  };
+
   React.useEffect(() => {
     // Generate wallet immediately when component mounts
     try {
       const wallet = WalletService.generateWallet();
       setMnemonic(wallet.mnemonic);
     } catch (error) {
-      Alert.alert('Error', 'Failed to generate wallet');
+      showAlert('Error', 'Failed to generate wallet');
     }
   }, []);
 
   const handleContinue = () => {
     if (!mnemonic) {
-      Alert.alert('Error', 'Please generate a wallet first');
+      showAlert('Error', 'Please generate a wallet first');
       return;
     }
 
-    Alert.alert(
-      'Backup Confirmation',
-      'Have you safely written down your recovery phrase? You will need it to recover your wallet if you lose access to this device.',
-      [
-        { text: 'Not Yet', style: 'cancel' },
-        {
-          text: "Yes, I've Saved It",
-          onPress: () =>
-            navigation.navigate('SecuritySetup', {
-              mnemonic,
-              source: 'create',
-            }),
-        },
-      ]
-    );
+    if (Platform.OS === 'web') {
+      // On web, use confirm dialog
+      const confirmed = window.confirm(
+        'Backup Confirmation\n\nHave you safely written down your recovery phrase? You will need it to recover your wallet if you lose access to this device.'
+      );
+      if (confirmed) {
+        navigation.navigate('SecuritySetup', {
+          mnemonic,
+          source: 'create',
+        });
+      }
+    } else {
+      const { Alert } = require('react-native');
+      Alert.alert(
+        'Backup Confirmation',
+        'Have you safely written down your recovery phrase? You will need it to recover your wallet if you lose access to this device.',
+        [
+          { text: 'Not Yet', style: 'cancel' },
+          {
+            text: "Yes, I've Saved It",
+            onPress: () =>
+              navigation.navigate('SecuritySetup', {
+                mnemonic,
+                source: 'create',
+              }),
+          },
+        ]
+      );
+    }
   };
 
   const handleBack = () => {
-    Alert.alert(
-      'Warning',
-      'If you go back now, you will lose this recovery phrase. Are you sure?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Go Back',
-          style: 'destructive',
-          onPress: () => navigation.goBack(),
-        },
-      ]
-    );
+    if (Platform.OS === 'web') {
+      const confirmed = window.confirm(
+        'Warning\n\nIf you go back now, you will lose this recovery phrase. Are you sure?'
+      );
+      if (confirmed) {
+        navigation.goBack();
+      }
+    } else {
+      const { Alert } = require('react-native');
+      Alert.alert(
+        'Warning',
+        'If you go back now, you will lose this recovery phrase. Are you sure?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Go Back',
+            style: 'destructive',
+            onPress: () => navigation.goBack(),
+          },
+        ]
+      );
+    }
   };
 
   return (

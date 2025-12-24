@@ -60,6 +60,32 @@ export interface Arc200TokensResponse {
   'current-round': number;
 }
 
+export interface Arc200Approval {
+  owner: string;
+  round: number;
+  amount: string;
+  spender: string;
+  timestamp: number;
+  contractId: number;
+  transactionId: string;
+}
+
+export interface Arc200ApprovalsResponse {
+  approvals: Arc200Approval[];
+  'next-token': string | null;
+  'total-count': number;
+  'current-round': number;
+}
+
+export interface Arc200BalanceResponse {
+  balances: Array<{
+    accountId: string;
+    contractId: number;
+    balance: string;
+  }>;
+  'current-round': number;
+}
+
 export interface MimirApiConfig {
   baseUrl: string;
   timeout: number;
@@ -409,6 +435,136 @@ export class MimirApiService {
    */
   isAvailable(): boolean {
     return Boolean(this.config.baseUrl && this.config.baseUrl !== 'disabled');
+  }
+
+  /**
+   * Fetch ARC-200 approvals where the specified address is the spender
+   * This returns tokens that the user can claim (transferFrom)
+   */
+  async getArc200ApprovalsForSpender(
+    spenderAddress: string
+  ): Promise<Arc200ApprovalsResponse> {
+    try {
+      const url = new URL(`${this.config.baseUrl}/arc200/approvals`);
+      url.searchParams.append('spender', spenderAddress);
+
+      const response = await this.fetchWithRetry(url.toString());
+
+      if (!response.ok) {
+        throw new MimirApiError(
+          `Failed to fetch ARC-200 approvals: ${response.statusText}`,
+          response.status
+        );
+      }
+
+      const data: Arc200ApprovalsResponse = await response.json();
+
+      if (!data.approvals || !Array.isArray(data.approvals)) {
+        throw new MimirApiError(
+          'Invalid response format from Mimir API approvals endpoint'
+        );
+      }
+
+      return data;
+    } catch (error) {
+      if (error instanceof MimirApiError) {
+        throw error;
+      }
+
+      console.error('Mimir API approvals request failed:', error);
+      throw new MimirApiError(
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Fetch ARC-200 balance for a specific account and contract
+   * Used to validate that token owners have sufficient balance for claims
+   */
+  async getArc200Balance(
+    contractId: number,
+    accountId: string
+  ): Promise<string> {
+    try {
+      const url = new URL(`${this.config.baseUrl}/arc200/balances`);
+      url.searchParams.append('contractId', contractId.toString());
+      url.searchParams.append('accountId', accountId);
+
+      const response = await this.fetchWithRetry(url.toString());
+
+      if (!response.ok) {
+        throw new MimirApiError(
+          `Failed to fetch ARC-200 balance: ${response.statusText}`,
+          response.status
+        );
+      }
+
+      const data: Arc200BalanceResponse = await response.json();
+
+      if (!data.balances || !Array.isArray(data.balances)) {
+        throw new MimirApiError(
+          'Invalid response format from Mimir API balances endpoint'
+        );
+      }
+
+      // Find the balance for the requested account
+      const balance = data.balances.find(
+        (b) => b.accountId === accountId && b.contractId === contractId
+      );
+
+      return balance?.balance ?? '0';
+    } catch (error) {
+      if (error instanceof MimirApiError) {
+        throw error;
+      }
+
+      console.error('Mimir API balance request failed:', error);
+      throw new MimirApiError(
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Batch fetch ARC-200 balances for multiple owner/contract pairs
+   * More efficient than individual calls when validating multiple approvals
+   */
+  async batchGetArc200Balances(
+    pairs: Array<{ owner: string; contractId: number }>
+  ): Promise<Map<string, string>> {
+    const balanceMap = new Map<string, string>();
+
+    // Group by contractId to minimize API calls
+    const byContract = new Map<number, string[]>();
+    for (const pair of pairs) {
+      const owners = byContract.get(pair.contractId) || [];
+      if (!owners.includes(pair.owner)) {
+        owners.push(pair.owner);
+      }
+      byContract.set(pair.contractId, owners);
+    }
+
+    // Fetch balances for each contract
+    await Promise.all(
+      Array.from(byContract.entries()).map(async ([contractId, owners]) => {
+        for (const owner of owners) {
+          try {
+            const balance = await this.getArc200Balance(contractId, owner);
+            balanceMap.set(`${contractId}_${owner}`, balance);
+          } catch (error) {
+            console.error(
+              `Failed to fetch balance for ${owner} on contract ${contractId}:`,
+              error
+            );
+            // Set to '0' on error to mark as not claimable
+            balanceMap.set(`${contractId}_${owner}`, '0');
+          }
+        }
+      })
+    );
+
+    return balanceMap;
   }
 }
 

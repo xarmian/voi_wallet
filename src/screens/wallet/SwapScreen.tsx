@@ -40,12 +40,16 @@ import AccountListModal from '@/components/account/AccountListModal';
 import WaitingForConfirmationModal from '@/components/common/WaitingForConfirmationModal';
 import { SwapService, SwapToken, UnifiedSwapQuote } from '@/services/swap';
 import { NetworkId } from '@/types/network';
+import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
+import NetworkSelector from '@/components/network/NetworkSelector';
+import { useIsSwapEnabled } from '@/store/experimentalStore';
+import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -64,8 +68,18 @@ export default function SwapScreen() {
   const routeParams = route.params as SwapScreenRouteParams | undefined;
   const delayedRefreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Network MUST come from route params
-  const currentNetwork = routeParams?.networkId;
+  // Experimental feature guard - redirect if swap is not enabled
+  const isSwapEnabled = useIsSwapEnabled();
+  useEffect(() => {
+    if (!isSwapEnabled) {
+      navigation.goBack();
+    }
+  }, [isSwapEnabled, navigation]);
+
+  // Network state - initialized from route params or defaults to VOI_MAINNET
+  const [selectedNetwork, setSelectedNetwork] = useState<NetworkId>(
+    routeParams?.networkId || NetworkId.VOI_MAINNET
+  );
 
   const activeAccount = useActiveAccount();
   const accountId = routeParams?.accountId || activeAccount?.id;
@@ -93,30 +107,42 @@ export default function SwapScreen() {
 
   // Load network-specific balance when network or account changes
   useEffect(() => {
+    let isCancelled = false;
+
     const loadNetworkSpecificBalance = async () => {
       const address = currentAccount?.address;
-      if (!address || !currentNetwork) return;
+      if (!address || !selectedNetwork) return;
 
       try {
         // For non-VOI networks, fetch directly from NetworkService
-        if (currentNetwork !== NetworkId.VOI_MAINNET) {
-          const networkService = NetworkService.getInstance(currentNetwork);
+        if (selectedNetwork !== NetworkId.VOI_MAINNET) {
+          const networkService = NetworkService.getInstance(selectedNetwork);
           const balance = await networkService.getAccountBalance(address);
-          setNetworkBalance(balance);
+          if (!isCancelled) {
+            setNetworkBalance(balance);
+          }
         } else {
           // For VOI network, use the store balance
-          setNetworkBalance(singleNetworkBalance || null);
+          if (!isCancelled) {
+            setNetworkBalance(singleNetworkBalance || null);
+          }
         }
       } catch (error) {
-        console.error('Error loading network balance:', error);
+        if (!isCancelled) {
+          console.error('Error loading network balance:', error);
+        }
       }
     };
 
     loadNetworkSpecificBalance();
-  }, [currentAccount, currentNetwork, singleNetworkBalance]);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentAccount, selectedNetwork, singleNetworkBalance]);
 
   // Use network-specific balance - only fall back to store balance for VOI
-  const accountBalance = currentNetwork === NetworkId.VOI_MAINNET
+  const accountBalance = selectedNetwork === NetworkId.VOI_MAINNET
     ? (networkBalance || singleNetworkBalance)
     : networkBalance;
 
@@ -144,11 +170,11 @@ export default function SwapScreen() {
   // Account selector state
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
 
-  // Load initial tokens
+  // Load initial tokens only on mount (not when network changes - handleNetworkChange handles that)
   useEffect(() => {
     loadInitialTokens();
     loadStoredSlippage();
-  }, [routeParams]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -191,7 +217,7 @@ export default function SwapScreen() {
 
   const loadInitialTokens = async () => {
     try {
-      const provider = SwapService.getProvider(currentNetwork);
+      const provider = SwapService.getProvider(selectedNetwork);
 
       // Set input token based on route params or default to native token
       if (routeParams?.assetId !== undefined) {
@@ -241,7 +267,7 @@ export default function SwapScreen() {
     setQuoteError(null);
 
     try {
-      const provider = SwapService.getProvider(currentNetwork);
+      const provider = SwapService.getProvider(selectedNetwork);
 
       // Convert amount to base units
       const amountInBaseUnits = BigInt(
@@ -344,8 +370,167 @@ export default function SwapScreen() {
     setSlippage(newSlippage);
   };
 
+  // Handle network change - try to find equivalent tokens on new network
+  const handleNetworkChange = async (networkId: NetworkId) => {
+    if (networkId === selectedNetwork) return;
+
+    // Store current input token info before resetting
+    const previousInputToken = inputToken;
+    const previousOutputToken = outputToken;
+    const previousNetwork = selectedNetwork;
+
+    // Reset basic swap state
+    setSelectedNetwork(networkId);
+    setQuote(null);
+    setQuoteError(null);
+    setNetworkBalance(null);
+
+    // Try to find equivalent tokens on the new network
+    const newProvider = SwapService.getProvider(networkId);
+
+    // Fetch balance for the new network to help select the right equivalent token
+    let newNetworkBalance: AccountBalance | null = null;
+    if (currentAccount?.address) {
+      try {
+        const networkService = NetworkService.getInstance(networkId);
+        newNetworkBalance = await networkService.getAccountBalance(currentAccount.address);
+      } catch (error) {
+        console.warn('[handleNetworkChange] Failed to fetch new network balance:', error);
+      }
+    }
+
+    // Helper to get balance for an asset on the new network
+    const getAssetBalance = (assetId: number): bigint => {
+      if (!newNetworkBalance) return BigInt(0);
+      if (assetId === 0) return BigInt(newNetworkBalance.amount || 0);
+      const asset = newNetworkBalance.assets?.find(a => {
+        const id = a.assetId ?? a['asset-id'] ?? a.contractId;
+        return id === assetId;
+      });
+      return BigInt(asset?.amount || 0);
+    };
+
+    // Handle input token - try to find equivalent
+    let newInputToken: SwapToken | null = null;
+    if (previousInputToken) {
+      // Get all equivalent tokens (works both directions since mapping contains all tokens)
+      const mapping = tokenMappingService.getMappingForToken(previousInputToken.id, previousNetwork);
+
+      console.log('[handleNetworkChange] Input token lookup:', {
+        previousTokenId: previousInputToken.id,
+        previousNetwork,
+        targetNetwork: networkId,
+        mapping: mapping?.mappingId,
+      });
+
+      let equivalentOnNewNetwork;
+      if (mapping) {
+        // Filter to tokens on target network
+        const equivalentsOnNewNetwork = mapping.tokens.filter((t) => t.networkId === networkId);
+        console.log('[handleNetworkChange] Equivalents on new network:', equivalentsOnNewNetwork);
+
+        if (equivalentsOnNewNetwork.length === 1) {
+          equivalentOnNewNetwork = equivalentsOnNewNetwork[0];
+        } else if (equivalentsOnNewNetwork.length > 1) {
+          // Pick the one with highest balance
+          equivalentOnNewNetwork = equivalentsOnNewNetwork.reduce((best, current) => {
+            const bestBalance = getAssetBalance(best.assetId);
+            const currentBalance = getAssetBalance(current.assetId);
+            return currentBalance > bestBalance ? current : best;
+          });
+          console.log('[handleNetworkChange] Selected by balance:', equivalentOnNewNetwork);
+        }
+      }
+
+      console.log('[handleNetworkChange] Final equivalentOnNewNetwork:', equivalentOnNewNetwork);
+
+      if (equivalentOnNewNetwork) {
+        // Try to load from provider first for extra metadata (logoUrl, etc)
+        try {
+          const token = await newProvider.getTokenById(equivalentOnNewNetwork.assetId);
+          if (token) {
+            // Use provider token but ensure id matches mapping for consistency
+            newInputToken = {
+              ...token,
+              id: equivalentOnNewNetwork.assetId,
+            };
+          }
+        } catch (error) {
+          console.warn('Failed to load equivalent input token from provider:', error);
+        }
+
+        // If provider didn't have the token, construct from mapping data
+        if (!newInputToken) {
+          newInputToken = {
+            id: equivalentOnNewNetwork.assetId,
+            symbol: equivalentOnNewNetwork.symbol,
+            name: equivalentOnNewNetwork.symbol,
+            decimals: equivalentOnNewNetwork.decimals,
+          };
+        }
+      }
+    }
+    setInputToken(newInputToken);
+
+    // Handle output token - try to find equivalent
+    let newOutputToken: SwapToken | null = null;
+    if (previousOutputToken) {
+      // Get all equivalent tokens (works both directions since mapping contains all tokens)
+      const mapping = tokenMappingService.getMappingForToken(previousOutputToken.id, previousNetwork);
+
+      let equivalentOnNewNetwork;
+      if (mapping) {
+        // Filter to tokens on target network
+        const equivalentsOnNewNetwork = mapping.tokens.filter((t) => t.networkId === networkId);
+
+        if (equivalentsOnNewNetwork.length === 1) {
+          equivalentOnNewNetwork = equivalentsOnNewNetwork[0];
+        } else if (equivalentsOnNewNetwork.length > 1) {
+          // Pick the one with highest balance
+          equivalentOnNewNetwork = equivalentsOnNewNetwork.reduce((best, current) => {
+            const bestBalance = getAssetBalance(best.assetId);
+            const currentBalance = getAssetBalance(current.assetId);
+            return currentBalance > bestBalance ? current : best;
+          });
+        }
+      }
+
+      if (equivalentOnNewNetwork) {
+        // Try to load from provider first for extra metadata (logoUrl, etc)
+        try {
+          const token = await newProvider.getTokenById(equivalentOnNewNetwork.assetId);
+          if (token) {
+            // Use provider token but ensure id matches mapping for consistency
+            newOutputToken = {
+              ...token,
+              id: equivalentOnNewNetwork.assetId,
+            };
+          }
+        } catch (error) {
+          console.warn('Failed to load equivalent output token from provider:', error);
+        }
+
+        // If provider didn't have the token, construct from mapping data
+        if (!newOutputToken) {
+          newOutputToken = {
+            id: equivalentOnNewNetwork.assetId,
+            symbol: equivalentOnNewNetwork.symbol,
+            name: equivalentOnNewNetwork.symbol,
+            decimals: equivalentOnNewNetwork.decimals,
+          };
+        }
+      }
+    }
+    setOutputToken(newOutputToken);
+
+    // Keep the input amount if we found equivalent tokens, otherwise reset
+    if (!newInputToken) {
+      setInputAmount('');
+    }
+  };
+
   // Get swap provider info for branding
-  const providerInfo = SwapService.getProviderInfo(currentNetwork);
+  const providerInfo = SwapService.getProviderInfo(selectedNetwork);
 
   const handleProviderPress = async () => {
     try {
@@ -389,12 +574,8 @@ export default function SwapScreen() {
       return;
     }
 
-    // Navigate to UniversalTransactionSigning screen with swap transactions
-    navigation.navigate('UniversalTransactionSigning', {
-      transactions: quote.unsignedTransactions,
-      account: activeAccount,
-      title: 'Confirm Swap',
-      networkId: currentNetwork,
+    // Register callbacks in the callback registry to avoid serialization warnings
+    const callbackId = registerNavigationCallbacks({
       onSuccess: async (result: any) => {
         await handleSwapSuccess(result);
       },
@@ -403,10 +584,21 @@ export default function SwapScreen() {
         navigation.goBack();
       },
     });
+
+    // Navigate to UniversalTransactionSigning screen with swap transactions
+    navigation.navigate('UniversalTransactionSigning', {
+      transactions: quote.unsignedTransactions,
+      account: activeAccount,
+      title: 'Confirm Swap',
+      networkId: selectedNetwork,
+      callbackId,
+    });
   };
 
   const handleSwapSuccess = async (result: any) => {
-    if (!result?.signedTransactions) {
+    // Check if transaction was already submitted by auth controller (remote signer flow)
+    // or if we have signed transactions to submit (standard flow)
+    if (!result?.transactionId && !result?.signedTransactions) {
       Alert.alert('Error', 'No signed transactions returned');
       return;
     }
@@ -415,18 +607,26 @@ export default function SwapScreen() {
     setIsWaitingForConfirmation(true);
 
     try {
-      const networkService = NetworkService.getInstance(currentNetwork);
+      let txId: string;
 
-      // Convert signed transactions from base64 strings to Uint8Array if needed
-      const signedTxns = result.signedTransactions.map((txn: string | Uint8Array) => {
-        if (typeof txn === 'string') {
-          return new Uint8Array(Buffer.from(txn, 'base64'));
-        }
-        return txn;
-      });
+      if (result?.transactionId) {
+        // Transaction already submitted by auth controller (remote signer flow)
+        txId = result.transactionId;
+      } else {
+        // Standard flow - need to submit signed transactions
+        const networkService = NetworkService.getInstance(selectedNetwork);
 
-      // Submit transaction group
-      const txId = await networkService.submitTransaction(signedTxns);
+        // Convert signed transactions from base64 strings to Uint8Array if needed
+        const signedTxns = result.signedTransactions.map((txn: string | Uint8Array) => {
+          if (typeof txn === 'string') {
+            return new Uint8Array(Buffer.from(txn, 'base64'));
+          }
+          return txn;
+        });
+
+        // Submit transaction group
+        txId = await networkService.submitTransaction(signedTxns);
+      }
 
       const shortTxId =
         txId && txId.length > 12
@@ -570,7 +770,7 @@ export default function SwapScreen() {
   const renderTokenIcon = (token: SwapToken | null) => {
     if (!token) return null;
 
-    const imageSource = getTokenImageSource(token, currentNetwork);
+    const imageSource = getTokenImageSource(token, selectedNetwork);
 
     if (imageSource) {
       if (imageSource.type === 'uri') {
@@ -709,11 +909,20 @@ export default function SwapScreen() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title="Swap Tokens"
+          showBackButton
           onBackPress={() => navigation.goBack()}
           onAccountSelectorPress={handleAccountSelectorPress}
         />
 
       <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Network Selector */}
+        <NetworkSelector
+          selectedNetworkId={selectedNetwork}
+          onNetworkChange={handleNetworkChange}
+          disabled={isSwapping}
+          networks={[NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]}
+        />
+
         {/* Input Token Section */}
         <View style={styles.tokenSection}>
           <Text style={styles.sectionLabel}>You pay</Text>
@@ -885,7 +1094,7 @@ export default function SwapScreen() {
       <TokenSelector
         visible={showInputTokenSelector}
         accountId={accountId!}
-        networkId={currentNetwork}
+        networkId={selectedNetwork}
         selectedTokenId={inputToken?.id}
         excludeTokenId={outputToken?.id}
         ownedOnly={true}
@@ -896,7 +1105,7 @@ export default function SwapScreen() {
       <TokenSelector
         visible={showOutputTokenSelector}
         accountId={accountId!}
-        networkId={currentNetwork}
+        networkId={selectedNetwork}
         selectedTokenId={outputToken?.id}
         excludeTokenId={inputToken?.id}
         ownedOnly={false}

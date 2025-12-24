@@ -22,10 +22,10 @@ export const PERA_WALLET_PEER_META: WalletConnectV1PeerMeta = {
 export const VOI_WALLET_PEER_META: WalletConnectV1PeerMeta = {
   name: 'Voi Wallet',
   description: 'Mobile wallet for Voi Network and Algorand ecosystem',
-  url: 'https://voiapp.com',
+  url: 'https://getvoi.app',
   icons: [
-    'https://voiapp.com/icon-192.png',
-    'https://voiapp.com/icon-512.png',
+    'https://getvoi.app/android-chrome-192x192.png',
+    'https://getvoi.app/android-chrome-512x512.png',
   ],
 };
 

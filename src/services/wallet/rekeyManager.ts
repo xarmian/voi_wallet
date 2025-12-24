@@ -4,7 +4,9 @@ import {
   AccountType,
   RekeyedAccountMetadata,
   StandardAccountMetadata,
+  WatchAccountMetadata,
   LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
   LedgerSigningInfo,
   LedgerTransportMedium,
   LedgerAccountError,
@@ -18,6 +20,7 @@ export interface SigningAuthorityCheck {
   signingAccountId?: string; // ID of the account in wallet that can sign
   signingAddress?: string; // Address that can sign
   isLedger?: boolean;
+  isRemoteSigner?: boolean; // True if signing via airgap QR flow
   signingDeviceId?: string;
   signingDeviceName?: string;
   deviceConnected?: boolean;
@@ -92,6 +95,25 @@ export class RekeyManager {
         };
       }
 
+      // Check for remote signer (airgap) account
+      const remoteSignerAccount = wallet.accounts.find(
+        (account) =>
+          account.address === authAddress &&
+          account.type === AccountType.REMOTE_SIGNER
+      ) as RemoteSignerAccountMetadata | undefined;
+
+      if (remoteSignerAccount) {
+        return {
+          accountAddress: rekeyedAccountAddress,
+          canSign: true, // Can sign via QR flow
+          signingAccountId: remoteSignerAccount.id,
+          signingAddress: authAddress,
+          isRemoteSigner: true,
+          signingDeviceId: remoteSignerAccount.signerDeviceId,
+          signingDeviceName: remoteSignerAccount.signerDeviceName,
+        };
+      }
+
       return {
         accountAddress: rekeyedAccountAddress,
         canSign: false,
@@ -163,19 +185,20 @@ export class RekeyManager {
     try {
       if (!rekeyInfo.isRekeyed || !rekeyInfo.authAddress) {
         // Account is not rekeyed according to network - check if we should auto-convert
+        // Only process REKEYED accounts - WATCH accounts stay as-is
         if (account.type === AccountType.REKEYED) {
-          const rekeyedAccount = account as RekeyedAccountMetadata;
-
-          // Do NOT auto-convert manually imported auth accounts that have canSign capability
-          // These were explicitly imported and should be trusted regardless of network detection
-          if (rekeyedAccount.canSign && !rekeyedAccount.originalOwner) {
-            console.log(`[RekeyManager] Preserving manually imported auth account: ${account.address.slice(0, 8)}...`);
-            return account; // Keep as rekeyed account
+          // Check if we have a private key for this account - if so, it's a STANDARD account
+          let hasPrivateKey = false;
+          try {
+            const { AccountSecureStorage } = await import('@/services/secure/AccountSecureStorage');
+            await AccountSecureStorage.getPrivateKey(account.id);
+            hasPrivateKey = true;
+          } catch {
+            hasPrivateKey = false;
           }
 
-          // Convert back to standard account if it was originally a standard account
-          if (rekeyedAccount.originalOwner) {
-            console.log(`[RekeyManager] Converting rekeyed account back to standard: ${account.address.slice(0, 8)}...`);
+          if (hasPrivateKey) {
+            console.log(`[RekeyManager] Converting rekeyed account back to standard (has private key): ${account.address.slice(0, 8)}...`);
             const standardAccount: StandardAccountMetadata = {
               id: account.id,
               address: account.address,
@@ -190,9 +213,8 @@ export class RekeyManager {
             };
             return standardAccount;
           } else {
-            // Convert back to watch account if it was originally a watch account
-            console.log(`[RekeyManager] Converting rekeyed account back to watch: ${account.address.slice(0, 8)}...`);
-            const watchAccount = {
+            console.log(`[RekeyManager] Converting rekeyed account to watch (no private key): ${account.address.slice(0, 8)}...`);
+            const watchAccount: WatchAccountMetadata = {
               id: account.id,
               address: account.address,
               publicKey: account.publicKey,
@@ -208,7 +230,7 @@ export class RekeyManager {
           }
         }
 
-        // Account was never rekeyed, return as-is
+        // Account was never rekeyed or is WATCH, return as-is
         return account;
       }
 
@@ -305,6 +327,8 @@ export class RekeyManager {
         return (account as RekeyedAccountMetadata).canSign;
       case AccountType.LEDGER:
         return this.isLedgerDeviceConnected(account as LedgerAccountMetadata);
+      case AccountType.REMOTE_SIGNER:
+        return true; // Can sign via QR flow
       case AccountType.WATCH:
         return false;
       default:
@@ -322,6 +346,8 @@ export class RekeyManager {
       case AccountType.STANDARD:
         return account.address;
       case AccountType.LEDGER:
+        return account.address;
+      case AccountType.REMOTE_SIGNER:
         return account.address;
       case AccountType.REKEYED:
         const rekeyedAccount = account as RekeyedAccountMetadata;
@@ -384,6 +410,59 @@ export class RekeyManager {
       rekeyedFrom:
         sourceAccount.type === AccountType.REKEYED
           ? (sourceAccount.rekeyedFrom ?? sourceAccount.address)
+          : sourceAccount.address,
+    };
+  }
+
+  /**
+   * Create rekeyed account metadata for an account being rekeyed to an airgap signer
+   * This is called AFTER the rekey transaction has been successfully submitted
+   *
+   * @param sourceAccount - The account being rekeyed
+   * @param airgapAccount - The airgap signer account that will have signing authority
+   * @param wallet - The current wallet
+   */
+  async rekeyToAirgap(
+    sourceAccount: AccountMetadata,
+    airgapAccount: RemoteSignerAccountMetadata,
+    wallet: Wallet
+  ): Promise<RekeyedAccountMetadata> {
+    if (sourceAccount.type === AccountType.REMOTE_SIGNER) {
+      throw new Error('Cannot rekey a remote signer account to another remote signer');
+    }
+
+    // Verify the airgap account exists in wallet
+    const airgapAccountInWallet = wallet.accounts.find(
+      (account) =>
+        account.id === airgapAccount.id &&
+        account.type === AccountType.REMOTE_SIGNER
+    ) as RemoteSignerAccountMetadata | undefined;
+
+    if (!airgapAccountInWallet) {
+      throw new Error('Airgap signer account not found in wallet');
+    }
+
+    const baseMetadata = {
+      id: sourceAccount.id,
+      address: sourceAccount.address,
+      publicKey: sourceAccount.publicKey,
+      label: sourceAccount.label,
+      color: sourceAccount.color,
+      isHidden: sourceAccount.isHidden,
+      createdAt: sourceAccount.createdAt,
+      importedAt: sourceAccount.importedAt,
+      lastUsed: sourceAccount.lastUsed,
+    };
+
+    return {
+      ...baseMetadata,
+      type: AccountType.REKEYED,
+      authAddress: airgapAccountInWallet.address,
+      originalOwner: sourceAccount.type === AccountType.STANDARD,
+      canSign: true, // Airgap accounts can always sign via QR flow
+      rekeyedFrom:
+        sourceAccount.type === AccountType.REKEYED
+          ? ((sourceAccount as RekeyedAccountMetadata).rekeyedFrom ?? sourceAccount.address)
           : sourceAccount.address,
     };
   }

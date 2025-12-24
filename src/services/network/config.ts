@@ -10,7 +10,7 @@ export const NETWORK_CONFIGURATIONS: Record<NetworkId, NetworkConfiguration> = {
     currency: 'VOI',
     currencyName: 'Voi',
     color: '#8B5CF6',
-    iconUrl: 'https://voiapp.com/voi-logo.png',
+    iconUrl: 'https://voirewards.com/voi_logo.png',
     nativeToken: 'VOI',
     nativeTokenImage: require('../../../assets/voi-token.png'),
 

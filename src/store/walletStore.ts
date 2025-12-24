@@ -7,12 +7,15 @@ import {
   StandardAccountMetadata,
   WatchAccountMetadata,
   RekeyedAccountMetadata,
+  LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
   Wallet,
   WalletSettings,
   CreateAccountRequest,
   ImportAccountRequest,
   AddWatchAccountRequest,
   DetectRekeyedAccountRequest,
+  ImportRemoteSignerAccountRequest,
   AccountBalance,
   TransactionInfo,
   AccountNotFoundError,
@@ -37,6 +40,11 @@ import {
   AssetFilterStorage,
   DEFAULT_ASSET_FILTER_SETTINGS,
 } from '@/utils/assetFilterStorage';
+import {
+  notificationService,
+  DEFAULT_NOTIFICATION_PREFERENCES,
+} from '@/services/notifications';
+import { realtimeService } from '@/services/realtime';
 
 // Account-specific state for UI
 interface AccountUIState {
@@ -118,6 +126,9 @@ interface WalletState {
   detectRekeyedAccount: (
     request: DetectRekeyedAccountRequest
   ) => Promise<RekeyedAccountMetadata>;
+  addRemoteSignerAccount: (
+    request: ImportRemoteSignerAccountRequest
+  ) => Promise<RemoteSignerAccountMetadata>;
   deleteAccount: (accountId: string) => Promise<void>;
 
   // Account operations
@@ -509,6 +520,14 @@ export const useWalletStore = create<WalletState>()(
           accountStates: { ...accountStates },
         });
 
+        // Auto-subscribe new account to notifications if service is initialized
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(newAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
+            .catch(err => console.warn('Failed to subscribe new account to notifications:', err));
+          realtimeService.addAddress(newAccount.address);
+        }
+
         return newAccount;
       } catch (error) {
         const errorMessage =
@@ -537,6 +556,14 @@ export const useWalletStore = create<WalletState>()(
           accountStates: { ...accountStates },
         });
 
+        // Auto-subscribe imported account to notifications if service is initialized
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(importedAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
+            .catch(err => console.warn('Failed to subscribe imported account to notifications:', err));
+          realtimeService.addAddress(importedAccount.address);
+        }
+
         return importedAccount;
       } catch (error) {
         const errorMessage =
@@ -564,6 +591,17 @@ export const useWalletStore = create<WalletState>()(
           wallet,
           accountStates: { ...accountStates },
         });
+
+        // Auto-subscribe watch account to notifications (with messages disabled)
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(watchAccount.address, {
+              ...DEFAULT_NOTIFICATION_PREFERENCES,
+              messages: false, // Watch accounts can't decrypt messages
+            })
+            .catch(err => console.warn('Failed to subscribe watch account to notifications:', err));
+          realtimeService.addAddress(watchAccount.address);
+        }
 
         return watchAccount;
       } catch (error) {
@@ -595,6 +633,14 @@ export const useWalletStore = create<WalletState>()(
           accountStates: { ...accountStates },
         });
 
+        // Auto-subscribe rekeyed account to notifications if service is initialized
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(rekeyedAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
+            .catch(err => console.warn('Failed to subscribe rekeyed account to notifications:', err));
+          realtimeService.addAddress(rekeyedAccount.address);
+        }
+
         return rekeyedAccount;
       } catch (error) {
         const errorMessage =
@@ -608,9 +654,55 @@ export const useWalletStore = create<WalletState>()(
       }
     },
 
+    addRemoteSignerAccount: async (request: ImportRemoteSignerAccountRequest) => {
+      try {
+        set({ isLoading: true, lastError: null });
+
+        const remoteSignerAccount =
+          await MultiAccountWalletService.addRemoteSignerAccount(request);
+        const wallet = await MultiAccountWalletService.getCurrentWallet();
+
+        // Initialize account state
+        const { accountStates } = get();
+        accountStates[remoteSignerAccount.id] = createInitialAccountState();
+
+        set({
+          wallet,
+          accountStates: { ...accountStates },
+        });
+
+        // Auto-subscribe remote signer account to notifications (with messages disabled)
+        if (notificationService.getDeviceId()) {
+          notificationService
+            .subscribeAccount(remoteSignerAccount.address, {
+              ...DEFAULT_NOTIFICATION_PREFERENCES,
+              messages: false, // Remote signer accounts can't decrypt messages locally
+            })
+            .catch(err => console.warn('Failed to subscribe remote signer account to notifications:', err));
+          realtimeService.addAddress(remoteSignerAccount.address);
+        }
+
+        return remoteSignerAccount;
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'Failed to add remote signer account';
+        set({ lastError: errorMessage });
+        throw error;
+      } finally {
+        set({ isLoading: false });
+      }
+    },
+
     deleteAccount: async (accountId: string) => {
       try {
         set({ isLoading: true, lastError: null });
+
+        // Get the account address before deletion for unsubscribing
+        const { wallet: currentWallet } = get();
+        const accountToDelete = currentWallet?.accounts.find(a => a.id === accountId);
+        const addressToUnsubscribe = accountToDelete?.address;
 
         await MultiAccountWalletService.deleteAccount(accountId);
         const wallet = await MultiAccountWalletService.getCurrentWallet();
@@ -623,6 +715,14 @@ export const useWalletStore = create<WalletState>()(
           wallet,
           accountStates: { ...accountStates },
         });
+
+        // Unsubscribe deleted account from notifications
+        if (addressToUnsubscribe && notificationService.getDeviceId()) {
+          notificationService
+            .unsubscribeAccount(addressToUnsubscribe)
+            .catch(err => console.warn('Failed to unsubscribe deleted account from notifications:', err));
+          realtimeService.removeAddress(addressToUnsubscribe);
+        }
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to delete account';
@@ -2215,6 +2315,8 @@ const EMPTY_ACCOUNTS: AccountMetadata[] = [];
 const EMPTY_STANDARD_ACCOUNTS: StandardAccountMetadata[] = [];
 const EMPTY_WATCH_ACCOUNTS: WatchAccountMetadata[] = [];
 const EMPTY_REKEYED_ACCOUNTS: RekeyedAccountMetadata[] = [];
+// Signable accounts are those that can directly sign transactions (STANDARD or LEDGER)
+const EMPTY_SIGNABLE_ACCOUNTS: (StandardAccountMetadata | LedgerAccountMetadata)[] = [];
 const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   isLoading: false,
   lastError: null,
@@ -2235,6 +2337,7 @@ let lastWalletForDerived: Wallet | null | undefined = undefined;
 let cachedStandardAccounts: StandardAccountMetadata[] = EMPTY_STANDARD_ACCOUNTS;
 let cachedWatchAccounts: WatchAccountMetadata[] = EMPTY_WATCH_ACCOUNTS;
 let cachedRekeyedAccounts: RekeyedAccountMetadata[] = EMPTY_REKEYED_ACCOUNTS;
+let cachedSignableAccounts: (StandardAccountMetadata | LedgerAccountMetadata)[] = EMPTY_SIGNABLE_ACCOUNTS;
 
 function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
   if (wallet === lastWalletForDerived) return;
@@ -2244,6 +2347,7 @@ function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
     cachedStandardAccounts = EMPTY_STANDARD_ACCOUNTS;
     cachedWatchAccounts = EMPTY_WATCH_ACCOUNTS;
     cachedRekeyedAccounts = EMPTY_REKEYED_ACCOUNTS;
+    cachedSignableAccounts = EMPTY_SIGNABLE_ACCOUNTS;
     return;
   }
 
@@ -2257,6 +2361,9 @@ function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
   cachedRekeyedAccounts = accounts.filter(
     (acc) => acc.type === AccountType.REKEYED
   ) as RekeyedAccountMetadata[];
+  cachedSignableAccounts = accounts.filter(
+    (acc) => acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER
+  ) as (StandardAccountMetadata | LedgerAccountMetadata)[];
 }
 
 export const useActiveAccount = () =>
@@ -2288,6 +2395,14 @@ export const useRekeyedAccounts = () =>
   useWalletStore((state) => {
     ensureDerivedAccountCaches(state.wallet);
     return cachedRekeyedAccounts;
+  });
+
+// Signable accounts are those that can directly sign transactions (STANDARD or LEDGER)
+// Used in airgap/signer mode to filter out watch, rekeyed, and remote signer accounts
+export const useSignableAccounts = () =>
+  useWalletStore((state) => {
+    ensureDerivedAccountCaches(state.wallet);
+    return cachedSignableAccounts;
   });
 
 export const useAccountState = (accountId: string) =>

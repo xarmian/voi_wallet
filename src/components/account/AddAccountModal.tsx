@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
@@ -20,6 +20,8 @@ interface AddAccountModalProps {
   onImportQRAccount: () => void;
   onAddWatchAccount: () => void;
   onImportLedgerAccount: () => void;
+  /** Hide watch account option - used in airgap mode where only signable accounts are relevant */
+  airgapMode?: boolean;
 }
 
 export default function AddAccountModal({
@@ -30,6 +32,7 @@ export default function AddAccountModal({
   onImportQRAccount,
   onAddWatchAccount,
   onImportLedgerAccount,
+  airgapMode = false,
 }: AddAccountModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const createAccount = useWalletStore((state) => state.createAccount);
@@ -77,55 +80,72 @@ export default function AddAccountModal({
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
 
-  const accountOptions = [
-    {
-      id: 'create',
-      title: 'Create New Account',
-      subtitle: 'Generate a new account and backup its recovery phrase',
-      icon: 'add-circle-outline' as const,
-      onPress: handleCreateAccount,
-    },
-    {
-      id: 'import',
-      title: 'Import Account',
-      subtitle: 'Import existing account with seed phrase or private key',
-      icon: 'download-outline' as const,
-      onPress: () => {
-        onClose();
-        onImportAccount();
+  const accountOptions = useMemo(() => {
+    const allOptions = [
+      {
+        id: 'create',
+        title: 'Create New Account',
+        subtitle: 'Generate a new account and backup its recovery phrase',
+        icon: 'add-circle-outline' as const,
+        onPress: handleCreateAccount,
       },
-    },
-    {
-      id: 'ledger',
-      title: 'Connect Ledger',
-      subtitle: 'Import accounts secured by a Ledger hardware wallet',
-      icon: 'hardware-chip-outline' as const,
-      onPress: () => {
-        onClose();
-        onImportLedgerAccount();
+      {
+        id: 'import',
+        title: 'Import Account',
+        subtitle: 'Import existing account with seed phrase or private key',
+        icon: 'download-outline' as const,
+        onPress: () => {
+          onClose();
+          onImportAccount();
+        },
       },
-    },
-    {
-      id: 'importQR',
-      title: 'Import via QR Code',
-      subtitle: 'Scan QR codes to import multiple accounts',
-      icon: 'qr-code-outline' as const,
-      onPress: () => {
-        onClose();
-        onImportQRAccount();
+      {
+        id: 'ledger',
+        title: 'Connect Ledger',
+        subtitle: 'Import accounts secured by a Ledger hardware wallet',
+        icon: 'hardware-chip-outline' as const,
+        onPress: () => {
+          onClose();
+          onImportLedgerAccount();
+        },
       },
-    },
-    {
-      id: 'watch',
-      title: 'Add Watch Account',
-      subtitle: 'Monitor an account without private key access',
-      icon: 'eye-outline' as const,
-      onPress: () => {
-        onClose();
-        onAddWatchAccount();
+      {
+        id: 'importQR',
+        title: 'Import via QR Code',
+        subtitle: 'Scan QR codes to import multiple accounts',
+        icon: 'qr-code-outline' as const,
+        onPress: () => {
+          onClose();
+          onImportQRAccount();
+        },
       },
-    },
-  ];
+      {
+        id: 'watch',
+        title: 'Add Watch Account',
+        subtitle: 'Monitor an account without private key access',
+        icon: 'eye-outline' as const,
+        onPress: () => {
+          onClose();
+          onAddWatchAccount();
+        },
+      },
+    ];
+
+    // In airgap mode, hide watch account option since watch accounts can't sign
+    if (airgapMode) {
+      return allOptions.filter((option) => option.id !== 'watch');
+    }
+
+    return allOptions;
+  }, [
+    airgapMode,
+    handleCreateAccount,
+    onClose,
+    onImportAccount,
+    onImportLedgerAccount,
+    onImportQRAccount,
+    onAddWatchAccount,
+  ]);
 
   return (
     <BottomSheetModal

@@ -32,6 +32,10 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { NetworkId } from '@/types/network';
+import {
+  getNavigationCallbacks,
+  clearNavigationCallbacks,
+} from '@/services/navigation/callbackRegistry';
 
 type UniversalTransactionSigningScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -61,12 +65,18 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
   const {
     transactions,
     account,
-    onSuccess,
-    onReject,
+    onSuccess: directOnSuccess,
+    onReject: directOnReject,
+    callbackId,
     title = 'Sign Transaction',
     networkId,
     chainId,
   } = route.params;
+
+  // Get callbacks from registry if callbackId provided, otherwise use direct callbacks
+  const registryCallbacks = getNavigationCallbacks(callbackId);
+  const onSuccess = registryCallbacks?.onSuccess || directOnSuccess;
+  const onReject = registryCallbacks?.onReject || directOnReject;
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] = useState<UnifiedTransactionRequest | null>(null);
@@ -83,6 +93,8 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     parseTransactions();
     return () => {
       authController.cleanup();
+      // Clean up callback registry when unmounting
+      clearNavigationCallbacks(callbackId);
     };
   }, []);
 

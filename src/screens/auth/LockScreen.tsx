@@ -4,18 +4,46 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
-  Vibration,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '@/services/wallet';
 
+// Cross-platform alert helper
+const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void, style?: string}>) => {
+  if (Platform.OS === 'web') {
+    if (buttons && buttons.length > 1) {
+      const confirmed = window.confirm(`${title}\n\n${message}`);
+      if (confirmed) {
+        const confirmButton = buttons.find(b => b.style === 'destructive') || buttons[buttons.length - 1];
+        confirmButton?.onPress?.();
+      }
+    } else {
+      window.alert(`${title}\n\n${message}`);
+      buttons?.[0]?.onPress?.();
+    }
+  } else {
+    const { Alert } = require('react-native');
+    Alert.alert(title, message, buttons);
+  }
+};
+
+// Cross-platform vibration helper
+const vibrate = (duration: number) => {
+  if (Platform.OS !== 'web') {
+    const { Vibration } = require('react-native');
+    Vibration.vibrate(duration);
+  }
+};
+
 export default function LockScreen() {
+  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { authState, unlock, unlockWithBiometrics, recheckAuthState } =
     useAuth();
@@ -70,11 +98,11 @@ export default function LockScreen() {
         const newAttempts = attempts + 1;
         setAttempts(newAttempts);
         setPin('');
-        Vibration.vibrate(500);
+        vibrate(500);
 
         if (newAttempts >= MAX_ATTEMPTS) {
           setIsLocked(true);
-          Alert.alert(
+          showAlert(
             'Too Many Attempts',
             `Wallet locked for ${LOCKOUT_TIME / 1000} seconds`
           );
@@ -84,7 +112,7 @@ export default function LockScreen() {
             setAttempts(0);
           }, LOCKOUT_TIME);
         } else {
-          Alert.alert(
+          showAlert(
             'Incorrect PIN',
             `${MAX_ATTEMPTS - newAttempts} attempts remaining`
           );
@@ -92,12 +120,12 @@ export default function LockScreen() {
       }
     } catch (error) {
       console.error('PIN verification error:', error);
-      Alert.alert('Error', 'Failed to verify PIN');
+      showAlert('Error', 'Failed to verify PIN');
     }
   };
 
   const handleReset = () => {
-    Alert.alert(
+    showAlert(
       'Reset Application',
       'This will permanently delete all wallet data, accounts, and settings. This action cannot be undone.\n\nAre you sure you want to continue?',
       [
@@ -115,7 +143,7 @@ export default function LockScreen() {
   };
 
   const confirmReset = () => {
-    Alert.alert(
+    showAlert(
       'Final Confirmation',
       'This is your last chance. All wallet data will be permanently deleted.',
       [
@@ -148,7 +176,7 @@ export default function LockScreen() {
       // Force the AuthContext to re-check the initial state
       await recheckAuthState();
 
-      Alert.alert(
+      showAlert(
         'Reset Complete',
         'All application data has been cleared. You can now set up a new wallet.',
         [
@@ -159,7 +187,7 @@ export default function LockScreen() {
       );
     } catch (error) {
       console.error('Reset error:', error);
-      Alert.alert('Error', 'Failed to reset application. Please try again.');
+      showAlert('Error', 'Failed to reset application. Please try again.');
     }
   };
 
@@ -207,7 +235,7 @@ export default function LockScreen() {
                     <Ionicons
                       name="backspace-outline"
                       size={24}
-                      color={styles.keypadIconColor}
+                      color={theme.colors.text}
                     />
                   </TouchableOpacity>
                 );
@@ -237,7 +265,7 @@ export default function LockScreen() {
           <Ionicons
             name="lock-closed"
             size={48}
-            color={styles.primaryIconColor}
+            color={theme.colors.primary}
           />
           <Text style={styles.title}>Wallet Locked</Text>
           <Text style={styles.subtitle}>Enter your PIN to unlock</Text>
@@ -253,7 +281,7 @@ export default function LockScreen() {
             <Ionicons
               name="finger-print"
               size={32}
-              color={styles.primaryIconColor}
+              color={theme.colors.primary}
             />
             <Text style={styles.biometricText}>Use Biometric</Text>
           </TouchableOpacity>
@@ -279,7 +307,7 @@ export default function LockScreen() {
               <Ionicons
                 name="refresh-outline"
                 size={20}
-                color={styles.errorIconColor}
+                color={theme.colors.error}
               />
               <Text style={styles.resetButtonText}>Reset Application</Text>
             </TouchableOpacity>
@@ -408,7 +436,4 @@ const createStyles = (theme: Theme) =>
       marginLeft: theme.spacing.sm,
       fontWeight: '500',
     },
-    primaryIconColor: theme.colors.primary,
-    keypadIconColor: theme.colors.text,
-    errorIconColor: theme.colors.error,
   });

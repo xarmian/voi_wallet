@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useAuth } from '@/contexts/AuthContext';
 
 type PinStep = 'current' | 'new' | 'confirm';
 
@@ -25,12 +26,31 @@ export default function ChangePinScreen() {
   const { theme } = useTheme();
   const themeColors = useThemeColors();
   const styles = useThemedStyles(createStyles);
+  const { recheckAuthState } = useAuth();
   const [currentStep, setCurrentStep] = useState<PinStep>('current');
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [attempts, setAttempts] = useState(0);
+  const [isInitialSetup, setIsInitialSetup] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Check if this is initial PIN setup (no existing PIN) on mount
+  useEffect(() => {
+    const checkPinExists = async () => {
+      try {
+        const hasPin = await AccountSecureStorage.hasPin();
+        if (!hasPin) {
+          setIsInitialSetup(true);
+          setCurrentStep('new'); // Skip 'current' step
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    checkPinExists();
+  }, []);
 
   const getCurrentPinValue = () => {
     switch (currentStep) {
@@ -64,9 +84,9 @@ export default function ChangePinScreen() {
       case 'current':
         return 'Enter Current PIN';
       case 'new':
-        return 'Enter New PIN';
+        return isInitialSetup ? 'Create PIN' : 'Enter New PIN';
       case 'confirm':
-        return 'Confirm New PIN';
+        return isInitialSetup ? 'Confirm PIN' : 'Confirm New PIN';
       default:
         return '';
     }
@@ -77,9 +97,13 @@ export default function ChangePinScreen() {
       case 'current':
         return 'Please enter your current 6-digit PIN';
       case 'new':
-        return 'Choose a new 6-digit PIN for your wallet';
+        return isInitialSetup
+          ? 'Choose a 6-digit PIN to secure your wallet'
+          : 'Choose a new 6-digit PIN for your wallet';
       case 'confirm':
-        return 'Re-enter your new PIN to confirm';
+        return isInitialSetup
+          ? 'Re-enter your PIN to confirm'
+          : 'Re-enter your new PIN to confirm';
       default:
         return '';
     }
@@ -125,7 +149,8 @@ export default function ChangePinScreen() {
         setIsSubmitting(false);
       }
     } else if (currentStep === 'new') {
-      if (pinValue === currentPin) {
+      // Only check against current PIN if changing (not initial setup)
+      if (!isInitialSetup && pinValue === currentPin) {
         Alert.alert('Error', 'New PIN must be different from current PIN');
         setNewPin('');
         return;
@@ -140,11 +165,22 @@ export default function ChangePinScreen() {
 
       setIsSubmitting(true);
       try {
-        await AccountSecureStorage.changePin(currentPin, newPin);
+        if (isInitialSetup) {
+          // Initial PIN setup - use storePin
+          await AccountSecureStorage.storePin(newPin);
+        } else {
+          // Changing existing PIN - use changePin
+          await AccountSecureStorage.changePin(currentPin, newPin);
+        }
+
+        // Update AuthContext to reflect new PIN state
+        await recheckAuthState();
 
         Alert.alert(
-          'PIN Changed Successfully',
-          'Your PIN has been updated successfully.',
+          isInitialSetup ? 'PIN Set Successfully' : 'PIN Changed Successfully',
+          isInitialSetup
+            ? 'Your PIN has been set up successfully.'
+            : 'Your PIN has been updated successfully.',
           [
             {
               text: 'OK',
@@ -155,7 +191,7 @@ export default function ChangePinScreen() {
       } catch (error) {
         Alert.alert(
           'Error',
-          `Failed to change PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
+          `Failed to ${isInitialSetup ? 'set' : 'change'} PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
       } finally {
         setIsSubmitting(false);
@@ -167,8 +203,13 @@ export default function ChangePinScreen() {
     if (currentStep === 'current') {
       navigation.goBack();
     } else if (currentStep === 'new') {
-      setCurrentStep('current');
-      setNewPin('');
+      if (isInitialSetup) {
+        // In initial setup, 'new' is the first step - go back to settings
+        navigation.goBack();
+      } else {
+        setCurrentStep('current');
+        setNewPin('');
+      }
     } else if (currentStep === 'confirm') {
       setCurrentStep('new');
       setConfirmPin('');
@@ -176,21 +217,46 @@ export default function ChangePinScreen() {
   };
 
   const getProgress = () => {
-    switch (currentStep) {
-      case 'current':
-        return '1 of 3';
-      case 'new':
-        return '2 of 3';
-      case 'confirm':
-        return '3 of 3';
-      default:
-        return '';
+    if (isInitialSetup) {
+      // 2-step flow for initial setup
+      switch (currentStep) {
+        case 'new':
+          return '1 of 2';
+        case 'confirm':
+          return '2 of 2';
+        default:
+          return '';
+      }
+    } else {
+      // 3-step flow for changing existing PIN
+      switch (currentStep) {
+        case 'current':
+          return '1 of 3';
+        case 'new':
+          return '2 of 3';
+        case 'confirm':
+          return '3 of 3';
+        default:
+          return '';
+      }
     }
   };
 
+  // Show loading state while checking if PIN exists
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader title="PIN" showBack onBack={() => navigation.goBack()} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader title="Change PIN" showBack onBack={handleBack} />
+      <UniversalHeader title={isInitialSetup ? 'Set PIN' : 'Change PIN'} showBack onBack={handleBack} />
 
       <KeyboardAwareScrollView
         style={styles.scrollView}
@@ -235,7 +301,7 @@ export default function ChangePinScreen() {
             <ActivityIndicator size="small" color="white" />
           ) : (
             <Text style={styles.nextButtonText}>
-              {currentStep === 'confirm' ? 'Change PIN' : 'Next'}
+              {currentStep === 'confirm' ? (isInitialSetup ? 'Set PIN' : 'Change PIN') : 'Next'}
             </Text>
           )}
         </TouchableOpacity>
@@ -263,6 +329,11 @@ const createStyles = (theme: Theme) =>
     container: {
       flex: 1,
       backgroundColor: theme.colors.background,
+    },
+    loadingContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
     },
     scrollView: {
       flex: 1,

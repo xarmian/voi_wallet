@@ -48,8 +48,8 @@ export const ALGORAND_MAINNET_CHAIN_DATA: WalletConnectChainData = {
 export const WALLET_METADATA = {
   name: 'Voi Wallet',
   description: 'Mobile wallet for Voi Network and Algorand ecosystem',
-  url: 'https://voiapp.com',
-  icons: ['https://voiapp.com/icon-192.png', 'https://voiapp.com/icon-512.png'],
+  url: 'https://getvoi.app',
+  icons: ['https://getvoi.app/android-chrome-192x192.png', 'https://getvoi.app/android-chrome-512x512.png'],
 };
 
 export const ALGORAND_METHODS = [

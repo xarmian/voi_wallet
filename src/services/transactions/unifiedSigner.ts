@@ -18,6 +18,16 @@ import { NetworkId } from '@/types/network';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 
 /**
+ * Error thrown when attempting to sign with a remote signer account directly
+ */
+export class RemoteSignerRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RemoteSignerRequiredError';
+  }
+}
+
+/**
  * Unified callback interface for ALL signing operations
  */
 export interface UnifiedSigningCallbacks {
@@ -64,7 +74,9 @@ export type UnifiedTransactionType =
   | 'rekey'
   | 'rekey_reverse'
   | 'batch_transaction'
-  | 'walletconnect_batch'; // Deprecated: use batch_transaction instead
+  | 'walletconnect_batch' // Deprecated: use batch_transaction instead
+  | 'keyreg' // Key registration (go online/offline for consensus)
+  | 'appl'; // Application call (smart contract interaction)
 
 /**
  * Unified transaction request interface
@@ -91,6 +103,35 @@ export interface UnifiedTransactionRequest {
     accountAddress: string;
     // Optional: Pre-decoded transactions to avoid double-parsing
     decodedTransactions?: algosdk.Transaction[];
+  };
+
+  // For key registration (go online/offline)
+  keyregParams?: {
+    address: string;
+    voteKey?: Uint8Array;
+    selectionKey?: Uint8Array;
+    stateProofKey?: Uint8Array;
+    voteFirst?: number;
+    voteLast?: number;
+    voteKeyDilution?: number;
+    nonParticipation?: boolean; // true for going offline
+    fee?: number;
+    note?: string;
+    networkId?: NetworkId;
+  };
+
+  // For application calls
+  applParams?: {
+    senderAddress: string;
+    appId: number;
+    appArgs?: Uint8Array[];
+    foreignApps?: number[];
+    foreignAssets?: number[];
+    accounts?: string[];
+    boxes?: Array<{ appIndex: number; name: Uint8Array }>;
+    fee?: number;
+    note?: string;
+    networkId?: NetworkId;
   };
 
   // Network ID for the transaction (optional, defaults to current network)
@@ -145,6 +186,14 @@ export class UnifiedTransactionSigner {
         case 'batch_transaction':
         case 'walletconnect_batch':
           result = await this.signWalletConnectBatch(request, callbacks);
+          break;
+
+        case 'keyreg':
+          result = await this.signKeyregTransaction(request, callbacks);
+          break;
+
+        case 'appl':
+          result = await this.signApplTransaction(request, callbacks);
           break;
 
         default:
@@ -325,7 +374,7 @@ export class UnifiedTransactionSigner {
             }
 
             // Verify we have a valid transaction with sender info
-            if (!txn || !txn.from || !txn.from.publicKey) {
+            if (!txn || !txn.sender || !txn.sender.publicKey) {
               // Invalid or already-signed transaction - pass through
               signedTxns.push(wtxn.txn);
               callbacks?.onLedgerSigned?.({ index: i + 1, total });
@@ -333,7 +382,7 @@ export class UnifiedTransactionSigner {
             }
 
             // Get the transaction sender address
-            const txnSender = algosdk.encodeAddress(txn.from.publicKey);
+            const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
             // Determine signer address
             let signerAddress = request.walletConnectParams!.accountAddress;
@@ -371,7 +420,7 @@ export class UnifiedTransactionSigner {
         // Parallel signing for standard accounts (much faster!)
         callbacks?.onLedgerPrompt?.({ index: 1, total });
 
-        const signingPromises = request.walletConnectParams.transactions.map(async (wtxn, i) => {
+        const signingPromises = request.walletConnectParams!.transactions.map(async (wtxn, i) => {
           try {
             const txnBytes = Buffer.from(wtxn.txn, 'base64');
 
@@ -379,8 +428,8 @@ export class UnifiedTransactionSigner {
             // If it fails, the transaction is already signed (e.g., logic sig) - pass through
             let txn: algosdk.Transaction;
             try {
-              if (useDecodedCache && request.walletConnectParams.decodedTransactions?.[i]) {
-                txn = request.walletConnectParams.decodedTransactions[i];
+              if (useDecodedCache && request.walletConnectParams!.decodedTransactions?.[i]) {
+                txn = request.walletConnectParams!.decodedTransactions[i];
               } else {
                 txn = algosdk.decodeUnsignedTransaction(txnBytes);
               }
@@ -390,15 +439,13 @@ export class UnifiedTransactionSigner {
             }
 
             // Verify we have a valid transaction with sender info
-            // algosdk may use 'from' or 'sender' depending on version
-            const senderField = (txn as any).from || (txn as any).sender;
-            if (!txn || !senderField || !senderField.publicKey) {
+            if (!txn || !txn.sender || !txn.sender.publicKey) {
               // Invalid or already-signed transaction - pass through
               return wtxn.txn;
             }
 
             // Get the transaction sender address
-            const txnSender = algosdk.encodeAddress(senderField.publicKey);
+            const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
             // Determine signer address
             let signerAddress = request.walletConnectParams!.accountAddress;
@@ -472,6 +519,19 @@ export class UnifiedTransactionSigner {
       throw new Error('Transaction type is required');
     }
 
+    // Check for REMOTE_SIGNER accounts - these cannot be signed directly
+    if (request.account.type === AccountType.REMOTE_SIGNER) {
+      throw new RemoteSignerRequiredError(
+        'This account uses remote signing via QR codes. ' +
+        'Please use the remote signer flow instead of direct signing.'
+      );
+    }
+
+    // Check for WATCH accounts - these cannot sign at all
+    if (request.account.type === AccountType.WATCH) {
+      throw new Error('Watch accounts cannot sign transactions');
+    }
+
     // Type-specific validation
     switch (request.type) {
       case 'voi_transfer':
@@ -497,6 +557,21 @@ export class UnifiedTransactionSigner {
       case 'walletconnect_batch':
         if (!request.walletConnectParams) {
           throw new Error('Batch parameters required for batch signing');
+        }
+        break;
+
+      case 'keyreg':
+        if (!request.keyregParams) {
+          throw new Error('Keyreg parameters required for key registration transactions');
+        }
+        break;
+
+      case 'appl':
+        if (!request.applParams) {
+          throw new Error('Application parameters required for app call transactions');
+        }
+        if (!request.applParams.appId) {
+          throw new Error('Application ID required for app call transactions');
         }
         break;
     }
@@ -593,6 +668,155 @@ export class UnifiedTransactionSigner {
     }
 
     return errors;
+  }
+
+  /**
+   * Sign key registration transaction (go online/offline)
+   */
+  private async signKeyregTransaction(
+    request: UnifiedTransactionRequest,
+    callbacks?: UnifiedSigningCallbacks
+  ): Promise<UnifiedSigningResult> {
+    if (!request.keyregParams) {
+      throw new Error('Keyreg parameters required');
+    }
+
+    try {
+      const networkId = request.keyregParams.networkId || request.networkId;
+      const { NetworkService } = await import('@/services/network');
+      const networkService = NetworkService.getInstance(networkId);
+      const suggestedParams = await networkService.getSuggestedParams();
+
+      // Override fee if specified
+      if (request.keyregParams.fee) {
+        suggestedParams.fee = request.keyregParams.fee;
+        suggestedParams.flatFee = true;
+      }
+
+      // Build keyreg transaction
+      let txn: algosdk.Transaction;
+
+      if (request.keyregParams.nonParticipation) {
+        // Go offline (non-participation)
+        txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
+          sender: request.keyregParams.address,
+          suggestedParams,
+          nonParticipation: true,
+          note: request.keyregParams.note
+            ? new Uint8Array(Buffer.from(request.keyregParams.note))
+            : undefined,
+        });
+      } else {
+        // Go online with participation keys
+        txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
+          sender: request.keyregParams.address,
+          voteKey: request.keyregParams.voteKey,
+          selectionKey: request.keyregParams.selectionKey,
+          stateProofKey: request.keyregParams.stateProofKey,
+          voteFirst: request.keyregParams.voteFirst,
+          voteLast: request.keyregParams.voteLast,
+          voteKeyDilution: request.keyregParams.voteKeyDilution,
+          suggestedParams,
+          note: request.keyregParams.note
+            ? new Uint8Array(Buffer.from(request.keyregParams.note))
+            : undefined,
+        });
+      }
+
+      callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
+
+      // Sign the transaction
+      const signedTxnBlob = await SecureKeyManager.signTransaction(
+        txn,
+        request.keyregParams.address,
+        request.pin
+      );
+
+      callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+      callbacks?.onNetworkSubmit?.();
+
+      // Submit to network
+      const txId = await networkService.sendRawTransaction(signedTxnBlob);
+
+      // Wait for confirmation
+      await networkService.waitForConfirmation(txId);
+
+      callbacks?.onNetworkConfirmed?.(txId);
+
+      return {
+        success: true,
+        transactionId: txId,
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Sign application call transaction
+   */
+  private async signApplTransaction(
+    request: UnifiedTransactionRequest,
+    callbacks?: UnifiedSigningCallbacks
+  ): Promise<UnifiedSigningResult> {
+    if (!request.applParams) {
+      throw new Error('Application parameters required');
+    }
+
+    try {
+      const networkId = request.applParams.networkId || request.networkId;
+      const { NetworkService } = await import('@/services/network');
+      const networkService = NetworkService.getInstance(networkId);
+      const suggestedParams = await networkService.getSuggestedParams();
+
+      // Override fee if specified
+      if (request.applParams.fee) {
+        suggestedParams.fee = request.applParams.fee;
+        suggestedParams.flatFee = true;
+      }
+
+      // Build application call transaction
+      const txn = algosdk.makeApplicationNoOpTxnFromObject({
+        sender: request.applParams.senderAddress,
+        appIndex: request.applParams.appId,
+        appArgs: request.applParams.appArgs,
+        foreignApps: request.applParams.foreignApps,
+        foreignAssets: request.applParams.foreignAssets,
+        accounts: request.applParams.accounts,
+        boxes: request.applParams.boxes,
+        suggestedParams,
+        note: request.applParams.note
+          ? new Uint8Array(Buffer.from(request.applParams.note))
+          : undefined,
+      });
+
+      callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
+
+      // Sign the transaction
+      const signedTxnBlob = await SecureKeyManager.signTransaction(
+        txn,
+        request.applParams.senderAddress,
+        request.pin
+      );
+
+      callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+      callbacks?.onNetworkSubmit?.();
+
+      // Submit to network
+      const txId = await networkService.sendRawTransaction(signedTxnBlob);
+
+      // Wait for confirmation
+      await networkService.waitForConfirmation(txId);
+
+      callbacks?.onNetworkConfirmed?.(txId);
+
+      return {
+        success: true,
+        transactionId: txId,
+      };
+    } catch (error) {
+      throw error;
+    }
   }
 
   /**

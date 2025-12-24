@@ -1,18 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Dimensions,
+  Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { CameraView, Camera } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { DeepLinkService } from '@/services/deeplink';
 import { isWalletConnectUri, isVoiUri } from '@/services/walletconnect/utils';
-import { isAlgorandPaymentUri, parseAlgorandUri } from '@/utils/algorandUri';
+import {
+  isArc0090Uri,
+  getArc0090UriType,
+  isLegacyVoiUri,
+} from '@/utils/arc0090Uri';
 import {
   parseArc0300AccountImportUri,
   Arc0300AccountImportResult,
@@ -22,6 +26,34 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { getFromClipboard } from '@/utils/clipboard';
+import jsQR from 'jsqr';
+import { CameraView, Camera } from 'expo-camera';
+
+// Cross-platform alert helper
+const showAlert = (
+  title: string,
+  message: string,
+  buttons?: Array<{ text: string; onPress?: () => void; style?: string }>
+) => {
+  if (Platform.OS === 'web') {
+    if (buttons && buttons.length > 1) {
+      const confirmed = window.confirm(`${title}\n\n${message}`);
+      if (confirmed) {
+        const confirmButton = buttons.find(b => b.style !== 'cancel') || buttons[0];
+        confirmButton?.onPress?.();
+      } else {
+        const cancelButton = buttons.find(b => b.style === 'cancel');
+        cancelButton?.onPress?.();
+      }
+    } else {
+      window.alert(`${title}\n\n${message}`);
+      buttons?.[0]?.onPress?.();
+    }
+  } else {
+    const { Alert } = require('react-native');
+    Alert.alert(title, message, buttons);
+  }
+};
 
 interface Props {
   onClose: () => void;
@@ -34,12 +66,169 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
 
   useEffect(() => {
-    requestCameraPermission();
+    // Only request camera permission on native platforms
+    if (Platform.OS !== 'web') {
+      requestCameraPermission();
+    } else {
+      // On web, we don't need camera permission - set to true to show web UI
+      setHasPermission(true);
+    }
   }, []);
+
+  // Scan QR code from image data using jsQR
+  const scanQRFromImageData = useCallback((imageData: ImageData): string | null => {
+    try {
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      return code?.data || null;
+    } catch (e) {
+      console.error('jsQR error:', e);
+      return null;
+    }
+  }, []);
+
+  // Web: Handle screen capture
+  const handleScreenCapture = async () => {
+    if (Platform.OS !== 'web' || isProcessing || isCapturing) return;
+
+    setIsCapturing(true);
+
+    try {
+      // Request screen capture
+      const stream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: { cursor: 'never' },
+        audio: false,
+      });
+
+      // Create video element to capture frame
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      await video.play();
+
+      // Wait a moment for video to be ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Create canvas and draw video frame
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        throw new Error('Could not get canvas context');
+      }
+
+      ctx.drawImage(video, 0, 0);
+
+      // Stop the stream
+      stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+
+      // Get image data and scan for QR code
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const qrData = scanQRFromImageData(imageData);
+
+      if (qrData) {
+        await handleBarCodeScanned({ type: 'qr', data: qrData });
+      } else {
+        showAlert(
+          'No QR Code Found',
+          'Could not find a QR code in the captured screen. Please make sure the QR code is visible and try again.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error: any) {
+      // User cancelled or error occurred
+      if (error.name !== 'NotAllowedError' && error.name !== 'AbortError') {
+        console.error('Screen capture error:', error);
+        showAlert(
+          'Capture Error',
+          'Failed to capture screen. Please try again.',
+          [{ text: 'OK' }]
+        );
+      }
+    } finally {
+      setIsCapturing(false);
+    }
+  };
+
+  // Web: Handle file upload
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || isProcessing) return;
+
+    setIsProcessing(true);
+
+    try {
+      const img = new Image();
+      const reader = new FileReader();
+
+      const qrData = await new Promise<string | null>((resolve, reject) => {
+        reader.onload = (e) => {
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+
+            if (!ctx) {
+              reject(new Error('Could not get canvas context'));
+              return;
+            }
+
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = scanQRFromImageData(imageData);
+            resolve(data);
+          };
+          img.onerror = () => reject(new Error('Failed to load image'));
+          img.src = e.target?.result as string;
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
+      if (qrData) {
+        await handleBarCodeScanned({ type: 'qr', data: qrData });
+      } else {
+        showAlert(
+          'No QR Code Found',
+          'Could not find a QR code in the uploaded image. Please try a different image.',
+          [{ text: 'OK' }]
+        );
+        setIsProcessing(false);
+      }
+    } catch (error) {
+      console.error('File upload error:', error);
+      showAlert(
+        'Upload Error',
+        'Failed to process the uploaded image. Please try again.',
+        [{ text: 'OK' }]
+      );
+      setIsProcessing(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Web: Trigger file input click
+  const triggerFileUpload = () => {
+    if (fileInputRef.current && !isProcessing) {
+      fileInputRef.current.click();
+    }
+  };
 
   // Reset scanner state when component gains focus
   useFocusEffect(
@@ -72,7 +261,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     if (!rawValue) {
       setScanned(false);
       setIsProcessing(false);
-      Alert.alert(
+      showAlert(
         'QR Code Error',
         'QR code data is empty. Please try scanning again.',
         [
@@ -83,7 +272,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
               setIsProcessing(false);
             },
           },
-          { text: 'Cancel', onPress: onClose },
+          { text: 'Cancel', style: 'cancel', onPress: onClose },
         ]
       );
       return;
@@ -92,7 +281,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     try {
       const arcImportResult = parseArc0300AccountImportUri(rawValue);
       if (arcImportResult) {
-        Alert.alert(
+        showAlert(
           'Account Import QR Code',
           'This is an account import QR code. Please use the Account Import feature from Settings → Import Account → QR Code to import accounts.',
           [
@@ -110,10 +299,13 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
 
       if (isWalletConnectUri(rawValue)) {
         await handleWalletConnectUri(rawValue);
-      } else if (isVoiUri(rawValue)) {
-        await handleVoiUri(rawValue);
-      } else if (isAlgorandPaymentUri(rawValue)) {
-        await handleAlgorandPaymentUri(rawValue);
+      } else if (isArc0090Uri(rawValue)) {
+        // Handle ARC-0090 URIs (algorand://, voi://, perawallet://)
+        // This includes payment, keyreg, appl, and query URIs
+        await handleArc0090Uri(rawValue);
+      } else if (isVoiUri(rawValue) && isLegacyVoiUri(rawValue)) {
+        // Handle legacy voi://action?params format
+        await handleLegacyVoiUri(rawValue);
       } else {
         // Try to handle as a regular URL or address
         await handleGenericUri(rawValue);
@@ -124,8 +316,8 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       if (error instanceof Error) {
         errorMessage = error.message;
       }
-      
-      Alert.alert(
+
+      showAlert(
         'QR Code Error',
         errorMessage,
         [
@@ -136,7 +328,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
               setIsProcessing(false);
             },
           },
-          { text: 'Cancel', onPress: onClose },
+          { text: 'Cancel', style: 'cancel', onPress: onClose },
         ]
       );
     }
@@ -164,7 +356,43 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     }
   };
 
-  const handleVoiUri = async (uri: string) => {
+  /**
+   * Handle ARC-0090 URIs (algorand://, voi://, perawallet://)
+   * Routes to appropriate screens via DeepLinkService
+   */
+  const handleArc0090Uri = async (uri: string) => {
+    try {
+      const uriType = getArc0090UriType(uri);
+      console.log('[QRScanner] handleArc0090Uri - uriType:', uriType, 'uri:', uri);
+
+      const deepLinkService = DeepLinkService.getInstance();
+      const handled = await deepLinkService.testDeepLink(uri);
+      console.log('[QRScanner] handleArc0090Uri - handled:', handled);
+
+      if (handled) {
+        // NOTE: Don't call onSuccess() or onClose() here - the deep link handler
+        // has already navigated to a new screen using StackActions.replace.
+        // Calling onSuccess() would trigger handleSuccess in QRScannerScreen
+        // which has a setTimeout that calls goBack(), dismissing the new screen.
+        console.log('[QRScanner] handleArc0090Uri - navigation handled by deep link service');
+      } else {
+        console.log('[QRScanner] handleArc0090Uri - not handled, resetting scanner');
+        // Reset scanner state so user can try again
+        setScanned(false);
+        setIsProcessing(false);
+      }
+    } catch (error) {
+      console.error('[QRScanner] handleArc0090Uri - error:', error);
+      throw new Error(
+        `URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  };
+
+  /**
+   * Handle legacy voi://action?params format
+   */
+  const handleLegacyVoiUri = async (uri: string) => {
     try {
       const deepLinkService = DeepLinkService.getInstance();
       const handled = await deepLinkService.testDeepLink(uri);
@@ -172,30 +400,12 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       if (handled) {
         onSuccess?.(uri);
         onClose();
-        Alert.alert('Success', 'Processing Voi URI...');
       } else {
         throw new Error('Failed to process Voi URI');
       }
     } catch (error) {
       throw new Error(
         `Voi URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
-  };
-
-  const handleAlgorandPaymentUri = async (uri: string) => {
-    try {
-      const parsed = parseAlgorandUri(uri);
-
-      if (!parsed || !parsed.isValid) {
-        throw new Error('Invalid Algorand payment URI format');
-      }
-
-      // Let the parent screen handle navigation directly
-      onSuccess?.(uri);
-    } catch (error) {
-      throw new Error(
-        `Algorand payment URI processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   };
@@ -240,7 +450,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
 
     // Check if it's a URL
     if (cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
-      Alert.alert(
+      showAlert(
         'URL Detected',
         'This appears to be a web URL. This QR scanner is designed for WalletConnect and Voi URIs.',
         [
@@ -251,7 +461,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
               setIsProcessing(false);
             },
           },
-          { text: 'Cancel', onPress: onClose },
+          { text: 'Cancel', style: 'cancel', onPress: onClose },
         ]
       );
       return;
@@ -276,7 +486,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       const rawValue = clipboardText.trim();
 
       if (!rawValue) {
-        Alert.alert(
+        showAlert(
           'Clipboard Empty',
           'No text found in clipboard. Please copy a WalletConnect URI, payment request, or address and try again.',
           [
@@ -300,7 +510,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         errorMessage = error.message;
       }
 
-      Alert.alert(
+      showAlert(
         'Paste Error',
         errorMessage,
         [
@@ -311,7 +521,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
               setIsProcessing(false);
             },
           },
-          { text: 'Cancel', onPress: onClose },
+          { text: 'Cancel', style: 'cancel', onPress: onClose },
         ]
       );
     }
@@ -382,6 +592,113 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     </View>
   );
 
+  // Web: Render web-specific scanner UI
+  const renderWebScanner = () => (
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Hidden file input for image upload */}
+      {Platform.OS === 'web' && (
+        <input
+          ref={fileInputRef as any}
+          type="file"
+          accept="image/*"
+          onChange={handleFileUpload as any}
+          style={{ display: 'none' }}
+        />
+      )}
+
+      <View style={styles.webHeader}>
+        <TouchableOpacity style={styles.webCloseButton} onPress={onClose}>
+          <Ionicons name="close" size={24} color={theme.colors.text} />
+        </TouchableOpacity>
+        <Text style={[styles.webTitle, { color: theme.colors.text }]}>Scan QR Code</Text>
+        <View style={styles.placeholder} />
+      </View>
+
+      <View style={styles.webContent}>
+        <View style={[styles.webIconContainer, { backgroundColor: theme.colors.surface }]}>
+          <Ionicons name="qr-code" size={80} color={theme.colors.primary} />
+        </View>
+
+        <Text style={[styles.webDescription, { color: theme.colors.textSecondary }]}>
+          Scan a QR code from your screen, upload an image, or paste a URI from clipboard
+        </Text>
+
+        {/* Screen Capture Button */}
+        <TouchableOpacity
+          style={[
+            styles.webButton,
+            { backgroundColor: theme.colors.primary },
+            (isProcessing || isCapturing) && styles.webButtonDisabled,
+          ]}
+          onPress={handleScreenCapture}
+          disabled={isProcessing || isCapturing}
+        >
+          {isCapturing ? (
+            <ActivityIndicator color="#FFFFFF" size="small" />
+          ) : (
+            <Ionicons name="scan" size={24} color="#FFFFFF" />
+          )}
+          <Text style={styles.webButtonText}>
+            {isCapturing ? 'Capturing...' : 'Scan Screen for QR Code'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* File Upload Button */}
+        <TouchableOpacity
+          style={[
+            styles.webButton,
+            styles.webButtonSecondary,
+            { borderColor: theme.colors.primary },
+            isProcessing && styles.webButtonDisabled,
+          ]}
+          onPress={triggerFileUpload}
+          disabled={isProcessing}
+        >
+          <Ionicons name="image" size={24} color={theme.colors.primary} />
+          <Text style={[styles.webButtonSecondaryText, { color: theme.colors.primary }]}>
+            Upload QR Code Image
+          </Text>
+        </TouchableOpacity>
+
+        {/* Paste from Clipboard Button */}
+        <TouchableOpacity
+          style={[
+            styles.webButton,
+            styles.webButtonSecondary,
+            { borderColor: theme.colors.primary },
+            isProcessing && styles.webButtonDisabled,
+          ]}
+          onPress={handlePasteUri}
+          disabled={isProcessing}
+        >
+          <Ionicons name="clipboard" size={24} color={theme.colors.primary} />
+          <Text style={[styles.webButtonSecondaryText, { color: theme.colors.primary }]}>
+            Paste URI from Clipboard
+          </Text>
+        </TouchableOpacity>
+
+        {isProcessing && (
+          <View style={styles.webProcessingContainer}>
+            <ActivityIndicator color={theme.colors.primary} size="large" />
+            <Text style={[styles.webProcessingText, { color: theme.colors.textSecondary }]}>
+              Processing...
+            </Text>
+          </View>
+        )}
+
+        <Text style={[styles.webSupportedFormats, { color: theme.colors.textMuted }]}>
+          Supports WalletConnect, Voi/Algorand payment requests, and addresses
+        </Text>
+      </View>
+    </View>
+  );
+
+  // Web platform - show web scanner UI
+  if (Platform.OS === 'web') {
+    return renderWebScanner();
+  }
+
+  // Native: Loading state
   if (hasPermission === null) {
     return (
       <View style={styles.permissionContainer}>
@@ -392,6 +709,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     );
   }
 
+  // Native: No permission state
   if (hasPermission === false) {
     return (
       <View style={styles.permissionContainer}>
@@ -413,13 +731,14 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     );
   }
 
+  // Native: Camera scanner
   return (
     <View style={styles.container}>
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
         onBarcodeScanned={
-          scanned && !isProcessing ? undefined : handleBarCodeScanned
+          scanned || isProcessing ? undefined : handleBarCodeScanned
         }
         barcodeScannerSettings={{
           barcodeTypes: ['qr'],
@@ -610,5 +929,90 @@ const createStyles = (theme: Theme) =>
     cancelButtonText: {
       fontSize: 16,
       color: theme.colors.primary,
+    },
+    // Web-specific styles
+    webHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 20,
+      paddingVertical: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.border,
+    },
+    webCloseButton: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: theme.colors.surface,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    webTitle: {
+      fontSize: 18,
+      fontWeight: '600',
+    },
+    webContent: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 24,
+      paddingBottom: 40,
+    },
+    webIconContainer: {
+      width: 140,
+      height: 140,
+      borderRadius: 70,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 24,
+    },
+    webDescription: {
+      fontSize: 16,
+      textAlign: 'center',
+      marginBottom: 32,
+      lineHeight: 24,
+      paddingHorizontal: 16,
+    },
+    webButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 16,
+      paddingHorizontal: 24,
+      borderRadius: 12,
+      marginBottom: 12,
+      width: '100%',
+      maxWidth: 320,
+      gap: 12,
+    },
+    webButtonSecondary: {
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+    },
+    webButtonDisabled: {
+      opacity: 0.5,
+    },
+    webButtonText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: '#FFFFFF',
+    },
+    webButtonSecondaryText: {
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    webProcessingContainer: {
+      alignItems: 'center',
+      marginTop: 24,
+    },
+    webProcessingText: {
+      fontSize: 14,
+      marginTop: 12,
+    },
+    webSupportedFormats: {
+      fontSize: 12,
+      textAlign: 'center',
+      marginTop: 24,
     },
   });

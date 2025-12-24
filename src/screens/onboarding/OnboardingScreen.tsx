@@ -71,15 +71,19 @@ function OptionCardWithAnimation({ icon, title, subtitle, onPress, theme, styles
       onPressOut={handlePressOut}
       style={animatedStyle}
     >
-      <GlassCard variant="medium" style={styles.optionButton}>
-        <View style={[styles.optionIcon, { backgroundColor: `${theme.colors.primary}15` }]}>
-          <Ionicons name={icon} size={24} color={theme.colors.primary} />
+      <GlassCard variant="medium">
+        <View style={styles.optionButton}>
+          <View style={[styles.optionIcon, { backgroundColor: `${theme.colors.primary}15` }]}>
+            <Ionicons name={icon} size={24} color={theme.colors.primary} />
+          </View>
+          <View style={styles.optionContent}>
+            <Text style={[styles.optionTitle, { color: theme.colors.text }]}>{title}</Text>
+            <Text style={[styles.optionSubtitle, { color: theme.colors.textMuted }]}>{subtitle}</Text>
+          </View>
+          <View style={styles.optionChevron}>
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+          </View>
         </View>
-        <View style={styles.optionContent}>
-          <Text style={[styles.optionTitle, { color: theme.colors.text }]}>{title}</Text>
-          <Text style={[styles.optionSubtitle, { color: theme.colors.textMuted }]}>{subtitle}</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
       </GlassCard>
     </AnimatedPressable>
   );
@@ -184,6 +188,25 @@ export default function OnboardingScreen({ navigation }: Props) {
               />
             ))}
           </View>
+
+          <View style={styles.bottomLinks}>
+            <Pressable
+              onPress={() => navigation.navigate('Main')}
+              style={styles.skipButton}
+            >
+              <Text style={[styles.skipText, { color: theme.colors.textMuted }]}>
+                Continue without account
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => navigation.navigate('RestoreWallet', { isOnboarding: true })}
+              style={styles.restoreButton}
+            >
+              <Text style={[styles.restoreText, { color: theme.colors.primary }]}>
+                or restore from backup
+              </Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </SafeAreaView>
     </NFTBackground>
@@ -222,7 +245,7 @@ const createStyles = (theme: Theme) =>
     },
     optionButton: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       borderRadius: theme.borderRadius.xl,
     },
     optionIcon: {
@@ -232,9 +255,11 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       alignItems: 'center',
       marginRight: theme.spacing.md,
+      marginTop: 2,
     },
     optionContent: {
       flex: 1,
+      flexShrink: 1,
     },
     optionTitle: {
       fontSize: theme.typography.body.fontSize,
@@ -244,5 +269,29 @@ const createStyles = (theme: Theme) =>
     optionSubtitle: {
       fontSize: theme.typography.bodySmall.fontSize,
       lineHeight: 18,
+    },
+    optionChevron: {
+      flexShrink: 0,
+      marginLeft: theme.spacing.sm,
+      alignSelf: 'center',
+    },
+    bottomLinks: {
+      alignItems: 'center',
+      marginTop: theme.spacing.xl,
+    },
+    skipButton: {
+      paddingVertical: theme.spacing.md,
+    },
+    skipText: {
+      textAlign: 'center',
+      fontSize: theme.typography.bodySmall.fontSize,
+    },
+    restoreButton: {
+      paddingVertical: theme.spacing.sm,
+    },
+    restoreText: {
+      textAlign: 'center',
+      fontSize: theme.typography.bodySmall.fontSize,
+      fontWeight: '500',
     },
   });

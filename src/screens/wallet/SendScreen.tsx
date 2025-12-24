@@ -62,6 +62,7 @@ import NetworkAssetSelector from '@/components/send/NetworkAssetSelector';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
+import { BlurredContainer } from '@/components/common/BlurredContainer';
 
 interface SendScreenRouteParams {
   assetName?: string;
@@ -71,12 +72,14 @@ interface SendScreenRouteParams {
   mappingId?: string; // For multi-network assets
   // ARC-72 NFT token for transfer
   nftToken?: NFTToken;
-  // Payment request parameters from Algorand URIs
+  // Payment request parameters from ARC-0090 URIs
   recipient?: string;
   amount?: string;
   note?: string;
   label?: string;
   asset?: string;
+  fee?: string; // Transaction fee in microunits from URI
+  isXnote?: boolean; // Whether the note is non-modifiable (xnote)
 }
 
 export default function SendScreen() {
@@ -193,6 +196,11 @@ export default function SendScreen() {
     setEstimatedFee(0);
   };
 
+  // Track if note is non-modifiable (xnote from ARC-0090)
+  const [isNoteReadOnly, setIsNoteReadOnly] = useState(false);
+  // Track if fee was specified in URI
+  const [uriFee, setUriFee] = useState<number | null>(null);
+
   // Pre-fill form fields from payment request parameters
   useEffect(() => {
     if (routeParams) {
@@ -231,11 +239,23 @@ export default function SendScreen() {
         // Sanitize note to prevent potential issues
         const sanitizedNote = routeParams.note.slice(0, 1000); // Limit length
         setNote(sanitizedNote);
+        // If isXnote is set, make note field read-only
+        if (routeParams.isXnote) {
+          setIsNoteReadOnly(true);
+        }
       }
       // label is display only, used for recipient name
       if (routeParams.label && routeParams.recipient) {
         const sanitizedLabel = routeParams.label.slice(0, 100); // Limit label length
         setResolvedName(sanitizedLabel);
+      }
+      // Fee parameter from ARC-0090 URI
+      if (routeParams.fee && /^\d+$/.test(routeParams.fee)) {
+        const feeInMicrounits = parseInt(routeParams.fee);
+        if (feeInMicrounits >= 1000) { // Minimum fee is 1000 microunits
+          setUriFee(feeInMicrounits);
+          setEstimatedFee(feeInMicrounits);
+        }
       }
     }
   }, [routeParams]);
@@ -1325,12 +1345,16 @@ export default function SendScreen() {
               />
             )}
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Recipient Address or Name</Text>
+            <BlurredContainer
+              variant="light"
+              borderRadius={theme.borderRadius.md}
+              style={styles.inputContainer}
+            >
+              <Text style={styles.inputLabelInContainer}>Recipient Address or Name</Text>
               <View style={styles.inputWithButton}>
                 <TextInput
                   style={[
-                    styles.textInputWithButton,
+                    styles.textInputWithButtonInContainer,
                     nameResolutionError && styles.textInputError,
                     recipientAddress &&
                       !nameResolutionError &&
@@ -1439,14 +1463,18 @@ export default function SendScreen() {
                   ))}
                 </View>
               )}
-            </View>
+            </BlurredContainer>
 
             {/* Amount Input (hidden when NFT is present) */}
             {!contextNftToken && (
-              <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Amount ({getAssetSymbol()})</Text>
+              <BlurredContainer
+                variant="light"
+                borderRadius={theme.borderRadius.md}
+                style={styles.inputContainer}
+              >
+                <Text style={styles.inputLabelInContainer}>Amount ({getAssetSymbol()})</Text>
                 <TextInput
-                  style={styles.textInput}
+                  style={styles.textInputInContainer}
                   placeholder={`0.${'0'.repeat(getAssetDecimals())}`}
                   placeholderTextColor={themeColors.placeholder}
                   value={amount}
@@ -1484,25 +1512,38 @@ export default function SendScreen() {
                     })()}
                   </Text>
                 )}
-              </View>
+              </BlurredContainer>
             )}
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Note (Optional)</Text>
+            <BlurredContainer
+              variant="light"
+              borderRadius={theme.borderRadius.md}
+              style={styles.inputContainer}
+            >
+              <Text style={styles.inputLabelInContainer}>
+                Note (Optional){isNoteReadOnly ? ' - Fixed' : ''}
+              </Text>
               <TextInput
-                style={styles.textInput}
+                style={[
+                  styles.textInputInContainer,
+                  isNoteReadOnly && styles.readOnlyInput,
+                ]}
                 placeholder="Add a note..."
                 placeholderTextColor={themeColors.placeholder}
                 value={note}
-                onChangeText={setNote}
+                onChangeText={isNoteReadOnly ? undefined : setNote}
                 multiline
                 numberOfLines={3}
-                editable={!isSending}
+                editable={!isSending && !isNoteReadOnly}
               />
-            </View>
+            </BlurredContainer>
 
             {estimatedFee > 0 && (
-              <View style={styles.feeContainer}>
+              <BlurredContainer
+                variant="light"
+                borderRadius={theme.borderRadius.md}
+                style={styles.feeContainer}
+              >
                 <Text style={styles.feeLabel}>
                   Estimated Fee: {formatBalance(estimatedFee)}{' '}
                   {transactionNetworkConfig.nativeToken}
@@ -1534,7 +1575,7 @@ export default function SendScreen() {
                     }
                   })()
                 ) : null}
-              </View>
+              </BlurredContainer>
             )}
 
             {/* Watch Account Status */}
@@ -1737,6 +1778,7 @@ const createStyles = (theme: Theme) =>
     },
     inputContainer: {
       marginBottom: theme.spacing.lg,
+      padding: theme.spacing.md,
     },
     inputLabel: {
       fontSize: 16,
@@ -1750,6 +1792,13 @@ const createStyles = (theme: Theme) =>
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 16,
     },
+    // Label style for inside BlurredContainer (no shadow needed)
+    inputLabelInContainer: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.text,
+      marginBottom: theme.spacing.sm,
+    },
     textInput: {
       backgroundColor: theme.mode === 'dark'
         ? 'rgba(255, 255, 255, 0.1)'
@@ -1762,6 +1811,27 @@ const createStyles = (theme: Theme) =>
         ? 'rgba(255, 255, 255, 0.15)'
         : 'rgba(255, 255, 255, 0.5)',
       color: theme.colors.text,
+    },
+    // TextInput style for inside BlurredContainer (subtle inner styling)
+    textInputInContainer: {
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.2)'
+        : 'rgba(255, 255, 255, 0.3)',
+      borderRadius: theme.borderRadius.sm,
+      padding: theme.spacing.md,
+      fontSize: 16,
+      borderWidth: 1,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(0, 0, 0, 0.05)',
+      color: theme.colors.text,
+    },
+    // Style for read-only inputs (e.g., xnote from ARC-0090)
+    readOnlyInput: {
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.3)'
+        : 'rgba(0, 0, 0, 0.05)',
+      opacity: 0.8,
     },
     inputWithButton: {
       flexDirection: 'row',
@@ -1780,6 +1850,22 @@ const createStyles = (theme: Theme) =>
       borderColor: theme.mode === 'dark'
         ? 'rgba(255, 255, 255, 0.15)'
         : 'rgba(255, 255, 255, 0.5)',
+      flex: 1,
+      color: theme.colors.text,
+    },
+    // TextInput with button style for inside BlurredContainer
+    textInputWithButtonInContainer: {
+      backgroundColor: theme.mode === 'dark'
+        ? 'rgba(0, 0, 0, 0.2)'
+        : 'rgba(255, 255, 255, 0.3)',
+      borderRadius: theme.borderRadius.sm,
+      padding: theme.spacing.md,
+      paddingRight: 100, // Make room for both buttons
+      fontSize: 16,
+      borderWidth: 1,
+      borderColor: theme.mode === 'dark'
+        ? 'rgba(255, 255, 255, 0.1)'
+        : 'rgba(0, 0, 0, 0.05)',
       flex: 1,
       color: theme.colors.text,
     },
@@ -1816,16 +1902,9 @@ const createStyles = (theme: Theme) =>
       textAlign: 'right',
     },
     feeContainer: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
-      borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
     },
     feeLabel: {
       fontSize: 14,

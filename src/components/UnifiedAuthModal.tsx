@@ -5,17 +5,35 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
-  Vibration,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
-import * as LocalAuthentication from 'expo-local-authentication';
 import { LedgerDeviceInfo } from '@/services/ledger/transport';
+
+// Cross-platform alert helper
+const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void}>) => {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+    buttons?.[0]?.onPress?.();
+  } else {
+    const { Alert } = require('react-native');
+    Alert.alert(title, message, buttons);
+  }
+};
+
+// Cross-platform vibration helper
+const vibrate = (duration: number) => {
+  if (Platform.OS !== 'web') {
+    const { Vibration } = require('react-native');
+    Vibration.vibrate(duration);
+  }
+};
 
 type LedgerStatus =
   | 'searching'
@@ -57,6 +75,7 @@ export default function UnifiedAuthModal({
   ledgerDevice = null,
   onLedgerRetry,
 }: UnifiedAuthModalProps) {
+  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { authState } = useAuth();
   const [pin, setPin] = useState('');
@@ -154,7 +173,15 @@ export default function UnifiedAuthModal({
     setBiometricAttempted(true);
     setIsAuthenticating(true);
 
+    // Biometric auth not available on web
+    if (Platform.OS === 'web') {
+      console.log('Biometric authentication not available on web, falling back to PIN');
+      setIsAuthenticating(false);
+      return;
+    }
+
     try {
+      const LocalAuthentication = require('expo-local-authentication');
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
 
@@ -219,11 +246,11 @@ export default function UnifiedAuthModal({
         const newAttempts = attempts + 1;
         setAttempts(newAttempts);
         setPin('');
-        Vibration.vibrate(500);
+        vibrate(500);
 
         if (newAttempts >= MAX_ATTEMPTS) {
           setIsLocked(true);
-          Alert.alert(
+          showAlert(
             'Too Many Attempts',
             `Authentication locked for ${LOCKOUT_TIME / 1000} seconds`
           );
@@ -233,7 +260,7 @@ export default function UnifiedAuthModal({
             setAttempts(0);
           }, LOCKOUT_TIME);
         } else {
-          Alert.alert(
+          showAlert(
             'Incorrect PIN',
             `${MAX_ATTEMPTS - newAttempts} attempts remaining`
           );
@@ -241,7 +268,7 @@ export default function UnifiedAuthModal({
       }
     } catch (error) {
       console.error('PIN verification error:', error);
-      Alert.alert('Error', 'Failed to verify PIN');
+      showAlert('Error', 'Failed to verify PIN');
     } finally {
       setIsAuthenticating(false);
     }
@@ -320,7 +347,7 @@ export default function UnifiedAuthModal({
                     <Ionicons
                       name="backspace-outline"
                       size={20}
-                      color={styles.keypadIconColor}
+                      color={theme.colors.text}
                     />
                   </TouchableOpacity>
                 );
@@ -361,7 +388,7 @@ export default function UnifiedAuthModal({
             <Ionicons
               name="shield-checkmark"
               size={32}
-              color={styles.primaryIconColor}
+              color={theme.colors.primary}
             />
             <Text style={styles.title}>{title}</Text>
             <Text style={styles.message}>{message}</Text>
@@ -369,7 +396,7 @@ export default function UnifiedAuthModal({
 
           {isAuthenticating ? (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={styles.primaryIconColor} />
+              <ActivityIndicator size="large" color={theme.colors.primary} />
               <Text style={styles.loadingText}>Authenticating...</Text>
             </View>
           ) : isProcessing ? (
@@ -379,7 +406,7 @@ export default function UnifiedAuthModal({
                   <Ionicons
                     name={getLedgerStatusMessage(ledgerStatus).icon as any}
                     size={48}
-                    color={ledgerStatus === 'error' ? styles.errorIconColor : styles.primaryIconColor}
+                    color={ledgerStatus === 'error' ? theme.colors.error : theme.colors.primary}
                   />
                   <Text style={[
                     styles.processingTitle,
@@ -404,7 +431,7 @@ export default function UnifiedAuthModal({
                 </>
               ) : (
                 <>
-                  <ActivityIndicator size="large" color={styles.primaryIconColor} />
+                  <ActivityIndicator size="large" color={theme.colors.primary} />
                   <Text style={styles.processingTitle}>Processing Transaction</Text>
                   <Text style={styles.processingMessage}>
                     Please wait while your transaction is being processed...
@@ -417,7 +444,7 @@ export default function UnifiedAuthModal({
               <Ionicons
                 name="checkmark-circle"
                 size={48}
-                color={styles.successIconColor}
+                color={theme.colors.success}
               />
               <Text style={styles.confirmationTitle}>
                 Authentication Successful
@@ -439,7 +466,7 @@ export default function UnifiedAuthModal({
                   <Ionicons
                     name="finger-print"
                     size={24}
-                    color={styles.primaryIconColor}
+                    color={theme.colors.primary}
                   />
                   <Text style={styles.biometricText}>Use Biometric</Text>
                 </TouchableOpacity>
@@ -713,10 +740,6 @@ const createStyles = (theme: Theme) =>
       textAlign: 'center',
       marginTop: theme.spacing.sm,
     },
-    primaryIconColor: theme.colors.primary,
-    successIconColor: theme.colors.success,
-    errorIconColor: theme.colors.error,
-    keypadIconColor: theme.colors.text,
     errorTitle: {
       color: theme.colors.error,
     },

@@ -1,6 +1,6 @@
 import algosdk from 'algosdk';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as SecureStore from 'expo-secure-store';
+import { Buffer } from 'buffer';
+import { storage, secureStorage } from '../../platform';
 import {
   WalletAccount,
   WalletInfo,
@@ -10,6 +10,7 @@ import {
   WatchAccountMetadata,
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
+  RemoteSignerAccountMetadata,
   CreateAccountRequest,
   ImportAccountRequest,
   ImportLedgerAccountRequest,
@@ -17,6 +18,7 @@ import {
   LedgerAccountDiscoveryResult,
   AddWatchAccountRequest,
   DetectRekeyedAccountRequest,
+  ImportRemoteSignerAccountRequest,
   AccountNotFoundError,
   AccountExistsError,
   InvalidAddressError,
@@ -538,6 +540,123 @@ export class MultiAccountWalletService {
         `Failed to detect rekeyed account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  static async addRemoteSignerAccount(
+    request: ImportRemoteSignerAccountRequest
+  ): Promise<RemoteSignerAccountMetadata> {
+    try {
+      if (!algosdk.isValidAddress(request.address)) {
+        throw new InvalidAddressError('Invalid Algorand address');
+      }
+
+      // Check if account already exists
+      const existingAccount = await this.findAccountByAddress(request.address);
+      if (existingAccount) {
+        throw new AccountExistsError('Account already exists in wallet');
+      }
+
+      const accountMetadata: RemoteSignerAccountMetadata = {
+        id: this.generateAccountId(),
+        address: request.address,
+        publicKey: request.publicKey,
+        type: AccountType.REMOTE_SIGNER,
+        label:
+          request.label ||
+          `Remote Signer ${(await this.getRemoteSignerAccountCount()) + 1}`,
+        color: request.color || this.generateAccountColor(),
+        isHidden: false,
+        createdAt: new Date().toISOString(),
+        importedAt: new Date().toISOString(),
+        lastUsed: new Date().toISOString(),
+        signerDeviceId: request.signerDeviceId,
+        signerDeviceName: request.signerDeviceName,
+        pairedAt: new Date().toISOString(),
+      };
+
+      await this.addAccountToWallet(accountMetadata);
+      return accountMetadata;
+    } catch (error) {
+      if (
+        error instanceof InvalidAddressError ||
+        error instanceof AccountExistsError
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Failed to add remote signer account: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  static async getRemoteSignerAccountCount(): Promise<number> {
+    const wallet = await this.getCurrentWallet();
+    if (!wallet) return 0;
+    return wallet.accounts.filter((a) => a.type === AccountType.REMOTE_SIGNER)
+      .length;
+  }
+
+  /**
+   * Convert a STANDARD account to a REMOTE_SIGNER account.
+   * This removes the private key and converts the account type.
+   * Used when transferring an account to an airgap device.
+   *
+   * @param accountId - The ID of the STANDARD account to convert
+   * @param signerDeviceId - The device ID of the airgap signer
+   * @param signerDeviceName - Optional friendly name for the signer device
+   * @returns The new RemoteSignerAccountMetadata
+   */
+  static async convertStandardToRemoteSigner(
+    accountId: string,
+    signerDeviceId: string,
+    signerDeviceName?: string
+  ): Promise<RemoteSignerAccountMetadata> {
+    const wallet = await this.getCurrentWallet();
+    if (!wallet) {
+      throw new Error('No wallet found');
+    }
+
+    // Find the account
+    const accountIndex = wallet.accounts.findIndex((acc) => acc.id === accountId);
+    if (accountIndex === -1) {
+      throw new AccountNotFoundError('Account not found');
+    }
+
+    const existingAccount = wallet.accounts[accountIndex];
+
+    // Validate it's a STANDARD account
+    if (existingAccount.type !== AccountType.STANDARD) {
+      throw new Error(
+        `Cannot convert account type ${existingAccount.type} to remote signer. Only STANDARD accounts can be converted.`
+      );
+    }
+
+    // Delete the private key from secure storage
+    await AccountSecureStorage.deleteAccount(accountId);
+
+    // Create the new RemoteSignerAccountMetadata
+    const remoteSignerAccount: RemoteSignerAccountMetadata = {
+      id: accountId, // Keep the same ID for continuity
+      address: existingAccount.address,
+      publicKey: existingAccount.publicKey,
+      type: AccountType.REMOTE_SIGNER,
+      label: existingAccount.label,
+      color: existingAccount.color,
+      isHidden: existingAccount.isHidden,
+      createdAt: existingAccount.createdAt,
+      lastUsed: new Date().toISOString(),
+      signerDeviceId,
+      signerDeviceName,
+      pairedAt: new Date().toISOString(),
+    };
+
+    // Replace the account in the wallet
+    wallet.accounts[accountIndex] = remoteSignerAccount;
+
+    // Store the updated wallet
+    await this.storeWallet(wallet);
+
+    return remoteSignerAccount;
   }
 
   // Wallet Management
@@ -1155,13 +1274,35 @@ export class MultiAccountWalletService {
       // If no wallet exists, create one with this account
       if (accountMetadata.type === AccountType.STANDARD) {
         await this.createWallet(accountMetadata as StandardAccountMetadata);
+      } else if (
+        accountMetadata.type === AccountType.REMOTE_SIGNER ||
+        accountMetadata.type === AccountType.WATCH_ONLY
+      ) {
+        // Create wallet with non-standard account (no mnemonic required)
+        await this.createWalletWithAccount(accountMetadata);
       } else {
-        throw new Error('Cannot create wallet with non-standard account');
+        throw new Error('Cannot create wallet with this account type');
       }
     } else {
       wallet.accounts.push(accountMetadata);
       await this.storeWallet(wallet);
     }
+  }
+
+  private static async createWalletWithAccount(
+    accountMetadata: AccountMetadata
+  ): Promise<Wallet> {
+    const wallet: Wallet = {
+      id: this.generateWalletId(),
+      version: '1.0',
+      createdAt: new Date().toISOString(),
+      accounts: [accountMetadata],
+      activeAccountId: accountMetadata.id,
+      settings: this.getDefaultWalletSettings(),
+    };
+
+    await this.storeWallet(wallet);
+    return wallet;
   }
 
   private static async storeWallet(wallet: Wallet): Promise<void> {
@@ -1189,10 +1330,10 @@ export class MultiAccountWalletService {
     };
   }
 
-  // Storage methods using AsyncStorage
+  // Storage methods using platform adapters
   private static async getStoredValue(key: string): Promise<string | null> {
     try {
-      const value = await AsyncStorage.getItem(key);
+      const value = await storage.getItem(key);
       if (value) {
         return value;
       }
@@ -1206,7 +1347,7 @@ export class MultiAccountWalletService {
 
   private static async storeValue(key: string, value: string): Promise<void> {
     try {
-      await AsyncStorage.setItem(key, value);
+      await storage.setItem(key, value);
       await this.clearLegacyValue(key);
     } catch (error) {
       console.error(`Failed to store value for key ${key}:`, error);
@@ -1233,7 +1374,8 @@ export class MultiAccountWalletService {
 
   private static async migrateLegacyValue(key: string): Promise<string | null> {
     try {
-      const legacyValue = await SecureStore.getItemAsync(key);
+      // Try to get from secure storage (legacy location)
+      const legacyValue = await secureStorage.getItem(key);
       if (!legacyValue) {
         return null;
       }
@@ -1250,8 +1392,8 @@ export class MultiAccountWalletService {
         }
       }
 
-      await AsyncStorage.setItem(key, valueToPersist);
-      await SecureStore.deleteItemAsync(key).catch(() => {});
+      await storage.setItem(key, valueToPersist);
+      await secureStorage.deleteItem(key).catch(() => {});
       return valueToPersist;
     } catch (error) {
       console.error(`Failed to migrate legacy value for key ${key}:`, error);
@@ -1261,7 +1403,7 @@ export class MultiAccountWalletService {
 
   private static async clearLegacyValue(key: string): Promise<void> {
     try {
-      await SecureStore.deleteItemAsync(key).catch(() => {});
+      await secureStorage.deleteItem(key).catch(() => {});
     } catch {
       // Ignore errors when clearing legacy storage
     }

@@ -64,6 +64,14 @@ import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs, getStaggerDelay } from '@/utils/animations';
+import ClaimableBanner from '@/components/claimable/ClaimableBanner';
+import { useClaimableStore, useVisibleClaimableCount } from '@/store/claimableStore';
+import UpdateBanner from '@/components/update/UpdateBanner';
+import { useUpdateStore } from '@/store/updateStore';
+import { useUpdates } from 'expo-updates';
+import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
+import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
+import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -80,6 +88,8 @@ export default function HomeScreen() {
     useState(false);
   const [isAssetFilterModalVisible, setIsAssetFilterModalVisible] =
     useState(false);
+  const [isOnboardingModalVisible, setIsOnboardingModalVisible] =
+    useState(false);
 
   const navigation = useNavigation<StackNavigationProp<any>>();
   const { updateActivity } = useAuth();
@@ -87,6 +97,49 @@ export default function HomeScreen() {
   const currentNetworkConfig = useCurrentNetworkConfig();
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
+
+  // Claimable tokens
+  const visibleClaimableCount = useVisibleClaimableCount();
+  const { fetchApprovals } = useClaimableStore();
+
+  // Remote signer mode
+  const appMode = useAppMode();
+  const isRemoteSignerInitialized = useRemoteSignerStore((state) => state.isInitialized);
+  const initializeRemoteSigner = useRemoteSignerStore((state) => state.initialize);
+  // OTA Updates
+  const {
+    isUpdateAvailable,
+    isDownloading,
+    isInstalling,
+    downloadAndInstall,
+    dismissUpdate,
+    setUpdateAvailable,
+    checkForUpdate,
+  } = useUpdateStore();
+
+  // Use expo-updates hook to detect when update is pending (already downloaded by Expo)
+  const { isUpdatePending, downloadedUpdate } = useUpdates();
+
+  // Sync expo-updates state with our store
+  // Note: isUpdatePending means Expo has already downloaded an update
+  useEffect(() => {
+    if (!__DEV__) {
+      const updateId = downloadedUpdate?.updateId || null;
+      if (isUpdatePending && updateId) {
+        // Pass true for isDownloaded since Expo has already downloaded it
+        setUpdateAvailable(updateId, true);
+      }
+    }
+  }, [isUpdatePending, downloadedUpdate, setUpdateAvailable]);
+
+  // Check for updates on app startup (silent - no toasts, just show banner if available)
+  useEffect(() => {
+    if (!__DEV__) {
+      checkForUpdate({ silent: true });
+    }
+    // Only run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Entrance animations
   const balanceOpacity = useSharedValue(0);
@@ -208,7 +261,11 @@ export default function HomeScreen() {
   useEffect(() => {
     initializeWallet();
     updateActivity();
-  }, []);
+    // Initialize remote signer store to get app mode
+    if (!isRemoteSignerInitialized) {
+      initializeRemoteSigner();
+    }
+  }, [isRemoteSignerInitialized, initializeRemoteSigner]);
 
   // Handle Android back button for local modals
   useEffect(() => {
@@ -739,6 +796,8 @@ export default function HomeScreen() {
     if (activeAccount) {
       // Only refresh the current account, not all accounts
       await loadAccountData();
+      // Also refresh claimable tokens
+      fetchApprovals(activeAccount.address);
     }
 
     setRefreshing(false);
@@ -748,6 +807,22 @@ export default function HomeScreen() {
     if (!activeAccount?.id) return;
     void reloadEnvoiName();
   }, [activeAccount?.id, reloadEnvoiName]);
+
+  // Fetch claimable tokens when account changes
+  useEffect(() => {
+    if (!activeAccount?.address) return;
+    fetchApprovals(activeAccount.address);
+  }, [activeAccount?.address, fetchApprovals]);
+
+  // Navigate to claimable tokens screen
+  const handleClaimableBannerPress = useCallback(() => {
+    navigation.navigate('ClaimableTokens');
+  }, [navigation]);
+
+  // Navigate to sign request scanner (signer mode)
+  const handleScanSigningRequest = useCallback(() => {
+    navigation.navigate('SignRequestScanner' as never);
+  }, [navigation]);
 
   const handleAccountSelectorPress = () => {
     setIsAccountModalVisible(true);
@@ -1041,8 +1116,23 @@ export default function HomeScreen() {
           }
           onScrollBeginDrag={handleUserInteraction}
         >
+          {/* Signer Mode Banner */}
+          {appMode === 'signer' && (
+            <SignerModeBanner onScanPress={handleScanSigningRequest} />
+          )}
+
           {activeAccount && (
             <>
+              {/* Update Available Banner */}
+              {isUpdateAvailable && (
+                <UpdateBanner
+                  onInstall={downloadAndInstall}
+                  onDismiss={dismissUpdate}
+                  isDownloading={isDownloading}
+                  isInstalling={isInstalling}
+                />
+              )}
+
               <Animated.View style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}>
                 <GlassCard
                   variant="medium"
@@ -1062,10 +1152,18 @@ export default function HomeScreen() {
                     </View>
                   </View>
                   {isBalanceLoading && !accountBalance ? (
-                    <View style={styles.loadingBalance}>
-                      <ActivityIndicator size="small" color={theme.colors.primary} />
-                      <Text style={styles.loadingText}>Loading balance...</Text>
-                    </View>
+                    appMode === 'signer' ? (
+                      // In signer mode, show offline fallback instead of spinner
+                      <View style={styles.loadingBalance}>
+                        <Ionicons name="cloud-offline-outline" size={16} color={theme.colors.textMuted} />
+                        <Text style={styles.loadingText}>Offline</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.loadingBalance}>
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <Text style={styles.loadingText}>Loading balance...</Text>
+                      </View>
+                    )
                   ) : (
                     <>
                       <Text style={styles.balance}>{calculateTotalUsdValue}</Text>
@@ -1178,6 +1276,14 @@ export default function HomeScreen() {
               />
             </Animated.View>
 
+            {/* Claimable Tokens Banner */}
+            {visibleClaimableCount > 0 && (
+              <ClaimableBanner
+                count={visibleClaimableCount}
+                onPress={handleClaimableBannerPress}
+              />
+            )}
+
             <Animated.View style={assetsAnimatedStyle}>
               <GlassCard
               variant="medium"
@@ -1261,6 +1367,34 @@ export default function HomeScreen() {
             </Animated.View>
           </>
         )}
+        {!activeAccount && (
+          <View style={styles.emptyStateContainer}>
+            <GlassCard
+              variant="medium"
+              style={styles.emptyStateCard}
+              borderRadius={theme.borderRadius.xl}
+              padding="lg"
+            >
+              <View style={styles.emptyStateIconContainer}>
+                <Ionicons
+                  name="wallet-outline"
+                  size={64}
+                  color={theme.colors.primary}
+                />
+              </View>
+              <Text style={styles.emptyStateTitle}>Welcome to Voi Wallet</Text>
+              <Text style={styles.emptyStateSubtitle}>
+                Set up an account to access all wallet features including sending, receiving, and managing your assets.
+              </Text>
+              <Pressable
+                style={[styles.emptyStateButton, { backgroundColor: theme.colors.primary }]}
+                onPress={() => setIsOnboardingModalVisible(true)}
+              >
+                <Text style={styles.emptyStateButtonText}>Get Started</Text>
+              </Pressable>
+            </GlassCard>
+          </View>
+        )}
       </ScrollView>
 
       {/* Account List Modal */}
@@ -1338,6 +1472,24 @@ export default function HomeScreen() {
         onClose={handleCloseAssetFilter}
         onApply={handleApplyAssetFilter}
         onReset={handleResetAssetFilter}
+      />
+
+      {/* Onboarding Options Modal (for empty state) */}
+      <OnboardingOptionsModal
+        isVisible={isOnboardingModalVisible}
+        onClose={() => setIsOnboardingModalVisible(false)}
+        onCreateAccount={() => {
+          navigation.navigate('CreateWallet' as never);
+        }}
+        onImportAccount={() => {
+          navigation.navigate('MnemonicImport' as never, { isOnboarding: true });
+        }}
+        onImportQRAccount={() => {
+          navigation.navigate('QRAccountImport' as never);
+        }}
+        onAddWatchAccount={() => {
+          navigation.navigate('AddWatchAccount' as never, { isOnboarding: true });
+        }}
       />
       </SafeAreaView>
     </NFTBackground>
@@ -1579,5 +1731,50 @@ const createStyles = (theme: Theme) =>
     },
     addAssetButton: {
       padding: theme.spacing.xs,
+    },
+    // Empty State (no account)
+    emptyStateContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingVertical: theme.spacing.xxl,
+    },
+    emptyStateCard: {
+      alignItems: 'center',
+      width: '100%',
+    },
+    emptyStateIconContainer: {
+      width: 120,
+      height: 120,
+      borderRadius: 60,
+      backgroundColor: `${theme.colors.primary}15`,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: theme.spacing.lg,
+    },
+    emptyStateTitle: {
+      fontSize: theme.typography.heading2.fontSize,
+      fontWeight: '700',
+      color: theme.colors.text,
+      textAlign: 'center',
+      marginBottom: theme.spacing.sm,
+    },
+    emptyStateSubtitle: {
+      fontSize: theme.typography.body.fontSize,
+      color: theme.colors.textMuted,
+      textAlign: 'center',
+      lineHeight: 22,
+      marginBottom: theme.spacing.xl,
+      paddingHorizontal: theme.spacing.md,
+    },
+    emptyStateButton: {
+      paddingVertical: theme.spacing.md,
+      paddingHorizontal: theme.spacing.xxl,
+      borderRadius: theme.borderRadius.lg,
+    },
+    emptyStateButtonText: {
+      fontSize: theme.typography.body.fontSize,
+      fontWeight: '600',
+      color: '#FFFFFF',
     },
   });

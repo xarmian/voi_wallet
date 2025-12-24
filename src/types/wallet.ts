@@ -6,6 +6,7 @@ export enum AccountType {
   WATCH = 'watch', // Read-only monitoring
   REKEYED = 'rekeyed', // Delegated signing authority
   LEDGER = 'ledger', // Controlled by Ledger hardware device
+  REMOTE_SIGNER = 'remote_signer', // Air-gapped signing via QR codes
 }
 
 // Base Account Metadata Interface
@@ -60,12 +61,22 @@ export interface LedgerAccountMetadata extends BaseAccountMetadata {
   lastDeviceConnection?: string; // Last successful device connection timestamp
 }
 
+// Remote Signer Account (air-gapped QR-based signing)
+export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
+  type: AccountType.REMOTE_SIGNER;
+  signerDeviceId: string; // Unique identifier of the signer device
+  signerDeviceName?: string; // User-friendly device name (e.g., "My Cold Storage Phone")
+  pairedAt: string; // ISO timestamp when account was paired
+  lastSigningActivity?: string; // Last time a transaction was signed
+}
+
 // Union type for all account metadata types
 export type AccountMetadata =
   | StandardAccountMetadata
   | WatchAccountMetadata
   | RekeyedAccountMetadata
-  | LedgerAccountMetadata;
+  | LedgerAccountMetadata
+  | RemoteSignerAccountMetadata;
 
 // Wallet Container
 export interface Wallet {
@@ -104,6 +115,9 @@ export interface WalletAccount {
   address: string;
   publicKey: Uint8Array;
   // privateKey removed - now handled by SecureKeyManager
+  // Optional type for detecting account type (e.g., REMOTE_SIGNER, LEDGER)
+  // Present when account is passed from AccountMetadata
+  type?: AccountType;
 }
 
 export interface WalletInfo {
@@ -233,6 +247,17 @@ export interface DetectRekeyedAccountRequest {
   label?: string;
   canSign?: boolean;
   rekeyedFrom?: string;
+}
+
+// Remote Signer Account Import Request
+export interface ImportRemoteSignerAccountRequest {
+  type: AccountType.REMOTE_SIGNER;
+  address: string; // Account address from signer device
+  publicKey: string; // Public key in hex format
+  signerDeviceId: string; // Unique identifier of the signer device
+  signerDeviceName?: string; // User-friendly device name
+  label?: string; // User-defined label for the account
+  color?: string; // UI color identifier
 }
 
 // Account Error Types

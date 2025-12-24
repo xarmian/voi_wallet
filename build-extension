@@ -1,0 +1,24 @@
+#!/bin/bash
+
+npx expo export -p web
+
+# Extract the new index-*.js filename from the expo-generated index.html
+NEW_INDEX_JS=$(grep -oE 'index-[a-f0-9]+\.js' dist/index.html)
+
+if [ -z "$NEW_INDEX_JS" ]; then
+  echo "Error: Could not find index-*.js in dist/index.html"
+  exit 1
+fi
+
+echo "Found new bundle: $NEW_INDEX_JS"
+
+# Copy extension files (overwrites index.html with template)
+cp extension/* ./dist
+
+# Rename _expo to expo-assets
+mv dist/_expo dist/expo-assets
+
+# Update the script src in index.html with the new filename
+sed -i '' "s/index-[a-f0-9]*\.js/$NEW_INDEX_JS/g" dist/index.html
+
+echo "Updated dist/index.html with $NEW_INDEX_JS"

@@ -8,18 +8,46 @@ import {
   ScrollView,
   Linking,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
+import * as Application from 'expo-application';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import UniversalHeader from '@/components/common/UniversalHeader';
+import { useUpdateStore } from '@/store/updateStore';
+
+const getUpdateInfo = () => {
+  if (Updates.updateId && !Updates.isEmbeddedLaunch) {
+    const shortId = Updates.updateId.substring(0, 8);
+    const date = Updates.createdAt
+      ? new Date(Updates.createdAt).toLocaleDateString()
+      : null;
+    return { type: 'ota' as const, id: shortId, date };
+  }
+  return {
+    type: 'native' as const,
+    buildNumber: Application.nativeBuildVersion,
+  };
+};
 
 export default function AboutScreen() {
   const navigation = useNavigation();
   const styles = useThemedStyles(createStyles);
+  const updateInfo = getUpdateInfo();
+  const { checkForUpdate, isChecking } = useUpdateStore();
+
+  const handleCheckForUpdates = async () => {
+    if (__DEV__) {
+      Alert.alert('Development Mode', 'Update checking is not available in development mode.');
+      return;
+    }
+    await checkForUpdate();
+  };
 
   const openURL = async (url: string, label: string) => {
     try {
@@ -66,9 +94,29 @@ export default function AboutScreen() {
         <View style={styles.appInfoSection}>
           <Text style={styles.appName}>Voi Wallet</Text>
           <Text style={styles.version}>Version {Constants.expoConfig?.version || Constants.manifest?.version || '1.0.0'}</Text>
+          <Text style={styles.buildInfo}>
+            {updateInfo.type === 'ota'
+              ? `${updateInfo.id}${updateInfo.date ? ` • ${updateInfo.date}` : ''}`
+              : `Build ${updateInfo.buildNumber || ''}`}
+          </Text>
           <Text style={styles.description}>
             A secure, decentralized wallet for the Voi Network
           </Text>
+
+          <TouchableOpacity
+            style={styles.checkUpdateButton}
+            onPress={handleCheckForUpdates}
+            disabled={isChecking}
+          >
+            {isChecking ? (
+              <ActivityIndicator size="small" color={styles.checkUpdateText.color} />
+            ) : (
+              <Ionicons name="refresh" size={18} color={styles.checkUpdateText.color} />
+            )}
+            <Text style={styles.checkUpdateText}>
+              {isChecking ? 'Checking...' : 'Check for Updates'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.linksSection}>
@@ -129,7 +177,7 @@ export default function AboutScreen() {
 
         <View style={styles.footerSection}>
           <Text style={styles.footerText}>
-            Built for the Voi Network with ❤️
+            Built for Voi Network with ❤️
           </Text>
         </View>
       </ScrollView>
@@ -170,6 +218,11 @@ const createStyles = (theme: Theme) =>
     version: {
       fontSize: 16,
       color: theme.colors.textSecondary,
+      marginBottom: 4,
+    },
+    buildInfo: {
+      fontSize: 14,
+      color: theme.colors.textMuted,
       marginBottom: 12,
     },
     description: {
@@ -178,6 +231,24 @@ const createStyles = (theme: Theme) =>
       textAlign: 'center',
       lineHeight: 22,
       paddingHorizontal: 20,
+    },
+    checkUpdateButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 20,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      backgroundColor: theme.colors.primary + '15',
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: theme.colors.primary + '30',
+    },
+    checkUpdateText: {
+      fontSize: 15,
+      fontWeight: '500',
+      color: theme.colors.primary,
+      marginLeft: 8,
     },
     linksSection: {
       backgroundColor: theme.colors.card,

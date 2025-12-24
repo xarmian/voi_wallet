@@ -18,7 +18,7 @@ import {
   useActiveAccount,
   useWalletStore,
 } from '@/store/walletStore';
-import { AccountMetadata } from '@/types/wallet';
+import { AccountMetadata, AccountType } from '@/types/wallet';
 import AccountListItem from './AccountListItem';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -28,6 +28,10 @@ interface AccountListModalProps {
   onAddAccount: () => void;
   onEditAccount?: (accountId: string) => void;
   onAccountSelect?: (accountId: string) => void;
+  /** Only show accounts that can sign (STANDARD, LEDGER) - used in airgap mode */
+  filterSignable?: boolean;
+  /** Don't display balance information - used in airgap mode */
+  hideBalances?: boolean;
 }
 
 export default function AccountListModal({
@@ -36,6 +40,8 @@ export default function AccountListModal({
   onAddAccount,
   onEditAccount,
   onAccountSelect,
+  filterSignable = false,
+  hideBalances = false,
 }: AccountListModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const accounts = useAccounts();
@@ -52,16 +58,30 @@ export default function AccountListModal({
   // Snap points for the bottom sheet
   const snapPoints = useMemo(() => ['85%'], []);
 
-  // Filter accounts based on search query
+  // Filter accounts based on search query and signable filter
   const filteredAccounts = useMemo(() => {
-    if (!searchQuery.trim()) return accounts;
+    let result = accounts;
 
-    return accounts.filter(
-      (account) =>
-        account.label?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        account.address.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [accounts, searchQuery]);
+    // Filter to signable accounts only (STANDARD, LEDGER) if requested
+    if (filterSignable) {
+      result = result.filter(
+        (account) =>
+          account.type === AccountType.STANDARD ||
+          account.type === AccountType.LEDGER
+      );
+    }
+
+    // Filter by search query
+    if (searchQuery.trim()) {
+      result = result.filter(
+        (account) =>
+          account.label?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          account.address.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    return result;
+  }, [accounts, searchQuery, filterSignable]);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(
@@ -121,7 +141,8 @@ export default function AccountListModal({
         onSelect={handleAccountSelect}
         onEdit={onEditAccount}
         onDelete={handleDeleteAccount}
-        shouldLoadBalance={isVisible}
+        shouldLoadBalance={isVisible && !hideBalances}
+        hideBalance={hideBalances}
       />
     ),
     [
@@ -130,6 +151,7 @@ export default function AccountListModal({
       onEditAccount,
       handleDeleteAccount,
       isVisible,
+      hideBalances,
     ]
   );
 
@@ -138,11 +160,14 @@ export default function AccountListModal({
     if (isVisible) {
       bottomSheetRef.current?.present();
       // Batch load all account balances when modal opens (single state update)
-      refreshAllBalances();
+      // Skip in airgap mode when balances are hidden (no network access)
+      if (!hideBalances) {
+        refreshAllBalances();
+      }
     } else {
       bottomSheetRef.current?.dismiss();
     }
-  }, [isVisible, refreshAllBalances]);
+  }, [isVisible, refreshAllBalances, hideBalances]);
 
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();

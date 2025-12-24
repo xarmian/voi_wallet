@@ -3,6 +3,8 @@ const WALLETCONNECT_PROJECT_ID =
   process.env.EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID ||
   process.env.WALLETCONNECT_PROJECT_ID ||
   '';
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
 const withAndroidJvmTarget = require('./plugins/withAndroidJvmTarget');
 const withExpoModulesProguard = require('./plugins/withExpoModulesProguard');
@@ -11,13 +13,22 @@ export default {
   "expo": {
     "name": IS_DEV ? "Voi Wallet (Dev)" : "Voi Wallet",
     "slug": "voi-wallet",
-    "version": "0.1.7",
+    "version": "0.1.10",
     "orientation": "portrait",
     "icon": "./assets/voi_wallet_logo.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "scheme": "voi",
     "platforms": ["ios", "android"],
+    "updates": {
+      "enabled": true,
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_ERROR_RECOVERY",
+      "url": "https://u.expo.dev/48f3eead-a427-4651-9b06-6b952fc8b84d"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "splash": {
       "image": "./assets/voi_wallet_logo.png",
       "resizeMode": "contain",
@@ -34,7 +45,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "12",
+      "buildNumber": "22",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -56,7 +67,8 @@ export default {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "This app uses the camera to scan QR codes for wallet connections and transactions.",
         "NSFaceIDUsageDescription": "This app uses Face ID for secure wallet authentication.",
-        "NSBluetoothAlwaysUsageDescription": "This app uses Bluetooth to connect to Ledger devices."
+        "NSBluetoothAlwaysUsageDescription": "This app uses Bluetooth to connect to Ledger devices.",
+        "UIBackgroundModes": ["remote-notification"]
       }
     },
     "android": {
@@ -68,7 +80,8 @@ export default {
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "versionCode": 12,
+      "googleServicesFile": IS_DEV ? "./google-services-dev.json" : "./google-services.json",
+      "versionCode": 22,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",
@@ -102,6 +115,8 @@ export default {
     },
     "extra": {
       "walletConnectProjectId": WALLETCONNECT_PROJECT_ID || undefined,
+      "supabaseUrl": SUPABASE_URL || undefined,
+      "supabaseAnonKey": SUPABASE_ANON_KEY || undefined,
       "eas": {
         "projectId": "48f3eead-a427-4651-9b06-6b952fc8b84d"
       }
@@ -111,7 +126,7 @@ export default {
         "expo-build-properties",
         {
           android: {
-            kotlinVersion: "2.0.0",
+            kotlinVersion: "2.1.20",
             compileSdkVersion: 35,
             targetSdkVersion: 35,
             buildToolsVersion: "35.0.0",
@@ -119,6 +134,14 @@ export default {
           },
         },
       ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/voi_wallet_logo_crop.png",
+          "color": "#8B5CF6"
+        }
+      ],
+      "expo-secure-store",
       withAndroidJvmTarget,
       withExpoModulesProguard,
     ]

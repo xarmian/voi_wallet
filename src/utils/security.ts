@@ -1,23 +1,12 @@
-import * as LocalAuthentication from 'expo-local-authentication';
-import * as Crypto from 'expo-crypto';
+import { biometrics, crypto } from '../platform';
+import type { AuthCapability, AuthenticationType } from '../platform/types';
 
-export interface BiometricCapability {
-  available: boolean;
-  enrolled: boolean;
-  types: LocalAuthentication.AuthenticationType[];
-}
+// Re-export types for backwards compatibility
+export type BiometricCapability = AuthCapability;
 
 export class SecurityUtils {
   static async getBiometricCapability(): Promise<BiometricCapability> {
-    const available = await LocalAuthentication.hasHardwareAsync();
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
-
-    return {
-      available,
-      enrolled,
-      types,
-    };
+    return await biometrics.getCapability();
   }
 
   static async authenticateWithBiometrics(): Promise<{
@@ -41,27 +30,37 @@ export class SecurityUtils {
         };
       }
 
-      const result = await LocalAuthentication.authenticateAsync({
+      const result = await biometrics.authenticate({
         promptMessage: 'Authenticate to access your wallet',
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
-        disableDeviceFallback: false,
       });
 
-      if (result.success) {
-        return { success: true };
-      } else {
-        return {
-          success: false,
-          error: result.error || 'Authentication failed',
-        };
-      }
+      return result;
     } catch (error) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Get the type of authentication available (biometric, webauthn, or none)
+   */
+  static async getAuthType(): Promise<AuthenticationType> {
+    return await biometrics.getAuthType();
+  }
+
+  /**
+   * Register a WebAuthn credential (extension only)
+   * Returns null on mobile or if registration fails
+   */
+  static async registerWebAuthnCredential(options: {
+    userId: string;
+    userName: string;
+  }): Promise<{ credentialId: string } | null> {
+    return await biometrics.registerCredential(options);
   }
 
   static validatePinFormat(pin: string): boolean {
@@ -73,7 +72,7 @@ export class SecurityUtils {
     // implementation attempted to access Node.js modules that do not exist in
     // React Native, which crashed Metro bundles. We now return a conservative
     // default and leave room for a future async/native implementation.
-    if (__DEV__) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
       console.warn(
         '[SecurityUtils] Jailbreak detection not available in this build; returning false.'
       );
@@ -83,13 +82,9 @@ export class SecurityUtils {
 
   static generateSessionId(): string {
     try {
-      return `session_${Crypto.randomUUID()}`;
+      return `session_${crypto.randomUUID()}`;
     } catch {
-      const buffer = Crypto.getRandomBytes ? Crypto.getRandomBytes(16) : null;
-      if (buffer) {
-        return `session_${Array.from(buffer, (b) => b.toString(16).padStart(2, '0')).join('')}`;
-      }
-      // Fallback when randomUUID/getRandomBytes are unavailable
+      // Fallback when randomUUID is unavailable
       return `session_${Date.now().toString(36)}_${Math.random()
         .toString(36)
         .substring(2, 10)}`;

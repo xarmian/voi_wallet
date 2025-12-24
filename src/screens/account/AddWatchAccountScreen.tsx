@@ -5,8 +5,8 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -18,6 +18,7 @@ import { AccountType } from '@/types/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { getFromClipboard } from '@/utils/clipboard';
@@ -38,6 +39,7 @@ interface Props {
 }
 
 export default function AddWatchAccountScreen() {
+  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const navigation = useNavigation<AddWatchAccountScreenNavigationProp>();
   const route = useRoute<AddWatchAccountScreenRouteProp>();
@@ -47,6 +49,17 @@ export default function AddWatchAccountScreen() {
   const [label, setLabel] = useState('');
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Cross-platform alert helper
+  const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void}>) => {
+    if (Platform.OS === 'web') {
+      window.alert(`${title}\n\n${message}`);
+      buttons?.[0]?.onPress?.();
+    } else {
+      const { Alert } = require('react-native');
+      Alert.alert(title, message, buttons);
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -94,12 +107,12 @@ export default function AddWatchAccountScreen() {
     const trimmedAddress = address.trim();
 
     if (!trimmedAddress) {
-      Alert.alert('Error', 'Please enter an Algorand address');
+      showAlert('Error', 'Please enter an Algorand address');
       return;
     }
 
     if (!validateAddress(trimmedAddress)) {
-      Alert.alert('Error', 'Please enter a valid Algorand address');
+      showAlert('Error', 'Please enter a valid Algorand address');
       return;
     }
 
@@ -145,11 +158,11 @@ export default function AddWatchAccountScreen() {
 
       if (isOnboarding) {
         // PIN exists - navigate to Main app after adding watch account
-        Alert.alert('Success', 'Watch account added successfully!', [
+        showAlert('Success', 'Watch account added successfully!', [
           { text: 'OK', onPress: () => navigation.navigate('Main') },
         ]);
       } else {
-        Alert.alert('Success', 'Watch account added successfully!', [
+        showAlert('Success', 'Watch account added successfully!', [
           { text: 'OK', onPress: () => navigation.goBack() },
         ]);
       }
@@ -157,7 +170,7 @@ export default function AddWatchAccountScreen() {
       console.error('Failed to add watch account:', error);
       const errorMessage =
         error instanceof Error ? error.message : 'Failed to add watch account';
-      Alert.alert('Error', errorMessage);
+      showAlert('Error', errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -169,14 +182,14 @@ export default function AddWatchAccountScreen() {
       if (clipboardText && validateAddress(clipboardText)) {
         setAddress(clipboardText);
       } else {
-        Alert.alert(
+        showAlert(
           'Error',
           'Clipboard does not contain a valid Algorand address'
         );
       }
     } catch (error) {
       console.error('Failed to paste from clipboard:', error);
-      Alert.alert('Error', 'Failed to access clipboard');
+      showAlert('Error', 'Failed to access clipboard');
     }
   };
 
@@ -193,7 +206,7 @@ export default function AddWatchAccountScreen() {
           <Ionicons
             name="arrow-back"
             size={24}
-            color={styles.backButtonColor}
+            color={theme.colors.text}
           />
         </TouchableOpacity>
         <Text style={styles.title}>Add Watch Account</Text>
@@ -209,7 +222,7 @@ export default function AddWatchAccountScreen() {
             <Ionicons
               name="eye-outline"
               size={24}
-              color={styles.primaryColor}
+              color={theme.colors.primary}
               style={styles.infoIcon}
             />
             <View style={styles.infoContent}>
@@ -235,7 +248,7 @@ export default function AddWatchAccountScreen() {
                 value={address}
                 onChangeText={setAddress}
                 placeholder="Enter address (58 characters)"
-                placeholderTextColor={styles.placeholderColor}
+                placeholderTextColor={theme.colors.placeholder}
                 multiline
                 textAlignVertical="top"
                 autoCapitalize="none"
@@ -249,7 +262,7 @@ export default function AddWatchAccountScreen() {
                 <Ionicons
                   name="clipboard-outline"
                   size={20}
-                  color={styles.primaryColor}
+                  color={theme.colors.primary}
                 />
                 <Text style={styles.pasteText}>Paste</Text>
               </TouchableOpacity>
@@ -267,7 +280,7 @@ export default function AddWatchAccountScreen() {
               value={label}
               onChangeText={setLabel}
               placeholder="e.g., Trading Account, Cold Storage"
-              placeholderTextColor={styles.placeholderColor}
+              placeholderTextColor={theme.colors.placeholder}
               maxLength={50}
             />
           </View>
@@ -280,7 +293,7 @@ export default function AddWatchAccountScreen() {
               value={notes}
               onChangeText={setNotes}
               placeholder="Add any notes about this account..."
-              placeholderTextColor={styles.placeholderColor}
+              placeholderTextColor={theme.colors.placeholder}
               multiline
               textAlignVertical="top"
               maxLength={200}
@@ -304,7 +317,7 @@ export default function AddWatchAccountScreen() {
                 <Ionicons
                   name="eye-outline"
                   size={20}
-                  color={styles.buttonTextColor}
+                  color={theme.colors.buttonText}
                 />
                 <Text style={styles.addButtonText}>Add Watch Account</Text>
               </>
@@ -478,8 +491,4 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.buttonText,
       marginLeft: theme.spacing.sm,
     },
-    backButtonColor: theme.colors.text,
-    primaryColor: theme.colors.primary,
-    placeholderColor: theme.colors.placeholder,
-    buttonTextColor: theme.colors.buttonText,
   });

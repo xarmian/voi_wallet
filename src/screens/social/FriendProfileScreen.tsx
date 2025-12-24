@@ -31,6 +31,7 @@ import { BlurredContainer } from '@/components/common/BlurredContainer';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { GlassButton } from '@/components/common/GlassButton';
+import { useIsMessagingEnabled } from '@/store/experimentalStore';
 
 const formatRelativeTime = (timestamp?: number): string => {
   if (!timestamp) return 'No recent activity';
@@ -67,6 +68,7 @@ export default function FriendProfileScreen() {
   const navigation = useNavigation();
   const route = useRoute<FriendProfileRouteProp>();
   const networkConfig = useCurrentNetworkConfig();
+  const isMessagingEnabled = useIsMessagingEnabled();
 
   const { envoiName } = route.params;
 
@@ -207,6 +209,17 @@ export default function FriendProfileScreen() {
     });
   }, [friend?.address, networkConfig?.blockExplorerUrl]);
 
+  const handleMessage = useCallback(() => {
+    if (!friend?.address) {
+      return;
+    }
+
+    (navigation as any).navigate('Chat', {
+      friendAddress: friend.address,
+      friendEnvoiName: friend.envoiName,
+    });
+  }, [navigation, friend]);
+
   const handleSend = useCallback(() => {
     const parentNavigator = navigation.getParent() as any;
     if (!friend?.address || !parentNavigator) {
@@ -292,6 +305,16 @@ export default function FriendProfileScreen() {
           >
             <Text style={styles.cardTitle}>Quick Actions</Text>
             <View style={styles.actionRow}>
+              {isMessagingEnabled && (
+                <GlassButton
+                  variant="secondary"
+                  size="sm"
+                  label="Message"
+                  icon="chatbubble"
+                  onPress={handleMessage}
+                  style={styles.actionButton}
+                />
+              )}
               <GlassButton
                 variant="secondary"
                 size="sm"
@@ -308,6 +331,8 @@ export default function FriendProfileScreen() {
                 onPress={handleOpenExplorer}
                 style={styles.actionButton}
               />
+            </View>
+            <View style={[styles.actionRow, { marginTop: theme.spacing.sm }]}>
               <GlassButton
                 variant="secondary"
                 size="sm"
