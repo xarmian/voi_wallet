@@ -793,6 +793,7 @@ export class DeepLinkService {
           fee: parsed.params.fee ? parseInt(parsed.params.fee) : undefined,
           note: parsed.params.xnote || parsed.params.note,
           networkId: currentNetwork,
+          payment: parsed.params.payment ? parseInt(parsed.params.payment) : undefined,
         },
       }, { replace: true });
 

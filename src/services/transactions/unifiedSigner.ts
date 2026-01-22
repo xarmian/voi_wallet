@@ -132,6 +132,7 @@ export interface UnifiedTransactionRequest {
     fee?: number;
     note?: string;
     networkId?: NetworkId;
+    paymentAmount?: number; // Payment amount in atomic units to prepend to app call
   };
 
   // Network ID for the transaction (optional, defaults to current network)
@@ -754,6 +755,8 @@ export class UnifiedTransactionSigner {
 
   /**
    * Sign application call transaction
+   * If paymentAmount is specified, creates a transaction group with a prepended
+   * payment to the application's escrow account
    */
   private async signApplTransaction(
     request: UnifiedTransactionRequest,
@@ -769,14 +772,17 @@ export class UnifiedTransactionSigner {
       const networkService = NetworkService.getInstance(networkId);
       const suggestedParams = await networkService.getSuggestedParams();
 
-      // Override fee if specified
+      // Create a copy of suggested params for the app call (fee may be overridden)
+      const applSuggestedParams = { ...suggestedParams };
+
+      // Override fee if specified (only for app call)
       if (request.applParams.fee) {
-        suggestedParams.fee = request.applParams.fee;
-        suggestedParams.flatFee = true;
+        applSuggestedParams.fee = request.applParams.fee;
+        applSuggestedParams.flatFee = true;
       }
 
       // Build application call transaction
-      const txn = algosdk.makeApplicationNoOpTxnFromObject({
+      const applTxn = algosdk.makeApplicationNoOpTxnFromObject({
         sender: request.applParams.senderAddress,
         appIndex: request.applParams.appId,
         appArgs: request.applParams.appArgs,
@@ -784,36 +790,90 @@ export class UnifiedTransactionSigner {
         foreignAssets: request.applParams.foreignAssets,
         accounts: request.applParams.accounts,
         boxes: request.applParams.boxes,
-        suggestedParams,
+        suggestedParams: applSuggestedParams,
         note: request.applParams.note
           ? new Uint8Array(Buffer.from(request.applParams.note))
           : undefined,
       });
 
-      callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
+      // Check if we need to create a transaction group with a payment
+      if (request.applParams.paymentAmount && request.applParams.paymentAmount > 0) {
+        // Get the application's escrow address
+        const appEscrowAddress = algosdk.getApplicationAddress(request.applParams.appId);
 
-      // Sign the transaction
-      const signedTxnBlob = await SecureKeyManager.signTransaction(
-        txn,
-        request.applParams.senderAddress,
-        request.pin
-      );
+        // Build payment transaction to app escrow
+        const paymentTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+          sender: request.applParams.senderAddress,
+          receiver: appEscrowAddress,
+          amount: request.applParams.paymentAmount,
+          suggestedParams, // Use base suggested params (no fee override)
+        });
 
-      callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
-      callbacks?.onNetworkSubmit?.();
+        // Group the transactions (payment first, then app call)
+        const txnGroup = [paymentTxn, applTxn];
+        algosdk.assignGroupID(txnGroup);
 
-      // Submit to network
-      const txId = await networkService.sendRawTransaction(signedTxnBlob);
+        const totalTxns = txnGroup.length;
+        callbacks?.onLedgerPrompt?.({ index: 1, total: totalTxns });
 
-      // Wait for confirmation
-      await networkService.waitForConfirmation(txId);
+        // Sign both transactions
+        const signedTxns: Uint8Array[] = [];
 
-      callbacks?.onNetworkConfirmed?.(txId);
+        for (let i = 0; i < txnGroup.length; i++) {
+          callbacks?.onLedgerPrompt?.({ index: i + 1, total: totalTxns });
 
-      return {
-        success: true,
-        transactionId: txId,
-      };
+          const signedTxnBlob = await SecureKeyManager.signTransaction(
+            txnGroup[i],
+            request.applParams.senderAddress,
+            request.pin
+          );
+          signedTxns.push(signedTxnBlob);
+
+          callbacks?.onLedgerSigned?.({ index: i + 1, total: totalTxns });
+        }
+
+        callbacks?.onNetworkSubmit?.();
+
+        // Submit the group atomically
+        const txId = await networkService.sendRawTransaction(signedTxns);
+
+        // Wait for confirmation
+        await networkService.waitForConfirmation(txId);
+
+        callbacks?.onNetworkConfirmed?.(txId);
+
+        return {
+          success: true,
+          transactionId: txId,
+          transactionIds: txnGroup.map((txn) => txn.txID()),
+        };
+      } else {
+        // Single app call transaction (no payment)
+        callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
+
+        // Sign the transaction
+        const signedTxnBlob = await SecureKeyManager.signTransaction(
+          applTxn,
+          request.applParams.senderAddress,
+          request.pin
+        );
+
+        callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
+        callbacks?.onNetworkSubmit?.();
+
+        // Submit to network
+        const txId = await networkService.sendRawTransaction(signedTxnBlob);
+
+        // Wait for confirmation
+        await networkService.waitForConfirmation(txId);
+
+        callbacks?.onNetworkConfirmed?.(txId);
+
+        return {
+          success: true,
+          transactionId: txId,
+        };
+      }
     } catch (error) {
       throw error;
     }
