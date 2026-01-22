@@ -64,6 +64,7 @@ export interface Arc0090ApplUri extends Arc0090BaseUri {
     fee?: string;
     note?: string;
     xnote?: string;
+    payment?: string; // payment amount in atomic units to prepend to app call
   };
 }
 
@@ -555,6 +556,14 @@ function parseApplUri(uri: string): Arc0090ApplUri | null {
 
     if (searchParams.has('xnote')) {
       params.xnote = decodeURIComponent(searchParams.get('xnote')!);
+    }
+
+    // Payment amount (atomic units to prepend as payment to app escrow)
+    if (searchParams.has('payment')) {
+      const payment = searchParams.get('payment')!;
+      if (/^\d+$/.test(payment)) {
+        params.payment = payment;
+      }
     }
   }
 

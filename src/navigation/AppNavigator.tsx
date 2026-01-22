@@ -178,6 +178,7 @@ export type RootStackParamList = {
     fee?: number;
     note?: string;
     networkId?: NetworkId;
+    payment?: number; // Payment amount in atomic units to prepend to app call
   };
   AppInfoModal: {
     appId: number;

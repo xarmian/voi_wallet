@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
+import algosdk from 'algosdk';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -68,6 +69,21 @@ export default function AppCallConfirmScreen() {
 
   const networkId = params.networkId || NetworkId.VOI_MAINNET;
   const networkConfig = getNetworkConfig(networkId);
+
+  // Calculate the app's escrow address if payment is specified
+  const appEscrowAddress = useMemo(() => {
+    if (params.payment && params.payment > 0) {
+      return algosdk.getApplicationAddress(params.appId);
+    }
+    return null;
+  }, [params.appId, params.payment]);
+
+  // Format payment amount for display
+  const formattedPaymentAmount = useMemo(() => {
+    if (!params.payment || params.payment <= 0) return null;
+    // Convert atomic units to display units (divide by 1,000,000 for 6 decimals)
+    return (params.payment / 1_000_000).toFixed(6);
+  }, [params.payment]);
 
   useEffect(() => {
     return () => {
@@ -144,6 +160,7 @@ export default function AppCallConfirmScreen() {
         fee: params.fee,
         note: params.note,
         networkId,
+        paymentAmount: params.payment,
       },
       networkId,
     };
@@ -217,6 +234,31 @@ export default function AppCallConfirmScreen() {
             <Text style={styles.infoValue}>{networkConfig.name}</Text>
           </View>
         </GlassCard>
+
+        {/* Payment Info (if payment is specified) */}
+        {params.payment && params.payment > 0 && (
+          <GlassCard style={styles.card}>
+            <Text style={styles.cardTitle}>Payment</Text>
+            <View style={styles.paymentAmountContainer}>
+              <Ionicons name="send" size={24} color={colors.primary} />
+              <Text style={styles.paymentAmountText}>
+                {formattedPaymentAmount} {networkConfig.nativeToken}
+              </Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>To App Escrow</Text>
+              <Text style={styles.infoValue} numberOfLines={1}>
+                {appEscrowAddress ? formatAddress(appEscrowAddress) : '-'}
+              </Text>
+            </View>
+            <View style={styles.infoBanner}>
+              <Ionicons name="information-circle" size={16} color="#3B82F6" />
+              <Text style={styles.infoText}>
+                This payment will be sent to the application's escrow account as part of an atomic transaction group
+              </Text>
+            </View>
+          </GlassCard>
+        )}
 
         {/* Method Info */}
         {params.method && (
@@ -438,6 +480,17 @@ const createStyles = (theme: Theme) =>
       fontSize: 24,
       fontWeight: '700',
       color: theme.colors.text,
+    },
+    paymentAmountContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 12,
+      gap: 12,
+    },
+    paymentAmountText: {
+      fontSize: 22,
+      fontWeight: '700',
+      color: theme.colors.primary,
     },
     methodContainer: {
       backgroundColor: theme.colors.surface,
