@@ -32,6 +32,13 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { NetworkId } from '@/types/network';
+import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
+import {
+  detectTransactionDangers,
+  aggregateDangers,
+  hasAnyDanger,
+  TransactionDangers,
+} from '@/utils/transactionDangers';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -59,6 +66,7 @@ interface ParsedTransaction {
   note?: string;
   assetId?: number;
   type: string;
+  dangers?: TransactionDangers;
 }
 
 export default function UniversalTransactionSigningScreen({ navigation, route }: Props) {
@@ -84,6 +92,7 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
   const [decodedTransactions, setDecodedTransactions] = useState<algosdk.Transaction[]>([]);
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
   const [networkCurrency, setNetworkCurrency] = useState<string>('VOI');
+  const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
 
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -191,6 +200,8 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
             note: txnAny.note ? Buffer.from(txnAny.note).toString() : undefined,
             assetId: txnAny.assetIndex,
             type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
+            // Only surface danger fields for transactions we are about to sign.
+            dangers: isAlreadySigned ? undefined : detectTransactionDangers(txn),
           });
         } catch (error) {
           console.error('Failed to parse transaction:', error);
@@ -212,7 +223,23 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     }
   };
 
+  // S-01: aggregate authority-transfer / balance-sweep dangers across all
+  // transactions. Declared before handleApprove so the guard and the render
+  // gating share the same scope.
+  const aggregatedDangers = aggregateDangers(
+    parsedTransactions.map((t) => t.dangers ?? {})
+  );
+  const hasDanger = hasAnyDanger(aggregatedDangers);
+
   const handleApprove = () => {
+    if (hasDanger && !dangerAcknowledged) {
+      Alert.alert(
+        'Confirmation required',
+        'Please acknowledge the highlighted account-security warning before signing.'
+      );
+      return;
+    }
+
     if (!account) {
       Alert.alert('Error', 'Account information is missing');
       return;
@@ -354,6 +381,15 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
         )}
 
         {renderTransactionSummary()}
+
+        {hasDanger && (
+          <TransactionDangerBanner
+            dangers={aggregatedDangers}
+            acknowledged={dangerAcknowledged}
+            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
+          />
+        )}
+
         {renderAccountSelector()}
 
         <View style={styles.warningContainer}>
@@ -377,7 +413,7 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
         <TouchableOpacity
           style={[styles.button, styles.approveButton]}
           onPress={handleApprove}
-          disabled={!account}
+          disabled={!account || (hasDanger && !dangerAcknowledged)}
         >
           <Text style={styles.approveButtonText}>Sign</Text>
         </TouchableOpacity>
