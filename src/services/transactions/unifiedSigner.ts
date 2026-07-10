@@ -582,7 +582,7 @@ export class UnifiedTransactionSigner {
    */
   async estimateTransactionCost(request: UnifiedTransactionRequest): Promise<{
     fee: number;
-    total: number;
+    total: number | bigint;
   }> {
     switch (request.type) {
       case 'voi_transfer':
