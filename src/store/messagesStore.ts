@@ -454,13 +454,11 @@ export const useMessagesStore = create<MessagesState>()(
           .getState()
           .friends.find((f) => f.address === friendAddress);
 
-        // Merge with existing messages (deduplicate by ID)
-        const allMessages = [...(existingThread?.messages || [])];
-        for (const msg of messages) {
-          if (!allMessages.some((m) => m.id === msg.id)) {
-            allMessages.push(msg);
-          }
-        }
+        // Merge with existing messages (dedupe by ID; reconcile pending->confirmed)
+        const allMessages = mergeMessagesById(
+          existingThread?.messages || [],
+          messages
+        );
         allMessages.sort((a, b) => a.timestamp - b.timestamp);
 
         const lastMsg = allMessages[allMessages.length - 1];
@@ -536,13 +534,11 @@ export const useMessagesStore = create<MessagesState>()(
           .getState()
           .friends.find((f) => f.address === friendAddress);
 
-        // Merge with existing messages (deduplicate by ID)
-        const allMessages = [...(existingThread?.messages || [])];
-        for (const msg of messages) {
-          if (!allMessages.some((m) => m.id === msg.id)) {
-            allMessages.push(msg);
-          }
-        }
+        // Merge with existing messages (dedupe by ID; reconcile pending->confirmed)
+        const allMessages = mergeMessagesById(
+          existingThread?.messages || [],
+          messages
+        );
         allMessages.sort((a, b) => a.timestamp - b.timestamp);
 
         const lastMsg = allMessages[allMessages.length - 1];
@@ -650,13 +646,11 @@ export const useMessagesStore = create<MessagesState>()(
             .getState()
             .friends.find((f) => f.address === friendAddress);
 
-          // Merge messages (deduplicate by ID)
-          const allMessages = [...(existing?.messages || [])];
-          for (const msg of messages) {
-            if (!allMessages.some((m) => m.id === msg.id)) {
-              allMessages.push(msg);
-            }
-          }
+          // Merge messages (dedupe by ID; reconcile pending->confirmed)
+          const allMessages = mergeMessagesById(
+            existing?.messages || [],
+            messages
+          );
           allMessages.sort((a, b) => a.timestamp - b.timestamp);
 
           const lastMsg = allMessages[allMessages.length - 1];
@@ -771,6 +765,41 @@ export const useMessagesStore = create<MessagesState>()(
     },
   }))
 );
+
+/**
+ * Merge chain-fetched messages into an existing list, deduplicating by ID.
+ *
+ * When an incoming message matches an existing one, the chain record is the
+ * source of truth for confirmation state: a locally pending (or failed)
+ * message is upgraded to the confirmed chain record (carrying confirmedRound).
+ * This is what resolves an optimistic "pending" sent message to "confirmed"
+ * on the next load — without it, the dedup would keep skipping the confirmed
+ * record and the message would stay pending forever.
+ */
+function mergeMessagesById(
+  existing: Message[],
+  incoming: Message[]
+): Message[] {
+  const merged = [...existing];
+  for (const msg of incoming) {
+    const idx = merged.findIndex((m) => m.id === msg.id);
+    if (idx === -1) {
+      merged.push(msg);
+    } else if (
+      merged[idx].status !== 'confirmed' &&
+      msg.status === 'confirmed'
+    ) {
+      merged[idx] = {
+        ...merged[idx],
+        status: 'confirmed',
+        ...(msg.confirmedRound !== undefined
+          ? { confirmedRound: msg.confirmedRound }
+          : {}),
+      };
+    }
+  }
+  return merged;
+}
 
 /**
  * Create an empty thread for a new conversation

@@ -162,8 +162,10 @@ export class MessagingService {
         networkId: NetworkId.VOI_MAINNET,
       };
 
-      // Send the transaction (bare txId; confirmation state not needed here)
-      const { txId } = await TransactionService.sendTransaction(
+      // Send the transaction. `confirmed` reflects whether the note tx actually
+      // confirmed within the wait window; propagate it so a submitted-but-
+      // unconfirmed message shows as pending instead of a premature "confirmed".
+      const { txId, confirmed } = await TransactionService.sendTransaction(
         params,
         account as WalletAccount,
         pin
@@ -176,7 +178,10 @@ export class MessagingService {
         direction: 'sent',
         content: request.content,
         timestamp: encryptedPayload.t,
-        status: 'confirmed',
+        // Don't claim confirmation the network hasn't given us; a pending
+        // message resolves to confirmed when the thread is next loaded from
+        // chain (the receive path parses on-chain txns as confirmed).
+        status: confirmed ? 'confirmed' : 'pending',
         fee: MESSAGE_FEE_MICRO,
       };
 
