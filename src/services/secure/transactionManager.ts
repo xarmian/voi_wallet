@@ -34,8 +34,9 @@ export class SecureTransactionManager {
         );
       }
 
-      // Send transaction using secure key access
-      const txId = await TransactionService.sendTransaction(
+      // Send transaction using secure key access. This path returns a bare txId
+      // string; the { confirmed } flag is intentionally not surfaced here.
+      const { txId } = await TransactionService.sendTransaction(
         params,
         account,
         pin,

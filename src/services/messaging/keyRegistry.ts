@@ -319,8 +319,8 @@ export async function registerMessagingKey(
     networkId: NetworkId.VOI_MAINNET,
   };
 
-  // Send the transaction
-  const txId = await TransactionService.sendTransaction(params, account, pin);
+  // Send the transaction (bare txId; confirmation state not needed for key reg)
+  const { txId } = await TransactionService.sendTransaction(params, account, pin);
 
   // Immediately update cache with the new registration
   const registration: MessagingKeyRegistration = {
