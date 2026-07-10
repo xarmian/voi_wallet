@@ -161,6 +161,26 @@ export const parseAmountToBaseUnits = (
 export const toBaseUnitsBigInt = parseAmountToBaseUnits;
 
 /**
+ * Format an integer base-unit amount to a plain decimal string (no grouping,
+ * no symbol) — the inverse of parseAmountToBaseUnits. Exact for bigint values
+ * of any magnitude; trailing zeros are trimmed. Suitable for setting an
+ * amount TextInput's value.
+ */
+export const formatBaseUnitsToAmount = (
+  base: bigint | number,
+  decimals: number
+): string => {
+  const b = typeof base === 'bigint' ? base : BigInt(Math.trunc(base));
+  const neg = b < 0n;
+  const digits = (neg ? -b : b).toString().padStart(decimals + 1, '0');
+  const cut = digits.length - decimals;
+  const intPart = digits.slice(0, cut) || '0';
+  let fracPart = decimals > 0 ? digits.slice(cut).replace(/0+$/, '') : '';
+  const out = fracPart ? `${intPart}.${fracPart}` : intPart;
+  return neg ? `-${out}` : out;
+};
+
+/**
  * Sanitize raw amount-input text into a single well-formed decimal string
  * (using '.' as the separator) suitable for a controlled TextInput, for display,
  * and for {@link parseAmountToBaseUnits}.

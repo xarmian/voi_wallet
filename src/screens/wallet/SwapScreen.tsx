@@ -44,7 +44,11 @@ import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
-import { parseAmountToBaseUnits, sanitizeAmountInput } from '@/utils/bigint';
+import {
+  parseAmountToBaseUnits,
+  sanitizeAmountInput,
+  formatBaseUnitsToAmount,
+} from '@/utils/bigint';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
@@ -159,6 +163,11 @@ export default function SwapScreen() {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
+  // Monotonic id of the latest in-flight quote request. Only the newest request
+  // may mutate quote state, so a slow earlier response can never overwrite a
+  // newer quote (whose unsignedTransactions were built for a different amount).
+  const quoteRequestIdRef = useRef<number>(0);
+
   // Slippage and route modals
   const [slippage, setSlippage] = useState(1.0);
   const [showSlippageModal, setShowSlippageModal] = useState(false);
@@ -245,17 +254,38 @@ export default function SwapScreen() {
     setSlippage(stored);
   };
 
-  // Fetch quote when amount or tokens change
+  // Fetch quote when amount or tokens change.
+  // U-04: debounce the fetch (~400ms) so rapid typing issues at most one request
+  // per pause, and the monotonic requestId guard inside fetchQuote prevents any
+  // late/stale response from overwriting a newer one. Clearing the field clears
+  // the quote immediately (no debounce) for responsive UX.
   useEffect(() => {
+    // Bump the request id on EVERY input change so any already-in-flight quote
+    // request is invalidated immediately (its captured id stops matching), not
+    // only when the next fetch starts after the debounce.
+    const requestId = ++quoteRequestIdRef.current;
     if (inputToken && outputToken && inputAmount && parseFloat(inputAmount) > 0) {
-      fetchQuote();
-    } else {
+      // Clear the now-stale quote so it can't be reviewed/signed in the window.
       setQuote(null);
       setQuoteError(null);
+      const t = setTimeout(() => {
+        fetchQuote(requestId);
+      }, 400);
+      return () => clearTimeout(t);
+    } else {
+      // No valid input to quote: clear state AND loading. A previously in-flight
+      // request was just invalidated (id bumped) and its guarded finally won't
+      // clear loading, so we must clear it here or the UI stays stuck loading.
+      setQuote(null);
+      setQuoteError(null);
+      setQuoteLoading(false);
     }
   }, [inputToken, outputToken, inputAmount, slippage]);
 
-  const fetchQuote = async () => {
+  const fetchQuote = async (requestId: number) => {
+    // Bail if a newer input change or manual refresh already superseded this
+    // scheduled request — don't even enter the loading state for a stale id.
+    if (requestId !== quoteRequestIdRef.current) return;
     if (!inputToken || !outputToken || !inputAmount || !activeAccount) return;
 
     const amountValue = parseFloat(inputAmount);
@@ -264,6 +294,8 @@ export default function SwapScreen() {
       return;
     }
 
+    // requestId was captured when this fetch was scheduled (in the effect); the
+    // guards below drop this response if the inputs changed in the meantime.
     setQuoteLoading(true);
     setQuoteError(null);
 
@@ -284,8 +316,10 @@ export default function SwapScreen() {
         slippageTolerance: slippage, // Unified interface uses percentage
       });
 
+      if (requestId !== quoteRequestIdRef.current) return;
       setQuote(quoteResponse);
     } catch (error) {
+      if (requestId !== quoteRequestIdRef.current) return;
       console.error('Error fetching quote:', error);
       setQuoteError(
         error instanceof Error
@@ -294,21 +328,26 @@ export default function SwapScreen() {
       );
       setQuote(null);
     } finally {
-      setQuoteLoading(false);
+      if (requestId === quoteRequestIdRef.current) {
+        setQuoteLoading(false);
+      }
     }
   };
 
   const handleSwapTokens = () => {
-    // Get the current output amount to use as new input
+    // Get the current output amount to use as new input.
+    // quote.outputAmount is a base-unit string; convert it exactly with BigInt
+    // (no parseFloat / toLocaleString precision loss).
     let newInputAmount = '';
     if (quote?.outputAmount && outputToken?.decimals !== undefined) {
-      const outputValue = parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals);
-      // Format without trailing zeros
-      newInputAmount = outputValue.toLocaleString('en-US', {
-        useGrouping: false,
-        minimumFractionDigits: 0,
-        maximumFractionDigits: outputToken.decimals,
-      });
+      try {
+        newInputAmount = formatBaseUnitsToAmount(
+          BigInt(quote.outputAmount),
+          outputToken.decimals
+        );
+      } catch {
+        newInputAmount = '';
+      }
     }
 
     // Swap input and output tokens
@@ -330,36 +369,32 @@ export default function SwapScreen() {
     setInputAmount((prev) => sanitizeAmountInput(text) ?? prev);
   };
 
+  // Spendable base-unit balance of the input token. Native reserves min-balance
+  // (grows with opt-ins) + a fee headroom; ASAs have no reserve. Shared by the
+  // Max button and isSwapDisabled so they agree exactly.
+  const getInputSpendableBase = (): bigint => {
+    if (!accountBalance || !inputToken) return 0n;
+    if (inputToken.id === NATIVE_TOKEN_ID) {
+      const balance = BigInt(accountBalance.amount ?? 0);
+      const minBalance = BigInt(accountBalance.minBalance ?? 0);
+      const feeReserve = BigInt(100000); // ~0.1 native token fee headroom
+      const spendable = balance - minBalance - feeReserve;
+      return spendable > 0n ? spendable : 0n;
+    }
+    const asset = accountBalance.assets?.find(
+      (a) => String(a.assetId) === String(inputToken.id)
+    );
+    return asset ? BigInt(asset.amount) : 0n;
+  };
+
   const handleMaxPress = () => {
     if (!inputToken || !accountBalance) return;
 
     try {
-      let maxAmount = '0';
-
-      if (inputToken.id === NATIVE_TOKEN_ID) {
-        // For native token (VOI/ALGO), account for transaction fees (reserve ~0.1 for fees)
-        const balance = BigInt(accountBalance.amount || '0');
-        const reserveForFees = BigInt(100000); // 0.1 native token in base units
-        const maxBalance = balance > reserveForFees ? balance - reserveForFees : BigInt(0);
-        const value = Number(maxBalance) / Math.pow(10, 6);
-        maxAmount = value.toFixed(6);
-      } else {
-        // Find asset by ID - check multiple possible field names
-        const asset = accountBalance.assets?.find(a => {
-          const assetId = a.assetId ?? a['asset-id'] ?? a.contractId;
-          return assetId === inputToken.id;
-        });
-
-        if (asset) {
-          const balance = BigInt(asset.amount);
-          const value = Number(balance) / Math.pow(10, inputToken.decimals);
-          maxAmount = value.toFixed(inputToken.decimals);
-        }
-      }
-
-      // Remove trailing zeros
-      maxAmount = maxAmount.replace(/\.?0+$/, '');
-      setInputAmount(maxAmount);
+      // Max = spendable balance (native reserves min-balance + fee headroom).
+      // formatBaseUnitsToAmount trims trailing zeros and is exact for any magnitude.
+      const maxBase = getInputSpendableBase();
+      setInputAmount(formatBaseUnitsToAmount(maxBase, inputToken.decimals));
     } catch (error) {
       console.error('Error calculating max amount:', error);
     }
@@ -763,6 +798,25 @@ export default function SwapScreen() {
       return true;
     }
 
+    // R-08: disable when the entered amount exceeds the user's balance of the
+    // input token. Compared in exact BigInt base units (never Number-downcast a
+    // balance). Only a real over-balance disables the swap — if the balance is
+    // still unknown (accountBalance not loaded yet) we do NOT hard-disable here.
+    if (accountBalance) {
+      try {
+        // Compare against the SPENDABLE balance (native reserves min-balance +
+        // fee headroom), consistent with the Max button.
+        const spendableBase = getInputSpendableBase();
+        const wanted = parseAmountToBaseUnits(inputAmount, inputToken.decimals);
+        if (wanted > spendableBase) {
+          return true;
+        }
+      } catch {
+        // Malformed amount that parseAmountToBaseUnits rejects -> treat as disabled.
+        return true;
+      }
+    }
+
     return false;
   };
 
@@ -1055,7 +1109,7 @@ export default function SwapScreen() {
           loading={quoteLoading}
           error={quoteError}
           slippage={slippage}
-          onRefresh={fetchQuote}
+          onRefresh={() => fetchQuote(++quoteRequestIdRef.current)}
           onSlippagePress={() => setShowSlippageModal(true)}
           onRouteDetailPress={() => setShowRouteModal(true)}
         />
