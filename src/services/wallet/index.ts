@@ -33,6 +33,7 @@ import { AccountSecureStorage } from '../secure/AccountSecureStorage';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
+import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
 
 export class MultiAccountWalletService {
@@ -1201,7 +1202,16 @@ export class MultiAccountWalletService {
         return false;
       }
 
-      const reportedAuthAddress = accountInfo['auth-addr'];
+      // algosdk v3 exposes the auth address as `authAddr` (an Address object
+      // with publicKey bytes), not the legacy kebab-case 'auth-addr' (which is
+      // always undefined in v3 — reading it made rekey verification always fail).
+      const authAddr = (accountInfo as any).authAddr;
+      const reportedAuthAddress =
+        typeof authAddr === 'string'
+          ? authAddr
+          : authAddr?.publicKey
+            ? algosdk.encodeAddress(new Uint8Array(authAddr.publicKey))
+            : undefined;
       if (!reportedAuthAddress) {
         return false;
       }
