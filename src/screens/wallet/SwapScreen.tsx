@@ -44,7 +44,7 @@ import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
-import { parseAmountToBaseUnits } from '@/utils/bigint';
+import { parseAmountToBaseUnits, sanitizeAmountInput } from '@/utils/bigint';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
@@ -323,14 +323,11 @@ export default function SwapScreen() {
   };
 
   const handleInputAmountChange = (text: string) => {
-    // Allow only numbers and decimal point
-    const cleaned = text.replace(/[^0-9.]/g, '');
-
-    // Prevent multiple decimal points
-    const parts = cleaned.split('.');
-    const formatted = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
-
-    setInputAmount(formatted);
+    // Normalize locale separator (',' -> '.'). The shared sanitizer avoids the
+    // previous bug where ',' was stripped entirely, turning '1,5' into '15' (a
+    // 10x error), and rejects ambiguous multi-separator paste (returns null),
+    // in which case we keep the previous well-formed value.
+    setInputAmount((prev) => sanitizeAmountInput(text) ?? prev);
   };
 
   const handleMaxPress = () => {

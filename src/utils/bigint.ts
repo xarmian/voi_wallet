@@ -161,6 +161,52 @@ export const parseAmountToBaseUnits = (
 export const toBaseUnitsBigInt = parseAmountToBaseUnits;
 
 /**
+ * Sanitize raw amount-input text into a single well-formed decimal string
+ * (using '.' as the separator) suitable for a controlled TextInput, for display,
+ * and for {@link parseAmountToBaseUnits}.
+ *
+ * Both ',' and '.' are accepted as the decimal separator and normalized to '.'
+ * — a `decimal-pad` keyboard emits ',' in many locales, and `parseFloat('1,5')
+ * === 1` would otherwise silently send 1.0 instead of 1.5 (and stripping ','
+ * turned '1,5' into '15', a 10x error, in Swap). Accepting either separator is
+ * required because this value is stored and re-fed to the field on every
+ * keystroke, so we cannot treat '.' (our own normalized separator) as grouping.
+ *
+ * Returns `null` — signalling the caller to keep the previous value — when the
+ * input is ambiguous or malformed:
+ * - it contains any character other than digits, ',', '.', or whitespace (e.g.
+ *   a pasted '-1', '1e3', or currency symbol), which could otherwise be silently
+ *   rewritten into a different valid amount; or
+ * - it contains more than one decimal separator (e.g. a pasted grouped number
+ *   like '1,234.56'), which is ambiguous.
+ *
+ * A single lone '.' is allowed as a valid typing intermediate for '.5'; the
+ * downstream positive-amount validation rejects a bare '.' as an amount.
+ *
+ * KNOWN LIMITATION: a paste of a *thousands-grouped* number that uses a single
+ * separator (e.g. US '1,234' meaning 1234) is read as a decimal (1.234). This
+ * is inherent to supporting ',' as a decimal separator and is visible to the
+ * user in the field before they confirm; full locale-aware grouping detection
+ * that does not break comma-decimal typing is tracked separately.
+ *
+ * @returns the sanitized decimal string, or `null` if the input is invalid.
+ */
+export const sanitizeAmountInput = (text: string): string | null => {
+  const raw = text ?? '';
+  // Reject anything that isn't a digit, a separator, or whitespace so a
+  // malformed paste ('-1', '1e3', '$1', '1,,2') isn't silently transformed.
+  if (/[^0-9.,\s]/.test(raw)) {
+    return null;
+  }
+  const normalized = raw.replace(/,/g, '.').replace(/[^0-9.]/g, '');
+  const dotCount = (normalized.match(/\./g) || []).length;
+  if (dotCount > 1) {
+    return null;
+  }
+  return normalized;
+};
+
+/**
  * Add BigInt or number values safely
  */
 export const addBigIntSafe = (

@@ -39,6 +39,7 @@ import {
   formatAssetBalance,
   subtractBigIntSafe,
   parseAmountToBaseUnits,
+  sanitizeAmountInput,
 } from '@/utils/bigint';
 import { AccountType, type WalletAccount } from '@/types/wallet';
 import { useCurrentNetwork, useCurrentNetworkConfig } from '@/store/networkStore';
@@ -1125,7 +1126,9 @@ export default function SendScreen() {
       }
 
       // Skip amount validation for NFT transfers
-      if (!contextNftToken && (!amount || parseFloat(amount) <= 0)) {
+      // Use !(x > 0) rather than (x <= 0) so a NaN amount (e.g. a bare '.')
+      // is rejected instead of slipping through as a zero-value transfer.
+      if (!contextNftToken && (!amount || !(parseFloat(amount) > 0))) {
         Alert.alert('Error', 'Please enter a valid amount');
         return;
       }
@@ -1483,7 +1486,9 @@ export default function SendScreen() {
                   placeholder={`0.${'0'.repeat(getAssetDecimals())}`}
                   placeholderTextColor={themeColors.placeholder}
                   value={amount}
-                  onChangeText={setAmount}
+                  onChangeText={(t) =>
+                    setAmount((prev) => sanitizeAmountInput(t) ?? prev)
+                  }
                   keyboardType="decimal-pad"
                   editable={!isSending}
                 />
