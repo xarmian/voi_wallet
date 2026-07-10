@@ -1,5 +1,10 @@
 import algosdk from 'algosdk';
-import { AccountBalance, AssetBalance, TransactionInfo } from '@/types/wallet';
+import {
+  AccountBalance,
+  AssetBalance,
+  AssetParams,
+  TransactionInfo,
+} from '@/types/wallet';
 import {
   NetworkId,
   NetworkConfiguration,
@@ -47,6 +52,13 @@ export class NetworkService {
     string,
     { decimals: number; name?: string; unitName?: string }
   > = new Map();
+
+  // Bumped on every network switch (when assetParamsCache is cleared). An
+  // in-flight asset-params fetch captures the generation before awaiting and
+  // discards its result if the generation changed — so a response that lands
+  // after a switch (or a switch-and-back) can't poison the cleared cache with
+  // another network's decimals.
+  private assetCacheGeneration = 0;
 
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
@@ -140,6 +152,7 @@ export class NetworkService {
       // the per-network asset-params cache to avoid serving another network's
       // decimals for a colliding asset ID.
       this.assetParamsCache.clear();
+      this.assetCacheGeneration++;
 
       // Reinitialize clients with new configuration
       this.initializeClients();
@@ -283,6 +296,11 @@ export class NetworkService {
       }
 
       const algodAssets: AssetBalance[] = [];
+      // Guard the cache writes below against a network switch during this
+      // refresh: switchNetwork clears assetParamsCache and bumps the
+      // generation, so a stale response can't repopulate the cleared cache
+      // (holds even across a switch-and-back within the loop).
+      const requestGeneration = this.assetCacheGeneration;
       if (accountInfo.value.assets) {
         for (const asset of accountInfo.value.assets) {
           const assetId = Number(asset.assetId);
@@ -313,7 +331,9 @@ export class NetworkService {
               name: assetInfo.params.name,
               unitName: assetInfo.params.unitName,
             };
-            this.assetParamsCache.set(assetKey, params);
+            if (this.assetCacheGeneration === requestGeneration) {
+              this.assetParamsCache.set(assetKey, params);
+            }
             algodAssets.push({
               assetId,
               amount: asset.amount,
@@ -1139,6 +1159,49 @@ export class NetworkService {
       throw new Error(
         `Failed to check rekey statuses: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    }
+  }
+
+  /**
+   * Resolve an ASA's immutable params (decimals/name/unitName), preferring the
+   * process-wide assetParamsCache populated during balance refreshes. Falls back
+   * to a single getAssetByID fetch and caches the result. Returns null when the
+   * asset can't be resolved (not found / network error) so callers can render a
+   * safe placeholder instead of assuming 0 decimals (which inflates displayed
+   * amounts by up to 10^decimals).
+   */
+  async getCachedAssetParams(assetId: number): Promise<AssetParams | null> {
+    const assetKey = String(assetId);
+
+    const cached = this.assetParamsCache.get(assetKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Capture the switch generation before the fetch. switchNetwork() clears
+    // this cache and bumps the generation, so if it changed while we awaited,
+    // this response belongs to a network we've since left — discard it (don't
+    // cache OR return it) so callers never see another network's params.
+    const requestGeneration = this.assetCacheGeneration;
+
+    try {
+      const assetInfo = await this.getAssetInfo(assetId);
+      if (!assetInfo?.params) {
+        return null;
+      }
+      if (this.assetCacheGeneration !== requestGeneration) {
+        return null;
+      }
+      const params: AssetParams = {
+        decimals: Number(assetInfo.params.decimals ?? 0),
+        name: assetInfo.params.name,
+        unitName: assetInfo.params.unitName,
+      };
+      this.assetParamsCache.set(assetKey, params);
+      return params;
+    } catch (error) {
+      console.error(`Failed to resolve asset params for ${assetId}:`, error);
+      return null;
     }
   }
 

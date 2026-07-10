@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { TransactionInfo, AssetBalance } from '@/types/wallet';
+import { TransactionInfo, AssetBalance, AssetParams } from '@/types/wallet';
 import { Arc200TokenMetadata } from '@/services/mimir';
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import TransactionAddressDisplay from './TransactionAddressDisplay';
@@ -16,6 +16,8 @@ interface TransactionListItemProps {
   activeAccountAddress: string;
   assets?: AssetBalance[];
   tokenMetadata?: Arc200TokenMetadata | null;
+  /** Resolved ASA params for assets not in the active account's holdings. */
+  assetMetadata?: AssetParams | null;
   onPress: (transaction: TransactionInfo) => void;
 }
 
@@ -25,6 +27,7 @@ const TransactionListItem = React.memo(
     activeAccountAddress,
     assets,
     tokenMetadata,
+    assetMetadata,
     onPress,
   }: TransactionListItemProps) => {
     const [imageError, setImageError] = useState(false);
@@ -105,12 +108,26 @@ const TransactionListItem = React.memo(
       }
     };
 
+    // Render an asset amount only when decimals are known. Falling back to 0
+    // decimals renders raw base units as whole tokens (a 10^decimals display
+    // error), so when decimals are unresolved we show a placeholder instead.
+    const formatKnownAmount = (
+      sign: string,
+      decimals: number | undefined,
+      symbol: string
+    ) => {
+      if (decimals === undefined) {
+        return `${sign}… ${symbol}`;
+      }
+      return `${sign}${formatAssetBalance(transaction.amount, decimals)} ${symbol}`;
+    };
+
     const getTransactionAmount = () => {
       const sign = isOutgoing ? '-' : '+';
 
       if (transaction.isArc200 && transaction.contractId) {
         // For ARC-200 tokens, prefer cached metadata, fallback to assets
-        let decimals = 0;
+        let decimals: number | undefined;
         let symbol = 'TOKEN';
 
         if (tokenMetadata) {
@@ -122,19 +139,21 @@ const TransactionListItem = React.memo(
               a.assetType === 'arc200' &&
               a.contractId === transaction.contractId
           );
-          decimals = asset?.decimals || 0;
+          decimals = asset?.decimals;
           symbol = asset?.symbol || 'TOKEN';
         }
 
-        return `${sign}${formatAssetBalance(transaction.amount, decimals)} ${symbol}`;
+        return formatKnownAmount(sign, decimals, symbol);
       } else if (transaction.assetId && transaction.assetId !== 0) {
-        // For ASA tokens
+        // For ASA tokens: prefer holdings, fall back to resolved asset params.
+        // Use ?? so a legitimately 0-decimals asset is preserved (not treated
+        // as unknown).
         const asset = assets?.find(
           (a) => a.assetType === 'asa' && a.assetId === transaction.assetId
         );
-        const decimals = asset?.decimals || 0;
-        const symbol = asset?.symbol || 'TOKEN';
-        return `${sign}${formatAssetBalance(transaction.amount, decimals)} ${symbol}`;
+        const decimals = asset?.decimals ?? assetMetadata?.decimals;
+        const symbol = asset?.symbol || assetMetadata?.unitName || 'TOKEN';
+        return formatKnownAmount(sign, decimals, symbol);
       } else {
         // For native token
         return `${sign}${formatNativeBalance(transaction.amount, currentNetworkConfig.nativeToken)} ${currentNetworkConfig.nativeToken}`;

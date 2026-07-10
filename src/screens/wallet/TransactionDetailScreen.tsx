@@ -250,7 +250,9 @@ export default function TransactionDetailScreen() {
               {isReceived ? '+' : isSent ? '-' : ''}
               {assetId === 0
                 ? formatBalance(transaction.amount)
-                : formatAssetBalance(transaction.amount, decimals || 0)}{' '}
+                : decimals === undefined
+                  ? '…'
+                  : formatAssetBalance(transaction.amount, decimals)}{' '}
               {assetName}
             </Text>
           </BlurredContainer>
