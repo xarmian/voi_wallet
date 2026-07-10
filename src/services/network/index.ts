@@ -958,10 +958,19 @@ export class NetworkService {
             .limit(50)
             .do();
 
-          // Look for the most recent transaction with rekey-to field
+          // Look for the most recent transaction with a rekey-to field.
+          // algosdk v3 exposes it as `rekeyTo` (string or Address), not the
+          // legacy kebab-case 'rekey-to'.
           if (txnResponse.transactions) {
             for (const txn of txnResponse.transactions) {
-              if (txn['rekey-to'] === authAddress) {
+              const rekeyTo = (txn as any).rekeyTo;
+              const rekeyToAddress =
+                typeof rekeyTo === 'string'
+                  ? rekeyTo
+                  : rekeyTo?.publicKey
+                    ? algosdk.encodeAddress(new Uint8Array(rekeyTo.publicKey))
+                    : undefined;
+              if (rekeyToAddress && rekeyToAddress === authAddress) {
                 rekeyedAt = txn.roundTime ? txn.roundTime * 1000 : undefined;
                 break;
               }

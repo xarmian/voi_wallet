@@ -380,7 +380,12 @@ export default function SendScreen() {
                 });
               } else {
                 // Handle ASA token
-                const assetHolding = accountInfo.assets?.find((a: any) => a['asset-id'] === initialAssetId);
+                // algosdk v3: asset holdings expose `assetId` (a uint64 bigint),
+                // not the legacy 'asset-id'. Compare as strings so large IDs
+                // aren't collapsed by a lossy Number() cast.
+                const assetHolding = accountInfo.assets?.find(
+                  (a: any) => String(a.assetId) === String(initialAssetId)
+                );
 
                 if (assetHolding) {
                   const assetInfo = await networkService.getAlgodClient().getAssetByID(initialAssetId).do();
