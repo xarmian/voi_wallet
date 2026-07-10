@@ -17,7 +17,6 @@ import {
   parseArc0090Uri,
   getArc0090UriType,
   resolveNetworkFromAuthority,
-  convertAmountToDisplay,
   isLegacyVoiUri,
   Arc0090PaymentUri,
   Arc0090KeyregUri,
@@ -655,11 +654,10 @@ export class DeepLinkService {
       }
 
       if (parsed.params.amount) {
-        // Convert from smallest units to display format
-        const assetId = parsed.params.asset ? parseInt(parsed.params.asset) : 0;
-        const isNativeToken = assetId === 0;
-        const decimals = isNativeToken ? 6 : 0; // VOI/ALGO has 6 decimals, other assets default to 0
-        params.amount = convertAmountToDisplay(parsed.params.amount, decimals);
+        // Pass the raw base-unit amount through untouched. SendScreen resolves
+        // the asset's real decimals and converts to display exactly once. This
+        // matches the URI format and the legacy voi:// path (both raw).
+        params.amount = parsed.params.amount;
       }
 
       if (parsed.params.asset) {
