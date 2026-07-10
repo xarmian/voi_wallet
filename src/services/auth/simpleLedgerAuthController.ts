@@ -3,8 +3,14 @@ import {
   UnifiedTransactionRequest,
   UnifiedSigningResult,
 } from '@/services/transactions/unifiedSigner';
-import { simpleLedgerSigner, SimpleLedgerSigningCallbacks } from '@/services/ledger/simpleLedgerSigner';
-import { simpleLedgerManager, LedgerStateChange } from '@/services/ledger/simpleLedgerManager';
+import {
+  simpleLedgerSigner,
+  SimpleLedgerSigningCallbacks,
+} from '@/services/ledger/simpleLedgerSigner';
+import {
+  simpleLedgerManager,
+  LedgerStateChange,
+} from '@/services/ledger/simpleLedgerManager';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { LedgerSigningInfo } from '@/types/wallet';
 
@@ -39,8 +45,12 @@ export interface SimpleLedgerAuthStateData {
  * Replaces the complex TransactionAuthController with a much simpler implementation
  */
 export class SimpleLedgerAuthController {
-  private stateListeners: Array<(state: SimpleLedgerAuthStateData) => void> = [];
-  private currentState: SimpleLedgerAuthStateData = { state: 'idle', deviceConnected: false };
+  private stateListeners: Array<(state: SimpleLedgerAuthStateData) => void> =
+    [];
+  private currentState: SimpleLedgerAuthStateData = {
+    state: 'idle',
+    deviceConnected: false,
+  };
   private currentRequest: UnifiedTransactionRequest | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;
 
@@ -75,7 +85,9 @@ export class SimpleLedgerAuthController {
   /**
    * Initialize signing flow for a Ledger transaction
    */
-  async initializeSigningFlow(request: UnifiedTransactionRequest): Promise<void> {
+  async initializeSigningFlow(
+    request: UnifiedTransactionRequest
+  ): Promise<void> {
     this.currentRequest = request;
 
     try {
@@ -88,9 +100,10 @@ export class SimpleLedgerAuthController {
 
       // Start connection process
       await this.startLedgerFlow();
-
     } catch (error) {
-      this.handleError(error instanceof Error ? error : new Error(String(error)));
+      this.handleError(
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   }
 
@@ -105,7 +118,7 @@ export class SimpleLedgerAuthController {
       deviceConnected: false,
       error: undefined,
       signingProgress: undefined,
-      result: undefined
+      result: undefined,
     });
   }
 
@@ -117,13 +130,15 @@ export class SimpleLedgerAuthController {
 
     this.updateState({
       state: 'connecting',
-      error: undefined
+      error: undefined,
     });
 
     try {
       await simpleLedgerManager.retry();
     } catch (error) {
-      this.handleError(error instanceof Error ? error : new Error(String(error)));
+      this.handleError(
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   }
 
@@ -150,7 +165,7 @@ export class SimpleLedgerAuthController {
       },
       onProgress: (current, total, message) => {
         this.updateState({
-          signingProgress: { current, total, message }
+          signingProgress: { current, total, message },
         });
       },
       onError: (error) => {
@@ -166,7 +181,10 @@ export class SimpleLedgerAuthController {
 
       if (signingRequests.length === 1) {
         // Single transaction
-        const signResult = await simpleLedgerSigner.signTransaction(signingRequests[0], callbacks);
+        const signResult = await simpleLedgerSigner.signTransaction(
+          signingRequests[0],
+          callbacks
+        );
         result = {
           success: true,
           transactionId: signResult.txID,
@@ -174,21 +192,25 @@ export class SimpleLedgerAuthController {
         };
       } else {
         // Multiple transactions
-        const signResults = await simpleLedgerSigner.signTransactions(signingRequests, callbacks);
+        const signResults = await simpleLedgerSigner.signTransactions(
+          signingRequests,
+          callbacks
+        );
         result = {
           success: true,
-          transactionIds: signResults.map(r => r.txID),
-          signedTransactions: signResults.map(r => r.signedTransaction),
+          transactionIds: signResults.map((r) => r.txID),
+          signedTransactions: signResults.map((r) => r.signedTransaction),
         };
       }
 
       this.updateState({
         state: 'completed',
-        result
+        result,
       });
-
     } catch (error) {
-      this.handleError(error instanceof Error ? error : new Error(String(error)));
+      this.handleError(
+        error instanceof Error ? error : new Error(String(error))
+      );
     }
   }
 
@@ -209,13 +231,17 @@ export class SimpleLedgerAuthController {
         if (this.currentRequest.transferParams) {
           // For transfers, we'll need to build the transaction first
           // This is a simplified version - in practice, you'd use the full transaction service
-          const txn = await this.buildTransactionFromParams(this.currentRequest.transferParams);
+          const txn = await this.buildTransactionFromParams(
+            this.currentRequest.transferParams
+          );
 
-          requests.push(simpleLedgerSigner.constructor.createSigningRequest(
-            txn,
-            this.ledgerSigningInfo.derivationIndex,
-            this.ledgerSigningInfo.signerAddress
-          ));
+          requests.push(
+            simpleLedgerSigner.constructor.createSigningRequest(
+              txn,
+              this.ledgerSigningInfo.derivationIndex,
+              this.ledgerSigningInfo.signerAddress
+            )
+          );
         }
         break;
 
@@ -223,33 +249,42 @@ export class SimpleLedgerAuthController {
       case 'rekey_reverse':
         if (this.currentRequest.rekeyParams) {
           // Build rekey transaction
-          const rekeyTxn = await this.buildRekeyTransaction(this.currentRequest.rekeyParams);
+          const rekeyTxn = await this.buildRekeyTransaction(
+            this.currentRequest.rekeyParams
+          );
 
-          requests.push(simpleLedgerSigner.constructor.createSigningRequest(
-            rekeyTxn,
-            this.ledgerSigningInfo.derivationIndex,
-            this.ledgerSigningInfo.signerAddress
-          ));
+          requests.push(
+            simpleLedgerSigner.constructor.createSigningRequest(
+              rekeyTxn,
+              this.ledgerSigningInfo.derivationIndex,
+              this.ledgerSigningInfo.signerAddress
+            )
+          );
         }
         break;
 
       case 'walletconnect_batch':
         if (this.currentRequest.walletConnectParams) {
           // Handle WalletConnect batch transactions
-          for (const wtxn of this.currentRequest.walletConnectParams.transactions) {
+          for (const wtxn of this.currentRequest.walletConnectParams
+            .transactions) {
             const txnBytes = Buffer.from(wtxn.txn, 'base64');
 
-            requests.push(simpleLedgerSigner.constructor.createSigningRequest(
-              txnBytes,
-              this.ledgerSigningInfo.derivationIndex,
-              this.ledgerSigningInfo.signerAddress
-            ));
+            requests.push(
+              simpleLedgerSigner.constructor.createSigningRequest(
+                txnBytes,
+                this.ledgerSigningInfo.derivationIndex,
+                this.ledgerSigningInfo.signerAddress
+              )
+            );
           }
         }
         break;
 
       default:
-        throw new Error(`Unsupported transaction type: ${this.currentRequest.type}`);
+        throw new Error(
+          `Unsupported transaction type: ${this.currentRequest.type}`
+        );
     }
 
     return requests;
@@ -259,7 +294,8 @@ export class SimpleLedgerAuthController {
    * Handle Ledger manager state changes
    */
   private handleLedgerStateChange(stateChange: LedgerStateChange): void {
-    const deviceConnected = stateChange.state === 'ready' || stateChange.state === 'signing';
+    const deviceConnected =
+      stateChange.state === 'ready' || stateChange.state === 'signing';
     const deviceName = stateChange.device?.name;
 
     // Map ledger manager states to our simplified states
@@ -269,7 +305,7 @@ export class SimpleLedgerAuthController {
         this.updateState({
           state: 'connecting',
           deviceConnected: false,
-          deviceName
+          deviceName,
         });
         break;
 
@@ -278,7 +314,7 @@ export class SimpleLedgerAuthController {
           state: 'ready',
           deviceConnected: true,
           deviceName,
-          error: undefined
+          error: undefined,
         });
         break;
 
@@ -286,7 +322,7 @@ export class SimpleLedgerAuthController {
         this.updateState({
           state: 'signing',
           deviceConnected: true,
-          deviceName
+          deviceName,
         });
         break;
 
@@ -295,11 +331,13 @@ export class SimpleLedgerAuthController {
           state: 'error',
           deviceConnected: false,
           deviceName,
-          error: stateChange.error ? {
-            message: stateChange.error.message,
-            retryable: stateChange.error.retryable,
-            userAction: stateChange.error.userAction,
-          } : undefined
+          error: stateChange.error
+            ? {
+                message: stateChange.error.message,
+                retryable: stateChange.error.retryable,
+                userAction: stateChange.error.userAction,
+              }
+            : undefined,
         });
         break;
 
@@ -307,7 +345,7 @@ export class SimpleLedgerAuthController {
         this.updateState({
           state: 'idle',
           deviceConnected: false,
-          deviceName: undefined
+          deviceName: undefined,
         });
         break;
     }
@@ -323,7 +361,7 @@ export class SimpleLedgerAuthController {
         message: error.message,
         retryable: true, // Most Ledger errors are retryable
         userAction: this.getErrorUserAction(error.message),
-      }
+      },
     });
   }
 
@@ -358,7 +396,7 @@ export class SimpleLedgerAuthController {
       ...updates,
     };
 
-    this.stateListeners.forEach(listener => {
+    this.stateListeners.forEach((listener) => {
       try {
         listener(this.currentState);
       } catch (error) {
@@ -372,7 +410,9 @@ export class SimpleLedgerAuthController {
    */
   private async buildTransactionFromParams(params: any): Promise<any> {
     // This is a placeholder - in practice, you'd use the full TransactionService
-    throw new Error('Transaction building not implemented in simplified controller');
+    throw new Error(
+      'Transaction building not implemented in simplified controller'
+    );
   }
 
   /**
@@ -380,7 +420,9 @@ export class SimpleLedgerAuthController {
    */
   private async buildRekeyTransaction(params: any): Promise<any> {
     // This is a placeholder - in practice, you'd use the full TransactionService
-    throw new Error('Rekey transaction building not implemented in simplified controller');
+    throw new Error(
+      'Rekey transaction building not implemented in simplified controller'
+    );
   }
 
   /**
@@ -398,7 +440,9 @@ export class SimpleLedgerAuthController {
  */
 export function useSimpleLedgerAuth() {
   const [controller] = useState(() => new SimpleLedgerAuthController());
-  const [authState, setAuthState] = useState<SimpleLedgerAuthStateData>(controller.getState());
+  const [authState, setAuthState] = useState<SimpleLedgerAuthStateData>(
+    controller.getState()
+  );
 
   // Subscribe to controller state changes
   React.useEffect(() => {

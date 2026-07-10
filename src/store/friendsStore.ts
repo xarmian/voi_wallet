@@ -36,7 +36,10 @@ interface FriendsState {
   refreshFriendProfile: (envoiName: string) => Promise<void>;
   refreshAllProfiles: () => Promise<void>;
   searchFriends: (query: string) => Friend[];
-  updateLastInteraction: (envoiName: string, timestamp: number) => Promise<void>;
+  updateLastInteraction: (
+    envoiName: string,
+    timestamp: number
+  ) => Promise<void>;
   clearError: () => void;
 }
 
@@ -53,7 +56,9 @@ export const useFriendsStore = create<FriendsState>()(
       try {
         set({ isLoading: true, lastError: null });
 
-        const friendsJson = await AsyncStorage.getItem(STORAGE_KEYS.FRIENDS_LIST);
+        const friendsJson = await AsyncStorage.getItem(
+          STORAGE_KEYS.FRIENDS_LIST
+        );
         const friends = friendsJson ? JSON.parse(friendsJson) : [];
 
         set({ friends, isInitialized: true, isLoading: false });
@@ -72,13 +77,19 @@ export const useFriendsStore = create<FriendsState>()(
       const { friends } = get();
 
       // Validate not already a friend
-      if (friends.some(f => f.envoiName.toLowerCase() === envoiName.toLowerCase())) {
+      if (
+        friends.some(
+          (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        )
+      ) {
         throw new FriendAlreadyExistsError(envoiName);
       }
 
       // Check friend limit
       if (friends.length >= MAX_FRIENDS) {
-        throw new FriendStorageError(`Maximum number of friends (${MAX_FRIENDS}) reached`);
+        throw new FriendStorageError(
+          `Maximum number of friends (${MAX_FRIENDS}) reached`
+        );
       }
 
       set({ isLoading: true, lastError: null });
@@ -122,7 +133,8 @@ export const useFriendsStore = create<FriendsState>()(
 
         return newFriend;
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Failed to add friend';
+        const errorMessage =
+          error instanceof Error ? error.message : 'Failed to add friend';
         set({ lastError: errorMessage, isLoading: false });
         throw error;
       }
@@ -133,7 +145,7 @@ export const useFriendsStore = create<FriendsState>()(
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
-        f => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
       );
 
       if (friendIndex === -1) {
@@ -143,7 +155,9 @@ export const useFriendsStore = create<FriendsState>()(
       set({ isLoading: true, lastError: null });
 
       try {
-        const updatedFriends = friends.filter((_, index) => index !== friendIndex);
+        const updatedFriends = friends.filter(
+          (_, index) => index !== friendIndex
+        );
 
         await AsyncStorage.setItem(
           STORAGE_KEYS.FRIENDS_LIST,
@@ -152,7 +166,8 @@ export const useFriendsStore = create<FriendsState>()(
 
         set({ friends: updatedFriends, isLoading: false });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Failed to remove friend';
+        const errorMessage =
+          error instanceof Error ? error.message : 'Failed to remove friend';
         set({ lastError: errorMessage, isLoading: false });
         throw new FriendStorageError(errorMessage);
       }
@@ -161,9 +176,11 @@ export const useFriendsStore = create<FriendsState>()(
     // Get a specific friend
     getFriend: (envoiName: string) => {
       const { friends } = get();
-      return friends.find(
-        f => f.envoiName.toLowerCase() === envoiName.toLowerCase()
-      ) || null;
+      return (
+        friends.find(
+          (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        ) || null
+      );
     },
 
     // Toggle favorite status
@@ -171,7 +188,7 @@ export const useFriendsStore = create<FriendsState>()(
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
-        f => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
       );
 
       if (friendIndex === -1) {
@@ -192,7 +209,8 @@ export const useFriendsStore = create<FriendsState>()(
 
         set({ friends: updatedFriends });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Failed to toggle favorite';
+        const errorMessage =
+          error instanceof Error ? error.message : 'Failed to toggle favorite';
         set({ lastError: errorMessage });
         throw new FriendStorageError(errorMessage);
       }
@@ -203,7 +221,7 @@ export const useFriendsStore = create<FriendsState>()(
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
-        f => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
       );
 
       if (friendIndex === -1) {
@@ -224,7 +242,8 @@ export const useFriendsStore = create<FriendsState>()(
 
         set({ friends: updatedFriends });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Failed to update notes';
+        const errorMessage =
+          error instanceof Error ? error.message : 'Failed to update notes';
         set({ lastError: errorMessage });
         throw new FriendStorageError(errorMessage);
       }
@@ -235,7 +254,7 @@ export const useFriendsStore = create<FriendsState>()(
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
-        f => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
       );
 
       if (friendIndex === -1) {
@@ -332,10 +351,11 @@ export const useFriendsStore = create<FriendsState>()(
 
       const lowerQuery = query.toLowerCase();
 
-      return friends.filter(friend =>
-        friend.envoiName.toLowerCase().includes(lowerQuery) ||
-        friend.bio?.toLowerCase().includes(lowerQuery) ||
-        friend.notes?.toLowerCase().includes(lowerQuery)
+      return friends.filter(
+        (friend) =>
+          friend.envoiName.toLowerCase().includes(lowerQuery) ||
+          friend.bio?.toLowerCase().includes(lowerQuery) ||
+          friend.notes?.toLowerCase().includes(lowerQuery)
       );
     },
 
@@ -344,7 +364,7 @@ export const useFriendsStore = create<FriendsState>()(
       const { friends } = get();
 
       const friendIndex = friends.findIndex(
-        f => f.envoiName.toLowerCase() === envoiName.toLowerCase()
+        (f) => f.envoiName.toLowerCase() === envoiName.toLowerCase()
       );
 
       if (friendIndex === -1) {
@@ -396,17 +416,23 @@ export const useIsFriend = (addressOrName: string): boolean => {
   const friends = useFriendsStore((state) => state.friends);
 
   return friends.some(
-    f => f.address === addressOrName ||
-         f.envoiName.toLowerCase() === addressOrName.toLowerCase()
+    (f) =>
+      f.address === addressOrName ||
+      f.envoiName.toLowerCase() === addressOrName.toLowerCase()
   );
 };
 
 // Hook to get friend by address or Envoi name
-export const useFriendByAddressOrName = (addressOrName: string): Friend | null => {
+export const useFriendByAddressOrName = (
+  addressOrName: string
+): Friend | null => {
   const friends = useFriendsStore((state) => state.friends);
 
-  return friends.find(
-    f => f.address === addressOrName ||
-         f.envoiName.toLowerCase() === addressOrName.toLowerCase()
-  ) || null;
+  return (
+    friends.find(
+      (f) =>
+        f.address === addressOrName ||
+        f.envoiName.toLowerCase() === addressOrName.toLowerCase()
+    ) || null
+  );
 };

@@ -13,7 +13,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import {
+  useNavigation,
+  useRoute,
+  useFocusEffect,
+} from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
@@ -24,7 +28,9 @@ import { useFriendsStore } from '@/store/friendsStore';
 import { useActiveAccount, useAccounts } from '@/store/walletStore';
 import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
 import { Message, MESSAGE_FEE_MICRO } from '@/services/messaging/types';
-import MessagingService, { isMessagingKeyRegistered } from '@/services/messaging';
+import MessagingService, {
+  isMessagingKeyRegistered,
+} from '@/services/messaging';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -78,7 +84,8 @@ export default function ChatScreen() {
 
   // Get friend info
   const friend = friends.find((f) => f.address === friendAddress);
-  const displayName = friend?.envoiName || friendEnvoiName || formatAddress(friendAddress);
+  const displayName =
+    friend?.envoiName || friendEnvoiName || formatAddress(friendAddress);
 
   // Messages sorted newest first for inverted FlatList
   const messages = thread?.messages.slice().reverse() || [];
@@ -95,7 +102,9 @@ export default function ChatScreen() {
     // Rekeyed accounts can use messaging if the auth account is a Standard account we control
     if (activeAccount.type === AccountType.REKEYED) {
       const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(acc => acc.address === rekeyedAccount.authAddress);
+      const authAccount = allAccounts.find(
+        (acc) => acc.address === rekeyedAccount.authAddress
+      );
       if (authAccount?.type === AccountType.STANDARD) {
         return true;
       }
@@ -113,7 +122,9 @@ export default function ChatScreen() {
           // Check if sender (current user) has registered their messaging key
           setIsCheckingSender(true);
           try {
-            const senderRegistered = await checkKeyRegistration(activeAccount.address);
+            const senderRegistered = await checkKeyRegistration(
+              activeAccount.address
+            );
             setIsSenderRegistered(senderRegistered);
           } catch (error) {
             console.error('Failed to check sender registration:', error);
@@ -143,7 +154,15 @@ export default function ChatScreen() {
       };
 
       initializeChat();
-    }, [activeAccount?.address, canUseMessaging, friendAddress, isInitialized, fetchThreadMessages, markThreadAsRead, checkKeyRegistration])
+    }, [
+      activeAccount?.address,
+      canUseMessaging,
+      friendAddress,
+      isInitialized,
+      fetchThreadMessages,
+      markThreadAsRead,
+      checkKeyRegistration,
+    ])
   );
 
   // Mark as read when messages change
@@ -212,7 +231,9 @@ export default function ChatScreen() {
           // Only show alert for first-time sends, not retries
           Alert.alert(
             'Message Failed',
-            error instanceof Error ? error.message : 'Failed to send message. Tap the retry button to try again.'
+            error instanceof Error
+              ? error.message
+              : 'Failed to send message. Tap the retry button to try again.'
           );
         }
       } finally {
@@ -221,7 +242,12 @@ export default function ChatScreen() {
         }
       }
     },
-    [activeAccount?.address, friendAddress, addPendingMessage, updateMessageStatus]
+    [
+      activeAccount?.address,
+      friendAddress,
+      addPendingMessage,
+      updateMessageStatus,
+    ]
   );
 
   // Handle sending a new message
@@ -242,7 +268,10 @@ export default function ChatScreen() {
       setIsSenderRegistered(true);
     } catch (error) {
       console.error('Failed to register messaging key:', error);
-      Alert.alert('Registration Failed', 'Failed to enable messaging. Please try again.');
+      Alert.alert(
+        'Registration Failed',
+        'Failed to enable messaging. Please try again.'
+      );
     } finally {
       setIsRegistering(false);
     }
@@ -281,7 +310,14 @@ export default function ChatScreen() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [activeAccount?.address, isLoadingMore, hasMoreMessages, thread?.messages, fetchOlderMessages, friendAddress]);
+  }, [
+    activeAccount?.address,
+    isLoadingMore,
+    hasMoreMessages,
+    thread?.messages,
+    fetchOlderMessages,
+    friendAddress,
+  ]);
 
   // Render message item
   const renderMessage = useCallback(
@@ -341,7 +377,11 @@ export default function ChatScreen() {
       {!isCheckingSender && !isSenderRegistered && canUseMessaging && (
         <View style={styles.registrationBanner}>
           <View style={styles.registrationContent}>
-            <Ionicons name="key-outline" size={20} color={theme.colors.primary} />
+            <Ionicons
+              name="key-outline"
+              size={20}
+              color={theme.colors.primary}
+            />
             <View style={styles.registrationTextContainer}>
               <Text style={styles.registrationTitle}>Enable Messaging</Text>
               <Text style={styles.registrationText}>
@@ -444,7 +484,12 @@ export default function ChatScreen() {
           tint={theme.mode === 'dark' ? 'dark' : 'light'}
           style={StyleSheet.absoluteFill}
         />
-        <View style={[styles.backgroundOverlay, { backgroundColor: theme.colors.background + 'CC' }]} />
+        <View
+          style={[
+            styles.backgroundOverlay,
+            { backgroundColor: theme.colors.background + 'CC' },
+          ]}
+        />
         {chatContent}
       </ImageBackground>
     );
@@ -452,7 +497,12 @@ export default function ChatScreen() {
 
   // Otherwise, use plain background
   return (
-    <View style={[styles.plainBackground, { backgroundColor: theme.colors.background }]}>
+    <View
+      style={[
+        styles.plainBackground,
+        { backgroundColor: theme.colors.background },
+      ]}
+    >
       {chatContent}
     </View>
   );

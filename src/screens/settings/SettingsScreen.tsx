@@ -192,7 +192,13 @@ function SettingsRow({
 }
 
 // Section header component
-function SectionHeader({ title, icon }: { title: string; icon: keyof typeof Ionicons.glyphMap }) {
+function SectionHeader({
+  title,
+  icon,
+}: {
+  title: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
   const { theme } = useTheme();
   const themeColors = useThemeColors();
 
@@ -279,7 +285,10 @@ export default function SettingsScreen() {
       { label: 'Spanish (Spain)', value: 'es-ES' },
       { label: 'Japanese (Japan)', value: 'ja-JP' },
     ];
-    return options.find((option) => option.value === currentLocaleValue)?.label ?? 'System Default';
+    return (
+      options.find((option) => option.value === currentLocaleValue)?.label ??
+      'System Default'
+    );
   })();
 
   const getAccountDisplayName = (account: AccountMetadata) =>
@@ -764,7 +773,11 @@ export default function SettingsScreen() {
           </GlassCard>
 
           {/* Danger Zone */}
-          <GlassCard variant="light" style={styles.dangerSection} padding="none">
+          <GlassCard
+            variant="light"
+            style={styles.dangerSection}
+            padding="none"
+          >
             <SettingsRow
               icon="trash-outline"
               label={
@@ -779,83 +792,83 @@ export default function SettingsScreen() {
           </GlassCard>
         </ScrollView>
 
-      <LocaleSwitcher
-        visible={isLocaleModalVisible}
-        onClose={() => setIsLocaleModalVisible(false)}
-        currentLocale={currentLocaleValue}
-        onLocaleSelect={handleLocaleSelect}
-        theme={theme}
-      />
-
-      <ThemeSwitcher
-        visible={isThemeModalVisible}
-        onClose={() => setIsThemeModalVisible(false)}
-        currentTheme={themeMode}
-        onThemeSelect={handleThemeSelect}
-        onNFTThemeSelect={handleOpenNFTSelector}
-        theme={theme}
-      />
-
-      <NFTThemeSelector
-        visible={isNFTThemeModalVisible}
-        onClose={handleNFTThemeModalClose}
-        theme={theme}
-      />
-
-      <AccountListModal
-        isVisible={isAccountModalVisible}
-        onClose={handleAccountModalClose}
-        onAddAccount={handleAddAccount}
-        onEditAccount={handleRenameAccountFromList}
-      />
-
-      {/* Add Account Modal */}
-      <AddAccountModal
-        isVisible={isAddAccountModalVisible}
-        onClose={() => setIsAddAccountModalVisible(false)}
-        onCreateAccount={() => {
-          console.log('SettingsScreen: onCreateAccount called');
-          setIsAddAccountModalVisible(false);
-          console.log('SettingsScreen: navigating to CreateAccount');
-          navigation.navigate('CreateAccount');
-          console.log('SettingsScreen: navigation.navigate called');
-        }}
-        onImportAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('MnemonicImport');
-        }}
-        onImportLedgerAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.getParent()?.navigate('LedgerAccountImport');
-        }}
-        onImportQRAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.getParent()?.navigate('QRAccountImport');
-        }}
-        onAddWatchAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('AddWatchAccount');
-        }}
-      />
-
-      <RenameAccountModal
-        visible={!!accountToRename}
-        initialName={accountToRename?.label ?? ''}
-        accountDisplayName={
-          accountToRename ? getAccountDisplayName(accountToRename) : undefined
-        }
-        onCancel={handleRenameModalClose}
-        onConfirm={handleConfirmAccountRename}
-        isSubmitting={isRenamingAccount}
-      />
-
-      {isNetworkSwitcherVisible && (
-        <SafeNetworkSwitcher
-          visible={isNetworkSwitcherVisible}
-          onClose={handleNetworkSwitcherClose}
+        <LocaleSwitcher
+          visible={isLocaleModalVisible}
+          onClose={() => setIsLocaleModalVisible(false)}
+          currentLocale={currentLocaleValue}
+          onLocaleSelect={handleLocaleSelect}
           theme={theme}
         />
-      )}
+
+        <ThemeSwitcher
+          visible={isThemeModalVisible}
+          onClose={() => setIsThemeModalVisible(false)}
+          currentTheme={themeMode}
+          onThemeSelect={handleThemeSelect}
+          onNFTThemeSelect={handleOpenNFTSelector}
+          theme={theme}
+        />
+
+        <NFTThemeSelector
+          visible={isNFTThemeModalVisible}
+          onClose={handleNFTThemeModalClose}
+          theme={theme}
+        />
+
+        <AccountListModal
+          isVisible={isAccountModalVisible}
+          onClose={handleAccountModalClose}
+          onAddAccount={handleAddAccount}
+          onEditAccount={handleRenameAccountFromList}
+        />
+
+        {/* Add Account Modal */}
+        <AddAccountModal
+          isVisible={isAddAccountModalVisible}
+          onClose={() => setIsAddAccountModalVisible(false)}
+          onCreateAccount={() => {
+            console.log('SettingsScreen: onCreateAccount called');
+            setIsAddAccountModalVisible(false);
+            console.log('SettingsScreen: navigating to CreateAccount');
+            navigation.navigate('CreateAccount');
+            console.log('SettingsScreen: navigation.navigate called');
+          }}
+          onImportAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('MnemonicImport');
+          }}
+          onImportLedgerAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.getParent()?.navigate('LedgerAccountImport');
+          }}
+          onImportQRAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.getParent()?.navigate('QRAccountImport');
+          }}
+          onAddWatchAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('AddWatchAccount');
+          }}
+        />
+
+        <RenameAccountModal
+          visible={!!accountToRename}
+          initialName={accountToRename?.label ?? ''}
+          accountDisplayName={
+            accountToRename ? getAccountDisplayName(accountToRename) : undefined
+          }
+          onCancel={handleRenameModalClose}
+          onConfirm={handleConfirmAccountRename}
+          isSubmitting={isRenamingAccount}
+        />
+
+        {isNetworkSwitcherVisible && (
+          <SafeNetworkSwitcher
+            visible={isNetworkSwitcherVisible}
+            onClose={handleNetworkSwitcherClose}
+            theme={theme}
+          />
+        )}
       </SafeAreaView>
     </NFTBackground>
   );

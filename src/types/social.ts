@@ -46,19 +46,28 @@ export class FriendError extends Error {
 
 export class FriendAlreadyExistsError extends FriendError {
   constructor(envoiName: string) {
-    super(`Friend with Envoi name "${envoiName}" already exists`, 'FRIEND_ALREADY_EXISTS');
+    super(
+      `Friend with Envoi name "${envoiName}" already exists`,
+      'FRIEND_ALREADY_EXISTS'
+    );
   }
 }
 
 export class FriendNotFoundError extends FriendError {
   constructor(envoiName: string) {
-    super(`Friend with Envoi name "${envoiName}" not found`, 'FRIEND_NOT_FOUND');
+    super(
+      `Friend with Envoi name "${envoiName}" not found`,
+      'FRIEND_NOT_FOUND'
+    );
   }
 }
 
 export class InvalidEnvoiNameError extends FriendError {
   constructor(envoiName: string) {
-    super(`Invalid or non-existent Envoi name: "${envoiName}"`, 'INVALID_ENVOI_NAME');
+    super(
+      `Invalid or non-existent Envoi name: "${envoiName}"`,
+      'INVALID_ENVOI_NAME'
+    );
   }
 }
 

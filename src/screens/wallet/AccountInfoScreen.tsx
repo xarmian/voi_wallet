@@ -38,7 +38,10 @@ import { BlurredContainer } from '@/components/common/BlurredContainer';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 
-type AccountInfoScreenRouteProp = RouteProp<WalletStackParamList, 'AccountInfo'>;
+type AccountInfoScreenRouteProp = RouteProp<
+  WalletStackParamList,
+  'AccountInfo'
+>;
 
 interface AssetDistribution {
   name: string;
@@ -78,7 +81,8 @@ export default function AccountInfoScreen() {
   // Use route param address if provided, otherwise use active account
   const routeParams = route.params as { address?: string } | undefined;
   const displayAddress = routeParams?.address || activeAccount?.address;
-  const isOwnAccount = !routeParams?.address || routeParams.address === activeAccount?.address;
+  const isOwnAccount =
+    !routeParams?.address || routeParams.address === activeAccount?.address;
   const {
     balance: multiNetworkBalance,
     isLoading: isMultiNetworkBalanceLoading,
@@ -92,7 +96,8 @@ export default function AccountInfoScreen() {
   } = useAccountEnvoiName(activeAccount?.id || '');
 
   const [otherAccountEnvoiInfo, setOtherAccountEnvoiInfo] = useState<any>(null);
-  const [isLoadingOtherAccountEnvoi, setIsLoadingOtherAccountEnvoi] = useState(false);
+  const [isLoadingOtherAccountEnvoi, setIsLoadingOtherAccountEnvoi] =
+    useState(false);
 
   // Load Envoi info for other accounts
   useEffect(() => {
@@ -124,7 +129,9 @@ export default function AccountInfoScreen() {
   }, [isOwnAccount, displayAddress]);
 
   const displayEnvoiInfo = isOwnAccount ? envoiNameInfo : otherAccountEnvoiInfo;
-  const displayEnvoiLoading = isOwnAccount ? isEnvoiLoading : isLoadingOtherAccountEnvoi;
+  const displayEnvoiLoading = isOwnAccount
+    ? isEnvoiLoading
+    : isLoadingOtherAccountEnvoi;
 
   const loadMultiNetworkBalance = useWalletStore(
     (state) => state.loadMultiNetworkBalance
@@ -148,7 +155,9 @@ export default function AccountInfoScreen() {
       const VOI_GENESIS_DATE = new Date('2024-03-01'); // Approximate Voi network start
 
       const secondsSinceGenesis = createdRound * SECONDS_PER_ROUND;
-      const createdDate = new Date(VOI_GENESIS_DATE.getTime() + (secondsSinceGenesis * 1000));
+      const createdDate = new Date(
+        VOI_GENESIS_DATE.getTime() + secondsSinceGenesis * 1000
+      );
       const now = new Date();
       const diffMs = now.getTime() - createdDate.getTime();
       const daysSinceCreation = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -158,18 +167,28 @@ export default function AccountInfoScreen() {
       } else if (daysSinceCreation < 365) {
         const months = Math.floor(daysSinceCreation / 30);
         const remainingDays = daysSinceCreation % 30;
-        setAccountAge(remainingDays > 0 ? `${months} months ${remainingDays} days` : `${months} months`);
+        setAccountAge(
+          remainingDays > 0
+            ? `${months} months ${remainingDays} days`
+            : `${months} months`
+        );
       } else {
         const years = Math.floor(daysSinceCreation / 365);
         const remainingDays = daysSinceCreation % 365;
         if (remainingDays < 30) {
-          setAccountAge(remainingDays > 0 ? `${years} year${years > 1 ? 's' : ''} ${remainingDays} days` : `${years} year${years > 1 ? 's' : ''}`);
+          setAccountAge(
+            remainingDays > 0
+              ? `${years} year${years > 1 ? 's' : ''} ${remainingDays} days`
+              : `${years} year${years > 1 ? 's' : ''}`
+          );
         } else {
           const months = Math.floor(remainingDays / 30);
           const days = remainingDays % 30;
-          setAccountAge(days > 0
-            ? `${years} year${years > 1 ? 's' : ''} ${months} month${months > 1 ? 's' : ''} ${days} days`
-            : `${years} year${years > 1 ? 's' : ''} ${months} month${months > 1 ? 's' : ''}`);
+          setAccountAge(
+            days > 0
+              ? `${years} year${years > 1 ? 's' : ''} ${months} month${months > 1 ? 's' : ''} ${days} days`
+              : `${years} year${years > 1 ? 's' : ''} ${months} month${months > 1 ? 's' : ''}`
+          );
         }
       }
     } catch (error) {
@@ -191,12 +210,16 @@ export default function AccountInfoScreen() {
         setVoiAccountInfo(info);
       } catch (error) {
         console.error('Failed to load Voi account info:', error);
-        if (error instanceof Error && error.message && error.message.includes('account does not exist')) {
+        if (
+          error instanceof Error &&
+          error.message &&
+          error.message.includes('account does not exist')
+        ) {
           setVoiAccountInfo({
             address: displayAddress,
             amount: 0,
             status: 'Offline',
-            round: null
+            round: null,
           });
         }
       }
@@ -204,17 +227,23 @@ export default function AccountInfoScreen() {
 
     const loadAlgo = async () => {
       try {
-        const algoService = NetworkService.getInstance(NetworkId.ALGORAND_MAINNET);
+        const algoService = NetworkService.getInstance(
+          NetworkId.ALGORAND_MAINNET
+        );
         const info = await algoService.getAccountInfo(displayAddress);
         setAlgoAccountInfo(info);
       } catch (error) {
         console.error('Failed to load Algorand account info:', error);
-        if (error instanceof Error && error.message && error.message.includes('account does not exist')) {
+        if (
+          error instanceof Error &&
+          error.message &&
+          error.message.includes('account does not exist')
+        ) {
           setAlgoAccountInfo({
             address: displayAddress,
             amount: 0,
             status: 'Offline',
-            round: null
+            round: null,
           });
         }
       }
@@ -248,7 +277,16 @@ export default function AccountInfoScreen() {
     if (!multiNetworkBalance) return [];
 
     const data: AssetDistribution[] = [];
-    const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'];
+    const colors = [
+      '#FF6384',
+      '#36A2EB',
+      '#FFCE56',
+      '#4BC0C0',
+      '#9966FF',
+      '#FF9F40',
+      '#FF6384',
+      '#C9CBCF',
+    ];
     let colorIndex = 0;
 
     // Calculate total portfolio value first
@@ -256,7 +294,8 @@ export default function AccountInfoScreen() {
     if (multiNetworkBalance.assets) {
       multiNetworkBalance.assets.forEach((asset) => {
         const assetValue = calculateAssetValue(asset);
-        if (assetValue >= 0.01) { // Filter dust
+        if (assetValue >= 0.01) {
+          // Filter dust
           totalValue += assetValue;
         }
       });
@@ -267,13 +306,19 @@ export default function AccountInfoScreen() {
       multiNetworkBalance.assets.forEach((asset) => {
         const assetValue = calculateAssetValue(asset);
 
-        if (assetValue >= 0.01) { // Filter dust
-          const networkBadge = !asset.isMapped && asset.sourceBalances.length === 1
-            ? asset.sourceBalances[0].networkId === NetworkId.VOI_MAINNET ? 'VOI' : 'ALGO'
-            : undefined;
+        if (assetValue >= 0.01) {
+          // Filter dust
+          const networkBadge =
+            !asset.isMapped && asset.sourceBalances.length === 1
+              ? asset.sourceBalances[0].networkId === NetworkId.VOI_MAINNET
+                ? 'VOI'
+                : 'ALGO'
+              : undefined;
 
-          const percentage = totalValue > 0 ? (assetValue / totalValue) * 100 : 0;
-          const assetSymbol = asset.symbol || asset.name || `Asset ${asset.assetId}`;
+          const percentage =
+            totalValue > 0 ? (assetValue / totalValue) * 100 : 0;
+          const assetSymbol =
+            asset.symbol || asset.name || `Asset ${asset.assetId}`;
           const displayName = `${assetSymbol} (${percentage.toFixed(1)}%)`;
 
           data.push({
@@ -317,21 +362,28 @@ export default function AccountInfoScreen() {
     const stats: NetworkStats[] = [];
 
     // Voi Network
-    const voiAmount = multiNetworkBalance.perNetworkAmounts[NetworkId.VOI_MAINNET];
-    const voiPrice = multiNetworkBalance.perNetworkPrices[NetworkId.VOI_MAINNET];
+    const voiAmount =
+      multiNetworkBalance.perNetworkAmounts[NetworkId.VOI_MAINNET];
+    const voiPrice =
+      multiNetworkBalance.perNetworkPrices[NetworkId.VOI_MAINNET];
     if (voiAmount !== undefined) {
       // Calculate value ONLY from balances on this specific network
       let voiValue = 0;
       let voiAssetCount = 0;
 
       multiNetworkBalance.assets.forEach((asset) => {
-        const voiSource = asset.sourceBalances.find((s) => s.networkId === NetworkId.VOI_MAINNET);
+        const voiSource = asset.sourceBalances.find(
+          (s) => s.networkId === NetworkId.VOI_MAINNET
+        );
         if (voiSource) {
           voiAssetCount++;
           const sourceAsset = voiSource.balance;
           if (sourceAsset.usdValue && sourceAsset.amount) {
             const unitPrice = parseFloat(sourceAsset.usdValue);
-            const amount = typeof sourceAsset.amount === 'bigint' ? Number(sourceAsset.amount) : sourceAsset.amount;
+            const amount =
+              typeof sourceAsset.amount === 'bigint'
+                ? Number(sourceAsset.amount)
+                : sourceAsset.amount;
             const normalizedBalance = amount / 10 ** sourceAsset.decimals;
             voiValue += normalizedBalance * unitPrice;
           }
@@ -348,21 +400,28 @@ export default function AccountInfoScreen() {
     }
 
     // Algorand Network
-    const algoAmount = multiNetworkBalance.perNetworkAmounts[NetworkId.ALGORAND_MAINNET];
-    const algoPrice = multiNetworkBalance.perNetworkPrices[NetworkId.ALGORAND_MAINNET];
+    const algoAmount =
+      multiNetworkBalance.perNetworkAmounts[NetworkId.ALGORAND_MAINNET];
+    const algoPrice =
+      multiNetworkBalance.perNetworkPrices[NetworkId.ALGORAND_MAINNET];
     if (algoAmount !== undefined) {
       // Calculate value ONLY from balances on this specific network
       let algoValue = 0;
       let algoAssetCount = 0;
 
       multiNetworkBalance.assets.forEach((asset) => {
-        const algoSource = asset.sourceBalances.find((s) => s.networkId === NetworkId.ALGORAND_MAINNET);
+        const algoSource = asset.sourceBalances.find(
+          (s) => s.networkId === NetworkId.ALGORAND_MAINNET
+        );
         if (algoSource) {
           algoAssetCount++;
           const sourceAsset = algoSource.balance;
           if (sourceAsset.usdValue && sourceAsset.amount) {
             const unitPrice = parseFloat(sourceAsset.usdValue);
-            const amount = typeof sourceAsset.amount === 'bigint' ? Number(sourceAsset.amount) : sourceAsset.amount;
+            const amount =
+              typeof sourceAsset.amount === 'bigint'
+                ? Number(sourceAsset.amount)
+                : sourceAsset.amount;
             const normalizedBalance = amount / 10 ** sourceAsset.decimals;
             algoValue += normalizedBalance * unitPrice;
           }
@@ -399,7 +458,9 @@ export default function AccountInfoScreen() {
 
   const getConsensusStatus = (accountInfo: any) => {
     if (!accountInfo) return 'Unknown';
-    return accountInfo.status === 'Online' ? 'Online (Participating)' : 'Offline';
+    return accountInfo.status === 'Online'
+      ? 'Online (Participating)'
+      : 'Offline';
   };
 
   const getKeyExpirationInfo = (accountInfo: any) => {
@@ -409,7 +470,8 @@ export default function AccountInfoScreen() {
       return null;
     }
 
-    const lastValidRound = participation.voteLastValid || participation['vote-last-valid'];
+    const lastValidRound =
+      participation.voteLastValid || participation['vote-last-valid'];
     if (!lastValidRound) {
       return null;
     }
@@ -424,7 +486,9 @@ export default function AccountInfoScreen() {
 
     // Calculate expiration date from now
     const now = new Date();
-    const expirationDate = new Date(now.getTime() + (secondsUntilExpiration * 1000));
+    const expirationDate = new Date(
+      now.getTime() + secondsUntilExpiration * 1000
+    );
 
     const result = {
       round: lastValidRoundNumber,
@@ -461,12 +525,22 @@ export default function AccountInfoScreen() {
         loadMultiNetworkBalance(activeAccount.id);
       }
     }
-  }, [displayAddress, isOwnAccount, activeAccount, loadAccountInfo, calculateAndSetAccountAge, reloadEnvoiName, loadMultiNetworkBalance]);
+  }, [
+    displayAddress,
+    isOwnAccount,
+    activeAccount,
+    loadAccountInfo,
+    calculateAndSetAccountAge,
+    reloadEnvoiName,
+    loadMultiNetworkBalance,
+  ]);
 
   const assetDistribution = generateAssetDistribution();
   const totalValue = getTotalUsdValue();
   const networkStats = getNetworkBreakdown();
-  const assetCount = multiNetworkBalance?.assets ? multiNetworkBalance.assets.length : 0;
+  const assetCount = multiNetworkBalance?.assets
+    ? multiNetworkBalance.assets.length
+    : 0;
   const networksActive = multiNetworkBalance?.sourceNetworks.length || 0;
   const totalMinBalance = multiNetworkBalance?.minBalance || 0n;
 
@@ -504,7 +578,11 @@ export default function AccountInfoScreen() {
                 style={styles.searchButton}
                 onPress={navigateToMyAccount}
               >
-                <Ionicons name="person" size={24} color={theme.colors.primary} />
+                <Ionicons
+                  name="person"
+                  size={24}
+                  color={theme.colors.primary}
+                />
               </TouchableOpacity>
             ) : undefined
           }
@@ -514,7 +592,11 @@ export default function AccountInfoScreen() {
           style={styles.scrollView}
           contentContainerStyle={styles.content}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.colors.primary}
+            />
           }
         >
           {/* Account Profile */}
@@ -523,13 +605,16 @@ export default function AccountInfoScreen() {
             name={displayEnvoiInfo?.name}
             envoiProfile={displayEnvoiInfo}
             isLoading={displayEnvoiLoading}
-            title={isOwnAccount ? "Account Information" : "User Profile"}
+            title={isOwnAccount ? 'Account Information' : 'User Profile'}
             showVerifiedBadge={false}
           />
 
           {/* Account Stats */}
           <View style={styles.statsContainer}>
-            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.statCard}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.statLabel}>Total Portfolio</Text>
               {isMultiNetworkBalanceLoading ? (
                 <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -538,17 +623,26 @@ export default function AccountInfoScreen() {
               )}
             </BlurredContainer>
 
-            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.statCard}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.statLabel}>Total Assets</Text>
               <Text style={styles.statValue}>{assetCount}</Text>
             </BlurredContainer>
 
-            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.statCard}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.statLabel}>Networks Active</Text>
               <Text style={styles.statValue}>{networksActive}</Text>
             </BlurredContainer>
 
-            <BlurredContainer style={styles.statCard} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.statCard}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.statLabel}>Account Age</Text>
               <Text style={styles.statValue}>{accountAge}</Text>
             </BlurredContainer>
@@ -556,32 +650,44 @@ export default function AccountInfoScreen() {
 
           {/* Network Breakdown */}
           {networkStats.length > 0 && (
-            <BlurredContainer style={styles.card} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.card}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.cardTitle}>Network Breakdown</Text>
               {networkStats.map((network) => (
                 <View key={network.networkId} style={styles.networkRow}>
                   <View style={styles.networkHeader}>
                     <View style={styles.networkBadge}>
-                      <Text style={styles.networkBadgeText}>{network.nativeSymbol}</Text>
+                      <Text style={styles.networkBadgeText}>
+                        {network.nativeSymbol}
+                      </Text>
                     </View>
                     <Text style={styles.networkName}>
-                      {network.networkId === NetworkId.VOI_MAINNET ? 'Voi Network' : 'Algorand Network'}
+                      {network.networkId === NetworkId.VOI_MAINNET
+                        ? 'Voi Network'
+                        : 'Algorand Network'}
                     </Text>
                   </View>
                   <View style={styles.networkStats}>
                     <View style={styles.networkStatItem}>
                       <Text style={styles.networkStatLabel}>Balance</Text>
                       <Text style={styles.networkStatValue}>
-                        {(Number(network.nativeBalance) / 1_000_000).toFixed(2)} {network.nativeSymbol}
+                        {(Number(network.nativeBalance) / 1_000_000).toFixed(2)}{' '}
+                        {network.nativeSymbol}
                       </Text>
                     </View>
                     <View style={styles.networkStatItem}>
                       <Text style={styles.networkStatLabel}>Assets</Text>
-                      <Text style={styles.networkStatValue}>{network.assetCount}</Text>
+                      <Text style={styles.networkStatValue}>
+                        {network.assetCount}
+                      </Text>
                     </View>
                     <View style={styles.networkStatItem}>
                       <Text style={styles.networkStatLabel}>Value</Text>
-                      <Text style={styles.networkStatValue}>{formatCurrency(network.usdValue)}</Text>
+                      <Text style={styles.networkStatValue}>
+                        {formatCurrency(network.usdValue)}
+                      </Text>
                     </View>
                   </View>
                 </View>
@@ -591,7 +697,10 @@ export default function AccountInfoScreen() {
 
           {/* Consensus Participation Status - Network Specific */}
           {(voiAccountInfo || algoAccountInfo) && (
-            <BlurredContainer style={styles.card} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.card}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.cardTitle}>Consensus Participation</Text>
 
               {/* Voi Network Participation */}
@@ -608,20 +717,32 @@ export default function AccountInfoScreen() {
                   </Text>
                   {(() => {
                     const keyExpiration = getKeyExpirationInfo(voiAccountInfo);
-                    return keyExpiration && (
-                      <View style={styles.participationDetails}>
-                        <Text style={styles.participationText}>
-                          Key Expires: Round {keyExpiration.round}
-                        </Text>
-                        <Text style={styles.participationText}>
-                          Expiration: {keyExpiration.date} at {keyExpiration.time}
-                        </Text>
-                        {keyExpiration.secondsUntilExpiration > 0 && (
+                    return (
+                      keyExpiration && (
+                        <View style={styles.participationDetails}>
                           <Text style={styles.participationText}>
-                            Time Remaining: {Math.floor(keyExpiration.secondsUntilExpiration / 86400)} days, {Math.floor((keyExpiration.secondsUntilExpiration % 86400) / 3600)} hours
+                            Key Expires: Round {keyExpiration.round}
                           </Text>
-                        )}
-                      </View>
+                          <Text style={styles.participationText}>
+                            Expiration: {keyExpiration.date} at{' '}
+                            {keyExpiration.time}
+                          </Text>
+                          {keyExpiration.secondsUntilExpiration > 0 && (
+                            <Text style={styles.participationText}>
+                              Time Remaining:{' '}
+                              {Math.floor(
+                                keyExpiration.secondsUntilExpiration / 86400
+                              )}{' '}
+                              days,{' '}
+                              {Math.floor(
+                                (keyExpiration.secondsUntilExpiration % 86400) /
+                                  3600
+                              )}{' '}
+                              hours
+                            </Text>
+                          )}
+                        </View>
+                      )
                     );
                   })()}
                 </View>
@@ -641,20 +762,32 @@ export default function AccountInfoScreen() {
                   </Text>
                   {(() => {
                     const keyExpiration = getKeyExpirationInfo(algoAccountInfo);
-                    return keyExpiration && (
-                      <View style={styles.participationDetails}>
-                        <Text style={styles.participationText}>
-                          Key Expires: Round {keyExpiration.round}
-                        </Text>
-                        <Text style={styles.participationText}>
-                          Expiration: {keyExpiration.date} at {keyExpiration.time}
-                        </Text>
-                        {keyExpiration.secondsUntilExpiration > 0 && (
+                    return (
+                      keyExpiration && (
+                        <View style={styles.participationDetails}>
                           <Text style={styles.participationText}>
-                            Time Remaining: {Math.floor(keyExpiration.secondsUntilExpiration / 86400)} days, {Math.floor((keyExpiration.secondsUntilExpiration % 86400) / 3600)} hours
+                            Key Expires: Round {keyExpiration.round}
                           </Text>
-                        )}
-                      </View>
+                          <Text style={styles.participationText}>
+                            Expiration: {keyExpiration.date} at{' '}
+                            {keyExpiration.time}
+                          </Text>
+                          {keyExpiration.secondsUntilExpiration > 0 && (
+                            <Text style={styles.participationText}>
+                              Time Remaining:{' '}
+                              {Math.floor(
+                                keyExpiration.secondsUntilExpiration / 86400
+                              )}{' '}
+                              days,{' '}
+                              {Math.floor(
+                                (keyExpiration.secondsUntilExpiration % 86400) /
+                                  3600
+                              )}{' '}
+                              hours
+                            </Text>
+                          )}
+                        </View>
+                      )
                     );
                   })()}
                 </View>
@@ -662,10 +795,12 @@ export default function AccountInfoScreen() {
             </BlurredContainer>
           )}
 
-
           {/* Asset Distribution Chart */}
           {assetDistribution.length > 0 && (
-            <BlurredContainer style={styles.card} borderRadius={theme.borderRadius.lg}>
+            <BlurredContainer
+              style={styles.card}
+              borderRadius={theme.borderRadius.lg}
+            >
               <Text style={styles.cardTitle}>Asset Distribution</Text>
               <View style={styles.pieChartWrapper}>
                 <PieChart
@@ -692,7 +827,12 @@ export default function AccountInfoScreen() {
                 <View style={styles.legendContainer}>
                   {assetDistribution.map((asset, index) => (
                     <View key={index} style={styles.legendItem}>
-                      <View style={[styles.legendColor, { backgroundColor: asset.color }]} />
+                      <View
+                        style={[
+                          styles.legendColor,
+                          { backgroundColor: asset.color },
+                        ]}
+                      />
                       <Text style={styles.legendText} numberOfLines={2}>
                         {asset.name}
                       </Text>

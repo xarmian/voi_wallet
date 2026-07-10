@@ -136,18 +136,26 @@ export default function TransactionResultScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Status Icon and Message */}
-          <GlassCard variant="medium" style={styles.statusContainer} borderGlow glowColor={statusColor}>
-            <View style={[styles.statusIconContainer, { backgroundColor: `${statusColor}20` }]}>
-              <Ionicons
-                name={getStatusIcon()}
-                size={48}
-                color={statusColor}
-              />
+          <GlassCard
+            variant="medium"
+            style={styles.statusContainer}
+            borderGlow
+            glowColor={statusColor}
+          >
+            <View
+              style={[
+                styles.statusIconContainer,
+                { backgroundColor: `${statusColor}20` },
+              ]}
+            >
+              <Ionicons name={getStatusIcon()} size={48} color={statusColor} />
             </View>
             <Text style={[styles.statusTitle, { color: theme.colors.text }]}>
               {getStatusTitle()}
             </Text>
-            <Text style={[styles.statusMessage, { color: theme.colors.textMuted }]}>
+            <Text
+              style={[styles.statusMessage, { color: theme.colors.textMuted }]}
+            >
               {getStatusMessage()}
             </Text>
           </GlassCard>
@@ -159,14 +167,22 @@ export default function TransactionResultScreen() {
             </Text>
 
             <View style={styles.detailRow}>
-              <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>Amount</Text>
+              <Text
+                style={[styles.detailLabel, { color: theme.colors.textMuted }]}
+              >
+                Amount
+              </Text>
               <Text style={[styles.detailValue, { color: theme.colors.text }]}>
                 {params.amount} {params.assetSymbol}
               </Text>
             </View>
 
             <View style={styles.detailRow}>
-              <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>To</Text>
+              <Text
+                style={[styles.detailLabel, { color: theme.colors.textMuted }]}
+              >
+                To
+              </Text>
               <Text style={[styles.detailValue, { color: theme.colors.text }]}>
                 {params.recipientName || formatAddress(params.recipient)}
               </Text>
@@ -174,8 +190,17 @@ export default function TransactionResultScreen() {
 
             {params.fee && (
               <View style={styles.detailRow}>
-                <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>Fee</Text>
-                <Text style={[styles.detailValue, { color: theme.colors.text }]}>
+                <Text
+                  style={[
+                    styles.detailLabel,
+                    { color: theme.colors.textMuted },
+                  ]}
+                >
+                  Fee
+                </Text>
+                <Text
+                  style={[styles.detailValue, { color: theme.colors.text }]}
+                >
                   {formatVoiBalance(params.fee)} VOI
                 </Text>
               </View>
@@ -183,16 +208,32 @@ export default function TransactionResultScreen() {
 
             {params.transactionId && (
               <View style={styles.detailRow}>
-                <Text style={[styles.detailLabel, { color: theme.colors.textMuted }]}>Transaction ID</Text>
+                <Text
+                  style={[
+                    styles.detailLabel,
+                    { color: theme.colors.textMuted },
+                  ]}
+                >
+                  Transaction ID
+                </Text>
                 <TouchableOpacity
                   style={styles.transactionIdContainer}
                   onPress={handleCopyTransactionId}
                 >
-                  <Text style={[styles.transactionIdText, { color: theme.colors.primary }]}>
+                  <Text
+                    style={[
+                      styles.transactionIdText,
+                      { color: theme.colors.primary },
+                    ]}
+                  >
                     {params.transactionId.slice(0, 8)}...
                     {params.transactionId.slice(-8)}
                   </Text>
-                  <Ionicons name="copy-outline" size={14} color={theme.colors.primary} />
+                  <Ionicons
+                    name="copy-outline"
+                    size={14}
+                    color={theme.colors.primary}
+                  />
                 </TouchableOpacity>
               </View>
             )}

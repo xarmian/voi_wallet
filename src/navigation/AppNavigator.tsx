@@ -75,7 +75,11 @@ import {
 import KeyregConfirmScreen from '@/screens/transaction/KeyregConfirmScreen';
 import AppCallConfirmScreen from '@/screens/transaction/AppCallConfirmScreen';
 import AppInfoModal from '@/screens/app/AppInfoModal';
-import { useAppMode, getAppModeEarly, useRemoteSignerStore } from '@/store/remoteSignerStore';
+import {
+  useAppMode,
+  getAppModeEarly,
+  useRemoteSignerStore,
+} from '@/store/remoteSignerStore';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
@@ -290,7 +294,9 @@ export type WalletStackParamList = {
   };
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
-  ClaimableTokens: { pendingRefresh?: boolean; claimedItemIds?: string[] } | undefined;
+  ClaimableTokens:
+    | { pendingRefresh?: boolean; claimedItemIds?: string[] }
+    | undefined;
   ClaimToken: {
     claimableItem: SerializableClaimableItem;
   };
@@ -390,7 +396,11 @@ export type FriendsStackParamList = {
   MyProfile: undefined;
   MessagesInbox: undefined;
   NewMessage: undefined;
-  Chat: { friendAddress: string; friendEnvoiName?: string; userAddress?: string };
+  Chat: {
+    friendAddress: string;
+    friendEnvoiName?: string;
+    userAddress?: string;
+  };
 };
 
 // Airgap mode stack - minimal screens for offline signing device
@@ -408,7 +418,9 @@ export type AirgapStackParamList = {
   MnemonicImport: { isOnboarding?: boolean };
   QRAccountImport: undefined;
   AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
-  LedgerAccountImport: { deviceId?: string; isOnboarding?: boolean } | undefined;
+  LedgerAccountImport:
+    | { deviceId?: string; isOnboarding?: boolean }
+    | undefined;
 };
 
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
@@ -445,7 +457,10 @@ function WalletStackNavigator() {
       >
         <WalletStack.Screen name="HomeMain" component={HomeScreen} />
         <WalletStack.Screen name="AssetDetail" component={AssetDetailScreen} />
-        <WalletStack.Screen name="MultiNetworkAsset" component={MultiNetworkAssetScreen} />
+        <WalletStack.Screen
+          name="MultiNetworkAsset"
+          component={MultiNetworkAssetScreen}
+        />
         <WalletStack.Screen
           name="TransactionDetail"
           component={TransactionDetailScreen}
@@ -470,11 +485,20 @@ function WalletStackNavigator() {
           component={TransactionResultScreen}
         />
         <WalletStack.Screen name="Receive" component={ReceiveScreen} />
-        <WalletStack.Screen name="ClaimableTokens" component={ClaimableTokensScreen} />
+        <WalletStack.Screen
+          name="ClaimableTokens"
+          component={ClaimableTokensScreen}
+        />
         <WalletStack.Screen name="ClaimToken" component={ClaimTokenScreen} />
-        <WalletStack.Screen name="ClaimAllConfirmation" component={ClaimAllConfirmationScreen} />
+        <WalletStack.Screen
+          name="ClaimAllConfirmation"
+          component={ClaimAllConfirmationScreen}
+        />
         <WalletStack.Screen name="AccountInfo" component={AccountInfoScreen} />
-        <WalletStack.Screen name="AccountSearch" component={AccountSearchScreen} />
+        <WalletStack.Screen
+          name="AccountSearch"
+          component={AccountSearchScreen}
+        />
       </WalletStack.Navigator>
     </NFTBackground>
   );
@@ -493,7 +517,10 @@ function NFTStackNavigator() {
         }}
       >
         <NFTStack.Screen name="NFTMain" component={NFTScreen} />
-        <NFTStack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
+        <NFTStack.Screen
+          name="CollectionDetail"
+          component={CollectionDetailScreen}
+        />
         <NFTStack.Screen name="NFTDetail" component={NFTDetailScreen} />
         <NFTStack.Screen name="Send" component={SendScreen} />
         <NFTStack.Screen
@@ -561,8 +588,14 @@ function SettingsStackNavigator() {
           name="ExperimentalFeatures"
           component={ExperimentalFeaturesScreen}
         />
-        <SettingsStack.Screen name="BackupWallet" component={BackupWalletScreen} />
-        <SettingsStack.Screen name="RestoreWallet" component={RestoreWalletScreen} />
+        <SettingsStack.Screen
+          name="BackupWallet"
+          component={BackupWalletScreen}
+        />
+        <SettingsStack.Screen
+          name="RestoreWallet"
+          component={RestoreWalletScreen}
+        />
         <SettingsStack.Screen name="WebView" component={WebViewScreen} />
         {/* Remote Signer settings & account management */}
         <SettingsStack.Screen
@@ -597,9 +630,15 @@ function FriendsStackNavigator() {
       >
         <FriendsStack.Screen name="FriendsList" component={FriendsScreen} />
         <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} />
-        <FriendsStack.Screen name="FriendProfile" component={FriendProfileScreen} />
+        <FriendsStack.Screen
+          name="FriendProfile"
+          component={FriendProfileScreen}
+        />
         <FriendsStack.Screen name="MyProfile" component={MyProfileScreen} />
-        <FriendsStack.Screen name="MessagesInbox" component={MessagesInboxScreen} />
+        <FriendsStack.Screen
+          name="MessagesInbox"
+          component={MessagesInboxScreen}
+        />
         <FriendsStack.Screen name="NewMessage" component={NewMessageScreen} />
         <FriendsStack.Screen name="Chat" component={ChatScreen} />
       </FriendsStack.Navigator>
@@ -621,18 +660,39 @@ function AirgapStackNavigator() {
         }}
       >
         <AirgapStack.Screen name="AirgapHome" component={AirgapHomeScreen} />
-        <AirgapStack.Screen name="ExportAccounts" component={ExportAccountsScreen} />
-        <AirgapStack.Screen name="SignRequestScanner" component={SignRequestScannerScreen} />
-        <AirgapStack.Screen name="ImportFromOnlineWallet" component={ImportFromOnlineWalletScreen} />
+        <AirgapStack.Screen
+          name="ExportAccounts"
+          component={ExportAccountsScreen}
+        />
+        <AirgapStack.Screen
+          name="SignRequestScanner"
+          component={SignRequestScannerScreen}
+        />
+        <AirgapStack.Screen
+          name="ImportFromOnlineWallet"
+          component={ImportFromOnlineWalletScreen}
+        />
         <AirgapStack.Screen
           name="RemoteSignerTransactionReview"
           component={TransactionReviewScreen}
         />
-        <AirgapStack.Screen name="SignatureDisplay" component={SignatureDisplayScreen} />
+        <AirgapStack.Screen
+          name="SignatureDisplay"
+          component={SignatureDisplayScreen}
+        />
         {/* Account management screens */}
-        <AirgapStack.Screen name="CreateAccount" component={CreateAccountScreen} />
-        <AirgapStack.Screen name="MnemonicImport" component={MnemonicImportScreen} />
-        <AirgapStack.Screen name="QRAccountImport" component={QRAccountImportScreen} />
+        <AirgapStack.Screen
+          name="CreateAccount"
+          component={CreateAccountScreen}
+        />
+        <AirgapStack.Screen
+          name="MnemonicImport"
+          component={MnemonicImportScreen}
+        />
+        <AirgapStack.Screen
+          name="QRAccountImport"
+          component={QRAccountImportScreen}
+        />
         <AirgapStack.Screen
           name="AccountImportPreview"
           component={AccountImportPreviewScreen}
@@ -695,7 +755,9 @@ function MainTabNavigator() {
                 let iconName: keyof typeof Ionicons.glyphMap;
 
                 if (route.name === 'Home') {
-                  iconName = focused ? 'shield-checkmark' : 'shield-checkmark-outline';
+                  iconName = focused
+                    ? 'shield-checkmark'
+                    : 'shield-checkmark-outline';
                 } else if (route.name === 'Settings') {
                   iconName = focused ? 'settings' : 'settings-outline';
                 } else {
@@ -815,9 +877,7 @@ function MainTabNavigator() {
 
               if (route.name === 'Discover') {
                 // Invisible placeholder to reserve space for FABRadialMenu
-                return (
-                  <View style={styles.centerButtonPlaceholder} />
-                );
+                return <View style={styles.centerButtonPlaceholder} />;
               }
               return <TouchableOpacity {...props} onPress={handlePress} />;
             },
@@ -956,8 +1016,14 @@ function AppStack() {
         name="WalletConnectTransactionRequest"
         component={TransactionRequestScreen}
       />
-      <Stack.Screen name="WalletConnectPairing" component={WalletConnectPairingScreen} />
-      <Stack.Screen name="WalletConnectError" component={WalletConnectErrorScreen} />
+      <Stack.Screen
+        name="WalletConnectPairing"
+        component={WalletConnectPairingScreen}
+      />
+      <Stack.Screen
+        name="WalletConnectError"
+        component={WalletConnectErrorScreen}
+      />
       <Stack.Screen
         name="UniversalTransactionSigning"
         component={UniversalTransactionSigningScreen}
@@ -1175,7 +1241,9 @@ export default function AppNavigator() {
                 // Check if we're already on the TransactionRequestScreen
                 if (currentRoute?.name === 'WalletConnectTransactionRequest') {
                   // Enqueue the request instead of navigating immediately
-                  console.log('[AppNavigator] Currently on transaction screen, enqueueing request');
+                  console.log(
+                    '[AppNavigator] Currently on transaction screen, enqueueing request'
+                  );
                   await TransactionRequestQueue.enqueue({
                     id: requestEvent.id,
                     topic: requestEvent.topic,
@@ -1248,24 +1316,35 @@ export default function AppNavigator() {
 
           // Process any pending transaction requests from the queue
           try {
-            const hasQueuedRequests = !(await TransactionRequestQueue.isEmpty());
+            const hasQueuedRequests =
+              !(await TransactionRequestQueue.isEmpty());
             if (hasQueuedRequests) {
-              console.log('[AppNavigator] Processing queued transaction requests on startup');
+              console.log(
+                '[AppNavigator] Processing queued transaction requests on startup'
+              );
               const nextRequest = await TransactionRequestQueue.peek();
               if (nextRequest && navigationRef.current) {
                 // Dequeue and navigate to the first request
                 await TransactionRequestQueue.dequeue();
-                navigationRef.current.navigate('WalletConnectTransactionRequest', {
-                  requestEvent: nextRequest,
-                  version: nextRequest.version,
-                });
+                navigationRef.current.navigate(
+                  'WalletConnectTransactionRequest',
+                  {
+                    requestEvent: nextRequest,
+                    version: nextRequest.version,
+                  }
+                );
               }
             }
           } catch (error) {
-            console.error('[AppNavigator] Failed to process queued requests:', error);
+            console.error(
+              '[AppNavigator] Failed to process queued requests:',
+              error
+            );
           }
         } else {
-          console.log('[AppNavigator] Signer mode: skipping network services (WalletConnect, DeepLink, Notifications)');
+          console.log(
+            '[AppNavigator] Signer mode: skipping network services (WalletConnect, DeepLink, Notifications)'
+          );
         }
 
         // Initialize Ledger transport service (useful in BOTH modes for hardware wallet signing)

@@ -66,7 +66,10 @@ export default function AccountRecipientModal({
   const snapPoints = useMemo(() => ['90%'], []);
 
   const listContentStyle = useMemo(
-    () => [styles.listContent, { paddingBottom: spacingLg + insets.bottom + 100 }],
+    () => [
+      styles.listContent,
+      { paddingBottom: spacingLg + insets.bottom + 100 },
+    ],
     [styles.listContent, spacingLg, insets.bottom]
   );
 
@@ -182,10 +185,7 @@ export default function AccountRecipientModal({
         activeOpacity={0.7}
       >
         {item.avatar ? (
-          <Image
-            source={{ uri: item.avatar }}
-            style={styles.friendAvatar}
-          />
+          <Image source={{ uri: item.avatar }} style={styles.friendAvatar} />
         ) : (
           <View style={styles.friendAvatarFallback}>
             <Text style={styles.friendAvatarText}>
@@ -195,9 +195,7 @@ export default function AccountRecipientModal({
         )}
         <View style={styles.accountInfo}>
           <View style={styles.friendNameRow}>
-            <Text style={styles.accountLabel}>
-              {item.envoiName}
-            </Text>
+            <Text style={styles.accountLabel}>{item.envoiName}</Text>
             {item.isFavorite && (
               <Ionicons name="star" size={16} color={themeColors.warning} />
             )}
@@ -226,9 +224,9 @@ export default function AccountRecipientModal({
   }, [isVisible]);
 
   const isAccountsTab = activeTab === 'accounts';
-  const listData = (isAccountsTab
-    ? filteredAccounts
-    : filteredFriends) as Array<AccountMetadata | Friend>;
+  const listData = (
+    isAccountsTab ? filteredAccounts : filteredFriends
+  ) as Array<AccountMetadata | Friend>;
 
   const renderListItem = useCallback<ListRenderItem<AccountMetadata | Friend>>(
     ({ item }) =>
@@ -286,11 +284,18 @@ export default function AccountRecipientModal({
                 <Ionicons
                   name="wallet-outline"
                   size={20}
-                  color={isAccountsTab ? themeColors.primary : themeColors.textSecondary}
+                  color={
+                    isAccountsTab
+                      ? themeColors.primary
+                      : themeColors.textSecondary
+                  }
                   style={styles.tabIcon}
                 />
                 <Text
-                  style={[styles.tabText, isAccountsTab && styles.tabTextActive]}
+                  style={[
+                    styles.tabText,
+                    isAccountsTab && styles.tabTextActive,
+                  ]}
                 >
                   Accounts
                 </Text>
@@ -303,11 +308,18 @@ export default function AccountRecipientModal({
                 <Ionicons
                   name="people-outline"
                   size={20}
-                  color={!isAccountsTab ? themeColors.primary : themeColors.textSecondary}
+                  color={
+                    !isAccountsTab
+                      ? themeColors.primary
+                      : themeColors.textSecondary
+                  }
                   style={styles.tabIcon}
                 />
                 <Text
-                  style={[styles.tabText, !isAccountsTab && styles.tabTextActive]}
+                  style={[
+                    styles.tabText,
+                    !isAccountsTab && styles.tabTextActive,
+                  ]}
                 >
                   Friends
                 </Text>

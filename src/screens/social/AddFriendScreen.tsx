@@ -39,10 +39,16 @@ export default function AddFriendScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
   const navigation =
-    useNavigation<NativeStackNavigationProp<FriendsStackParamList, 'AddFriend'>>();
+    useNavigation<
+      NativeStackNavigationProp<FriendsStackParamList, 'AddFriend'>
+    >();
   const route = useRoute<RouteProp<FriendsStackParamList, 'AddFriend'>>();
-  const [searchQuery, setSearchQuery] = useState(() => route.params?.initialQuery ?? '');
-  const [searchResults, setSearchResults] = useState<SearchResultWithStatus[]>([]);
+  const [searchQuery, setSearchQuery] = useState(
+    () => route.params?.initialQuery ?? ''
+  );
+  const [searchResults, setSearchResults] = useState<SearchResultWithStatus[]>(
+    []
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
@@ -81,75 +87,84 @@ export default function AddFriendScreen() {
     };
   }, [searchQuery]);
 
-  const handleSearch = useCallback(async (query: string) => {
-    setIsLoading(true);
-    setHasSearched(true);
+  const handleSearch = useCallback(
+    async (query: string) => {
+      setIsLoading(true);
+      setHasSearched(true);
 
-    try {
-      const envoiService = EnvoiService.getInstance();
-      const wasEnabled = envoiService.isServiceEnabled();
-      envoiService.setEnabled(true);
+      try {
+        const envoiService = EnvoiService.getInstance();
+        const wasEnabled = envoiService.isServiceEnabled();
+        envoiService.setEnabled(true);
 
-      const results = await envoiService.searchNames(query);
+        const results = await envoiService.searchNames(query);
 
-      envoiService.setEnabled(wasEnabled);
+        envoiService.setEnabled(wasEnabled);
 
-      if (results && results.length > 0) {
-        // Deduplicate by name
-        const uniqueResults = results.filter(
-          (result, index, arr) =>
-            arr.findIndex((item) => item.name === result.name) === index
+        if (results && results.length > 0) {
+          // Deduplicate by name
+          const uniqueResults = results.filter(
+            (result, index, arr) =>
+              arr.findIndex((item) => item.name === result.name) === index
+          );
+
+          // Check which ones are already friends
+          const resultsWithStatus = uniqueResults
+            .slice(0, 10)
+            .map((result) => ({
+              ...result,
+              isAlreadyFriend: getFriend(result.name) !== null,
+            }));
+
+          setSearchResults(resultsWithStatus);
+        } else {
+          setSearchResults([]);
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        setSearchResults([]);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [getFriend]
+  );
+
+  const handleAddFriend = useCallback(
+    async (result: SearchResultWithStatus) => {
+      try {
+        const newFriend = await addFriend(result.name);
+
+        Alert.alert(
+          'Friend Added',
+          `${result.name} has been added to your friends!`,
+          [
+            {
+              text: 'View Profile',
+              onPress: () => {
+                navigation.navigate('FriendProfile', {
+                  envoiName: newFriend.envoiName,
+                });
+              },
+            },
+            { text: 'OK' },
+          ]
         );
 
-        // Check which ones are already friends
-        const resultsWithStatus = uniqueResults.slice(0, 10).map((result) => ({
-          ...result,
-          isAlreadyFriend: getFriend(result.name) !== null,
-        }));
-
-        setSearchResults(resultsWithStatus);
-      } else {
-        setSearchResults([]);
+        // Update the search results to reflect the change
+        setSearchResults((prev) =>
+          prev.map((r) =>
+            r.name === result.name ? { ...r, isAlreadyFriend: true } : r
+          )
+        );
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : 'Failed to add friend';
+        Alert.alert('Error', errorMessage);
       }
-    } catch (error) {
-      console.error('Search error:', error);
-      setSearchResults([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [getFriend]);
-
-  const handleAddFriend = useCallback(async (result: SearchResultWithStatus) => {
-    try {
-      const newFriend = await addFriend(result.name);
-
-      Alert.alert(
-        'Friend Added',
-        `${result.name} has been added to your friends!`,
-        [
-          {
-            text: 'View Profile',
-            onPress: () => {
-              navigation.navigate('FriendProfile', {
-                envoiName: newFriend.envoiName,
-              });
-            },
-          },
-          { text: 'OK' },
-        ]
-      );
-
-      // Update the search results to reflect the change
-      setSearchResults(prev =>
-        prev.map(r =>
-          r.name === result.name ? { ...r, isAlreadyFriend: true } : r
-        )
-      );
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to add friend';
-      Alert.alert('Error', errorMessage);
-    }
-  }, [addFriend, navigation]);
+    },
+    [addFriend, navigation]
+  );
 
   // Update search term if navigation provides an initial query
   useEffect(() => {
@@ -180,13 +195,19 @@ export default function AddFriendScreen() {
         )}
         <View style={styles.resultInfo}>
           <Text style={styles.resultName}>{item.name}</Text>
-          <Text style={styles.resultAddress}>{formatAddress(item.address)}</Text>
+          <Text style={styles.resultAddress}>
+            {formatAddress(item.address)}
+          </Text>
         </View>
       </View>
 
       {item.isAlreadyFriend ? (
         <View style={styles.alreadyFriendBadge}>
-          <Ionicons name="checkmark-circle" size={20} color={theme.colors.success} />
+          <Ionicons
+            name="checkmark-circle"
+            size={20}
+            color={theme.colors.success}
+          />
           <Text style={styles.alreadyFriendText}>Friend</Text>
         </View>
       ) : (
@@ -221,10 +242,15 @@ export default function AddFriendScreen() {
     if (searchResults.length === 0) {
       return (
         <View style={styles.emptyState}>
-          <Ionicons name="alert-circle-outline" size={64} color={theme.colors.textMuted} />
+          <Ionicons
+            name="alert-circle-outline"
+            size={64}
+            color={theme.colors.textMuted}
+          />
           <Text style={styles.emptyTitle}>No Results Found</Text>
           <Text style={styles.emptyText}>
-            No Envoi names match your search. Make sure the name is spelled correctly.
+            No Envoi names match your search. Make sure the name is spelled
+            correctly.
           </Text>
         </View>
       );
@@ -249,12 +275,13 @@ export default function AddFriendScreen() {
           />
 
           {/* Search Input */}
-          <BlurredContainer
-            style={styles.searchContainer}
-            borderRadius={0}
-          >
+          <BlurredContainer style={styles.searchContainer} borderRadius={0}>
             <View style={styles.searchInputContainer}>
-              <Ionicons name="search" size={20} color={theme.colors.textMuted} />
+              <Ionicons
+                name="search"
+                size={20}
+                color={theme.colors.textMuted}
+              />
               <TextInput
                 style={styles.searchInput}
                 placeholder="Enter Envoi name"
@@ -273,7 +300,11 @@ export default function AddFriendScreen() {
                     setHasSearched(false);
                   }}
                 >
-                  <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+                  <Ionicons
+                    name="close-circle"
+                    size={20}
+                    color={theme.colors.textMuted}
+                  />
                 </TouchableOpacity>
               )}
             </View>
@@ -290,11 +321,9 @@ export default function AddFriendScreen() {
               contentContainerStyle={styles.resultsList}
               keyboardShouldPersistTaps="handled"
             >
-              {searchResults.length === 0 ? (
-                renderEmptyState()
-              ) : (
-                searchResults.map(renderSearchResult)
-              )}
+              {searchResults.length === 0
+                ? renderEmptyState()
+                : searchResults.map(renderSearchResult)}
             </ScrollView>
           )}
         </KeyboardAvoidingView>

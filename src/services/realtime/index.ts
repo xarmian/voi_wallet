@@ -5,7 +5,10 @@
  * Replaces polling with WebSocket-based real-time updates.
  */
 
-import { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import {
+  RealtimeChannel,
+  RealtimePostgresChangesPayload,
+} from '@supabase/supabase-js';
 import { AppState, AppStateStatus } from 'react-native';
 import { getSupabaseClient, isSupabaseConfigured } from '../supabase';
 import { WalletEvent } from '../notifications/types';
@@ -30,13 +33,15 @@ export interface RealtimeEventHandlers {
 class RealtimeService {
   private static instance: RealtimeService;
   private channel: RealtimeChannel | null = null;
-  private subscribedAddresses: Set<string> = new Set();  // Algorand addresses (58-char)
+  private subscribedAddresses: Set<string> = new Set(); // Algorand addresses (58-char)
   private handlers: RealtimeEventHandlers = {};
   private isConnected: boolean = false;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
+  private appStateSubscription: ReturnType<
+    typeof AppState.addEventListener
+  > | null = null;
 
   private constructor() {
     // Private constructor for singleton
@@ -47,7 +52,9 @@ class RealtimeService {
     );
   }
 
-  private handleAppStateChange = async (nextAppState: AppStateStatus): Promise<void> => {
+  private handleAppStateChange = async (
+    nextAppState: AppStateStatus
+  ): Promise<void> => {
     if (nextAppState === 'active') {
       // App came to foreground - reset reconnect attempts and try to reconnect if needed
       this.reconnectAttempts = 0;
@@ -102,7 +109,7 @@ class RealtimeService {
     }
 
     // Validate and store addresses (no conversion needed - use directly)
-    const validAddresses = addresses.filter(addr => addr.length === 58);
+    const validAddresses = addresses.filter((addr) => addr.length === 58);
 
     if (validAddresses.length === 0) {
       console.warn('No valid addresses to subscribe to');
@@ -110,7 +117,7 @@ class RealtimeService {
     }
 
     // Store subscribed addresses
-    validAddresses.forEach(addr => this.subscribedAddresses.add(addr));
+    validAddresses.forEach((addr) => this.subscribedAddresses.add(addr));
 
     // Unsubscribe from existing channel if any
     await this.unsubscribe();
@@ -139,7 +146,9 @@ class RealtimeService {
           this.reconnectAttempts = 0;
           this.handlers.onConnectionChange?.('connected');
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn(`Realtime subscription ${status.toLowerCase()}${err ? `: ${err.message || err}` : ''}`);
+          console.warn(
+            `Realtime subscription ${status.toLowerCase()}${err ? `: ${err.message || err}` : ''}`
+          );
           this.isConnected = false;
           this.handlers.onConnectionChange?.('error');
           this.scheduleReconnect();
@@ -245,7 +254,9 @@ class RealtimeService {
 
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.warn('Max reconnect attempts reached, will retry on next app foreground');
+      console.warn(
+        'Max reconnect attempts reached, will retry on next app foreground'
+      );
       // Don't give up completely - just stop the exponential backoff loop
       // The connection will be retried when subscribeToAddresses is called again
       return;
@@ -255,7 +266,9 @@ class RealtimeService {
     const delay = Math.pow(2, this.reconnectAttempts) * 1000;
     this.reconnectAttempts++;
 
-    console.log(`Scheduling reconnect attempt ${this.reconnectAttempts} in ${delay}ms`);
+    console.log(
+      `Scheduling reconnect attempt ${this.reconnectAttempts} in ${delay}ms`
+    );
 
     this.reconnectTimeout = setTimeout(async () => {
       if (this.subscribedAddresses.size > 0) {
@@ -300,7 +313,9 @@ class RealtimeService {
           this.reconnectAttempts = 0;
           this.handlers.onConnectionChange?.('connected');
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn(`Realtime reconnection ${status.toLowerCase()}${err ? `: ${err.message || err}` : ''}`);
+          console.warn(
+            `Realtime reconnection ${status.toLowerCase()}${err ? `: ${err.message || err}` : ''}`
+          );
           this.isConnected = false;
           this.scheduleReconnect();
         }

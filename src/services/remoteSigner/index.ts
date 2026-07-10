@@ -79,7 +79,9 @@ class RemoteSignerServiceClass {
    * Check if payload needs animated QR (too large for single QR)
    */
   needsAnimatedQR(payload: RemoteSignerPayload): boolean {
-    return this.getPayloadSize(payload) > REMOTE_SIGNER_CONSTANTS.SINGLE_QR_MAX_BYTES;
+    return (
+      this.getPayloadSize(payload) > REMOTE_SIGNER_CONSTANTS.SINGLE_QR_MAX_BYTES
+    );
   }
 
   // ============ Request Creation ============
@@ -110,7 +112,9 @@ class RemoteSignerServiceClass {
         : String(senderField || '');
       return {
         i: index,
-        b: Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64'),
+        b: Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString(
+          'base64'
+        ),
         s: signerAddresses[index] || senderAddress,
         a: options?.authAddresses?.[index],
       };
@@ -280,7 +284,9 @@ class RemoteSignerServiceClass {
         : String(senderField || ''),
       receiver: receiverField?.publicKey
         ? algosdk.encodeAddress(receiverField.publicKey)
-        : receiverField ? String(receiverField) : undefined,
+        : receiverField
+          ? String(receiverField)
+          : undefined,
       amount: txn.amount !== undefined ? BigInt(txn.amount) : undefined,
       fee: BigInt(txn.fee || 0),
       assetId: assetIndex,
@@ -294,10 +300,14 @@ class RemoteSignerServiceClass {
         : '',
       rekeyTo: rekeyField?.publicKey
         ? algosdk.encodeAddress(rekeyField.publicKey)
-        : rekeyField ? String(rekeyField) : undefined,
+        : rekeyField
+          ? String(rekeyField)
+          : undefined,
       closeRemainderTo: closeField?.publicKey
         ? algosdk.encodeAddress(closeField.publicKey)
-        : closeField ? String(closeField) : undefined,
+        : closeField
+          ? String(closeField)
+          : undefined,
       raw: txn,
     };
   }
@@ -305,7 +315,9 @@ class RemoteSignerServiceClass {
   /**
    * Decode all transactions in a request
    */
-  decodeRequestTransactions(request: RemoteSignerRequest): DecodedTransactionInfo[] {
+  decodeRequestTransactions(
+    request: RemoteSignerRequest
+  ): DecodedTransactionInfo[] {
     return request.txns.map((txn) => this.decodeTransaction(txn.b));
   }
 
@@ -357,7 +369,9 @@ class RemoteSignerServiceClass {
    */
   extractSignedTransactions(response: RemoteSignerResponse): Uint8Array[] {
     if (!response.ok || !response.sigs) {
-      throw new Error(response.err?.m || 'Response does not contain signatures');
+      throw new Error(
+        response.err?.m || 'Response does not contain signatures'
+      );
     }
 
     return response.sigs
@@ -389,7 +403,10 @@ class RemoteSignerServiceClass {
 
     // Check signature count matches transaction count
     if (!response.sigs || response.sigs.length !== request.txns.length) {
-      return { valid: false, error: 'Signature count does not match transaction count' };
+      return {
+        valid: false,
+        error: 'Signature count does not match transaction count',
+      };
     }
 
     return { valid: true };

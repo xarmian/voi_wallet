@@ -17,12 +17,8 @@ import { RootStackParamList } from '@/navigation/AppNavigator';
 import { AccountMetadata } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
-import {
-  useTransactionAuthController,
-} from '@/services/auth/transactionAuthController';
-import {
-  UnifiedTransactionRequest,
-} from '@/services/transactions/unifiedSigner';
+import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
+import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import {
   truncateAddress,
   getNetworkNameByChainId,
@@ -69,7 +65,10 @@ interface ParsedTransaction {
   dangers?: TransactionDangers;
 }
 
-export default function UniversalTransactionSigningScreen({ navigation, route }: Props) {
+export default function UniversalTransactionSigningScreen({
+  navigation,
+  route,
+}: Props) {
   const {
     transactions,
     account,
@@ -87,9 +86,14 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
   const onReject = registryCallbacks?.onReject || directOnReject;
 
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [currentRequest, setCurrentRequest] = useState<UnifiedTransactionRequest | null>(null);
-  const [parsedTransactions, setParsedTransactions] = useState<ParsedTransaction[]>([]);
-  const [decodedTransactions, setDecodedTransactions] = useState<algosdk.Transaction[]>([]);
+  const [currentRequest, setCurrentRequest] =
+    useState<UnifiedTransactionRequest | null>(null);
+  const [parsedTransactions, setParsedTransactions] = useState<
+    ParsedTransaction[]
+  >([]);
+  const [decodedTransactions, setDecodedTransactions] = useState<
+    algosdk.Transaction[]
+  >([]);
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
   const [networkCurrency, setNetworkCurrency] = useState<string>('VOI');
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
@@ -114,7 +118,10 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
       setNetworkCurrency(getNetworkCurrencyByChainId(chainId));
     } else if (networkId) {
       // Handle networkId (e.g., from SwapScreen)
-      if (networkId === 'algorand-mainnet' || networkId === 'algorand-testnet') {
+      if (
+        networkId === 'algorand-mainnet' ||
+        networkId === 'algorand-testnet'
+      ) {
         setNetworkName('Algorand');
         setNetworkCurrency('ALGO');
       } else if (networkId === 'voi-mainnet' || networkId === 'voi-testnet') {
@@ -179,14 +186,23 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
 
           if (txnType === 'pay' && txnAny.payment) {
             if (txnAny.payment.receiver && txnAny.payment.receiver.publicKey) {
-              toAddress = algosdk.encodeAddress(txnAny.payment.receiver.publicKey);
+              toAddress = algosdk.encodeAddress(
+                txnAny.payment.receiver.publicKey
+              );
             }
             amount = txnAny.payment.amount ? Number(txnAny.payment.amount) : 0;
           } else if (txnType === 'axfer' && txnAny.assetTransfer) {
-            if (txnAny.assetTransfer.receiver && txnAny.assetTransfer.receiver.publicKey) {
-              toAddress = algosdk.encodeAddress(txnAny.assetTransfer.receiver.publicKey);
+            if (
+              txnAny.assetTransfer.receiver &&
+              txnAny.assetTransfer.receiver.publicKey
+            ) {
+              toAddress = algosdk.encodeAddress(
+                txnAny.assetTransfer.receiver.publicKey
+              );
             }
-            amount = txnAny.assetTransfer.amount ? Number(txnAny.assetTransfer.amount) : 0;
+            amount = txnAny.assetTransfer.amount
+              ? Number(txnAny.assetTransfer.amount)
+              : 0;
           } else if (txnType === 'appl') {
             // Application call
             toAddress = 'App Call';
@@ -201,7 +217,9 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
             assetId: txnAny.assetIndex,
             type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
             // Only surface danger fields for transactions we are about to sign.
-            dangers: isAlreadySigned ? undefined : detectTransactionDangers(txn),
+            dangers: isAlreadySigned
+              ? undefined
+              : detectTransactionDangers(txn),
           });
         } catch (error) {
           console.error('Failed to parse transaction:', error);
@@ -246,8 +264,14 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     }
 
     // Build the transaction list
-    const allTransactions = transactions.map((txn) => ({ txn, signers: [account.address] }));
-    const allDecodedTransactions = decodedTransactions.length === transactions.length ? [...decodedTransactions] : undefined;
+    const allTransactions = transactions.map((txn) => ({
+      txn,
+      signers: [account.address],
+    }));
+    const allDecodedTransactions =
+      decodedTransactions.length === transactions.length
+        ? [...decodedTransactions]
+        : undefined;
 
     // Create unified transaction request for batch signing
     const request: UnifiedTransactionRequest = {
@@ -271,7 +295,10 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
     if (success && onSuccess) {
       await onSuccess(result);
     } else if (!success) {
-      const errorMessage = result instanceof Error ? result.message : 'Failed to sign transactions';
+      const errorMessage =
+        result instanceof Error
+          ? result.message
+          : 'Failed to sign transactions';
       Alert.alert('Error', errorMessage);
     }
   };
@@ -339,10 +366,7 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
       {account && (
         <View style={styles.selectedAccount}>
           <View
-            style={[
-              styles.accountColor,
-              { backgroundColor: account.color },
-            ]}
+            style={[styles.accountColor, { backgroundColor: account.color }]}
           />
           <View style={styles.accountInfo}>
             <Text style={styles.accountLabel}>{account.label}</Text>
@@ -376,7 +400,9 @@ export default function UniversalTransactionSigningScreen({ navigation, route }:
               <Text style={styles.networkTitle}>Network</Text>
             </View>
             <Text style={styles.networkName}>{networkName}</Text>
-            <Text style={styles.networkCurrency}>Currency: {networkCurrency}</Text>
+            <Text style={styles.networkCurrency}>
+              Currency: {networkCurrency}
+            </Text>
           </View>
         )}
 
@@ -556,7 +582,10 @@ const createStyles = (theme: Theme) =>
     },
     warningContainer: {
       flexDirection: 'row',
-      backgroundColor: theme.mode === 'light' ? 'rgba(255,149,0,0.1)' : 'rgba(255,159,10,0.15)',
+      backgroundColor:
+        theme.mode === 'light'
+          ? 'rgba(255,149,0,0.1)'
+          : 'rgba(255,159,10,0.15)',
       borderWidth: 1,
       borderColor: theme.colors.warning + '40',
       borderRadius: 12,

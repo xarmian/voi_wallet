@@ -6,7 +6,9 @@ import { Theme } from '@/constants/themes';
 
 export default function NetworkFilterToggle() {
   const assetNetworkFilter = useAssetNetworkFilter();
-  const setAssetNetworkFilter = useWalletStore((state) => state.setAssetNetworkFilter);
+  const setAssetNetworkFilter = useWalletStore(
+    (state) => state.setAssetNetworkFilter
+  );
   const styles = useThemedStyles(createStyles);
 
   const filters: Array<{ key: 'all' | 'voi' | 'algorand'; label: string }> = [

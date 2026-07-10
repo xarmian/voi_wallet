@@ -172,7 +172,8 @@ export const crypto = {
  * Platform-specific secure storage (encrypted)
  */
 export const secureStorage = {
-  setItem: (key: string, value: string) => getSecureStorage().setItem(key, value),
+  setItem: (key: string, value: string) =>
+    getSecureStorage().setItem(key, value),
   getItem: (key: string) => getSecureStorage().getItem(key),
   deleteItem: (key: string) => getSecureStorage().deleteItem(key),
   getItemWithAuth: (key: string, options: { prompt: string }) => {
@@ -196,14 +197,21 @@ export const storage = {
     if (adapter.multiGet) {
       return adapter.multiGet(keys);
     }
-    return Promise.all(keys.map(async (key) => [key, await adapter.getItem(key)] as [string, string | null]));
+    return Promise.all(
+      keys.map(
+        async (key) =>
+          [key, await adapter.getItem(key)] as [string, string | null]
+      )
+    );
   },
   multiRemove: (keys: string[]) => {
     const adapter = getStorage();
     if (adapter.multiRemove) {
       return adapter.multiRemove(keys);
     }
-    return Promise.all(keys.map((key) => adapter.removeItem(key))).then(() => {});
+    return Promise.all(keys.map((key) => adapter.removeItem(key))).then(
+      () => {}
+    );
   },
   getAllKeys: () => {
     const adapter = getStorage();
@@ -221,8 +229,11 @@ export const biometrics = {
   isAvailable: () => getBiometrics().isAvailable(),
   isEnrolled: () => getBiometrics().isEnrolled(),
   getCapability: () => getBiometrics().getCapability(),
-  authenticate: (options: { promptMessage: string; fallbackLabel?: string; cancelLabel?: string }) =>
-    getBiometrics().authenticate(options),
+  authenticate: (options: {
+    promptMessage: string;
+    fallbackLabel?: string;
+    cancelLabel?: string;
+  }) => getBiometrics().authenticate(options),
   getAuthType: () => getBiometrics().getAuthType(),
   registerCredential: (options: { userId: string; userName: string }) => {
     const adapter = getBiometrics();

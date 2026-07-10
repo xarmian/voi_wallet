@@ -1,11 +1,5 @@
 import React, { useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  ScrollView,
-} from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -37,7 +31,15 @@ interface OptionCardWithAnimationProps {
   index: number;
 }
 
-function OptionCardWithAnimation({ icon, title, subtitle, onPress, theme, styles, index }: OptionCardWithAnimationProps) {
+function OptionCardWithAnimation({
+  icon,
+  title,
+  subtitle,
+  onPress,
+  theme,
+  styles,
+  index,
+}: OptionCardWithAnimationProps) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(0);
   const translateY = useSharedValue(20);
@@ -59,7 +61,10 @@ function OptionCardWithAnimation({ icon, title, subtitle, onPress, theme, styles
   React.useEffect(() => {
     const delay = getStaggerDelay(index, 80, 400);
     setTimeout(() => {
-      opacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+      opacity.value = withTiming(1, {
+        duration: 400,
+        easing: Easing.out(Easing.ease),
+      });
       translateY.value = withSpring(0, springConfigs.smooth);
     }, delay);
   }, [index, opacity, translateY]);
@@ -73,15 +78,30 @@ function OptionCardWithAnimation({ icon, title, subtitle, onPress, theme, styles
     >
       <GlassCard variant="medium">
         <View style={styles.optionButton}>
-          <View style={[styles.optionIcon, { backgroundColor: `${theme.colors.primary}15` }]}>
+          <View
+            style={[
+              styles.optionIcon,
+              { backgroundColor: `${theme.colors.primary}15` },
+            ]}
+          >
             <Ionicons name={icon} size={24} color={theme.colors.primary} />
           </View>
           <View style={styles.optionContent}>
-            <Text style={[styles.optionTitle, { color: theme.colors.text }]}>{title}</Text>
-            <Text style={[styles.optionSubtitle, { color: theme.colors.textMuted }]}>{subtitle}</Text>
+            <Text style={[styles.optionTitle, { color: theme.colors.text }]}>
+              {title}
+            </Text>
+            <Text
+              style={[styles.optionSubtitle, { color: theme.colors.textMuted }]}
+            >
+              {subtitle}
+            </Text>
           </View>
           <View style={styles.optionChevron}>
-            <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+            <Ionicons
+              name="chevron-forward"
+              size={20}
+              color={theme.colors.textMuted}
+            />
           </View>
         </View>
       </GlassCard>
@@ -112,7 +132,10 @@ export default function OnboardingScreen({ navigation }: Props) {
   }));
 
   React.useEffect(() => {
-    headerOpacity.value = withTiming(1, { duration: 500, easing: Easing.out(Easing.ease) });
+    headerOpacity.value = withTiming(1, {
+      duration: 500,
+      easing: Easing.out(Easing.ease),
+    });
     headerTranslateY.value = withSpring(0, springConfigs.smooth);
   }, [headerOpacity, headerTranslateY]);
 
@@ -194,15 +217,21 @@ export default function OnboardingScreen({ navigation }: Props) {
               onPress={() => navigation.navigate('Main')}
               style={styles.skipButton}
             >
-              <Text style={[styles.skipText, { color: theme.colors.textMuted }]}>
+              <Text
+                style={[styles.skipText, { color: theme.colors.textMuted }]}
+              >
                 Continue without account
               </Text>
             </Pressable>
             <Pressable
-              onPress={() => navigation.navigate('RestoreWallet', { isOnboarding: true })}
+              onPress={() =>
+                navigation.navigate('RestoreWallet', { isOnboarding: true })
+              }
               style={styles.restoreButton}
             >
-              <Text style={[styles.restoreText, { color: theme.colors.primary }]}>
+              <Text
+                style={[styles.restoreText, { color: theme.colors.primary }]}
+              >
                 or restore from backup
               </Text>
             </Pressable>

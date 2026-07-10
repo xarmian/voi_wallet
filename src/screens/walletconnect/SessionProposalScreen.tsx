@@ -22,7 +22,10 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
-import { WalletConnectV1Client, DEFAULT_CHAIN_ID } from '@/services/walletconnect/v1';
+import {
+  WalletConnectV1Client,
+  DEFAULT_CHAIN_ID,
+} from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
@@ -203,9 +206,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         <Text style={styles.dappDescription}>
           {metadata.description || 'No description provided'}
         </Text>
-        {metadata.url && (
-          <Text style={styles.dappUrl}>{metadata.url}</Text>
-        )}
+        {metadata.url && <Text style={styles.dappUrl}>{metadata.url}</Text>}
       </View>
     );
   };
@@ -215,16 +216,12 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       // v1 has simpler permissions - just show algo_signTxn
       return (
         <View style={styles.permissionsContainer}>
-          <Text style={styles.sectionTitle}>Requested Permissions and Networks</Text>
+          <Text style={styles.sectionTitle}>
+            Requested Permissions and Networks
+          </Text>
           <View style={styles.permissionItem}>
-            <Ionicons
-              name="link"
-              size={16}
-              color={theme.colors.textMuted}
-            />
-            <Text style={styles.permissionText}>
-              Networks: Voi Network
-            </Text>
+            <Ionicons name="link" size={16} color={theme.colors.textMuted} />
+            <Text style={styles.permissionText}>Networks: Voi Network</Text>
           </View>
           <View style={styles.permissionItem}>
             <Ionicons
@@ -232,9 +229,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
               size={16}
               color={theme.colors.textMuted}
             />
-            <Text style={styles.permissionText}>
-              Methods: algo_signTxn
-            </Text>
+            <Text style={styles.permissionText}>Methods: algo_signTxn</Text>
           </View>
         </View>
       );
@@ -244,7 +239,10 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     const allChains = new Set<string>();
     const allRequestedChains = new Set<string>(); // For debug logging
     const allMethods = new Set<string>();
-    const supportedChainIds = [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
+    const supportedChainIds = [
+      VOI_CHAIN_DATA.chainId,
+      ALGORAND_MAINNET_CHAIN_DATA.chainId,
+    ];
 
     // Collect from required namespaces
     if (proposal!.requiredNamespaces) {
@@ -283,10 +281,19 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     }
 
     // Debug output
-    console.log('[WalletConnect] dApp requested chains:', Array.from(allRequestedChains));
+    console.log(
+      '[WalletConnect] dApp requested chains:',
+      Array.from(allRequestedChains)
+    );
     console.log('[WalletConnect] Supported chains:', Array.from(allChains));
-    console.log('[WalletConnect] Required namespaces:', proposal!.requiredNamespaces);
-    console.log('[WalletConnect] Optional namespaces:', proposal!.optionalNamespaces);
+    console.log(
+      '[WalletConnect] Required namespaces:',
+      proposal!.requiredNamespaces
+    );
+    console.log(
+      '[WalletConnect] Optional namespaces:',
+      proposal!.optionalNamespaces
+    );
 
     // Convert chain IDs to readable names (all chains in the set are already supported)
     const chainNames = Array.from(allChains).map((chainId) =>
@@ -296,15 +303,13 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
 
     return (
       <View style={styles.permissionsContainer}>
-        <Text style={styles.sectionTitle}>Requested Permissions and Networks</Text>
+        <Text style={styles.sectionTitle}>
+          Requested Permissions and Networks
+        </Text>
 
         {chainNames.length > 0 && (
           <View style={styles.permissionItem}>
-            <Ionicons
-              name="link"
-              size={16}
-              color={theme.colors.textMuted}
-            />
+            <Ionicons name="link" size={16} color={theme.colors.textMuted} />
             <Text style={styles.permissionText}>
               Networks: {chainNames.join(', ')}
             </Text>

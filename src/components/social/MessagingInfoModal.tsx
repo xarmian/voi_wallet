@@ -32,8 +32,17 @@ function InfoItem({ icon, title, description, iconColor }: InfoItemProps) {
 
   return (
     <View style={styles.infoItem}>
-      <View style={[styles.iconContainer, { backgroundColor: (iconColor || theme.colors.primary) + '20' }]}>
-        <Ionicons name={icon} size={20} color={iconColor || theme.colors.primary} />
+      <View
+        style={[
+          styles.iconContainer,
+          { backgroundColor: (iconColor || theme.colors.primary) + '20' },
+        ]}
+      >
+        <Ionicons
+          name={icon}
+          size={20}
+          color={iconColor || theme.colors.primary}
+        />
       </View>
       <View style={styles.infoContent}>
         <Text style={styles.infoTitle}>{title}</Text>
@@ -43,7 +52,10 @@ function InfoItem({ icon, title, description, iconColor }: InfoItemProps) {
   );
 }
 
-export default function MessagingInfoModal({ visible, onClose }: MessagingInfoModalProps) {
+export default function MessagingInfoModal({
+  visible,
+  onClose,
+}: MessagingInfoModalProps) {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
 
@@ -57,7 +69,10 @@ export default function MessagingInfoModal({ visible, onClose }: MessagingInfoMo
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={styles.overlay}>
           <TouchableWithoutFeedback>
-            <BlurredContainer style={styles.modal} borderRadius={theme.borderRadius.xl}>
+            <BlurredContainer
+              style={styles.modal}
+              borderRadius={theme.borderRadius.xl}
+            >
               {/* Header */}
               <View style={styles.header}>
                 <Text style={styles.title}>How Messaging Works</Text>
@@ -98,7 +113,10 @@ export default function MessagingInfoModal({ visible, onClose }: MessagingInfoMo
 
               {/* Footer */}
               <TouchableOpacity
-                style={[styles.doneButton, { backgroundColor: theme.colors.primary }]}
+                style={[
+                  styles.doneButton,
+                  { backgroundColor: theme.colors.primary },
+                ]}
                 onPress={onClose}
                 activeOpacity={0.8}
               >

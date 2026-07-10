@@ -16,14 +16,20 @@ type PairingScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
   'WalletConnectPairing'
 >;
-type PairingScreenRouteProp = RouteProp<RootStackParamList, 'WalletConnectPairing'>;
+type PairingScreenRouteProp = RouteProp<
+  RootStackParamList,
+  'WalletConnectPairing'
+>;
 
 interface Props {
   navigation: PairingScreenNavigationProp;
   route: PairingScreenRouteProp;
 }
 
-export default function WalletConnectPairingScreen({ navigation, route }: Props) {
+export default function WalletConnectPairingScreen({
+  navigation,
+  route,
+}: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const uri = route.params?.uri;
@@ -31,13 +37,19 @@ export default function WalletConnectPairingScreen({ navigation, route }: Props)
   return (
     <NFTBackground>
       <SafeAreaView style={styles.container} edges={['top']}>
-        <UniversalHeader title="WalletConnect" showBackButton onBackPress={() => navigation.goBack()} />
+        <UniversalHeader
+          title="WalletConnect"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+        />
         <View style={styles.content}>
           <GlassCard variant="medium" style={styles.card}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={[styles.title, { marginTop: 16 }]}>Connecting…</Text>
             <Text style={styles.message}>
-              {uri ? 'Waiting for session proposal from dApp…' : 'Waiting for WalletConnect…'}
+              {uri
+                ? 'Waiting for session proposal from dApp…'
+                : 'Waiting for WalletConnect…'}
             </Text>
           </GlassCard>
         </View>
@@ -75,5 +87,3 @@ const createStyles = (theme: Theme) =>
       textAlign: 'center',
     },
   });
-
-

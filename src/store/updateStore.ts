@@ -23,7 +23,7 @@ const VALIDATION_CACHE_KEY = '@update/validationCache';
 const VALIDATION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 interface ValidUpdateEntry {
-  ids: string[];        // Array of Update UUIDs (iOS ID, Android ID, and/or updateGroup ID)
+  ids: string[]; // Array of Update UUIDs (iOS ID, Android ID, and/or updateGroup ID)
   runtimeVersion?: string;
   createdAt?: string;
   description?: string; // Optional: human-readable description
@@ -105,7 +105,9 @@ async function validateUpdate(updateId: string): Promise<boolean | null> {
   }
 
   // Check if update ID matches any ID in any valid update entry's ids array
-  const isValid = validUpdates.validUpdates.some(entry => entry.ids.includes(updateId));
+  const isValid = validUpdates.validUpdates.some((entry) =>
+    entry.ids.includes(updateId)
+  );
 
   if (!isValid) {
     console.warn(`Update ${updateId} not found in valid updates list`);
@@ -167,12 +169,20 @@ export const useUpdateStore = create<UpdateState>()(
      * @param updateId - The update ID to mark as available
      * @param isDownloaded - Whether the update has already been downloaded (default: false)
      */
-    setUpdateAvailable: async (updateId: string | null, isDownloaded: boolean = false) => {
+    setUpdateAvailable: async (
+      updateId: string | null,
+      isDownloaded: boolean = false
+    ) => {
       const { dismissedUpdateId } = get();
 
       // If no update or this update was previously dismissed, don't show the banner
       if (!updateId || (dismissedUpdateId && dismissedUpdateId === updateId)) {
-        set({ isUpdateAvailable: false, updateId: null, isDownloaded: false, validationStatus: 'pending' });
+        set({
+          isUpdateAvailable: false,
+          updateId: null,
+          isDownloaded: false,
+          validationStatus: 'pending',
+        });
         return;
       }
 
@@ -184,7 +194,9 @@ export const useUpdateStore = create<UpdateState>()(
 
         if (isValid === false) {
           // Update is explicitly invalid or revoked
-          console.warn(`Update ${updateId} failed validation - not showing to user`);
+          console.warn(
+            `Update ${updateId} failed validation - not showing to user`
+          );
           set({
             isUpdateAvailable: false,
             updateId: null,
@@ -198,7 +210,9 @@ export const useUpdateStore = create<UpdateState>()(
         if (isValid === null) {
           // Couldn't validate (network error, etc.)
           // Block the update until validation can be performed
-          console.warn(`Could not validate update ${updateId} - blocking until validation succeeds`);
+          console.warn(
+            `Could not validate update ${updateId} - blocking until validation succeeds`
+          );
           set({
             isUpdateAvailable: false,
             updateId: null,
@@ -237,7 +251,8 @@ export const useUpdateStore = create<UpdateState>()(
      */
     loadDismissedUpdateId: async () => {
       try {
-        const storedDismissedId = await AsyncStorage.getItem(DISMISSED_UPDATE_KEY);
+        const storedDismissedId =
+          await AsyncStorage.getItem(DISMISSED_UPDATE_KEY);
         if (storedDismissedId) {
           set({ dismissedUpdateId: storedDismissedId });
         }
@@ -301,7 +316,9 @@ export const useUpdateStore = create<UpdateState>()(
 
           if (isValid === null) {
             // Couldn't validate (network error, file not found, etc.)
-            console.warn(`Could not validate update ${updateId} - blocking until validation succeeds`);
+            console.warn(
+              `Could not validate update ${updateId} - blocking until validation succeeds`
+            );
             set({
               isChecking: false,
               validationStatus: 'unknown',
@@ -354,7 +371,10 @@ export const useUpdateStore = create<UpdateState>()(
 
         return false;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to check for updates';
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to check for updates';
         console.error('Failed to check for updates:', error);
 
         set({
@@ -412,7 +432,10 @@ export const useUpdateStore = create<UpdateState>()(
         // Reload the app with the new update
         await Updates.reloadAsync();
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to download/install update';
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to download/install update';
         console.error('Failed to download/install update:', error);
 
         set({
@@ -516,6 +539,10 @@ export function useIsValidating(): boolean {
 /**
  * Hook to get validation status (reactive)
  */
-export function useValidationStatus(): 'pending' | 'valid' | 'invalid' | 'unknown' {
+export function useValidationStatus():
+  | 'pending'
+  | 'valid'
+  | 'invalid'
+  | 'unknown' {
   return useUpdateStore((state) => state.validationStatus);
 }

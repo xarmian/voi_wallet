@@ -20,7 +20,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRoute, useNavigation, CommonActions } from '@react-navigation/native';
+import {
+  useRoute,
+  useNavigation,
+  CommonActions,
+} from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import algosdk from 'algosdk';
@@ -34,22 +38,35 @@ import { GlassButton } from '@/components/common/GlassButton';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import AccountRecipientModal from '@/components/account/AccountRecipientModal';
 import { useActiveAccount } from '@/store/walletStore';
-import { ClaimableItem, fromSerializableClaimableItem } from '@/types/claimable';
+import {
+  ClaimableItem,
+  fromSerializableClaimableItem,
+} from '@/types/claimable';
 import { Arc200TransactionService } from '@/services/transactions/arc200';
 import VoiNetworkService, { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
-import { resolveAddressOrName, isLikelyEnvoiName, formatAddress } from '@/utils/address';
+import {
+  resolveAddressOrName,
+  isLikelyEnvoiName,
+  formatAddress,
+} from '@/utils/address';
 import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
-import type { WalletStackParamList, RootStackParamList } from '@/navigation/AppNavigator';
+import type {
+  WalletStackParamList,
+  RootStackParamList,
+} from '@/navigation/AppNavigator';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
 
 type ClaimTokenRouteProp = RouteProp<WalletStackParamList, 'ClaimToken'>;
-type NavigationProp = NativeStackNavigationProp<WalletStackParamList, 'ClaimToken'>;
+type NavigationProp = NativeStackNavigationProp<
+  WalletStackParamList,
+  'ClaimToken'
+>;
 
 /**
  * Formats a bigint token amount for display
@@ -77,7 +94,9 @@ export default function ClaimTokenScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ClaimTokenRouteProp>();
 
-  const claimableItem = fromSerializableClaimableItem(route.params.claimableItem);
+  const claimableItem = fromSerializableClaimableItem(
+    route.params.claimableItem
+  );
   const activeAccount = useActiveAccount();
 
   const [sendToSelf, setSendToSelf] = useState(true);
@@ -85,7 +104,9 @@ export default function ClaimTokenScreen() {
   const [recipientAddress, setRecipientAddress] = useState('');
   const [resolvedName, setResolvedName] = useState<string | null>(null);
   const [isResolvingName, setIsResolvingName] = useState(false);
-  const [nameResolutionError, setNameResolutionError] = useState<string | null>(null);
+  const [nameResolutionError, setNameResolutionError] = useState<string | null>(
+    null
+  );
   const [isClaiming, setIsClaiming] = useState(false);
   const [estimatedFee, setEstimatedFee] = useState<number>(0);
   const [imageError, setImageError] = useState(false);
@@ -114,7 +135,10 @@ export default function ClaimTokenScreen() {
 
     // Skip if already resolved
     if (recipientAddress && algosdk.isValidAddress(recipientAddress)) {
-      if (input === recipientAddress || (resolvedName && input === resolvedName)) {
+      if (
+        input === recipientAddress ||
+        (resolvedName && input === resolvedName)
+      ) {
         return;
       }
     }
@@ -179,7 +203,8 @@ export default function ClaimTokenScreen() {
     }
 
     // Only search if input looks like a name
-    const looksLikeName = /^[a-z0-9-_.]+$/.test(normalized) && normalized.length >= 2;
+    const looksLikeName =
+      /^[a-z0-9-_.]+$/.test(normalized) && normalized.length >= 2;
     if (!looksLikeName) {
       setSearchResults([]);
       setIsSearchingNames(false);
@@ -235,21 +260,31 @@ export default function ClaimTokenScreen() {
   }, []);
 
   // Handle recipient selection from modal
-  const handleRecipientSelect = useCallback((address: string, label?: string) => {
-    setRecipientInput(address);
-    setRecipientAddress(address);
-    setResolvedName(label || null);
-    setNameResolutionError(null);
-    setIsRecipientModalVisible(false);
-  }, []);
+  const handleRecipientSelect = useCallback(
+    (address: string, label?: string) => {
+      setRecipientInput(address);
+      setRecipientAddress(address);
+      setResolvedName(label || null);
+      setNameResolutionError(null);
+      setIsRecipientModalVisible(false);
+    },
+    []
+  );
 
   // Estimate transaction fee (including MBR if needed)
   useEffect(() => {
     const estimateFee = async () => {
-      if (!finalRecipientAddress || !algosdk.isValidAddress(finalRecipientAddress)) {
+      if (
+        !finalRecipientAddress ||
+        !algosdk.isValidAddress(finalRecipientAddress)
+      ) {
         // Default estimate without MBR check
         try {
-          const costEstimate = await Arc200TransactionService.estimateClaimCost(1, 1, CLAIM_NETWORK_ID);
+          const costEstimate = await Arc200TransactionService.estimateClaimCost(
+            1,
+            1,
+            CLAIM_NETWORK_ID
+          );
           setEstimatedFee(costEstimate.total);
         } catch (error) {
           setEstimatedFee(1000);
@@ -264,7 +299,11 @@ export default function ClaimTokenScreen() {
           claimableItem.contractId
         );
         const needsMbr = hasBalance ? 0 : 1;
-        const costEstimate = await Arc200TransactionService.estimateClaimCost(1, needsMbr, CLAIM_NETWORK_ID);
+        const costEstimate = await Arc200TransactionService.estimateClaimCost(
+          1,
+          needsMbr,
+          CLAIM_NETWORK_ID
+        );
         setEstimatedFee(costEstimate.total);
       } catch (error) {
         console.error('Failed to estimate fee:', error);
@@ -290,15 +329,16 @@ export default function ClaimTokenScreen() {
 
     try {
       // Build the transferFrom transaction (always on Voi network)
-      const txnGroup = await Arc200TransactionService.buildArc200TransferFromGroup({
-        contractId: claimableItem.contractId,
-        from: claimableItem.owner,
-        to: finalRecipientAddress,
-        amount: claimableItem.amount,
-        sender: activeAccount.address,
-        note: `Claiming ${claimableItem.tokenSymbol} from approval`,
-        networkId: CLAIM_NETWORK_ID,
-      });
+      const txnGroup =
+        await Arc200TransactionService.buildArc200TransferFromGroup({
+          contractId: claimableItem.contractId,
+          from: claimableItem.owner,
+          to: finalRecipientAddress,
+          amount: claimableItem.amount,
+          sender: activeAccount.address,
+          note: `Claiming ${claimableItem.tokenSymbol} from approval`,
+          networkId: CLAIM_NETWORK_ID,
+        });
 
       // Encode transactions as base64 for UniversalTransactionSigning
       const base64Transactions = txnGroup.txnBytes.map((txnBytes) =>
@@ -331,12 +371,21 @@ export default function ClaimTokenScreen() {
                 index: 1,
                 routes: [
                   { name: 'HomeMain' },
-                  { name: 'ClaimableTokens', params: { pendingRefresh: true, claimedItemIds: [claimableItem.id] } },
+                  {
+                    name: 'ClaimableTokens',
+                    params: {
+                      pendingRefresh: true,
+                      claimedItemIds: [claimableItem.id],
+                    },
+                  },
                 ],
               })
             );
           } catch (submitError) {
-            const message = submitError instanceof Error ? submitError.message : 'Failed to submit transaction';
+            const message =
+              submitError instanceof Error
+                ? submitError.message
+                : 'Failed to submit transaction';
             Alert.alert('Submission Failed', message);
           }
         },
@@ -355,7 +404,10 @@ export default function ClaimTokenScreen() {
         callbackId,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to build claim transaction';
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to build claim transaction';
       Alert.alert('Claim Failed', message);
     } finally {
       setIsClaiming(false);
@@ -369,7 +421,9 @@ export default function ClaimTokenScreen() {
     !isClaiming &&
     !isResolvingName;
 
-  const normalizedImageUrl = normalizeAssetImageUrl(claimableItem.tokenImageUrl);
+  const normalizedImageUrl = normalizeAssetImageUrl(
+    claimableItem.tokenImageUrl
+  );
 
   return (
     <NFTBackground>
@@ -397,12 +451,18 @@ export default function ClaimTokenScreen() {
                 />
               ) : (
                 <View style={styles.tokenImagePlaceholder}>
-                  <Ionicons name="disc" size={32} color={styles.placeholderIcon.color} />
+                  <Ionicons
+                    name="disc"
+                    size={32}
+                    color={styles.placeholderIcon.color}
+                  />
                 </View>
               )}
               <View style={styles.tokenInfo}>
                 <View style={styles.tokenNameRow}>
-                  <Text style={styles.tokenName}>{claimableItem.tokenName}</Text>
+                  <Text style={styles.tokenName}>
+                    {claimableItem.tokenName}
+                  </Text>
                   {claimableItem.tokenVerified && (
                     <Ionicons
                       name="checkmark-circle"
@@ -412,22 +472,30 @@ export default function ClaimTokenScreen() {
                     />
                   )}
                 </View>
-                <Text style={styles.tokenSymbol}>{claimableItem.tokenSymbol}</Text>
+                <Text style={styles.tokenSymbol}>
+                  {claimableItem.tokenSymbol}
+                </Text>
               </View>
             </View>
 
             <View style={styles.amountContainer}>
               <Text style={styles.amountLabel}>Amount to Claim</Text>
               <Text style={styles.amount}>
-                {formatTokenAmount(claimableItem.amount, claimableItem.tokenDecimals)}
+                {formatTokenAmount(
+                  claimableItem.amount,
+                  claimableItem.tokenDecimals
+                )}
               </Text>
-              <Text style={styles.amountSymbol}>{claimableItem.tokenSymbol}</Text>
+              <Text style={styles.amountSymbol}>
+                {claimableItem.tokenSymbol}
+              </Text>
             </View>
 
             <View style={styles.ownerInfo}>
               <Text style={styles.ownerLabel}>From</Text>
               <Text style={styles.ownerAddress}>
-                {claimableItem.ownerEnvoiName || formatAddress(claimableItem.owner)}
+                {claimableItem.ownerEnvoiName ||
+                  formatAddress(claimableItem.owner)}
               </Text>
             </View>
           </GlassCard>
@@ -439,7 +507,10 @@ export default function ClaimTokenScreen() {
               <Switch
                 value={sendToSelf}
                 onValueChange={setSendToSelf}
-                trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                trackColor={{
+                  false: theme.colors.border,
+                  true: theme.colors.primary,
+                }}
                 thumbColor="white"
               />
             </View>
@@ -479,8 +550,13 @@ export default function ClaimTokenScreen() {
                 </View>
                 {isEnvoiEnabled && isSearchingNames && (
                   <View style={styles.searchStatus}>
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
-                    <Text style={styles.searchStatusText}>Searching Envoi...</Text>
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.colors.primary}
+                    />
+                    <Text style={styles.searchStatusText}>
+                      Searching Envoi...
+                    </Text>
                   </View>
                 )}
                 {nameResolutionError && (
@@ -491,11 +567,13 @@ export default function ClaimTokenScreen() {
                     Resolved: {resolvedName} → {formatAddress(recipientAddress)}
                   </Text>
                 )}
-                {!resolvedName && recipientAddress && !isLikelyEnvoiName(recipientInput) && (
-                  <Text style={styles.addressText}>
-                    {formatAddress(recipientAddress)}
-                  </Text>
-                )}
+                {!resolvedName &&
+                  recipientAddress &&
+                  !isLikelyEnvoiName(recipientInput) && (
+                    <Text style={styles.addressText}>
+                      {formatAddress(recipientAddress)}
+                    </Text>
+                  )}
                 {/* Envoi Search Results */}
                 {searchResults.length > 0 && (
                   <View style={styles.searchResults}>
@@ -504,7 +582,8 @@ export default function ClaimTokenScreen() {
                         key={`${result.name}-${result.address}`}
                         style={[
                           styles.searchResultItem,
-                          index === searchResults.length - 1 && styles.searchResultItemLast,
+                          index === searchResults.length - 1 &&
+                            styles.searchResultItemLast,
                         ]}
                         onPress={() => handleSearchResultSelect(result)}
                         activeOpacity={0.8}
@@ -522,7 +601,9 @@ export default function ClaimTokenScreen() {
                           </View>
                         )}
                         <View style={styles.searchResultContent}>
-                          <Text style={styles.searchResultName}>{result.name}</Text>
+                          <Text style={styles.searchResultName}>
+                            {result.name}
+                          </Text>
                           <Text style={styles.searchResultAddress}>
                             {formatAddress(result.address)}
                           </Text>
@@ -739,14 +820,16 @@ const createStyles = (theme: Theme) =>
     },
     searchResults: {
       marginTop: 8,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(30, 30, 40, 0.9)'
-        : 'rgba(255, 255, 255, 0.85)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(30, 30, 40, 0.9)'
+          : 'rgba(255, 255, 255, 0.85)',
       borderRadius: theme.borderRadius.md,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.15)'
+          : 'rgba(255, 255, 255, 0.5)',
       overflow: 'hidden',
     },
     searchResultItem: {

@@ -28,12 +28,20 @@ export default function FriendsScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
   const navigation =
-    useNavigation<NativeStackNavigationProp<FriendsStackParamList, 'FriendsList'>>();
+    useNavigation<
+      NativeStackNavigationProp<FriendsStackParamList, 'FriendsList'>
+    >();
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const sortedFriends = useSortedFriends();
-  const { initialize, isInitialized, isLoading, searchFriends, refreshAllProfiles } = useFriendsStore();
+  const {
+    initialize,
+    isInitialized,
+    isLoading,
+    searchFriends,
+    refreshAllProfiles,
+  } = useFriendsStore();
 
   // Initialize on mount
   useEffect(() => {
@@ -48,13 +56,16 @@ export default function FriendsScreen() {
     : sortedFriends;
 
   // Group friends
-  const favorites = filteredFriends.filter(f => f.isFavorite);
-  const regular = filteredFriends.filter(f => !f.isFavorite);
+  const favorites = filteredFriends.filter((f) => f.isFavorite);
+  const regular = filteredFriends.filter((f) => !f.isFavorite);
 
   // Handle friend press
-  const handleFriendPress = useCallback((friend: Friend) => {
-    navigation.navigate('FriendProfile', { envoiName: friend.envoiName });
-  }, [navigation]);
+  const handleFriendPress = useCallback(
+    (friend: Friend) => {
+      navigation.navigate('FriendProfile', { envoiName: friend.envoiName });
+    },
+    [navigation]
+  );
 
   // Handle add friend
   const handleAddFriend = useCallback(() => {
@@ -82,18 +93,24 @@ export default function FriendsScreen() {
     if (searchQuery.trim()) {
       return (
         <View style={styles.emptyState}>
-          <Ionicons name="search-outline" size={64} color={theme.colors.textMuted} />
+          <Ionicons
+            name="search-outline"
+            size={64}
+            color={theme.colors.textMuted}
+          />
           <Text style={styles.emptyTitle}>No friends found</Text>
-          <Text style={styles.emptyText}>
-            Try a different search term
-          </Text>
+          <Text style={styles.emptyText}>Try a different search term</Text>
         </View>
       );
     }
 
     return (
       <View style={styles.emptyState}>
-        <Ionicons name="people-outline" size={64} color={theme.colors.textMuted} />
+        <Ionicons
+          name="people-outline"
+          size={64}
+          color={theme.colors.textMuted}
+        />
         <Text style={styles.emptyTitle}>No friends yet</Text>
         <Text style={styles.emptyText}>
           Add friends by searching for their Envoi name
@@ -118,17 +135,21 @@ export default function FriendsScreen() {
           showAccountSelector={false}
           onAccountSelectorPress={() => {}}
           rightAction={
-            <TouchableOpacity style={styles.profileButton} onPress={handleMyProfile}>
-              <Ionicons name="person-circle-outline" size={28} color={theme.colors.primary} />
+            <TouchableOpacity
+              style={styles.profileButton}
+              onPress={handleMyProfile}
+            >
+              <Ionicons
+                name="person-circle-outline"
+                size={28}
+                color={theme.colors.primary}
+              />
             </TouchableOpacity>
           }
         />
 
         {/* Search Bar */}
-        <BlurredContainer
-          style={styles.searchContainer}
-          borderRadius={0}
-        >
+        <BlurredContainer style={styles.searchContainer} borderRadius={0}>
           <View style={styles.searchInputContainer}>
             <Ionicons name="search" size={20} color={theme.colors.textMuted} />
             <TextInput
@@ -142,7 +163,11 @@ export default function FriendsScreen() {
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+                <Ionicons
+                  name="close-circle"
+                  size={20}
+                  color={theme.colors.textMuted}
+                />
               </TouchableOpacity>
             )}
           </View>
@@ -155,7 +180,11 @@ export default function FriendsScreen() {
                 })
               }
             >
-              <Ionicons name="person-add-outline" size={16} color={theme.colors.primary} />
+              <Ionicons
+                name="person-add-outline"
+                size={16}
+                color={theme.colors.primary}
+              />
               <Text style={styles.searchExpandText}>
                 Search Envoi for "{searchQuery.trim()}"
               </Text>
@@ -165,7 +194,11 @@ export default function FriendsScreen() {
 
         {/* Friends List */}
         <ScrollView
-          contentContainerStyle={filteredFriends.length === 0 ? styles.emptyListContent : styles.listContent}
+          contentContainerStyle={
+            filteredFriends.length === 0
+              ? styles.emptyListContent
+              : styles.listContent
+          }
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}

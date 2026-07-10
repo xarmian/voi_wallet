@@ -108,7 +108,10 @@ export default function PasswordInputModal({
         >
           <View style={styles.modal}>
             <Text style={styles.title}>
-              {title || (mode === 'create' ? 'Create Backup Password' : 'Enter Backup Password')}
+              {title ||
+                (mode === 'create'
+                  ? 'Create Backup Password'
+                  : 'Enter Backup Password')}
             </Text>
             <Text style={styles.message}>
               {subtitle ||
@@ -121,7 +124,8 @@ export default function PasswordInputModal({
               <View style={styles.warningContainer}>
                 <Ionicons name="warning" size={18} color={colors.warning} />
                 <Text style={styles.warningText}>
-                  If you forget this password, you will not be able to restore your backup.
+                  If you forget this password, you will not be able to restore
+                  your backup.
                 </Text>
               </View>
             )}
@@ -131,7 +135,9 @@ export default function PasswordInputModal({
               <TextInput
                 style={[
                   styles.input,
-                  (validationMessage || error) && hasEdited && styles.inputError,
+                  (validationMessage || error) &&
+                    hasEdited &&
+                    styles.inputError,
                 ]}
                 value={password}
                 onChangeText={(text) => {

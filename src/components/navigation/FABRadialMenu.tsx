@@ -6,7 +6,10 @@
  */
 
 import React, { useCallback, useMemo } from 'react';
-import { useIsSwapEnabled, useIsMessagingEnabled } from '@/store/experimentalStore';
+import {
+  useIsSwapEnabled,
+  useIsMessagingEnabled,
+} from '@/store/experimentalStore';
 import {
   View,
   StyleSheet,
@@ -42,17 +45,52 @@ interface MenuItem {
 }
 
 const MENU_ITEMS: MenuItem[] = [
-  { id: 'discover', label: 'Discover Voi', icon: 'compass', screen: 'Discover' },
-  { id: 'swap', label: 'Swap Tokens', icon: 'swap-horizontal', screen: 'Home', stackScreen: 'Swap' },
-  { id: 'send', label: 'Send Tokens', icon: 'arrow-up', screen: 'Home', stackScreen: 'Send' },
-  { id: 'receive', label: 'Receive Tokens', icon: 'arrow-down', screen: 'Home', stackScreen: 'Receive' },
-  { id: 'claim', label: 'Claim Tokens', icon: 'gift-outline', screen: 'Home', stackScreen: 'ClaimableTokens' },
-  { id: 'messages', label: 'Messages', icon: 'chatbubbles', screen: 'Friends', stackScreen: 'MessagesInbox' },
+  {
+    id: 'discover',
+    label: 'Discover Voi',
+    icon: 'compass',
+    screen: 'Discover',
+  },
+  {
+    id: 'swap',
+    label: 'Swap Tokens',
+    icon: 'swap-horizontal',
+    screen: 'Home',
+    stackScreen: 'Swap',
+  },
+  {
+    id: 'send',
+    label: 'Send Tokens',
+    icon: 'arrow-up',
+    screen: 'Home',
+    stackScreen: 'Send',
+  },
+  {
+    id: 'receive',
+    label: 'Receive Tokens',
+    icon: 'arrow-down',
+    screen: 'Home',
+    stackScreen: 'Receive',
+  },
+  {
+    id: 'claim',
+    label: 'Claim Tokens',
+    icon: 'gift-outline',
+    screen: 'Home',
+    stackScreen: 'ClaimableTokens',
+  },
+  {
+    id: 'messages',
+    label: 'Messages',
+    icon: 'chatbubbles',
+    screen: 'Friends',
+    stackScreen: 'MessagesInbox',
+  },
 ];
 
 // Vertical stack positioning constants
-const ITEM_HEIGHT = 52;   // Height of each menu item including gap
-const ITEM_GAP = 12;      // Gap between items
+const ITEM_HEIGHT = 52; // Height of each menu item including gap
+const ITEM_GAP = 12; // Gap between items
 const FIRST_ITEM_OFFSET = 80; // Distance from FAB center to first item
 
 // Individual menu item component
@@ -76,7 +114,10 @@ const FABMenuItem: React.FC<FABMenuItemProps> = ({
   // Calculate vertical position - items stack upward from the FAB
   // Reverse index so first item in array appears at bottom of stack (closest to FAB)
   const reverseIndex = totalItems - 1 - index;
-  const targetY = -(FIRST_ITEM_OFFSET + reverseIndex * (ITEM_HEIGHT + ITEM_GAP));
+  const targetY = -(
+    FIRST_ITEM_OFFSET +
+    reverseIndex * (ITEM_HEIGHT + ITEM_GAP)
+  );
 
   const animatedStyle = useAnimatedStyle(() => {
     const progress = menuProgress.value;
@@ -108,10 +149,18 @@ const FABMenuItem: React.FC<FABMenuItemProps> = ({
         borderColor={theme.colors.border}
       >
         <View style={styles.menuItemContent}>
-          <View style={[styles.menuItemIconContainer, { backgroundColor: theme.colors.primary + '20' }]}>
+          <View
+            style={[
+              styles.menuItemIconContainer,
+              { backgroundColor: theme.colors.primary + '20' },
+            ]}
+          >
             <Ionicons name={item.icon} size={20} color={theme.colors.primary} />
           </View>
-          <Text style={[styles.menuItemLabel, { color: theme.colors.text }]} numberOfLines={1}>
+          <Text
+            style={[styles.menuItemLabel, { color: theme.colors.text }]}
+            numberOfLines={1}
+          >
             {item.label}
           </Text>
         </View>
@@ -126,7 +175,9 @@ interface FABRadialMenuProps {
 }
 
 // Default offset positions the button to overlap the tab bar top (like original design)
-export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 }) => {
+export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
+  bottomOffset = 20,
+}) => {
   const { theme } = useTheme();
   const navigation = useNavigation<any>();
   const activeAccount = useActiveAccount();
@@ -158,15 +209,18 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
   }, [menuProgress, buttonRotation, isOpen]);
 
   // Close menu animation with optional completion callback
-  const closeMenu = useCallback((onComplete?: () => void) => {
-    isOpen.value = false;
-    menuProgress.value = withSpring(0, springConfigs.snappy, (finished) => {
-      if (finished && onComplete) {
-        runOnJS(onComplete)();
-      }
-    });
-    buttonRotation.value = withSpring(0, springConfigs.snappy);
-  }, [menuProgress, buttonRotation, isOpen]);
+  const closeMenu = useCallback(
+    (onComplete?: () => void) => {
+      isOpen.value = false;
+      menuProgress.value = withSpring(0, springConfigs.snappy, (finished) => {
+        if (finished && onComplete) {
+          runOnJS(onComplete)();
+        }
+      });
+      buttonRotation.value = withSpring(0, springConfigs.snappy);
+    },
+    [menuProgress, buttonRotation, isOpen]
+  );
 
   // Toggle menu
   const toggleMenu = useCallback(() => {
@@ -178,35 +232,39 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
   }, [isOpen, openMenu, closeMenu]);
 
   // Handle menu item press
-  const handleItemPress = useCallback((item: MenuItem) => {
-    const navigateToScreen = () => {
-      if (item.stackScreen) {
-        // Navigate to nested stack screen
-        const params = item.stackScreen === 'Swap' && activeAccount
-          ? { accountId: activeAccount.address }
-          : {};
+  const handleItemPress = useCallback(
+    (item: MenuItem) => {
+      const navigateToScreen = () => {
+        if (item.stackScreen) {
+          // Navigate to nested stack screen
+          const params =
+            item.stackScreen === 'Swap' && activeAccount
+              ? { accountId: activeAccount.address }
+              : {};
 
-        // Use Main -> Tab -> Stack screen navigation path
-        navigation.navigate('Main', {
-          screen: item.screen,
-          params: {
-            screen: item.stackScreen,
-            params,
-            initial: false, // Prevents showing initial route first
-          },
-        });
-      } else {
-        // Direct tab navigation (Discover)
-        // Navigate through Main to reach the tab
-        navigation.navigate('Main', {
-          screen: item.screen,
-        });
-      }
-    };
+          // Use Main -> Tab -> Stack screen navigation path
+          navigation.navigate('Main', {
+            screen: item.screen,
+            params: {
+              screen: item.stackScreen,
+              params,
+              initial: false, // Prevents showing initial route first
+            },
+          });
+        } else {
+          // Direct tab navigation (Discover)
+          // Navigate through Main to reach the tab
+          navigation.navigate('Main', {
+            screen: item.screen,
+          });
+        }
+      };
 
-    // Close menu and navigate after animation completes
-    closeMenu(navigateToScreen);
-  }, [navigation, activeAccount, closeMenu]);
+      // Close menu and navigate after animation completes
+      closeMenu(navigateToScreen);
+    },
+    [navigation, activeAccount, closeMenu]
+  );
 
   // Backdrop animated style
   const backdropAnimatedStyle = useAnimatedStyle(() => ({
@@ -239,9 +297,7 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
   return (
     <>
       {/* Dark backdrop overlay */}
-      <Animated.View
-        style={[styles.backdrop, backdropAnimatedStyle]}
-      >
+      <Animated.View style={[styles.backdrop, backdropAnimatedStyle]}>
         <TouchableWithoutFeedback onPress={() => closeMenu()}>
           <View style={StyleSheet.absoluteFill} />
         </TouchableWithoutFeedback>
@@ -295,7 +351,12 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({ bottomOffset = 20 
 
           {/* Unread messages badge */}
           {unreadCount > 0 && (
-            <View style={[styles.unreadBadge, { backgroundColor: theme.colors.error || '#EF4444' }]}>
+            <View
+              style={[
+                styles.unreadBadge,
+                { backgroundColor: theme.colors.error || '#EF4444' },
+              ]}
+            >
               <Text style={styles.unreadBadgeText}>
                 {unreadCount > 99 ? '99+' : unreadCount}
               </Text>

@@ -102,8 +102,17 @@ export default function NFTGridView({
             </View>
           )}
           {owned && (
-            <View style={[styles.ownedBadge, { backgroundColor: theme.colors.background }]}>
-              <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
+            <View
+              style={[
+                styles.ownedBadge,
+                { backgroundColor: theme.colors.background },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={16}
+                color={theme.colors.success}
+              />
             </View>
           )}
         </View>
@@ -132,7 +141,9 @@ export default function NFTGridView({
       renderItem={renderNFTItem}
       keyExtractor={(item) => `${item.contractId}-${item.tokenId}`}
       numColumns={2}
-      contentContainerStyle={nfts.length === 0 ? styles.emptyListContainer : styles.listContainer}
+      contentContainerStyle={
+        nfts.length === 0 ? styles.emptyListContainer : styles.listContainer
+      }
       columnWrapperStyle={nfts.length > 0 ? styles.row : undefined}
       refreshControl={
         onRefresh ? (

@@ -143,12 +143,17 @@ export function AnimatedQRScanner({
             decoderRef.current = AnimatedQRService.createDecoder();
           }
 
-          const state = AnimatedQRService.processFrame(decoderRef.current, data);
+          const state = AnimatedQRService.processFrame(
+            decoderRef.current,
+            data
+          );
 
           // Log progress concisely
           const seqInfo = AnimatedQRService.getSequenceInfo(data);
           if (seqInfo) {
-            console.log(`[AnimatedQRScanner] Frame ${seqInfo.current}/${seqInfo.total} → ${state.progress}% (${state.receivedCount}/${state.expectedCount} received)${state.error ? ` error: ${state.error}` : ''}`);
+            console.log(
+              `[AnimatedQRScanner] Frame ${seqInfo.current}/${seqInfo.total} → ${state.progress}% (${state.receivedCount}/${state.expectedCount} received)${state.error ? ` error: ${state.error}` : ''}`
+            );
           }
 
           setDecodeState(state);
@@ -169,8 +174,13 @@ export function AnimatedQRScanner({
             hasCompletedRef.current = true;
             onScan(decoded);
           } catch (error) {
-            console.error('[AnimatedQRScanner] Single-part UR decode error:', error);
-            onError?.(error instanceof Error ? error.message : 'Failed to decode QR');
+            console.error(
+              '[AnimatedQRScanner] Single-part UR decode error:',
+              error
+            );
+            onError?.(
+              error instanceof Error ? error.message : 'Failed to decode QR'
+            );
           }
         }
       } else {
@@ -186,7 +196,9 @@ export function AnimatedQRScanner({
   // Handle permission
   if (!permission) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View
+        style={[styles.container, { backgroundColor: theme.colors.background }]}
+      >
         <Text style={[styles.statusText, { color: theme.colors.text }]}>
           Requesting camera permission...
         </Text>
@@ -196,7 +208,9 @@ export function AnimatedQRScanner({
 
   if (!permission.granted) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View
+        style={[styles.container, { backgroundColor: theme.colors.background }]}
+      >
         <View style={styles.permissionContainer}>
           <Ionicons
             name="camera-outline"
@@ -206,14 +220,27 @@ export function AnimatedQRScanner({
           <Text style={[styles.permissionTitle, { color: theme.colors.text }]}>
             Camera Permission Required
           </Text>
-          <Text style={[styles.permissionText, { color: theme.colors.textSecondary }]}>
+          <Text
+            style={[
+              styles.permissionText,
+              { color: theme.colors.textSecondary },
+            ]}
+          >
             We need camera access to scan QR codes
           </Text>
           <TouchableOpacity
-            style={[styles.permissionButton, { backgroundColor: theme.colors.primary }]}
+            style={[
+              styles.permissionButton,
+              { backgroundColor: theme.colors.primary },
+            ]}
             onPress={requestPermission}
           >
-            <Text style={[styles.permissionButtonText, { color: theme.colors.buttonText }]}>
+            <Text
+              style={[
+                styles.permissionButtonText,
+                { color: theme.colors.buttonText },
+              ]}
+            >
               Grant Permission
             </Text>
           </TouchableOpacity>
@@ -243,12 +270,41 @@ export function AnimatedQRScanner({
         {/* Middle section with scan frame */}
         <View style={[styles.middleSection, { height: scanAreaSize }]}>
           <View style={styles.overlaySection} />
-          <View style={[styles.scanArea, { width: scanAreaSize, height: scanAreaSize }]}>
+          <View
+            style={[
+              styles.scanArea,
+              { width: scanAreaSize, height: scanAreaSize },
+            ]}
+          >
             {/* Corner markers */}
-            <View style={[styles.corner, styles.topLeft, { borderColor: theme.colors.primary }]} />
-            <View style={[styles.corner, styles.topRight, { borderColor: theme.colors.primary }]} />
-            <View style={[styles.corner, styles.bottomLeft, { borderColor: theme.colors.primary }]} />
-            <View style={[styles.corner, styles.bottomRight, { borderColor: theme.colors.primary }]} />
+            <View
+              style={[
+                styles.corner,
+                styles.topLeft,
+                { borderColor: theme.colors.primary },
+              ]}
+            />
+            <View
+              style={[
+                styles.corner,
+                styles.topRight,
+                { borderColor: theme.colors.primary },
+              ]}
+            />
+            <View
+              style={[
+                styles.corner,
+                styles.bottomLeft,
+                { borderColor: theme.colors.primary },
+              ]}
+            />
+            <View
+              style={[
+                styles.corner,
+                styles.bottomRight,
+                { borderColor: theme.colors.primary },
+              ]}
+            />
           </View>
           <View style={styles.overlaySection} />
         </View>
@@ -262,9 +318,23 @@ export function AnimatedQRScanner({
 
           {/* Animated QR indicator */}
           {isAnimatedMode && (
-            <View style={[styles.animatedIndicator, { backgroundColor: theme.colors.primary }]}>
-              <Ionicons name="play-circle" size={16} color={theme.colors.buttonText} />
-              <Text style={[styles.animatedText, { color: theme.colors.buttonText }]}>
+            <View
+              style={[
+                styles.animatedIndicator,
+                { backgroundColor: theme.colors.primary },
+              ]}
+            >
+              <Ionicons
+                name="play-circle"
+                size={16}
+                color={theme.colors.buttonText}
+              />
+              <Text
+                style={[
+                  styles.animatedText,
+                  { color: theme.colors.buttonText },
+                ]}
+              >
                 Receiving animated QR...
               </Text>
             </View>
@@ -273,7 +343,12 @@ export function AnimatedQRScanner({
           {/* Progress bar for animated QR */}
           {isAnimatedMode && showProgress && (
             <View style={[styles.progressContainer, { width: scanAreaSize }]}>
-              <View style={[styles.progressBar, { backgroundColor: 'rgba(255,255,255,0.3)' }]}>
+              <View
+                style={[
+                  styles.progressBar,
+                  { backgroundColor: 'rgba(255,255,255,0.3)' },
+                ]}
+              >
                 <View
                   style={[
                     styles.progressFill,
@@ -285,7 +360,8 @@ export function AnimatedQRScanner({
                 />
               </View>
               <Text style={styles.progressText}>
-                {Math.round(decodeState.progress)}% • {decodeState.receivedCount} frames
+                {Math.round(decodeState.progress)}% •{' '}
+                {decodeState.receivedCount} frames
               </Text>
             </View>
           )}
@@ -293,7 +369,10 @@ export function AnimatedQRScanner({
           {/* Reset button for animated QR */}
           {isAnimatedMode && (
             <TouchableOpacity
-              style={[styles.resetButton, { borderColor: 'rgba(255,255,255,0.5)' }]}
+              style={[
+                styles.resetButton,
+                { borderColor: 'rgba(255,255,255,0.5)' },
+              ]}
               onPress={resetDecoder}
             >
               <Ionicons name="refresh" size={16} color="white" />

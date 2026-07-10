@@ -9,7 +9,10 @@ import {
   LedgerAccountError,
 } from '@/types/wallet';
 import RekeyManager from '@/services/wallet/rekeyManager';
-import { simpleLedgerSigner, SimpleLedgerSigningRequest } from '@/services/ledger/simpleLedgerSigner';
+import {
+  simpleLedgerSigner,
+  SimpleLedgerSigningRequest,
+} from '@/services/ledger/simpleLedgerSigner';
 import algosdk, { Transaction } from 'algosdk';
 import VoiNetworkService from '@/services/network';
 
@@ -83,9 +86,12 @@ export class SimplifiedKeyManager {
       if (signingInfo.requiresLedger) {
         return await this.signWithLedger(transaction, signingInfo, address);
       } else {
-        return await this.signWithSoftwareKey(transaction, signingInfo.signingAddress, pin);
+        return await this.signWithSoftwareKey(
+          transaction,
+          signingInfo.signingAddress,
+          pin
+        );
       }
-
     } catch (error) {
       console.error('Transaction signing failed:', error);
       throw error;
@@ -100,12 +106,17 @@ export class SimplifiedKeyManager {
     signingInfo: any,
     originalAddress: string
   ): Promise<Uint8Array> {
-    const ledgerInfo = await this.getLedgerSigningInfo(signingInfo.signingAddress || originalAddress);
+    const ledgerInfo = await this.getLedgerSigningInfo(
+      signingInfo.signingAddress || originalAddress
+    );
 
     const signingRequest: SimpleLedgerSigningRequest = {
       transaction: transaction as Transaction | Uint8Array,
       derivationIndex: ledgerInfo.derivationIndex,
-      signerAddress: signingInfo.signingAddress !== originalAddress ? signingInfo.signingAddress : undefined,
+      signerAddress:
+        signingInfo.signingAddress !== originalAddress
+          ? signingInfo.signingAddress
+          : undefined,
     };
 
     const result = await simpleLedgerSigner.signTransaction(signingRequest);
@@ -183,7 +194,10 @@ export class SimplifiedKeyManager {
 
           case AccountType.REKEYED:
             const rekeyedAccount = account as RekeyedAccountMetadata;
-            const signingAccount = RekeyManager.findSigningAccount(rekeyedAccount, wallet);
+            const signingAccount = RekeyManager.findSigningAccount(
+              rekeyedAccount,
+              wallet
+            );
 
             if (signingAccount) {
               return {
@@ -199,7 +213,8 @@ export class SimplifiedKeyManager {
 
           case AccountType.WATCH:
             // For watch accounts, check if they're rekeyed to an account we control
-            const rekeyInfo = await VoiNetworkService.getAccountRekeyInfo(address);
+            const rekeyInfo =
+              await VoiNetworkService.getAccountRekeyInfo(address);
             if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
               const signerAccount = wallet.accounts.find(
                 (acc) => acc.address === rekeyInfo.authAddress
@@ -227,7 +242,6 @@ export class SimplifiedKeyManager {
         isRekeyed: false,
         requiresLedger: false,
       };
-
     } catch (error) {
       console.error('Failed to get signing info:', error);
       return {
@@ -308,13 +322,15 @@ export class SimplifiedKeyManager {
   /**
    * Get list of signing accounts (accounts that can sign transactions)
    */
-  static async getSigningAccounts(): Promise<Array<{
-    id: string;
-    address: string;
-    type: AccountType;
-    canSign: boolean;
-    requiresLedger: boolean;
-  }>> {
+  static async getSigningAccounts(): Promise<
+    Array<{
+      id: string;
+      address: string;
+      type: AccountType;
+      canSign: boolean;
+      requiresLedger: boolean;
+    }>
+  > {
     try {
       const wallet = await MultiAccountWalletService.getCurrentWallet();
       if (!wallet) {
@@ -324,7 +340,10 @@ export class SimplifiedKeyManager {
       const signingAccounts = [];
 
       for (const account of wallet.accounts) {
-        if (account.type === AccountType.STANDARD || account.type === AccountType.LEDGER) {
+        if (
+          account.type === AccountType.STANDARD ||
+          account.type === AccountType.LEDGER
+        ) {
           signingAccounts.push({
             id: account.id,
             address: account.address,
@@ -354,9 +373,7 @@ export class SimplifiedKeyManager {
   /**
    * Validate that a transaction can be signed
    */
-  static async validateSigningCapability(
-    addresses: string[]
-  ): Promise<{
+  static async validateSigningCapability(addresses: string[]): Promise<{
     canSign: boolean;
     missingSigners: string[];
     ledgerRequired: boolean;

@@ -122,7 +122,10 @@ export class TokenMappingError extends Error {
 }
 
 export class TokenMappingAPIError extends TokenMappingError {
-  constructor(message: string, public status?: number) {
+  constructor(
+    message: string,
+    public status?: number
+  ) {
     super(message, 'API_ERROR', { status });
   }
 }

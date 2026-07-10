@@ -57,9 +57,9 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
 export interface WalletEvent {
   id: number;
   event_type: NotificationType;
-  sender: string;        // 58-char Algorand address
-  receiver: string;      // 58-char Algorand address
-  txid: string | null;   // 52-char base32 transaction ID
+  sender: string; // 58-char Algorand address
+  receiver: string; // 58-char Algorand address
+  txid: string | null; // 52-char base32 transaction ID
   round: number;
   intra: number | null;
   timestamp: number;
@@ -90,7 +90,7 @@ export interface PushTokenRecord {
 export interface AccountSubscription {
   id: string;
   device_id: string;
-  account_address: string;  // 58-char Algorand address
+  account_address: string; // 58-char Algorand address
   notify_messages: boolean;
   notify_voi_payments: boolean;
   notify_arc200_transfers: boolean;
@@ -108,14 +108,20 @@ export interface AccountSubscription {
  * Notification data payload received from push notification
  */
 export interface NotificationData {
-  type: 'message' | 'payment' | 'arc200' | 'arc72' | 'key_registration' | 'test';
-  txId?: string;         // 52-char base32 transaction ID
-  sender?: string;       // 58-char Algorand address
-  receiver?: string;     // 58-char Algorand address (our account that received the event)
+  type:
+    | 'message'
+    | 'payment'
+    | 'arc200'
+    | 'arc72'
+    | 'key_registration'
+    | 'test';
+  txId?: string; // 52-char base32 transaction ID
+  sender?: string; // 58-char Algorand address
+  receiver?: string; // 58-char Algorand address (our account that received the event)
   eventType?: NotificationType;
   round?: number;
   timestamp?: number;
-  amount?: number;       // Normalized decimal amount
+  amount?: number; // Normalized decimal amount
   contractId?: number;
   tokenId?: string;
 }
@@ -126,9 +132,9 @@ export interface NotificationData {
 export interface NotificationHistoryRecord {
   id: string;
   device_id: string;
-  account_address: string;  // 58-char Algorand address
+  account_address: string; // 58-char Algorand address
   notification_type: NotificationType;
-  txid: string | null;      // 52-char base32 transaction ID
+  txid: string | null; // 52-char base32 transaction ID
   title: string;
   body: string;
   sent_at: string;

@@ -10,7 +10,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { RouteProp, useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
+import {
+  RouteProp,
+  useRoute,
+  useNavigation,
+  useFocusEffect,
+} from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as algosdk from 'algosdk';
 import { useWalletStore } from '@/store/walletStore';
@@ -51,7 +56,11 @@ export default function AddWatchAccountScreen() {
   const [isLoading, setIsLoading] = useState(false);
 
   // Cross-platform alert helper
-  const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void}>) => {
+  const showAlert = (
+    title: string,
+    message: string,
+    buttons?: Array<{ text: string; onPress?: () => void }>
+  ) => {
     if (Platform.OS === 'web') {
       window.alert(`${title}\n\n${message}`);
       buttons?.[0]?.onPress?.();
@@ -203,11 +212,7 @@ export default function AddWatchAccountScreen() {
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Ionicons
-            name="arrow-back"
-            size={24}
-            color={theme.colors.text}
-          />
+          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Add Watch Account</Text>
         <View style={styles.placeholder} />
@@ -217,88 +222,88 @@ export default function AddWatchAccountScreen() {
         style={styles.content}
         contentContainerStyle={styles.scrollContent}
       >
-          {/* Information Card */}
-          <View style={styles.infoCard}>
-            <Ionicons
-              name="eye-outline"
-              size={24}
-              color={theme.colors.primary}
-              style={styles.infoIcon}
-            />
-            <View style={styles.infoContent}>
-              <Text style={styles.infoTitle}>Watch Only Account</Text>
-              <Text style={styles.infoDescription}>
-                Watch accounts allow you to monitor any Algorand address without
-                requiring the private key. You can view balances and transaction
-                history, but cannot send transactions.
-              </Text>
-            </View>
+        {/* Information Card */}
+        <View style={styles.infoCard}>
+          <Ionicons
+            name="eye-outline"
+            size={24}
+            color={theme.colors.primary}
+            style={styles.infoIcon}
+          />
+          <View style={styles.infoContent}>
+            <Text style={styles.infoTitle}>Watch Only Account</Text>
+            <Text style={styles.infoDescription}>
+              Watch accounts allow you to monitor any Algorand address without
+              requiring the private key. You can view balances and transaction
+              history, but cannot send transactions.
+            </Text>
           </View>
+        </View>
 
-          {/* Address Input */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>Algorand Address *</Text>
-            <View style={styles.addressInputContainer}>
-              <TextInput
-                style={[
-                  styles.addressInput,
-                  address &&
-                    (isAddressValid ? styles.validInput : styles.invalidInput),
-                ]}
-                value={address}
-                onChangeText={setAddress}
-                placeholder="Enter address (58 characters)"
-                placeholderTextColor={theme.colors.placeholder}
-                multiline
-                textAlignVertical="top"
-                autoCapitalize="none"
-                autoCorrect={false}
-                spellCheck={false}
-              />
-              <TouchableOpacity
-                style={styles.pasteButton}
-                onPress={handlePasteAddress}
-              >
-                <Ionicons
-                  name="clipboard-outline"
-                  size={20}
-                  color={theme.colors.primary}
-                />
-                <Text style={styles.pasteText}>Paste</Text>
-              </TouchableOpacity>
-            </View>
-            {address && !isAddressValid && (
-              <Text style={styles.errorText}>Invalid Algorand address</Text>
-            )}
-          </View>
-
-          {/* Label Input */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>Account Label (Optional)</Text>
+        {/* Address Input */}
+        <View style={styles.inputSection}>
+          <Text style={styles.inputLabel}>Algorand Address *</Text>
+          <View style={styles.addressInputContainer}>
             <TextInput
-              style={styles.textInput}
-              value={label}
-              onChangeText={setLabel}
-              placeholder="e.g., Trading Account, Cold Storage"
-              placeholderTextColor={theme.colors.placeholder}
-              maxLength={50}
-            />
-          </View>
-
-          {/* Notes Input */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>Notes (Optional)</Text>
-            <TextInput
-              style={[styles.textInput, styles.notesInput]}
-              value={notes}
-              onChangeText={setNotes}
-              placeholder="Add any notes about this account..."
+              style={[
+                styles.addressInput,
+                address &&
+                  (isAddressValid ? styles.validInput : styles.invalidInput),
+              ]}
+              value={address}
+              onChangeText={setAddress}
+              placeholder="Enter address (58 characters)"
               placeholderTextColor={theme.colors.placeholder}
               multiline
               textAlignVertical="top"
-              maxLength={200}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
             />
+            <TouchableOpacity
+              style={styles.pasteButton}
+              onPress={handlePasteAddress}
+            >
+              <Ionicons
+                name="clipboard-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+              <Text style={styles.pasteText}>Paste</Text>
+            </TouchableOpacity>
           </View>
+          {address && !isAddressValid && (
+            <Text style={styles.errorText}>Invalid Algorand address</Text>
+          )}
+        </View>
+
+        {/* Label Input */}
+        <View style={styles.inputSection}>
+          <Text style={styles.inputLabel}>Account Label (Optional)</Text>
+          <TextInput
+            style={styles.textInput}
+            value={label}
+            onChangeText={setLabel}
+            placeholder="e.g., Trading Account, Cold Storage"
+            placeholderTextColor={theme.colors.placeholder}
+            maxLength={50}
+          />
+        </View>
+
+        {/* Notes Input */}
+        <View style={styles.inputSection}>
+          <Text style={styles.inputLabel}>Notes (Optional)</Text>
+          <TextInput
+            style={[styles.textInput, styles.notesInput]}
+            value={notes}
+            onChangeText={setNotes}
+            placeholder="Add any notes about this account..."
+            placeholderTextColor={theme.colors.placeholder}
+            multiline
+            textAlignVertical="top"
+            maxLength={200}
+          />
+        </View>
 
         {/* Add Button */}
         <View style={styles.buttonContainer}>
@@ -400,9 +405,10 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.8)'
-        : 'rgba(255, 255, 255, 0.9)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.8)'
+          : 'rgba(255, 255, 255, 0.9)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 10,
     },

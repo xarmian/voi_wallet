@@ -212,9 +212,7 @@ export const WC_ERROR_CODES = {
 /**
  * Parse session request details
  */
-export function parseSessionRequest(
-  request: WalletConnectV1SessionRequest
-): {
+export function parseSessionRequest(request: WalletConnectV1SessionRequest): {
   peerId: string;
   peerMeta: WalletConnectV1PeerMeta;
   chainId: number | undefined;

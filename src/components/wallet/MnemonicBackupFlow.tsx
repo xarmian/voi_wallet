@@ -149,7 +149,10 @@ export default function MnemonicBackupFlow({
           <View style={styles.placeholder} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
           <Text
             style={[styles.verificationTitle, { color: theme.colors.text }]}
           >
@@ -301,7 +304,10 @@ export default function MnemonicBackupFlow({
         <View style={styles.placeholder} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
           {subtitle}
         </Text>

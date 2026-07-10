@@ -84,7 +84,9 @@ export async function encryptBackup(
 
     // Generate HMAC for authentication
     // Use a derived HMAC key (key + 'hmac_salt' hashed)
-    const hmacKey = CryptoJS.SHA256(keyMaterial + 'backup_hmac_salt').toString();
+    const hmacKey = CryptoJS.SHA256(
+      keyMaterial + 'backup_hmac_salt'
+    ).toString();
     const hmac = CryptoJS.HmacSHA256(ciphertext, hmacKey).toString();
 
     return {
@@ -124,7 +126,10 @@ export async function decryptBackup(
   try {
     // Validate format
     if (encrypted.format !== 'voibackup') {
-      throw new BackupError('Invalid backup file format', 'INVALID_FILE_FORMAT');
+      throw new BackupError(
+        'Invalid backup file format',
+        'INVALID_FILE_FORMAT'
+      );
     }
 
     if (encrypted.version !== 1) {
@@ -138,8 +143,13 @@ export async function decryptBackup(
     keyMaterial = deriveKey(password, encrypted.salt);
 
     // Verify HMAC first (authenticate before decrypt)
-    const hmacKey = CryptoJS.SHA256(keyMaterial + 'backup_hmac_salt').toString();
-    const computedHmac = CryptoJS.HmacSHA256(encrypted.ciphertext, hmacKey).toString();
+    const hmacKey = CryptoJS.SHA256(
+      keyMaterial + 'backup_hmac_salt'
+    ).toString();
+    const computedHmac = CryptoJS.HmacSHA256(
+      encrypted.ciphertext,
+      hmacKey
+    ).toString();
 
     if (computedHmac !== encrypted.hmac) {
       throw new BackupError(
@@ -163,7 +173,10 @@ export async function decryptBackup(
     const plaintext = decrypted.toString(CryptoJS.enc.Utf8);
 
     if (!plaintext || plaintext.length === 0) {
-      throw new BackupError('Decryption failed - invalid result', 'DECRYPTION_FAILED');
+      throw new BackupError(
+        'Decryption failed - invalid result',
+        'DECRYPTION_FAILED'
+      );
     }
 
     return plaintext;

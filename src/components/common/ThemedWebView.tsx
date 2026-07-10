@@ -50,320 +50,331 @@ interface ThemedWebViewProps {
   onLoadEnd?: (event: any) => void;
   onError?: (event: any) => void;
   onShouldStartLoadWithRequest?: (request: any) => boolean;
-  contentInset?: { top?: number; left?: number; right?: number; bottom?: number };
+  contentInset?: {
+    top?: number;
+    left?: number;
+    right?: number;
+    bottom?: number;
+  };
   contentInsetAdjustmentBehavior?: string;
   // Additional props passed to native WebView
   [key: string]: any;
 }
 
-const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(({
-  loadingIcon = 'globe-outline',
-  loadingText = 'Loading...',
-  onLoadError,
-  showDefaultErrorAlert = true,
-  showLoadingOnlyOnce = false,
-  onLoadStart,
-  onLoadEnd,
-  onError,
-  style,
-  contentInset,
-  contentInsetAdjustmentBehavior,
-  source,
-  onShouldStartLoadWithRequest: customShouldStartLoadWithRequest,
-  ...restWebViewProps
-}, ref) => {
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
-  const [initialUrl, setInitialUrl] = useState<string | null>(null);
-  const webViewRef = useRef<any>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const allowedOriginsRef = useRef<Set<string>>(new Set());
-  const sourceUri = useMemo(() => {
-    if (source && typeof source === 'object' && 'uri' in source) {
-      return typeof source.uri === 'string' ? source.uri : null;
-    }
-    return null;
-  }, [source]);
-  const sourceUriRef = useRef<string | null>(null);
-  sourceUriRef.current = sourceUri ?? null;
-  const { theme } = useTheme();
-  const insets = useSafeAreaInsets();
-
-  const recordAllowedOrigin = (url: string | null | undefined) => {
-    if (!url) {
-      return;
-    }
-    try {
-      const origin = new URL(url).origin;
-      if (origin) {
-        allowedOriginsRef.current.add(origin);
+const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(
+  (
+    {
+      loadingIcon = 'globe-outline',
+      loadingText = 'Loading...',
+      onLoadError,
+      showDefaultErrorAlert = true,
+      showLoadingOnlyOnce = false,
+      onLoadStart,
+      onLoadEnd,
+      onError,
+      style,
+      contentInset,
+      contentInsetAdjustmentBehavior,
+      source,
+      onShouldStartLoadWithRequest: customShouldStartLoadWithRequest,
+      ...restWebViewProps
+    },
+    ref
+  ) => {
+    const [isLoading, setIsLoading] = useState(true);
+    const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+    const [initialUrl, setInitialUrl] = useState<string | null>(null);
+    const webViewRef = useRef<any>(null);
+    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const allowedOriginsRef = useRef<Set<string>>(new Set());
+    const sourceUri = useMemo(() => {
+      if (source && typeof source === 'object' && 'uri' in source) {
+        return typeof source.uri === 'string' ? source.uri : null;
       }
-    } catch {
-      // Ignore invalid URLs (e.g., mailto:, about:blank)
-    }
-  };
+      return null;
+    }, [source]);
+    const sourceUriRef = useRef<string | null>(null);
+    sourceUriRef.current = sourceUri ?? null;
+    const { theme } = useTheme();
+    const insets = useSafeAreaInsets();
 
-  // Track the origin of the provided source URI so that navigations to the
-  // same host remain in the WebView (e.g., account changes on the buy tab).
-  if (sourceUri) {
-    recordAllowedOrigin(sourceUri);
-  }
-
-  const resolvedContentInset = useMemo(() => {
-    if (Platform.OS !== 'ios') {
-      return contentInset;
-    }
-
-    const bottomInset = Math.max(contentInset?.bottom ?? 0, insets.bottom);
-
-    if (!bottomInset && contentInset === undefined) {
-      return undefined;
-    }
-
-    return {
-      top: contentInset?.top ?? 0,
-      left: contentInset?.left ?? 0,
-      right: contentInset?.right ?? 0,
-      bottom: bottomInset,
+    const recordAllowedOrigin = (url: string | null | undefined) => {
+      if (!url) {
+        return;
+      }
+      try {
+        const origin = new URL(url).origin;
+        if (origin) {
+          allowedOriginsRef.current.add(origin);
+        }
+      } catch {
+        // Ignore invalid URLs (e.g., mailto:, about:blank)
+      }
     };
-  }, [contentInset, insets.bottom]);
 
-  const resolvedContentInsetAdjustmentBehavior =
-    contentInsetAdjustmentBehavior ??
-    (Platform.OS === 'ios' ? 'automatic' : undefined);
-
-  // Expose WebView methods to parent components
-  useImperativeHandle(ref, () => ({
-    reload: () => {
-      if (Platform.OS === 'web') {
-        if (iframeRef.current) {
-          iframeRef.current.src = iframeRef.current.src;
-        }
-      } else {
-        webViewRef.current?.reload();
-      }
-    },
-    goBack: () => {
-      if (Platform.OS === 'web') {
-        try {
-          iframeRef.current?.contentWindow?.history.back();
-        } catch (e) {
-          // Cross-origin restrictions may prevent this
-        }
-      } else {
-        webViewRef.current?.goBack();
-      }
-    },
-    goForward: () => {
-      if (Platform.OS === 'web') {
-        try {
-          iframeRef.current?.contentWindow?.history.forward();
-        } catch (e) {
-          // Cross-origin restrictions may prevent this
-        }
-      } else {
-        webViewRef.current?.goForward();
-      }
-    },
-    injectJavaScript: (script: string) => {
-      if (Platform.OS === 'web') {
-        try {
-          iframeRef.current?.contentWindow?.eval(script);
-        } catch (e) {
-          // Cross-origin restrictions may prevent this
-          console.warn('Cannot inject JavaScript into iframe due to cross-origin restrictions');
-        }
-      } else {
-        webViewRef.current?.injectJavaScript(script);
-      }
-    },
-    resetLoadingState: () => {
-      setHasLoadedOnce(false);
-      setIsLoading(true);
-    },
-  }));
-
-  const handleLoadStart = (event: any) => {
-    // Store the initial URL on first load
-    const eventUrl = event?.nativeEvent?.url;
-    if (!initialUrl && eventUrl) {
-      setInitialUrl(eventUrl);
+    // Track the origin of the provided source URI so that navigations to the
+    // same host remain in the WebView (e.g., account changes on the buy tab).
+    if (sourceUri) {
+      recordAllowedOrigin(sourceUri);
     }
-    recordAllowedOrigin(eventUrl);
-    // Only show loading if we haven't loaded once yet, or if showLoadingOnlyOnce is false
-    if (!showLoadingOnlyOnce || !hasLoadedOnce) {
-      setIsLoading(true);
-    }
-    onLoadStart?.(event);
-  };
 
-  const handleShouldStartLoadWithRequest = (request: any) => {
-    const customResult = customShouldStartLoadWithRequest
-      ? customShouldStartLoadWithRequest(request)
-      : undefined;
+    const resolvedContentInset = useMemo(() => {
+      if (Platform.OS !== 'ios') {
+        return contentInset;
+      }
 
-    if (customResult === false) {
+      const bottomInset = Math.max(contentInset?.bottom ?? 0, insets.bottom);
+
+      if (!bottomInset && contentInset === undefined) {
+        return undefined;
+      }
+
+      return {
+        top: contentInset?.top ?? 0,
+        left: contentInset?.left ?? 0,
+        right: contentInset?.right ?? 0,
+        bottom: bottomInset,
+      };
+    }, [contentInset, insets.bottom]);
+
+    const resolvedContentInsetAdjustmentBehavior =
+      contentInsetAdjustmentBehavior ??
+      (Platform.OS === 'ios' ? 'automatic' : undefined);
+
+    // Expose WebView methods to parent components
+    useImperativeHandle(ref, () => ({
+      reload: () => {
+        if (Platform.OS === 'web') {
+          if (iframeRef.current) {
+            iframeRef.current.src = iframeRef.current.src;
+          }
+        } else {
+          webViewRef.current?.reload();
+        }
+      },
+      goBack: () => {
+        if (Platform.OS === 'web') {
+          try {
+            iframeRef.current?.contentWindow?.history.back();
+          } catch (e) {
+            // Cross-origin restrictions may prevent this
+          }
+        } else {
+          webViewRef.current?.goBack();
+        }
+      },
+      goForward: () => {
+        if (Platform.OS === 'web') {
+          try {
+            iframeRef.current?.contentWindow?.history.forward();
+          } catch (e) {
+            // Cross-origin restrictions may prevent this
+          }
+        } else {
+          webViewRef.current?.goForward();
+        }
+      },
+      injectJavaScript: (script: string) => {
+        if (Platform.OS === 'web') {
+          try {
+            iframeRef.current?.contentWindow?.eval(script);
+          } catch (e) {
+            // Cross-origin restrictions may prevent this
+            console.warn(
+              'Cannot inject JavaScript into iframe due to cross-origin restrictions'
+            );
+          }
+        } else {
+          webViewRef.current?.injectJavaScript(script);
+        }
+      },
+      resetLoadingState: () => {
+        setHasLoadedOnce(false);
+        setIsLoading(true);
+      },
+    }));
+
+    const handleLoadStart = (event: any) => {
+      // Store the initial URL on first load
+      const eventUrl = event?.nativeEvent?.url;
+      if (!initialUrl && eventUrl) {
+        setInitialUrl(eventUrl);
+      }
+      recordAllowedOrigin(eventUrl);
+      // Only show loading if we haven't loaded once yet, or if showLoadingOnlyOnce is false
+      if (!showLoadingOnlyOnce || !hasLoadedOnce) {
+        setIsLoading(true);
+      }
+      onLoadStart?.(event);
+    };
+
+    const handleShouldStartLoadWithRequest = (request: any) => {
+      const customResult = customShouldStartLoadWithRequest
+        ? customShouldStartLoadWithRequest(request)
+        : undefined;
+
+      if (customResult === false) {
+        return false;
+      }
+
+      const { url } = request;
+      if (!url) {
+        return false;
+      }
+
+      // Allow the initial load or any navigation that matches the current source
+      if (!initialUrl || url === initialUrl || url === sourceUriRef.current) {
+        return true;
+      }
+
+      // Allow sub-frame/resource requests
+      if (request.isMainFrame === false) {
+        return true;
+      }
+      if (request.mainDocumentURL && request.mainDocumentURL !== url) {
+        return true;
+      }
+
+      // Allow navigations that stay on a known origin
+      let isAllowedOrigin = false;
+      try {
+        const origin = new URL(url).origin;
+        isAllowedOrigin = allowedOriginsRef.current.has(origin);
+      } catch {
+        // Non-http(s) schemes (mailto:, tel:, etc.) fall back to external handling
+      }
+
+      if (isAllowedOrigin) {
+        return true;
+      }
+
+      // If the custom handler explicitly allowed the navigation, honor it
+      if (customResult === true) {
+        return true;
+      }
+
+      // Open external links in system browser
+      Linking.openURL(url).catch((error) => {
+        console.warn('[ThemedWebView] Failed to open external URL:', error);
+      });
       return false;
-    }
+    };
 
-    const { url } = request;
-    if (!url) {
-      return false;
-    }
+    const handleLoadEnd = (event: any) => {
+      setIsLoading(false);
+      setHasLoadedOnce(true);
+      onLoadEnd?.(event);
+    };
 
-    // Allow the initial load or any navigation that matches the current source
-    if (!initialUrl || url === initialUrl || url === sourceUriRef.current) {
-      return true;
-    }
+    const handleError = (syntheticEvent: any) => {
+      const { nativeEvent } = syntheticEvent;
+      setIsLoading(false);
 
-    // Allow sub-frame/resource requests
-    if (request.isMainFrame === false) {
-      return true;
-    }
-    if (request.mainDocumentURL && request.mainDocumentURL !== url) {
-      return true;
-    }
+      // Call custom error handler if provided
+      const errorDescription = nativeEvent?.description || 'Unknown error';
+      onLoadError?.(errorDescription);
 
-    // Allow navigations that stay on a known origin
-    let isAllowedOrigin = false;
-    try {
-      const origin = new URL(url).origin;
-      isAllowedOrigin = allowedOriginsRef.current.has(origin);
-    } catch {
-      // Non-http(s) schemes (mailto:, tel:, etc.) fall back to external handling
-    }
+      // Show default error alert if enabled
+      if (showDefaultErrorAlert) {
+        showAlert('Loading Error', `Unable to load page: ${errorDescription}`);
+      }
 
-    if (isAllowedOrigin) {
-      return true;
-    }
+      // Call original onError handler
+      onError?.(syntheticEvent);
+    };
 
-    // If the custom handler explicitly allowed the navigation, honor it
-    if (customResult === true) {
-      return true;
-    }
+    // Handle iframe load for web
+    const handleIframeLoad = useCallback(() => {
+      setIsLoading(false);
+      setHasLoadedOnce(true);
+      onLoadEnd?.({});
+    }, [onLoadEnd]);
 
-    // Open external links in system browser
-    Linking.openURL(url).catch((error) => {
-      console.warn('[ThemedWebView] Failed to open external URL:', error);
-    });
-    return false;
-  };
+    const handleIframeError = useCallback(() => {
+      setIsLoading(false);
+      onLoadError?.('Failed to load page');
+      if (showDefaultErrorAlert) {
+        showAlert('Loading Error', 'Unable to load page');
+      }
+      onError?.({ nativeEvent: { description: 'Failed to load page' } });
+    }, [onLoadError, showDefaultErrorAlert, onError]);
 
-  const handleLoadEnd = (event: any) => {
-    setIsLoading(false);
-    setHasLoadedOnce(true);
-    onLoadEnd?.(event);
-  };
+    // Get the URL from source
+    const url = useMemo(() => {
+      if (source && typeof source === 'object' && 'uri' in source) {
+        return source.uri;
+      }
+      return null;
+    }, [source]);
 
-  const handleError = (syntheticEvent: any) => {
-    const { nativeEvent } = syntheticEvent;
-    setIsLoading(false);
-
-    // Call custom error handler if provided
-    const errorDescription = nativeEvent?.description || 'Unknown error';
-    onLoadError?.(errorDescription);
-
-    // Show default error alert if enabled
-    if (showDefaultErrorAlert) {
-      showAlert('Loading Error', `Unable to load page: ${errorDescription}`);
-    }
-
-    // Call original onError handler
-    onError?.(syntheticEvent);
-  };
-
-  // Handle iframe load for web
-  const handleIframeLoad = useCallback(() => {
-    setIsLoading(false);
-    setHasLoadedOnce(true);
-    onLoadEnd?.({});
-  }, [onLoadEnd]);
-
-  const handleIframeError = useCallback(() => {
-    setIsLoading(false);
-    onLoadError?.('Failed to load page');
-    if (showDefaultErrorAlert) {
-      showAlert('Loading Error', 'Unable to load page');
-    }
-    onError?.({ nativeEvent: { description: 'Failed to load page' } });
-  }, [onLoadError, showDefaultErrorAlert, onError]);
-
-  // Get the URL from source
-  const url = useMemo(() => {
-    if (source && typeof source === 'object' && 'uri' in source) {
-      return source.uri;
-    }
-    return null;
-  }, [source]);
-
-  // Render loading state
-  const renderLoading = () => (
-    <View
-      style={[
-        styles.loadingContainer,
-        { backgroundColor: theme.colors.background },
-      ]}
-    >
-      <Ionicons
-        name={loadingIcon}
-        size={50}
-        color={theme.colors.textSecondary}
-      />
-      <Text
+    // Render loading state
+    const renderLoading = () => (
+      <View
         style={[
-          styles.loadingText,
-          { color: theme.colors.textSecondary },
+          styles.loadingContainer,
+          { backgroundColor: theme.colors.background },
         ]}
       >
-        {loadingText}
-      </Text>
-    </View>
-  );
-
-  // Web: Use iframe
-  if (Platform.OS === 'web') {
-    return (
-      <View style={[styles.webview, style]}>
-        {isLoading && renderLoading()}
-        {url && (
-          <iframe
-            ref={iframeRef as any}
-            src={url}
-            style={{
-              flex: 1,
-              width: '100%',
-              height: '100%',
-              border: 'none',
-              display: isLoading ? 'none' : 'block',
-            }}
-            onLoad={handleIframeLoad}
-            onError={handleIframeError}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-          />
-        )}
+        <Ionicons
+          name={loadingIcon}
+          size={50}
+          color={theme.colors.textSecondary}
+        />
+        <Text
+          style={[styles.loadingText, { color: theme.colors.textSecondary }]}
+        >
+          {loadingText}
+        </Text>
       </View>
     );
-  }
 
-  // Native: Use WebView
-  return (
-    <>
-      {isLoading && renderLoading()}
-      <WebView
-        ref={webViewRef}
-        {...restWebViewProps}
-        source={source}
-        style={[styles.webview, isLoading && styles.hiddenWebView, style]}
-        contentInset={resolvedContentInset}
-        contentInsetAdjustmentBehavior={resolvedContentInsetAdjustmentBehavior}
-        onLoadStart={handleLoadStart}
-        onLoadEnd={handleLoadEnd}
-        onError={handleError}
-        onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
-      />
-    </>
-  );
-});
+    // Web: Use iframe
+    if (Platform.OS === 'web') {
+      return (
+        <View style={[styles.webview, style]}>
+          {isLoading && renderLoading()}
+          {url && (
+            <iframe
+              ref={iframeRef as any}
+              src={url}
+              style={{
+                flex: 1,
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                display: isLoading ? 'none' : 'block',
+              }}
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            />
+          )}
+        </View>
+      );
+    }
+
+    // Native: Use WebView
+    return (
+      <>
+        {isLoading && renderLoading()}
+        <WebView
+          ref={webViewRef}
+          {...restWebViewProps}
+          source={source}
+          style={[styles.webview, isLoading && styles.hiddenWebView, style]}
+          contentInset={resolvedContentInset}
+          contentInsetAdjustmentBehavior={
+            resolvedContentInsetAdjustmentBehavior
+          }
+          onLoadStart={handleLoadStart}
+          onLoadEnd={handleLoadEnd}
+          onError={handleError}
+          onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
+        />
+      </>
+    );
+  }
+);
 
 ThemedWebView.displayName = 'ThemedWebView';
 

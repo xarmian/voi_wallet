@@ -14,7 +14,12 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Message, MessageThread, MessageStatus, MessagingKeyPair } from '@/services/messaging/types';
+import {
+  Message,
+  MessageThread,
+  MessageStatus,
+  MessagingKeyPair,
+} from '@/services/messaging/types';
 import MessagingService from '@/services/messaging';
 import { useFriendsStore } from './friendsStore';
 
@@ -24,8 +29,10 @@ const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
 const POLLING_INTERVAL_MS = 30000; // 30 seconds (used when chat is open)
 
 // Helper to get storage key for a specific account
-const getStorageKey = (userAddress: string) => `${STORAGE_KEY_PREFIX}${userAddress}`;
-const getHiddenStorageKey = (userAddress: string) => `${HIDDEN_THREADS_STORAGE_KEY_PREFIX}${userAddress}`;
+const getStorageKey = (userAddress: string) =>
+  `${STORAGE_KEY_PREFIX}${userAddress}`;
+const getHiddenStorageKey = (userAddress: string) =>
+  `${HIDDEN_THREADS_STORAGE_KEY_PREFIX}${userAddress}`;
 
 interface MessagesState {
   // State
@@ -125,7 +132,10 @@ export const useMessagesStore = create<MessagesState>()(
     getSortedThreads: () => {
       const { threads, hiddenThreads, showHiddenThreads } = get();
       return Object.values(threads)
-        .filter(thread => showHiddenThreads || !hiddenThreads.has(thread.friendAddress))
+        .filter(
+          (thread) =>
+            showHiddenThreads || !hiddenThreads.has(thread.friendAddress)
+        )
         .sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
     },
 
@@ -142,7 +152,8 @@ export const useMessagesStore = create<MessagesState>()(
      */
     addMessage: (message: Message) => {
       const { threads } = get();
-      const thread = threads[message.threadId] || createEmptyThread(message.threadId);
+      const thread =
+        threads[message.threadId] || createEmptyThread(message.threadId);
 
       // Check for duplicate
       if (thread.messages.some((m) => m.id === message.id)) {
@@ -150,9 +161,9 @@ export const useMessagesStore = create<MessagesState>()(
       }
 
       // Get friend's Envoi name if available
-      const friend = useFriendsStore.getState().friends.find(
-        (f) => f.address === message.threadId
-      );
+      const friend = useFriendsStore
+        .getState()
+        .friends.find((f) => f.address === message.threadId);
 
       const updatedMessages = [...thread.messages, message].sort(
         (a, b) => a.timestamp - b.timestamp
@@ -189,12 +200,13 @@ export const useMessagesStore = create<MessagesState>()(
      */
     addPendingMessage: (message: Message) => {
       const { threads } = get();
-      const thread = threads[message.threadId] || createEmptyThread(message.threadId);
+      const thread =
+        threads[message.threadId] || createEmptyThread(message.threadId);
 
       // Get friend's Envoi name if available
-      const friend = useFriendsStore.getState().friends.find(
-        (f) => f.address === message.threadId
-      );
+      const friend = useFriendsStore
+        .getState()
+        .friends.find((f) => f.address === message.threadId);
 
       const updatedMessages = [...thread.messages, message].sort(
         (a, b) => a.timestamp - b.timestamp
@@ -345,7 +357,8 @@ export const useMessagesStore = create<MessagesState>()(
      */
     checkKeyRegistration: async (userAddress: string) => {
       try {
-        const isRegistered = await MessagingService.isKeyRegistered(userAddress);
+        const isRegistered =
+          await MessagingService.isKeyRegistered(userAddress);
         set({ isKeyRegistered: isRegistered });
         return isRegistered;
       } catch (error) {
@@ -364,7 +377,8 @@ export const useMessagesStore = create<MessagesState>()(
         set({ isKeyRegistered: true, isLoading: false });
         return txId;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
         set({ lastError: message, isLoading: false });
         throw error;
       }
@@ -384,15 +398,20 @@ export const useMessagesStore = create<MessagesState>()(
 
       const storageKey = getStorageKey(userAddress);
       const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-      const rawStoredThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
+      const rawStoredThreads = storedThreadsJson
+        ? JSON.parse(storedThreadsJson)
+        : {};
 
       // Also load hidden threads for the new account
       const hiddenStorageKey = getHiddenStorageKey(userAddress);
       const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
-      const storedHidden = storedHiddenJson ? new Set<string>(JSON.parse(storedHiddenJson)) : new Set<string>();
+      const storedHidden = storedHiddenJson
+        ? new Set<string>(JSON.parse(storedHiddenJson))
+        : new Set<string>();
 
       // Deduplicate messages and calculate lastSyncRound
-      const { threads: storedThreads, maxRound } = deduplicateThreads(rawStoredThreads);
+      const { threads: storedThreads, maxRound } =
+        deduplicateThreads(rawStoredThreads);
 
       set({
         threads: storedThreads,
@@ -431,9 +450,9 @@ export const useMessagesStore = create<MessagesState>()(
         const existingThread = threads[friendAddress];
 
         // Get friend's Envoi name if available
-        const friend = useFriendsStore.getState().friends.find(
-          (f) => f.address === friendAddress
-        );
+        const friend = useFriendsStore
+          .getState()
+          .friends.find((f) => f.address === friendAddress);
 
         // Merge with existing messages (deduplicate by ID)
         const allMessages = [...(existingThread?.messages || [])];
@@ -483,7 +502,12 @@ export const useMessagesStore = create<MessagesState>()(
      * Fetch older messages for a thread (pagination - load more when scrolling up)
      * @returns hasMore - whether there might be more messages to load
      */
-    fetchOlderMessages: async (userAddress, friendAddress, beforeRound, pin) => {
+    fetchOlderMessages: async (
+      userAddress,
+      friendAddress,
+      beforeRound,
+      pin
+    ) => {
       try {
         // Don't set global isLoading to avoid UI flicker during pagination
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -508,9 +532,9 @@ export const useMessagesStore = create<MessagesState>()(
         const existingThread = threads[friendAddress];
 
         // Get friend's Envoi name if available
-        const friend = useFriendsStore.getState().friends.find(
-          (f) => f.address === friendAddress
-        );
+        const friend = useFriendsStore
+          .getState()
+          .friends.find((f) => f.address === friendAddress);
 
         // Merge with existing messages (deduplicate by ID)
         const allMessages = [...(existingThread?.messages || [])];
@@ -529,7 +553,8 @@ export const useMessagesStore = create<MessagesState>()(
             [friendAddress]: {
               ...existingThread,
               friendAddress,
-              friendEnvoiName: friend?.envoiName || existingThread?.friendEnvoiName,
+              friendEnvoiName:
+                friend?.envoiName || existingThread?.friendEnvoiName,
               messages: allMessages,
               lastMessage: lastMsg,
               lastMessageTimestamp: lastMsg?.timestamp || 0,
@@ -561,15 +586,20 @@ export const useMessagesStore = create<MessagesState>()(
         if (currentUserAddress !== userAddress) {
           const storageKey = getStorageKey(userAddress);
           const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-          const rawStoredThreads = storedThreadsJson ? JSON.parse(storedThreadsJson) : {};
+          const rawStoredThreads = storedThreadsJson
+            ? JSON.parse(storedThreadsJson)
+            : {};
 
           // Also load hidden threads for the new account
           const hiddenStorageKey = getHiddenStorageKey(userAddress);
           const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
-          const storedHidden = storedHiddenJson ? new Set<string>(JSON.parse(storedHiddenJson)) : new Set<string>();
+          const storedHidden = storedHiddenJson
+            ? new Set<string>(JSON.parse(storedHiddenJson))
+            : new Set<string>();
 
           // Deduplicate messages and calculate lastSyncRound from cached messages
-          const { threads: storedThreads, maxRound: cachedMaxRound } = deduplicateThreads(rawStoredThreads);
+          const { threads: storedThreads, maxRound: cachedMaxRound } =
+            deduplicateThreads(rawStoredThreads);
 
           set({
             threads: storedThreads,
@@ -581,13 +611,16 @@ export const useMessagesStore = create<MessagesState>()(
           });
 
           // Re-persist if deduplication changed anything
-          if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
+          if (
+            JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)
+          ) {
             await persistThreads(userAddress, storedThreads);
           }
         }
 
         // Check key registration status
-        const isRegistered = await MessagingService.isKeyRegistered(userAddress);
+        const isRegistered =
+          await MessagingService.isKeyRegistered(userAddress);
         set({ isKeyRegistered: isRegistered });
 
         // If not registered, can't fetch messages (need to register first)
@@ -613,9 +646,9 @@ export const useMessagesStore = create<MessagesState>()(
 
         for (const [friendAddress, messages] of conversationMap) {
           const existing = existingThreads[friendAddress];
-          const friend = useFriendsStore.getState().friends.find(
-            (f) => f.address === friendAddress
-          );
+          const friend = useFriendsStore
+            .getState()
+            .friends.find((f) => f.address === friendAddress);
 
           // Merge messages (deduplicate by ID)
           const allMessages = [...(existing?.messages || [])];
@@ -853,10 +886,14 @@ export function useThread(friendAddress: string): MessageThread | null {
 export function useSortedThreads(): MessageThread[] {
   const threads = useMessagesStore((state) => state.threads);
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
-  const showHiddenThreads = useMessagesStore((state) => state.showHiddenThreads);
+  const showHiddenThreads = useMessagesStore(
+    (state) => state.showHiddenThreads
+  );
 
   return Object.values(threads)
-    .filter(thread => showHiddenThreads || !hiddenThreads.has(thread.friendAddress))
+    .filter(
+      (thread) => showHiddenThreads || !hiddenThreads.has(thread.friendAddress)
+    )
     .sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
 }
 
@@ -866,7 +903,7 @@ export function useSortedThreads(): MessageThread[] {
 export function useHiddenThreadsCount(): number {
   const threads = useMessagesStore((state) => state.threads);
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
-  return Object.keys(threads).filter(addr => hiddenThreads.has(addr)).length;
+  return Object.keys(threads).filter((addr) => hiddenThreads.has(addr)).length;
 }
 
 /**

@@ -39,8 +39,8 @@ export function toLedgerFriendlyError(
   const deviceState: 'connected' | 'disconnected' | 'unknown' = device
     ? 'connected'
     : ledgerTransportService.getDevices().length > 0
-    ? 'disconnected'
-    : 'unknown';
+      ? 'disconnected'
+      : 'unknown';
   const base = {
     timestamp: Date.now(),
     deviceState,
@@ -112,10 +112,15 @@ export function toLedgerFriendlyError(
       mappedCode = 'LEDGER_COMMUNICATION_ERROR';
       retryable = true;
       userAction = 'Check that your Ledger is unlocked and try reconnecting.';
-    } else if (code === 'LEDGER_INVALID_APP_INFO' || message.includes('incomplete') || message.includes('app version payload')) {
+    } else if (
+      code === 'LEDGER_INVALID_APP_INFO' ||
+      message.includes('incomplete') ||
+      message.includes('app version payload')
+    ) {
       mappedCode = 'LEDGER_APP_INFO_ERROR';
       retryable = true;
-      userAction = 'Ensure the Algorand app is open on your Ledger and try again. If this persists, try disconnecting and reconnecting your Ledger.';
+      userAction =
+        'Ensure the Algorand app is open on your Ledger and try again. If this persists, try disconnecting and reconnecting your Ledger.';
     } else if (code && code.startsWith('LEDGER_INVALID_')) {
       mappedCode = 'LEDGER_INVALID_REQUEST';
       retryable = false;
@@ -131,7 +136,10 @@ export function toLedgerFriendlyError(
       mappedCode = 'LEDGER_USER_REJECTED';
       retryable = false;
       userAction = 'Approve on your Ledger to continue, or cancel to abort.';
-    } else if (message.includes('connection') || message.includes('transport')) {
+    } else if (
+      message.includes('connection') ||
+      message.includes('transport')
+    ) {
       mappedCode = 'LEDGER_CONNECTION_FAILED';
       retryable = true;
       userAction = 'Try disconnecting and reconnecting your Ledger device.';
@@ -178,33 +186,41 @@ export function toLedgerFriendlyError(
 export function buildUserFacingLedgerMessage(err: LedgerFriendlyError): string {
   // Compose a concise, user-facing message with troubleshooting hints
   const hint = err.userAction ? ` ${err.userAction}` : '';
-  const retryHint = err.retryable && err.attemptCount && err.attemptCount > 1
-    ? ` (Attempt ${err.attemptCount})`
-    : '';
+  const retryHint =
+    err.retryable && err.attemptCount && err.attemptCount > 1
+      ? ` (Attempt ${err.attemptCount})`
+      : '';
 
   // Add specific guidance for common issues
   let troubleshootingTip = '';
   switch (err.code) {
     case 'LEDGER_APP_INFO_ERROR':
-      troubleshootingTip = ' Make sure you have the latest Algorand app installed on your Ledger.';
+      troubleshootingTip =
+        ' Make sure you have the latest Algorand app installed on your Ledger.';
       break;
     case 'LEDGER_CONNECTION_FAILED':
-      troubleshootingTip = ' Try using a different USB cable or moving closer to your device for Bluetooth.';
+      troubleshootingTip =
+        ' Try using a different USB cable or moving closer to your device for Bluetooth.';
       break;
     case 'LEDGER_COMMUNICATION_ERROR':
-      troubleshootingTip = ' Check that no other apps are using your Ledger device.';
+      troubleshootingTip =
+        ' Check that no other apps are using your Ledger device.';
       break;
   }
 
   return `${err.message}${hint}${troubleshootingTip}${retryHint}`.trim();
 }
 
-export function getDiagnosticInfo(err: LedgerFriendlyError): Record<string, any> {
+export function getDiagnosticInfo(
+  err: LedgerFriendlyError
+): Record<string, any> {
   return {
     code: err.code,
     retryable: err.retryable,
     deviceState: err.deviceState,
-    timestamp: err.timestamp ? new Date(err.timestamp).toISOString() : undefined,
+    timestamp: err.timestamp
+      ? new Date(err.timestamp).toISOString()
+      : undefined,
     attemptCount: err.attemptCount,
     requiresReconnect: err.requiresReconnect,
     requiresAppOpen: err.requiresAppOpen,

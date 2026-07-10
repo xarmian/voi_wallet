@@ -45,7 +45,9 @@ export default function SimpleLedgerTransactionModal({
   const colors = useThemeColors();
 
   const [controller] = useState(() => new SimpleLedgerAuthController());
-  const [authState, setAuthState] = useState<SimpleLedgerAuthStateData>(controller.getState());
+  const [authState, setAuthState] = useState<SimpleLedgerAuthStateData>(
+    controller.getState()
+  );
   const [showLedgerModal, setShowLedgerModal] = useState(false);
 
   // Subscribe to controller state changes
@@ -74,7 +76,9 @@ export default function SimpleLedgerTransactionModal({
         // Keep Ledger modal open for retryable errors
         if (!authState.error?.retryable) {
           setShowLedgerModal(false);
-          onComplete(false, { error: new Error(authState.error?.message || 'Unknown error') });
+          onComplete(false, {
+            error: new Error(authState.error?.message || 'Unknown error'),
+          });
         }
         break;
 

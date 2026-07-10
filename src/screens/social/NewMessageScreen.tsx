@@ -45,7 +45,9 @@ export default function NewMessageScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
   const navigation =
-    useNavigation<NativeStackNavigationProp<FriendsStackParamList, 'NewMessage'>>();
+    useNavigation<
+      NativeStackNavigationProp<FriendsStackParamList, 'NewMessage'>
+    >();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<RecipientOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -71,15 +73,26 @@ export default function NewMessageScreen() {
     if (!activeAccount) return false;
 
     // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER || activeAccount.type === 'ledger') {
+    if (
+      activeAccount.type === AccountType.LEDGER ||
+      activeAccount.type === 'ledger'
+    ) {
       return true;
     }
 
     // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED || activeAccount.type === 'rekeyed') {
+    if (
+      activeAccount.type === AccountType.REKEYED ||
+      activeAccount.type === 'rekeyed'
+    ) {
       const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(acc => acc.address === rekeyedAccount.authAddress);
-      if (authAccount?.type === AccountType.LEDGER || authAccount?.type === 'ledger') {
+      const authAccount = allAccounts.find(
+        (acc) => acc.address === rekeyedAccount.authAddress
+      );
+      if (
+        authAccount?.type === AccountType.LEDGER ||
+        authAccount?.type === 'ledger'
+      ) {
         return true;
       }
     }
@@ -123,7 +136,12 @@ export default function NewMessageScreen() {
         }
       };
       checkRegistration();
-    }, [activeAccount?.address, isLedgerBacked, checkKeyRegistration, navigation])
+    }, [
+      activeAccount?.address,
+      isLedgerBacked,
+      checkKeyRegistration,
+      navigation,
+    ])
   );
 
   // Initialize friends store if needed
@@ -319,8 +337,15 @@ export default function NewMessageScreen() {
         </View>
 
         {recipient.isFriend && (
-          <View style={[styles.friendBadge, { backgroundColor: theme.colors.primary + '20' }]}>
-            <Text style={[styles.friendBadgeText, { color: theme.colors.primary }]}>
+          <View
+            style={[
+              styles.friendBadge,
+              { backgroundColor: theme.colors.primary + '20' },
+            ]}
+          >
+            <Text
+              style={[styles.friendBadgeText, { color: theme.colors.primary }]}
+            >
               Friend
             </Text>
           </View>
@@ -369,7 +394,11 @@ export default function NewMessageScreen() {
             )}
             {searchQuery.length > 0 && !isLoading && (
               <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+                <Ionicons
+                  name="close-circle"
+                  size={20}
+                  color={theme.colors.textMuted}
+                />
               </TouchableOpacity>
             )}
           </BlurredContainer>

@@ -6,7 +6,13 @@
  */
 
 import React, { useMemo, useEffect, useCallback } from 'react';
-import { View, StyleSheet, TextStyle, StyleProp, ViewStyle } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TextStyle,
+  StyleProp,
+  ViewStyle,
+} from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -67,24 +73,27 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
   const previousValue = useSharedValue(value);
 
   // Format number with commas and decimals
-  const formatNumber = useCallback((num: number): string => {
-    if (compact) {
-      if (Math.abs(num) >= 1e9) {
-        return (num / 1e9).toFixed(1) + 'B';
+  const formatNumber = useCallback(
+    (num: number): string => {
+      if (compact) {
+        if (Math.abs(num) >= 1e9) {
+          return (num / 1e9).toFixed(1) + 'B';
+        }
+        if (Math.abs(num) >= 1e6) {
+          return (num / 1e6).toFixed(1) + 'M';
+        }
+        if (Math.abs(num) >= 1e3) {
+          return (num / 1e3).toFixed(1) + 'K';
+        }
       }
-      if (Math.abs(num) >= 1e6) {
-        return (num / 1e6).toFixed(1) + 'M';
-      }
-      if (Math.abs(num) >= 1e3) {
-        return (num / 1e3).toFixed(1) + 'K';
-      }
-    }
 
-    // Add thousand separators
-    const parts = num.toFixed(decimals).split('.');
-    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return parts.join('.');
-  }, [decimals, compact]);
+      // Add thousand separators
+      const parts = num.toFixed(decimals).split('.');
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      return parts.join('.');
+    },
+    [decimals, compact]
+  );
 
   // Update animation when value changes
   useEffect(() => {
@@ -96,11 +105,18 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
 
     previousValue.value = value;
     animatedValue.value = withTiming(value, { duration });
-  }, [value, animatedValue, glowOpacity, glowOnChange, duration, previousValue]);
+  }, [
+    value,
+    animatedValue,
+    glowOpacity,
+    glowOnChange,
+    duration,
+    previousValue,
+  ]);
 
   // Derived formatted value
-  const [displayText, setDisplayText] = React.useState(() =>
-    `${prefix}${formatNumber(value)}${suffix}`
+  const [displayText, setDisplayText] = React.useState(
+    () => `${prefix}${formatNumber(value)}${suffix}`
   );
 
   // Update display text based on animated value
@@ -140,13 +156,16 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
   }));
 
   // Combined text styles
-  const textStyles = useMemo(() => [
-    styles.text,
-    {
-      color: theme.colors.text,
-    },
-    style,
-  ], [theme.colors.text, style]);
+  const textStyles = useMemo(
+    () => [
+      styles.text,
+      {
+        color: theme.colors.text,
+      },
+      style,
+    ],
+    [theme.colors.text, style]
+  );
 
   if (loading) {
     return (
@@ -214,12 +233,17 @@ export const AnimatedBalance: React.FC<AnimatedBalanceProps> = ({
 }) => {
   const { theme } = useTheme();
 
-  const balanceStyle = useMemo((): TextStyle => ({
-    fontSize: large ? theme.typography.display.fontSize : theme.typography.heading1.fontSize,
-    fontWeight: theme.typography.display.fontWeight,
-    letterSpacing: theme.typography.display.letterSpacing,
-    color: theme.colors.text,
-  }), [large, theme]);
+  const balanceStyle = useMemo(
+    (): TextStyle => ({
+      fontSize: large
+        ? theme.typography.display.fontSize
+        : theme.typography.heading1.fontSize,
+      fontWeight: theme.typography.display.fontWeight,
+      letterSpacing: theme.typography.display.letterSpacing,
+      color: theme.colors.text,
+    }),
+    [large, theme]
+  );
 
   return (
     <AnimatedNumber

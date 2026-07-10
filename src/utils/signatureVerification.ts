@@ -58,7 +58,8 @@ export function verifySignedTransaction(
     if (rekeyField) {
       return {
         valid: false,
-        error: 'Security error: Verification transaction must not contain a rekey field',
+        error:
+          'Security error: Verification transaction must not contain a rekey field',
       };
     }
 
@@ -83,7 +84,9 @@ export function verifySignedTransaction(
     const txnBytesToSign = txn.bytesToSign();
 
     // Decode the expected signer's public key from address
-    const expectedPublicKey = algosdk.decodeAddress(expectedSignerAddress).publicKey;
+    const expectedPublicKey = algosdk.decodeAddress(
+      expectedSignerAddress
+    ).publicKey;
 
     // Verify the Ed25519 signature
     const isValid = nacl.sign.detached.verify(
@@ -95,7 +98,8 @@ export function verifySignedTransaction(
     if (!isValid) {
       return {
         valid: false,
-        error: 'Signature verification failed - signature does not match the expected signer',
+        error:
+          'Signature verification failed - signature does not match the expected signer',
       };
     }
 

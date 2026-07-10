@@ -8,7 +8,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
+import {
+  useNavigation,
+  useRoute,
+  CommonActions,
+} from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -145,7 +149,10 @@ export default function RestoreWalletScreen() {
     setIsRestoring(true);
 
     try {
-      const result = await BackupService.restoreBackup(selectedFile.uri, password);
+      const result = await BackupService.restoreBackup(
+        selectedFile.uri,
+        password
+      );
       setShowProgressModal(false);
 
       // Reload theme to reflect restored settings
@@ -313,7 +320,10 @@ export default function RestoreWalletScreen() {
         </GlassCard>
 
         {/* Select File Button */}
-        <TouchableOpacity style={styles.selectButton} onPress={handleSelectFile}>
+        <TouchableOpacity
+          style={styles.selectButton}
+          onPress={handleSelectFile}
+        >
           <Ionicons name="folder-open" size={20} color="#FFFFFF" />
           <Text style={styles.selectButtonText}>Select Backup File</Text>
         </TouchableOpacity>

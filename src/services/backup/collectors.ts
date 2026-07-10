@@ -69,7 +69,9 @@ const REMOTE_SIGNER_STORAGE_KEYS = {
  * Collect all accounts with their data for backup
  * For standard accounts, retrieves the mnemonic (requires PIN/biometric auth)
  */
-export async function collectAccounts(pin?: string): Promise<BackupAccountData[]> {
+export async function collectAccounts(
+  pin?: string
+): Promise<BackupAccountData[]> {
   try {
     const wallet = await MultiAccountWalletService.getCurrentWallet();
     if (!wallet || wallet.accounts.length === 0) {
@@ -97,7 +99,9 @@ export async function collectAccounts(pin?: string): Promise<BackupAccountData[]
           const standardAccount = account as StandardAccountMetadata;
           try {
             // Get mnemonic - this may require PIN auth
-            const mnemonic = await SecureKeyManager.getMnemonic(account.address);
+            const mnemonic = await SecureKeyManager.getMnemonic(
+              account.address
+            );
             backupAccounts.push({
               ...baseData,
               mnemonic,
@@ -168,7 +172,9 @@ export async function collectAccounts(pin?: string): Promise<BackupAccountData[]
           // Unknown account type - include base data only with warning
           // This handles future account types that may be added
           const unknownAccount = account as { type: string };
-          console.warn(`Unknown account type during backup: ${unknownAccount.type}`);
+          console.warn(
+            `Unknown account type during backup: ${unknownAccount.type}`
+          );
           backupAccounts.push(baseData);
         }
       }
@@ -247,7 +253,9 @@ async function collectThemeSettings(): Promise<BackupThemeSettings> {
     nftThemeEnabled: nftThemeEnabled[1] === 'true',
     selectedPaletteIndex: paletteIndex[1] ? parseInt(paletteIndex[1], 10) : 0,
     backgroundImageEnabled: backgroundEnabled[1] !== 'false', // Default true
-    overlayIntensity: overlayIntensity[1] ? parseFloat(overlayIntensity[1]) : 0.5,
+    overlayIntensity: overlayIntensity[1]
+      ? parseFloat(overlayIntensity[1])
+      : 0.5,
   };
 }
 
@@ -315,7 +323,9 @@ export async function collectFriends(): Promise<Friend[]> {
  */
 export async function collectExperimental(): Promise<BackupExperimentalFlags> {
   try {
-    const experimentalJson = await AsyncStorage.getItem(STORAGE_KEYS.EXPERIMENTAL);
+    const experimentalJson = await AsyncStorage.getItem(
+      STORAGE_KEYS.EXPERIMENTAL
+    );
     if (!experimentalJson) {
       return {
         swapEnabled: false,
@@ -346,12 +356,17 @@ export async function collectExperimental(): Promise<BackupExperimentalFlags> {
 async function collectRemoteSignerSettings(): Promise<BackupRemoteSignerSettings> {
   try {
     // Get app mode
-    const storedMode = await AsyncStorage.getItem(REMOTE_SIGNER_STORAGE_KEYS.APP_MODE);
-    const appMode: 'wallet' | 'signer' = storedMode === 'signer' ? 'signer' : 'wallet';
+    const storedMode = await AsyncStorage.getItem(
+      REMOTE_SIGNER_STORAGE_KEYS.APP_MODE
+    );
+    const appMode: 'wallet' | 'signer' =
+      storedMode === 'signer' ? 'signer' : 'wallet';
 
     // Get signer config (when in signer mode)
     let signerConfig: BackupSignerConfig | null = null;
-    const storedConfig = await AsyncStorage.getItem(REMOTE_SIGNER_STORAGE_KEYS.SIGNER_CONFIG);
+    const storedConfig = await AsyncStorage.getItem(
+      REMOTE_SIGNER_STORAGE_KEYS.SIGNER_CONFIG
+    );
     if (storedConfig) {
       try {
         signerConfig = JSON.parse(storedConfig) as BackupSignerConfig;
@@ -362,17 +377,22 @@ async function collectRemoteSignerSettings(): Promise<BackupRemoteSignerSettings
 
     // Get paired signers (when in wallet mode)
     let pairedSigners: BackupPairedSigner[] = [];
-    const storedSigners = await AsyncStorage.getItem(REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS);
+    const storedSigners = await AsyncStorage.getItem(
+      REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS
+    );
     if (storedSigners) {
       try {
         // Stored as array of [deviceId, SignerDeviceInfo] tuples (Map serialization)
-        const parsed = JSON.parse(storedSigners) as [string, {
-          deviceId: string;
-          deviceName?: string;
-          pairedAt: number;
-          addresses: string[];
-          lastActivity?: number;
-        }][];
+        const parsed = JSON.parse(storedSigners) as [
+          string,
+          {
+            deviceId: string;
+            deviceName?: string;
+            pairedAt: number;
+            addresses: string[];
+            lastActivity?: number;
+          },
+        ][];
         pairedSigners = parsed.map(([, info]) => ({
           deviceId: info.deviceId,
           deviceName: info.deviceName,

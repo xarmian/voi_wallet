@@ -120,7 +120,9 @@ export interface SerializableClaimableItem {
 /**
  * Convert ClaimableItem to serializable form for navigation
  */
-export function toSerializableClaimableItem(item: ClaimableItem): SerializableClaimableItem {
+export function toSerializableClaimableItem(
+  item: ClaimableItem
+): SerializableClaimableItem {
   return {
     ...item,
     amount: item.amount.toString(),
@@ -131,7 +133,9 @@ export function toSerializableClaimableItem(item: ClaimableItem): SerializableCl
 /**
  * Convert serializable form back to ClaimableItem
  */
-export function fromSerializableClaimableItem(item: SerializableClaimableItem): ClaimableItem {
+export function fromSerializableClaimableItem(
+  item: SerializableClaimableItem
+): ClaimableItem {
   return {
     ...item,
     amount: BigInt(item.amount),

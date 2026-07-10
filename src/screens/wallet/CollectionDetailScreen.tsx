@@ -111,7 +111,10 @@ export default function CollectionDetailScreen() {
         setHasMore(!!response.nextToken);
       } catch (error) {
         console.error('Failed to load collection tokens:', error);
-        Alert.alert('Error', 'Failed to load collection tokens. Please try again.');
+        Alert.alert(
+          'Error',
+          'Failed to load collection tokens. Please try again.'
+        );
       } finally {
         setLoadingMore(false);
       }
@@ -272,8 +275,17 @@ export default function CollectionDetailScreen() {
             </View>
           )}
           {owned && activeTab === 'all-nfts' && (
-            <View style={[styles.ownedBadge, { backgroundColor: theme.colors.background }]}>
-              <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
+            <View
+              style={[
+                styles.ownedBadge,
+                { backgroundColor: theme.colors.background },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={16}
+                color={theme.colors.success}
+              />
             </View>
           )}
         </View>
@@ -307,9 +319,11 @@ export default function CollectionDetailScreen() {
         <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
           {isMyNFTs ? 'No NFTs Owned' : 'No NFTs Found'}
         </Text>
-        <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+        <Text
+          style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+        >
           {isMyNFTs
-            ? 'You don\'t own any NFTs from this collection yet'
+            ? "You don't own any NFTs from this collection yet"
             : 'This collection appears to be empty'}
         </Text>
       </View>

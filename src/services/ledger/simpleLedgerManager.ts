@@ -6,7 +6,10 @@ import Transport from '@ledgerhq/hw-transport';
 import type { Device as BleDevice } from 'react-native-ble-plx';
 import type { DeviceModelId } from '@ledgerhq/devices';
 
-import { LedgerDeviceNotConnectedError, LedgerAccountError } from '@/types/wallet';
+import {
+  LedgerDeviceNotConnectedError,
+  LedgerAccountError,
+} from '@/types/wallet';
 
 export interface SimpleLedgerDevice {
   id: string;
@@ -90,12 +93,14 @@ export class SimpleLedgerManager {
     return {
       state: this.currentState,
       device: this.currentDevice || undefined,
-      error: this.lastError ? {
-        type: this.lastError.type,
-        message: this.lastError.message,
-        retryable: this.isRetryableError(this.lastError.type),
-        userAction: this.getUserAction(this.lastError.type),
-      } : undefined,
+      error: this.lastError
+        ? {
+            type: this.lastError.type,
+            message: this.lastError.message,
+            retryable: this.isRetryableError(this.lastError.type),
+            userAction: this.getUserAction(this.lastError.type),
+          }
+        : undefined,
     };
   }
 
@@ -179,7 +184,10 @@ export class SimpleLedgerManager {
         const appName = response.slice(2, 2 + appNameLength).toString('ascii');
 
         if (appName.toLowerCase() !== 'algorand') {
-          this.setError('app_not_open', 'Please open the Algorand app on your Ledger device');
+          this.setError(
+            'app_not_open',
+            'Please open the Algorand app on your Ledger device'
+          );
           return false;
         }
       }
@@ -189,14 +197,21 @@ export class SimpleLedgerManager {
       console.log('Device verification failed:', error);
 
       // Determine error type from the error
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
 
       if (errorMessage.includes('6982')) {
         this.setError('device_locked', 'Please unlock your Ledger device');
       } else if (errorMessage.includes('6e00')) {
-        this.setError('app_not_open', 'Please open the Algorand app on your Ledger device');
+        this.setError(
+          'app_not_open',
+          'Please open the Algorand app on your Ledger device'
+        );
       } else {
-        this.setError('connection_failed', 'Failed to communicate with Ledger device');
+        this.setError(
+          'connection_failed',
+          'Failed to communicate with Ledger device'
+        );
       }
 
       return false;
@@ -249,16 +264,28 @@ export class SimpleLedgerManager {
       this.updateState('ready', targetDevice);
 
       return transport;
-
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       console.error('Connection failed:', errorMessage);
 
       // Determine error type and set appropriate error
-      if (errorMessage.includes('Permission') || errorMessage.includes('permission')) {
-        this.setError('permission_denied', 'Bluetooth permissions required. Please enable Bluetooth permissions for this app.');
-      } else if (errorMessage.includes('not found') || errorMessage.includes('No Ledger')) {
-        this.setError('device_not_found', 'No Ledger device found. Please connect and unlock your device.');
+      if (
+        errorMessage.includes('Permission') ||
+        errorMessage.includes('permission')
+      ) {
+        this.setError(
+          'permission_denied',
+          'Bluetooth permissions required. Please enable Bluetooth permissions for this app.'
+        );
+      } else if (
+        errorMessage.includes('not found') ||
+        errorMessage.includes('No Ledger')
+      ) {
+        this.setError(
+          'device_not_found',
+          'No Ledger device found. Please connect and unlock your device.'
+        );
       } else {
         this.setError('connection_failed', errorMessage);
       }
@@ -278,7 +305,7 @@ export class SimpleLedgerManager {
     this.isDiscovering = true;
 
     // Start BLE discovery
-    if (Platform.OS === 'ios' || await this.checkBluetoothPermissions()) {
+    if (Platform.OS === 'ios' || (await this.checkBluetoothPermissions())) {
       await this.startBleDiscovery();
     }
 
@@ -413,7 +440,10 @@ export class SimpleLedgerManager {
   /**
    * Wait for a specific device to be discovered
    */
-  private async waitForDevice(deviceId: string, timeoutMs: number): Promise<SimpleLedgerDevice | null> {
+  private async waitForDevice(
+    deviceId: string,
+    timeoutMs: number
+  ): Promise<SimpleLedgerDevice | null> {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => resolve(null), timeoutMs);
 
@@ -434,7 +464,9 @@ export class SimpleLedgerManager {
   /**
    * Wait for any device to be discovered
    */
-  private async waitForAnyDevice(timeoutMs: number): Promise<SimpleLedgerDevice | null> {
+  private async waitForAnyDevice(
+    timeoutMs: number
+  ): Promise<SimpleLedgerDevice | null> {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => resolve(null), timeoutMs);
 
@@ -460,7 +492,10 @@ export class SimpleLedgerManager {
 
     try {
       const permissions: Permission[] = [];
-      const sdkVersion = typeof Platform.Version === 'number' ? Platform.Version : parseInt(String(Platform.Version), 10) || 0;
+      const sdkVersion =
+        typeof Platform.Version === 'number'
+          ? Platform.Version
+          : parseInt(String(Platform.Version), 10) || 0;
 
       if (sdkVersion >= 31) {
         permissions.push(
@@ -477,7 +512,10 @@ export class SimpleLedgerManager {
       if (permissions.length === 0) return true;
 
       const results = await PermissionsAndroid.requestMultiple(permissions);
-      return permissions.every(permission => results[permission] === PermissionsAndroid.RESULTS.GRANTED);
+      return permissions.every(
+        (permission) =>
+          results[permission] === PermissionsAndroid.RESULTS.GRANTED
+      );
     } catch (error) {
       console.error('Permission check failed:', error);
       return false;
@@ -487,7 +525,10 @@ export class SimpleLedgerManager {
   /**
    * Update state and notify listeners
    */
-  private updateState(state: LedgerConnectionState, device?: SimpleLedgerDevice): void {
+  private updateState(
+    state: LedgerConnectionState,
+    device?: SimpleLedgerDevice
+  ): void {
     this.currentState = state;
 
     // Clear error when state changes to non-error state
@@ -498,15 +539,17 @@ export class SimpleLedgerManager {
     const stateChange: LedgerStateChange = {
       state,
       device: device || this.currentDevice || undefined,
-      error: this.lastError ? {
-        type: this.lastError.type,
-        message: this.lastError.message,
-        retryable: this.isRetryableError(this.lastError.type),
-        userAction: this.getUserAction(this.lastError.type),
-      } : undefined,
+      error: this.lastError
+        ? {
+            type: this.lastError.type,
+            message: this.lastError.message,
+            retryable: this.isRetryableError(this.lastError.type),
+            userAction: this.getUserAction(this.lastError.type),
+          }
+        : undefined,
     };
 
-    this.listeners.forEach(listener => {
+    this.listeners.forEach((listener) => {
       try {
         listener(stateChange);
       } catch (error) {

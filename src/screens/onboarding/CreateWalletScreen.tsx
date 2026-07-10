@@ -1,10 +1,5 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Platform,
-} from 'react-native';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -35,13 +30,20 @@ export default function CreateWalletScreen({ navigation }: Props) {
   const [mnemonic, setMnemonic] = useState<string>('');
 
   // Cross-platform alert helper
-  const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void, style?: string}>) => {
+  const showAlert = (
+    title: string,
+    message: string,
+    buttons?: Array<{ text: string; onPress?: () => void; style?: string }>
+  ) => {
     if (Platform.OS === 'web') {
       if (buttons && buttons.length > 1) {
         // For confirmation dialogs
         const confirmed = window.confirm(`${title}\n\n${message}`);
         if (confirmed) {
-          const confirmButton = buttons.find(b => b.style !== 'cancel' && b.style !== 'destructive') || buttons[buttons.length - 1];
+          const confirmButton =
+            buttons.find(
+              (b) => b.style !== 'cancel' && b.style !== 'destructive'
+            ) || buttons[buttons.length - 1];
           confirmButton?.onPress?.();
         }
       } else {
@@ -146,8 +148,8 @@ export default function CreateWalletScreen({ navigation }: Props) {
             Your Recovery Phrase
           </Text>
           <Text style={[styles.subtitle, { color: theme.colors.textMuted }]}>
-            Write down these 25 words in order and store them safely. This is the
-            only way to recover your wallet.
+            Write down these 25 words in order and store them safely. This is
+            the only way to recover your wallet.
           </Text>
 
           {mnemonic ? (
@@ -159,10 +161,21 @@ export default function CreateWalletScreen({ navigation }: Props) {
               />
 
               <GlassCard variant="light" style={styles.warningContainer}>
-                <View style={[styles.warningIconContainer, { backgroundColor: `${theme.colors.warning}20` }]}>
-                  <Ionicons name="warning" size={20} color={theme.colors.warning} />
+                <View
+                  style={[
+                    styles.warningIconContainer,
+                    { backgroundColor: `${theme.colors.warning}20` },
+                  ]}
+                >
+                  <Ionicons
+                    name="warning"
+                    size={20}
+                    color={theme.colors.warning}
+                  />
                 </View>
-                <Text style={[styles.warningText, { color: theme.colors.text }]}>
+                <Text
+                  style={[styles.warningText, { color: theme.colors.text }]}
+                >
                   Never share your recovery phrase with anyone. Store it safely
                   offline.
                 </Text>

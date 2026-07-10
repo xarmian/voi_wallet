@@ -120,7 +120,9 @@ const TransactionVerification: React.FC<TransactionVerificationProps> = ({
       {/* Network indicator at the top if provided */}
       {networkName && networkColor && (
         <View style={styles.networkHeader}>
-          <View style={[styles.networkDot, { backgroundColor: networkColor }]} />
+          <View
+            style={[styles.networkDot, { backgroundColor: networkColor }]}
+          />
           <Text style={styles.networkText}>Sending on {networkName}</Text>
         </View>
       )}
@@ -134,10 +136,7 @@ const TransactionVerification: React.FC<TransactionVerificationProps> = ({
         {renderAssetImage()}
 
         <Text style={styles.amountValue}>
-          {isNftTransfer
-            ? `1 NFT`
-            : `${amount} ${assetSymbol}`
-          }
+          {isNftTransfer ? `1 NFT` : `${amount} ${assetSymbol}`}
         </Text>
 
         {isNftTransfer && nftToken && (

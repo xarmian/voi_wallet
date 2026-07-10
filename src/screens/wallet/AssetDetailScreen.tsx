@@ -199,8 +199,10 @@ export default function AssetDetailScreen() {
   // If networkId is provided, we need to get the balance from that specific network
   const [networkSpecificBalance, setNetworkSpecificBalance] =
     useState<AccountBalance | null>(null);
-  const [networkSpecificTransactions, setNetworkSpecificTransactions] = useState<TransactionInfo[]>([]);
-  const [isLoadingNetworkTransactions, setIsLoadingNetworkTransactions] = useState(false);
+  const [networkSpecificTransactions, setNetworkSpecificTransactions] =
+    useState<TransactionInfo[]>([]);
+  const [isLoadingNetworkTransactions, setIsLoadingNetworkTransactions] =
+    useState(false);
 
   useEffect(() => {
     if (!networkId) {
@@ -221,8 +223,12 @@ export default function AssetDetailScreen() {
 
     const fetchNetworkBalance = async () => {
       try {
-        const networkService = NetworkService.getInstance(networkId as NetworkId);
-        const balance = await networkService.getAccountBalance(currentAccount.address);
+        const networkService = NetworkService.getInstance(
+          networkId as NetworkId
+        );
+        const balance = await networkService.getAccountBalance(
+          currentAccount.address
+        );
         if (isMounted) {
           setNetworkSpecificBalance(balance);
         }
@@ -243,7 +249,8 @@ export default function AssetDetailScreen() {
     const checkSwappable = async () => {
       setCheckingSwappable(true);
       try {
-        const effectiveNetworkId = networkId as NetworkId || NetworkId.VOI_MAINNET;
+        const effectiveNetworkId =
+          (networkId as NetworkId) || NetworkId.VOI_MAINNET;
 
         // Check if swap is available on this network
         if (!SwapService.isSwapAvailable(effectiveNetworkId)) {
@@ -297,11 +304,14 @@ export default function AssetDetailScreen() {
 
         // Add price data from perNetworkPrices if available
         // Use the primary network's price
-        const primaryPrice = multiNetworkBalance.perNetworkPrices?.[mappedAsset.primaryNetwork];
+        const primaryPrice =
+          multiNetworkBalance.perNetworkPrices?.[mappedAsset.primaryNetwork];
         if (primaryPrice) {
           if (mappedAsset.primaryNetwork === NetworkId.VOI_MAINNET) {
             syntheticBalance.voiPrice = primaryPrice;
-          } else if (mappedAsset.primaryNetwork === NetworkId.ALGORAND_MAINNET) {
+          } else if (
+            mappedAsset.primaryNetwork === NetworkId.ALGORAND_MAINNET
+          ) {
             syntheticBalance.algoPrice = primaryPrice;
           }
         }
@@ -337,17 +347,23 @@ export default function AssetDetailScreen() {
 
     // If multi-network view, show all networks this asset exists on
     if (isMultiNetworkView && multiNetworkBalance) {
-      const mappedAsset = multiNetworkBalance.assets.find(
-        (a) => mappingId ? (a.mappingId === mappingId && a.isMapped) : (a.assetId === assetId && a.isMapped)
+      const mappedAsset = multiNetworkBalance.assets.find((a) =>
+        mappingId
+          ? a.mappingId === mappingId && a.isMapped
+          : a.assetId === assetId && a.isMapped
       );
       if (mappedAsset && mappedAsset.sourceBalances.length > 0) {
-        const uniqueNetworks = Array.from(new Set(mappedAsset.sourceBalances.map(s => s.networkId)));
+        const uniqueNetworks = Array.from(
+          new Set(mappedAsset.sourceBalances.map((s) => s.networkId))
+        );
         return uniqueNetworks
-          .map((nid) => getNetworkConfig(nid).name
-            .replace(' Network', '')
-            .replace(' Mainnet', '')
-            .replace(' Testnet', '')
-            .trim())
+          .map((nid) =>
+            getNetworkConfig(nid)
+              .name.replace(' Network', '')
+              .replace(' Mainnet', '')
+              .replace(' Testnet', '')
+              .trim()
+          )
           .join(' + ');
       }
     }
@@ -370,15 +386,22 @@ export default function AssetDetailScreen() {
         if (networkId && currentAccount) {
           setIsLoadingNetworkTransactions(true);
           try {
-            const networkService = NetworkService.getInstance(networkId as NetworkId);
+            const networkService = NetworkService.getInstance(
+              networkId as NetworkId
+            );
             const result = await networkService.getAssetTransactionHistory(
               currentAccount.address,
               assetId,
               isArc200
             );
-            setNetworkSpecificTransactions(dedupeTransactions(result.transactions));
+            setNetworkSpecificTransactions(
+              dedupeTransactions(result.transactions)
+            );
           } catch (error) {
-            console.error(`Failed to load transactions from ${networkId}:`, error);
+            console.error(
+              `Failed to load transactions from ${networkId}:`,
+              error
+            );
             setNetworkSpecificTransactions([]);
           } finally {
             setIsLoadingNetworkTransactions(false);
@@ -419,19 +442,28 @@ export default function AssetDetailScreen() {
     // Load transactions based on context
     if (networkId && currentAccount) {
       // Reload network-specific transactions
-      refreshPromises.push((async () => {
-        try {
-          const networkService = NetworkService.getInstance(networkId as NetworkId);
-          const result = await networkService.getAssetTransactionHistory(
-            currentAccount.address,
-            assetId,
-            isArc200
-          );
-          setNetworkSpecificTransactions(dedupeTransactions(result.transactions));
-        } catch (error) {
-          console.error(`Failed to refresh transactions from ${networkId}:`, error);
-        }
-      })());
+      refreshPromises.push(
+        (async () => {
+          try {
+            const networkService = NetworkService.getInstance(
+              networkId as NetworkId
+            );
+            const result = await networkService.getAssetTransactionHistory(
+              currentAccount.address,
+              assetId,
+              isArc200
+            );
+            setNetworkSpecificTransactions(
+              dedupeTransactions(result.transactions)
+            );
+          } catch (error) {
+            console.error(
+              `Failed to refresh transactions from ${networkId}:`,
+              error
+            );
+          }
+        })()
+      );
     } else {
       // Use loadAssetTransactions for all assets (including native VOI)
       refreshPromises.push(loadAssetTransactions(accountId, assetId, isArc200));
@@ -776,10 +808,15 @@ export default function AssetDetailScreen() {
     }
 
     console.log('[handleLoadMore] Called - assetId:', assetId);
-    console.log('[handleLoadMore] Asset pagination state:', JSON.stringify(pagination));
+    console.log(
+      '[handleLoadMore] Asset pagination state:',
+      JSON.stringify(pagination)
+    );
 
     if (!pagination || !pagination.hasMore || pagination.isLoadingMore) {
-      console.log('[handleLoadMore] Skipping - no more data or already loading');
+      console.log(
+        '[handleLoadMore] Skipping - no more data or already loading'
+      );
       return;
     }
 
@@ -799,9 +836,7 @@ export default function AssetDetailScreen() {
       <BlurredContainer
         style={[
           styles.transactionItem,
-          isOutgoing
-            ? styles.outgoingTransaction
-            : styles.incomingTransaction,
+          isOutgoing ? styles.outgoingTransaction : styles.incomingTransaction,
         ]}
         borderRadius={theme.borderRadius.lg}
         opacity={0.7}
@@ -810,89 +845,86 @@ export default function AssetDetailScreen() {
           style={{ flex: 1 }}
           onPress={() => handleTransactionPress(tx)}
         >
-        <View style={styles.transactionContent}>
-          <View style={styles.transactionHeader}>
-            <View style={styles.transactionInfo}>
-              <View style={styles.transactionTypeRow}>
-                <Ionicons
-                  name={getTransactionTypeIcon(tx.type) as any}
-                  size={16}
-                  color={getTransactionTypeColor(tx.type, isOutgoing)}
-                  style={{ marginRight: 4 }}
+          <View style={styles.transactionContent}>
+            <View style={styles.transactionHeader}>
+              <View style={styles.transactionInfo}>
+                <View style={styles.transactionTypeRow}>
+                  <Ionicons
+                    name={getTransactionTypeIcon(tx.type) as any}
+                    size={16}
+                    color={getTransactionTypeColor(tx.type, isOutgoing)}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={styles.transactionType}>
+                    {formatTransactionType(tx.type)}
+                  </Text>
+                  {tx.type !== 'application-call' && (
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        isOutgoing
+                          ? styles.outgoingStatus
+                          : styles.incomingStatus,
+                      ]}
+                    >
+                      <Text style={styles.statusText}>
+                        {isOutgoing ? 'Sent' : 'Received'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                <TransactionAddressDisplay
+                  address={
+                    tx.from === currentAccount?.address ? tx.to : tx.from
+                  }
+                  isOutgoing={tx.from === currentAccount?.address}
+                  style={styles.transactionAddress}
+                  nameStyle={styles.transactionName}
+                  addressStyle={styles.transactionAddressText}
                 />
-                <Text style={styles.transactionType}>
-                  {formatTransactionType(tx.type)}
-                </Text>
-                {tx.type !== 'application-call' && (
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      isOutgoing
-                        ? styles.outgoingStatus
-                        : styles.incomingStatus,
-                    ]}
-                  >
-                    <Text style={styles.statusText}>
-                      {isOutgoing ? 'Sent' : 'Received'}
-                    </Text>
-                  </View>
-                )}
               </View>
-              <TransactionAddressDisplay
-                address={
-                  tx.from === currentAccount?.address
-                    ? tx.to
-                    : tx.from
-                }
-                isOutgoing={tx.from === currentAccount?.address}
-                style={styles.transactionAddress}
-                nameStyle={styles.transactionName}
-                addressStyle={styles.transactionAddressText}
-              />
+              <View style={styles.transactionRightInfo}>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={themeColors.textMuted}
+                />
+              </View>
             </View>
-            <View style={styles.transactionRightInfo}>
-              <Ionicons
-                name="chevron-forward"
-                size={16}
-                color={themeColors.textMuted}
-              />
-            </View>
-          </View>
-          <View style={styles.transactionAmountContainer}>
-            <View style={styles.amountRow}>
-              <Text
-                style={[
-                  styles.transactionAmountText,
-                  {
-                    color: isOutgoing
-                      ? themeColors.error
-                      : themeColors.success,
-                  },
-                ]}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {isOutgoing ? '-' : '+'}
-                {(() => {
-                  if (assetId === 0) {
-                    return `${formatBalance(tx.amount)} ${assetName}`;
-                  } else {
-                    const txAsset =
-                      effectiveBalance?.assets?.find(
+            <View style={styles.transactionAmountContainer}>
+              <View style={styles.amountRow}>
+                <Text
+                  style={[
+                    styles.transactionAmountText,
+                    {
+                      color: isOutgoing
+                        ? themeColors.error
+                        : themeColors.success,
+                    },
+                  ]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {isOutgoing ? '-' : '+'}
+                  {(() => {
+                    if (assetId === 0) {
+                      return `${formatBalance(tx.amount)} ${assetName}`;
+                    } else {
+                      const txAsset = effectiveBalance?.assets?.find(
                         (a) =>
                           a.assetId === assetId ||
                           (tx.isArc200 && a.contractId === assetId)
                       );
-                    return `${formatAssetBalance(tx.amount, txAsset?.decimals || 0)} ${txAsset?.symbol || assetName}`;
-                  }
-                })()}
+                      return `${formatAssetBalance(tx.amount, txAsset?.decimals || 0)} ${txAsset?.symbol || assetName}`;
+                    }
+                  })()}
+                </Text>
+              </View>
+              <Text style={styles.transactionDate}>
+                {formatTimestamp(tx.timestamp)}
               </Text>
             </View>
-            <Text style={styles.transactionDate}>
-              {formatTimestamp(tx.timestamp)}
-            </Text>
           </View>
-        </View>
         </TouchableOpacity>
       </BlurredContainer>
     );
@@ -900,102 +932,105 @@ export default function AssetDetailScreen() {
 
   const renderListHeader = () => (
     <>
-        <GlassCard
-          style={styles.balanceContainer}
-          variant="medium"
-        >
-          {(() => {
-            const asset = getAsset();
-            const showImage = asset?.imageUrl && !imageError;
+      <GlassCard style={styles.balanceContainer} variant="medium">
+        {(() => {
+          const asset = getAsset();
+          const showImage = asset?.imageUrl && !imageError;
 
-            return (
-              <>
-                <View style={styles.assetHeader}>
-                  {assetId === 0 ? (
-                    <Image
-                      source={specificNetworkConfig.nativeTokenImage}
-                      style={styles.assetImage}
+          return (
+            <>
+              <View style={styles.assetHeader}>
+                {assetId === 0 ? (
+                  <Image
+                    source={specificNetworkConfig.nativeTokenImage}
+                    style={styles.assetImage}
+                  />
+                ) : showImage ? (
+                  <Image
+                    source={{ uri: asset!.imageUrl }}
+                    style={styles.assetImage}
+                    onError={() => setImageError(true)}
+                  />
+                ) : (
+                  <View style={styles.placeholderIcon}>
+                    <Ionicons
+                      name="disc"
+                      size={32}
+                      color={themeColors.primary}
                     />
-                  ) : showImage ? (
-                    <Image
-                      source={{ uri: asset!.imageUrl }}
-                      style={styles.assetImage}
-                      onError={() => setImageError(true)}
-                    />
-                  ) : (
-                    <View style={styles.placeholderIcon}>
-                      <Ionicons
-                        name="disc"
-                        size={32}
-                        color={themeColors.primary}
-                      />
-                    </View>
-                  )}
-                  <View style={styles.assetTitleSection}>
-                    <View style={styles.assetNameRow}>
-                      <Text style={styles.assetTitle}>
-                        {asset?.name || assetName}
-                      </Text>
-                      {asset?.verified === 1 && (
-                        <View style={styles.verifiedBadge}>
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={18}
-                            color={themeColors.success}
-                          />
-                        </View>
-                      )}
-                    </View>
-                    {asset?.symbol && (
-                      <Text style={styles.assetSymbol}>{asset.symbol}</Text>
-                    )}
-                    {asset?.assetType === 'arc200' && (
-                      <View style={styles.arc200Badge}>
-                        <Text style={styles.arc200Text}>ARC-200 Token</Text>
+                  </View>
+                )}
+                <View style={styles.assetTitleSection}>
+                  <View style={styles.assetNameRow}>
+                    <Text style={styles.assetTitle}>
+                      {asset?.name || assetName}
+                    </Text>
+                    {asset?.verified === 1 && (
+                      <View style={styles.verifiedBadge}>
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={18}
+                          color={themeColors.success}
+                        />
                       </View>
                     )}
                   </View>
+                  {asset?.symbol && (
+                    <Text style={styles.assetSymbol}>{asset.symbol}</Text>
+                  )}
+                  {asset?.assetType === 'arc200' && (
+                    <View style={styles.arc200Badge}>
+                      <Text style={styles.arc200Text}>ARC-200 Token</Text>
+                    </View>
+                  )}
                 </View>
+              </View>
 
-                <Text style={styles.balanceLabel}>Balance</Text>
-                <Text style={styles.balance}>
-                  {getAssetBalance()} {asset?.symbol || assetName}
-                </Text>
-                <Text style={styles.balanceUsd}>
-                  {assetId === 0
-                    ? `${calculateNativeUsdValue()} USD`
-                    : `${calculateAssetUsdValue()} USD`}
-                </Text>
+              <Text style={styles.balanceLabel}>Balance</Text>
+              <Text style={styles.balance}>
+                {getAssetBalance()} {asset?.symbol || assetName}
+              </Text>
+              <Text style={styles.balanceUsd}>
+                {assetId === 0
+                  ? `${calculateNativeUsdValue()} USD`
+                  : `${calculateAssetUsdValue()} USD`}
+              </Text>
 
-                {asset?.contractId !== undefined && asset.assetType === 'arc200' && (
+              {asset?.contractId !== undefined &&
+                asset.assetType === 'arc200' && (
                   <View style={styles.contractInfo}>
                     <Text style={styles.contractLabel}>Contract ID:</Text>
                     <Text style={styles.contractId}>{asset.contractId}</Text>
                   </View>
                 )}
-                {asset?.assetType === 'asa' && (
-                  <View style={styles.contractInfo}>
-                    <Text style={styles.contractLabel}>Asset ID:</Text>
-                    <Text style={styles.contractId}>{asset.assetId}</Text>
-                  </View>
-                )}
-                {asset?.decimals !== undefined && (
-                  <View style={styles.decimalsInfo}>
-                    <Text style={styles.decimalsLabel}>Decimals:</Text>
-                    <Text style={styles.decimalsId}>{asset.decimals}</Text>
-                  </View>
-                )}
-              </>
-            );
-          })()}
-        </GlassCard>
+              {asset?.assetType === 'asa' && (
+                <View style={styles.contractInfo}>
+                  <Text style={styles.contractLabel}>Asset ID:</Text>
+                  <Text style={styles.contractId}>{asset.assetId}</Text>
+                </View>
+              )}
+              {asset?.decimals !== undefined && (
+                <View style={styles.decimalsInfo}>
+                  <Text style={styles.decimalsLabel}>Decimals:</Text>
+                  <Text style={styles.decimalsId}>{asset.decimals}</Text>
+                </View>
+              )}
+            </>
+          );
+        })()}
+      </GlassCard>
 
-        {/* Per-Network Breakdown for Mapped Assets */}
-        {/* Only show breakdown if we're NOT viewing a specific network */}
-        {!networkId && isMultiNetworkView && multiNetworkBalance && (() => {
+      {/* Per-Network Breakdown for Mapped Assets */}
+      {/* Only show breakdown if we're NOT viewing a specific network */}
+      {!networkId &&
+        isMultiNetworkView &&
+        multiNetworkBalance &&
+        (() => {
           // Find mapped asset by mappingId if provided, otherwise by assetId
-          const mappedAsset = multiNetworkBalance.assets.find(
-            (a) => mappingId ? (a.mappingId === mappingId && a.isMapped) : (a.assetId === assetId && a.isMapped)
+          const mappedAsset = multiNetworkBalance.assets.find((a) =>
+            mappingId
+              ? a.mappingId === mappingId && a.isMapped
+              : a.assetId === assetId && a.isMapped
           );
 
           if (mappedAsset && mappedAsset.sourceBalances.length >= 1) {
@@ -1005,18 +1040,29 @@ export default function AssetDetailScreen() {
                 borderRadius={theme.borderRadius.lg}
                 opacity={0.7}
               >
-                <Text style={styles.networkBreakdownTitle}>Per-Network Breakdown</Text>
+                <Text style={styles.networkBreakdownTitle}>
+                  Per-Network Breakdown
+                </Text>
                 {mappedAsset.sourceBalances.map((source, index) => {
                   const networkConfig = getNetworkConfig(source.networkId);
                   const sourceAsset = source.balance;
                   const isNative = sourceAsset.assetId === 0;
 
                   const balanceStr = isNative
-                    ? formatNativeBalance(sourceAsset.amount, networkConfig.nativeToken)
-                    : formatAssetBalance(sourceAsset.amount, sourceAsset.decimals);
+                    ? formatNativeBalance(
+                        sourceAsset.amount,
+                        networkConfig.nativeToken
+                      )
+                    : formatAssetBalance(
+                        sourceAsset.amount,
+                        sourceAsset.decimals
+                      );
 
                   return (
-                    <View key={`${source.networkId}-${sourceAsset.assetId}-${index}`} style={styles.networkBreakdownRow}>
+                    <View
+                      key={`${source.networkId}-${sourceAsset.assetId}-${index}`}
+                      style={styles.networkBreakdownRow}
+                    >
                       <View style={styles.networkBreakdownLeft}>
                         <View
                           style={[
@@ -1029,7 +1075,10 @@ export default function AssetDetailScreen() {
                             {networkConfig.name}
                           </Text>
                           <Text style={styles.networkBreakdownAssetInfo}>
-                            {sourceAsset.symbol || sourceAsset.name || `Asset ${sourceAsset.assetId}`} • ID: {sourceAsset.assetId}
+                            {sourceAsset.symbol ||
+                              sourceAsset.name ||
+                              `Asset ${sourceAsset.assetId}`}{' '}
+                            • ID: {sourceAsset.assetId}
                           </Text>
                         </View>
                       </View>
@@ -1045,76 +1094,76 @@ export default function AssetDetailScreen() {
           return null;
         })()}
 
-        <View style={styles.actionButtonsContainer}>
+      <View style={styles.actionButtonsContainer}>
+        <GlassButton
+          variant="secondary"
+          size="md"
+          icon="send"
+          label="Send"
+          tint="#007AFF"
+          onPress={() =>
+            navigation.navigate('Send', {
+              assetName,
+              assetId,
+              accountId,
+              networkId,
+              mappingId,
+            })
+          }
+          style={styles.actionButton}
+        />
+
+        {isSwappable && isSwapEnabled && (
           <GlassButton
             variant="secondary"
             size="md"
-            icon="send"
-            label="Send"
-            tint="#007AFF"
+            icon="swap-horizontal"
+            label="Swap"
+            tint="#AF52DE"
             onPress={() =>
-              navigation.navigate('Send', {
+              navigation.navigate('Swap', {
                 assetName,
                 assetId,
                 accountId,
                 networkId,
-                mappingId,
               })
             }
             style={styles.actionButton}
           />
-
-          {isSwappable && isSwapEnabled && (
-            <GlassButton
-              variant="secondary"
-              size="md"
-              icon="swap-horizontal"
-              label="Swap"
-              tint="#AF52DE"
-              onPress={() =>
-                navigation.navigate('Swap', {
-                  assetName,
-                  assetId,
-                  accountId,
-                  networkId,
-                })
-              }
-              style={styles.actionButton}
-            />
-          )}
-
-          <GlassButton
-            variant="secondary"
-            size="md"
-            icon="download"
-            label="Receive"
-            tint="#30D158"
-            onPress={() =>
-              navigation.navigate('Receive', {
-                assetName,
-                assetId,
-                accountId,
-              })
-            }
-            style={styles.actionButton}
-          />
-        </View>
-
-        {canOptOut() && (
-          <TouchableOpacity
-            style={styles.optOutButton}
-            onPress={handleOptOut}
-            disabled={optingOut}
-          >
-            <Ionicons name="remove-circle-outline" size={20} color="#EF4444" />
-            <Text style={styles.optOutButtonText}>
-              {optingOut ? 'Removing...' : 'Remove Asset'}
-            </Text>
-          </TouchableOpacity>
         )}
 
-        <Text style={styles.transactionsTitle}>Transactions</Text>
-      </>
+        <GlassButton
+          variant="secondary"
+          size="md"
+          icon="download"
+          label="Receive"
+          tint="#30D158"
+          onPress={() =>
+            navigation.navigate('Receive', {
+              assetName,
+              assetId,
+              accountId,
+            })
+          }
+          style={styles.actionButton}
+        />
+      </View>
+
+      {canOptOut() && (
+        <TouchableOpacity
+          style={styles.optOutButton}
+          onPress={handleOptOut}
+          disabled={optingOut}
+        >
+          <Ionicons name="remove-circle-outline" size={20} color="#EF4444" />
+          <Text style={styles.optOutButtonText}>
+            {optingOut ? 'Removing...' : 'Remove Asset'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      <Text style={styles.transactionsTitle}>Transactions</Text>
+    </>
   );
 
   const renderListFooter = () => {
@@ -1163,15 +1212,11 @@ export default function AssetDetailScreen() {
           }
         >
           {renderListHeader()}
-          {filteredTransactions.length === 0 ? (
-            renderListEmpty()
-          ) : (
-            filteredTransactions.map((tx) => (
-              <View key={tx.id}>
-                {renderTransactionItem({ item: tx })}
-              </View>
-            ))
-          )}
+          {filteredTransactions.length === 0
+            ? renderListEmpty()
+            : filteredTransactions.map((tx) => (
+                <View key={tx.id}>{renderTransactionItem({ item: tx })}</View>
+              ))}
           {renderListFooter()}
         </ScrollView>
 
@@ -1347,9 +1392,10 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
       color: theme.colors.text,
       marginBottom: theme.spacing.md,
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 1.0)'
-        : 'rgba(255, 255, 255, 1.0)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 1.0)'
+          : 'rgba(255, 255, 255, 1.0)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 16,
     },

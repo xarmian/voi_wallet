@@ -150,7 +150,8 @@ const AuthAccountPreview: React.FC<AuthAccountPreviewProps> = ({
         />
         <Text style={styles.infoText}>
           This account has been rekeyed to use your Ledger device for signing.
-          You'll be able to manage this account using your Ledger hardware wallet.
+          You'll be able to manage this account using your Ledger hardware
+          wallet.
         </Text>
       </View>
 

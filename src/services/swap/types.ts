@@ -130,7 +130,11 @@ export class SwapServiceError extends Error {
   statusCode?: number;
   provider?: 'snowball' | 'deflex';
 
-  constructor(message: string, provider?: 'snowball' | 'deflex', statusCode?: number) {
+  constructor(
+    message: string,
+    provider?: 'snowball' | 'deflex',
+    statusCode?: number
+  ) {
     super(message);
     this.name = 'SwapServiceError';
     this.provider = provider;

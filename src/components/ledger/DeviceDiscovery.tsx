@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -45,7 +51,7 @@ const DeviceItem = ({
   const isRecentlyDiscovered = useMemo(() => {
     const lastSeenTime = new Date(device.lastSeen).getTime();
     const now = Date.now();
-    return (now - lastSeenTime) < 30000; // 30 seconds
+    return now - lastSeenTime < 30000; // 30 seconds
   }, [device.lastSeen]);
 
   // Format last connected/seen info
@@ -139,8 +145,8 @@ export const DeviceDiscovery: React.FC<DeviceDiscoveryProps> = ({
     }
 
     if (!discoveryStartPromiseRef.current) {
-      discoveryStartPromiseRef.current = ledgerTransportService
-        .startDiscovery();
+      discoveryStartPromiseRef.current =
+        ledgerTransportService.startDiscovery();
 
       discoveryStartPromiseRef.current
         .then(() => {
@@ -234,7 +240,12 @@ export const DeviceDiscovery: React.FC<DeviceDiscoveryProps> = ({
       cleanupListeners();
       stopDiscoverySession();
     };
-  }, [autoInitialize, initializeTransports, registerListeners, stopDiscoverySession]);
+  }, [
+    autoInitialize,
+    initializeTransports,
+    registerListeners,
+    stopDiscoverySession,
+  ]);
 
   const handleRefresh = useCallback(async () => {
     try {

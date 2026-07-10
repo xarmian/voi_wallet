@@ -35,7 +35,11 @@ import {
 } from '@/store/remoteSignerStore';
 import { useAccounts, useWalletStore } from '@/store/walletStore';
 import { AppMode } from '@/types/remoteSigner';
-import { AccountType, StandardAccountMetadata, AccountMetadata } from '@/types/wallet';
+import {
+  AccountType,
+  StandardAccountMetadata,
+  AccountMetadata,
+} from '@/types/wallet';
 import * as Updates from 'expo-updates';
 import AccountListModal from '@/components/account/AccountListModal';
 import { TransferToAirgapFlow } from '@/components/remoteSigner/TransferToAirgapFlow';
@@ -50,7 +54,8 @@ const showAlert = (
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find((b) => b.style !== 'cancel') || buttons[0];
+        const confirmButton =
+          buttons.find((b) => b.style !== 'cancel') || buttons[0];
         confirmButton?.onPress?.();
       } else {
         const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -100,7 +105,8 @@ export default function RemoteSignerSettingsScreen() {
 
   // Transfer to Airgap state
   const [showAccountSelector, setShowAccountSelector] = useState(false);
-  const [selectedAccountForTransfer, setSelectedAccountForTransfer] = useState<StandardAccountMetadata | null>(null);
+  const [selectedAccountForTransfer, setSelectedAccountForTransfer] =
+    useState<StandardAccountMetadata | null>(null);
   const [showTransferFlow, setShowTransferFlow] = useState(false);
 
   useEffect(() => {
@@ -262,7 +268,11 @@ export default function RemoteSignerSettingsScreen() {
               <Ionicons
                 name="wallet-outline"
                 size={28}
-                color={appMode === 'wallet' ? theme.colors.primary : theme.colors.textSecondary}
+                color={
+                  appMode === 'wallet'
+                    ? theme.colors.primary
+                    : theme.colors.textSecondary
+                }
               />
             </View>
             <View style={styles.modeContent}>
@@ -275,8 +285,8 @@ export default function RemoteSignerSettingsScreen() {
                 Wallet Mode
               </Text>
               <Text style={styles.modeDescription}>
-                Full wallet functionality. Use air-gapped signer accounts for enhanced
-                security.
+                Full wallet functionality. Use air-gapped signer accounts for
+                enhanced security.
               </Text>
             </View>
             {appMode === 'wallet' && (
@@ -300,7 +310,11 @@ export default function RemoteSignerSettingsScreen() {
               <Ionicons
                 name="key-outline"
                 size={28}
-                color={appMode === 'signer' ? theme.colors.primary : theme.colors.textSecondary}
+                color={
+                  appMode === 'signer'
+                    ? theme.colors.primary
+                    : theme.colors.textSecondary
+                }
               />
             </View>
             <View style={styles.modeContent}>
@@ -313,8 +327,8 @@ export default function RemoteSignerSettingsScreen() {
                 Signer Mode
               </Text>
               <Text style={styles.modeDescription}>
-                Air-gapped signing only. Keep this device offline and sign via QR
-                codes.
+                Air-gapped signing only. Keep this device offline and sign via
+                QR codes.
               </Text>
             </View>
             {appMode === 'signer' && (
@@ -368,7 +382,9 @@ export default function RemoteSignerSettingsScreen() {
                     style={styles.editButton}
                     onPress={() => setIsEditingName(true)}
                   >
-                    <Text style={styles.deviceValue}>{signerConfig.deviceName}</Text>
+                    <Text style={styles.deviceValue}>
+                      {signerConfig.deviceName}
+                    </Text>
                     <Ionicons
                       name="pencil-outline"
                       size={16}
@@ -499,7 +515,9 @@ export default function RemoteSignerSettingsScreen() {
                   />
                 </View>
                 <View style={styles.actionContent}>
-                  <Text style={styles.actionTitle}>Transfer to Airgap Device</Text>
+                  <Text style={styles.actionTitle}>
+                    Transfer to Airgap Device
+                  </Text>
                   <Text style={styles.actionDescription}>
                     Move an existing account to your signer device
                   </Text>
@@ -561,8 +579,8 @@ export default function RemoteSignerSettingsScreen() {
               />
               <Text style={styles.modalTitle}>Set Up Signer Mode</Text>
               <Text style={styles.modalDescription}>
-                Enter a name for this signer device. This name will be shown when
-                pairing with other devices.
+                Enter a name for this signer device. This name will be shown
+                when pairing with other devices.
               </Text>
             </View>
 
@@ -595,7 +613,10 @@ export default function RemoteSignerSettingsScreen() {
                 disabled={!setupDeviceName.trim() || isModeSwitching}
               >
                 {isModeSwitching ? (
-                  <ActivityIndicator size="small" color={theme.colors.buttonText} />
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.buttonText}
+                  />
                 ) : (
                   <Text style={styles.modalConfirmButtonText}>Set Up</Text>
                 )}

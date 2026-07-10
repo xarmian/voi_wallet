@@ -30,11 +30,7 @@ export default function TransactionDangerBanner({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Ionicons
-          name="alert-circle"
-          size={24}
-          color={theme.colors.error}
-        />
+        <Ionicons name="alert-circle" size={24} color={theme.colors.error} />
         <Text style={styles.headerText}>
           Dangerous operation — review carefully
         </Text>

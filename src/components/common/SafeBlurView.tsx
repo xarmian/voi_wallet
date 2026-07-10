@@ -24,22 +24,15 @@ type SafeBlurViewProps = {
  * as it can cause crashes due to view recycling issues.
  */
 export const SafeBlurView = forwardRef<View, SafeBlurViewProps>(
-  (
-    {
-      intensity = 10,
-      tint = 'light',
-      children,
-      style,
-      ...viewProps
-    },
-    ref
-  ) => {
+  ({ intensity = 10, tint = 'light', children, style, ...viewProps }, ref) => {
     return (
       <BlurView
         ref={ref}
         intensity={intensity}
         tint={tint}
-        experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+        experimentalBlurMethod={
+          Platform.OS === 'android' ? 'dimezisBlurView' : undefined
+        }
         style={style}
         {...viewProps}
       >

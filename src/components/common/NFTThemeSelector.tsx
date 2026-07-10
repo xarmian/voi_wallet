@@ -47,9 +47,11 @@ export default function NFTThemeSelector({
   const [processingNFT, setProcessingNFT] = useState<string | null>(null);
 
   // Collection tokens data
-  const [selectedCollection, setSelectedCollection] = useState<ARC72Collection | null>(null);
+  const [selectedCollection, setSelectedCollection] =
+    useState<ARC72Collection | null>(null);
   const [collectionTokens, setCollectionTokens] = useState<NFTToken[]>([]);
-  const [isLoadingCollectionTokens, setIsLoadingCollectionTokens] = useState(false);
+  const [isLoadingCollectionTokens, setIsLoadingCollectionTokens] =
+    useState(false);
   const [ownershipMap, setOwnershipMap] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextToken, setNextToken] = useState<number | undefined>();
@@ -91,49 +93,57 @@ export default function NFTThemeSelector({
     }
   }, [activeAccount]);
 
-  const loadCollectionTokens = useCallback(async (reset = false) => {
-    if (!selectedCollection) return;
+  const loadCollectionTokens = useCallback(
+    async (reset = false) => {
+      if (!selectedCollection) return;
 
-    try {
-      if (reset) {
-        setIsLoadingCollectionTokens(true);
-        setCollectionTokens([]);
-        setNextToken(undefined);
+      try {
+        if (reset) {
+          setIsLoadingCollectionTokens(true);
+          setCollectionTokens([]);
+          setNextToken(undefined);
 
-        // Load user's NFTs for ownership check
-        if (activeAccount) {
-          const userNFTs = await NFTService.fetchUserNFTs(activeAccount.address);
-          const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
-          setOwnershipMap(ownership);
+          // Load user's NFTs for ownership check
+          if (activeAccount) {
+            const userNFTs = await NFTService.fetchUserNFTs(
+              activeAccount.address
+            );
+            const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
+            setOwnershipMap(ownership);
+          }
+        } else {
+          setLoadingMore(true);
         }
-      } else {
-        setLoadingMore(true);
-      }
 
-      const response = await NFTService.fetchTokensByCollection(
-        selectedCollection.contractId,
-        {
-          limit: 20,
-          nextToken: reset ? undefined : nextToken,
+        const response = await NFTService.fetchTokensByCollection(
+          selectedCollection.contractId,
+          {
+            limit: 20,
+            nextToken: reset ? undefined : nextToken,
+          }
+        );
+
+        if (reset) {
+          setCollectionTokens(response.tokens);
+        } else {
+          setCollectionTokens((prev) => [...prev, ...response.tokens]);
         }
-      );
 
-      if (reset) {
-        setCollectionTokens(response.tokens);
-      } else {
-        setCollectionTokens(prev => [...prev, ...response.tokens]);
+        setNextToken(response.nextToken);
+        setHasMore(!!response.nextToken);
+      } catch (error) {
+        console.error('Failed to load collection tokens:', error);
+        Alert.alert(
+          'Error',
+          'Failed to load collection tokens. Please try again.'
+        );
+      } finally {
+        setIsLoadingCollectionTokens(false);
+        setLoadingMore(false);
       }
-
-      setNextToken(response.nextToken);
-      setHasMore(!!response.nextToken);
-    } catch (error) {
-      console.error('Failed to load collection tokens:', error);
-      Alert.alert('Error', 'Failed to load collection tokens. Please try again.');
-    } finally {
-      setIsLoadingCollectionTokens(false);
-      setLoadingMore(false);
-    }
-  }, [selectedCollection, nextToken, activeAccount]);
+    },
+    [selectedCollection, nextToken, activeAccount]
+  );
 
   // Load collection tokens when collection is selected
   useEffect(() => {
@@ -211,11 +221,16 @@ export default function NFTThemeSelector({
   };
 
   const renderTabs = () => (
-    <View style={[styles.tabContainer, { borderBottomColor: theme.colors.border }]}>
+    <View
+      style={[styles.tabContainer, { borderBottomColor: theme.colors.border }]}
+    >
       <TouchableOpacity
         style={[
           styles.tab,
-          activeTab === 'my-nfts' && [styles.activeTab, { borderBottomColor: theme.colors.primary }],
+          activeTab === 'my-nfts' && [
+            styles.activeTab,
+            { borderBottomColor: theme.colors.primary },
+          ],
         ]}
         onPress={() => setActiveTab('my-nfts')}
       >
@@ -223,7 +238,10 @@ export default function NFTThemeSelector({
           style={[
             styles.tabText,
             { color: theme.colors.text },
-            activeTab === 'my-nfts' && [styles.activeTabText, { color: theme.colors.primary }],
+            activeTab === 'my-nfts' && [
+              styles.activeTabText,
+              { color: theme.colors.primary },
+            ],
           ]}
         >
           My NFTs
@@ -232,7 +250,10 @@ export default function NFTThemeSelector({
       <TouchableOpacity
         style={[
           styles.tab,
-          activeTab === 'browse-collections' && [styles.activeTab, { borderBottomColor: theme.colors.primary }],
+          activeTab === 'browse-collections' && [
+            styles.activeTab,
+            { borderBottomColor: theme.colors.primary },
+          ],
         ]}
         onPress={() => setActiveTab('browse-collections')}
       >
@@ -240,7 +261,10 @@ export default function NFTThemeSelector({
           style={[
             styles.tabText,
             { color: theme.colors.text },
-            activeTab === 'browse-collections' && [styles.activeTabText, { color: theme.colors.primary }],
+            activeTab === 'browse-collections' && [
+              styles.activeTabText,
+              { color: theme.colors.primary },
+            ],
           ]}
         >
           Browse Collections
@@ -253,7 +277,12 @@ export default function NFTThemeSelector({
     if (viewMode !== 'collection-tokens' || !selectedCollection) return null;
 
     return (
-      <View style={[styles.collectionHeader, { backgroundColor: theme.colors.surface }]}>
+      <View
+        style={[
+          styles.collectionHeader,
+          { backgroundColor: theme.colors.surface },
+        ]}
+      >
         <TouchableOpacity
           style={styles.backButton}
           onPress={handleBackToCollections}
@@ -262,10 +291,18 @@ export default function NFTThemeSelector({
           <Ionicons name="chevron-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
         <View style={styles.collectionHeaderInfo}>
-          <Text style={[styles.collectionHeaderName, { color: theme.colors.text }]} numberOfLines={1}>
+          <Text
+            style={[styles.collectionHeaderName, { color: theme.colors.text }]}
+            numberOfLines={1}
+          >
             {selectedCollection.name}
           </Text>
-          <Text style={[styles.collectionHeaderSub, { color: theme.colors.textSecondary }]}>
+          <Text
+            style={[
+              styles.collectionHeaderSub,
+              { color: theme.colors.textSecondary },
+            ]}
+          >
             {selectedCollection.totalSupply.toLocaleString()} items
           </Text>
         </View>
@@ -279,7 +316,12 @@ export default function NFTThemeSelector({
         return (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.loadingText,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               Loading NFTs...
             </Text>
           </View>
@@ -295,8 +337,17 @@ export default function NFTThemeSelector({
           processingNFTKey={processingNFT}
           ListEmptyComponent={
             <View style={styles.emptyState}>
-              <Ionicons name="images-outline" size={64} color={theme.colors.textMuted} />
-              <Text style={[styles.emptyStateText, { color: theme.colors.textSecondary }]}>
+              <Ionicons
+                name="images-outline"
+                size={64}
+                color={theme.colors.textMuted}
+              />
+              <Text
+                style={[
+                  styles.emptyStateText,
+                  { color: theme.colors.textSecondary },
+                ]}
+              >
                 No NFTs with images found
               </Text>
             </View>
@@ -317,7 +368,12 @@ export default function NFTThemeSelector({
         return (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.loadingText,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               Loading tokens...
             </Text>
           </View>

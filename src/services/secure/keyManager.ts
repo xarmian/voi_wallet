@@ -99,7 +99,8 @@ export class SecureKeyManager {
         const signingAccount = wallet.accounts.find(
           (acc) =>
             acc.address.toUpperCase() === signingAddress.toUpperCase() &&
-            (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER)
+            (acc.type === AccountType.STANDARD ||
+              acc.type === AccountType.LEDGER)
         );
 
         if (!signingAccount) {
@@ -407,9 +408,16 @@ export class SecureKeyManager {
       } catch (error) {
         // If verification fails due to race condition during signing, continue anyway
         // The signing process will handle and report the actual error
-        const message = error instanceof Error ? error.message.toLowerCase() : '';
-        if (message.includes('race') || message.includes('pending') || message.includes('communication')) {
-          console.log('⏭️ Skipping app verification due to race condition during signing');
+        const message =
+          error instanceof Error ? error.message.toLowerCase() : '';
+        if (
+          message.includes('race') ||
+          message.includes('pending') ||
+          message.includes('communication')
+        ) {
+          console.log(
+            '⏭️ Skipping app verification due to race condition during signing'
+          );
           return;
         }
         throw error;
@@ -483,8 +491,14 @@ export class SecureKeyManager {
     } catch (error) {
       // If verification fails due to race condition during signing, continue anyway
       const message = error instanceof Error ? error.message.toLowerCase() : '';
-      if (message.includes('race') || message.includes('pending') || message.includes('communication')) {
-        console.log('⏭️ Skipping app verification due to race condition during signing');
+      if (
+        message.includes('race') ||
+        message.includes('pending') ||
+        message.includes('communication')
+      ) {
+        console.log(
+          '⏭️ Skipping app verification due to race condition during signing'
+        );
         return;
       }
       throw error;

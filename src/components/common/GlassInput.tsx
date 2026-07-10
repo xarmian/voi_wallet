@@ -131,24 +131,30 @@ export const GlassInput: React.FC<GlassInputProps> = ({
   }, [size, theme.spacing, theme.borderRadius]);
 
   // Handle focus
-  const handleFocus = useCallback((e: any) => {
-    setIsFocused(true);
-    focusProgress.value = withSpring(1, springConfigs.snappy);
-    if (floatingLabel) {
-      labelProgress.value = withSpring(1, springConfigs.smooth);
-    }
-    onFocus?.(e);
-  }, [focusProgress, labelProgress, floatingLabel, onFocus]);
+  const handleFocus = useCallback(
+    (e: any) => {
+      setIsFocused(true);
+      focusProgress.value = withSpring(1, springConfigs.snappy);
+      if (floatingLabel) {
+        labelProgress.value = withSpring(1, springConfigs.smooth);
+      }
+      onFocus?.(e);
+    },
+    [focusProgress, labelProgress, floatingLabel, onFocus]
+  );
 
   // Handle blur
-  const handleBlur = useCallback((e: any) => {
-    setIsFocused(false);
-    focusProgress.value = withSpring(0, springConfigs.snappy);
-    if (floatingLabel && !value) {
-      labelProgress.value = withSpring(0, springConfigs.smooth);
-    }
-    onBlur?.(e);
-  }, [focusProgress, labelProgress, floatingLabel, value, onBlur]);
+  const handleBlur = useCallback(
+    (e: any) => {
+      setIsFocused(false);
+      focusProgress.value = withSpring(0, springConfigs.snappy);
+      if (floatingLabel && !value) {
+        labelProgress.value = withSpring(0, springConfigs.smooth);
+      }
+      onBlur?.(e);
+    },
+    [focusProgress, labelProgress, floatingLabel, value, onBlur]
+  );
 
   // Handle clear
   const handleClear = useCallback(() => {
@@ -168,7 +174,10 @@ export const GlassInput: React.FC<GlassInputProps> = ({
     const borderColor = interpolateColor(
       focusProgress.value,
       [0, 1],
-      [theme.colors.glassBorder, error ? theme.colors.error : theme.colors.primary]
+      [
+        theme.colors.glassBorder,
+        error ? theme.colors.error : theme.colors.primary,
+      ]
     );
 
     return {
@@ -185,7 +194,11 @@ export const GlassInput: React.FC<GlassInputProps> = ({
       [0, -(sizeConfig.height / 2 + sizeConfig.labelFontSize / 2 - 2)]
     );
     const scale = interpolate(labelProgress.value, [0, 1], [1, 0.85]);
-    const opacity = interpolate(labelProgress.value, [0, 0.5, 1], [0.6, 0.8, 1]);
+    const opacity = interpolate(
+      labelProgress.value,
+      [0, 0.5, 1],
+      [0.6, 0.8, 1]
+    );
 
     return {
       transform: [{ translateY }, { scale }],
@@ -199,14 +212,18 @@ export const GlassInput: React.FC<GlassInputProps> = ({
   }));
 
   // Container styles
-  const containerStyles = useMemo((): ViewStyle[] => [
-    styles.container,
-    {
-      height: sizeConfig.height,
-      borderRadius: sizeConfig.borderRadius,
-    },
-    containerStyle as ViewStyle,
-  ].filter(Boolean), [sizeConfig, containerStyle]);
+  const containerStyles = useMemo(
+    (): ViewStyle[] =>
+      [
+        styles.container,
+        {
+          height: sizeConfig.height,
+          borderRadius: sizeConfig.borderRadius,
+        },
+        containerStyle as ViewStyle,
+      ].filter(Boolean),
+    [sizeConfig, containerStyle]
+  );
 
   // Show clear button
   const showClear = clearButton && value && value.length > 0;
@@ -236,7 +253,9 @@ export const GlassInput: React.FC<GlassInputProps> = ({
             style={[
               styles.glowLayer,
               {
-                backgroundColor: error ? theme.colors.glowError : theme.colors.glowPrimary,
+                backgroundColor: error
+                  ? theme.colors.glowError
+                  : theme.colors.glowPrimary,
                 borderRadius: sizeConfig.borderRadius,
               },
               animatedGlowStyle,
@@ -249,7 +268,10 @@ export const GlassInput: React.FC<GlassInputProps> = ({
             <SafeBlurView
               intensity={theme.glass.light.blur}
               tint={theme.mode === 'dark' ? 'dark' : 'light'}
-              style={[StyleSheet.absoluteFill, { borderRadius: sizeConfig.borderRadius }]}
+              style={[
+                StyleSheet.absoluteFill,
+                { borderRadius: sizeConfig.borderRadius },
+              ]}
             />
           ) : null}
 
@@ -269,7 +291,12 @@ export const GlassInput: React.FC<GlassInputProps> = ({
           />
 
           {/* Content row */}
-          <View style={[styles.inputRow, { paddingHorizontal: sizeConfig.paddingHorizontal }]}>
+          <View
+            style={[
+              styles.inputRow,
+              { paddingHorizontal: sizeConfig.paddingHorizontal },
+            ]}
+          >
             {/* Left icon */}
             {leftIcon && (
               <Ionicons
@@ -288,7 +315,9 @@ export const GlassInput: React.FC<GlassInputProps> = ({
                   {
                     fontSize: sizeConfig.fontSize,
                     color: error ? theme.colors.error : theme.colors.textMuted,
-                    left: leftIcon ? sizeConfig.paddingHorizontal + sizeConfig.iconSize + 8 : sizeConfig.paddingHorizontal,
+                    left: leftIcon
+                      ? sizeConfig.paddingHorizontal + sizeConfig.iconSize + 8
+                      : sizeConfig.paddingHorizontal,
                   },
                   animatedLabelStyle,
                 ]}
@@ -313,7 +342,7 @@ export const GlassInput: React.FC<GlassInputProps> = ({
                   fontSize: sizeConfig.fontSize,
                   color: theme.colors.text,
                   paddingLeft: leftIcon ? 8 : 0,
-                  paddingRight: (rightIcon || showClear) ? 8 : 0,
+                  paddingRight: rightIcon || showClear ? 8 : 0,
                 },
                 inputStyle,
               ]}
@@ -324,7 +353,11 @@ export const GlassInput: React.FC<GlassInputProps> = ({
 
             {/* Clear button */}
             {showClear && !rightIcon && (
-              <Pressable onPress={handleClear} style={styles.iconButton} hitSlop={8}>
+              <Pressable
+                onPress={handleClear}
+                style={styles.iconButton}
+                hitSlop={8}
+              >
                 <Ionicons
                   name="close-circle"
                   size={sizeConfig.iconSize}

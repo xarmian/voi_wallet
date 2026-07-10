@@ -9,11 +9,10 @@ const resolveWalletConnectProjectId = (): string => {
     return fromEnv.trim();
   }
 
-  const extra =
-    (Constants?.expoConfig?.extra ??
-      (Constants as any)?.manifest2?.extra ??
-      Constants?.manifest?.extra ??
-      {}) as Record<string, unknown>;
+  const extra = (Constants?.expoConfig?.extra ??
+    (Constants as any)?.manifest2?.extra ??
+    Constants?.manifest?.extra ??
+    {}) as Record<string, unknown>;
 
   const fromExtra = extra['walletConnectProjectId'];
   if (typeof fromExtra === 'string' && fromExtra.trim().length > 0) {
@@ -49,7 +48,10 @@ export const WALLET_METADATA = {
   name: 'Voi Wallet',
   description: 'Mobile wallet for Voi Network and Algorand ecosystem',
   url: 'https://getvoi.app',
-  icons: ['https://getvoi.app/android-chrome-192x192.png', 'https://getvoi.app/android-chrome-512x512.png'],
+  icons: [
+    'https://getvoi.app/android-chrome-192x192.png',
+    'https://getvoi.app/android-chrome-512x512.png',
+  ],
 };
 
 export const ALGORAND_METHODS = [

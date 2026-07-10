@@ -12,7 +12,13 @@ import {
   SwapServiceError,
 } from './types';
 import SnowballApiService from '../snowball';
-import { SnowballToken, SwapQuote, Route, RoutePool, RouteHop } from '../snowball/types';
+import {
+  SnowballToken,
+  SwapQuote,
+  Route,
+  RoutePool,
+  RouteHop,
+} from '../snowball/types';
 import { DeflexSwapService } from '../deflex';
 import { NetworkId } from '@/types/network';
 import { useNetworkStore } from '@/store/networkStore';
@@ -41,9 +47,11 @@ class SnowballSwapAdapter implements SwapProvider {
    * Convert Snowball Route to UnifiedRoute
    */
   private convertRoute(route: Route): UnifiedRoute {
-    const totalPools = route.type === 'direct'
-      ? (route.pools?.length || 0)
-      : (route.hops?.reduce((sum, hop) => sum + (hop.pools?.length || 0), 0) || 0);
+    const totalPools =
+      route.type === 'direct'
+        ? route.pools?.length || 0
+        : route.hops?.reduce((sum, hop) => sum + (hop.pools?.length || 0), 0) ||
+          0;
 
     if (route.type === 'multi-hop' && route.hops) {
       return {
@@ -86,8 +94,8 @@ class SnowballSwapAdapter implements SwapProvider {
     }
 
     return tokens
-      .filter(t => !t.is_wrapped) // Filter out wrapped tokens
-      .map(t => this.convertToken(t));
+      .filter((t) => !t.is_wrapped) // Filter out wrapped tokens
+      .map((t) => this.convertToken(t));
   }
 
   async getQuote(request: UnifiedQuoteRequest): Promise<UnifiedSwapQuote> {
@@ -128,7 +136,7 @@ class SnowballSwapAdapter implements SwapProvider {
 
   async searchTokens(query: string): Promise<SwapToken[]> {
     const tokens = await this.service.searchTokens(query);
-    return tokens.map(t => this.convertToken(t));
+    return tokens.map((t) => this.convertToken(t));
   }
 
   clearCache(): void {
@@ -147,7 +155,8 @@ export class SwapService {
    * Get the swap provider for a given network
    */
   static getProvider(networkId?: NetworkId): SwapProvider {
-    const currentNetwork = networkId || useNetworkStore.getState().currentNetwork;
+    const currentNetwork =
+      networkId || useNetworkStore.getState().currentNetwork;
 
     switch (currentNetwork) {
       case NetworkId.VOI_MAINNET:
@@ -163,7 +172,9 @@ export class SwapService {
         return this.algorandProvider;
 
       default:
-        throw new SwapServiceError(`Swap not supported on network: ${currentNetwork}`);
+        throw new SwapServiceError(
+          `Swap not supported on network: ${currentNetwork}`
+        );
     }
   }
 
@@ -171,8 +182,11 @@ export class SwapService {
    * Check if swap is available on a given network
    */
   static isSwapAvailable(networkId?: NetworkId): boolean {
-    const currentNetwork = networkId || useNetworkStore.getState().currentNetwork;
-    return [NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET].includes(currentNetwork);
+    const currentNetwork =
+      networkId || useNetworkStore.getState().currentNetwork;
+    return [NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET].includes(
+      currentNetwork
+    );
   }
 
   /**
@@ -183,7 +197,8 @@ export class SwapService {
     url: string;
     provider: 'snowball' | 'deflex';
   } {
-    const currentNetwork = networkId || useNetworkStore.getState().currentNetwork;
+    const currentNetwork =
+      networkId || useNetworkStore.getState().currentNetwork;
 
     switch (currentNetwork) {
       case NetworkId.ALGORAND_MAINNET:

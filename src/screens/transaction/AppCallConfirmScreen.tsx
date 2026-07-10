@@ -16,9 +16,7 @@ import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
-import {
-  useTransactionAuthController,
-} from '@/services/auth/transactionAuthController';
+import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
 import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import { formatAddress } from '@/utils/address';
 import { useWalletStore, useActiveAccount } from '@/store/walletStore';
@@ -124,7 +122,10 @@ export default function AppCallConfirmScreen() {
           name: decodeBase64Url(box),
         }));
       } catch (err) {
-        Alert.alert('Invalid Box References', 'Failed to decode box references.');
+        Alert.alert(
+          'Invalid Box References',
+          'Failed to decode box references.'
+        );
         return;
       }
     }
@@ -248,7 +249,9 @@ export default function AppCallConfirmScreen() {
                   {parsedMethod?.args[index] || `arg${index}`}
                 </Text>
                 <Text style={styles.argValue} numberOfLines={1}>
-                  {arg.length > 30 ? `${arg.slice(0, 15)}...${arg.slice(-15)}` : arg}
+                  {arg.length > 30
+                    ? `${arg.slice(0, 15)}...${arg.slice(-15)}`
+                    : arg}
                 </Text>
               </View>
             ))}
@@ -337,7 +340,8 @@ export default function AppCallConfirmScreen() {
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Fee</Text>
               <Text style={styles.infoValue}>
-                {(params.fee / 1_000_000).toFixed(6)} {networkConfig.nativeToken}
+                {(params.fee / 1_000_000).toFixed(6)}{' '}
+                {networkConfig.nativeToken}
               </Text>
             </View>
           )}
@@ -370,18 +374,12 @@ export default function AppCallConfirmScreen() {
 
       {/* Action Buttons */}
       <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={styles.cancelButton}
-          onPress={handleCancel}
-        >
+        <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
           <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[
-            styles.confirmButton,
-            !account && styles.disabledButton,
-          ]}
+          style={[styles.confirmButton, !account && styles.disabledButton]}
           onPress={handleConfirm}
           disabled={!account}
         >

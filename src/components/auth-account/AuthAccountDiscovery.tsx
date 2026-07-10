@@ -1,11 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
@@ -40,17 +34,24 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
 
-  const [discoveryResult, setDiscoveryResult] = useState<AuthAccountDiscoveryResult | null>(null);
-  const [selectedAddresses, setSelectedAddresses] = useState<Set<string>>(new Set());
-  const [previewAccount, setPreviewAccount] = useState<NetworkAuthAccount | undefined>();
+  const [discoveryResult, setDiscoveryResult] =
+    useState<AuthAccountDiscoveryResult | null>(null);
+  const [selectedAddresses, setSelectedAddresses] = useState<Set<string>>(
+    new Set()
+  );
+  const [previewAccount, setPreviewAccount] = useState<
+    NetworkAuthAccount | undefined
+  >();
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const refreshWallet = useWalletStore((state) => state.refresh);
-  const refreshAllBalances = useWalletStore((state) => state.refreshAllBalances);
+  const refreshAllBalances = useWalletStore(
+    (state) => state.refreshAllBalances
+  );
 
   // Extract Ledger addresses from the imported accounts
-  const ledgerAddresses = ledgerAccounts.map(account => account.address);
+  const ledgerAddresses = ledgerAccounts.map((account) => account.address);
 
   const handleDiscoverAuthAccounts = useCallback(async () => {
     if (ledgerAddresses.length === 0) {
@@ -71,14 +72,15 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
         includeExisting: false, // Don't include already imported accounts
       };
 
-      const result = await AuthAccountDiscoveryService.discoverAuthAccounts(request);
+      const result =
+        await AuthAccountDiscoveryService.discoverAuthAccounts(request);
       setDiscoveryResult(result);
 
       // Auto-select non-existing accounts
       const newSelections = new Set<string>();
       let firstAccount: NetworkAuthAccount | undefined;
 
-      result.authAccounts.forEach(account => {
+      result.authAccounts.forEach((account) => {
         if (!account.existsInWallet) {
           newSelections.add(account.address);
           if (!firstAccount) {
@@ -131,10 +133,12 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
           message = error.message + ' This is usually temporary.';
         } else if (error.message.includes('timeout')) {
           title = 'Request Timed Out';
-          message = 'The search took too long to complete. Please check your internet connection and try again.';
+          message =
+            'The search took too long to complete. Please check your internet connection and try again.';
         } else if (error.message.includes('network')) {
           title = 'Network Error';
-          message = 'Unable to connect to the blockchain indexer. Please check your internet connection.';
+          message =
+            'Unable to connect to the blockchain indexer. Please check your internet connection.';
         } else {
           message = error.message;
         }
@@ -150,7 +154,7 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
   }, [ledgerAddresses]);
 
   const handleToggleAccount = useCallback((account: NetworkAuthAccount) => {
-    setSelectedAddresses(prev => {
+    setSelectedAddresses((prev) => {
       const next = new Set(prev);
       if (next.has(account.address)) {
         next.delete(account.address);
@@ -175,7 +179,8 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
     }
 
     const accountsToImport = discoveryResult.authAccounts.filter(
-      account => selectedAddresses.has(account.address) && !account.existsInWallet
+      (account) =>
+        selectedAddresses.has(account.address) && !account.existsInWallet
     );
 
     if (accountsToImport.length === 0) {
@@ -199,18 +204,22 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
       // Import accounts sequentially to avoid race conditions
       for (const authAccount of accountsToImport) {
         try {
-          const importedAccount = await MultiAccountWalletService.importAuthAccount({
-            authAccount,
-            label: `Auth Account (${authAccount.networkName})`,
-          });
+          const importedAccount =
+            await MultiAccountWalletService.importAuthAccount({
+              authAccount,
+              label: `Auth Account (${authAccount.networkName})`,
+            });
 
           importedAccountIds.push(importedAccount.id);
           results.imported += 1;
 
           // Add small delay between imports to ensure wallet state consistency
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, 100));
         } catch (error) {
-          console.error(`Failed to import auth account ${authAccount.address}:`, error);
+          console.error(
+            `Failed to import auth account ${authAccount.address}:`,
+            error
+          );
           results.failed += 1;
         }
       }
@@ -220,7 +229,10 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
 
         await refreshAllBalances();
       } catch (refreshError) {
-        console.warn('Failed to refresh wallet after importing auth accounts:', refreshError);
+        console.warn(
+          'Failed to refresh wallet after importing auth accounts:',
+          refreshError
+        );
       }
 
       Alert.alert(
@@ -247,9 +259,13 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
         } else if (error.message.includes('Invalid')) {
           title = 'Invalid Account Data';
           message = error.message;
-        } else if (error.message.includes('network') || error.message.includes('timeout')) {
+        } else if (
+          error.message.includes('network') ||
+          error.message.includes('timeout')
+        ) {
           title = 'Network Error';
-          message = 'Unable to verify account information. Please check your connection and try again.';
+          message =
+            'Unable to verify account information. Please check your connection and try again.';
         } else {
           message = error.message;
         }
@@ -258,14 +274,24 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
       Alert.alert(title, message, [
         { text: 'Cancel', style: 'cancel' },
         ...(results.imported > 0
-          ? [{ text: 'Continue', onPress: () => onImportComplete?.(results.imported) }]
-          : [{ text: 'Try Again', onPress: handleImportAuthAccounts }]
-        ),
+          ? [
+              {
+                text: 'Continue',
+                onPress: () => onImportComplete?.(results.imported),
+              },
+            ]
+          : [{ text: 'Try Again', onPress: handleImportAuthAccounts }]),
       ]);
     } finally {
       setIsImporting(false);
     }
-  }, [discoveryResult, selectedAddresses, onImportComplete, refreshWallet, refreshAllBalances]);
+  }, [
+    discoveryResult,
+    selectedAddresses,
+    onImportComplete,
+    refreshWallet,
+    refreshAllBalances,
+  ]);
 
   // Auto-start discovery when component becomes visible
   useEffect(() => {
@@ -282,7 +308,10 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
   const authAccounts = discoveryResult?.authAccounts || [];
 
   return (
-    <KeyboardAwareScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+    <KeyboardAwareScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+    >
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <Ionicons
@@ -297,8 +326,8 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
               {isDiscovering
                 ? 'Searching for accounts rekeyed to your Ledger...'
                 : hasSearched
-                ? `Found ${authAccounts.length} rekeyed account${authAccounts.length === 1 ? '' : 's'}`
-                : 'Search for accounts that use your Ledger for signing'}
+                  ? `Found ${authAccounts.length} rekeyed account${authAccounts.length === 1 ? '' : 's'}`
+                  : 'Search for accounts that use your Ledger for signing'}
             </Text>
           </View>
         </View>
@@ -322,7 +351,8 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
             style={styles.errorIcon}
           />
           <Text style={styles.errorText}>
-            Some networks could not be searched completely. Results may be incomplete.
+            Some networks could not be searched completely. Results may be
+            incomplete.
           </Text>
         </View>
       )}
@@ -347,7 +377,9 @@ const AuthAccountDiscovery: React.FC<AuthAccountDiscoveryProps> = ({
       {hasSearched && authAccounts.length === 0 && (
         <View style={styles.skipContainer}>
           <TouchableOpacity style={styles.skipButton} onPress={onSkip}>
-            <Text style={styles.skipButtonText}>Continue - No Rekeyed Accounts Found</Text>
+            <Text style={styles.skipButtonText}>
+              Continue - No Rekeyed Accounts Found
+            </Text>
           </TouchableOpacity>
         </View>
       )}

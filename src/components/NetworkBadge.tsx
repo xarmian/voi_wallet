@@ -26,14 +26,8 @@ const NetworkBadge: React.FC<NetworkBadgeProps> = ({
   };
 
   const variantStyles = {
-    filled: [
-      styles.variantFilled,
-      { backgroundColor: networkConfig.color },
-    ],
-    outlined: [
-      styles.variantOutlined,
-      { borderColor: networkConfig.color },
-    ],
+    filled: [styles.variantFilled, { backgroundColor: networkConfig.color }],
+    outlined: [styles.variantOutlined, { borderColor: networkConfig.color }],
     minimal: styles.variantMinimal,
   };
 

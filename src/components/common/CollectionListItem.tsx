@@ -43,7 +43,10 @@ export default function CollectionListItem({
 
   // Debug: Log collection data to see what we're getting
   if (!collection.name || collection.name.trim() === '') {
-    console.log('Collection missing name:', JSON.stringify(collection, null, 2));
+    console.log(
+      'Collection missing name:',
+      JSON.stringify(collection, null, 2)
+    );
   }
 
   return (
@@ -119,7 +122,10 @@ export default function CollectionListItem({
           {collection.uniqueOwners > 0 && (
             <>
               <Text
-                style={[styles.statsSeparator, { color: theme.colors.textSecondary }]}
+                style={[
+                  styles.statsSeparator,
+                  { color: theme.colors.textSecondary },
+                ]}
               >
                 •
               </Text>

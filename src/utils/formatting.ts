@@ -175,9 +175,10 @@ export const formatNumber = (
   const resolvedLocale = resolveLocale(locale);
 
   // Determine decimal places
-  const decimalPlaces = decimals !== undefined
-    ? decimals
-    : getSignificantDecimals(value, maxDecimals, minDecimals);
+  const decimalPlaces =
+    decimals !== undefined
+      ? decimals
+      : getSignificantDecimals(value, maxDecimals, minDecimals);
 
   try {
     const formatter = new Intl.NumberFormat(resolvedLocale, {

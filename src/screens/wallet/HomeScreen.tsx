@@ -65,7 +65,10 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { springConfigs, getStaggerDelay } from '@/utils/animations';
 import ClaimableBanner from '@/components/claimable/ClaimableBanner';
-import { useClaimableStore, useVisibleClaimableCount } from '@/store/claimableStore';
+import {
+  useClaimableStore,
+  useVisibleClaimableCount,
+} from '@/store/claimableStore';
 import UpdateBanner from '@/components/update/UpdateBanner';
 import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
@@ -104,8 +107,12 @@ export default function HomeScreen() {
 
   // Remote signer mode
   const appMode = useAppMode();
-  const isRemoteSignerInitialized = useRemoteSignerStore((state) => state.isInitialized);
-  const initializeRemoteSigner = useRemoteSignerStore((state) => state.initialize);
+  const isRemoteSignerInitialized = useRemoteSignerStore(
+    (state) => state.isInitialized
+  );
+  const initializeRemoteSigner = useRemoteSignerStore(
+    (state) => state.initialize
+  );
   // OTA Updates
   const {
     isUpdateAvailable,
@@ -168,18 +175,27 @@ export default function HomeScreen() {
   useEffect(() => {
     const animateEntrance = () => {
       // Balance card - immediate
-      balanceOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+      balanceOpacity.value = withTiming(1, {
+        duration: 400,
+        easing: Easing.out(Easing.ease),
+      });
       balanceTranslateY.value = withSpring(0, springConfigs.smooth);
 
       // Actions - slight delay
       setTimeout(() => {
-        actionsOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+        actionsOpacity.value = withTiming(1, {
+          duration: 400,
+          easing: Easing.out(Easing.ease),
+        });
         actionsTranslateY.value = withSpring(0, springConfigs.smooth);
       }, 100);
 
       // Assets - more delay
       setTimeout(() => {
-        assetsOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+        assetsOpacity.value = withTiming(1, {
+          duration: 400,
+          easing: Easing.out(Easing.ease),
+        });
         assetsTranslateY.value = withSpring(0, springConfigs.smooth);
       }, 200);
     };
@@ -255,7 +271,13 @@ export default function HomeScreen() {
       valueThreshold: assetFilterValueThreshold,
       nativeTokensFirst: assetNativeTokensFirst,
     }),
-    [assetSortBy, assetSortOrder, assetFilterBalanceThreshold, assetFilterValueThreshold, assetNativeTokensFirst]
+    [
+      assetSortBy,
+      assetSortOrder,
+      assetFilterBalanceThreshold,
+      assetFilterValueThreshold,
+      assetNativeTokensFirst,
+    ]
   );
 
   useEffect(() => {
@@ -269,29 +291,37 @@ export default function HomeScreen() {
 
   // Handle Android back button for local modals
   useEffect(() => {
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      // Close modals in order of priority (most recently likely opened first)
-      if (isAssetFilterModalVisible) {
-        setIsAssetFilterModalVisible(false);
-        return true;
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        // Close modals in order of priority (most recently likely opened first)
+        if (isAssetFilterModalVisible) {
+          setIsAssetFilterModalVisible(false);
+          return true;
+        }
+        if (isAssetOptInModalVisible) {
+          setIsAssetOptInModalVisible(false);
+          return true;
+        }
+        if (isAddAccountModalVisible) {
+          setIsAddAccountModalVisible(false);
+          return true;
+        }
+        if (isAccountModalVisible) {
+          setIsAccountModalVisible(false);
+          return true;
+        }
+        return false; // Let default back behavior happen
       }
-      if (isAssetOptInModalVisible) {
-        setIsAssetOptInModalVisible(false);
-        return true;
-      }
-      if (isAddAccountModalVisible) {
-        setIsAddAccountModalVisible(false);
-        return true;
-      }
-      if (isAccountModalVisible) {
-        setIsAccountModalVisible(false);
-        return true;
-      }
-      return false; // Let default back behavior happen
-    });
+    );
 
     return () => backHandler.remove();
-  }, [isAccountModalVisible, isAddAccountModalVisible, isAssetOptInModalVisible, isAssetFilterModalVisible]);
+  }, [
+    isAccountModalVisible,
+    isAddAccountModalVisible,
+    isAssetOptInModalVisible,
+    isAssetFilterModalVisible,
+  ]);
 
   // Track the current view mode to prevent race conditions
   const viewModeRef = React.useRef(isMultiNetworkView);
@@ -321,8 +351,13 @@ export default function HomeScreen() {
         }
 
         // Check if view mode or account changed while loading
-        if (viewModeRef.current !== currentViewMode || activeAccountIdRef.current !== accountId) {
-          console.log('[HomeScreen] View mode or account changed during load, aborting');
+        if (
+          viewModeRef.current !== currentViewMode ||
+          activeAccountIdRef.current !== accountId
+        ) {
+          console.log(
+            '[HomeScreen] View mode or account changed during load, aborting'
+          );
           return;
         }
 
@@ -332,8 +367,13 @@ export default function HomeScreen() {
         }
 
         // Check again before loading balance
-        if (viewModeRef.current !== currentViewMode || activeAccountIdRef.current !== accountId) {
-          console.log('[HomeScreen] View mode or account changed after mappings, aborting');
+        if (
+          viewModeRef.current !== currentViewMode ||
+          activeAccountIdRef.current !== accountId
+        ) {
+          console.log(
+            '[HomeScreen] View mode or account changed after mappings, aborting'
+          );
           return;
         }
 
@@ -343,8 +383,13 @@ export default function HomeScreen() {
         await loadMultiNetworkBalance(accountId);
 
         // Final check before loading additional data
-        if (viewModeRef.current !== currentViewMode || activeAccountIdRef.current !== accountId) {
-          console.log('[HomeScreen] View mode or account changed after balance, aborting');
+        if (
+          viewModeRef.current !== currentViewMode ||
+          activeAccountIdRef.current !== accountId
+        ) {
+          console.log(
+            '[HomeScreen] View mode or account changed after balance, aborting'
+          );
           return;
         }
 
@@ -375,7 +420,10 @@ export default function HomeScreen() {
       let filtered = [...assets];
 
       // Apply balance threshold filter
-      if (assetFilterBalanceThreshold !== null && assetFilterBalanceThreshold > 0) {
+      if (
+        assetFilterBalanceThreshold !== null &&
+        assetFilterBalanceThreshold > 0
+      ) {
         filtered = filtered.filter((asset) => {
           let totalAmount = 0;
           asset.sourceBalances.forEach((source) => {
@@ -398,7 +446,8 @@ export default function HomeScreen() {
             const sourceAsset = source.balance;
             if (sourceAsset.assetId === 0) {
               // Native token
-              const price = multiNetworkBalance?.perNetworkPrices[source.networkId];
+              const price =
+                multiNetworkBalance?.perNetworkPrices[source.networkId];
               if (price && sourceAsset.amount) {
                 const amount =
                   typeof sourceAsset.amount === 'bigint'
@@ -436,8 +485,16 @@ export default function HomeScreen() {
         let compareValue = 0;
 
         if (assetSortBy === 'name') {
-          const nameA = (a.name || a.symbol || `Asset ${a.assetId}`).toLowerCase();
-          const nameB = (b.name || b.symbol || `Asset ${b.assetId}`).toLowerCase();
+          const nameA = (
+            a.name ||
+            a.symbol ||
+            `Asset ${a.assetId}`
+          ).toLowerCase();
+          const nameB = (
+            b.name ||
+            b.symbol ||
+            `Asset ${b.assetId}`
+          ).toLowerCase();
           compareValue = nameA.localeCompare(nameB);
         } else if (assetSortBy === 'balance') {
           let totalAmountA = 0;
@@ -466,7 +523,8 @@ export default function HomeScreen() {
           a.sourceBalances.forEach((source) => {
             const sourceAsset = source.balance;
             if (sourceAsset.assetId === 0) {
-              const price = multiNetworkBalance?.perNetworkPrices[source.networkId];
+              const price =
+                multiNetworkBalance?.perNetworkPrices[source.networkId];
               if (price && sourceAsset.amount) {
                 const amount =
                   typeof sourceAsset.amount === 'bigint'
@@ -490,7 +548,8 @@ export default function HomeScreen() {
           b.sourceBalances.forEach((source) => {
             const sourceAsset = source.balance;
             if (sourceAsset.assetId === 0) {
-              const price = multiNetworkBalance?.perNetworkPrices[source.networkId];
+              const price =
+                multiNetworkBalance?.perNetworkPrices[source.networkId];
               if (price && sourceAsset.amount) {
                 const amount =
                   typeof sourceAsset.amount === 'bigint'
@@ -518,7 +577,14 @@ export default function HomeScreen() {
 
       return filtered;
     },
-    [assetSortBy, assetSortOrder, assetFilterBalanceThreshold, assetFilterValueThreshold, assetNativeTokensFirst, multiNetworkBalance]
+    [
+      assetSortBy,
+      assetSortOrder,
+      assetFilterBalanceThreshold,
+      assetFilterValueThreshold,
+      assetNativeTokensFirst,
+      multiNetworkBalance,
+    ]
   );
 
   const filterAndSortSingleNetworkAssets = React.useCallback(
@@ -526,10 +592,15 @@ export default function HomeScreen() {
       let filtered = [...assets];
 
       // Apply balance threshold filter
-      if (assetFilterBalanceThreshold !== null && assetFilterBalanceThreshold > 0) {
+      if (
+        assetFilterBalanceThreshold !== null &&
+        assetFilterBalanceThreshold > 0
+      ) {
         filtered = filtered.filter((asset) => {
           const amount =
-            typeof asset.amount === 'bigint' ? Number(asset.amount) : asset.amount;
+            typeof asset.amount === 'bigint'
+              ? Number(asset.amount)
+              : asset.amount;
           const normalizedBalance = amount / 10 ** asset.decimals;
           return normalizedBalance >= assetFilterBalanceThreshold!;
         });
@@ -542,7 +613,9 @@ export default function HomeScreen() {
 
           const unitPrice = parseFloat(asset.usdValue);
           const amount =
-            typeof asset.amount === 'bigint' ? Number(asset.amount) : asset.amount;
+            typeof asset.amount === 'bigint'
+              ? Number(asset.amount)
+              : asset.amount;
           const normalizedBalance = amount / 10 ** asset.decimals;
           const totalUsdValue = normalizedBalance * unitPrice;
 
@@ -615,36 +688,48 @@ export default function HomeScreen() {
 
       return filtered;
     },
-    [assetSortBy, assetSortOrder, assetFilterBalanceThreshold, assetFilterValueThreshold, assetNativeTokensFirst]
+    [
+      assetSortBy,
+      assetSortOrder,
+      assetFilterBalanceThreshold,
+      assetFilterValueThreshold,
+      assetNativeTokensFirst,
+    ]
   );
 
-  const handleAssetPress = useCallback((assetName: string, assetId: number, mappingId?: string) => {
-    if (!activeAccount) return;
+  const handleAssetPress = useCallback(
+    (assetName: string, assetId: number, mappingId?: string) => {
+      if (!activeAccount) return;
 
-    // In multi-network view, always navigate to MultiNetworkAssetScreen
-    // It handles both single and multi-network assets gracefully
-    if (isMultiNetworkView) {
-      navigation.navigate('MultiNetworkAsset', {
+      // In multi-network view, always navigate to MultiNetworkAssetScreen
+      // It handles both single and multi-network assets gracefully
+      if (isMultiNetworkView) {
+        navigation.navigate('MultiNetworkAsset', {
+          assetName,
+          assetId,
+          accountId: activeAccount.id,
+          mappingId,
+        });
+        return;
+      }
+
+      // Single-network view: navigate directly to AssetDetail
+      navigation.navigate('AssetDetail', {
         assetName,
         assetId,
         accountId: activeAccount.id,
         mappingId,
       });
-      return;
-    }
-
-    // Single-network view: navigate directly to AssetDetail
-    navigation.navigate('AssetDetail', {
-      assetName,
-      assetId,
-      accountId: activeAccount.id,
-      mappingId,
-    });
-  }, [activeAccount, isMultiNetworkView, navigation]);
+    },
+    [activeAccount, isMultiNetworkView, navigation]
+  );
 
   // Memoize multi-network asset list to prevent excessive re-renders
   const multiNetworkAssetList = React.useMemo(() => {
-    if (!multiNetworkBalance?.assets || multiNetworkBalance.assets.length === 0) {
+    if (
+      !multiNetworkBalance?.assets ||
+      multiNetworkBalance.assets.length === 0
+    ) {
       return null;
     }
 
@@ -714,7 +799,9 @@ export default function HomeScreen() {
       name: currentNetworkConfig.nativeToken,
       symbol: currentNetworkConfig.nativeToken,
       assetType: 'asa',
-      usdValue: accountBalance.voiPrice?.toString() || accountBalance.algoPrice?.toString(),
+      usdValue:
+        accountBalance.voiPrice?.toString() ||
+        accountBalance.algoPrice?.toString(),
     };
 
     const allAssets = [nativeAsset, ...(accountBalance.assets || [])];
@@ -837,7 +924,6 @@ export default function HomeScreen() {
     setIsAddAccountModalVisible(true);
   };
 
-
   const handleQRScan = () => {
     navigation.navigate('QRScanner' as never);
   };
@@ -911,7 +997,8 @@ export default function HomeScreen() {
 
             // Check if native asset
             if (sourceAsset.assetId === 0) {
-              const price = multiNetworkBalance.perNetworkPrices[source.networkId];
+              const price =
+                multiNetworkBalance.perNetworkPrices[source.networkId];
               if (price && sourceAsset.amount) {
                 const amount =
                   typeof sourceAsset.amount === 'bigint'
@@ -970,49 +1057,53 @@ export default function HomeScreen() {
     return formatCurrency(totalUsdValue);
   }, [isMultiNetworkView, multiNetworkBalance, accountBalance]);
 
-  const calculateNetworkUsdValue = React.useCallback((targetNetworkId: NetworkId) => {
-    if (!isMultiNetworkView || !multiNetworkBalance) {
-      return 0;
-    }
+  const calculateNetworkUsdValue = React.useCallback(
+    (targetNetworkId: NetworkId) => {
+      if (!isMultiNetworkView || !multiNetworkBalance) {
+        return 0;
+      }
 
-    let totalUsdValue = 0;
+      let totalUsdValue = 0;
 
-    if (multiNetworkBalance.assets) {
-      multiNetworkBalance.assets.forEach((mappedAsset) => {
-        mappedAsset.sourceBalances.forEach((source) => {
-          // Only include the target network
-          if (source.networkId !== targetNetworkId) {
-            return;
-          }
+      if (multiNetworkBalance.assets) {
+        multiNetworkBalance.assets.forEach((mappedAsset) => {
+          mappedAsset.sourceBalances.forEach((source) => {
+            // Only include the target network
+            if (source.networkId !== targetNetworkId) {
+              return;
+            }
 
-          const sourceAsset = source.balance;
+            const sourceAsset = source.balance;
 
-          // Check if native asset
-          if (sourceAsset.assetId === 0) {
-            const price = multiNetworkBalance.perNetworkPrices[source.networkId];
-            if (price && sourceAsset.amount) {
+            // Check if native asset
+            if (sourceAsset.assetId === 0) {
+              const price =
+                multiNetworkBalance.perNetworkPrices[source.networkId];
+              if (price && sourceAsset.amount) {
+                const amount =
+                  typeof sourceAsset.amount === 'bigint'
+                    ? Number(sourceAsset.amount)
+                    : sourceAsset.amount;
+                const nativeValue = amount / 1_000_000;
+                totalUsdValue += nativeValue * price;
+              }
+            } else if (sourceAsset.usdValue && sourceAsset.amount) {
+              const unitPrice = parseFloat(sourceAsset.usdValue);
               const amount =
                 typeof sourceAsset.amount === 'bigint'
                   ? Number(sourceAsset.amount)
                   : sourceAsset.amount;
-              const nativeValue = amount / 1_000_000;
-              totalUsdValue += nativeValue * price;
+              const normalizedBalance = amount / 10 ** sourceAsset.decimals;
+              totalUsdValue += normalizedBalance * unitPrice;
             }
-          } else if (sourceAsset.usdValue && sourceAsset.amount) {
-            const unitPrice = parseFloat(sourceAsset.usdValue);
-            const amount =
-              typeof sourceAsset.amount === 'bigint'
-                ? Number(sourceAsset.amount)
-                : sourceAsset.amount;
-            const normalizedBalance = amount / 10 ** sourceAsset.decimals;
-            totalUsdValue += normalizedBalance * unitPrice;
-          }
+          });
         });
-      });
-    }
+      }
 
-    return totalUsdValue;
-  }, [isMultiNetworkView, multiNetworkBalance]);
+      return totalUsdValue;
+    },
+    [isMultiNetworkView, multiNetworkBalance]
+  );
 
   const voiNetworkUsdValue = React.useMemo(() => {
     return calculateNetworkUsdValue(NetworkId.VOI_MAINNET);
@@ -1030,8 +1121,10 @@ export default function HomeScreen() {
       // Determine which networks to include based on filter
       const shouldIncludeNetwork = (networkId: NetworkId) => {
         if (assetNetworkFilter === 'all') return true;
-        if (assetNetworkFilter === 'voi') return networkId === NetworkId.VOI_MAINNET;
-        if (assetNetworkFilter === 'algorand') return networkId === NetworkId.ALGORAND_MAINNET;
+        if (assetNetworkFilter === 'voi')
+          return networkId === NetworkId.VOI_MAINNET;
+        if (assetNetworkFilter === 'algorand')
+          return networkId === NetworkId.ALGORAND_MAINNET;
         return true;
       };
 
@@ -1043,18 +1136,22 @@ export default function HomeScreen() {
           }
 
           const config = getNetworkConfig(networkId as NetworkId);
-          const amountNum = typeof amount === 'bigint' ? Number(amount) : amount;
+          const amountNum =
+            typeof amount === 'bigint' ? Number(amount) : amount;
           const formatted = formatNativeBalance(amountNum, config.nativeToken);
           parts.push(`${formatted} ${config.nativeToken}`);
         }
       );
 
-      return parts.length > 0 ? parts.join(' + ') : formatNativeBalance(0, 'VOI');
+      return parts.length > 0
+        ? parts.join(' + ')
+        : formatNativeBalance(0, 'VOI');
     }
 
     // Single-network calculation (existing logic)
     const nativePrice = accountBalance?.voiPrice || accountBalance?.algoPrice;
-    if (!nativePrice) return formatNativeBalance(0, currentNetworkConfig.nativeToken);
+    if (!nativePrice)
+      return formatNativeBalance(0, currentNetworkConfig.nativeToken);
 
     // Get total USD value without formatting
     let totalUsdValue = 0;
@@ -1086,8 +1183,17 @@ export default function HomeScreen() {
 
     const nativeTokenEquivalent = totalUsdValue / nativePrice;
     // Convert to micro-units for formatting
-    return formatNativeBalance(nativeTokenEquivalent * 1_000_000, currentNetworkConfig.nativeToken);
-  }, [isMultiNetworkView, multiNetworkBalance, assetNetworkFilter, accountBalance, currentNetworkConfig]);
+    return formatNativeBalance(
+      nativeTokenEquivalent * 1_000_000,
+      currentNetworkConfig.nativeToken
+    );
+  }, [
+    isMultiNetworkView,
+    multiNetworkBalance,
+    assetNetworkFilter,
+    accountBalance,
+    currentNetworkConfig,
+  ]);
 
   if (loading) {
     return (
@@ -1104,7 +1210,11 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title="Voi Wallet"
-          subtitle={isMultiNetworkView ? "All Networks" : `Network: ${currentNetworkConfig.name}`}
+          subtitle={
+            isMultiNetworkView
+              ? 'All Networks'
+              : `Network: ${currentNetworkConfig.name}`
+          }
           onAccountSelectorPress={handleAccountSelectorPress}
         />
 
@@ -1133,7 +1243,9 @@ export default function HomeScreen() {
                 />
               )}
 
-              <Animated.View style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}>
+              <Animated.View
+                style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}
+              >
                 <GlassCard
                   variant="medium"
                   style={styles.balanceContainer}
@@ -1143,11 +1255,21 @@ export default function HomeScreen() {
                   <View style={styles.balanceHeader}>
                     <View style={styles.balanceHeaderLeft}>
                       <Text style={styles.balanceLabel}>Account Value</Text>
-                      <Pressable onPress={handleAccountInfo} style={styles.infoButtonInline}>
-                        <Ionicons name="information-circle-outline" size={18} color={theme.colors.primary} />
+                      <Pressable
+                        onPress={handleAccountInfo}
+                        style={styles.infoButtonInline}
+                      >
+                        <Ionicons
+                          name="information-circle-outline"
+                          size={18}
+                          color={theme.colors.primary}
+                        />
                       </Pressable>
                       {isBackgroundRefreshing && (
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <ActivityIndicator
+                          size="small"
+                          color={theme.colors.primary}
+                        />
                       )}
                     </View>
                   </View>
@@ -1155,18 +1277,29 @@ export default function HomeScreen() {
                     appMode === 'signer' ? (
                       // In signer mode, show offline fallback instead of spinner
                       <View style={styles.loadingBalance}>
-                        <Ionicons name="cloud-offline-outline" size={16} color={theme.colors.textMuted} />
+                        <Ionicons
+                          name="cloud-offline-outline"
+                          size={16}
+                          color={theme.colors.textMuted}
+                        />
                         <Text style={styles.loadingText}>Offline</Text>
                       </View>
                     ) : (
                       <View style={styles.loadingBalance}>
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
-                        <Text style={styles.loadingText}>Loading balance...</Text>
+                        <ActivityIndicator
+                          size="small"
+                          color={theme.colors.primary}
+                        />
+                        <Text style={styles.loadingText}>
+                          Loading balance...
+                        </Text>
                       </View>
                     )
                   ) : (
                     <>
-                      <Text style={styles.balance}>{calculateTotalUsdValue}</Text>
+                      <Text style={styles.balance}>
+                        {calculateTotalUsdValue}
+                      </Text>
                       {isMultiNetworkView && multiNetworkBalance && (
                         <View style={styles.networkBalanceBreakdown}>
                           <View style={styles.networkBalanceItem}>
@@ -1177,7 +1310,9 @@ export default function HomeScreen() {
                           </View>
                           <View style={styles.networkBalanceDivider} />
                           <View style={styles.networkBalanceItem}>
-                            <Text style={styles.networkBalanceLabel}>Algorand</Text>
+                            <Text style={styles.networkBalanceLabel}>
+                              Algorand
+                            </Text>
                             <Text style={styles.networkBalanceValue}>
                               {formatCurrency(algorandNetworkUsdValue)}
                             </Text>
@@ -1207,290 +1342,311 @@ export default function HomeScreen() {
                 </GlassCard>
               </Animated.View>
 
-            {false && (
-              <View style={styles.addressContainer}>
-                <Text style={styles.addressLabel}>Your Address</Text>
-                <View style={styles.addressHeader}>
-                  <AccountAvatar address={activeAccount?.address || ''} size={56} />
-                  <View style={styles.addressDetails}>
-                    {isEnvoiLoading ? (
-                      <View style={styles.envoiLoading}>
-                        <ActivityIndicator size="small" color="#3B82F6" />
+              {false && (
+                <View style={styles.addressContainer}>
+                  <Text style={styles.addressLabel}>Your Address</Text>
+                  <View style={styles.addressHeader}>
+                    <AccountAvatar
+                      address={activeAccount?.address || ''}
+                      size={56}
+                    />
+                    <View style={styles.addressDetails}>
+                      {isEnvoiLoading ? (
+                        <View style={styles.envoiLoading}>
+                          <ActivityIndicator size="small" color="#3B82F6" />
+                          <Text style={styles.loadingText}>
+                            Looking up name...
+                          </Text>
+                        </View>
+                      ) : envoiNameInfo?.name ? (
+                        <Text style={styles.envoiName}>
+                          {envoiNameInfo?.name}
+                        </Text>
+                      ) : (
+                        <Text style={styles.address}>
+                          {formatAddress(activeAccount?.address || '')}
+                        </Text>
+                      )}
+                      <Text style={styles.fullAddress}>
+                        {activeAccount?.address}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* View Mode Toggle - Hidden by default (multi-network is primary UX)
+                 Users can switch networks via settings if needed */}
+              {false && (
+                <View style={styles.viewModeContainer}>
+                  <ViewModeToggle size="small" showLabel={false} />
+                </View>
+              )}
+
+              <Animated.View
+                style={[styles.actionButtonsRow, actionsAnimatedStyle]}
+              >
+                <GlassButton
+                  variant="secondary"
+                  size="md"
+                  icon="send"
+                  label="Send"
+                  onPress={handleSend}
+                  style={styles.actionButton}
+                  tint="#007AFF"
+                  pill
+                />
+                <GlassButton
+                  variant="secondary"
+                  size="md"
+                  icon="download"
+                  label="Receive"
+                  onPress={handleReceive}
+                  style={styles.actionButton}
+                  tint="#30D158"
+                  pill
+                />
+                <GlassButton
+                  variant="secondary"
+                  size="md"
+                  icon="time"
+                  label="History"
+                  onPress={handleHistory}
+                  style={styles.actionButton}
+                  tint="#AF52DE"
+                  pill
+                />
+              </Animated.View>
+
+              {/* Claimable Tokens Banner */}
+              {visibleClaimableCount > 0 && (
+                <ClaimableBanner
+                  count={visibleClaimableCount}
+                  onPress={handleClaimableBannerPress}
+                />
+              )}
+
+              <Animated.View style={assetsAnimatedStyle}>
+                <GlassCard
+                  variant="medium"
+                  style={styles.assetsContainer}
+                  borderRadius={theme.borderRadius.xl}
+                  padding="md"
+                >
+                  <View style={styles.assetsHeader}>
+                    <View style={styles.assetsHeaderLeft}>
+                      <Text style={styles.assetsTitle}>Assets</Text>
+                    </View>
+                    <View style={styles.assetsHeaderCenter}>
+                      {isMultiNetworkView && <NetworkFilterToggle />}
+                    </View>
+                    <View style={styles.assetsHeaderRight}>
+                      <GlassCard
+                        variant="light"
+                        onPress={handleOpenAssetFilter}
+                        style={styles.headerIconButton}
+                        borderRadius={theme.borderRadius.md}
+                        padding="none"
+                        borderGlow
+                        glowColor={theme.colors.primary}
+                        borderColor={theme.colors.secondary}
+                      >
+                        <View style={styles.headerIconButtonInner}>
+                          <Ionicons
+                            name="filter-outline"
+                            size={20}
+                            color={theme.colors.text}
+                          />
+                        </View>
+                      </GlassCard>
+                      <GlassCard
+                        variant="light"
+                        onPress={handleAddAsset}
+                        style={styles.headerIconButton}
+                        borderRadius={theme.borderRadius.md}
+                        padding="none"
+                        borderGlow
+                        glowColor={theme.colors.primary}
+                        borderColor={theme.colors.secondary}
+                      >
+                        <View style={styles.headerIconButtonInner}>
+                          <Ionicons
+                            name="add-circle-outline"
+                            size={20}
+                            color={theme.colors.text}
+                          />
+                        </View>
+                      </GlassCard>
+                    </View>
+                  </View>
+
+                  {isMultiNetworkView ? (
+                    // Multi-network view
+                    isMultiNetworkBalanceLoading && !multiNetworkBalance ? (
+                      <View style={styles.loadingAssets}>
+                        <ActivityIndicator size="small" color="#007AFF" />
                         <Text style={styles.loadingText}>
-                          Looking up name...
+                          Loading assets...
                         </Text>
                       </View>
-                    ) : envoiNameInfo?.name ? (
-                      <Text style={styles.envoiName}>{envoiNameInfo?.name}</Text>
+                    ) : multiNetworkAssetList ? (
+                      multiNetworkAssetList
                     ) : (
-                      <Text style={styles.address}>
-                        {formatAddress(activeAccount?.address || '')}
-                      </Text>
-                    )}
-                    <Text style={styles.fullAddress}>
-                      {activeAccount?.address}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* View Mode Toggle - Hidden by default (multi-network is primary UX)
-                 Users can switch networks via settings if needed */}
-            {false && (
-              <View style={styles.viewModeContainer}>
-                <ViewModeToggle size="small" showLabel={false} />
-              </View>
-            )}
-
-            <Animated.View style={[styles.actionButtonsRow, actionsAnimatedStyle]}>
-              <GlassButton
-                variant="secondary"
-                size="md"
-                icon="send"
-                label="Send"
-                onPress={handleSend}
-                style={styles.actionButton}
-                tint="#007AFF"
-                pill
-              />
-              <GlassButton
-                variant="secondary"
-                size="md"
-                icon="download"
-                label="Receive"
-                onPress={handleReceive}
-                style={styles.actionButton}
-                tint="#30D158"
-                pill
-              />
-              <GlassButton
-                variant="secondary"
-                size="md"
-                icon="time"
-                label="History"
-                onPress={handleHistory}
-                style={styles.actionButton}
-                tint="#AF52DE"
-                pill
-              />
-            </Animated.View>
-
-            {/* Claimable Tokens Banner */}
-            {visibleClaimableCount > 0 && (
-              <ClaimableBanner
-                count={visibleClaimableCount}
-                onPress={handleClaimableBannerPress}
-              />
-            )}
-
-            <Animated.View style={assetsAnimatedStyle}>
+                      <View style={styles.loadingAssets}>
+                        <Text style={styles.loadingText}>No assets found</Text>
+                      </View>
+                    )
+                  ) : // Single-network view (existing behavior)
+                  isBalanceLoading && !accountBalance ? (
+                    <View style={styles.loadingAssets}>
+                      <ActivityIndicator
+                        size="small"
+                        color={theme.colors.primary}
+                      />
+                      <Text style={styles.loadingText}>Loading assets...</Text>
+                    </View>
+                  ) : (
+                    singleNetworkAssetList
+                  )}
+                </GlassCard>
+              </Animated.View>
+            </>
+          )}
+          {!activeAccount && (
+            <View style={styles.emptyStateContainer}>
               <GlassCard
-              variant="medium"
-              style={styles.assetsContainer}
-              borderRadius={theme.borderRadius.xl}
-              padding="md"
-            >
-              <View style={styles.assetsHeader}>
-                <View style={styles.assetsHeaderLeft}>
-                  <Text style={styles.assetsTitle}>Assets</Text>
-                </View>
-                <View style={styles.assetsHeaderCenter}>
-                  {isMultiNetworkView && <NetworkFilterToggle />}
-                </View>
-                <View style={styles.assetsHeaderRight}>
-                  <GlassCard
-                    variant="light"
-                    onPress={handleOpenAssetFilter}
-                    style={styles.headerIconButton}
-                    borderRadius={theme.borderRadius.md}
-                    padding="none"
-                    borderGlow
-                    glowColor={theme.colors.primary}
-                    borderColor={theme.colors.secondary}
-                  >
-                    <View style={styles.headerIconButtonInner}>
-                      <Ionicons
-                        name="filter-outline"
-                        size={20}
-                        color={theme.colors.text}
-                      />
-                    </View>
-                  </GlassCard>
-                  <GlassCard
-                    variant="light"
-                    onPress={handleAddAsset}
-                    style={styles.headerIconButton}
-                    borderRadius={theme.borderRadius.md}
-                    padding="none"
-                    borderGlow
-                    glowColor={theme.colors.primary}
-                    borderColor={theme.colors.secondary}
-                  >
-                    <View style={styles.headerIconButtonInner}>
-                      <Ionicons
-                        name="add-circle-outline"
-                        size={20}
-                        color={theme.colors.text}
-                      />
-                    </View>
-                  </GlassCard>
-                </View>
-              </View>
-
-              {isMultiNetworkView ? (
-                // Multi-network view
-                isMultiNetworkBalanceLoading && !multiNetworkBalance ? (
-                  <View style={styles.loadingAssets}>
-                    <ActivityIndicator size="small" color="#007AFF" />
-                    <Text style={styles.loadingText}>Loading assets...</Text>
-                  </View>
-                ) : multiNetworkAssetList ? (
-                  multiNetworkAssetList
-                ) : (
-                  <View style={styles.loadingAssets}>
-                    <Text style={styles.loadingText}>No assets found</Text>
-                  </View>
-                )
-              ) : (
-                // Single-network view (existing behavior)
-                isBalanceLoading && !accountBalance ? (
-                  <View style={styles.loadingAssets}>
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
-                    <Text style={styles.loadingText}>Loading assets...</Text>
-                  </View>
-                ) : (
-                  singleNetworkAssetList
-                )
-              )}
-              </GlassCard>
-            </Animated.View>
-          </>
-        )}
-        {!activeAccount && (
-          <View style={styles.emptyStateContainer}>
-            <GlassCard
-              variant="medium"
-              style={styles.emptyStateCard}
-              borderRadius={theme.borderRadius.xl}
-              padding="lg"
-            >
-              <View style={styles.emptyStateIconContainer}>
-                <Ionicons
-                  name="wallet-outline"
-                  size={64}
-                  color={theme.colors.primary}
-                />
-              </View>
-              <Text style={styles.emptyStateTitle}>Welcome to Voi Wallet</Text>
-              <Text style={styles.emptyStateSubtitle}>
-                Set up an account to access all wallet features including sending, receiving, and managing your assets.
-              </Text>
-              <Pressable
-                style={[styles.emptyStateButton, { backgroundColor: theme.colors.primary }]}
-                onPress={() => setIsOnboardingModalVisible(true)}
+                variant="medium"
+                style={styles.emptyStateCard}
+                borderRadius={theme.borderRadius.xl}
+                padding="lg"
               >
-                <Text style={styles.emptyStateButtonText}>Get Started</Text>
-              </Pressable>
-            </GlassCard>
-          </View>
-        )}
-      </ScrollView>
+                <View style={styles.emptyStateIconContainer}>
+                  <Ionicons
+                    name="wallet-outline"
+                    size={64}
+                    color={theme.colors.primary}
+                  />
+                </View>
+                <Text style={styles.emptyStateTitle}>
+                  Welcome to Voi Wallet
+                </Text>
+                <Text style={styles.emptyStateSubtitle}>
+                  Set up an account to access all wallet features including
+                  sending, receiving, and managing your assets.
+                </Text>
+                <Pressable
+                  style={[
+                    styles.emptyStateButton,
+                    { backgroundColor: theme.colors.primary },
+                  ]}
+                  onPress={() => setIsOnboardingModalVisible(true)}
+                >
+                  <Text style={styles.emptyStateButtonText}>Get Started</Text>
+                </Pressable>
+              </GlassCard>
+            </View>
+          )}
+        </ScrollView>
 
-      {/* Account List Modal */}
-      <AccountListModal
-        isVisible={isAccountModalVisible}
-        onClose={handleAccountModalClose}
-        onAddAccount={handleAddAccount}
-      />
+        {/* Account List Modal */}
+        <AccountListModal
+          isVisible={isAccountModalVisible}
+          onClose={handleAccountModalClose}
+          onAddAccount={handleAddAccount}
+        />
 
-      {/* Add Account Modal */}
-      <AddAccountModal
-        isVisible={isAddAccountModalVisible}
-        onClose={() => setIsAddAccountModalVisible(false)}
-        onCreateAccount={() => {
-          console.log('HomeScreen: onCreateAccount called');
-          setIsAddAccountModalVisible(false);
-          console.log('HomeScreen: navigating to Settings then CreateAccount');
-          // Navigate to Settings stack, then to CreateAccount
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'CreateAccount',
-              },
-            })
-          );
-          console.log(
-            'HomeScreen: navigation dispatched to Settings->CreateAccount'
-          );
-        }}
-        onImportAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'MnemonicImport',
-              },
-            })
-          );
-        }}
-        onImportQRAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('QRAccountImport' as never);
-        }}
-        onImportLedgerAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.navigate('LedgerAccountImport' as never);
-        }}
-        onAddWatchAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'AddWatchAccount',
-              },
-            })
-          );
-        }}
-      />
+        {/* Add Account Modal */}
+        <AddAccountModal
+          isVisible={isAddAccountModalVisible}
+          onClose={() => setIsAddAccountModalVisible(false)}
+          onCreateAccount={() => {
+            console.log('HomeScreen: onCreateAccount called');
+            setIsAddAccountModalVisible(false);
+            console.log(
+              'HomeScreen: navigating to Settings then CreateAccount'
+            );
+            // Navigate to Settings stack, then to CreateAccount
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'CreateAccount',
+                },
+              })
+            );
+            console.log(
+              'HomeScreen: navigation dispatched to Settings->CreateAccount'
+            );
+          }}
+          onImportAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'MnemonicImport',
+                },
+              })
+            );
+          }}
+          onImportQRAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('QRAccountImport' as never);
+          }}
+          onImportLedgerAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.navigate('LedgerAccountImport' as never);
+          }}
+          onAddWatchAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'AddWatchAccount',
+                },
+              })
+            );
+          }}
+        />
 
+        {/* Asset Opt-In Modal */}
+        <AssetOptInModal
+          visible={isAssetOptInModalVisible}
+          onClose={() => setIsAssetOptInModalVisible(false)}
+          onSuccess={handleAssetOptInSuccess}
+        />
 
-      {/* Asset Opt-In Modal */}
-      <AssetOptInModal
-        visible={isAssetOptInModalVisible}
-        onClose={() => setIsAssetOptInModalVisible(false)}
-        onSuccess={handleAssetOptInSuccess}
-      />
+        {/* Asset Filter Modal */}
+        <AssetFilterModal
+          visible={isAssetFilterModalVisible}
+          currentSettings={assetFilterSettings}
+          onClose={handleCloseAssetFilter}
+          onApply={handleApplyAssetFilter}
+          onReset={handleResetAssetFilter}
+        />
 
-      {/* Asset Filter Modal */}
-      <AssetFilterModal
-        visible={isAssetFilterModalVisible}
-        currentSettings={assetFilterSettings}
-        onClose={handleCloseAssetFilter}
-        onApply={handleApplyAssetFilter}
-        onReset={handleResetAssetFilter}
-      />
-
-      {/* Onboarding Options Modal (for empty state) */}
-      <OnboardingOptionsModal
-        isVisible={isOnboardingModalVisible}
-        onClose={() => setIsOnboardingModalVisible(false)}
-        onCreateAccount={() => {
-          navigation.navigate('CreateWallet' as never);
-        }}
-        onImportAccount={() => {
-          navigation.navigate('MnemonicImport' as never, { isOnboarding: true });
-        }}
-        onImportQRAccount={() => {
-          navigation.navigate('QRAccountImport' as never);
-        }}
-        onAddWatchAccount={() => {
-          navigation.navigate('AddWatchAccount' as never, { isOnboarding: true });
-        }}
-      />
+        {/* Onboarding Options Modal (for empty state) */}
+        <OnboardingOptionsModal
+          isVisible={isOnboardingModalVisible}
+          onClose={() => setIsOnboardingModalVisible(false)}
+          onCreateAccount={() => {
+            navigation.navigate('CreateWallet' as never);
+          }}
+          onImportAccount={() => {
+            navigation.navigate('MnemonicImport' as never, {
+              isOnboarding: true,
+            });
+          }}
+          onImportQRAccount={() => {
+            navigation.navigate('QRAccountImport' as never);
+          }}
+          onAddWatchAccount={() => {
+            navigation.navigate('AddWatchAccount' as never, {
+              isOnboarding: true,
+            });
+          }}
+        />
       </SafeAreaView>
     </NFTBackground>
   );

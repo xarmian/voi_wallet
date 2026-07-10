@@ -41,7 +41,10 @@ declare namespace chrome {
     const id: string | undefined;
     const lastError: { message?: string } | undefined;
 
-    function sendMessage(message: any, callback?: (response: any) => void): void;
+    function sendMessage(
+      message: any,
+      callback?: (response: any) => void
+    ): void;
     function getURL(path: string): string;
 
     interface MessageSender {

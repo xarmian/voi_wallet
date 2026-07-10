@@ -21,7 +21,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { Ionicons } from '@expo/vector-icons';
-import { useRoute, useNavigation, CommonActions } from '@react-navigation/native';
+import {
+  useRoute,
+  useNavigation,
+  CommonActions,
+} from '@react-navigation/native';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -71,7 +75,9 @@ export default function SwapScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const routeParams = route.params as SwapScreenRouteParams | undefined;
-  const delayedRefreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const delayedRefreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   // Experimental feature guard - redirect if swap is not enabled
   const isSwapEnabled = useIsSwapEnabled();
@@ -90,19 +96,23 @@ export default function SwapScreen() {
   const accountId = routeParams?.accountId || activeAccount?.id;
 
   // Get accounts for address lookup
-  const accounts = useWalletStore(state => state.wallet?.accounts);
-  const currentAccount = accounts?.find(acc => acc.id === accountId);
+  const accounts = useWalletStore((state) => state.wallet?.accounts);
+  const currentAccount = accounts?.find((acc) => acc.id === accountId);
 
   // Get account balance from store (for VOI network)
-  const singleNetworkBalance = useWalletStore(state =>
+  const singleNetworkBalance = useWalletStore((state) =>
     accountId ? state.accountStates[accountId]?.balance : undefined
   );
 
   // Network-specific balance state
-  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(null);
+  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(
+    null
+  );
 
   // Load balance if not available
-  const loadAccountBalance = useWalletStore(state => state.loadAccountBalance);
+  const loadAccountBalance = useWalletStore(
+    (state) => state.loadAccountBalance
+  );
 
   useEffect(() => {
     if (accountId && !singleNetworkBalance) {
@@ -147,9 +157,10 @@ export default function SwapScreen() {
   }, [currentAccount, selectedNetwork, singleNetworkBalance]);
 
   // Use network-specific balance - only fall back to store balance for VOI
-  const accountBalance = selectedNetwork === NetworkId.VOI_MAINNET
-    ? (networkBalance || singleNetworkBalance)
-    : networkBalance;
+  const accountBalance =
+    selectedNetwork === NetworkId.VOI_MAINNET
+      ? networkBalance || singleNetworkBalance
+      : networkBalance;
 
   // Token selection state
   const [inputToken, setInputToken] = useState<SwapToken | null>(null);
@@ -175,7 +186,8 @@ export default function SwapScreen() {
 
   // Transaction state
   const [isSwapping, setIsSwapping] = useState(false);
-  const [isWaitingForConfirmation, setIsWaitingForConfirmation] = useState(false);
+  const [isWaitingForConfirmation, setIsWaitingForConfirmation] =
+    useState(false);
 
   // Account selector state
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
@@ -197,33 +209,42 @@ export default function SwapScreen() {
 
   // Handle Android back button for local modals
   useEffect(() => {
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      // Close modals in order of priority (don't dismiss waiting modal)
-      if (showRouteModal) {
-        setShowRouteModal(false);
-        return true;
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        // Close modals in order of priority (don't dismiss waiting modal)
+        if (showRouteModal) {
+          setShowRouteModal(false);
+          return true;
+        }
+        if (showSlippageModal) {
+          setShowSlippageModal(false);
+          return true;
+        }
+        if (showOutputTokenSelector) {
+          setShowOutputTokenSelector(false);
+          return true;
+        }
+        if (showInputTokenSelector) {
+          setShowInputTokenSelector(false);
+          return true;
+        }
+        if (isAccountModalVisible) {
+          setIsAccountModalVisible(false);
+          return true;
+        }
+        return false; // Let default back behavior happen
       }
-      if (showSlippageModal) {
-        setShowSlippageModal(false);
-        return true;
-      }
-      if (showOutputTokenSelector) {
-        setShowOutputTokenSelector(false);
-        return true;
-      }
-      if (showInputTokenSelector) {
-        setShowInputTokenSelector(false);
-        return true;
-      }
-      if (isAccountModalVisible) {
-        setIsAccountModalVisible(false);
-        return true;
-      }
-      return false; // Let default back behavior happen
-    });
+    );
 
     return () => backHandler.remove();
-  }, [showRouteModal, showSlippageModal, showOutputTokenSelector, showInputTokenSelector, isAccountModalVisible]);
+  }, [
+    showRouteModal,
+    showSlippageModal,
+    showOutputTokenSelector,
+    showInputTokenSelector,
+    isAccountModalVisible,
+  ]);
 
   const loadInitialTokens = async () => {
     try {
@@ -264,7 +285,12 @@ export default function SwapScreen() {
     // request is invalidated immediately (its captured id stops matching), not
     // only when the next fetch starts after the debounce.
     const requestId = ++quoteRequestIdRef.current;
-    if (inputToken && outputToken && inputAmount && parseFloat(inputAmount) > 0) {
+    if (
+      inputToken &&
+      outputToken &&
+      inputAmount &&
+      parseFloat(inputAmount) > 0
+    ) {
       // Clear the now-stale quote so it can't be reviewed/signed in the window.
       setQuote(null);
       setQuoteError(null);
@@ -427,9 +453,14 @@ export default function SwapScreen() {
     if (currentAccount?.address) {
       try {
         const networkService = NetworkService.getInstance(networkId);
-        newNetworkBalance = await networkService.getAccountBalance(currentAccount.address);
+        newNetworkBalance = await networkService.getAccountBalance(
+          currentAccount.address
+        );
       } catch (error) {
-        console.warn('[handleNetworkChange] Failed to fetch new network balance:', error);
+        console.warn(
+          '[handleNetworkChange] Failed to fetch new network balance:',
+          error
+        );
       }
     }
 
@@ -437,7 +468,7 @@ export default function SwapScreen() {
     const getAssetBalance = (assetId: number): bigint => {
       if (!newNetworkBalance) return BigInt(0);
       if (assetId === 0) return BigInt(newNetworkBalance.amount || 0);
-      const asset = newNetworkBalance.assets?.find(a => {
+      const asset = newNetworkBalance.assets?.find((a) => {
         const id = a.assetId ?? a['asset-id'] ?? a.contractId;
         return id === assetId;
       });
@@ -448,7 +479,10 @@ export default function SwapScreen() {
     let newInputToken: SwapToken | null = null;
     if (previousInputToken) {
       // Get all equivalent tokens (works both directions since mapping contains all tokens)
-      const mapping = tokenMappingService.getMappingForToken(previousInputToken.id, previousNetwork);
+      const mapping = tokenMappingService.getMappingForToken(
+        previousInputToken.id,
+        previousNetwork
+      );
 
       console.log('[handleNetworkChange] Input token lookup:', {
         previousTokenId: previousInputToken.id,
@@ -460,28 +494,43 @@ export default function SwapScreen() {
       let equivalentOnNewNetwork;
       if (mapping) {
         // Filter to tokens on target network
-        const equivalentsOnNewNetwork = mapping.tokens.filter((t) => t.networkId === networkId);
-        console.log('[handleNetworkChange] Equivalents on new network:', equivalentsOnNewNetwork);
+        const equivalentsOnNewNetwork = mapping.tokens.filter(
+          (t) => t.networkId === networkId
+        );
+        console.log(
+          '[handleNetworkChange] Equivalents on new network:',
+          equivalentsOnNewNetwork
+        );
 
         if (equivalentsOnNewNetwork.length === 1) {
           equivalentOnNewNetwork = equivalentsOnNewNetwork[0];
         } else if (equivalentsOnNewNetwork.length > 1) {
           // Pick the one with highest balance
-          equivalentOnNewNetwork = equivalentsOnNewNetwork.reduce((best, current) => {
-            const bestBalance = getAssetBalance(best.assetId);
-            const currentBalance = getAssetBalance(current.assetId);
-            return currentBalance > bestBalance ? current : best;
-          });
-          console.log('[handleNetworkChange] Selected by balance:', equivalentOnNewNetwork);
+          equivalentOnNewNetwork = equivalentsOnNewNetwork.reduce(
+            (best, current) => {
+              const bestBalance = getAssetBalance(best.assetId);
+              const currentBalance = getAssetBalance(current.assetId);
+              return currentBalance > bestBalance ? current : best;
+            }
+          );
+          console.log(
+            '[handleNetworkChange] Selected by balance:',
+            equivalentOnNewNetwork
+          );
         }
       }
 
-      console.log('[handleNetworkChange] Final equivalentOnNewNetwork:', equivalentOnNewNetwork);
+      console.log(
+        '[handleNetworkChange] Final equivalentOnNewNetwork:',
+        equivalentOnNewNetwork
+      );
 
       if (equivalentOnNewNetwork) {
         // Try to load from provider first for extra metadata (logoUrl, etc)
         try {
-          const token = await newProvider.getTokenById(equivalentOnNewNetwork.assetId);
+          const token = await newProvider.getTokenById(
+            equivalentOnNewNetwork.assetId
+          );
           if (token) {
             // Use provider token but ensure id matches mapping for consistency
             newInputToken = {
@@ -490,7 +539,10 @@ export default function SwapScreen() {
             };
           }
         } catch (error) {
-          console.warn('Failed to load equivalent input token from provider:', error);
+          console.warn(
+            'Failed to load equivalent input token from provider:',
+            error
+          );
         }
 
         // If provider didn't have the token, construct from mapping data
@@ -510,29 +562,38 @@ export default function SwapScreen() {
     let newOutputToken: SwapToken | null = null;
     if (previousOutputToken) {
       // Get all equivalent tokens (works both directions since mapping contains all tokens)
-      const mapping = tokenMappingService.getMappingForToken(previousOutputToken.id, previousNetwork);
+      const mapping = tokenMappingService.getMappingForToken(
+        previousOutputToken.id,
+        previousNetwork
+      );
 
       let equivalentOnNewNetwork;
       if (mapping) {
         // Filter to tokens on target network
-        const equivalentsOnNewNetwork = mapping.tokens.filter((t) => t.networkId === networkId);
+        const equivalentsOnNewNetwork = mapping.tokens.filter(
+          (t) => t.networkId === networkId
+        );
 
         if (equivalentsOnNewNetwork.length === 1) {
           equivalentOnNewNetwork = equivalentsOnNewNetwork[0];
         } else if (equivalentsOnNewNetwork.length > 1) {
           // Pick the one with highest balance
-          equivalentOnNewNetwork = equivalentsOnNewNetwork.reduce((best, current) => {
-            const bestBalance = getAssetBalance(best.assetId);
-            const currentBalance = getAssetBalance(current.assetId);
-            return currentBalance > bestBalance ? current : best;
-          });
+          equivalentOnNewNetwork = equivalentsOnNewNetwork.reduce(
+            (best, current) => {
+              const bestBalance = getAssetBalance(best.assetId);
+              const currentBalance = getAssetBalance(current.assetId);
+              return currentBalance > bestBalance ? current : best;
+            }
+          );
         }
       }
 
       if (equivalentOnNewNetwork) {
         // Try to load from provider first for extra metadata (logoUrl, etc)
         try {
-          const token = await newProvider.getTokenById(equivalentOnNewNetwork.assetId);
+          const token = await newProvider.getTokenById(
+            equivalentOnNewNetwork.assetId
+          );
           if (token) {
             // Use provider token but ensure id matches mapping for consistency
             newOutputToken = {
@@ -541,7 +602,10 @@ export default function SwapScreen() {
             };
           }
         } catch (error) {
-          console.warn('Failed to load equivalent output token from provider:', error);
+          console.warn(
+            'Failed to load equivalent output token from provider:',
+            error
+          );
         }
 
         // If provider didn't have the token, construct from mapping data
@@ -651,12 +715,14 @@ export default function SwapScreen() {
         const networkService = NetworkService.getInstance(selectedNetwork);
 
         // Convert signed transactions from base64 strings to Uint8Array if needed
-        const signedTxns = result.signedTransactions.map((txn: string | Uint8Array) => {
-          if (typeof txn === 'string') {
-            return new Uint8Array(Buffer.from(txn, 'base64'));
+        const signedTxns = result.signedTransactions.map(
+          (txn: string | Uint8Array) => {
+            if (typeof txn === 'string') {
+              return new Uint8Array(Buffer.from(txn, 'base64'));
+            }
+            return txn;
           }
-          return txn;
-        });
+        );
 
         // Submit transaction group
         const submitRes = await networkService.submitTransaction(signedTxns);
@@ -723,7 +789,7 @@ export default function SwapScreen() {
 
       const assetDetailParams = resolveAssetDetailParams();
 
-      navigation.dispatch(state => {
+      navigation.dispatch((state) => {
         const routes: Array<{ name: string; params?: Record<string, any> }> = [
           { name: 'HomeMain' },
         ];
@@ -759,7 +825,11 @@ export default function SwapScreen() {
       const tokenId = inputToken.id;
 
       // Check for native token (VOI/ALGO)
-      if (tokenId === NATIVE_TOKEN_ID || inputToken.symbol === 'VOI' || inputToken.symbol === 'ALGO') {
+      if (
+        tokenId === NATIVE_TOKEN_ID ||
+        inputToken.symbol === 'VOI' ||
+        inputToken.symbol === 'ALGO'
+      ) {
         const balance = BigInt(accountBalance.amount || '0');
         const value = Number(balance) / Math.pow(10, 6);
         return value.toLocaleString(undefined, {
@@ -769,7 +839,7 @@ export default function SwapScreen() {
       }
 
       // Find asset by ID - check multiple possible field names
-      const asset = accountBalance.assets?.find(a => {
+      const asset = accountBalance.assets?.find((a) => {
         const assetId = a.assetId ?? a['asset-id'] ?? a.contractId;
         return assetId === tokenId;
       });
@@ -790,7 +860,14 @@ export default function SwapScreen() {
   };
 
   const isSwapDisabled = (): boolean => {
-    if (!inputToken || !outputToken || !inputAmount || !quote || isSwapping || quoteLoading) {
+    if (
+      !inputToken ||
+      !outputToken ||
+      !inputAmount ||
+      !quote ||
+      isSwapping ||
+      quoteLoading
+    ) {
       return true;
     }
 
@@ -836,12 +913,7 @@ export default function SwapScreen() {
           />
         );
       } else {
-        return (
-          <Image
-            source={imageSource.source}
-            style={styles.tokenIcon}
-          />
-        );
+        return <Image source={imageSource.source} style={styles.tokenIcon} />;
       }
     }
 
@@ -937,7 +1009,8 @@ export default function SwapScreen() {
       const tokenIdStr = String(outputToken.id);
       const usdPerToken = quote.tokenValues[tokenIdStr];
       if (usdPerToken !== undefined) {
-        const outputValue = parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals);
+        const outputValue =
+          parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals);
         return formatUsdValue(outputValue * usdPerToken);
       }
     }
@@ -968,224 +1041,250 @@ export default function SwapScreen() {
           onAccountSelectorPress={handleAccountSelectorPress}
         />
 
-      <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Network Selector */}
-        <NetworkSelector
-          selectedNetworkId={selectedNetwork}
-          onNetworkChange={handleNetworkChange}
-          disabled={isSwapping}
-          networks={[NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]}
-        />
+        <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent}>
+          {/* Network Selector */}
+          <NetworkSelector
+            selectedNetworkId={selectedNetwork}
+            onNetworkChange={handleNetworkChange}
+            disabled={isSwapping}
+            networks={[NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]}
+          />
 
-        {/* Input Token Section */}
-        <View style={styles.tokenSection}>
-          <Text style={styles.sectionLabel}>You pay</Text>
-          <GlassCard variant="medium" style={styles.tokenCard}>
-            {/* Top Row: Amount + Token Selector */}
-            <View style={styles.mainRow}>
-              <View style={styles.amountContainer}>
-                <TextInput
-                  style={styles.amountInput}
-                  value={inputAmount}
-                  onChangeText={handleInputAmountChange}
-                  placeholder="0.0"
-                  placeholderTextColor={themeColors.textMuted}
-                  keyboardType="decimal-pad"
-                  editable={!!inputToken}
-                />
+          {/* Input Token Section */}
+          <View style={styles.tokenSection}>
+            <Text style={styles.sectionLabel}>You pay</Text>
+            <GlassCard variant="medium" style={styles.tokenCard}>
+              {/* Top Row: Amount + Token Selector */}
+              <View style={styles.mainRow}>
+                <View style={styles.amountContainer}>
+                  <TextInput
+                    style={styles.amountInput}
+                    value={inputAmount}
+                    onChangeText={handleInputAmountChange}
+                    placeholder="0.0"
+                    placeholderTextColor={themeColors.textMuted}
+                    keyboardType="decimal-pad"
+                    editable={!!inputToken}
+                  />
+                </View>
+                <TouchableOpacity
+                  style={styles.tokenSelector}
+                  onPress={() => setShowInputTokenSelector(true)}
+                >
+                  {inputToken ? (
+                    <>
+                      {renderTokenIcon(inputToken)}
+                      <Text style={styles.tokenSymbol}>
+                        {inputToken.symbol}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={styles.selectTokenText}>Select</Text>
+                  )}
+                  <Ionicons
+                    name="chevron-down"
+                    size={18}
+                    color={themeColors.text}
+                  />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={styles.tokenSelector}
-                onPress={() => setShowInputTokenSelector(true)}
-              >
-                {inputToken ? (
-                  <>
-                    {renderTokenIcon(inputToken)}
-                    <Text style={styles.tokenSymbol}>{inputToken.symbol}</Text>
-                  </>
-                ) : (
-                  <Text style={styles.selectTokenText}>Select</Text>
-                )}
-                <Ionicons name="chevron-down" size={18} color={themeColors.text} />
-              </TouchableOpacity>
-            </View>
 
-            {/* Bottom Row: USD Value + Balance */}
-            <View style={styles.bottomRow}>
-              <Text style={styles.usdValue}>{getInputUsdValue() || ' '}</Text>
-              <View style={styles.balanceRow}>
-                {inputToken && (
-                  <>
-                    <Text style={styles.balanceText}>
-                      Bal: {getInputBalance()}
+              {/* Bottom Row: USD Value + Balance */}
+              <View style={styles.bottomRow}>
+                <Text style={styles.usdValue}>{getInputUsdValue() || ' '}</Text>
+                <View style={styles.balanceRow}>
+                  {inputToken && (
+                    <>
+                      <Text style={styles.balanceText}>
+                        Bal: {getInputBalance()}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.maxButton}
+                        onPress={handleMaxPress}
+                      >
+                        <Text style={styles.maxButtonText}>MAX</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              </View>
+            </GlassCard>
+          </View>
+
+          {/* Swap Button */}
+          <View style={styles.swapButtonContainer}>
+            <TouchableOpacity
+              style={styles.swapButton}
+              onPress={handleSwapTokens}
+              disabled={!inputToken || !outputToken}
+            >
+              <Ionicons
+                name="swap-vertical"
+                size={24}
+                color={themeColors.primary}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Output Token Section */}
+          <View style={styles.tokenSection}>
+            <Text style={styles.sectionLabel}>You receive</Text>
+            <GlassCard variant="medium" style={styles.tokenCard}>
+              {/* Top Row: Amount + Token Selector */}
+              <View style={styles.mainRow}>
+                <View style={styles.amountContainer}>
+                  {quoteLoading ? (
+                    <Animated.View
+                      style={[
+                        styles.skeleton,
+                        styles.skeletonAmount,
+                        { opacity: skeletonOpacity },
+                      ]}
+                    />
+                  ) : (
+                    <Text style={styles.outputAmount}>
+                      {quote &&
+                      quote.outputAmount &&
+                      outputToken &&
+                      outputToken.decimals !== undefined
+                        ? (
+                            parseFloat(quote.outputAmount) /
+                            Math.pow(10, outputToken.decimals)
+                          ).toLocaleString(undefined, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: Math.min(
+                              outputToken.decimals,
+                              6
+                            ),
+                          })
+                        : '0.0'}
                     </Text>
-                    <TouchableOpacity
-                      style={styles.maxButton}
-                      onPress={handleMaxPress}
-                    >
-                      <Text style={styles.maxButtonText}>MAX</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={styles.tokenSelector}
+                  onPress={() => setShowOutputTokenSelector(true)}
+                >
+                  {outputToken ? (
+                    <>
+                      {renderTokenIcon(outputToken)}
+                      <Text style={styles.tokenSymbol}>
+                        {outputToken.symbol}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={styles.selectTokenText}>Select</Text>
+                  )}
+                  <Ionicons
+                    name="chevron-down"
+                    size={18}
+                    color={themeColors.text}
+                  />
+                </TouchableOpacity>
               </View>
-            </View>
-          </GlassCard>
-        </View>
 
-        {/* Swap Button */}
-        <View style={styles.swapButtonContainer}>
-          <TouchableOpacity
-            style={styles.swapButton}
-            onPress={handleSwapTokens}
-            disabled={!inputToken || !outputToken}
-          >
-            <Ionicons name="swap-vertical" size={24} color={themeColors.primary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Output Token Section */}
-        <View style={styles.tokenSection}>
-          <Text style={styles.sectionLabel}>You receive</Text>
-          <GlassCard variant="medium" style={styles.tokenCard}>
-            {/* Top Row: Amount + Token Selector */}
-            <View style={styles.mainRow}>
-              <View style={styles.amountContainer}>
+              {/* Bottom Row: USD Value */}
+              <View style={styles.bottomRow}>
                 {quoteLoading ? (
                   <Animated.View
                     style={[
                       styles.skeleton,
-                      styles.skeletonAmount,
+                      styles.skeletonUsd,
                       { opacity: skeletonOpacity },
                     ]}
                   />
                 ) : (
-                  <Text style={styles.outputAmount}>
-                    {quote && quote.outputAmount && outputToken && outputToken.decimals !== undefined
-                      ? (parseFloat(quote.outputAmount) / Math.pow(10, outputToken.decimals)).toLocaleString(undefined, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: Math.min(outputToken.decimals, 6),
-                        })
-                      : '0.0'}
+                  <Text style={styles.usdValue}>
+                    {getOutputUsdValue() || ' '}
                   </Text>
                 )}
               </View>
-              <TouchableOpacity
-                style={styles.tokenSelector}
-                onPress={() => setShowOutputTokenSelector(true)}
-              >
-                {outputToken ? (
-                  <>
-                    {renderTokenIcon(outputToken)}
-                    <Text style={styles.tokenSymbol}>{outputToken.symbol}</Text>
-                  </>
-                ) : (
-                  <Text style={styles.selectTokenText}>Select</Text>
-                )}
-                <Ionicons name="chevron-down" size={18} color={themeColors.text} />
-              </TouchableOpacity>
-            </View>
+            </GlassCard>
+          </View>
 
-            {/* Bottom Row: USD Value */}
-            <View style={styles.bottomRow}>
-              {quoteLoading ? (
-                <Animated.View
-                  style={[
-                    styles.skeleton,
-                    styles.skeletonUsd,
-                    { opacity: skeletonOpacity },
-                  ]}
-                />
-              ) : (
-                <Text style={styles.usdValue}>{getOutputUsdValue() || ' '}</Text>
-              )}
-            </View>
-          </GlassCard>
-        </View>
+          {/* Quote Display */}
+          <SwapQuoteDisplay
+            quote={quote}
+            inputToken={inputToken}
+            outputToken={outputToken}
+            loading={quoteLoading}
+            error={quoteError}
+            slippage={slippage}
+            onRefresh={() => fetchQuote(++quoteRequestIdRef.current)}
+            onSlippagePress={() => setShowSlippageModal(true)}
+            onRouteDetailPress={() => setShowRouteModal(true)}
+          />
 
-        {/* Quote Display */}
-        <SwapQuoteDisplay
-          quote={quote}
-          inputToken={inputToken}
-          outputToken={outputToken}
-          loading={quoteLoading}
-          error={quoteError}
-          slippage={slippage}
-          onRefresh={() => fetchQuote(++quoteRequestIdRef.current)}
-          onSlippagePress={() => setShowSlippageModal(true)}
-          onRouteDetailPress={() => setShowRouteModal(true)}
+          {/* Review Swap Button */}
+          <GlassButton
+            variant="primary"
+            label="Review Swap"
+            icon="swap-horizontal"
+            loading={isSwapping}
+            disabled={isSwapDisabled()}
+            onPress={handleReviewSwap}
+            fullWidth
+            glow
+            size="lg"
+          />
+
+          {/* Powered by swap provider */}
+          <View style={styles.poweredByContainer}>
+            <Text style={styles.poweredByText}>Powered by </Text>
+            {providerInfo.provider === 'snowball' && (
+              <Image
+                source={require('../../../assets/snowballSwap.png')}
+                style={styles.poweredByLogo}
+                resizeMode="contain"
+              />
+            )}
+            <TouchableOpacity onPress={handleProviderPress}>
+              <Text style={styles.providerLink}>{providerInfo.name}</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAwareScrollView>
+
+        {/* Modals */}
+        <TokenSelector
+          visible={showInputTokenSelector}
+          accountId={accountId!}
+          networkId={selectedNetwork}
+          selectedTokenId={inputToken?.id}
+          excludeTokenId={outputToken?.id}
+          ownedOnly={true}
+          onClose={() => setShowInputTokenSelector(false)}
+          onSelect={setInputToken}
         />
 
-        {/* Review Swap Button */}
-        <GlassButton
-          variant="primary"
-          label="Review Swap"
-          icon="swap-horizontal"
-          loading={isSwapping}
-          disabled={isSwapDisabled()}
-          onPress={handleReviewSwap}
-          fullWidth
-          glow
-          size="lg"
+        <TokenSelector
+          visible={showOutputTokenSelector}
+          accountId={accountId!}
+          networkId={selectedNetwork}
+          selectedTokenId={outputToken?.id}
+          excludeTokenId={inputToken?.id}
+          ownedOnly={false}
+          onClose={() => setShowOutputTokenSelector(false)}
+          onSelect={setOutputToken}
         />
 
-        {/* Powered by swap provider */}
-        <View style={styles.poweredByContainer}>
-          <Text style={styles.poweredByText}>Powered by </Text>
-          {providerInfo.provider === 'snowball' && (
-            <Image
-              source={require('../../../assets/snowballSwap.png')}
-              style={styles.poweredByLogo}
-              resizeMode="contain"
-            />
-          )}
-          <TouchableOpacity onPress={handleProviderPress}>
-            <Text style={styles.providerLink}>{providerInfo.name}</Text>
-          </TouchableOpacity>
-        </View>
-      </KeyboardAwareScrollView>
-
-      {/* Modals */}
-      <TokenSelector
-        visible={showInputTokenSelector}
-        accountId={accountId!}
-        networkId={selectedNetwork}
-        selectedTokenId={inputToken?.id}
-        excludeTokenId={outputToken?.id}
-        ownedOnly={true}
-        onClose={() => setShowInputTokenSelector(false)}
-        onSelect={setInputToken}
-      />
-
-      <TokenSelector
-        visible={showOutputTokenSelector}
-        accountId={accountId!}
-        networkId={selectedNetwork}
-        selectedTokenId={outputToken?.id}
-        excludeTokenId={inputToken?.id}
-        ownedOnly={false}
-        onClose={() => setShowOutputTokenSelector(false)}
-        onSelect={setOutputToken}
-      />
-
-      <SlippageSettingsModal
-        visible={showSlippageModal}
-        currentSlippage={slippage}
-        onClose={() => setShowSlippageModal(false)}
-        onSave={handleSlippageSave}
-      />
-
-      {quote && inputToken && outputToken && (
-        <RouteDetailModal
-          visible={showRouteModal}
-          route={quote.route}
-          inputToken={inputToken}
-          outputToken={outputToken}
-          estimatedOutput={quote.outputAmount}
-          minimumOutput={quote.minimumOutputAmount}
-          onClose={() => setShowRouteModal(false)}
+        <SlippageSettingsModal
+          visible={showSlippageModal}
+          currentSlippage={slippage}
+          onClose={() => setShowSlippageModal(false)}
+          onSave={handleSlippageSave}
         />
-      )}
 
+        {quote && inputToken && outputToken && (
+          <RouteDetailModal
+            visible={showRouteModal}
+            route={quote.route}
+            inputToken={inputToken}
+            outputToken={outputToken}
+            estimatedOutput={quote.outputAmount}
+            minimumOutput={quote.minimumOutputAmount}
+            onClose={() => setShowRouteModal(false)}
+          />
+        )}
       </SafeAreaView>
 
       {/* Account List Modal - rendered outside SafeAreaView to ensure proper z-index */}
@@ -1234,9 +1333,10 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textSecondary,
       marginBottom: theme.spacing.xs,
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.8)'
-        : 'rgba(255, 255, 255, 0.9)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.8)'
+          : 'rgba(255, 255, 255, 0.9)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 16,
     },

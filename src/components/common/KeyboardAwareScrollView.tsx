@@ -47,8 +47,8 @@ export default function KeyboardAwareScrollView({
         typeof extraHeight === 'number'
           ? extraHeight
           : Platform.OS === 'android'
-          ? 30
-          : 20
+            ? 30
+            : 20
       }
       {...props}
     >

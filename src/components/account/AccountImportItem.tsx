@@ -70,7 +70,8 @@ export default function AccountImportItem({
     return account.type === 'standard' ? 'Full Account' : 'Watch Account';
   };
 
-  const canBeSelected = account.isValid && (!account.isDuplicate || account.isUpgrade);
+  const canBeSelected =
+    account.isValid && (!account.isDuplicate || account.isUpgrade);
 
   return (
     <View

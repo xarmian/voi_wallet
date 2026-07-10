@@ -32,7 +32,10 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
 import { AnimatedQRCode } from '@/components/remoteSigner/AnimatedQRCode';
-import { parseArc0300AccountImportUri, normalizeBase64ToHex } from '@/utils/arc0300';
+import {
+  parseArc0300AccountImportUri,
+  normalizeBase64ToHex,
+} from '@/utils/arc0300';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { useCurrentNetwork } from '@/store/networkStore';
@@ -57,8 +60,11 @@ export default function ImportFromOnlineWalletScreen() {
 
   const [state, setState] = useState<ImportState>('disclaimer');
   const [error, setError] = useState<string | null>(null);
-  const [importedAccount, setImportedAccount] = useState<StandardAccountMetadata | null>(null);
-  const [confirmationQrData, setConfirmationQrData] = useState<string | null>(null);
+  const [importedAccount, setImportedAccount] =
+    useState<StandardAccountMetadata | null>(null);
+  const [confirmationQrData, setConfirmationQrData] = useState<string | null>(
+    null
+  );
   const [doneCountdown, setDoneCountdown] = useState(5);
 
   // Countdown timer for the Done button
@@ -91,14 +97,19 @@ export default function ImportFromOnlineWalletScreen() {
         const parsed = parseArc0300AccountImportUri(data);
 
         if (!parsed) {
-          throw new Error('Invalid QR code format. Expected an ARC-300 account import URI.');
+          throw new Error(
+            'Invalid QR code format. Expected an ARC-300 account import URI.'
+          );
         }
 
         if (parsed.kind !== 'standard') {
           throw new Error('This QR code does not contain a private key.');
         }
 
-        if (parsed.entries.length === 0 || !parsed.entries[0].privateKeyBase64) {
+        if (
+          parsed.entries.length === 0 ||
+          !parsed.entries[0].privateKeyBase64
+        ) {
           throw new Error('No private key found in QR code.');
         }
 
@@ -115,8 +126,11 @@ export default function ImportFromOnlineWalletScreen() {
           .replace(/-/g, '+')
           .replace(/_/g, '/');
         // Add padding if needed
-        const paddedBase64 = base64Standard + '='.repeat((4 - base64Standard.length % 4) % 4);
-        const privateKeyBytes = new Uint8Array(Buffer.from(paddedBase64, 'base64'));
+        const paddedBase64 =
+          base64Standard + '='.repeat((4 - (base64Standard.length % 4)) % 4);
+        const privateKeyBytes = new Uint8Array(
+          Buffer.from(paddedBase64, 'base64')
+        );
 
         // Derive the address from the private key
         const publicKeyBytes = privateKeyBytes.slice(32);
@@ -153,8 +167,11 @@ export default function ImportFromOnlineWalletScreen() {
         // Build a simple verification transaction
         // We're in airgap mode so use default/hardcoded params
         // Using Voi mainnet genesis hash as default
-        const genesisHashBase64 = 'IXnoWtviVVJW5LGivNFc0Dq14V3kqaXuK2u5OQrdVZo=';
-        const genesisHashBytes = new Uint8Array(Buffer.from(genesisHashBase64, 'base64'));
+        const genesisHashBase64 =
+          'IXnoWtviVVJW5LGivNFc0Dq14V3kqaXuK2u5OQrdVZo=';
+        const genesisHashBytes = new Uint8Array(
+          Buffer.from(genesisHashBase64, 'base64')
+        );
         const genesisId = 'voi-mainnet';
 
         // Create a minimal verification transaction (zero-amount self-payment)
@@ -168,23 +185,25 @@ export default function ImportFromOnlineWalletScreen() {
           genesisID: genesisId,
         };
 
-        const verificationTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
-          sender: address,
-          receiver: address,
-          amount: 0,
-          suggestedParams,
-          note: new Uint8Array(Buffer.from('Airgap signer verification - DO NOT SUBMIT')),
-        });
+        const verificationTxn =
+          algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+            sender: address,
+            receiver: address,
+            amount: 0,
+            suggestedParams,
+            note: new Uint8Array(
+              Buffer.from('Airgap signer verification - DO NOT SUBMIT')
+            ),
+          });
 
         // Sign the transaction directly with the private key we have
         const signedTxn = verificationTxn.signTxn(privateKeyBytes);
 
         // Create remote signer response
         const requestId = `verify-${Date.now()}`;
-        const response = RemoteSignerService.createSuccessResponse(
-          requestId,
-          [signedTxn]
-        );
+        const response = RemoteSignerService.createSuccessResponse(requestId, [
+          signedTxn,
+        ]);
 
         // Encode for QR display
         const payload = RemoteSignerService.encodePayload(response);
@@ -193,9 +212,9 @@ export default function ImportFromOnlineWalletScreen() {
 
         // Zero out the private key from memory
         privateKeyBytes.fill(0);
-
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to import account';
+        const message =
+          err instanceof Error ? err.message : 'Failed to import account';
         setError(message);
         setState('error');
       }
@@ -236,15 +255,24 @@ export default function ImportFromOnlineWalletScreen() {
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={styles.disclaimerContent}>
               <View style={styles.iconContainer}>
-                <Ionicons name="airplane" size={48} color={theme.colors.warning} />
+                <Ionicons
+                  name="airplane"
+                  size={48}
+                  color={theme.colors.warning}
+                />
               </View>
 
               <Text style={styles.title}>Import from Online Wallet</Text>
 
               <View style={styles.warningBox}>
-                <Ionicons name="shield-checkmark" size={24} color={theme.colors.warning} />
+                <Ionicons
+                  name="shield-checkmark"
+                  size={24}
+                  color={theme.colors.warning}
+                />
                 <Text style={styles.warningText}>
-                  For maximum security, ensure this device is in airplane mode with Wi-Fi and Bluetooth disabled before proceeding.
+                  For maximum security, ensure this device is in airplane mode
+                  with Wi-Fi and Bluetooth disabled before proceeding.
                 </Text>
               </View>
 
@@ -252,19 +280,31 @@ export default function ImportFromOnlineWalletScreen() {
                 <Text style={styles.infoTitle}>What will happen:</Text>
                 <View style={styles.infoPoints}>
                   <View style={styles.infoPoint}>
-                    <Ionicons name="scan-outline" size={20} color={theme.colors.textSecondary} />
+                    <Ionicons
+                      name="scan-outline"
+                      size={20}
+                      color={theme.colors.textSecondary}
+                    />
                     <Text style={styles.infoPointText}>
                       Scan the QR code from your online wallet
                     </Text>
                   </View>
                   <View style={styles.infoPoint}>
-                    <Ionicons name="key-outline" size={20} color={theme.colors.textSecondary} />
+                    <Ionicons
+                      name="key-outline"
+                      size={20}
+                      color={theme.colors.textSecondary}
+                    />
                     <Text style={styles.infoPointText}>
                       Import the account with full signing capability
                     </Text>
                   </View>
                   <View style={styles.infoPoint}>
-                    <Ionicons name="qr-code-outline" size={20} color={theme.colors.textSecondary} />
+                    <Ionicons
+                      name="qr-code-outline"
+                      size={20}
+                      color={theme.colors.textSecondary}
+                    />
                     <Text style={styles.infoPointText}>
                       Display a confirmation QR for the online wallet
                     </Text>
@@ -276,7 +316,11 @@ export default function ImportFromOnlineWalletScreen() {
                 style={styles.primaryButton}
                 onPress={handleAcceptDisclaimer}
               >
-                <Ionicons name="scan" size={20} color={theme.colors.buttonText} />
+                <Ionicons
+                  name="scan"
+                  size={20}
+                  color={theme.colors.buttonText}
+                />
                 <Text style={styles.primaryButtonText}>Start Scanning</Text>
               </TouchableOpacity>
 
@@ -321,7 +365,9 @@ export default function ImportFromOnlineWalletScreen() {
         return (
           <View style={styles.centeredContent}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={styles.statusText}>Signing verification transaction...</Text>
+            <Text style={styles.statusText}>
+              Signing verification transaction...
+            </Text>
           </View>
         );
 
@@ -329,7 +375,11 @@ export default function ImportFromOnlineWalletScreen() {
         return (
           <View style={styles.confirmationContent}>
             <View style={styles.successBanner}>
-              <Ionicons name="checkmark-circle" size={24} color={theme.colors.success} />
+              <Ionicons
+                name="checkmark-circle"
+                size={24}
+                color={theme.colors.success}
+              />
               <Text style={styles.successBannerText}>
                 Account imported successfully!
               </Text>
@@ -342,7 +392,8 @@ export default function ImportFromOnlineWalletScreen() {
                   {importedAccount.label || 'Unnamed Account'}
                 </Text>
                 <Text style={styles.accountAddress}>
-                  {importedAccount.address.slice(0, 8)}...{importedAccount.address.slice(-8)}
+                  {importedAccount.address.slice(0, 8)}...
+                  {importedAccount.address.slice(-8)}
                 </Text>
               </View>
             )}
@@ -365,7 +416,8 @@ export default function ImportFromOnlineWalletScreen() {
             <View style={styles.warningBanner}>
               <Ionicons name="warning" size={20} color={theme.colors.warning} />
               <Text style={styles.warningBannerText}>
-                Do not tap Done until you have scanned this QR code with your online wallet
+                Do not tap Done until you have scanned this QR code with your
+                online wallet
               </Text>
             </View>
 
@@ -380,12 +432,18 @@ export default function ImportFromOnlineWalletScreen() {
               <Ionicons
                 name="checkmark"
                 size={20}
-                color={doneCountdown > 0 ? theme.colors.textMuted : theme.colors.buttonText}
+                color={
+                  doneCountdown > 0
+                    ? theme.colors.textMuted
+                    : theme.colors.buttonText
+                }
               />
-              <Text style={[
-                styles.primaryButtonText,
-                doneCountdown > 0 && { color: theme.colors.textMuted },
-              ]}>
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  doneCountdown > 0 && { color: theme.colors.textMuted },
+                ]}
+              >
                 {doneCountdown > 0 ? `Done (${doneCountdown}s)` : 'Done'}
               </Text>
             </TouchableOpacity>
@@ -396,7 +454,11 @@ export default function ImportFromOnlineWalletScreen() {
         return (
           <View style={styles.centeredContent}>
             <View style={styles.successIcon}>
-              <Ionicons name="checkmark-circle" size={64} color={theme.colors.success} />
+              <Ionicons
+                name="checkmark-circle"
+                size={64}
+                color={theme.colors.success}
+              />
             </View>
             <Text style={styles.successTitle}>Import Complete</Text>
             <Text style={styles.successSubtitle}>
@@ -409,17 +471,27 @@ export default function ImportFromOnlineWalletScreen() {
         return (
           <View style={styles.centeredContent}>
             <View style={styles.errorIcon}>
-              <Ionicons name="close-circle" size={64} color={theme.colors.error} />
+              <Ionicons
+                name="close-circle"
+                size={64}
+                color={theme.colors.error}
+              />
             </View>
             <Text style={styles.errorTitle}>Import Failed</Text>
-            <Text style={styles.errorMessage}>{error || 'An unknown error occurred'}</Text>
+            <Text style={styles.errorMessage}>
+              {error || 'An unknown error occurred'}
+            </Text>
 
             <View style={styles.errorActions}>
               <TouchableOpacity
                 style={styles.retryButton}
                 onPress={handleRetry}
               >
-                <Ionicons name="refresh" size={20} color={theme.colors.buttonText} />
+                <Ionicons
+                  name="refresh"
+                  size={20}
+                  color={theme.colors.buttonText}
+                />
                 <Text style={styles.retryButtonText}>Try Again</Text>
               </TouchableOpacity>
 
@@ -450,7 +522,11 @@ export default function ImportFromOnlineWalletScreen() {
           <Ionicons
             name="arrow-back"
             size={24}
-            color={['importing', 'signing'].includes(state) ? theme.colors.textMuted : theme.colors.text}
+            color={
+              ['importing', 'signing'].includes(state)
+                ? theme.colors.textMuted
+                : theme.colors.text
+            }
           />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Import from Wallet</Text>

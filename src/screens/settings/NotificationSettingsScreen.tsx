@@ -155,7 +155,13 @@ function SliderSetting({
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.sm }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          marginBottom: theme.spacing.sm,
+        }}
+      >
         <View
           style={{
             width: 32,
@@ -345,7 +351,13 @@ function NumberInputSetting({
   );
 }
 
-function SectionHeader({ title, icon }: { title: string; icon: keyof typeof Ionicons.glyphMap }) {
+function SectionHeader({
+  title,
+  icon,
+}: {
+  title: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
   const { theme } = useTheme();
   const themeColors = useThemeColors();
 
@@ -392,7 +404,8 @@ export default function NotificationSettingsScreen() {
 
   // Track which account's preferences we're viewing/editing
   // This is separate from the global active account - we don't change the active account here
-  const [selectedAccount, setSelectedAccount] = useState<AccountMetadata | null>(null);
+  const [selectedAccount, setSelectedAccount] =
+    useState<AccountMetadata | null>(null);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -435,7 +448,9 @@ export default function NotificationSettingsScreen() {
       setNotificationsEnabled(enabled);
 
       // Load preferences from server for selected account
-      const prefs = await notificationService.getPreferences(selectedAccount.address);
+      const prefs = await notificationService.getPreferences(
+        selectedAccount.address
+      );
       if (prefs) {
         setPreferences(prefs);
       } else {
@@ -462,9 +477,15 @@ export default function NotificationSettingsScreen() {
 
       if (token) {
         // Subscribe the selected account
-        await notificationService.subscribeAccount(selectedAccount.address, preferences);
+        await notificationService.subscribeAccount(
+          selectedAccount.address,
+          preferences
+        );
         setNotificationsEnabled(true);
-        Alert.alert('Success', 'Push notifications have been enabled for this account');
+        Alert.alert(
+          'Success',
+          'Push notifications have been enabled for this account'
+        );
       } else {
         Alert.alert(
           'Permission Required',
@@ -493,7 +514,9 @@ export default function NotificationSettingsScreen() {
           onPress: async () => {
             setIsSaving(true);
             try {
-              await notificationService.unsubscribeAccount(selectedAccount.address);
+              await notificationService.unsubscribeAccount(
+                selectedAccount.address
+              );
               setNotificationsEnabled(false);
             } catch (error) {
               console.error('Failed to disable notifications:', error);
@@ -516,7 +539,9 @@ export default function NotificationSettingsScreen() {
 
       // Save to server (debounced for sliders)
       try {
-        await notificationService.updatePreferences(selectedAccount.address, { [key]: value });
+        await notificationService.updatePreferences(selectedAccount.address, {
+          [key]: value,
+        });
       } catch (error) {
         console.error('Failed to update preference:', error);
         // Revert on error
@@ -527,12 +552,15 @@ export default function NotificationSettingsScreen() {
   );
 
   // Handler for account selection from the modal
-  const handleAccountSelect = useCallback((accountId: string) => {
-    const account = accounts.find(a => a.id === accountId);
-    if (account) {
-      setSelectedAccount(account);
-    }
-  }, [accounts]);
+  const handleAccountSelect = useCallback(
+    (accountId: string) => {
+      const account = accounts.find((a) => a.id === accountId);
+      if (account) {
+        setSelectedAccount(account);
+      }
+    },
+    [accounts]
+  );
 
   if (!isConfigured) {
     return (
@@ -545,11 +573,17 @@ export default function NotificationSettingsScreen() {
             onAccountSelectorPress={() => setIsAccountModalVisible(true)}
           />
           <View style={styles.centerContent}>
-            <Ionicons name="notifications-off-outline" size={64} color={themeColors.textMuted} />
-            <Text style={styles.unavailableTitle}>Notifications Unavailable</Text>
+            <Ionicons
+              name="notifications-off-outline"
+              size={64}
+              color={themeColors.textMuted}
+            />
+            <Text style={styles.unavailableTitle}>
+              Notifications Unavailable
+            </Text>
             <Text style={styles.unavailableText}>
-              Push notifications are not configured for this app. Please contact support if you
-              believe this is an error.
+              Push notifications are not configured for this app. Please contact
+              support if you believe this is an error.
             </Text>
           </View>
         </SafeAreaView>
@@ -591,7 +625,10 @@ export default function NotificationSettingsScreen() {
         >
           {/* Master Toggle */}
           <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Push Notifications" icon="notifications-outline" />
+            <SectionHeader
+              title="Push Notifications"
+              icon="notifications-outline"
+            />
             <SettingToggle
               icon="notifications"
               label="Enable Push Notifications"
@@ -637,7 +674,10 @@ export default function NotificationSettingsScreen() {
 
           {/* Transaction Notifications */}
           <GlassCard variant="medium" style={styles.section} padding="none">
-            <SectionHeader title="Transactions" icon="swap-horizontal-outline" />
+            <SectionHeader
+              title="Transactions"
+              icon="swap-horizontal-outline"
+            />
             <SettingToggle
               icon="arrow-down-outline"
               label="Incoming VOI"
@@ -651,7 +691,9 @@ export default function NotificationSettingsScreen() {
               label="Minimum VOI Amount"
               description="Only notify for amounts above this threshold"
               value={preferences.minVoiAmount / 1_000_000}
-              onValueChange={(value) => updatePreference('minVoiAmount', Math.round(value * 1_000_000))}
+              onValueChange={(value) =>
+                updatePreference('minVoiAmount', Math.round(value * 1_000_000))
+              }
               suffix="VOI"
               disabled={!notificationsEnabled || !preferences.voiPayments}
             />
@@ -660,7 +702,9 @@ export default function NotificationSettingsScreen() {
               label="ARC-200 Tokens"
               description="Get notified for incoming token transfers"
               value={preferences.arc200Transfers}
-              onValueChange={(value) => updatePreference('arc200Transfers', value)}
+              onValueChange={(value) =>
+                updatePreference('arc200Transfers', value)
+              }
               disabled={!notificationsEnabled}
             />
             <SettingToggle
@@ -668,7 +712,9 @@ export default function NotificationSettingsScreen() {
               label="NFT Transfers"
               description="Get notified when you receive NFTs"
               value={preferences.arc72Transfers}
-              onValueChange={(value) => updatePreference('arc72Transfers', value)}
+              onValueChange={(value) =>
+                updatePreference('arc72Transfers', value)
+              }
               disabled={!notificationsEnabled}
             />
             <SettingToggle
@@ -676,7 +722,9 @@ export default function NotificationSettingsScreen() {
               label="Outgoing Confirmations"
               description="Get notified when your sent transactions confirm"
               value={preferences.outgoingConfirmations}
-              onValueChange={(value) => updatePreference('outgoingConfirmations', value)}
+              onValueChange={(value) =>
+                updatePreference('outgoingConfirmations', value)
+              }
               disabled={!notificationsEnabled}
             />
           </GlassCard>
@@ -691,8 +739,8 @@ export default function NotificationSettingsScreen() {
                 style={{ marginRight: theme.spacing.sm }}
               />
               <Text style={[styles.infoText, { color: themeColors.textMuted }]}>
-                Push notifications are sent via secure servers. Message content is never shared -
-                only notification that a message was received.
+                Push notifications are sent via secure servers. Message content
+                is never shared - only notification that a message was received.
               </Text>
             </View>
           </GlassCard>

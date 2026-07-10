@@ -114,7 +114,9 @@ export default function CollectionBrowser({
     if (!showSearch) return null;
 
     return (
-      <View style={[styles.searchContainer, { backgroundColor: theme.colors.card }]}>
+      <View
+        style={[styles.searchContainer, { backgroundColor: theme.colors.card }]}
+      >
         <Ionicons name="search" size={20} color={theme.colors.textMuted} />
         <TextInput
           style={[styles.searchInput, { color: theme.colors.text }]}
@@ -139,7 +141,9 @@ export default function CollectionBrowser({
       <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
         {searchQuery ? 'No collections found' : 'Search Collections'}
       </Text>
-      <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+      <Text
+        style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+      >
         {searchQuery
           ? 'Try a different search term'
           : 'Search to discover verified NFT collections on Voi Network'}
@@ -153,7 +157,9 @@ export default function CollectionBrowser({
         {renderSearchBar()}
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+          <Text
+            style={[styles.loadingText, { color: theme.colors.textSecondary }]}
+          >
             Loading collections...
           </Text>
         </View>
@@ -172,7 +178,9 @@ export default function CollectionBrowser({
         )}
         keyExtractor={(item) => item.contractId.toString()}
         contentContainerStyle={
-          collections.length === 0 ? styles.emptyListContainer : styles.listContainer
+          collections.length === 0
+            ? styles.emptyListContainer
+            : styles.listContainer
         }
         refreshControl={
           <RefreshControl

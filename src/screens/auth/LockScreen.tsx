@@ -16,12 +16,18 @@ import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '@/services/wallet';
 
 // Cross-platform alert helper
-const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void, style?: string}>) => {
+const showAlert = (
+  title: string,
+  message: string,
+  buttons?: Array<{ text: string; onPress?: () => void; style?: string }>
+) => {
   if (Platform.OS === 'web') {
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find(b => b.style === 'destructive') || buttons[buttons.length - 1];
+        const confirmButton =
+          buttons.find((b) => b.style === 'destructive') ||
+          buttons[buttons.length - 1];
         confirmButton?.onPress?.();
       }
     } else {
@@ -262,11 +268,7 @@ export default function LockScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.content}>
         <View style={styles.header}>
-          <Ionicons
-            name="lock-closed"
-            size={48}
-            color={theme.colors.primary}
-          />
+          <Ionicons name="lock-closed" size={48} color={theme.colors.primary} />
           <Text style={styles.title}>Wallet Locked</Text>
           <Text style={styles.subtitle}>Enter your PIN to unlock</Text>
         </View>

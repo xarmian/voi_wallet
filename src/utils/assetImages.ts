@@ -47,7 +47,10 @@ const isIpfsGatewayUrl = (url: string) =>
     url.toLowerCase().startsWith(prefix)
   );
 
-const computeImagePriority = (rawUrl: string, normalizedUrl: string): number => {
+const computeImagePriority = (
+  rawUrl: string,
+  normalizedUrl: string
+): number => {
   const raw = rawUrl.trim().toLowerCase();
   const normalized = normalizedUrl.trim().toLowerCase();
 
@@ -136,4 +139,3 @@ export const __TESTING__ = {
   computeImagePriority,
   isIpfsGatewayUrl,
 };
-

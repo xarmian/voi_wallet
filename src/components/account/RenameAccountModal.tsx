@@ -68,66 +68,66 @@ export default function RenameAccountModal({
           extraScrollHeight={50}
         >
           <View style={styles.modal}>
-          <Text style={styles.title}>Rename Account</Text>
-          <Text style={styles.message}>
-            Choose a new name for this account.
-          </Text>
-          {accountDisplayName && (
-            <Text style={styles.accountDetailsText} numberOfLines={2}>
-              {accountDisplayName}
+            <Text style={styles.title}>Rename Account</Text>
+            <Text style={styles.message}>
+              Choose a new name for this account.
             </Text>
-          )}
+            {accountDisplayName && (
+              <Text style={styles.accountDetailsText} numberOfLines={2}>
+                {accountDisplayName}
+              </Text>
+            )}
 
-          <TextInput
-            style={[
-              styles.input,
-              !isNameValid && hasEdited && styles.inputError,
-            ]}
-            value={name}
-            onChangeText={(text) => {
-              setName(text);
-              if (!hasEdited) {
-                setHasEdited(true);
-              }
-            }}
-            placeholder="Account name"
-            placeholderTextColor={styles.placeholderColor}
-            autoFocus
-            editable={!isSubmitting}
-            maxLength={40}
-            returnKeyType="done"
-            onSubmitEditing={handleConfirm}
-          />
-
-          {validationMessage && (
-            <Text style={styles.validationText}>{validationMessage}</Text>
-          )}
-
-          <View style={styles.buttons}>
-            <TouchableOpacity
-              style={[styles.button, styles.cancelButton]}
-              onPress={onCancel}
-              disabled={isSubmitting}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
+            <TextInput
               style={[
-                styles.button,
-                styles.confirmButton,
-                (!isNameValid || isSubmitting) && styles.buttonDisabled,
+                styles.input,
+                !isNameValid && hasEdited && styles.inputError,
               ]}
-              onPress={handleConfirm}
-              disabled={!isNameValid || isSubmitting}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={styles.confirmButtonText}>Save</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+              value={name}
+              onChangeText={(text) => {
+                setName(text);
+                if (!hasEdited) {
+                  setHasEdited(true);
+                }
+              }}
+              placeholder="Account name"
+              placeholderTextColor={styles.placeholderColor}
+              autoFocus
+              editable={!isSubmitting}
+              maxLength={40}
+              returnKeyType="done"
+              onSubmitEditing={handleConfirm}
+            />
+
+            {validationMessage && (
+              <Text style={styles.validationText}>{validationMessage}</Text>
+            )}
+
+            <View style={styles.buttons}>
+              <TouchableOpacity
+                style={[styles.button, styles.cancelButton]}
+                onPress={onCancel}
+                disabled={isSubmitting}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.button,
+                  styles.confirmButton,
+                  (!isNameValid || isSubmitting) && styles.buttonDisabled,
+                ]}
+                onPress={handleConfirm}
+                disabled={!isNameValid || isSubmitting}
+              >
+                {isSubmitting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.confirmButtonText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </KeyboardAwareScrollView>
       </View>

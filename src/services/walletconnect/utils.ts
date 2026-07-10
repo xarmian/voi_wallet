@@ -129,9 +129,10 @@ export function isWalletConnectRequestUri(uri: string): boolean {
   return params.has('requestId') && params.has('sessionTopic');
 }
 
-export function parseWalletConnectRequestUri(
-  uri: string
-): { requestId?: number; sessionTopic?: string } {
+export function parseWalletConnectRequestUri(uri: string): {
+  requestId?: number;
+  sessionTopic?: string;
+} {
   try {
     const qs = uri.split('?')[1] || '';
     const params = new URLSearchParams(qs);
@@ -588,7 +589,9 @@ function decodeGenesisHashToHex(
     if (typeof hash === 'string') {
       const base64 = hash.replace(/-/g, '+').replace(/_/g, '/');
       const padded =
-        base64.length % 4 === 0 ? base64 : base64 + '='.repeat(4 - (base64.length % 4));
+        base64.length % 4 === 0
+          ? base64
+          : base64 + '='.repeat(4 - (base64.length % 4));
       return Buffer.from(padded, 'base64').toString('hex');
     }
 

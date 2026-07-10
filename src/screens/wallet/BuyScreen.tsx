@@ -5,9 +5,19 @@ import React, {
   useCallback,
   useEffect,
 } from 'react';
-import { View, Text, StyleSheet, Alert, Linking, Platform, RefreshControl } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Alert,
+  Linking,
+  Platform,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import ThemedWebView, { ThemedWebViewRef } from '@/components/common/ThemedWebView';
+import ThemedWebView, {
+  ThemedWebViewRef,
+} from '@/components/common/ThemedWebView';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useWalletStore, useActiveAccount } from '@/store/walletStore';
@@ -18,8 +28,8 @@ import { useTheme } from '@/contexts/ThemeContext';
 export default function BuyScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const reloadTimestamp =
-    (route.params as { reload?: number } | undefined)?.reload;
+  const reloadTimestamp = (route.params as { reload?: number } | undefined)
+    ?.reload;
   const wallet = useWalletStore((state) => state.wallet);
   const activeAccount = useActiveAccount();
   const webViewRef = useRef<ThemedWebViewRef>(null);
@@ -69,7 +79,9 @@ export default function BuyScreen() {
       // Reset loading state to show "Loading iBuyVoi..." on next load
       webViewRef.current.resetLoadingState();
       // Reload the WebView to the main iBuyVoi URL
-      webViewRef.current.injectJavaScript(`window.location.href = '${iBuyVoiUrl}';`);
+      webViewRef.current.injectJavaScript(
+        `window.location.href = '${iBuyVoiUrl}';`
+      );
     }
 
     // Reset refreshing state after a short delay
@@ -101,7 +113,9 @@ export default function BuyScreen() {
     if (reloadTimestamp && webViewRef.current && iBuyVoiUrl) {
       console.log('[BuyScreen] Tab reload triggered');
       webViewRef.current.resetLoadingState();
-      webViewRef.current.injectJavaScript(`window.location.href = '${iBuyVoiUrl}';`);
+      webViewRef.current.injectJavaScript(
+        `window.location.href = '${iBuyVoiUrl}';`
+      );
     }
   }, [reloadTimestamp, iBuyVoiUrl]);
 
@@ -110,7 +124,9 @@ export default function BuyScreen() {
     if (shouldReload && activeAccount && webViewRef.current && iBuyVoiUrl) {
       console.log('[BuyScreen] Account switch reload triggered');
       webViewRef.current.resetLoadingState();
-      webViewRef.current.injectJavaScript(`window.location.href = '${iBuyVoiUrl}';`);
+      webViewRef.current.injectJavaScript(
+        `window.location.href = '${iBuyVoiUrl}';`
+      );
       setShouldReload(false);
     }
   }, [activeAccount, shouldReload, iBuyVoiUrl]);
@@ -202,7 +218,10 @@ export default function BuyScreen() {
           onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
           setSupportMultipleWindows={true}
           onLoadError={(errorDescription) => {
-            console.error('[BuyScreen] iBuyVoi loading error:', errorDescription);
+            console.error(
+              '[BuyScreen] iBuyVoi loading error:',
+              errorDescription
+            );
           }}
           refreshControl={
             <RefreshControl

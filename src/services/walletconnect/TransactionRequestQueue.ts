@@ -28,7 +28,8 @@ class TransactionRequestQueueService {
 
   public static getInstance(): TransactionRequestQueueService {
     if (!TransactionRequestQueueService.instance) {
-      TransactionRequestQueueService.instance = new TransactionRequestQueueService();
+      TransactionRequestQueueService.instance =
+        new TransactionRequestQueueService();
     }
     return TransactionRequestQueueService.instance;
   }
@@ -39,7 +40,9 @@ class TransactionRequestQueueService {
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     const previousOperation = this.queueMutex;
     let resolveLock: () => void;
-    this.queueMutex = new Promise(resolve => { resolveLock = resolve; });
+    this.queueMutex = new Promise((resolve) => {
+      resolveLock = resolve;
+    });
 
     try {
       await previousOperation;
@@ -52,24 +55,33 @@ class TransactionRequestQueueService {
   /**
    * Add a transaction request to the queue
    */
-  async enqueue(request: Omit<QueuedTransactionRequest, 'timestamp'>): Promise<void> {
+  async enqueue(
+    request: Omit<QueuedTransactionRequest, 'timestamp'>
+  ): Promise<void> {
     return this.withLock(async () => {
       try {
         const queue = await this.getAllInternal();
 
         // Check queue size limit
         if (queue.length >= MAX_QUEUE_SIZE) {
-          console.warn('[TransactionRequestQueue] Maximum queue size reached, rejecting request');
-          throw new Error('Transaction request queue is full. Please process pending requests first.');
+          console.warn(
+            '[TransactionRequestQueue] Maximum queue size reached, rejecting request'
+          );
+          throw new Error(
+            'Transaction request queue is full. Please process pending requests first.'
+          );
         }
 
         // Check if request already exists (prevent duplicates)
-        const isDuplicate = queue.some(item =>
-          item.id === request.id && item.topic === request.topic
+        const isDuplicate = queue.some(
+          (item) => item.id === request.id && item.topic === request.topic
         );
 
         if (isDuplicate) {
-          console.log('[TransactionRequestQueue] Request already in queue, skipping:', request.id);
+          console.log(
+            '[TransactionRequestQueue] Request already in queue, skipping:',
+            request.id
+          );
           return;
         }
 
@@ -80,9 +92,17 @@ class TransactionRequestQueueService {
 
         queue.push(queuedRequest);
         await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
-        console.log('[TransactionRequestQueue] Request enqueued:', request.id, 'Queue size:', queue.length);
+        console.log(
+          '[TransactionRequestQueue] Request enqueued:',
+          request.id,
+          'Queue size:',
+          queue.length
+        );
       } catch (error) {
-        console.error('[TransactionRequestQueue] Failed to enqueue request:', error);
+        console.error(
+          '[TransactionRequestQueue] Failed to enqueue request:',
+          error
+        );
         throw error;
       }
     });
@@ -104,12 +124,20 @@ class TransactionRequestQueueService {
         await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
 
         if (request) {
-          console.log('[TransactionRequestQueue] Request dequeued:', request.id, 'Remaining:', queue.length);
+          console.log(
+            '[TransactionRequestQueue] Request dequeued:',
+            request.id,
+            'Remaining:',
+            queue.length
+          );
         }
 
         return request || null;
       } catch (error) {
-        console.error('[TransactionRequestQueue] Failed to dequeue request:', error);
+        console.error(
+          '[TransactionRequestQueue] Failed to dequeue request:',
+          error
+        );
         return null;
       }
     });
@@ -119,13 +147,18 @@ class TransactionRequestQueueService {
    * Atomic operation: dequeue only if the next item matches the expected request
    * This prevents race conditions where the queue changes between peek and dequeue
    */
-  async dequeueIfMatch(expectedId: number | string, expectedTopic: string): Promise<QueuedTransactionRequest | null> {
+  async dequeueIfMatch(
+    expectedId: number | string,
+    expectedTopic: string
+  ): Promise<QueuedTransactionRequest | null> {
     return this.withLock(async () => {
       try {
         const queue = await this.getAllInternal();
 
         if (queue.length === 0) {
-          console.log('[TransactionRequestQueue] Cannot dequeue: queue is empty');
+          console.log(
+            '[TransactionRequestQueue] Cannot dequeue: queue is empty'
+          );
           return null;
         }
 
@@ -133,14 +166,27 @@ class TransactionRequestQueueService {
         if (first.id === expectedId && first.topic === expectedTopic) {
           queue.shift();
           await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
-          console.log('[TransactionRequestQueue] Request dequeued (matched):', first.id, 'Remaining:', queue.length);
+          console.log(
+            '[TransactionRequestQueue] Request dequeued (matched):',
+            first.id,
+            'Remaining:',
+            queue.length
+          );
           return first;
         } else {
-          console.warn('[TransactionRequestQueue] Queue changed: expected', expectedId, 'but found', first.id);
+          console.warn(
+            '[TransactionRequestQueue] Queue changed: expected',
+            expectedId,
+            'but found',
+            first.id
+          );
           return null;
         }
       } catch (error) {
-        console.error('[TransactionRequestQueue] Failed to dequeue with match:', error);
+        console.error(
+          '[TransactionRequestQueue] Failed to dequeue with match:',
+          error
+        );
         return null;
       }
     });
@@ -174,23 +220,34 @@ class TransactionRequestQueueService {
       try {
         queue = JSON.parse(queueJson);
       } catch (parseError) {
-        console.error('[TransactionRequestQueue] Corrupted queue detected, clearing:', parseError);
+        console.error(
+          '[TransactionRequestQueue] Corrupted queue detected, clearing:',
+          parseError
+        );
         await AsyncStorage.removeItem(QUEUE_STORAGE_KEY);
         return [];
       }
 
       if (!Array.isArray(queue)) {
-        console.error('[TransactionRequestQueue] Invalid queue format, clearing');
+        console.error(
+          '[TransactionRequestQueue] Invalid queue format, clearing'
+        );
         await AsyncStorage.removeItem(QUEUE_STORAGE_KEY);
         return [];
       }
 
       // Filter out stale requests (older than timeout)
       const now = Date.now();
-      const validQueue = queue.filter(request => {
+      const validQueue = queue.filter((request) => {
         const age = now - request.timestamp;
         if (age > REQUEST_TIMEOUT_MS) {
-          console.log('[TransactionRequestQueue] Removing stale request:', request.id, 'Age:', Math.round(age / 1000), 'seconds');
+          console.log(
+            '[TransactionRequestQueue] Removing stale request:',
+            request.id,
+            'Age:',
+            Math.round(age / 1000),
+            'seconds'
+          );
           return false;
         }
         return true;
@@ -198,7 +255,10 @@ class TransactionRequestQueueService {
 
       // If we filtered out any stale requests, save the cleaned queue
       if (validQueue.length !== queue.length) {
-        await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(validQueue));
+        await AsyncStorage.setItem(
+          QUEUE_STORAGE_KEY,
+          JSON.stringify(validQueue)
+        );
       }
 
       return validQueue;
@@ -251,9 +311,15 @@ class TransactionRequestQueueService {
   async setProcessing(isProcessing: boolean): Promise<void> {
     try {
       this.processingStateCache = isProcessing;
-      await AsyncStorage.setItem(PROCESSING_STATE_KEY, JSON.stringify(isProcessing));
+      await AsyncStorage.setItem(
+        PROCESSING_STATE_KEY,
+        JSON.stringify(isProcessing)
+      );
     } catch (error) {
-      console.error('[TransactionRequestQueue] Failed to set processing state:', error);
+      console.error(
+        '[TransactionRequestQueue] Failed to set processing state:',
+        error
+      );
     }
   }
 
@@ -270,7 +336,10 @@ class TransactionRequestQueueService {
       this.processingStateCache = state ? JSON.parse(state) : false;
       return this.processingStateCache;
     } catch (error) {
-      console.error('[TransactionRequestQueue] Failed to get processing state:', error);
+      console.error(
+        '[TransactionRequestQueue] Failed to get processing state:',
+        error
+      );
       return false;
     }
   }
@@ -283,18 +352,25 @@ class TransactionRequestQueueService {
       try {
         const queue = await this.getAllInternal();
         const filteredQueue = queue.filter(
-          request => !(request.id === id && request.topic === topic)
+          (request) => !(request.id === id && request.topic === topic)
         );
 
         if (filteredQueue.length !== queue.length) {
-          await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(filteredQueue));
+          await AsyncStorage.setItem(
+            QUEUE_STORAGE_KEY,
+            JSON.stringify(filteredQueue)
+          );
           console.log('[TransactionRequestQueue] Request removed:', id);
         }
       } catch (error) {
-        console.error('[TransactionRequestQueue] Failed to remove request:', error);
+        console.error(
+          '[TransactionRequestQueue] Failed to remove request:',
+          error
+        );
       }
     });
   }
 }
 
-export const TransactionRequestQueue = TransactionRequestQueueService.getInstance();
+export const TransactionRequestQueue =
+  TransactionRequestQueueService.getInstance();

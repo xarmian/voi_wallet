@@ -20,10 +20,7 @@ import { TransactionService, TransactionParams } from '@/services/transactions';
 import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
-import {
-  KEY_REGISTRATION_PREFIX,
-  MessagingKeyRegistration,
-} from './types';
+import { KEY_REGISTRATION_PREFIX, MessagingKeyRegistration } from './types';
 
 /**
  * MIMIR message_keys table row structure
@@ -136,7 +133,9 @@ export async function lookupMessagingKey(
         return result;
       }
       // If MIMIR query failed, fall back to indexer
-      console.warn(`MIMIR lookup failed for ${address}, falling back to indexer`);
+      console.warn(
+        `MIMIR lookup failed for ${address}, falling back to indexer`
+      );
     }
 
     // Fallback to indexer
@@ -227,7 +226,9 @@ async function lookupMessagingKeyViaIndexer(
       if (txn.sender !== address) continue;
 
       // Get receiver from payment transaction
-      const receiver = txn['payment-transaction']?.receiver || txn.paymentTransaction?.receiver;
+      const receiver =
+        txn['payment-transaction']?.receiver ||
+        txn.paymentTransaction?.receiver;
       if (receiver !== address) continue;
 
       // Skip transactions without notes
@@ -286,7 +287,9 @@ async function lookupMessagingKeyViaIndexer(
  * @param address - Address to check
  * @returns true if registered
  */
-export async function isMessagingKeyRegistered(address: string): Promise<boolean> {
+export async function isMessagingKeyRegistered(
+  address: string
+): Promise<boolean> {
   const registration = await lookupMessagingKey(address);
   return registration !== null;
 }
@@ -320,7 +323,11 @@ export async function registerMessagingKey(
   };
 
   // Send the transaction (bare txId; confirmation state not needed for key reg)
-  const { txId } = await TransactionService.sendTransaction(params, account, pin);
+  const { txId } = await TransactionService.sendTransaction(
+    params,
+    account,
+    pin
+  );
 
   // Immediately update cache with the new registration
   const registration: MessagingKeyRegistration = {

@@ -15,7 +15,11 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
-import { Message, MessageStatus, MESSAGE_FEE_MICRO } from '@/services/messaging/types';
+import {
+  Message,
+  MessageStatus,
+  MESSAGE_FEE_MICRO,
+} from '@/services/messaging/types';
 
 interface MessageBubbleProps {
   message: Message;
@@ -23,7 +27,11 @@ interface MessageBubbleProps {
   onRetry?: (message: Message) => void;
 }
 
-export default function MessageBubble({ message, isOwn, onRetry }: MessageBubbleProps) {
+export default function MessageBubble({
+  message,
+  isOwn,
+  onRetry,
+}: MessageBubbleProps) {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
   const networkConfig = useCurrentNetworkConfig();
@@ -95,7 +103,10 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
 
     // Transaction ID - skip if it's a pending/temp ID
     if (message.id.startsWith('pending-')) {
-      Alert.alert('Unavailable', 'This message is not yet confirmed on the blockchain.');
+      Alert.alert(
+        'Unavailable',
+        'This message is not yet confirmed on the blockchain.'
+      );
       return;
     }
 
@@ -139,7 +150,12 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
   };
 
   return (
-    <View style={[styles.container, isOwn ? styles.containerOwn : styles.containerOther]}>
+    <View
+      style={[
+        styles.container,
+        isOwn ? styles.containerOwn : styles.containerOther,
+      ]}
+    >
       {/* Failed message indicator with retry button */}
       {isFailed && isOwn && (
         <TouchableOpacity
@@ -157,8 +173,18 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
           style={[
             styles.bubble,
             isOwn
-              ? [styles.bubbleOwn, { backgroundColor: isFailed ? errorColor : theme.colors.primary }]
-              : [styles.bubbleOther, { backgroundColor: theme.colors.surface + 'E0' }],
+              ? [
+                  styles.bubbleOwn,
+                  {
+                    backgroundColor: isFailed
+                      ? errorColor
+                      : theme.colors.primary,
+                  },
+                ]
+              : [
+                  styles.bubbleOther,
+                  { backgroundColor: theme.colors.surface + 'E0' },
+                ],
           ]}
         >
           <Text
@@ -196,7 +222,9 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
           >
             {/* Metadata */}
             <View style={styles.detailsRow}>
-              <Text style={[styles.detailsLabel, { color: theme.colors.textMuted }]}>
+              <Text
+                style={[styles.detailsLabel, { color: theme.colors.textMuted }]}
+              >
                 Time
               </Text>
               <Text style={[styles.detailsValue, { color: theme.colors.text }]}>
@@ -206,10 +234,17 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
 
             {message.fee && (
               <View style={styles.detailsRow}>
-                <Text style={[styles.detailsLabel, { color: theme.colors.textMuted }]}>
+                <Text
+                  style={[
+                    styles.detailsLabel,
+                    { color: theme.colors.textMuted },
+                  ]}
+                >
                   Fee
                 </Text>
-                <Text style={[styles.detailsValue, { color: theme.colors.text }]}>
+                <Text
+                  style={[styles.detailsValue, { color: theme.colors.text }]}
+                >
                   {formatFee(message.fee)}
                 </Text>
               </View>
@@ -217,10 +252,17 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
 
             {message.confirmedRound && (
               <View style={styles.detailsRow}>
-                <Text style={[styles.detailsLabel, { color: theme.colors.textMuted }]}>
+                <Text
+                  style={[
+                    styles.detailsLabel,
+                    { color: theme.colors.textMuted },
+                  ]}
+                >
                   Block
                 </Text>
-                <Text style={[styles.detailsValue, { color: theme.colors.text }]}>
+                <Text
+                  style={[styles.detailsValue, { color: theme.colors.text }]}
+                >
                   {message.confirmedRound.toLocaleString()}
                 </Text>
               </View>
@@ -229,31 +271,67 @@ export default function MessageBubble({ message, isOwn, onRetry }: MessageBubble
             {/* Action buttons */}
             <View style={styles.detailsActions}>
               <TouchableOpacity
-                style={[styles.detailsButton, { backgroundColor: theme.colors.primary + '20' }]}
+                style={[
+                  styles.detailsButton,
+                  { backgroundColor: theme.colors.primary + '20' },
+                ]}
                 onPress={handleOpenExplorer}
               >
-                <Ionicons name="open-outline" size={14} color={theme.colors.primary} />
-                <Text style={[styles.detailsButtonText, { color: theme.colors.primary }]}>
+                <Ionicons
+                  name="open-outline"
+                  size={14}
+                  color={theme.colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.detailsButtonText,
+                    { color: theme.colors.primary },
+                  ]}
+                >
                   Explorer
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.detailsButton, { backgroundColor: theme.colors.primary + '20' }]}
+                style={[
+                  styles.detailsButton,
+                  { backgroundColor: theme.colors.primary + '20' },
+                ]}
                 onPress={handleCopyTxId}
               >
-                <Ionicons name="copy-outline" size={14} color={theme.colors.primary} />
-                <Text style={[styles.detailsButtonText, { color: theme.colors.primary }]}>
+                <Ionicons
+                  name="copy-outline"
+                  size={14}
+                  color={theme.colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.detailsButtonText,
+                    { color: theme.colors.primary },
+                  ]}
+                >
                   Copy TX ID
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.detailsButton, { backgroundColor: theme.colors.primary + '20' }]}
+                style={[
+                  styles.detailsButton,
+                  { backgroundColor: theme.colors.primary + '20' },
+                ]}
                 onPress={handleCopyMessage}
               >
-                <Ionicons name="document-outline" size={14} color={theme.colors.primary} />
-                <Text style={[styles.detailsButtonText, { color: theme.colors.primary }]}>
+                <Ionicons
+                  name="document-outline"
+                  size={14}
+                  color={theme.colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.detailsButtonText,
+                    { color: theme.colors.primary },
+                  ]}
+                >
                   Copy Text
                 </Text>
               </TouchableOpacity>

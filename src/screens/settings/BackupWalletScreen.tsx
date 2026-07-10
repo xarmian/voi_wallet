@@ -44,9 +44,13 @@ export default function BackupWalletScreen() {
   const [error, setError] = useState<string | undefined>();
 
   // Account counts
-  const standardAccounts = accounts.filter((a) => a.type === AccountType.STANDARD);
+  const standardAccounts = accounts.filter(
+    (a) => a.type === AccountType.STANDARD
+  );
   const watchAccounts = accounts.filter((a) => a.type === AccountType.WATCH);
-  const rekeyedAccounts = accounts.filter((a) => a.type === AccountType.REKEYED);
+  const rekeyedAccounts = accounts.filter(
+    (a) => a.type === AccountType.REKEYED
+  );
   const ledgerAccounts = accounts.filter((a) => a.type === AccountType.LEDGER);
 
   // Set up progress callback
@@ -73,28 +77,31 @@ export default function BackupWalletScreen() {
     setShowPasswordModal(true);
   }, [accounts.length]);
 
-  const handlePasswordConfirm = useCallback(async (password: string) => {
-    setShowPasswordModal(false);
-    setShowProgressModal(true);
-    setIsCreatingBackup(true);
-    setError(undefined);
+  const handlePasswordConfirm = useCallback(
+    async (password: string) => {
+      setShowPasswordModal(false);
+      setShowProgressModal(true);
+      setIsCreatingBackup(true);
+      setError(undefined);
 
-    try {
-      const result = await BackupService.createBackup(password);
-      setBackupResult(result);
-      setShowProgressModal(false);
-      // Show success state - user will see save/share options in the UI
-    } catch (err) {
-      setShowProgressModal(false);
-      const message =
-        err instanceof BackupError
-          ? err.message
-          : 'Failed to create backup. Please try again.';
-      Alert.alert('Backup Failed', message, [{ text: 'OK' }]);
-    } finally {
-      setIsCreatingBackup(false);
-    }
-  }, [navigation]);
+      try {
+        const result = await BackupService.createBackup(password);
+        setBackupResult(result);
+        setShowProgressModal(false);
+        // Show success state - user will see save/share options in the UI
+      } catch (err) {
+        setShowProgressModal(false);
+        const message =
+          err instanceof BackupError
+            ? err.message
+            : 'Failed to create backup. Please try again.';
+        Alert.alert('Backup Failed', message, [{ text: 'OK' }]);
+      } finally {
+        setIsCreatingBackup(false);
+      }
+    },
+    [navigation]
+  );
 
   const handleCancel = useCallback(() => {
     setShowPasswordModal(false);
@@ -114,14 +121,18 @@ export default function BackupWalletScreen() {
         }
 
         // Create file in user-selected directory
-        const newFileUri = await FileSystem.StorageAccessFramework.createFileAsync(
-          permissions.directoryUri,
-          backupResult.filename,
-          'application/octet-stream'
-        );
+        const newFileUri =
+          await FileSystem.StorageAccessFramework.createFileAsync(
+            permissions.directoryUri,
+            backupResult.filename,
+            'application/octet-stream'
+          );
 
         // Write content to the new file (use content from backup result)
-        await FileSystem.writeAsStringAsync(newFileUri, backupResult.fileContent);
+        await FileSystem.writeAsStringAsync(
+          newFileUri,
+          backupResult.fileContent
+        );
         setBackupSaved(true);
         Alert.alert('Saved', 'Backup saved to your selected folder.');
       } catch (err) {
@@ -141,7 +152,10 @@ export default function BackupWalletScreen() {
         await BackupService.shareBackup(backupResult.fileUri);
         setBackupSaved(true);
       } catch (err) {
-        Alert.alert('Save Failed', 'Could not save the backup file. Please try again.');
+        Alert.alert(
+          'Save Failed',
+          'Could not save the backup file. Please try again.'
+        );
       }
     }
   }, [backupResult]);
@@ -152,7 +166,10 @@ export default function BackupWalletScreen() {
       await BackupService.shareBackup(backupResult.fileUri);
       setBackupSaved(true);
     } catch (err) {
-      Alert.alert('Share Failed', 'Could not share the backup file. Please try again.');
+      Alert.alert(
+        'Share Failed',
+        'Could not share the backup file. Please try again.'
+      );
     }
   }, [backupResult]);
 
@@ -179,7 +196,6 @@ export default function BackupWalletScreen() {
     }
   }, [backupSaved, backupResult, navigation]);
 
-
   // Success state - backup is ready to save
   if (backupResult) {
     return (
@@ -199,7 +215,11 @@ export default function BackupWalletScreen() {
             <View
               style={[
                 styles.infoIconContainer,
-                { backgroundColor: backupSaved ? `${colors.success}15` : `${colors.primary}15` },
+                {
+                  backgroundColor: backupSaved
+                    ? `${colors.success}15`
+                    : `${colors.primary}15`,
+                },
               ]}
             >
               <Ionicons
@@ -232,7 +252,9 @@ export default function BackupWalletScreen() {
             <View style={styles.includeRow}>
               <Ionicons name="people" size={20} color={colors.primary} />
               <Text style={styles.includeLabel}>Accounts</Text>
-              <Text style={styles.includeValue}>{backupResult.accountCount}</Text>
+              <Text style={styles.includeValue}>
+                {backupResult.accountCount}
+              </Text>
             </View>
 
             <View style={styles.divider} />
@@ -251,7 +273,8 @@ export default function BackupWalletScreen() {
             <View style={styles.warningContainer}>
               <Ionicons name="alert-circle" size={20} color={colors.error} />
               <Text style={[styles.warningText, { color: colors.error }]}>
-                Your backup has not been saved yet! Save it now or it will be lost.
+                Your backup has not been saved yet! Save it now or it will be
+                lost.
               </Text>
             </View>
           )}
@@ -259,7 +282,10 @@ export default function BackupWalletScreen() {
           {/* Action Buttons */}
           {Platform.OS === 'android' ? (
             <>
-              <TouchableOpacity style={styles.createButton} onPress={handleSaveLocal}>
+              <TouchableOpacity
+                style={styles.createButton}
+                onPress={handleSaveLocal}
+              >
                 <Ionicons name="folder" size={20} color="#FFFFFF" />
                 <Text style={styles.createButtonText}>
                   {backupSaved ? 'Save Another Copy' : 'Save to Device'}
@@ -271,7 +297,11 @@ export default function BackupWalletScreen() {
                 onPress={handleShare}
               >
                 <View style={styles.secondaryButtonContent}>
-                  <Ionicons name="share-outline" size={18} color={colors.text} />
+                  <Ionicons
+                    name="share-outline"
+                    size={18}
+                    color={colors.text}
+                  />
                   <Text style={[styles.secondaryButtonText, { marginLeft: 8 }]}>
                     Share to Cloud or Other Apps
                   </Text>
@@ -280,7 +310,10 @@ export default function BackupWalletScreen() {
             </>
           ) : (
             <>
-              <TouchableOpacity style={styles.createButton} onPress={handleSaveLocal}>
+              <TouchableOpacity
+                style={styles.createButton}
+                onPress={handleSaveLocal}
+              >
                 <Ionicons name="share-outline" size={20} color="#FFFFFF" />
                 <Text style={styles.createButtonText}>
                   {backupSaved ? 'Export Another Copy' : 'Export Backup'}
@@ -297,7 +330,12 @@ export default function BackupWalletScreen() {
             style={[styles.doneButton, !backupSaved && styles.doneButtonMuted]}
             onPress={handleDone}
           >
-            <Text style={[styles.doneButtonText, !backupSaved && styles.doneButtonTextMuted]}>
+            <Text
+              style={[
+                styles.doneButtonText,
+                !backupSaved && styles.doneButtonTextMuted,
+              ]}
+            >
               Done
             </Text>
           </TouchableOpacity>

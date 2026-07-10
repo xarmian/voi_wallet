@@ -17,7 +17,11 @@ import { AccountSecureStorage } from '@/services/secure';
 import { LedgerDeviceInfo } from '@/services/ledger/transport';
 
 // Cross-platform alert helper
-const showAlert = (title: string, message: string, buttons?: Array<{text: string, onPress?: () => void}>) => {
+const showAlert = (
+  title: string,
+  message: string,
+  buttons?: Array<{ text: string; onPress?: () => void }>
+) => {
   if (Platform.OS === 'web') {
     window.alert(`${title}\n\n${message}`);
     buttons?.[0]?.onPress?.();
@@ -128,43 +132,46 @@ export default function UnifiedAuthModal({
     }
   };
 
-  const getLedgerStatusMessage = (status: LedgerStatus): { title: string; message: string; icon: string } => {
+  const getLedgerStatusMessage = (
+    status: LedgerStatus
+  ): { title: string; message: string; icon: string } => {
     switch (status) {
       case 'searching':
         return {
           title: 'Looking for Ledger Device',
           message: 'Searching for your Ledger device...',
-          icon: 'search'
+          icon: 'search',
         };
       case 'waiting_for_connection':
         return {
           title: 'Connect Your Ledger',
           message: 'Please connect your Ledger device and unlock it.',
-          icon: 'link'
+          icon: 'link',
         };
       case 'waiting_for_app':
         return {
           title: 'Open Algorand App',
-          message: 'Please open the Algorand application on your Ledger device.',
-          icon: 'apps'
+          message:
+            'Please open the Algorand application on your Ledger device.',
+          icon: 'apps',
         };
       case 'waiting_for_confirmation':
         return {
           title: 'Confirm on Ledger',
           message: 'Review and approve the transaction on your Ledger device.',
-          icon: 'checkmark-circle'
+          icon: 'checkmark-circle',
         };
       case 'error':
         return {
           title: 'Connection Failed',
           message: 'Unable to connect to your Ledger device.',
-          icon: 'warning'
+          icon: 'warning',
         };
       default:
         return {
           title: 'Processing Transaction',
           message: 'Please wait while your transaction is being processed...',
-          icon: 'time'
+          icon: 'time',
         };
     }
   };
@@ -175,7 +182,9 @@ export default function UnifiedAuthModal({
 
     // Biometric auth not available on web
     if (Platform.OS === 'web') {
-      console.log('Biometric authentication not available on web, falling back to PIN');
+      console.log(
+        'Biometric authentication not available on web, falling back to PIN'
+      );
       setIsAuthenticating(false);
       return;
     }
@@ -406,12 +415,18 @@ export default function UnifiedAuthModal({
                   <Ionicons
                     name={getLedgerStatusMessage(ledgerStatus).icon as any}
                     size={48}
-                    color={ledgerStatus === 'error' ? theme.colors.error : theme.colors.primary}
+                    color={
+                      ledgerStatus === 'error'
+                        ? theme.colors.error
+                        : theme.colors.primary
+                    }
                   />
-                  <Text style={[
-                    styles.processingTitle,
-                    ledgerStatus === 'error' && styles.errorTitle
-                  ]}>
+                  <Text
+                    style={[
+                      styles.processingTitle,
+                      ledgerStatus === 'error' && styles.errorTitle,
+                    ]}
+                  >
                     {getLedgerStatusMessage(ledgerStatus).title}
                   </Text>
                   <Text style={styles.processingMessage}>
@@ -419,20 +434,31 @@ export default function UnifiedAuthModal({
                   </Text>
                   {ledgerDevice && (
                     <View style={styles.deviceStatusContainer}>
-                      <View style={[
-                        styles.deviceStatusIndicator,
-                        ledgerDevice.connected ? styles.deviceConnected : styles.deviceDisconnected
-                      ]} />
+                      <View
+                        style={[
+                          styles.deviceStatusIndicator,
+                          ledgerDevice.connected
+                            ? styles.deviceConnected
+                            : styles.deviceDisconnected,
+                        ]}
+                      />
                       <Text style={styles.deviceStatusText}>
-                        {ledgerDevice.connected ? `${ledgerDevice.name} connected` : `${ledgerDevice.name} detected`}
+                        {ledgerDevice.connected
+                          ? `${ledgerDevice.name} connected`
+                          : `${ledgerDevice.name} detected`}
                       </Text>
                     </View>
                   )}
                 </>
               ) : (
                 <>
-                  <ActivityIndicator size="large" color={theme.colors.primary} />
-                  <Text style={styles.processingTitle}>Processing Transaction</Text>
+                  <ActivityIndicator
+                    size="large"
+                    color={theme.colors.primary}
+                  />
+                  <Text style={styles.processingTitle}>
+                    Processing Transaction
+                  </Text>
                   <Text style={styles.processingMessage}>
                     Please wait while your transaction is being processed...
                   </Text>

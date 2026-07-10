@@ -8,11 +8,25 @@ import {
 } from '@/services/transactions/unifiedSigner';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { LedgerSigningInfo, WalletAccount, AccountType, RekeyedAccountMetadata } from '@/types/wallet';
-import { ledgerTransportService, LedgerDeviceInfo } from '@/services/ledger/transport';
-import { ledgerAlgorandService, LedgerAlgorandService } from '@/services/ledger/algorand';
+import {
+  LedgerSigningInfo,
+  WalletAccount,
+  AccountType,
+  RekeyedAccountMetadata,
+} from '@/types/wallet';
+import {
+  ledgerTransportService,
+  LedgerDeviceInfo,
+} from '@/services/ledger/transport';
+import {
+  ledgerAlgorandService,
+  LedgerAlgorandService,
+} from '@/services/ledger/algorand';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { RemoteSignerRequest, RemoteSignerResponse } from '@/types/remoteSigner';
+import {
+  RemoteSignerRequest,
+  RemoteSignerResponse,
+} from '@/types/remoteSigner';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
 
@@ -45,9 +59,9 @@ export type LedgerSigningStatus =
  */
 export type RemoteSignerStatus =
   | 'idle'
-  | 'displaying_request'    // Showing QR code for signer to scan
-  | 'waiting_signature'     // Waiting for user to scan signed response
-  | 'processing_response'   // Processing the scanned response
+  | 'displaying_request' // Showing QR code for signer to scan
+  | 'waiting_signature' // Waiting for user to scan signed response
+  | 'processing_response' // Processing the scanned response
   | 'error';
 
 /**
@@ -100,7 +114,9 @@ export interface TransactionAuthState_Interface {
  */
 export class TransactionAuthController {
   private unifiedSigner = UnifiedTransactionSigner.getInstance();
-  private stateListeners: Array<(state: TransactionAuthState_Interface) => void> = [];
+  private stateListeners: Array<
+    (state: TransactionAuthState_Interface) => void
+  > = [];
   private currentState: TransactionAuthState_Interface;
   private currentRequest: UnifiedTransactionRequest | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;
@@ -113,7 +129,11 @@ export class TransactionAuthController {
   private pendingPinForStart: string | undefined;
   private hasStartedSigning: boolean = false;
   private ledgerListenersSetup: boolean = false;
-  private ledgerVerificationCache: { deviceId: string; timestamp: number; verified: boolean } | null = null;
+  private ledgerVerificationCache: {
+    deviceId: string;
+    timestamp: number;
+    verified: boolean;
+  } | null = null;
   private isSigningInProgress: boolean = false;
   private userExplicitlyRejected: boolean = false;
   private signingAbortController: AbortController | null = null;
@@ -153,7 +173,9 @@ export class TransactionAuthController {
   /**
    * Subscribe to state changes
    */
-  public subscribe(listener: (state: TransactionAuthState_Interface) => void): () => void {
+  public subscribe(
+    listener: (state: TransactionAuthState_Interface) => void
+  ): () => void {
     this.stateListeners.push(listener);
     // Return unsubscribe function
     return () => {
@@ -176,9 +198,16 @@ export class TransactionAuthController {
    */
   private updateState(updates: Partial<TransactionAuthState_Interface>): void {
     // Prevent any state changes after user has explicitly rejected (except setting error state for rejection)
-    if (this.userExplicitlyRejected && updates.state !== 'error' && this.currentState.state === 'error') {
+    if (
+      this.userExplicitlyRejected &&
+      updates.state !== 'error' &&
+      this.currentState.state === 'error'
+    ) {
       if (__DEV__) {
-        console.log('🚫 BLOCKING state update - user has rejected transaction:', updates);
+        console.log(
+          '🚫 BLOCKING state update - user has rejected transaction:',
+          updates
+        );
       }
       return;
     }
@@ -189,20 +218,21 @@ export class TransactionAuthController {
     const nextLedgerStatus = newState.ledgerStatus;
 
     // Check if state actually changed to avoid redundant updates
-    const stateChanged = previous.state !== newState.state ||
-                        previous.ledgerStatus !== newState.ledgerStatus ||
-                        previous.ledgerError !== newState.ledgerError ||
-                        previous.error !== newState.error ||
-                        previous.isLedgerFlow !== newState.isLedgerFlow ||
-                        previous.isRemoteSignerFlow !== newState.isRemoteSignerFlow ||
-                        previous.remoteSignerStatus !== newState.remoteSignerStatus ||
-                        previous.remoteSignerRequest !== newState.remoteSignerRequest ||
-                        previous.remoteSignerError !== newState.remoteSignerError ||
-                        previous.requiresPin !== newState.requiresPin ||
-                        previous.requiresBiometric !== newState.requiresBiometric ||
-                        previous.biometricAvailable !== newState.biometricAvailable ||
-                        previous.result !== newState.result ||
-                        previous.signingProgress !== newState.signingProgress;
+    const stateChanged =
+      previous.state !== newState.state ||
+      previous.ledgerStatus !== newState.ledgerStatus ||
+      previous.ledgerError !== newState.ledgerError ||
+      previous.error !== newState.error ||
+      previous.isLedgerFlow !== newState.isLedgerFlow ||
+      previous.isRemoteSignerFlow !== newState.isRemoteSignerFlow ||
+      previous.remoteSignerStatus !== newState.remoteSignerStatus ||
+      previous.remoteSignerRequest !== newState.remoteSignerRequest ||
+      previous.remoteSignerError !== newState.remoteSignerError ||
+      previous.requiresPin !== newState.requiresPin ||
+      previous.requiresBiometric !== newState.requiresBiometric ||
+      previous.biometricAvailable !== newState.biometricAvailable ||
+      previous.result !== newState.result ||
+      previous.signingProgress !== newState.signingProgress;
 
     if (!stateChanged) {
       return;
@@ -213,7 +243,10 @@ export class TransactionAuthController {
       try {
         console.log('TransactionAuthController.updateState', {
           from: { state: previous.state, ledgerStatus: previous.ledgerStatus },
-          to: { state: this.currentState.state, ledgerStatus: this.currentState.ledgerStatus },
+          to: {
+            state: this.currentState.state,
+            ledgerStatus: this.currentState.ledgerStatus,
+          },
           error: (updates as any)?.error?.message ?? null,
           ledgerError: updates.ledgerError ?? null,
         });
@@ -224,7 +257,7 @@ export class TransactionAuthController {
       this.handleLedgerStatusChange(nextLedgerStatus);
     }
 
-    this.stateListeners.forEach(listener => listener(this.currentState));
+    this.stateListeners.forEach((listener) => listener(this.currentState));
   }
 
   private handleLedgerStatusChange(status: LedgerSigningStatus): void {
@@ -265,7 +298,9 @@ export class TransactionAuthController {
     return false;
   }
 
-  private scheduleLedgerAutoRecovery(status: 'app_required' | 'device_locked'): void {
+  private scheduleLedgerAutoRecovery(
+    status: 'app_required' | 'device_locked'
+  ): void {
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
       return;
     }
@@ -278,7 +313,7 @@ export class TransactionAuthController {
 
     const delay = status === 'device_locked' ? 1000 : 1500;
     this.ledgerRecoveryTimer = setTimeout(() => {
-      this.runLedgerAutoRecovery().catch(error => {
+      this.runLedgerAutoRecovery().catch((error) => {
         if (__DEV__) {
           console.log('Ledger auto recovery loop error:', error);
         }
@@ -336,7 +371,11 @@ export class TransactionAuthController {
         lower.includes('security status') ||
         lower.includes('0x5515')
       ) {
-        if (this.currentState.ledgerStatus !== 'device_locked' || this.currentState.ledgerError !== 'Please unlock your Ledger device and try again') {
+        if (
+          this.currentState.ledgerStatus !== 'device_locked' ||
+          this.currentState.ledgerError !==
+            'Please unlock your Ledger device and try again'
+        ) {
           this.updateState({
             state: 'authenticating',
             ledgerStatus: 'device_locked',
@@ -354,7 +393,11 @@ export class TransactionAuthController {
         lower.includes('bolos') ||
         lower.includes('dashboard')
       ) {
-        if (this.currentState.ledgerStatus !== 'app_required' || this.currentState.ledgerError !== 'Please open the Algorand app on your Ledger device') {
+        if (
+          this.currentState.ledgerStatus !== 'app_required' ||
+          this.currentState.ledgerError !==
+            'Please open the Algorand app on your Ledger device'
+        ) {
           this.updateState({
             state: 'authenticating',
             ledgerStatus: 'app_required',
@@ -365,7 +408,10 @@ export class TransactionAuthController {
         return;
       }
 
-      if (lower.includes('communication_error') || lower.includes('not connected')) {
+      if (
+        lower.includes('communication_error') ||
+        lower.includes('not connected')
+      ) {
         this.updateState({
           state: 'authenticating',
           ledgerStatus: 'connecting',
@@ -376,7 +422,10 @@ export class TransactionAuthController {
       }
 
       if (__DEV__) {
-        console.log('Ledger auto recovery encountered unexpected error:', errorMessage);
+        console.log(
+          'Ledger auto recovery encountered unexpected error:',
+          errorMessage
+        );
       }
       this.scheduleLedgerAutoRecovery(reason);
     }
@@ -403,8 +452,9 @@ export class TransactionAuthController {
   /**
    * Initialize signing flow for a transaction
    */
-  public async initializeSigningFlow(request: UnifiedTransactionRequest): Promise<void> {
-
+  public async initializeSigningFlow(
+    request: UnifiedTransactionRequest
+  ): Promise<void> {
     this.currentRequest = request;
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
     this.activeFlowGeneration = this.cancelledFlowGeneration;
@@ -447,8 +497,12 @@ export class TransactionAuthController {
 
       // If no PIN required and no biometric required (and not ledger/remote signer flow),
       // auto-proceed to signing since user has already confirmed the transaction
-      if (!this.currentState.requiresPin && !this.currentState.requiresBiometric &&
-          !this.currentState.isLedgerFlow && !this.currentState.isRemoteSignerFlow) {
+      if (
+        !this.currentState.requiresPin &&
+        !this.currentState.requiresBiometric &&
+        !this.currentState.isLedgerFlow &&
+        !this.currentState.isRemoteSignerFlow
+      ) {
         this.updateState({ state: 'signing' });
         await this.startSigning();
         return;
@@ -463,9 +517,9 @@ export class TransactionAuthController {
       if (this.currentState.isRemoteSignerFlow) {
         await this.initializeRemoteSignerFlow();
       }
-
     } catch (error) {
-      const errorObj = error instanceof Error ? error : new Error(String(error));
+      const errorObj =
+        error instanceof Error ? error : new Error(String(error));
       this.updateState({
         state: 'error',
         error: errorObj,
@@ -476,7 +530,9 @@ export class TransactionAuthController {
   /**
    * Determine what type of authentication is required
    */
-  private async determineAuthRequirements(account: WalletAccount): Promise<void> {
+  private async determineAuthRequirements(
+    account: WalletAccount
+  ): Promise<void> {
     try {
       // Check if biometric authentication is available and enabled
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
@@ -492,7 +548,9 @@ export class TransactionAuthController {
       if (!isRemoteSigner && account.address) {
         try {
           const allAccounts = await MultiAccountWalletService.getAllAccounts();
-          const storedAccount = allAccounts.find(acc => acc.address === account.address);
+          const storedAccount = allAccounts.find(
+            (acc) => acc.address === account.address
+          );
           if (storedAccount?.type === AccountType.REMOTE_SIGNER) {
             isRemoteSigner = true;
           }
@@ -503,7 +561,7 @@ export class TransactionAuthController {
             const rekeyedAccount = storedAccount as RekeyedAccountMetadata;
             if (rekeyedAccount.authAddress) {
               const authAccount = allAccounts.find(
-                acc => acc.address === rekeyedAccount.authAddress
+                (acc) => acc.address === rekeyedAccount.authAddress
               );
               if (authAccount?.type === AccountType.REMOTE_SIGNER) {
                 isRemoteSigner = true;
@@ -532,7 +590,9 @@ export class TransactionAuthController {
       let ledgerInfo: LedgerSigningInfo | null = null;
 
       try {
-        const signingInfo = await SecureKeyManager.getSigningInfo(account.address);
+        const signingInfo = await SecureKeyManager.getSigningInfo(
+          account.address
+        );
 
         // Try to get Ledger signing info
         if (signingInfo.signingAccountId) {
@@ -549,14 +609,15 @@ export class TransactionAuthController {
         }
 
         if (!ledgerInfo) {
-          ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(account.address);
+          ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
+            account.address
+          );
         }
 
         if (ledgerInfo) {
           isLedgerFlow = true;
           this.ledgerSigningInfo = ledgerInfo;
         }
-
       } catch (ledgerError) {
         // Ledger info not available, continue with regular flow
       }
@@ -573,9 +634,10 @@ export class TransactionAuthController {
         ledgerDevice: isLedgerFlow ? this.getCurrentLedgerDevice() : null,
         ledgerStatus: isLedgerFlow ? 'idle' : 'idle', // Start as idle, will be set to searching when signing starts
       });
-
     } catch (error) {
-      throw new Error(`Failed to determine auth requirements: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to determine auth requirements: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -620,7 +682,9 @@ export class TransactionAuthController {
         try {
           // Try to verify the device is actually on and has the Algorand app available
           // This will throw if device is off or app isn't open
-          await this.verifyLedgerDeviceReady(connectedDevice, { skipIfSigning: true });
+          await this.verifyLedgerDeviceReady(connectedDevice, {
+            skipIfSigning: true,
+          });
           isDeviceReady = true;
         } catch (verifyError) {
           if (__DEV__) {
@@ -640,12 +704,16 @@ export class TransactionAuthController {
           ledgerStatus: 'ready',
         });
         // Stop active discovery once ready
-        try { ledgerTransportService.stopDiscovery({ ble: true, usb: true }); } catch {}
+        try {
+          ledgerTransportService.stopDiscovery({ ble: true, usb: true });
+        } catch {}
         await this.maybeStartSigningIfReady();
       } else {
         // Try to find and connect to the device
         const devices = ledgerTransportService.getDevices();
-        const targetDevice = devices.find(d => d.id === this.ledgerSigningInfo!.deviceId);
+        const targetDevice = devices.find(
+          (d) => d.id === this.ledgerSigningInfo!.deviceId
+        );
 
         if (this.ledgerCancelRequested) {
           return; // aborted
@@ -659,7 +727,7 @@ export class TransactionAuthController {
           if (!targetDevice.connected) {
             try {
               await ledgerTransportService.connect(targetDevice.id, {
-                transportType: targetDevice.type
+                transportType: targetDevice.type,
               });
               if (this.ledgerCancelRequested) {
                 return; // aborted after connect
@@ -669,16 +737,26 @@ export class TransactionAuthController {
               if (!connectedNow) {
                 throw new Error('Device not connected');
               }
-              await this.verifyLedgerDeviceReady(connectedNow, { skipIfSigning: true });
+              await this.verifyLedgerDeviceReady(connectedNow, {
+                skipIfSigning: true,
+              });
               this.updateState({ ledgerStatus: 'ready' });
-              try { ledgerTransportService.stopDiscovery({ ble: true, usb: true }); } catch {}
+              try {
+                ledgerTransportService.stopDiscovery({ ble: true, usb: true });
+              } catch {}
               await this.maybeStartSigningIfReady();
             } catch (connectError) {
               const errorMessage = this.sanitizeLedgerError(connectError);
               const lower = errorMessage.toLowerCase();
-              
+
               // Handle specific error types from device verification
-              if (lower.includes('device_locked') || lower.includes('locked') || lower.includes('pin') || lower.includes('security status') || lower.includes('0x5515')) {
+              if (
+                lower.includes('device_locked') ||
+                lower.includes('locked') ||
+                lower.includes('pin') ||
+                lower.includes('security status') ||
+                lower.includes('0x5515')
+              ) {
                 this.updateState({
                   state: 'authenticating',
                   ledgerStatus: 'device_locked',
@@ -686,17 +764,27 @@ export class TransactionAuthController {
                 });
                 return;
               }
-              
-              if (lower.includes('app_required') || lower.includes('not ready') || lower.includes('app') || lower.includes('bolos') || lower.includes('dashboard')) {
+
+              if (
+                lower.includes('app_required') ||
+                lower.includes('not ready') ||
+                lower.includes('app') ||
+                lower.includes('bolos') ||
+                lower.includes('dashboard')
+              ) {
                 this.updateState({
                   state: 'authenticating',
                   ledgerStatus: 'app_required',
-                  ledgerError: 'Please open the Algorand app on your Ledger device',
+                  ledgerError:
+                    'Please open the Algorand app on your Ledger device',
                 });
                 return;
               }
-              
-              if (lower.includes('communication_error') || lower.includes('not connected')) {
+
+              if (
+                lower.includes('communication_error') ||
+                lower.includes('not connected')
+              ) {
                 this.updateState({
                   state: 'authenticating',
                   ledgerStatus: 'connecting',
@@ -725,10 +813,15 @@ export class TransactionAuthController {
                 });
                 // Kick another connect attempt to keep trying
                 try {
-                  await ledgerTransportService.connect(targetDevice.id, { transportType: targetDevice.type });
-                  const connectedNow = ledgerTransportService.getConnectedDevice();
+                  await ledgerTransportService.connect(targetDevice.id, {
+                    transportType: targetDevice.type,
+                  });
+                  const connectedNow =
+                    ledgerTransportService.getConnectedDevice();
                   if (connectedNow) {
-                    await this.verifyLedgerDeviceReady(connectedNow, { skipIfSigning: true });
+                    await this.verifyLedgerDeviceReady(connectedNow, {
+                      skipIfSigning: true,
+                    });
                     this.updateState({ ledgerStatus: 'ready' });
                     await this.maybeStartSigningIfReady();
                   }
@@ -749,11 +842,11 @@ export class TransactionAuthController {
           this.updateState({
             state: 'authenticating',
             ledgerStatus: 'searching',
-            ledgerError: 'Ledger device not found. Please ensure it is connected and unlocked.',
+            ledgerError:
+              'Ledger device not found. Please ensure it is connected and unlocked.',
           });
         }
       }
-
     } catch (error) {
       const message = this.sanitizeLedgerError(error);
       if (message.toLowerCase().includes('cancel')) {
@@ -777,13 +870,16 @@ export class TransactionAuthController {
   /**
    * Verify that a Ledger device is actually ready to sign
    */
-  private async verifyLedgerDeviceReady(device: LedgerDeviceInfo, options: { skipIfSigning?: boolean } = {}): Promise<void> {
+  private async verifyLedgerDeviceReady(
+    device: LedgerDeviceInfo,
+    options: { skipIfSigning?: boolean } = {}
+  ): Promise<void> {
     if (__DEV__) {
       console.log('🔍 verifyLedgerDeviceReady:', {
         deviceId: device.id,
         skipIfSigning: options.skipIfSigning,
         isSigningInProgress: this.isSigningInProgress,
-        shouldSkip: options.skipIfSigning && this.isSigningInProgress
+        shouldSkip: options.skipIfSigning && this.isSigningInProgress,
       });
     }
 
@@ -821,9 +917,10 @@ export class TransactionAuthController {
 
     // Check cache first to avoid redundant verification calls
     const now = Date.now();
-    const cacheValid = this.ledgerVerificationCache &&
+    const cacheValid =
+      this.ledgerVerificationCache &&
       this.ledgerVerificationCache.deviceId === device.id &&
-      (now - this.ledgerVerificationCache.timestamp) < 5000 && // Reduced to 5 second cache
+      now - this.ledgerVerificationCache.timestamp < 5000 && // Reduced to 5 second cache
       this.ledgerVerificationCache.verified;
 
     if (cacheValid) {
@@ -846,7 +943,9 @@ export class TransactionAuthController {
       // Check if signing is in progress at the Ledger service level to prevent race conditions
       if (LedgerAlgorandService.isCurrentlySigningTransaction()) {
         if (__DEV__) {
-          console.log('✅ SKIPPING device verification - Ledger service is signing transaction');
+          console.log(
+            '✅ SKIPPING device verification - Ledger service is signing transaction'
+          );
         }
         return;
       }
@@ -858,44 +957,57 @@ export class TransactionAuthController {
       this.ledgerVerificationCache = {
         deviceId: device.id,
         timestamp: now,
-        verified: true
+        verified: true,
       };
 
       if (__DEV__) {
         console.log('Ledger device verified and ready for signing');
       }
-
     } catch (error) {
       if (__DEV__) {
         console.log('🚨 Ledger device verification failed during signing!', {
           error: error,
           isSigningInProgress: this.isSigningInProgress,
           currentState: this.currentState.state,
-          stack: new Error().stack?.split('\n').slice(1, 6)
+          stack: new Error().stack?.split('\n').slice(1, 6),
         });
       }
-      
+
       // Clear cache on error
       this.ledgerVerificationCache = null;
-      
+
       // Check for specific error types to provide better state management
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       const lowerMessage = errorMessage.toLowerCase();
-      
-      if (lowerMessage.includes('locked') || lowerMessage.includes('pin') || lowerMessage.includes('0x5515')) {
+
+      if (
+        lowerMessage.includes('locked') ||
+        lowerMessage.includes('pin') ||
+        lowerMessage.includes('0x5515')
+      ) {
         throw new Error('DEVICE_LOCKED');
       }
-      
-      if (lowerMessage.includes('app') || lowerMessage.includes('not open') || lowerMessage.includes('bolos') || lowerMessage.includes('dashboard')) {
+
+      if (
+        lowerMessage.includes('app') ||
+        lowerMessage.includes('not open') ||
+        lowerMessage.includes('bolos') ||
+        lowerMessage.includes('dashboard')
+      ) {
         // Clear cache when wrong app detected to ensure fresh verification next time
         this.ledgerVerificationCache = null;
         throw new Error('APP_REQUIRED');
       }
-      
-      if (lowerMessage.includes('not connected') || lowerMessage.includes('communication') || lowerMessage.includes('race')) {
+
+      if (
+        lowerMessage.includes('not connected') ||
+        lowerMessage.includes('communication') ||
+        lowerMessage.includes('race')
+      ) {
         throw new Error('COMMUNICATION_ERROR');
       }
-      
+
       // Generic error
       throw new Error(`Device is not ready: ${errorMessage}`);
     } finally {
@@ -911,7 +1023,11 @@ export class TransactionAuthController {
     if (this.ledgerListenersSetup) return;
     this.ledgerListenersSetup = true;
     const onConnected = async (device: LedgerDeviceInfo) => {
-      if (device.id !== this.ledgerSigningInfo?.deviceId || this.activeFlowGeneration !== this.cancelledFlowGeneration || this.userExplicitlyRejected) {
+      if (
+        device.id !== this.ledgerSigningInfo?.deviceId ||
+        this.activeFlowGeneration !== this.cancelledFlowGeneration ||
+        this.userExplicitlyRejected
+      ) {
         return;
       }
       this.clearLedgerConnectionTimeout();
@@ -919,21 +1035,58 @@ export class TransactionAuthController {
       try {
         const connectedNow = ledgerTransportService.getConnectedDevice();
         if (!connectedNow) throw new Error('Device not connected');
-        await this.verifyLedgerDeviceReady(connectedNow, { skipIfSigning: true });
-        this.updateState({ ledgerDevice: connectedNow, ledgerStatus: 'ready', ledgerError: null });
+        await this.verifyLedgerDeviceReady(connectedNow, {
+          skipIfSigning: true,
+        });
+        this.updateState({
+          ledgerDevice: connectedNow,
+          ledgerStatus: 'ready',
+          ledgerError: null,
+        });
         await this.maybeStartSigningIfReady();
       } catch (err) {
         const errorMessage = this.sanitizeLedgerError(err);
         const lower = errorMessage.toLowerCase();
-        
-        if (lower.includes('device_locked') || lower.includes('locked') || lower.includes('pin') || lower.includes('security status') || lower.includes('0x5515')) {
-          this.updateState({ ledgerDevice: device, ledgerStatus: 'device_locked', ledgerError: 'Please unlock your Ledger device and try again' });
-        } else if (lower.includes('app_required') || lower.includes('not ready') || lower.includes('app') || lower.includes('bolos') || lower.includes('dashboard')) {
-          this.updateState({ ledgerDevice: device, ledgerStatus: 'app_required', ledgerError: 'Please open the Algorand app on your Ledger device' });
-        } else if (lower.includes('communication_error') || lower.includes('not connected')) {
-          this.updateState({ ledgerDevice: device, ledgerStatus: 'connecting', ledgerError: errorMessage });
+
+        if (
+          lower.includes('device_locked') ||
+          lower.includes('locked') ||
+          lower.includes('pin') ||
+          lower.includes('security status') ||
+          lower.includes('0x5515')
+        ) {
+          this.updateState({
+            ledgerDevice: device,
+            ledgerStatus: 'device_locked',
+            ledgerError: 'Please unlock your Ledger device and try again',
+          });
+        } else if (
+          lower.includes('app_required') ||
+          lower.includes('not ready') ||
+          lower.includes('app') ||
+          lower.includes('bolos') ||
+          lower.includes('dashboard')
+        ) {
+          this.updateState({
+            ledgerDevice: device,
+            ledgerStatus: 'app_required',
+            ledgerError: 'Please open the Algorand app on your Ledger device',
+          });
+        } else if (
+          lower.includes('communication_error') ||
+          lower.includes('not connected')
+        ) {
+          this.updateState({
+            ledgerDevice: device,
+            ledgerStatus: 'connecting',
+            ledgerError: errorMessage,
+          });
         } else {
-          this.updateState({ ledgerDevice: device, ledgerStatus: 'error', ledgerError: errorMessage });
+          this.updateState({
+            ledgerDevice: device,
+            ledgerStatus: 'error',
+            ledgerError: errorMessage,
+          });
         }
       }
     };
@@ -943,7 +1096,11 @@ export class TransactionAuthController {
         return;
       }
       // During auth/signing before network submit, treat as transient and keep trying
-      if ((this.currentState.state === 'authenticating' || this.currentState.state === 'signing') && !this.hasSubmittedToNetwork) {
+      if (
+        (this.currentState.state === 'authenticating' ||
+          this.currentState.state === 'signing') &&
+        !this.hasSubmittedToNetwork
+      ) {
         this.updateState({
           ledgerDevice: null,
           ledgerStatus: 'connecting',
@@ -960,34 +1117,86 @@ export class TransactionAuthController {
     };
 
     const onDeviceDiscovered = async (info: LedgerDeviceInfo) => {
-      if (!this.currentState.isLedgerFlow || this.userExplicitlyRejected || this.activeFlowGeneration !== this.cancelledFlowGeneration) return;
+      if (
+        !this.currentState.isLedgerFlow ||
+        this.userExplicitlyRejected ||
+        this.activeFlowGeneration !== this.cancelledFlowGeneration
+      )
+        return;
       // If we already have a device or we're not authenticating, ignore
-      if (this.currentState.ledgerDevice || this.currentState.state !== 'authenticating') return;
+      if (
+        this.currentState.ledgerDevice ||
+        this.currentState.state !== 'authenticating'
+      )
+        return;
 
       // If a specific deviceId is known, only react to that one
-      if (this.ledgerSigningInfo?.deviceId && info.id !== this.ledgerSigningInfo.deviceId) return;
+      if (
+        this.ledgerSigningInfo?.deviceId &&
+        info.id !== this.ledgerSigningInfo.deviceId
+      )
+        return;
 
       // Adopt discovered device and attempt connect
-      this.updateState({ ledgerDevice: info, ledgerStatus: 'connecting', ledgerError: null });
+      this.updateState({
+        ledgerDevice: info,
+        ledgerStatus: 'connecting',
+        ledgerError: null,
+      });
       try {
-        await ledgerTransportService.connect(info.id, { transportType: info.type });
+        await ledgerTransportService.connect(info.id, {
+          transportType: info.type,
+        });
         const connectedNow = ledgerTransportService.getConnectedDevice();
         if (!connectedNow) throw new Error('Device not connected');
-        await this.verifyLedgerDeviceReady(connectedNow, { skipIfSigning: true });
+        await this.verifyLedgerDeviceReady(connectedNow, {
+          skipIfSigning: true,
+        });
         this.updateState({ ledgerStatus: 'ready' });
         await this.maybeStartSigningIfReady();
       } catch (err) {
         const errorMessage = this.sanitizeLedgerError(err);
         const msg = errorMessage.toLowerCase();
-        
-        if (msg.includes('device_locked') || msg.includes('locked') || msg.includes('pin') || msg.includes('security status') || msg.includes('0x5515')) {
-          this.updateState({ ledgerStatus: 'device_locked', ledgerError: 'Please unlock your Ledger device and try again', state: 'authenticating' });
-        } else if (msg.includes('app_required') || msg.includes('not ready') || msg.includes('app') || msg.includes('bolos') || msg.includes('dashboard')) {
-          this.updateState({ ledgerStatus: 'app_required', state: 'authenticating', ledgerError: 'Please open the Algorand app on your Ledger device' });
-        } else if (msg.includes('communication_error') || msg.includes('not connected')) {
-          this.updateState({ ledgerStatus: 'connecting', state: 'authenticating', ledgerError: errorMessage });
+
+        if (
+          msg.includes('device_locked') ||
+          msg.includes('locked') ||
+          msg.includes('pin') ||
+          msg.includes('security status') ||
+          msg.includes('0x5515')
+        ) {
+          this.updateState({
+            ledgerStatus: 'device_locked',
+            ledgerError: 'Please unlock your Ledger device and try again',
+            state: 'authenticating',
+          });
+        } else if (
+          msg.includes('app_required') ||
+          msg.includes('not ready') ||
+          msg.includes('app') ||
+          msg.includes('bolos') ||
+          msg.includes('dashboard')
+        ) {
+          this.updateState({
+            ledgerStatus: 'app_required',
+            state: 'authenticating',
+            ledgerError: 'Please open the Algorand app on your Ledger device',
+          });
+        } else if (
+          msg.includes('communication_error') ||
+          msg.includes('not connected')
+        ) {
+          this.updateState({
+            ledgerStatus: 'connecting',
+            state: 'authenticating',
+            ledgerError: errorMessage,
+          });
         } else if (!msg.includes('cancel')) {
-          this.updateState({ ledgerStatus: 'error', state: 'authenticating', ledgerError: errorMessage });
+          this.updateState({
+            ledgerStatus: 'error',
+            state: 'authenticating',
+            ledgerError: errorMessage,
+          });
         }
       }
     };
@@ -997,13 +1206,28 @@ export class TransactionAuthController {
     ledgerTransportService.on('deviceDiscovered', onDeviceDiscovered);
     // React to device updates (e.g., after unlocking or opening app)
     ledgerTransportService.on('deviceUpdated', async (info) => {
-      if (!this.currentState.isLedgerFlow || this.userExplicitlyRejected || this.activeFlowGeneration !== this.cancelledFlowGeneration) return;
-      if (this.ledgerSigningInfo?.deviceId && info.id !== this.ledgerSigningInfo.deviceId) return;
-      if (this.currentState.ledgerStatus === 'device_locked' || this.currentState.ledgerStatus === 'app_required' || this.currentState.ledgerStatus === 'error') {
+      if (
+        !this.currentState.isLedgerFlow ||
+        this.userExplicitlyRejected ||
+        this.activeFlowGeneration !== this.cancelledFlowGeneration
+      )
+        return;
+      if (
+        this.ledgerSigningInfo?.deviceId &&
+        info.id !== this.ledgerSigningInfo.deviceId
+      )
+        return;
+      if (
+        this.currentState.ledgerStatus === 'device_locked' ||
+        this.currentState.ledgerStatus === 'app_required' ||
+        this.currentState.ledgerStatus === 'error'
+      ) {
         try {
           const connectedNow = ledgerTransportService.getConnectedDevice();
           if (!connectedNow) return;
-          await this.verifyLedgerDeviceReady(connectedNow, { skipIfSigning: true });
+          await this.verifyLedgerDeviceReady(connectedNow, {
+            skipIfSigning: true,
+          });
           this.updateState({ ledgerStatus: 'ready', ledgerError: null });
           await this.maybeStartSigningIfReady();
         } catch {}
@@ -1021,12 +1245,17 @@ export class TransactionAuthController {
     if (this.ledgerSigningInfo) {
       // Check connected device as fallback
       const connectedDevice = ledgerTransportService.getConnectedDevice();
-      if (connectedDevice && connectedDevice.id === this.ledgerSigningInfo.deviceId) {
+      if (
+        connectedDevice &&
+        connectedDevice.id === this.ledgerSigningInfo.deviceId
+      ) {
         return connectedDevice;
       }
 
       const devices = ledgerTransportService.getDevices();
-      const knownDevice = devices.find(d => d.id === this.ledgerSigningInfo!.deviceId);
+      const knownDevice = devices.find(
+        (d) => d.id === this.ledgerSigningInfo!.deviceId
+      );
 
       if (knownDevice) {
         return knownDevice;
@@ -1059,7 +1288,9 @@ export class TransactionAuthController {
    */
   public async authenticateWithPin(pin: string): Promise<boolean> {
     if (this.currentState.isLocked) {
-      throw new Error('Authentication is locked due to too many failed attempts');
+      throw new Error(
+        'Authentication is locked due to too many failed attempts'
+      );
     }
 
     try {
@@ -1068,7 +1299,10 @@ export class TransactionAuthController {
       if (isValid) {
         // Reset attempts and proceed with signing
         // If ledger flow, wait until device is ready to start signing
-        if (this.currentState.isLedgerFlow && this.currentState.ledgerStatus !== 'ready') {
+        if (
+          this.currentState.isLedgerFlow &&
+          this.currentState.ledgerStatus !== 'ready'
+        ) {
           this.pendingStartAfterReady = true;
           this.pendingPinForStart = pin;
           // Surface app_required/connecting messaging
@@ -1079,7 +1313,6 @@ export class TransactionAuthController {
         this.updateState({ pinAttempts: 0, state: 'signing' });
         await this.startSigning(pin);
         return true;
-
       } else {
         // Increment attempts
         const newAttempts = this.currentState.pinAttempts + 1;
@@ -1088,7 +1321,9 @@ export class TransactionAuthController {
         this.updateState({
           pinAttempts: newAttempts,
           isLocked,
-          error: new Error(`Incorrect PIN. ${this.currentState.maxPinAttempts - newAttempts} attempts remaining.`),
+          error: new Error(
+            `Incorrect PIN. ${this.currentState.maxPinAttempts - newAttempts} attempts remaining.`
+          ),
         });
 
         if (isLocked) {
@@ -1104,11 +1339,11 @@ export class TransactionAuthController {
 
         return false;
       }
-
     } catch (error) {
       this.updateState({
         state: 'error',
-        error: error instanceof Error ? error : new Error('PIN verification failed'),
+        error:
+          error instanceof Error ? error : new Error('PIN verification failed'),
       });
       return false;
     }
@@ -1132,7 +1367,10 @@ export class TransactionAuthController {
 
       if (result.success) {
         // If ledger flow, wait until device is ready before starting
-        if (this.currentState.isLedgerFlow && this.currentState.ledgerStatus !== 'ready') {
+        if (
+          this.currentState.isLedgerFlow &&
+          this.currentState.ledgerStatus !== 'ready'
+        ) {
           this.pendingStartAfterReady = true;
           this.pendingPinForStart = undefined;
           await this.ensureLedgerDeviceReady();
@@ -1144,11 +1382,13 @@ export class TransactionAuthController {
       }
 
       return false;
-
     } catch (error) {
       this.updateState({
         state: 'error',
-        error: error instanceof Error ? error : new Error('Biometric authentication failed'),
+        error:
+          error instanceof Error
+            ? error
+            : new Error('Biometric authentication failed'),
       });
       return false;
     }
@@ -1212,30 +1452,50 @@ export class TransactionAuthController {
         onLedgerRejected: (ctx) => {
           const errorMessage = ctx.error?.message || 'Unknown error';
           const lower = errorMessage.toLowerCase();
-          
+
           // User explicitly rejected - STOP the signing process completely
-          if (lower.includes('reject') || lower.includes('denied') || lower.includes('refused') || lower.includes('cancel')) {
+          if (
+            lower.includes('reject') ||
+            lower.includes('denied') ||
+            lower.includes('refused') ||
+            lower.includes('cancel')
+          ) {
             if (__DEV__) {
-              console.log('🚫 User explicitly rejected transaction in onLedgerRejected');
+              console.log(
+                '🚫 User explicitly rejected transaction in onLedgerRejected'
+              );
             }
             this.isSigningInProgress = false;
             this.userExplicitlyRejected = true;
             this.cancel(); // Full stop
             return;
           }
-          
+
           // Handle specific error types during signing
-          if (lower.includes('locked') || lower.includes('pin') || lower.includes('0x5515')) {
+          if (
+            lower.includes('locked') ||
+            lower.includes('pin') ||
+            lower.includes('0x5515')
+          ) {
             this.updateState({
               state: 'authenticating',
               ledgerStatus: 'device_locked',
               ledgerError: 'Please unlock your Ledger device and try again',
               error: null,
             });
-          } else if (lower.includes('race') || lower.includes('pending') || lower.includes('communication')) {
+          } else if (
+            lower.includes('race') ||
+            lower.includes('pending') ||
+            lower.includes('communication')
+          ) {
             // Race condition errors during signing - don't change state, let signing continue
             return;
-          } else if (lower.includes('app') || lower.includes('not open') || lower.includes('bolos') || lower.includes('dashboard')) {
+          } else if (
+            lower.includes('app') ||
+            lower.includes('not open') ||
+            lower.includes('bolos') ||
+            lower.includes('dashboard')
+          ) {
             this.updateState({
               state: 'authenticating',
               ledgerStatus: 'app_required',
@@ -1281,38 +1541,64 @@ export class TransactionAuthController {
           const message = this.sanitizeLedgerError(error);
           const lower = message.toLowerCase();
           if (__DEV__) {
-            console.log('🚫 Signing onError', message, { hasSubmitted: this.hasSubmittedToNetwork });
+            console.log('🚫 Signing onError', message, {
+              hasSubmitted: this.hasSubmittedToNetwork,
+            });
           }
 
           // User explicitly rejected - STOP completely
-          if (lower.includes('rejected') || lower.includes('denied') || lower.includes('refused') || lower.includes('cancel')) {
+          if (
+            lower.includes('rejected') ||
+            lower.includes('denied') ||
+            lower.includes('refused') ||
+            lower.includes('cancel')
+          ) {
             if (__DEV__) {
-              console.log('🚫 User rejected transaction in onError - calling cancel');
+              console.log(
+                '🚫 User rejected transaction in onError - calling cancel'
+              );
             }
             this.userExplicitlyRejected = true;
             this.cancel();
             return;
           }
-          
+
           if (this.hasSubmittedToNetwork) {
-            this.updateState({ state: 'error', error: error instanceof Error ? error : new Error(String(error)) });
+            this.updateState({
+              state: 'error',
+              error: error instanceof Error ? error : new Error(String(error)),
+            });
           } else {
             // Handle specific error types during signing
-            if (lower.includes('locked') || lower.includes('pin') || lower.includes('0x5515')) {
+            if (
+              lower.includes('locked') ||
+              lower.includes('pin') ||
+              lower.includes('0x5515')
+            ) {
               this.updateState({
                 state: 'authenticating',
                 ledgerStatus: 'device_locked',
                 ledgerError: 'Please unlock your Ledger device and try again',
                 error: null,
               });
-            } else if (lower.includes('race') || lower.includes('pending') || lower.includes('communication')) {
+            } else if (
+              lower.includes('race') ||
+              lower.includes('pending') ||
+              lower.includes('communication')
+            ) {
               // Race condition errors during signing - don't change state, let signing retry
               return;
-            } else if (lower.includes('app') || lower.includes('not open') || lower.includes('bolos') || lower.includes('dashboard')) {
+            } else if (
+              lower.includes('app') ||
+              lower.includes('not open') ||
+              lower.includes('bolos') ||
+              lower.includes('dashboard')
+            ) {
               this.updateState({
                 state: 'authenticating',
                 ledgerStatus: 'app_required',
-                ledgerError: 'Please open the Algorand app on your Ledger device',
+                ledgerError:
+                  'Please open the Algorand app on your Ledger device',
                 error: null,
               });
             } else {
@@ -1329,13 +1615,17 @@ export class TransactionAuthController {
         onComplete: (result) => {
           this.isSigningInProgress = false;
           if (__DEV__) {
-            console.log('Signing onComplete', { success: result.success, hasSubmitted: this.hasSubmittedToNetwork });
+            console.log('Signing onComplete', {
+              success: result.success,
+              hasSubmitted: this.hasSubmittedToNetwork,
+            });
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
             this.updateState({
               state: 'authenticating',
               ledgerStatus: 'error',
-              ledgerError: result.error?.message || 'Signing failed before submission',
+              ledgerError:
+                result.error?.message || 'Signing failed before submission',
               result,
               error: null,
             });
@@ -1344,15 +1634,20 @@ export class TransactionAuthController {
           this.updateState({
             result,
             state: result.success ? 'completed' : 'error',
-            ledgerStatus: this.currentState.isLedgerFlow && result.success ? 'ready' : this.currentState.ledgerStatus, // Fix final state
+            ledgerStatus:
+              this.currentState.isLedgerFlow && result.success
+                ? 'ready'
+                : this.currentState.ledgerStatus, // Fix final state
             error: result.error || null,
           });
         },
       };
 
       // Execute the signing
-      const result = await this.unifiedSigner.signTransaction(this.currentRequest, callbacks);
-
+      const result = await this.unifiedSigner.signTransaction(
+        this.currentRequest,
+        callbacks
+      );
     } catch (error) {
       this.isSigningInProgress = false;
       const message = this.sanitizeLedgerError(error);
@@ -1368,7 +1663,8 @@ export class TransactionAuthController {
         }
         // Allow the flow to resume once the device becomes ready again
         this.pendingStartAfterReady = true;
-        this.pendingPinForStart = this.currentRequest?.pin ?? this.pendingPinForStart;
+        this.pendingPinForStart =
+          this.currentRequest?.pin ?? this.pendingPinForStart;
         this.hasStartedSigning = false;
 
         const shouldRestartDiscovery =
@@ -1380,7 +1676,10 @@ export class TransactionAuthController {
             .startDiscovery({ ble: true, usb: true })
             .catch((startError) => {
               if (__DEV__) {
-                console.warn('Failed to (re)start Ledger discovery during retry preparation', startError);
+                console.warn(
+                  'Failed to (re)start Ledger discovery during retry preparation',
+                  startError
+                );
               }
             });
         }
@@ -1395,7 +1694,10 @@ export class TransactionAuthController {
         if (options.restartDiscovery) {
           void this.initializeLedgerFlow().catch((initError) => {
             if (__DEV__) {
-              console.error('Failed to restart Ledger discovery after signing error', initError);
+              console.error(
+                'Failed to restart Ledger discovery after signing error',
+                initError
+              );
             }
           });
         }
@@ -1424,7 +1726,10 @@ export class TransactionAuthController {
         lower.includes('unlock') ||
         lower.includes('0x5515')
       ) {
-        await prepareForRetry('device_locked', 'Please unlock your Ledger device and try again');
+        await prepareForRetry(
+          'device_locked',
+          'Please unlock your Ledger device and try again'
+        );
         return;
       }
 
@@ -1435,7 +1740,10 @@ export class TransactionAuthController {
         lower.includes('bolos') ||
         lower.includes('dashboard')
       ) {
-        await prepareForRetry('app_required', 'Please open the Algorand app on your Ledger device');
+        await prepareForRetry(
+          'app_required',
+          'Please open the Algorand app on your Ledger device'
+        );
         return;
       }
 
@@ -1445,11 +1753,14 @@ export class TransactionAuthController {
         lower.includes('not found') ||
         lower.includes('disconnected')
       ) {
-        await prepareForRetry('connecting', message, { restartDiscovery: true });
+        await prepareForRetry('connecting', message, {
+          restartDiscovery: true,
+        });
         return;
       }
 
-      const errorObj = error instanceof Error ? error : new Error(String(error));
+      const errorObj =
+        error instanceof Error ? error : new Error(String(error));
       this.updateState({
         state: 'error',
         error: errorObj,
@@ -1464,7 +1775,7 @@ export class TransactionAuthController {
     if (!this.currentState.isLedgerFlow) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
     if (this.hasStartedSigning) return;
-    
+
     // CRITICAL: Don't restart signing if user cancelled or rejected
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
       return;
@@ -1480,7 +1791,7 @@ export class TransactionAuthController {
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = true;
-    
+
     await this.startSigning(pin);
   }
 
@@ -1489,7 +1800,11 @@ export class TransactionAuthController {
    */
   private async ensureLedgerDeviceReady(): Promise<void> {
     const device = this.currentState.ledgerDevice;
-    if (!device || this.userExplicitlyRejected || this.activeFlowGeneration !== this.cancelledFlowGeneration) {
+    if (
+      !device ||
+      this.userExplicitlyRejected ||
+      this.activeFlowGeneration !== this.cancelledFlowGeneration
+    ) {
       return;
     }
 
@@ -1500,20 +1815,35 @@ export class TransactionAuthController {
     } catch (err) {
       const errorMessage = this.sanitizeLedgerError(err);
       const lower = errorMessage.toLowerCase();
-      
-      if (lower.includes('device_locked') || lower.includes('locked') || lower.includes('pin') || lower.includes('security status') || lower.includes('0x5515')) {
+
+      if (
+        lower.includes('device_locked') ||
+        lower.includes('locked') ||
+        lower.includes('pin') ||
+        lower.includes('security status') ||
+        lower.includes('0x5515')
+      ) {
         this.updateState({
           state: 'authenticating',
           ledgerStatus: 'device_locked',
           ledgerError: 'Please unlock your Ledger device and try again',
         });
-      } else if (lower.includes('app_required') || lower.includes('not ready') || lower.includes('app') || lower.includes('bolos') || lower.includes('dashboard')) {
+      } else if (
+        lower.includes('app_required') ||
+        lower.includes('not ready') ||
+        lower.includes('app') ||
+        lower.includes('bolos') ||
+        lower.includes('dashboard')
+      ) {
         this.updateState({
           state: 'authenticating',
           ledgerStatus: 'app_required',
           ledgerError: 'Please open the Algorand app on your Ledger device',
         });
-      } else if (lower.includes('communication_error') || lower.includes('not connected')) {
+      } else if (
+        lower.includes('communication_error') ||
+        lower.includes('not connected')
+      ) {
         this.updateState({
           state: 'authenticating',
           ledgerStatus: 'connecting',
@@ -1567,7 +1897,7 @@ export class TransactionAuthController {
       this.updateState({
         ...this.getInitialState(),
         state: 'error',
-        error: new Error('Transaction cancelled by user')
+        error: new Error('Transaction cancelled by user'),
       });
     } else {
       this.updateState(this.getInitialState());
@@ -1712,9 +2042,10 @@ export class TransactionAuthController {
         unsignedTxns,
         [signerAddress], // signer addresses - use auth address for rekeyed accounts
         {
-          authAddresses: account.type === AccountType.REKEYED
-            ? [(account as RekeyedAccountMetadata).authAddress]
-            : undefined,
+          authAddresses:
+            account.type === AccountType.REKEYED
+              ? [(account as RekeyedAccountMetadata).authAddress]
+              : undefined,
           description: this.getTransactionDescription(),
         }
       );
@@ -1723,9 +2054,11 @@ export class TransactionAuthController {
         remoteSignerRequest: signerRequest,
         remoteSignerStatus: 'displaying_request',
       });
-
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to create signing request';
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'Failed to create signing request';
       this.updateState({
         state: 'error',
         remoteSignerStatus: 'error',
@@ -1768,7 +2101,9 @@ export class TransactionAuthController {
         }
         const rekeyTxn = await TransactionService.buildRekeyTransaction({
           fromAddress: this.currentRequest.rekeyParams.fromAddress,
-          rekeyToAddress: this.currentRequest.rekeyParams.rekeyToAddress || this.currentRequest.rekeyParams.fromAddress,
+          rekeyToAddress:
+            this.currentRequest.rekeyParams.rekeyToAddress ||
+            this.currentRequest.rekeyParams.fromAddress,
           networkId: this.currentRequest.rekeyParams.networkId,
           note: this.currentRequest.rekeyParams.note,
         });
@@ -1778,11 +2113,12 @@ export class TransactionAuthController {
         if (!this.currentRequest.rekeyParams) {
           throw new Error('Rekey parameters required');
         }
-        const reverseRekeyTxn = await TransactionService.buildRekeyReverseTransaction({
-          fromAddress: this.currentRequest.rekeyParams.fromAddress,
-          networkId: this.currentRequest.rekeyParams.networkId,
-          note: this.currentRequest.rekeyParams.note,
-        });
+        const reverseRekeyTxn =
+          await TransactionService.buildRekeyReverseTransaction({
+            fromAddress: this.currentRequest.rekeyParams.fromAddress,
+            networkId: this.currentRequest.rekeyParams.networkId,
+            note: this.currentRequest.rekeyParams.note,
+          });
         return [reverseRekeyTxn.txn];
 
       case 'batch_transaction':
@@ -1791,13 +2127,17 @@ export class TransactionAuthController {
           throw new Error('Batch transactions required');
         }
         // Decode the WalletConnect transactions
-        return this.currentRequest.walletConnectParams.transactions.map((wtxn) => {
-          const txnBytes = Buffer.from(wtxn.txn, 'base64');
-          return algosdk.decodeUnsignedTransaction(txnBytes);
-        });
+        return this.currentRequest.walletConnectParams.transactions.map(
+          (wtxn) => {
+            const txnBytes = Buffer.from(wtxn.txn, 'base64');
+            return algosdk.decodeUnsignedTransaction(txnBytes);
+          }
+        );
 
       default:
-        throw new Error(`Unsupported transaction type for remote signing: ${this.currentRequest.type}`);
+        throw new Error(
+          `Unsupported transaction type for remote signing: ${this.currentRequest.type}`
+        );
     }
   }
 
@@ -1842,8 +2182,13 @@ export class TransactionAuthController {
   /**
    * Process a scanned remote signer response
    */
-  public async processRemoteSignerResponse(response: RemoteSignerResponse): Promise<void> {
-    if (!this.currentState.isRemoteSignerFlow || !this.currentState.remoteSignerRequest) {
+  public async processRemoteSignerResponse(
+    response: RemoteSignerResponse
+  ): Promise<void> {
+    if (
+      !this.currentState.isRemoteSignerFlow ||
+      !this.currentState.remoteSignerRequest
+    ) {
       throw new Error('No active remote signer flow');
     }
 
@@ -1864,7 +2209,8 @@ export class TransactionAuthController {
       }
 
       // Extract signed transactions
-      const signedTxns = RemoteSignerService.extractSignedTransactions(response);
+      const signedTxns =
+        RemoteSignerService.extractSignedTransactions(response);
 
       if (!signedTxns || signedTxns.length === 0) {
         throw new Error('No signed transactions in response');
@@ -1897,9 +2243,11 @@ export class TransactionAuthController {
         remoteSignerStatus: 'idle',
         result: successResult,
       });
-
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to process signed response';
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'Failed to process signed response';
       this.updateState({
         state: 'error',
         remoteSignerStatus: 'error',

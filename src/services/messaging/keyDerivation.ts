@@ -188,7 +188,9 @@ export async function deriveMessagingKeyPairWithSign(
  * @param accountAddress - Account address to look up
  * @returns Cached keypair or null if not found/expired
  */
-export function getCachedKeyPair(accountAddress: string): MessagingKeyPair | null {
+export function getCachedKeyPair(
+  accountAddress: string
+): MessagingKeyPair | null {
   const cached = keyCache.get(accountAddress);
   if (!cached) return null;
 
@@ -233,7 +235,9 @@ export function clearAllCachedKeys(): void {
  * @param accountAddress - Account address
  * @returns Base64-encoded public key or null if not cached
  */
-export function getMessagingPublicKeyBase64(accountAddress: string): string | null {
+export function getMessagingPublicKeyBase64(
+  accountAddress: string
+): string | null {
   const cached = getCachedKeyPair(accountAddress);
   if (!cached) return null;
   return encodeBase64(cached.publicKey);

@@ -43,7 +43,8 @@ export class NetworkService {
   private config: NetworkConfiguration;
   private networkStatus: NetworkStatus;
   private mimirService?: MimirApiService;
-  private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> = new Map();
+  private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> =
+    new Map();
   private rekeyInfoCacheTTL: number = 10000; // 10 second cache
   // Cache of immutable ASA params (decimals/name/unitName). Cleared on
   // switchNetwork (this instance is reused across networks). Keyed by the asset
@@ -612,7 +613,11 @@ export class NetworkService {
     isArc200: boolean = false,
     limit: number = 50,
     nextToken?: string
-  ): Promise<{ transactions: TransactionInfo[]; nextToken?: string; hasMore: boolean }> {
+  ): Promise<{
+    transactions: TransactionInfo[];
+    nextToken?: string;
+    hasMore: boolean;
+  }> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
@@ -708,7 +713,7 @@ export class NetworkService {
         // Add txType filter first to narrow search space and prevent indexer timeouts
         let indexerQuery = this.indexerClient
           .lookupAccountTransactions(address)
-          .txType('axfer')  // Filter by asset transfer transactions first
+          .txType('axfer') // Filter by asset transfer transactions first
           .assetID(assetId)
           .limit(limit);
 
@@ -737,7 +742,8 @@ export class NetworkService {
             }
 
             const amount = txn.assetTransferTransaction?.amount ?? 0;
-            const recipient = txn.assetTransferTransaction?.receiver ?? txn.sender;
+            const recipient =
+              txn.assetTransferTransaction?.receiver ?? txn.sender;
 
             transactions.push({
               id: txn.id ?? '',
@@ -920,7 +926,12 @@ export class NetworkService {
         indexerQuery.do(),
         // Only fetch ARC-200 transfers if Mimir service is available
         this.mimirService
-          ? this.mimirService.getArc200Transfers(address, undefined, undefined, limit)
+          ? this.mimirService.getArc200Transfers(
+              address,
+              undefined,
+              undefined,
+              limit
+            )
           : Promise.resolve({ transfers: [], hasMore: false }),
       ];
 
@@ -1038,7 +1049,10 @@ export class NetworkService {
    * Check if an account has been rekeyed and return rekey information
    * @param skipTimestamp - Skip fetching the rekey timestamp (faster, for signing operations)
    */
-  async getAccountRekeyInfo(address: string, skipTimestamp: boolean = false): Promise<RekeyInfo> {
+  async getAccountRekeyInfo(
+    address: string,
+    skipTimestamp: boolean = false
+  ): Promise<RekeyInfo> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
@@ -1047,7 +1061,7 @@ export class NetworkService {
       // Check cache first
       const cached = this.rekeyInfoCache.get(address);
       const now = Date.now();
-      if (cached && (now - cached.timestamp) < this.rekeyInfoCacheTTL) {
+      if (cached && now - cached.timestamp < this.rekeyInfoCacheTTL) {
         return cached.info;
       }
 
@@ -1071,7 +1085,10 @@ export class NetworkService {
       if (!isRekeyed) {
         const result = { isRekeyed: false };
         // Cache the result
-        this.rekeyInfoCache.set(address, { info: result, timestamp: Date.now() });
+        this.rekeyInfoCache.set(address, {
+          info: result,
+          timestamp: Date.now(),
+        });
         return result;
       }
 

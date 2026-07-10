@@ -269,12 +269,14 @@ class LedgerAlgorandService {
   async verifyApp(options: VerifyAppOptions = {}): Promise<LedgerAppInfo> {
     // Skip verification if signing is in progress to prevent race conditions
     if (isLedgerSigningInProgress()) {
-      console.log('🚫 SKIPPING verifyApp - signing in progress to prevent race condition');
+      console.log(
+        '🚫 SKIPPING verifyApp - signing in progress to prevent race condition'
+      );
       // Return a cached/default response instead of throwing
       return {
         name: 'Algorand',
         version: '2.1.14',
-        flags: 258
+        flags: 258,
       };
     }
 
@@ -323,12 +325,14 @@ class LedgerAlgorandService {
         // Wait before retry
         if (attempt < maxRetries) {
           const delay = Math.min(1000 * attempt, 3000);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
     }
 
-    throw this.normalizeLedgerError(lastError || new Error('Unknown verification error'));
+    throw this.normalizeLedgerError(
+      lastError || new Error('Unknown verification error')
+    );
   }
 
   private async getApp(options: VerifyAppOptions = {}): Promise<AlgorandApp> {
@@ -363,7 +367,9 @@ class LedgerAlgorandService {
     });
 
     if (transaction instanceof Uint8Array) {
-      console.log('Ledger ensureTransactionInstance: Decoding Uint8Array transaction');
+      console.log(
+        'Ledger ensureTransactionInstance: Decoding Uint8Array transaction'
+      );
       try {
         const decoded = decodeUnsignedTransaction(transaction);
         console.log('Ledger ensureTransactionInstance: Decoded successfully', {
@@ -374,7 +380,10 @@ class LedgerAlgorandService {
         });
         return decoded;
       } catch (error) {
-        console.error('Ledger ensureTransactionInstance: Failed to decode Uint8Array', error);
+        console.error(
+          'Ledger ensureTransactionInstance: Failed to decode Uint8Array',
+          error
+        );
         throw new LedgerAccountError(
           `Failed to decode transaction bytes: ${error instanceof Error ? error.message : 'Unknown error'}`,
           'LEDGER_INVALID_TRANSACTION'
@@ -384,11 +393,16 @@ class LedgerAlgorandService {
 
     // Validate the transaction object has required methods
     const txn = transaction as Transaction;
-    console.log('Ledger ensureTransactionInstance: Validating transaction object', {
-      hasTxID: typeof txn.txID === 'function',
-      hasToEncodingData: typeof txn.toEncodingData === 'function',
-      availableMethods: Object.getOwnPropertyNames(txn).filter(name => typeof (txn as any)[name] === 'function'),
-    });
+    console.log(
+      'Ledger ensureTransactionInstance: Validating transaction object',
+      {
+        hasTxID: typeof txn.txID === 'function',
+        hasToEncodingData: typeof txn.toEncodingData === 'function',
+        availableMethods: Object.getOwnPropertyNames(txn).filter(
+          (name) => typeof (txn as any)[name] === 'function'
+        ),
+      }
+    );
 
     if (typeof txn.txID !== 'function') {
       throw new LedgerAccountError(
@@ -404,7 +418,9 @@ class LedgerAlgorandService {
       );
     }
 
-    console.log('Ledger ensureTransactionInstance: Transaction validation passed');
+    console.log(
+      'Ledger ensureTransactionInstance: Transaction validation passed'
+    );
     return txn;
   }
 
@@ -437,7 +453,8 @@ class LedgerAlgorandService {
 
       if (
         error instanceof LockedDeviceError ||
-        (error instanceof TransportStatusError && error.statusCode === StatusCodes.SECURITY_STATUS_NOT_SATISFIED) ||
+        (error instanceof TransportStatusError &&
+          error.statusCode === StatusCodes.SECURITY_STATUS_NOT_SATISFIED) ||
         message.toLowerCase().includes('0x5515') ||
         message.toLowerCase().includes('locked device')
       ) {
@@ -456,12 +473,20 @@ class LedgerAlgorandService {
     // Debug logging for device builds
     console.log('Ledger APDU Response:', {
       length: response?.length || 0,
-      raw: response ? Array.from(response).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' ') : 'null'
+      raw: response
+        ? Array.from(response)
+            .map((b) => `0x${b.toString(16).padStart(2, '0')}`)
+            .join(' ')
+        : 'null',
     });
 
     // Remove status bytes (0x90 0x00) from the end if present
     let dataLength = response.length;
-    if (dataLength >= 2 && response[dataLength - 2] === 0x90 && response[dataLength - 1] === 0x00) {
+    if (
+      dataLength >= 2 &&
+      response[dataLength - 2] === 0x90 &&
+      response[dataLength - 1] === 0x00
+    ) {
       dataLength -= 2;
       console.log('Ledger Removed status bytes, new length:', dataLength);
     }
@@ -514,10 +539,16 @@ class LedgerAlgorandService {
           const remainingBytes = dataLength - versionEnd;
           if (remainingBytes >= 2) {
             flags = (response[versionEnd] << 8) | response[versionEnd + 1];
-            console.log('Ledger App Flags (2 bytes):', `0x${flags.toString(16)}`);
+            console.log(
+              'Ledger App Flags (2 bytes):',
+              `0x${flags.toString(16)}`
+            );
           } else if (remainingBytes >= 1) {
             flags = response[versionEnd];
-            console.log('Ledger App Flags (1 byte):', `0x${flags.toString(16)}`);
+            console.log(
+              'Ledger App Flags (1 byte):',
+              `0x${flags.toString(16)}`
+            );
           }
         }
       } else {
@@ -525,7 +556,7 @@ class LedgerAlgorandService {
           versionLength,
           versionStart,
           versionEnd,
-          dataLength
+          dataLength,
         });
         // Use fallback version but continue
       }

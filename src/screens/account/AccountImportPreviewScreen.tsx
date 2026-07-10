@@ -100,7 +100,9 @@ export default function AccountImportPreviewScreen({
   };
 
   const getValidAccountsCount = () => {
-    return accounts.filter((acc) => acc.isValid && (!acc.isDuplicate || acc.isUpgrade)).length;
+    return accounts.filter(
+      (acc) => acc.isValid && (!acc.isDuplicate || acc.isUpgrade)
+    ).length;
   };
 
   const handleImportAccounts = async () => {
@@ -131,7 +133,10 @@ export default function AccountImportPreviewScreen({
       message,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: upgradeCount > 0 && newCount === 0 ? 'Upgrade' : 'Import', onPress: performImport },
+        {
+          text: upgradeCount > 0 && newCount === 0 ? 'Upgrade' : 'Import',
+          onPress: performImport,
+        },
       ]
     );
   };
@@ -176,7 +181,9 @@ export default function AccountImportPreviewScreen({
 
             // If upgrading from watch account, delete the watch account first
             if (account.isUpgrade && account.existingAccountId) {
-              await MultiAccountWalletService.deleteAccount(account.existingAccountId);
+              await MultiAccountWalletService.deleteAccount(
+                account.existingAccountId
+              );
             }
 
             const request: ImportAccountRequest = {

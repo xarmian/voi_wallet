@@ -19,7 +19,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRoute, useNavigation, CommonActions } from '@react-navigation/native';
+import {
+  useRoute,
+  useNavigation,
+  CommonActions,
+} from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import algosdk from 'algosdk';
@@ -33,12 +37,22 @@ import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useActiveAccount } from '@/store/walletStore';
-import { ClaimableItem, fromSerializableClaimableItem } from '@/types/claimable';
-import { Arc200TransactionService, Arc200ClaimParams } from '@/services/transactions/arc200';
+import {
+  ClaimableItem,
+  fromSerializableClaimableItem,
+} from '@/types/claimable';
+import {
+  Arc200TransactionService,
+  Arc200ClaimParams,
+} from '@/services/transactions/arc200';
 import VoiNetworkService, { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
-import { resolveAddressOrName, isLikelyEnvoiName, formatAddress } from '@/utils/address';
+import {
+  resolveAddressOrName,
+  isLikelyEnvoiName,
+  formatAddress,
+} from '@/utils/address';
 import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
@@ -47,8 +61,14 @@ import type { WalletStackParamList } from '@/navigation/AppNavigator';
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
 
-type ClaimAllRouteProp = RouteProp<WalletStackParamList, 'ClaimAllConfirmation'>;
-type NavigationProp = NativeStackNavigationProp<WalletStackParamList, 'ClaimAllConfirmation'>;
+type ClaimAllRouteProp = RouteProp<
+  WalletStackParamList,
+  'ClaimAllConfirmation'
+>;
+type NavigationProp = NativeStackNavigationProp<
+  WalletStackParamList,
+  'ClaimAllConfirmation'
+>;
 
 /**
  * Formats a bigint token amount for display
@@ -84,7 +104,9 @@ export default function ClaimAllConfirmationScreen() {
   const [recipientAddress, setRecipientAddress] = useState('');
   const [resolvedName, setResolvedName] = useState<string | null>(null);
   const [isResolvingName, setIsResolvingName] = useState(false);
-  const [nameResolutionError, setNameResolutionError] = useState<string | null>(null);
+  const [nameResolutionError, setNameResolutionError] = useState<string | null>(
+    null
+  );
   const [isClaiming, setIsClaiming] = useState(false);
   const [estimatedFee, setEstimatedFee] = useState<number>(0);
   const [isRecipientModalVisible, setIsRecipientModalVisible] = useState(false);
@@ -112,7 +134,10 @@ export default function ClaimAllConfirmationScreen() {
 
     // Skip if already resolved
     if (recipientAddress && algosdk.isValidAddress(recipientAddress)) {
-      if (input === recipientAddress || (resolvedName && input === resolvedName)) {
+      if (
+        input === recipientAddress ||
+        (resolvedName && input === resolvedName)
+      ) {
         return;
       }
     }
@@ -177,7 +202,8 @@ export default function ClaimAllConfirmationScreen() {
     }
 
     // Only search if input looks like a name
-    const looksLikeName = /^[a-z0-9-_.]+$/.test(normalized) && normalized.length >= 2;
+    const looksLikeName =
+      /^[a-z0-9-_.]+$/.test(normalized) && normalized.length >= 2;
     if (!looksLikeName) {
       setSearchResults([]);
       setIsSearchingNames(false);
@@ -233,18 +259,24 @@ export default function ClaimAllConfirmationScreen() {
   }, []);
 
   // Handle recipient selection from modal
-  const handleRecipientSelect = useCallback((address: string, label?: string) => {
-    setRecipientInput(address);
-    setRecipientAddress(address);
-    setResolvedName(label || null);
-    setNameResolutionError(null);
-    setIsRecipientModalVisible(false);
-  }, []);
+  const handleRecipientSelect = useCallback(
+    (address: string, label?: string) => {
+      setRecipientInput(address);
+      setRecipientAddress(address);
+      setResolvedName(label || null);
+      setNameResolutionError(null);
+      setIsRecipientModalVisible(false);
+    },
+    []
+  );
 
   // Estimate transaction fee (including MBR where needed)
   useEffect(() => {
     const estimateFee = async () => {
-      if (!finalRecipientAddress || !algosdk.isValidAddress(finalRecipientAddress)) {
+      if (
+        !finalRecipientAddress ||
+        !algosdk.isValidAddress(finalRecipientAddress)
+      ) {
         // Default estimate assuming all need MBR (worst case)
         try {
           const costEstimate = await Arc200TransactionService.estimateClaimCost(
@@ -261,14 +293,17 @@ export default function ClaimAllConfirmationScreen() {
 
       try {
         // Check which tokens need MBR for the recipient
-        const uniqueContractIds = [...new Set(items.map((item) => item.contractId))];
+        const uniqueContractIds = [
+          ...new Set(items.map((item) => item.contractId)),
+        ];
         let needsMbrCount = 0;
 
         for (const contractId of uniqueContractIds) {
-          const hasBalance = await Arc200TransactionService.checkRecipientBalance(
-            finalRecipientAddress,
-            contractId
-          );
+          const hasBalance =
+            await Arc200TransactionService.checkRecipientBalance(
+              finalRecipientAddress,
+              contractId
+            );
           if (!hasBalance) {
             needsMbrCount++;
           }
@@ -313,10 +348,11 @@ export default function ClaimAllConfirmationScreen() {
       }));
 
       // Build the batch transaction group (always on Voi network)
-      const txnGroup = await Arc200TransactionService.buildBatchClaimTransactionGroup(
-        claimParams,
-        CLAIM_NETWORK_ID
-      );
+      const txnGroup =
+        await Arc200TransactionService.buildBatchClaimTransactionGroup(
+          claimParams,
+          CLAIM_NETWORK_ID
+        );
 
       // Encode transactions as base64 for UniversalTransactionSigning
       const base64Transactions = txnGroup.txnBytes.map((txnBytes) =>
@@ -348,12 +384,21 @@ export default function ClaimAllConfirmationScreen() {
                 index: 1,
                 routes: [
                   { name: 'HomeMain' },
-                  { name: 'ClaimableTokens', params: { pendingRefresh: true, claimedItemIds: items.map(item => item.id) } },
+                  {
+                    name: 'ClaimableTokens',
+                    params: {
+                      pendingRefresh: true,
+                      claimedItemIds: items.map((item) => item.id),
+                    },
+                  },
                 ],
               })
             );
           } catch (submitError) {
-            const message = submitError instanceof Error ? submitError.message : 'Failed to submit transaction';
+            const message =
+              submitError instanceof Error
+                ? submitError.message
+                : 'Failed to submit transaction';
             Alert.alert('Submission Failed', message);
           }
         },
@@ -372,7 +417,10 @@ export default function ClaimAllConfirmationScreen() {
         callbackId,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to build claim transactions';
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to build claim transactions';
       Alert.alert('Claim Failed', message);
     } finally {
       setIsClaiming(false);
@@ -387,22 +435,35 @@ export default function ClaimAllConfirmationScreen() {
     !isResolvingName;
 
   // Group items by token for summary
-  const tokenSummary = items.reduce((acc, item) => {
-    const key = item.contractId;
-    if (!acc[key]) {
-      acc[key] = {
-        name: item.tokenName,
-        symbol: item.tokenSymbol,
-        decimals: item.tokenDecimals,
-        imageUrl: item.tokenImageUrl,
-        totalAmount: 0n,
-        count: 0,
-      };
-    }
-    acc[key].totalAmount += item.amount;
-    acc[key].count += 1;
-    return acc;
-  }, {} as Record<number, { name: string; symbol: string; decimals: number; imageUrl?: string; totalAmount: bigint; count: number }>);
+  const tokenSummary = items.reduce(
+    (acc, item) => {
+      const key = item.contractId;
+      if (!acc[key]) {
+        acc[key] = {
+          name: item.tokenName,
+          symbol: item.tokenSymbol,
+          decimals: item.tokenDecimals,
+          imageUrl: item.tokenImageUrl,
+          totalAmount: 0n,
+          count: 0,
+        };
+      }
+      acc[key].totalAmount += item.amount;
+      acc[key].count += 1;
+      return acc;
+    },
+    {} as Record<
+      number,
+      {
+        name: string;
+        symbol: string;
+        decimals: number;
+        imageUrl?: string;
+        totalAmount: bigint;
+        count: number;
+      }
+    >
+  );
 
   return (
     <NFTBackground>
@@ -421,12 +482,18 @@ export default function ClaimAllConfirmationScreen() {
         >
           {/* Summary Card */}
           <GlassCard variant="medium" padding="lg" style={styles.summaryCard}>
-            <Text style={styles.summaryTitle}>Claiming {items.length} Token{items.length > 1 ? 's' : ''}</Text>
+            <Text style={styles.summaryTitle}>
+              Claiming {items.length} Token{items.length > 1 ? 's' : ''}
+            </Text>
 
             <View style={styles.tokenList}>
               {Object.entries(tokenSummary).map(([contractId, token]) => (
                 <View key={contractId} style={styles.tokenRow}>
-                  <TokenImage imageUrl={token.imageUrl} theme={theme} styles={styles} />
+                  <TokenImage
+                    imageUrl={token.imageUrl}
+                    theme={theme}
+                    styles={styles}
+                  />
                   <View style={styles.tokenInfo}>
                     <Text style={styles.tokenName}>{token.name}</Text>
                     {token.count > 1 && (
@@ -453,7 +520,10 @@ export default function ClaimAllConfirmationScreen() {
               <Switch
                 value={sendToSelf}
                 onValueChange={setSendToSelf}
-                trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                trackColor={{
+                  false: theme.colors.border,
+                  true: theme.colors.primary,
+                }}
                 thumbColor="white"
               />
             </View>
@@ -493,8 +563,13 @@ export default function ClaimAllConfirmationScreen() {
                 </View>
                 {isEnvoiEnabled && isSearchingNames && (
                   <View style={styles.searchStatus}>
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
-                    <Text style={styles.searchStatusText}>Searching Envoi...</Text>
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.colors.primary}
+                    />
+                    <Text style={styles.searchStatusText}>
+                      Searching Envoi...
+                    </Text>
                   </View>
                 )}
                 {nameResolutionError && (
@@ -505,11 +580,13 @@ export default function ClaimAllConfirmationScreen() {
                     Resolved: {resolvedName} → {formatAddress(recipientAddress)}
                   </Text>
                 )}
-                {!resolvedName && recipientAddress && !isLikelyEnvoiName(recipientInput) && (
-                  <Text style={styles.addressText}>
-                    {formatAddress(recipientAddress)}
-                  </Text>
-                )}
+                {!resolvedName &&
+                  recipientAddress &&
+                  !isLikelyEnvoiName(recipientInput) && (
+                    <Text style={styles.addressText}>
+                      {formatAddress(recipientAddress)}
+                    </Text>
+                  )}
                 {/* Envoi Search Results */}
                 {searchResults.length > 0 && (
                   <View style={styles.searchResults}>
@@ -518,7 +595,8 @@ export default function ClaimAllConfirmationScreen() {
                         key={`${result.name}-${result.address}`}
                         style={[
                           styles.searchResultItem,
-                          index === searchResults.length - 1 && styles.searchResultItemLast,
+                          index === searchResults.length - 1 &&
+                            styles.searchResultItemLast,
                         ]}
                         onPress={() => handleSearchResultSelect(result)}
                         activeOpacity={0.8}
@@ -536,7 +614,9 @@ export default function ClaimAllConfirmationScreen() {
                           </View>
                         )}
                         <View style={styles.searchResultContent}>
-                          <Text style={styles.searchResultName}>{result.name}</Text>
+                          <Text style={styles.searchResultName}>
+                            {result.name}
+                          </Text>
                           <Text style={styles.searchResultAddress}>
                             {formatAddress(result.address)}
                           </Text>
@@ -559,15 +639,24 @@ export default function ClaimAllConfirmationScreen() {
 
           {/* Warning */}
           <View style={styles.warningContainer}>
-            <Ionicons name="information-circle" size={20} color={theme.colors.warning} />
+            <Ionicons
+              name="information-circle"
+              size={20}
+              color={theme.colors.warning}
+            />
             <Text style={styles.warningText}>
-              All tokens will be claimed in a single atomic transaction. If any claim fails, the entire transaction will be reverted.
+              All tokens will be claimed in a single atomic transaction. If any
+              claim fails, the entire transaction will be reverted.
             </Text>
           </View>
 
           {/* Claim Button */}
           <GlassButton
-            label={isClaiming ? 'Claiming...' : `Claim ${items.length} Token${items.length > 1 ? 's' : ''}`}
+            label={
+              isClaiming
+                ? 'Claiming...'
+                : `Claim ${items.length} Token${items.length > 1 ? 's' : ''}`
+            }
             variant="primary"
             size="lg"
             onPress={handleClaimAll}
@@ -590,7 +679,15 @@ export default function ClaimAllConfirmationScreen() {
 }
 
 // Helper component for token images
-function TokenImage({ imageUrl, theme, styles }: { imageUrl?: string; theme: Theme; styles: any }) {
+function TokenImage({
+  imageUrl,
+  theme,
+  styles,
+}: {
+  imageUrl?: string;
+  theme: Theme;
+  styles: any;
+}) {
   const [error, setError] = useState(false);
   const normalizedUrl = normalizeAssetImageUrl(imageUrl);
 
@@ -760,14 +857,16 @@ const createStyles = (theme: Theme) =>
     },
     searchResults: {
       marginTop: 8,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(30, 30, 40, 0.9)'
-        : 'rgba(255, 255, 255, 0.85)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(30, 30, 40, 0.9)'
+          : 'rgba(255, 255, 255, 0.85)',
       borderRadius: theme.borderRadius.md,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.15)'
+          : 'rgba(255, 255, 255, 0.5)',
       overflow: 'hidden',
     },
     searchResultItem: {

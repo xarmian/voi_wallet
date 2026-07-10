@@ -28,7 +28,10 @@ import { NetworkId } from '@/types/network';
 import { SwapService } from '@/services/swap';
 import { submitAsaOptIn, validateAsaOptIn } from '@/services/transactions/asa';
 import tokenMappingService from '@/services/token-mapping';
-import { TokenReference, NetworkBalanceSource } from '@/services/token-mapping/types';
+import {
+  TokenReference,
+  NetworkBalanceSource,
+} from '@/services/token-mapping/types';
 import { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
@@ -94,11 +97,8 @@ export default function MultiNetworkAssetScreen() {
   // Find the mapped asset - memoized to prevent re-computation on every render
   // Also handles single-network assets (isMapped can be false)
   const mappedAsset = useMemo(() => {
-    return multiNetworkBalance?.assets.find(
-      (a) =>
-        mappingId
-          ? a.mappingId === mappingId
-          : a.assetId === assetId
+    return multiNetworkBalance?.assets.find((a) =>
+      mappingId ? a.mappingId === mappingId : a.assetId === assetId
     );
   }, [multiNetworkBalance?.assets, mappingId, assetId]);
 
@@ -106,8 +106,8 @@ export default function MultiNetworkAssetScreen() {
   // NOTE: Must be defined AFTER mappedAsset
   const isSwappable = useMemo(() => {
     if (!mappedAsset) return false;
-    return mappedAsset.sourceBalances.some(
-      (source) => SwapService.isSwapAvailable(source.networkId)
+    return mappedAsset.sourceBalances.some((source) =>
+      SwapService.isSwapAvailable(source.networkId)
     );
   }, [mappedAsset]);
 
@@ -250,16 +250,19 @@ export default function MultiNetworkAssetScreen() {
     return formatCurrency(totalValue);
   }, [mappedAsset, multiNetworkBalance?.perNetworkPrices]);
 
-  const handleNetworkPress = useCallback((networkId: NetworkId, networkAssetId: number) => {
-    // Navigate to AssetDetailScreen with specific network context
-    navigation.navigate('AssetDetail', {
-      assetName,
-      assetId: networkAssetId,
-      accountId,
-      networkId,
-      mappingId,
-    });
-  }, [navigation, assetName, accountId, mappingId]);
+  const handleNetworkPress = useCallback(
+    (networkId: NetworkId, networkAssetId: number) => {
+      // Navigate to AssetDetailScreen with specific network context
+      navigation.navigate('AssetDetail', {
+        assetName,
+        assetId: networkAssetId,
+        accountId,
+        networkId,
+        mappingId,
+      });
+    },
+    [navigation, assetName, accountId, mappingId]
+  );
 
   const handleSend = useCallback(() => {
     // Pass mappingId so SendScreen can show all network options for this asset
@@ -270,18 +273,31 @@ export default function MultiNetworkAssetScreen() {
       mappingId, // CRITICAL: Pass mappingId so SendScreen knows this is a multi-network asset
       networkId: mappedAsset?.primaryNetwork, // Default to primary network
     });
-  }, [navigation, assetName, assetId, accountId, mappingId, mappedAsset?.primaryNetwork]);
+  }, [
+    navigation,
+    assetName,
+    assetId,
+    accountId,
+    mappingId,
+    mappedAsset?.primaryNetwork,
+  ]);
 
   const handleSwap = useCallback(() => {
     if (!mappedAsset) return;
 
     // Check if primary network supports swap, otherwise find first swappable network
-    const primaryNetworkSwappable = SwapService.isSwapAvailable(mappedAsset.primaryNetwork);
+    const primaryNetworkSwappable = SwapService.isSwapAvailable(
+      mappedAsset.primaryNetwork
+    );
 
     // Find the source balance for the target network
     const targetSource = primaryNetworkSwappable
-      ? mappedAsset.sourceBalances.find((s) => s.networkId === mappedAsset.primaryNetwork)
-      : mappedAsset.sourceBalances.find((source) => SwapService.isSwapAvailable(source.networkId));
+      ? mappedAsset.sourceBalances.find(
+          (s) => s.networkId === mappedAsset.primaryNetwork
+        )
+      : mappedAsset.sourceBalances.find((source) =>
+          SwapService.isSwapAvailable(source.networkId)
+        );
 
     if (!targetSource) return;
 
@@ -347,7 +363,9 @@ export default function MultiNetworkAssetScreen() {
         );
 
         // Wait for confirmation
-        const networkService = NetworkService.getInstance(optInPending.networkId);
+        const networkService = NetworkService.getInstance(
+          optInPending.networkId
+        );
         await networkService.waitForConfirmation(txId, 4);
 
         // Reload balances to update the UI
@@ -388,7 +406,10 @@ export default function MultiNetworkAssetScreen() {
     // For native tokens or if image failed, use primary network's token image
     if (mappedAsset.assetId === 0 || imageError) {
       const primaryNetworkConfig = getNetworkConfig(mappedAsset.primaryNetwork);
-      return { type: 'source' as const, source: primaryNetworkConfig.nativeTokenImage };
+      return {
+        type: 'source' as const,
+        source: primaryNetworkConfig.nativeTokenImage,
+      };
     }
 
     return { type: 'placeholder' as const };
@@ -409,10 +430,7 @@ export default function MultiNetworkAssetScreen() {
 
     if (assetImageSource.type === 'source') {
       return (
-        <Image
-          source={assetImageSource.source}
-          style={styles.assetImage}
-        />
+        <Image source={assetImageSource.source} style={styles.assetImage} />
       );
     }
 
@@ -422,7 +440,12 @@ export default function MultiNetworkAssetScreen() {
         <Ionicons name="disc" size={32} color={themeColors.primary} />
       </View>
     );
-  }, [assetImageSource, styles.assetImage, styles.placeholderIcon, themeColors.primary]);
+  }, [
+    assetImageSource,
+    styles.assetImage,
+    styles.placeholderIcon,
+    themeColors.primary,
+  ]);
 
   const formattedBalance = useMemo(() => {
     if (!mappedAsset) return '0';
@@ -432,13 +455,17 @@ export default function MultiNetworkAssetScreen() {
   // Compute network subtitle for header
   const networkSubtitle = useMemo(() => {
     if (!mappedAsset || !mappedAsset.sourceBalances.length) return undefined;
-    const uniqueNetworks = Array.from(new Set(mappedAsset.sourceBalances.map(s => s.networkId)));
+    const uniqueNetworks = Array.from(
+      new Set(mappedAsset.sourceBalances.map((s) => s.networkId))
+    );
     return uniqueNetworks
-      .map((nid) => getNetworkConfig(nid).name
-        .replace(' Network', '')
-        .replace(' Mainnet', '')
-        .replace(' Testnet', '')
-        .trim())
+      .map((nid) =>
+        getNetworkConfig(nid)
+          .name.replace(' Network', '')
+          .replace(' Mainnet', '')
+          .replace(' Testnet', '')
+          .trim()
+      )
       .join(' + ');
   }, [mappedAsset]);
 
@@ -454,256 +481,260 @@ export default function MultiNetworkAssetScreen() {
           onAccountSelectorPress={() => {}}
         />
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-      >
-        {/* Combined Balance Card */}
-        <GlassCard
-          style={styles.balanceContainer}
-          variant="medium"
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
-          <View style={styles.assetHeader}>
-            {renderAssetImage()}
-            <View style={styles.assetTitleSection}>
-              <View style={styles.assetNameRow}>
-                <Text style={styles.assetTitle}>
-                  {mappedAsset.name || assetName}
-                </Text>
-                {mappedAsset.verified === 1 && (
-                  <View style={styles.verifiedBadge}>
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={18}
-                      color={themeColors.success}
-                    />
-                  </View>
+          {/* Combined Balance Card */}
+          <GlassCard style={styles.balanceContainer} variant="medium">
+            <View style={styles.assetHeader}>
+              {renderAssetImage()}
+              <View style={styles.assetTitleSection}>
+                <View style={styles.assetNameRow}>
+                  <Text style={styles.assetTitle}>
+                    {mappedAsset.name || assetName}
+                  </Text>
+                  {mappedAsset.verified === 1 && (
+                    <View style={styles.verifiedBadge}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={18}
+                        color={themeColors.success}
+                      />
+                    </View>
+                  )}
+                </View>
+                {mappedAsset.symbol && (
+                  <Text style={styles.assetSymbol}>{mappedAsset.symbol}</Text>
                 )}
               </View>
-              {mappedAsset.symbol && (
-                <Text style={styles.assetSymbol}>{mappedAsset.symbol}</Text>
-              )}
             </View>
-          </View>
 
-          <Text style={styles.balanceLabel}>Combined Balance</Text>
-          <Text style={styles.balance}>
-            {formattedBalance} {mappedAsset.symbol || assetName}
-          </Text>
-          <Text style={styles.balanceUsd}>{calculateTotalUsdValue} USD</Text>
-        </GlassCard>
+            <Text style={styles.balanceLabel}>Combined Balance</Text>
+            <Text style={styles.balance}>
+              {formattedBalance} {mappedAsset.symbol || assetName}
+            </Text>
+            <Text style={styles.balanceUsd}>{calculateTotalUsdValue} USD</Text>
+          </GlassCard>
 
-        {/* Per-Network Breakdown */}
-        <BlurredContainer
-          style={styles.networkBreakdownContainer}
-          borderRadius={theme.borderRadius.lg}
-          opacity={0.7}
-        >
-          <Text style={styles.networkBreakdownTitle}>
-            Balances by Network
-          </Text>
-          <Text style={styles.networkBreakdownSubtitle}>
-            Tap a network to view transactions
-          </Text>
+          {/* Per-Network Breakdown */}
+          <BlurredContainer
+            style={styles.networkBreakdownContainer}
+            borderRadius={theme.borderRadius.lg}
+            opacity={0.7}
+          >
+            <Text style={styles.networkBreakdownTitle}>
+              Balances by Network
+            </Text>
+            <Text style={styles.networkBreakdownSubtitle}>
+              Tap a network to view transactions
+            </Text>
 
-          {allNetworkRows.map((row, index) => {
-            if (row.type === 'balance') {
-              const source = row.source;
-              const networkConfig = getNetworkConfig(source.networkId);
-              const sourceAsset = source.balance;
-              const isNative = sourceAsset.assetId === 0;
+            {allNetworkRows.map((row, index) => {
+              if (row.type === 'balance') {
+                const source = row.source;
+                const networkConfig = getNetworkConfig(source.networkId);
+                const sourceAsset = source.balance;
+                const isNative = sourceAsset.assetId === 0;
 
-              const balanceStr = isNative
-                ? formatNativeBalance(
-                    sourceAsset.amount,
-                    networkConfig.nativeToken
-                  )
-                : formatAssetBalance(sourceAsset.amount, sourceAsset.decimals);
+                const balanceStr = isNative
+                  ? formatNativeBalance(
+                      sourceAsset.amount,
+                      networkConfig.nativeToken
+                    )
+                  : formatAssetBalance(
+                      sourceAsset.amount,
+                      sourceAsset.decimals
+                    );
 
-              // Calculate USD value for this network
-              let usdValue = 0;
-              if (isNative) {
-                const price =
-                  multiNetworkBalance?.perNetworkPrices[source.networkId];
-                if (price && sourceAsset.amount) {
-                  const amount =
-                    typeof sourceAsset.amount === 'bigint'
-                      ? Number(sourceAsset.amount)
-                      : sourceAsset.amount;
-                  usdValue = (amount / 1_000_000) * price;
-                }
-              } else {
-                if (sourceAsset.usdValue && sourceAsset.amount) {
-                  const unitPrice = parseFloat(sourceAsset.usdValue);
-                  const amount =
-                    typeof sourceAsset.amount === 'bigint'
-                      ? Number(sourceAsset.amount)
-                      : sourceAsset.amount;
-                  usdValue = (amount / 10 ** sourceAsset.decimals) * unitPrice;
-                }
-              }
-
-              return (
-                <TouchableOpacity
-                  key={`balance-${source.networkId}-${sourceAsset.assetId}-${index}`}
-                  style={styles.networkBreakdownRow}
-                  onPress={() =>
-                    handleNetworkPress(source.networkId, sourceAsset.assetId)
+                // Calculate USD value for this network
+                let usdValue = 0;
+                if (isNative) {
+                  const price =
+                    multiNetworkBalance?.perNetworkPrices[source.networkId];
+                  if (price && sourceAsset.amount) {
+                    const amount =
+                      typeof sourceAsset.amount === 'bigint'
+                        ? Number(sourceAsset.amount)
+                        : sourceAsset.amount;
+                    usdValue = (amount / 1_000_000) * price;
                   }
-                >
-                  <View style={styles.networkBreakdownLeft}>
-                    <View
-                      style={[
-                        styles.networkBreakdownDot,
-                        { backgroundColor: networkConfig.color },
-                      ]}
-                    />
-                    <View style={styles.networkBreakdownInfo}>
-                      <Text style={styles.networkBreakdownNetwork}>
-                        {networkConfig.name}
-                      </Text>
-                      <Text style={styles.networkBreakdownAssetInfo}>
-                        {sourceAsset.symbol ||
-                          sourceAsset.name ||
-                          `Asset ${sourceAsset.assetId}`}{' '}
-                        • ID: {sourceAsset.assetId}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.networkBreakdownRight}>
-                    <View style={styles.networkBreakdownAmounts}>
-                      <Text style={styles.networkBreakdownBalance}>
-                        {balanceStr}
-                      </Text>
-                      <Text style={styles.networkBreakdownUsd}>
-                        {formatCurrency(usdValue)}
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={16}
-                      color={themeColors.textMuted}
-                      style={styles.chevron}
-                    />
-                  </View>
-                </TouchableOpacity>
-              );
-            } else {
-              // Opt-in row
-              const token = row.token;
-              const networkConfig = getNetworkConfig(token.networkId);
+                } else {
+                  if (sourceAsset.usdValue && sourceAsset.amount) {
+                    const unitPrice = parseFloat(sourceAsset.usdValue);
+                    const amount =
+                      typeof sourceAsset.amount === 'bigint'
+                        ? Number(sourceAsset.amount)
+                        : sourceAsset.amount;
+                    usdValue =
+                      (amount / 10 ** sourceAsset.decimals) * unitPrice;
+                  }
+                }
 
-              return (
-                <View
-                  key={`optin-${token.networkId}-${token.assetId}-${index}`}
-                  style={styles.networkBreakdownRow}
-                >
-                  <View style={styles.networkBreakdownLeft}>
-                    <View
-                      style={[
-                        styles.networkBreakdownDot,
-                        { backgroundColor: networkConfig.color },
-                      ]}
-                    />
-                    <View style={styles.networkBreakdownInfo}>
-                      <Text style={styles.networkBreakdownNetwork}>
-                        {networkConfig.name}
-                      </Text>
-                      <Text style={styles.networkBreakdownAssetInfo}>
-                        {token.symbol} • ID: {token.assetId}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.networkBreakdownRight}>
-                    <View style={styles.optInBadgeContainer}>
-                      <View style={styles.notOptedInBadge}>
-                        <Text style={styles.notOptedInText}>Not opted in</Text>
+                return (
+                  <TouchableOpacity
+                    key={`balance-${source.networkId}-${sourceAsset.assetId}-${index}`}
+                    style={styles.networkBreakdownRow}
+                    onPress={() =>
+                      handleNetworkPress(source.networkId, sourceAsset.assetId)
+                    }
+                  >
+                    <View style={styles.networkBreakdownLeft}>
+                      <View
+                        style={[
+                          styles.networkBreakdownDot,
+                          { backgroundColor: networkConfig.color },
+                        ]}
+                      />
+                      <View style={styles.networkBreakdownInfo}>
+                        <Text style={styles.networkBreakdownNetwork}>
+                          {networkConfig.name}
+                        </Text>
+                        <Text style={styles.networkBreakdownAssetInfo}>
+                          {sourceAsset.symbol ||
+                            sourceAsset.name ||
+                            `Asset ${sourceAsset.assetId}`}{' '}
+                          • ID: {sourceAsset.assetId}
+                        </Text>
                       </View>
-                      <TouchableOpacity
-                        style={styles.optInButton}
-                        onPress={() => handleOptInPress(token)}
-                      >
-                        <Text style={styles.optInButtonText}>Opt In</Text>
-                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.networkBreakdownRight}>
+                      <View style={styles.networkBreakdownAmounts}>
+                        <Text style={styles.networkBreakdownBalance}>
+                          {balanceStr}
+                        </Text>
+                        <Text style={styles.networkBreakdownUsd}>
+                          {formatCurrency(usdValue)}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={16}
+                        color={themeColors.textMuted}
+                        style={styles.chevron}
+                      />
+                    </View>
+                  </TouchableOpacity>
+                );
+              } else {
+                // Opt-in row
+                const token = row.token;
+                const networkConfig = getNetworkConfig(token.networkId);
+
+                return (
+                  <View
+                    key={`optin-${token.networkId}-${token.assetId}-${index}`}
+                    style={styles.networkBreakdownRow}
+                  >
+                    <View style={styles.networkBreakdownLeft}>
+                      <View
+                        style={[
+                          styles.networkBreakdownDot,
+                          { backgroundColor: networkConfig.color },
+                        ]}
+                      />
+                      <View style={styles.networkBreakdownInfo}>
+                        <Text style={styles.networkBreakdownNetwork}>
+                          {networkConfig.name}
+                        </Text>
+                        <Text style={styles.networkBreakdownAssetInfo}>
+                          {token.symbol} • ID: {token.assetId}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.networkBreakdownRight}>
+                      <View style={styles.optInBadgeContainer}>
+                        <View style={styles.notOptedInBadge}>
+                          <Text style={styles.notOptedInText}>
+                            Not opted in
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.optInButton}
+                          onPress={() => handleOptInPress(token)}
+                        >
+                          <Text style={styles.optInButtonText}>Opt In</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   </View>
-                </View>
-              );
-            }
-          })}
-        </BlurredContainer>
+                );
+              }
+            })}
+          </BlurredContainer>
 
-        {/* Action Buttons */}
-        <View style={styles.actionButtonsContainer}>
-          <GlassButton
-            variant="secondary"
-            size="md"
-            icon="send"
-            label="Send"
-            tint="#007AFF"
-            onPress={handleSend}
-            style={styles.actionButton}
-          />
-
-          {isSwappable && isSwapEnabled && (
+          {/* Action Buttons */}
+          <View style={styles.actionButtonsContainer}>
             <GlassButton
               variant="secondary"
               size="md"
-              icon="swap-horizontal"
-              label="Swap"
-              tint="#AF52DE"
-              onPress={handleSwap}
+              icon="send"
+              label="Send"
+              tint="#007AFF"
+              onPress={handleSend}
               style={styles.actionButton}
             />
-          )}
 
-          <GlassButton
-            variant="secondary"
-            size="md"
-            icon="download"
-            label="Receive"
-            tint="#30D158"
-            onPress={handleReceive}
-            style={styles.actionButton}
-          />
-        </View>
+            {isSwappable && isSwapEnabled && (
+              <GlassButton
+                variant="secondary"
+                size="md"
+                icon="swap-horizontal"
+                label="Swap"
+                tint="#AF52DE"
+                onPress={handleSwap}
+                style={styles.actionButton}
+              />
+            )}
 
-        {/* Info Section - only show if asset is on multiple networks */}
-        {mappedAsset.sourceBalances.length > 1 && (
-          <BlurredContainer
-            style={styles.infoContainer}
-            borderRadius={theme.borderRadius.md}
-            opacity={0.7}
-          >
-            <Ionicons
-              name="information-circle-outline"
-              size={20}
-              color={themeColors.textSecondary}
+            <GlassButton
+              variant="secondary"
+              size="md"
+              icon="download"
+              label="Receive"
+              tint="#30D158"
+              onPress={handleReceive}
+              style={styles.actionButton}
             />
-            <Text style={styles.infoText}>
-              This asset is available on multiple networks. Tap a network above to
-              view its transaction history and network-specific details.
-            </Text>
-          </BlurredContainer>
-        )}
-      </ScrollView>
+          </View>
 
-      <UnifiedAuthModal
-        visible={showAuthModal}
-        onSuccess={handleAuthSuccess}
-        onCancel={handleAuthCancel}
-        title="Authorize Asset Opt-In"
-        message={
-          optInPending
-            ? `Authenticate to opt into ${optInPending.symbol} on ${getNetworkConfig(optInPending.networkId).name}`
-            : 'Authenticate to complete the opt-in'
-        }
-        purpose="sign_transaction"
-        isProcessing={isOptingIn}
-      />
+          {/* Info Section - only show if asset is on multiple networks */}
+          {mappedAsset.sourceBalances.length > 1 && (
+            <BlurredContainer
+              style={styles.infoContainer}
+              borderRadius={theme.borderRadius.md}
+              opacity={0.7}
+            >
+              <Ionicons
+                name="information-circle-outline"
+                size={20}
+                color={themeColors.textSecondary}
+              />
+              <Text style={styles.infoText}>
+                This asset is available on multiple networks. Tap a network
+                above to view its transaction history and network-specific
+                details.
+              </Text>
+            </BlurredContainer>
+          )}
+        </ScrollView>
+
+        <UnifiedAuthModal
+          visible={showAuthModal}
+          onSuccess={handleAuthSuccess}
+          onCancel={handleAuthCancel}
+          title="Authorize Asset Opt-In"
+          message={
+            optInPending
+              ? `Authenticate to opt into ${optInPending.symbol} on ${getNetworkConfig(optInPending.networkId).name}`
+              : 'Authenticate to complete the opt-in'
+          }
+          purpose="sign_transaction"
+          isProcessing={isOptingIn}
+        />
       </SafeAreaView>
     </NFTBackground>
   );

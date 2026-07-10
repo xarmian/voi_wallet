@@ -64,7 +64,10 @@ export async function buildAsaOptOutTransaction(
   // Get asset info if creator not provided
   let assetCreator = creator;
   if (!assetCreator) {
-    const assetInfo = await networkService.getAlgodClient().getAssetByID(assetId).do();
+    const assetInfo = await networkService
+      .getAlgodClient()
+      .getAssetByID(assetId)
+      .do();
     if (!assetInfo) {
       throw new Error(`Asset ${assetId} not found`);
     }
@@ -72,7 +75,10 @@ export async function buildAsaOptOutTransaction(
   }
 
   // Get account info to determine balance
-  const accountInfo = await networkService.getAlgodClient().accountInformation(from).do();
+  const accountInfo = await networkService
+    .getAlgodClient()
+    .accountInformation(from)
+    .do();
   const assetHolding = accountInfo.assets?.find((asset) => {
     const holdingId = Number((asset as any).assetId ?? asset['asset-id']);
     return holdingId === assetId;
@@ -111,7 +117,10 @@ export async function validateAsaOptIn(
       : NetworkService.getInstance('voi-mainnet');
 
     // Check if already opted in
-    const accountInfo = await networkService.getAlgodClient().accountInformation(address).do();
+    const accountInfo = await networkService
+      .getAlgodClient()
+      .accountInformation(address)
+      .do();
 
     if (!accountInfo) {
       return {
@@ -201,7 +210,10 @@ export async function validateAsaOptOut(
       ? NetworkService.getInstance(networkId)
       : NetworkService.getInstance('voi-mainnet');
 
-    const accountInfo = await networkService.getAlgodClient().accountInformation(address).do();
+    const accountInfo = await networkService
+      .getAlgodClient()
+      .accountInformation(address)
+      .do();
     const assetHolding = accountInfo.assets?.find((asset) => {
       const holdingId = Number((asset as any).assetId ?? asset['asset-id']);
       return holdingId === assetId;

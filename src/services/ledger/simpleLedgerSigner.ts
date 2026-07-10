@@ -1,7 +1,10 @@
 import algosdk, { Transaction } from 'algosdk';
 import { ledgerAlgorandService } from './algorand';
 import { simpleLedgerManager } from './simpleLedgerManager';
-import { LedgerDeviceNotConnectedError, LedgerAccountError } from '@/types/wallet';
+import {
+  LedgerDeviceNotConnectedError,
+  LedgerAccountError,
+} from '@/types/wallet';
 
 export interface SimpleLedgerSigningRequest {
   transaction: Transaction | Uint8Array;
@@ -61,11 +64,9 @@ export class SimpleLedgerSigner {
 
         callbacks?.onSigningCompleted?.();
         return result;
-
       } finally {
         simpleLedgerManager.setSigningInProgress(false);
       }
-
     } catch (error) {
       simpleLedgerManager.setSigningInProgress(false);
       const normalizedError = this.normalizeError(error);
@@ -98,7 +99,11 @@ export class SimpleLedgerSigner {
         for (let i = 0; i < requests.length; i++) {
           const request = requests[i];
 
-          callbacks?.onProgress?.(i + 1, requests.length, `Signing transaction ${i + 1} of ${requests.length}`);
+          callbacks?.onProgress?.(
+            i + 1,
+            requests.length,
+            `Signing transaction ${i + 1} of ${requests.length}`
+          );
 
           const result = await ledgerAlgorandService.signTransaction(request);
           results.push(result);
@@ -106,11 +111,9 @@ export class SimpleLedgerSigner {
 
         callbacks?.onSigningCompleted?.();
         return results;
-
       } finally {
         simpleLedgerManager.setSigningInProgress(false);
       }
-
     } catch (error) {
       simpleLedgerManager.setSigningInProgress(false);
       const normalizedError = this.normalizeError(error);
@@ -126,20 +129,25 @@ export class SimpleLedgerSigner {
     startIndex: number = 0,
     count: number = 5,
     displayFirst: boolean = false
-  ): Promise<Array<{ address: string; publicKey: string; derivationIndex: number }>> {
+  ): Promise<
+    Array<{ address: string; publicKey: string; derivationIndex: number }>
+  > {
     try {
       // Ensure device is connected and ready
       await this.ensureDeviceReady();
 
       // Use existing algorand service for account derivation
-      const accounts = await ledgerAlgorandService.deriveAccounts(startIndex, count, { displayFirst });
+      const accounts = await ledgerAlgorandService.deriveAccounts(
+        startIndex,
+        count,
+        { displayFirst }
+      );
 
-      return accounts.map(account => ({
+      return accounts.map((account) => ({
         address: account.address,
         publicKey: account.publicKey,
         derivationIndex: account.derivationIndex,
       }));
-
     } catch (error) {
       throw this.normalizeError(error);
     }
@@ -156,13 +164,15 @@ export class SimpleLedgerSigner {
       // Ensure device is connected and ready
       await this.ensureDeviceReady();
 
-      const result = await ledgerAlgorandService.verifyAddressOnDevice(derivationIndex, expectedAddress);
+      const result = await ledgerAlgorandService.verifyAddressOnDevice(
+        derivationIndex,
+        expectedAddress
+      );
 
       return {
         address: result.address,
         matches: result.matches,
       };
-
     } catch (error) {
       throw this.normalizeError(error);
     }
@@ -204,7 +214,9 @@ export class SimpleLedgerSigner {
   /**
    * Ensure device is connected and ready for operations
    */
-  private async ensureDeviceReady(callbacks?: SimpleLedgerSigningCallbacks): Promise<any> {
+  private async ensureDeviceReady(
+    callbacks?: SimpleLedgerSigningCallbacks
+  ): Promise<any> {
     const currentState = simpleLedgerManager.getState();
 
     // If already ready, return transport
@@ -230,7 +242,6 @@ export class SimpleLedgerSigner {
 
       callbacks?.onDeviceReady?.();
       return transport;
-
     } catch (error) {
       throw this.normalizeError(error);
     }
@@ -240,7 +251,10 @@ export class SimpleLedgerSigner {
    * Normalize various error types to consistent Error objects
    */
   private normalizeError(error: unknown): Error {
-    if (error instanceof LedgerDeviceNotConnectedError || error instanceof LedgerAccountError) {
+    if (
+      error instanceof LedgerDeviceNotConnectedError ||
+      error instanceof LedgerAccountError
+    ) {
       return error;
     }
 
@@ -248,20 +262,32 @@ export class SimpleLedgerSigner {
       const message = error.message.toLowerCase();
 
       // Detect common error patterns and provide better messages
-      if (message.includes('6985') || message.includes('conditions of use not satisfied')) {
-        return new LedgerAccountError('Transaction was rejected on the Ledger device');
+      if (
+        message.includes('6985') ||
+        message.includes('conditions of use not satisfied')
+      ) {
+        return new LedgerAccountError(
+          'Transaction was rejected on the Ledger device'
+        );
       }
 
-      if (message.includes('6982') || message.includes('security status not satisfied')) {
+      if (
+        message.includes('6982') ||
+        message.includes('security status not satisfied')
+      ) {
         return new LedgerAccountError('Please unlock your Ledger device');
       }
 
       if (message.includes('6e00') || message.includes('app not found')) {
-        return new LedgerAccountError('Please open the Algorand app on your Ledger device');
+        return new LedgerAccountError(
+          'Please open the Algorand app on your Ledger device'
+        );
       }
 
       if (message.includes('timeout') || message.includes('disconnected')) {
-        return new LedgerDeviceNotConnectedError('Connection to Ledger device was lost');
+        return new LedgerDeviceNotConnectedError(
+          'Connection to Ledger device was lost'
+        );
       }
 
       return new LedgerAccountError(error.message);

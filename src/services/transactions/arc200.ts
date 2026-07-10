@@ -103,7 +103,10 @@ export class Arc200TransactionService {
     try {
       // If address is invalid or placeholder, assume MBR is needed
       if (!recipientAddress || !algosdk.isValidAddress(recipientAddress)) {
-        console.log('[ARC200] checkRecipientBalance: invalid address', recipientAddress);
+        console.log(
+          '[ARC200] checkRecipientBalance: invalid address',
+          recipientAddress
+        );
         return false;
       }
 
@@ -118,7 +121,14 @@ export class Arc200TransactionService {
       );
 
       const hasBalance = arc200Asset && parseFloat(arc200Asset.balance) > 0;
-      console.log('[ARC200] checkRecipientBalance:', recipientAddress, 'contractId:', contractId, 'hasBalance:', hasBalance);
+      console.log(
+        '[ARC200] checkRecipientBalance:',
+        recipientAddress,
+        'contractId:',
+        contractId,
+        'hasBalance:',
+        hasBalance
+      );
 
       // If asset exists and has balance > 0, recipient is already opted in
       return hasBalance;
@@ -642,7 +652,9 @@ export class Arc200TransactionService {
       if (!hasBalance) {
         totalMbrNeeded = true;
         // Add MBR payment for this token
-        const appEscrowAddress = algosdk.getApplicationAddress(claim.contractId);
+        const appEscrowAddress = algosdk.getApplicationAddress(
+          claim.contractId
+        );
         const mbrPaymentTxn =
           algosdk.makePaymentTxnWithSuggestedParamsFromObject({
             sender: claim.sender,

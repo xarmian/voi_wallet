@@ -69,9 +69,7 @@ export default function UniversalHeader({
   // Glass background colors
   const glassBackgroundColor = useMemo(() => {
     if (floating || hasNFTBackground) {
-      return isDark
-        ? 'rgba(20, 20, 25, 0.75)'
-        : 'rgba(255, 255, 255, 0.8)';
+      return isDark ? 'rgba(20, 20, 25, 0.75)' : 'rgba(255, 255, 255, 0.8)';
     }
     return 'transparent';
   }, [floating, hasNFTBackground, isDark]);
@@ -103,11 +101,7 @@ export default function UniversalHeader({
               },
             ]}
           >
-            <Ionicons
-              name="chevron-back"
-              size={22}
-              color={themeColors.text}
-            />
+            <Ionicons name="chevron-back" size={22} color={themeColors.text} />
           </View>
         </AnimatedPressable>
       )}
@@ -148,9 +142,7 @@ export default function UniversalHeader({
 
         {/* Right action area */}
         {rightAction && (
-          <View style={styles.rightActionContainer}>
-            {rightAction}
-          </View>
+          <View style={styles.rightActionContainer}>{rightAction}</View>
         )}
       </View>
     </>
@@ -167,7 +159,9 @@ export default function UniversalHeader({
           styles.header,
           floating && styles.floatingHeader,
           {
-            borderBottomColor: showBorder ? theme.colors.glassBorder : 'transparent',
+            borderBottomColor: showBorder
+              ? theme.colors.glassBorder
+              : 'transparent',
             borderBottomWidth: showBorder ? 1 : 0,
           },
         ]}
@@ -191,9 +185,7 @@ export default function UniversalHeader({
         />
 
         {/* Header content */}
-        <View style={styles.headerContent}>
-          {headerContent}
-        </View>
+        <View style={styles.headerContent}>{headerContent}</View>
       </SafeBlurView>
     );
   }

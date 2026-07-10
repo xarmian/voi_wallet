@@ -51,7 +51,9 @@ export default function TransactionHistoryScreen() {
   const getAssetMetadata = useWalletStore((state) => state.getAssetMetadata);
   // Subscribe to the cache itself so rows re-render when ASA params resolve
   // (getAssetMetadata is a stable selector and wouldn't trigger a re-render).
-  const assetMetadataCache = useWalletStore((state) => state.assetMetadataCache);
+  const assetMetadataCache = useWalletStore(
+    (state) => state.assetMetadataCache
+  );
 
   useEffect(() => {
     if (activeAccount) {
@@ -262,16 +264,16 @@ export default function TransactionHistoryScreen() {
   return (
     <NFTBackground>
       <SafeAreaView style={styles.container} edges={['top']}>
-        <BlurredContainer
-          style={styles.header}
-          borderRadius={0}
-          opacity={0.8}
-        >
+        <BlurredContainer style={styles.header} borderRadius={0} opacity={0.8}>
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="arrow-back" size={24} color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'} />
+            <Ionicons
+              name="arrow-back"
+              size={24}
+              color={theme.mode === 'dark' ? '#FFFFFF' : '#000000'}
+            />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Transaction History</Text>
           <View style={styles.headerSpacer} />
@@ -294,8 +296,8 @@ export default function TransactionHistoryScreen() {
             />
             <Text style={styles.emptyTitle}>No Transactions</Text>
             <Text style={styles.emptySubtitle}>
-              Your transaction history will appear here when you start using your
-              wallet.
+              Your transaction history will appear here when you start using
+              your wallet.
             </Text>
           </View>
         ) : (

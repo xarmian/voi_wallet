@@ -90,7 +90,9 @@ export class AssetFilterStorage {
   static async saveBalanceThreshold(threshold: number | null): Promise<void> {
     try {
       if (threshold === null) {
-        await AsyncStorage.removeItem(STORAGE_KEYS.ASSET_FILTER_BALANCE_THRESHOLD);
+        await AsyncStorage.removeItem(
+          STORAGE_KEYS.ASSET_FILTER_BALANCE_THRESHOLD
+        );
       } else {
         await AsyncStorage.setItem(
           STORAGE_KEYS.ASSET_FILTER_BALANCE_THRESHOLD,
@@ -127,7 +129,9 @@ export class AssetFilterStorage {
   static async saveValueThreshold(threshold: number | null): Promise<void> {
     try {
       if (threshold === null) {
-        await AsyncStorage.removeItem(STORAGE_KEYS.ASSET_FILTER_VALUE_THRESHOLD);
+        await AsyncStorage.removeItem(
+          STORAGE_KEYS.ASSET_FILTER_VALUE_THRESHOLD
+        );
       } else {
         await AsyncStorage.setItem(
           STORAGE_KEYS.ASSET_FILTER_VALUE_THRESHOLD,
@@ -194,21 +198,27 @@ export class AssetFilterStorage {
    */
   static async loadAssetFilterSettings(): Promise<AssetFilterSettings> {
     try {
-      const [sortBy, sortOrder, balanceThreshold, valueThreshold, nativeTokensFirst] =
-        await Promise.all([
-          this.getAssetSortBy(),
-          this.getAssetSortOrder(),
-          this.getBalanceThreshold(),
-          this.getValueThreshold(),
-          this.getNativeTokensFirst(),
-        ]);
+      const [
+        sortBy,
+        sortOrder,
+        balanceThreshold,
+        valueThreshold,
+        nativeTokensFirst,
+      ] = await Promise.all([
+        this.getAssetSortBy(),
+        this.getAssetSortOrder(),
+        this.getBalanceThreshold(),
+        this.getValueThreshold(),
+        this.getNativeTokensFirst(),
+      ]);
 
       return {
         sortBy: sortBy || DEFAULT_ASSET_FILTER_SETTINGS.sortBy,
         sortOrder: sortOrder || DEFAULT_ASSET_FILTER_SETTINGS.sortOrder,
         balanceThreshold: balanceThreshold,
         valueThreshold: valueThreshold,
-        nativeTokensFirst: nativeTokensFirst ?? DEFAULT_ASSET_FILTER_SETTINGS.nativeTokensFirst,
+        nativeTokensFirst:
+          nativeTokensFirst ?? DEFAULT_ASSET_FILTER_SETTINGS.nativeTokensFirst,
       };
     } catch (error) {
       console.error('Failed to load asset filter settings:', error);

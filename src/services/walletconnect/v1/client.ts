@@ -60,10 +60,13 @@ export class WalletConnectV1Client extends EventEmitter {
   async connect(config: WalletConnectV1SessionConfig): Promise<void> {
     try {
       if (this.sessionData?.connected) {
-        console.warn('WC v1 Client: Replacing active session with new connection request', {
-          existingSession: this.sessionData.peerId,
-          newTopic: config.topic,
-        });
+        console.warn(
+          'WC v1 Client: Replacing active session with new connection request',
+          {
+            existingSession: this.sessionData.peerId,
+            newTopic: config.topic,
+          }
+        );
         // Disconnect the old session's WebSocket
         if (this.socket) {
           this.socket.destroy();
@@ -137,7 +140,10 @@ export class WalletConnectV1Client extends EventEmitter {
 
         // Send session_update to DorkFi to notify them we're back online
         try {
-          await this.updateSession(storedSession.accounts, storedSession.chainId);
+          await this.updateSession(
+            storedSession.accounts,
+            storedSession.chainId
+          );
         } catch (error) {
           console.error('WC v1 Client: Failed to send session update', error);
         }
@@ -156,10 +162,7 @@ export class WalletConnectV1Client extends EventEmitter {
    * Approve session with accounts
    * Note: chainId parameter is optional - if not provided, uses the chainId from session request
    */
-  async approveSession(
-    accounts: string[],
-    chainId?: number
-  ): Promise<void> {
+  async approveSession(accounts: string[], chainId?: number): Promise<void> {
     if (!this.config || !this.socket || !this.clientId) {
       throw new Error('Client not connected');
     }
@@ -184,7 +187,10 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       // Encrypt and send response
-      const encryptedResponse = await encryptResponse(response, this.config.key);
+      const encryptedResponse = await encryptResponse(
+        response,
+        this.config.key
+      );
 
       // Subscribe to OUR clientId topic - this is where dApp will send algo_signTxn requests!
       // The dApp sends requests to this.peerId (which is OUR clientId from their perspective)
@@ -239,7 +245,10 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       // Encrypt and send response
-      const encryptedResponse = await encryptResponse(response, this.config.key);
+      const encryptedResponse = await encryptResponse(
+        response,
+        this.config.key
+      );
       this.socket.publishToTopic(this.config.topic, encryptedResponse);
 
       // Disconnect
@@ -253,10 +262,7 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Update session with new accounts
    */
-  async updateSession(
-    accounts: string[],
-    chainId?: number
-  ): Promise<void> {
+  async updateSession(accounts: string[], chainId?: number): Promise<void> {
     if (!this.config || !this.socket || !this.sessionData) {
       throw new Error('No active session');
     }
@@ -269,7 +275,10 @@ export class WalletConnectV1Client extends EventEmitter {
       });
 
       // Encrypt and send update to peerId topic
-      const encryptedUpdate = await encryptResponse(updateMessage, this.config.key);
+      const encryptedUpdate = await encryptResponse(
+        updateMessage,
+        this.config.key
+      );
       const updateTopic = this.sessionData.peerId || this.config.topic;
 
       this.socket.publishToTopic(updateTopic, encryptedUpdate);
@@ -300,7 +309,10 @@ export class WalletConnectV1Client extends EventEmitter {
       const response = createSignTxnResponse(requestId, signedTxns);
 
       // Encrypt and send response to peerId topic
-      const encryptedResponse = await encryptResponse(response, this.config.key);
+      const encryptedResponse = await encryptResponse(
+        response,
+        this.config.key
+      );
       const responseTopic = this.sessionData.peerId || this.config.topic;
       this.socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
@@ -325,7 +337,10 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       // Encrypt and send response to appropriate topic
-      const encryptedResponse = await encryptResponse(response, this.config.key);
+      const encryptedResponse = await encryptResponse(
+        response,
+        this.config.key
+      );
       // Use peerId topic if we have session data, otherwise use handshake topic
       const responseTopic = this.sessionData?.peerId || this.config.topic;
       this.socket.publishToTopic(responseTopic, encryptedResponse);
@@ -365,13 +380,19 @@ export class WalletConnectV1Client extends EventEmitter {
    * Check if session is connected
    */
   isConnected(): boolean {
-    return this.sessionData?.connected === true && this.socket?.isConnected() === true;
+    return (
+      this.sessionData?.connected === true &&
+      this.socket?.isConnected() === true
+    );
   }
 
   /**
    * Handle incoming message
    */
-  private async handleMessage(payloadString: string, receivedOnTopic?: string): Promise<void> {
+  private async handleMessage(
+    payloadString: string,
+    receivedOnTopic?: string
+  ): Promise<void> {
     try {
       if (!this.config) {
         console.error('WC v1 Client: No config available');
@@ -546,8 +567,7 @@ export class WalletConnectV1Client extends EventEmitter {
     try {
       const allKeys = await AsyncStorage.getAllKeys();
       const staleKeys = allKeys.filter(
-        (key) =>
-          key.startsWith(WC_V1_SESSION_STORAGE_KEY) && key !== activeKey
+        (key) => key.startsWith(WC_V1_SESSION_STORAGE_KEY) && key !== activeKey
       );
 
       if (staleKeys.length > 0) {

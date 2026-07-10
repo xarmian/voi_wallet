@@ -10,7 +10,10 @@ import {
   Keyboard,
   Platform,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import {
   CommonActions,
@@ -130,7 +133,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
     (text: string, index: number) => {
       // Detect if this is a multi-word paste operation
       const trimmedText = text.trim();
-      const pastedWords = trimmedText.split(/\s+/).filter(w => w.length > 0);
+      const pastedWords = trimmedText.split(/\s+/).filter((w) => w.length > 0);
 
       if (pastedWords.length > 1) {
         // Multi-word paste: insert starting from current position
@@ -154,7 +157,8 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           (word, idx) => idx > lastPastedIndex && !word.trim()
         );
 
-        const focusIndex = nextEmptyIndex >= 0 ? nextEmptyIndex : lastPastedIndex;
+        const focusIndex =
+          nextEmptyIndex >= 0 ? nextEmptyIndex : lastPastedIndex;
         setTimeout(() => {
           inputRefs.current[focusIndex]?.focus();
         }, 100);
@@ -434,7 +438,9 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
           activeOpacity={0.7}
         >
           <Text style={[styles.suggestionText, { color: theme.colors.text }]}>
-            <Text style={styles.suggestionMatch}>{item.word.substring(0, matchLength)}</Text>
+            <Text style={styles.suggestionMatch}>
+              {item.word.substring(0, matchLength)}
+            </Text>
             {item.word.substring(matchLength)}
           </Text>
         </TouchableOpacity>
@@ -451,8 +457,10 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
   }, []);
 
   useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const onShow = (e: any) => {
       const height = e?.endCoordinates?.height ?? 0;
@@ -583,10 +591,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
                 Account Name (optional)
               </Text>
               <TextInput
-                style={[
-                  styles.accountNameInput,
-                  { color: theme.colors.text },
-                ]}
+                style={[styles.accountNameInput, { color: theme.colors.text }]}
                 value={accountLabel}
                 onChangeText={setAccountLabel}
                 placeholder="Imported account name"

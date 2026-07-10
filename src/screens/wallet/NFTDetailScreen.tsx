@@ -72,10 +72,13 @@ export default function NFTDetailScreen() {
   };
 
   const handleSend = () => {
-    navigation.navigate('Send' as never, {
-      nftToken: nft,
-      networkId: nft.networkId, // Pass the network ID from the NFT
-    } as never);
+    navigation.navigate(
+      'Send' as never,
+      {
+        nftToken: nft,
+        networkId: nft.networkId, // Pass the network ID from the NFT
+      } as never
+    );
   };
 
   const handleSetAsTheme = async () => {
@@ -198,7 +201,10 @@ export default function NFTDetailScreen() {
               color={theme.colors.primary}
             />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton} onPress={handleShareNFT}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleShareNFT}
+          >
             <Ionicons
               name="share-outline"
               size={22}

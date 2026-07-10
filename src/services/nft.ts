@@ -247,10 +247,13 @@ export class NFTService {
       // Build query parameters
       const queryParams = new URLSearchParams();
 
-      if (params?.contractId) queryParams.append('contractId', params.contractId);
+      if (params?.contractId)
+        queryParams.append('contractId', params.contractId);
       if (params?.name) queryParams.append('name', params.name);
-      if (params?.verified !== undefined) queryParams.append('verified', params.verified ? '1' : '0');
-      if (params?.blacklisted !== undefined) queryParams.append('blacklisted', params.blacklisted.toString());
+      if (params?.verified !== undefined)
+        queryParams.append('verified', params.verified ? '1' : '0');
+      if (params?.blacklisted !== undefined)
+        queryParams.append('blacklisted', params.blacklisted.toString());
       if (params?.creator) queryParams.append('creator', params.creator);
       if (params?.limit) queryParams.append('limit', params.limit.toString());
       if (params?.nextToken) queryParams.append('next-token', params.nextToken);

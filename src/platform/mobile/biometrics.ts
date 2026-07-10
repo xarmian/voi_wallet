@@ -39,7 +39,8 @@ export class MobileBiometricAdapter implements BiometricAdapter {
   async getCapability(): Promise<AuthCapability> {
     const available = await LocalAuthentication.hasHardwareAsync();
     const enrolled = await LocalAuthentication.isEnrolledAsync();
-    const expoTypes = await LocalAuthentication.supportedAuthenticationTypesAsync();
+    const expoTypes =
+      await LocalAuthentication.supportedAuthenticationTypesAsync();
 
     return {
       available,

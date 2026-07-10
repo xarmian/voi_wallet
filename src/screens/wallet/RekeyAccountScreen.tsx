@@ -30,17 +30,16 @@ import { formatAddress } from '@/utils/address';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
-import {
-  useTransactionAuthController,
-} from '@/services/auth/transactionAuthController';
-import {
-  UnifiedTransactionRequest,
-} from '@/services/transactions/unifiedSigner';
+import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
+import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import RekeyToLedger from '@/components/ledger/RekeyToLedger';
 import AirgapVerificationFlow from '@/components/rekey/AirgapVerificationFlow';
 import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
-import { getNetworkConfig, NETWORK_CONFIGURATIONS } from '@/services/network/config';
+import {
+  getNetworkConfig,
+  NETWORK_CONFIGURATIONS,
+} from '@/services/network/config';
 import { NetworkService, RekeyInfo } from '@/services/network';
 
 type RekeyAccountScreenRouteProp = RouteProp<
@@ -68,7 +67,8 @@ export default function RekeyAccountScreen() {
   const loadAccountBalance = useWalletStore(
     (state) => state.loadAccountBalance
   );
-  const [selectedNetworkId, setSelectedNetworkId] = useState<NetworkId>('voi-mainnet');
+  const [selectedNetworkId, setSelectedNetworkId] =
+    useState<NetworkId>('voi-mainnet');
   const [rekeyFlow, setRekeyFlow] = useState<RekeyFlow>('standard');
   const [selectedStandardAccount, setSelectedStandardAccount] =
     useState<StandardAccountMetadata | null>(null);
@@ -80,7 +80,8 @@ export default function RekeyAccountScreen() {
   const [isValidating, setIsValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [currentRequest, setCurrentRequest] = useState<UnifiedTransactionRequest | null>(null);
+  const [currentRequest, setCurrentRequest] =
+    useState<UnifiedTransactionRequest | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [networkRekeyInfo, setNetworkRekeyInfo] = useState<any>(null);
   const [loadingRekeyInfo, setLoadingRekeyInfo] = useState(false);
@@ -101,7 +102,8 @@ export default function RekeyAccountScreen() {
     (acc) => acc.type === AccountType.LEDGER
   ) ?? []) as LedgerAccountMetadata[];
   const airgapAccounts = (wallet?.accounts.filter(
-    (acc) => acc.type === AccountType.REMOTE_SIGNER && acc.id !== params.accountId
+    (acc) =>
+      acc.type === AccountType.REMOTE_SIGNER && acc.id !== params.accountId
   ) ?? []) as RemoteSignerAccountMetadata[];
 
   // Check if source account is rekeyed on the selected network
@@ -111,11 +113,16 @@ export default function RekeyAccountScreen() {
   // For reverse rekey, we need:
   // 1. The auth address (current controller) in our wallet to sign the rekey transaction
   // 2. The source account itself in our wallet to ensure we can control it after reverting
-  const authSignerAccount = isSourceRekeyed && networkAuthAddress ?
-    wallet?.accounts.find(
-      (acc) => acc.address.toUpperCase() === networkAuthAddress.toUpperCase() &&
-      (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER || acc.type === AccountType.REMOTE_SIGNER)
-    ) : undefined;
+  const authSignerAccount =
+    isSourceRekeyed && networkAuthAddress
+      ? wallet?.accounts.find(
+          (acc) =>
+            acc.address.toUpperCase() === networkAuthAddress.toUpperCase() &&
+            (acc.type === AccountType.STANDARD ||
+              acc.type === AccountType.LEDGER ||
+              acc.type === AccountType.REMOTE_SIGNER)
+        )
+      : undefined;
 
   // Check if we have the source account in our wallet (to maintain control after rekey)
   const hasSourceAccount = !!sourceAccount;
@@ -123,9 +130,10 @@ export default function RekeyAccountScreen() {
   // We can reverse rekey if we have both the auth signer AND the source account
   const canReverseRekey = !!authSignerAccount && hasSourceAccount;
 
-  const matchingLedgerSigner = authSignerAccount?.type === AccountType.LEDGER
-    ? (authSignerAccount as LedgerAccountMetadata)
-    : undefined;
+  const matchingLedgerSigner =
+    authSignerAccount?.type === AccountType.LEDGER
+      ? (authSignerAccount as LedgerAccountMetadata)
+      : undefined;
 
   const isReverseFlow = rekeyFlow === 'reverse';
   const isLedgerFlow = rekeyFlow === 'ledger';
@@ -134,10 +142,10 @@ export default function RekeyAccountScreen() {
     rekeyFlow === 'standard'
       ? !!selectedStandardAccount
       : rekeyFlow === 'ledger'
-      ? !!selectedLedgerAccount
-      : rekeyFlow === 'airgap'
-      ? !!selectedAirgapAccount
-      : true;
+        ? !!selectedLedgerAccount
+        : rekeyFlow === 'airgap'
+          ? !!selectedAirgapAccount
+          : true;
   const isProceedDisabled =
     (rekeyFlow !== 'reverse' && !hasTargetSelection) ||
     validationErrors.length > 0 ||
@@ -146,10 +154,12 @@ export default function RekeyAccountScreen() {
   const proceedLabel = isReverseFlow
     ? 'Remove Rekey'
     : isLedgerFlow
-    ? 'Rekey to Ledger'
-    : isAirgapFlow
-    ? (airgapVerified ? 'Rekey to Airgap Signer' : 'Verify Airgap Signer')
-    : 'Rekey Account';
+      ? 'Rekey to Ledger'
+      : isAirgapFlow
+        ? airgapVerified
+          ? 'Rekey to Airgap Signer'
+          : 'Verify Airgap Signer'
+        : 'Rekey Account';
 
   useEffect(() => {
     return () => {
@@ -219,8 +229,8 @@ export default function RekeyAccountScreen() {
         rekeyFlow === 'ledger'
           ? selectedLedgerAccount
           : rekeyFlow === 'airgap'
-          ? selectedAirgapAccount
-          : selectedStandardAccount;
+            ? selectedAirgapAccount
+            : selectedStandardAccount;
       if (!targetAccount) {
         setValidationErrors([]);
         return;
@@ -286,7 +296,13 @@ export default function RekeyAccountScreen() {
     ) {
       setSelectedAirgapAccount(airgapAccounts[0]);
     }
-  }, [ledgerAccounts, airgapAccounts, rekeyFlow, selectedLedgerAccount, selectedAirgapAccount]);
+  }, [
+    ledgerAccounts,
+    airgapAccounts,
+    rekeyFlow,
+    selectedLedgerAccount,
+    selectedAirgapAccount,
+  ]);
 
   const handleStandardAccountSelect = (account: StandardAccountMetadata) => {
     setSelectedStandardAccount(account);
@@ -304,7 +320,9 @@ export default function RekeyAccountScreen() {
 
   const handleLedgerStatusUpdate = useCallback(
     ({ isReady }: { info: LedgerSigningInfo | null; isReady: boolean }) => {
-      setIsLedgerReady((previous) => (previous === isReady ? previous : isReady));
+      setIsLedgerReady((previous) =>
+        previous === isReady ? previous : isReady
+      );
     },
     []
   );
@@ -339,8 +357,8 @@ export default function RekeyAccountScreen() {
       rekeyFlow === 'ledger'
         ? selectedLedgerAccount
         : rekeyFlow === 'airgap'
-        ? selectedAirgapAccount
-        : selectedStandardAccount;
+          ? selectedAirgapAccount
+          : selectedStandardAccount;
 
     if (!targetAccount) {
       Alert.alert(
@@ -348,8 +366,8 @@ export default function RekeyAccountScreen() {
         rekeyFlow === 'ledger'
           ? 'Select a Ledger account to continue.'
           : rekeyFlow === 'airgap'
-          ? 'Select an airgap signer account to continue.'
-          : 'Select a signing account to continue.'
+            ? 'Select an airgap signer account to continue.'
+            : 'Select a signing account to continue.'
       );
       return;
     }
@@ -364,8 +382,8 @@ export default function RekeyAccountScreen() {
       rekeyFlow === 'ledger'
         ? '\n\nAfter rekeying, future transactions must be approved with your Ledger device.'
         : rekeyFlow === 'airgap'
-        ? '\n\nAfter rekeying, future transactions must be signed with your airgap signer device via QR codes.'
-        : '\n\nThis action can be reversed later.';
+          ? '\n\nAfter rekeying, future transactions must be signed with your airgap signer device via QR codes.'
+          : '\n\nThis action can be reversed later.';
 
     Alert.alert(
       'Confirm Rekey Operation',
@@ -450,14 +468,20 @@ export default function RekeyAccountScreen() {
           });
         }
       } catch (metadataError) {
-        console.warn('Failed to update Ledger rekey metadata immediately:', metadataError);
+        console.warn(
+          'Failed to update Ledger rekey metadata immediately:',
+          metadataError
+        );
       }
     },
     [wallet]
   );
 
   const applyAirgapMetadataUpdate = useCallback(
-    async (account: AccountMetadata, airgapAccount: RemoteSignerAccountMetadata) => {
+    async (
+      account: AccountMetadata,
+      airgapAccount: RemoteSignerAccountMetadata
+    ) => {
       if (!wallet) {
         return;
       }
@@ -483,7 +507,10 @@ export default function RekeyAccountScreen() {
           });
         }
       } catch (metadataError) {
-        console.warn('Failed to update airgap rekey metadata immediately:', metadataError);
+        console.warn(
+          'Failed to update airgap rekey metadata immediately:',
+          metadataError
+        );
       }
     },
     [wallet]
@@ -498,8 +525,8 @@ export default function RekeyAccountScreen() {
       rekeyFlow === 'ledger'
         ? selectedLedgerAccount
         : rekeyFlow === 'airgap'
-        ? selectedAirgapAccount
-        : selectedStandardAccount;
+          ? selectedAirgapAccount
+          : selectedStandardAccount;
 
     // Create unified transaction request
     const request: UnifiedTransactionRequest = {
@@ -508,10 +535,12 @@ export default function RekeyAccountScreen() {
       networkId: selectedNetworkId,
       rekeyParams: {
         fromAddress: sourceAccount.address,
-        rekeyToAddress: rekeyFlow === 'reverse' ? undefined : targetAccount?.address,
-        note: rekeyFlow === 'reverse'
-          ? 'Remove rekey - return to self'
-          : `Rekey to ${targetAccount?.label || 'account'}`,
+        rekeyToAddress:
+          rekeyFlow === 'reverse' ? undefined : targetAccount?.address,
+        note:
+          rekeyFlow === 'reverse'
+            ? 'Remove rekey - return to self'
+            : `Rekey to ${targetAccount?.label || 'account'}`,
         networkId: selectedNetworkId,
       },
     };
@@ -530,7 +559,10 @@ export default function RekeyAccountScreen() {
         try {
           await applyLedgerMetadataUpdate(sourceAccount, selectedLedgerAccount);
         } catch (metadataError) {
-          console.warn('Failed to update Ledger rekey metadata:', metadataError);
+          console.warn(
+            'Failed to update Ledger rekey metadata:',
+            metadataError
+          );
         }
       }
 
@@ -539,7 +571,10 @@ export default function RekeyAccountScreen() {
         try {
           await applyAirgapMetadataUpdate(sourceAccount, selectedAirgapAccount);
         } catch (metadataError) {
-          console.warn('Failed to update airgap rekey metadata:', metadataError);
+          console.warn(
+            'Failed to update airgap rekey metadata:',
+            metadataError
+          );
         }
       }
 
@@ -555,7 +590,9 @@ export default function RekeyAccountScreen() {
           );
 
           if (updatedAccount.type !== sourceAccount.type) {
-            await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
+            await MultiAccountWalletService.updateAccountMetadata(
+              updatedAccount
+            );
 
             const currentState = useWalletStore.getState();
             if (currentState.wallet) {
@@ -563,14 +600,19 @@ export default function RekeyAccountScreen() {
                 wallet: {
                   ...currentState.wallet,
                   accounts: currentState.wallet.accounts.map((candidate) =>
-                    candidate.id === updatedAccount.id ? updatedAccount : candidate
+                    candidate.id === updatedAccount.id
+                      ? updatedAccount
+                      : candidate
                   ),
                 },
               });
             }
           }
         } catch (metadataError) {
-          console.warn('Failed to update reverse rekey metadata:', metadataError);
+          console.warn(
+            'Failed to update reverse rekey metadata:',
+            metadataError
+          );
         }
       }
 
@@ -589,19 +631,19 @@ export default function RekeyAccountScreen() {
         rekeyFlow === 'reverse'
           ? 'Rekey Removed'
           : rekeyFlow === 'ledger'
-          ? 'Ledger Rekey Successful'
-          : rekeyFlow === 'airgap'
-          ? 'Airgap Rekey Successful'
-          : 'Rekey Successful';
+            ? 'Ledger Rekey Successful'
+            : rekeyFlow === 'airgap'
+              ? 'Airgap Rekey Successful'
+              : 'Rekey Successful';
 
       const message =
         rekeyFlow === 'reverse'
           ? `Account rekey has been removed successfully!\n\nYou now have full control of this account again.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
           : rekeyFlow === 'ledger'
-          ? `Account has been rekeyed to your Ledger device successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
-          : rekeyFlow === 'airgap'
-          ? `Account has been rekeyed to your airgap signer successfully!\n\nFuture transactions will require signing via QR code.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
-          : `Account has been rekeyed successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`;
+            ? `Account has been rekeyed to your Ledger device successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
+            : rekeyFlow === 'airgap'
+              ? `Account has been rekeyed to your airgap signer successfully!\n\nFuture transactions will require signing via QR code.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
+              : `Account has been rekeyed successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`;
 
       Alert.alert(title, message, [
         {
@@ -661,8 +703,8 @@ export default function RekeyAccountScreen() {
           isReverseFlow
             ? 'Remove rekey and return control to account'
             : isLedgerFlow
-            ? 'Transfer signing authority to a Ledger account'
-            : 'Transfer signing authority to another account'
+              ? 'Transfer signing authority to a Ledger account'
+              : 'Transfer signing authority to another account'
         }
         showBackButton
         onBackPress={() => navigation.goBack()}
@@ -703,7 +745,10 @@ export default function RekeyAccountScreen() {
               </Text>
               {loadingRekeyInfo ? (
                 <View style={styles.rekeyStatusContainer}>
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.primary}
+                  />
                   <Text
                     style={[
                       styles.rekeyStatusText,
@@ -726,8 +771,7 @@ export default function RekeyAccountScreen() {
                       { color: theme.colors.textSecondary },
                     ]}
                   >
-                    Currently rekeyed to:{' '}
-                    {formatAddress(networkAuthAddress)}
+                    Currently rekeyed to: {formatAddress(networkAuthAddress)}
                   </Text>
                 </View>
               ) : null}
@@ -771,10 +815,7 @@ export default function RekeyAccountScreen() {
                 disabled={isProcessing}
               >
                 <View
-                  style={[
-                    styles.networkDot,
-                    { backgroundColor: config.color },
-                  ]}
+                  style={[styles.networkDot, { backgroundColor: config.color }]}
                 />
                 <Text
                   style={[
@@ -935,9 +976,7 @@ export default function RekeyAccountScreen() {
                   name="return-up-back"
                   size={20}
                   color={
-                    rekeyFlow === 'reverse'
-                      ? theme.colors.primary
-                      : '#6B7280'
+                    rekeyFlow === 'reverse' ? theme.colors.primary : '#6B7280'
                   }
                 />
                 <Text
@@ -1053,9 +1092,7 @@ export default function RekeyAccountScreen() {
               onSelectAccount={handleLedgerAccountSelect}
               onStatusUpdate={handleLedgerStatusUpdate}
               onImportLedgerAccounts={() =>
-                navigation.getParent()?.navigate(
-                  'LedgerAccountImport' as never
-                )
+                navigation.getParent()?.navigate('LedgerAccountImport' as never)
               }
               isBusy={isProcessing}
             />
@@ -1098,7 +1135,8 @@ export default function RekeyAccountScreen() {
                     { color: theme.colors.textSecondary },
                   ]}
                 >
-                  No airgap signer accounts available. Import an airgap signer first.
+                  No airgap signer accounts available. Import an airgap signer
+                  first.
                 </Text>
               </View>
             ) : (
@@ -1112,8 +1150,12 @@ export default function RekeyAccountScreen() {
                       borderColor: theme.colors.border,
                     },
                     selectedAirgapAccount?.id === account.id && {
-                      borderColor: airgapVerified ? theme.colors.success : theme.colors.primary,
-                      backgroundColor: airgapVerified ? theme.colors.successLight : theme.colors.primaryLight,
+                      borderColor: airgapVerified
+                        ? theme.colors.success
+                        : theme.colors.primary,
+                      backgroundColor: airgapVerified
+                        ? theme.colors.successLight
+                        : theme.colors.primaryLight,
                     },
                   ]}
                   onPress={() => handleAirgapAccountSelect(account)}
@@ -1126,7 +1168,9 @@ export default function RekeyAccountScreen() {
                         { color: theme.colors.text },
                       ]}
                     >
-                      {account.label || account.signerDeviceName || 'Airgap Signer'}
+                      {account.label ||
+                        account.signerDeviceName ||
+                        'Airgap Signer'}
                     </Text>
                     <Text
                       style={[
@@ -1137,13 +1181,14 @@ export default function RekeyAccountScreen() {
                       {formatAddress(account.address)}
                     </Text>
                   </View>
-                  {selectedAirgapAccount?.id === account.id && airgapVerified && (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={24}
-                      color={theme.colors.success}
-                    />
-                  )}
+                  {selectedAirgapAccount?.id === account.id &&
+                    airgapVerified && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={24}
+                        color={theme.colors.success}
+                      />
+                    )}
                 </TouchableOpacity>
               ))
             )}
@@ -1271,8 +1316,8 @@ export default function RekeyAccountScreen() {
                   {isReverseFlow
                     ? 'Ready to remove rekey'
                     : isLedgerFlow
-                    ? 'Ledger device ready for rekey'
-                    : 'Ready to proceed with rekey'}
+                      ? 'Ledger device ready for rekey'
+                      : 'Ready to proceed with rekey'}
                 </Text>
               </View>
             )}
@@ -1301,8 +1346,8 @@ export default function RekeyAccountScreen() {
             {isReverseFlow
               ? '• This will remove the current rekey and return control to the original account\n• You will regain full signing authority\n• The account address will remain the same\n• This action can be undone by rekeying again later'
               : isLedgerFlow
-              ? '• This will transfer signing authority to your Ledger device\n• Keep the Ledger account available to sign future transactions\n• The account address remains the same\n• You can rekey back to a wallet account later if needed'
-              : '• This will transfer signing authority to the selected account\n• The account address will remain the same\n• You can reverse this operation later if needed\n• Both accounts must remain in your wallet for full functionality'}
+                ? '• This will transfer signing authority to your Ledger device\n• Keep the Ledger account available to sign future transactions\n• The account address remains the same\n• You can rekey back to a wallet account later if needed'
+                : '• This will transfer signing authority to the selected account\n• The account address will remain the same\n• You can reverse this operation later if needed\n• Both accounts must remain in your wallet for full functionality'}
           </Text>
         </View>
       </ScrollView>

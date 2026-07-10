@@ -17,7 +17,12 @@ import {
 } from 'react-native';
 import SignerAuthModal from '@/components/remoteSigner/SignerAuthModal';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
+import {
+  useNavigation,
+  useRoute,
+  RouteProp,
+  useFocusEffect,
+} from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -42,7 +47,8 @@ const showAlert = (
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find((b) => b.style !== 'cancel') || buttons[0];
+        const confirmButton =
+          buttons.find((b) => b.style !== 'cancel') || buttons[0];
         confirmButton?.onPress?.();
       } else {
         const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -94,8 +100,12 @@ export default function TransactionReviewScreen() {
 
   const { request } = route.params;
 
-  const setPendingRequest = useRemoteSignerStore((state) => state.setPendingRequest);
-  const markRequestProcessed = useRemoteSignerStore((state) => state.markRequestProcessed);
+  const setPendingRequest = useRemoteSignerStore(
+    (state) => state.setPendingRequest
+  );
+  const markRequestProcessed = useRemoteSignerStore(
+    (state) => state.markRequestProcessed
+  );
 
   const [currentTxnIndex, setCurrentTxnIndex] = useState(0);
   const [showFullDetails, setShowFullDetails] = useState(false);
@@ -141,23 +151,29 @@ export default function TransactionReviewScreen() {
     setShowAuthModal(true);
   };
 
-  const handleAuthSuccess = useCallback((pin?: string) => {
-    setShowAuthModal(false);
-    setIsSigning(true);
+  const handleAuthSuccess = useCallback(
+    (pin?: string) => {
+      setShowAuthModal(false);
+      setIsSigning(true);
 
-    // Navigate to signature display with the request and optional PIN
-    // The SignatureDisplayScreen will handle actual signing with the PIN
-    navigation.navigate('SignatureDisplay', {
-      request,
-      pin, // Pass PIN for signing (undefined if biometric was used)
-    });
-  }, [navigation, request]);
+      // Navigate to signature display with the request and optional PIN
+      // The SignatureDisplayScreen will handle actual signing with the PIN
+      navigation.navigate('SignatureDisplay', {
+        request,
+        pin, // Pass PIN for signing (undefined if biometric was used)
+      });
+    },
+    [navigation, request]
+  );
 
   const handleAuthCancel = useCallback(() => {
     setShowAuthModal(false);
   }, []);
 
-  const renderTransactionSummary = (txn: DecodedTransactionInfo, index: number) => {
+  const renderTransactionSummary = (
+    txn: DecodedTransactionInfo,
+    index: number
+  ) => {
     const typeLabel = TRANSACTION_TYPE_LABELS[txn.type];
     const typeIcon = TRANSACTION_TYPE_ICONS[txn.type];
 
@@ -201,7 +217,9 @@ export default function TransactionReviewScreen() {
           {txn.receiver && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>To</Text>
-              <Text style={styles.detailValue}>{formatAddress(txn.receiver)}</Text>
+              <Text style={styles.detailValue}>
+                {formatAddress(txn.receiver)}
+              </Text>
             </View>
           )}
 
@@ -225,7 +243,8 @@ export default function TransactionReviewScreen() {
           <View style={styles.warningBanner}>
             <Ionicons name="warning" size={20} color={theme.colors.warning} />
             <Text style={styles.warningText}>
-              This transaction rekeys the account to {formatAddress(txn.rekeyTo)}
+              This transaction rekeys the account to{' '}
+              {formatAddress(txn.rekeyTo)}
             </Text>
           </View>
         )}
@@ -234,7 +253,8 @@ export default function TransactionReviewScreen() {
           <View style={styles.warningBanner}>
             <Ionicons name="warning" size={20} color={theme.colors.error} />
             <Text style={styles.warningText}>
-              This transaction closes the account to {formatAddress(txn.closeRemainderTo)}
+              This transaction closes the account to{' '}
+              {formatAddress(txn.closeRemainderTo)}
             </Text>
           </View>
         )}
@@ -371,15 +391,13 @@ export default function TransactionReviewScreen() {
         )}
 
         {/* Transaction Cards */}
-        {isGroup ? (
-          // Show all transactions in group
-          decodedTransactions.map((txn, index) =>
-            renderTransactionSummary(txn, index)
-          )
-        ) : (
-          // Show single transaction
-          renderTransactionSummary(currentTxn, 0)
-        )}
+        {isGroup
+          ? // Show all transactions in group
+            decodedTransactions.map((txn, index) =>
+              renderTransactionSummary(txn, index)
+            )
+          : // Show single transaction
+            renderTransactionSummary(currentTxn, 0)}
 
         {/* Toggle Full Details */}
         <TouchableOpacity
@@ -417,7 +435,11 @@ export default function TransactionReviewScreen() {
           onPress={handleReject}
           disabled={isSigning}
         >
-          <Ionicons name="close-circle-outline" size={20} color={theme.colors.error} />
+          <Ionicons
+            name="close-circle-outline"
+            size={20}
+            color={theme.colors.error}
+          />
           <Text style={styles.rejectButtonText}>Reject</Text>
         </TouchableOpacity>
 

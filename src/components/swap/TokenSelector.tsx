@@ -66,15 +66,17 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
   const [loadingBalance, setLoadingBalance] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [slideAnim] = useState(new Animated.Value(0));
-  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(null);
+  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(
+    null
+  );
 
   // Get account address from store
-  const accounts = useWalletStore(state => state.wallet?.accounts);
-  const currentAccount = accounts?.find(acc => acc.id === accountId);
+  const accounts = useWalletStore((state) => state.wallet?.accounts);
+  const currentAccount = accounts?.find((acc) => acc.id === accountId);
 
   // Default single-network balance (for VOI)
-  const singleNetworkBalance = useWalletStore(state =>
-    state.accountStates[accountId]?.balance
+  const singleNetworkBalance = useWalletStore(
+    (state) => state.accountStates[accountId]?.balance
   );
 
   // Load balance for the specific network when modal opens
@@ -89,7 +91,9 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
         // This ensures we get the proper ASA balance structure
         if (networkId && networkId !== NetworkId.VOI_MAINNET) {
           const networkService = NetworkService.getInstance(networkId);
-          const balance = await networkService.getAccountBalance(currentAccount.address);
+          const balance = await networkService.getAccountBalance(
+            currentAccount.address
+          );
           setNetworkBalance(balance);
         } else {
           // For VOI network, use the store balance
@@ -141,23 +145,27 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
       const availableTokens = await provider.getTokens();
 
       // Enrich tokens with user balances
-      const tokensWithBalances = await enrichTokensWithBalances(availableTokens);
+      const tokensWithBalances =
+        await enrichTokensWithBalances(availableTokens);
 
       // Filter out excluded token
       let filteredTokens = excludeTokenId
-        ? tokensWithBalances.filter(t => t.id !== excludeTokenId)
+        ? tokensWithBalances.filter((t) => t.id !== excludeTokenId)
         : tokensWithBalances;
 
       // If ownedOnly, filter to only tokens with balance > 0
       if (ownedOnly) {
-        filteredTokens = filteredTokens.filter(t => parseFloat(t.balance || '0') > 0);
+        filteredTokens = filteredTokens.filter(
+          (t) => parseFloat(t.balance || '0') > 0
+        );
       }
 
       // Determine special token IDs based on network
       // VOI network: VOI (0) first, aUSDC (302190) second
       // Algorand: ALGO (0) first, USDC (31566704) second
       const nativeTokenId = 0;
-      const stablecoinId = networkId === NetworkId.ALGORAND_MAINNET ? 31566704 : 302190;
+      const stablecoinId =
+        networkId === NetworkId.ALGORAND_MAINNET ? 31566704 : 302190;
 
       // Custom sort: Native token first, stablecoin second, then by balance, then alphabetically
       const sorted = filteredTokens.sort((a, b) => {
@@ -201,17 +209,25 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
           const tokenId = token.id;
 
           // For native token (VOI/ALGO - id 0)
-          if (tokenId === 0 || token.symbol === 'VOI' || token.symbol === 'ALGO') {
-            const nativeBalance = accountBalance?.amount ? String(accountBalance.amount) : '0';
+          if (
+            tokenId === 0 ||
+            token.symbol === 'VOI' ||
+            token.symbol === 'ALGO'
+          ) {
+            const nativeBalance = accountBalance?.amount
+              ? String(accountBalance.amount)
+              : '0';
             const balanceValue = parseFloat(nativeBalance) / Math.pow(10, 6);
 
             // Calculate USD value from balance and price (use voiPrice or algoPrice)
-            const nativePrice = networkId === NetworkId.ALGORAND_MAINNET
-              ? (accountBalance?.algoPrice || 0)
-              : (accountBalance?.voiPrice || 0);
-            const nativeUsdValue = nativePrice > 0
-              ? (balanceValue * nativePrice).toFixed(2)
-              : undefined;
+            const nativePrice =
+              networkId === NetworkId.ALGORAND_MAINNET
+                ? accountBalance?.algoPrice || 0
+                : accountBalance?.voiPrice || 0;
+            const nativeUsdValue =
+              nativePrice > 0
+                ? (balanceValue * nativePrice).toFixed(2)
+                : undefined;
 
             return {
               ...token,
@@ -228,12 +244,13 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
           if (accountBalance?.assets && Array.isArray(accountBalance.assets)) {
             // Check for ASA tokens first (using assetId)
             const asaAsset = accountBalance.assets.find(
-              asset => asset.assetId === tokenId && asset.assetType === 'asa'
+              (asset) => asset.assetId === tokenId && asset.assetType === 'asa'
             );
 
             if (asaAsset) {
               const balanceValue =
-                parseFloat(asaAsset.amount.toString()) / Math.pow(10, token.decimals);
+                parseFloat(asaAsset.amount.toString()) /
+                Math.pow(10, token.decimals);
 
               // Format USD value
               const assetUsdValue = asaAsset.usdValue
@@ -253,12 +270,14 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
 
             // Check for ARC-200 tokens (using contractId)
             const arc200Asset = accountBalance.assets.find(
-              asset => asset.contractId === tokenId && asset.assetType === 'arc200'
+              (asset) =>
+                asset.contractId === tokenId && asset.assetType === 'arc200'
             );
 
             if (arc200Asset) {
               const balanceValue =
-                parseFloat(arc200Asset.amount.toString()) / Math.pow(10, token.decimals);
+                parseFloat(arc200Asset.amount.toString()) /
+                Math.pow(10, token.decimals);
 
               // Format USD value
               const assetUsdValue = arc200Asset.usdValue
@@ -284,7 +303,10 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
             balanceFormatted: '0',
           };
         } catch (error) {
-          console.error(`Error getting balance for token ${token.symbol}:`, error);
+          console.error(
+            `Error getting balance for token ${token.symbol}:`,
+            error
+          );
           return {
             ...token,
             balance: '0',
@@ -300,7 +322,7 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
 
     const query = searchQuery.toLowerCase();
     return tokens.filter(
-      token =>
+      (token) =>
         token.symbol.toLowerCase().includes(query) ||
         token.name.toLowerCase().includes(query) ||
         token.id.toString().includes(query)
@@ -335,10 +357,7 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
                 defaultSource={require('../../../assets/icon.png')}
               />
             ) : (
-              <Image
-                source={imageSource.source}
-                style={styles.tokenIcon}
-              />
+              <Image source={imageSource.source} style={styles.tokenIcon} />
             )
           ) : (
             <View style={styles.tokenIconPlaceholder}>
@@ -352,7 +371,11 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
           <View style={styles.tokenNameRow}>
             <Text style={styles.tokenSymbol}>{item.symbol}</Text>
             {item.verified && (
-              <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
+              <Ionicons
+                name="checkmark-circle"
+                size={16}
+                color={theme.colors.success}
+              />
             )}
           </View>
           <Text style={styles.tokenName} numberOfLines={1}>
@@ -405,18 +428,22 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
           <View style={styles.overlay}>
             <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
               <Animated.View
-                style={[
-                  styles.modalContainer,
-                  { transform: [{ translateY }] },
-                ]}
+                style={[styles.modalContainer, { transform: [{ translateY }] }]}
               >
                 {/* Header */}
                 <View style={styles.header}>
                   <Text style={styles.title}>
                     {ownedOnly ? 'Select Token to Swap' : 'Select Token'}
                   </Text>
-                  <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                    <Ionicons name="close" size={24} color={theme.colors.text} />
+                  <TouchableOpacity
+                    onPress={onClose}
+                    style={styles.closeButton}
+                  >
+                    <Ionicons
+                      name="close"
+                      size={24}
+                      color={theme.colors.text}
+                    />
                   </TouchableOpacity>
                 </View>
 
@@ -440,7 +467,11 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
                   />
                   {searchQuery.length > 0 && (
                     <TouchableOpacity onPress={() => setSearchQuery('')}>
-                      <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+                      <Ionicons
+                        name="close-circle"
+                        size={20}
+                        color={theme.colors.textMuted}
+                      />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -448,20 +479,29 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
                 {/* Token List */}
                 {loading || loadingBalance ? (
                   <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={theme.colors.primary} />
+                    <ActivityIndicator
+                      size="large"
+                      color={theme.colors.primary}
+                    />
                     <Text style={styles.loadingText}>
-                      {loadingBalance ? 'Loading balances...' : 'Loading tokens...'}
+                      {loadingBalance
+                        ? 'Loading balances...'
+                        : 'Loading tokens...'}
                     </Text>
                   </View>
                 ) : filteredTokens.length === 0 ? (
                   <View style={styles.emptyContainer}>
-                    <Ionicons name="search" size={48} color={theme.colors.textMuted} />
+                    <Ionicons
+                      name="search"
+                      size={48}
+                      color={theme.colors.textMuted}
+                    />
                     <Text style={styles.emptyText}>No tokens found</Text>
                     <Text style={styles.emptySubtext}>
                       {searchQuery
                         ? 'Try a different search term'
                         : ownedOnly
-                          ? 'You don\'t have any tokens to swap'
+                          ? "You don't have any tokens to swap"
                           : 'No swappable tokens available'}
                     </Text>
                   </View>
@@ -470,10 +510,12 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
                     style={styles.tokenList}
                     data={filteredTokens}
                     renderItem={renderTokenItem}
-                    keyExtractor={item => item.id.toString()}
+                    keyExtractor={(item) => item.id.toString()}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
-                    ItemSeparatorComponent={() => <View style={styles.separator} />}
+                    ItemSeparatorComponent={() => (
+                      <View style={styles.separator} />
+                    )}
                     keyboardShouldPersistTaps="handled"
                   />
                 )}

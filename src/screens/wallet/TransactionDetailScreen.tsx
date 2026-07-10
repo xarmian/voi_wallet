@@ -219,21 +219,37 @@ export default function TransactionDetailScreen() {
             style={styles.amountContainer}
             borderRadius={theme.borderRadius.lg}
           >
-            <View style={[
-              styles.directionBadge,
-              isReceived && styles.receivedBadge,
-              isSent && styles.sentBadge,
-            ]}>
+            <View
+              style={[
+                styles.directionBadge,
+                isReceived && styles.receivedBadge,
+                isSent && styles.sentBadge,
+              ]}
+            >
               <Ionicons
-                name={isReceived ? 'arrow-down' : isSent ? 'arrow-up' : 'swap-horizontal'}
+                name={
+                  isReceived
+                    ? 'arrow-down'
+                    : isSent
+                      ? 'arrow-up'
+                      : 'swap-horizontal'
+                }
                 size={16}
-                color={isReceived ? themeColors.success : isSent ? themeColors.error : themeColors.text}
+                color={
+                  isReceived
+                    ? themeColors.success
+                    : isSent
+                      ? themeColors.error
+                      : themeColors.text
+                }
               />
-              <Text style={[
-                styles.directionText,
-                isReceived && styles.receivedText,
-                isSent && styles.sentText,
-              ]}>
+              <Text
+                style={[
+                  styles.directionText,
+                  isReceived && styles.receivedText,
+                  isSent && styles.sentText,
+                ]}
+              >
                 {direction}
               </Text>
             </View>
@@ -325,7 +341,11 @@ export default function TransactionDetailScreen() {
 
             <View style={styles.addressSection}>
               <View style={styles.addressLabelRow}>
-                <Ionicons name="arrow-up-circle-outline" size={18} color={themeColors.error} />
+                <Ionicons
+                  name="arrow-up-circle-outline"
+                  size={18}
+                  color={themeColors.error}
+                />
                 <Text style={styles.addressLabel}>From</Text>
               </View>
               <TouchableOpacity
@@ -363,7 +383,11 @@ export default function TransactionDetailScreen() {
 
             <View style={[styles.addressSection, styles.addressSectionLast]}>
               <View style={styles.addressLabelRow}>
-                <Ionicons name="arrow-down-circle-outline" size={18} color={themeColors.success} />
+                <Ionicons
+                  name="arrow-down-circle-outline"
+                  size={18}
+                  color={themeColors.success}
+                />
                 <Text style={styles.addressLabel}>To</Text>
               </View>
               <TouchableOpacity

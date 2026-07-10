@@ -3,11 +3,15 @@ import {
   AuthAccountDiscoveryRequest,
   AuthAccountDiscoveryResult,
   AuthAccountDiscoveryError,
-  NetworkAuthAccount
+  NetworkAuthAccount,
 } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import { NetworkService } from '@/services/network';
-import { getNetworkConfig, getNetworkDisplayName, AVAILABLE_NETWORKS } from '@/services/network/config';
+import {
+  getNetworkConfig,
+  getNetworkDisplayName,
+  AVAILABLE_NETWORKS,
+} from '@/services/network/config';
 import { MultiAccountWalletService } from '@/services/wallet';
 
 export class AuthAccountDiscoveryService {
@@ -29,7 +33,11 @@ export class AuthAccountDiscoveryService {
   async discoverAuthAccounts(
     request: AuthAccountDiscoveryRequest
   ): Promise<AuthAccountDiscoveryResult> {
-    const { ledgerAddresses, networks = AVAILABLE_NETWORKS, includeExisting = true } = request;
+    const {
+      ledgerAddresses,
+      networks = AVAILABLE_NETWORKS,
+      includeExisting = true,
+    } = request;
 
     if (!ledgerAddresses.length) {
       throw new Error('At least one Ledger address is required');
@@ -59,15 +67,16 @@ export class AuthAccountDiscoveryService {
           );
           return networkAccounts;
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          const errorMessage =
+            error instanceof Error ? error.message : 'Unknown error';
 
           // Log error for each Ledger address on this network
-          ledgerAddresses.forEach(address => {
+          ledgerAddresses.forEach((address) => {
             errors.push({
               networkId,
               ledgerAddress: address,
               error: errorMessage,
-              code: 'NETWORK_SEARCH_FAILED'
+              code: 'NETWORK_SEARCH_FAILED',
             });
           });
 
@@ -78,13 +87,17 @@ export class AuthAccountDiscoveryService {
       const networkResults = await Promise.all(networkPromises);
 
       // Flatten all results
-      networkResults.forEach(accounts => {
+      networkResults.forEach((accounts) => {
         authAccounts.push(...accounts);
       });
 
       // Separate by network for convenience
-      const voiAccounts = authAccounts.filter(acc => acc.networkId === NetworkId.VOI_MAINNET);
-      const algorandAccounts = authAccounts.filter(acc => acc.networkId === NetworkId.ALGORAND_MAINNET);
+      const voiAccounts = authAccounts.filter(
+        (acc) => acc.networkId === NetworkId.VOI_MAINNET
+      );
+      const algorandAccounts = authAccounts.filter(
+        (acc) => acc.networkId === NetworkId.ALGORAND_MAINNET
+      );
 
       return {
         authAccounts,
@@ -93,7 +106,7 @@ export class AuthAccountDiscoveryService {
         totalFound: authAccounts.length,
         voiAccounts,
         algorandAccounts,
-        errors: errors.length > 0 ? errors : undefined
+        errors: errors.length > 0 ? errors : undefined,
       };
     } finally {
       const currentNetworkId = networkService.getCurrentNetworkId();
@@ -101,7 +114,10 @@ export class AuthAccountDiscoveryService {
         try {
           await networkService.switchNetwork(originalNetworkId);
         } catch (restoreError) {
-          console.warn('[AuthDiscovery] Failed to restore original network after discovery', restoreError);
+          console.warn(
+            '[AuthDiscovery] Failed to restore original network after discovery',
+            restoreError
+          );
         }
       }
     }
@@ -137,7 +153,10 @@ export class AuthAccountDiscoveryService {
         if (!includeExisting) {
           const filtered = [];
           for (const account of accounts) {
-            const existingAccount = await MultiAccountWalletService.findAccountByAddress(account.address);
+            const existingAccount =
+              await MultiAccountWalletService.findAccountByAddress(
+                account.address
+              );
             if (!existingAccount) {
               filtered.push(account);
             }
@@ -147,7 +166,10 @@ export class AuthAccountDiscoveryService {
 
         // Check if accounts exist in wallet and mark them
         for (const account of accounts) {
-          const existingAccount = await MultiAccountWalletService.findAccountByAddress(account.address);
+          const existingAccount =
+            await MultiAccountWalletService.findAccountByAddress(
+              account.address
+            );
           if (existingAccount) {
             account.existsInWallet = true;
             account.accountId = existingAccount.id;
@@ -156,7 +178,10 @@ export class AuthAccountDiscoveryService {
 
         return accounts;
       } catch (error) {
-        console.warn(`Failed to search for auth accounts with address ${authAddress} on ${networkName}:`, error);
+        console.warn(
+          `Failed to search for auth accounts with address ${authAddress} on ${networkName}:`,
+          error
+        );
         return [];
       }
     });
@@ -164,7 +189,7 @@ export class AuthAccountDiscoveryService {
     const searchResults = await Promise.all(searchPromises);
 
     // Flatten results
-    searchResults.forEach(accounts => {
+    searchResults.forEach((accounts) => {
       allAuthAccounts.push(...accounts);
     });
 
@@ -214,13 +239,19 @@ export class AuthAccountDiscoveryService {
 
         if (!response.ok) {
           if (response.status === 429) {
-            throw new Error('Rate limit exceeded. Please try again in a moment.');
+            throw new Error(
+              'Rate limit exceeded. Please try again in a moment.'
+            );
           } else if (response.status >= 500) {
-            throw new Error('Network service temporarily unavailable. Please try again.');
+            throw new Error(
+              'Network service temporarily unavailable. Please try again.'
+            );
           } else if (response.status === 404) {
             throw new Error('Indexer endpoint not found.');
           } else {
-            throw new Error(`Network error ${response.status}: ${response.statusText}`);
+            throw new Error(
+              `Network error ${response.status}: ${response.statusText}`
+            );
           }
         }
 

@@ -102,7 +102,10 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
     if (glow && !disabled && !loading) {
       glowOpacity.value = withRepeat(
         withSequence(
-          withTiming(0.6, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
+          withTiming(0.6, {
+            duration: 1200,
+            easing: Easing.inOut(Easing.ease),
+          }),
           withTiming(0.3, { duration: 1200, easing: Easing.inOut(Easing.ease) })
         ),
         -1,
@@ -191,9 +194,10 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
       secondary: {
         backgroundColor: getTintedBackground(),
         textColor: theme.colors.text,
-        borderColor: theme.mode === 'dark'
-          ? 'rgba(255, 255, 255, 0.2)'
-          : 'rgba(0, 0, 0, 0.1)',
+        borderColor:
+          theme.mode === 'dark'
+            ? 'rgba(255, 255, 255, 0.2)'
+            : 'rgba(0, 0, 0, 0.1)',
         glowColor: tint || theme.colors.glowPrimary,
         gradientColors: ['transparent', 'transparent'] as [string, string],
         useGradient: false,
@@ -249,30 +253,39 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
   }));
 
   // Container styles
-  const containerStyles = useMemo((): ViewStyle[] => [
-    styles.container,
-    {
-      height: sizeConfig.height,
-      borderRadius: sizeConfig.borderRadius,
-      borderColor: variantConfig.borderColor,
-      borderWidth: variant === 'ghost' ? 1.5 : (variant === 'secondary' ? 1 : 0),
-      opacity: disabled ? 0.5 : 1,
-    },
-    fullWidth && styles.fullWidth,
-    style as ViewStyle,
-  ].filter(Boolean), [sizeConfig, variantConfig, variant, disabled, fullWidth, style]);
+  const containerStyles = useMemo(
+    (): ViewStyle[] =>
+      [
+        styles.container,
+        {
+          height: sizeConfig.height,
+          borderRadius: sizeConfig.borderRadius,
+          borderColor: variantConfig.borderColor,
+          borderWidth:
+            variant === 'ghost' ? 1.5 : variant === 'secondary' ? 1 : 0,
+          opacity: disabled ? 0.5 : 1,
+        },
+        fullWidth && styles.fullWidth,
+        style as ViewStyle,
+      ].filter(Boolean),
+    [sizeConfig, variantConfig, variant, disabled, fullWidth, style]
+  );
 
   // Text styles
-  const textStyles = useMemo((): TextStyle[] => [
-    styles.label,
-    {
-      fontSize: sizeConfig.fontSize,
-      color: variantConfig.textColor,
-      fontWeight: '600',
-      letterSpacing: 0.3,
-    },
-    labelStyle as TextStyle,
-  ].filter(Boolean), [sizeConfig.fontSize, variantConfig.textColor, labelStyle]);
+  const textStyles = useMemo(
+    (): TextStyle[] =>
+      [
+        styles.label,
+        {
+          fontSize: sizeConfig.fontSize,
+          color: variantConfig.textColor,
+          fontWeight: '600',
+          letterSpacing: 0.3,
+        },
+        labelStyle as TextStyle,
+      ].filter(Boolean),
+    [sizeConfig.fontSize, variantConfig.textColor, labelStyle]
+  );
 
   // Render icon
   const renderIcon = () => {
@@ -332,15 +345,16 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
       )}
 
       {/* Tint overlay for secondary buttons */}
-      {variantConfig.tintGradient && variantConfig.tintGradient[0] !== 'transparent' && (
-        <LinearGradient
-          colors={variantConfig.tintGradient}
-          style={StyleSheet.absoluteFill}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          pointerEvents="none"
-        />
-      )}
+      {variantConfig.tintGradient &&
+        variantConfig.tintGradient[0] !== 'transparent' && (
+          <LinearGradient
+            colors={variantConfig.tintGradient}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            pointerEvents="none"
+          />
+        )}
 
       {/* Top highlight for depth */}
       <LinearGradient
@@ -349,7 +363,13 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
             ? ['rgba(255, 255, 255, 0.15)', 'rgba(255, 255, 255, 0)']
             : ['rgba(255, 255, 255, 0.4)', 'rgba(255, 255, 255, 0)']
         }
-        style={[styles.highlight, { borderTopLeftRadius: sizeConfig.borderRadius, borderTopRightRadius: sizeConfig.borderRadius }]}
+        style={[
+          styles.highlight,
+          {
+            borderTopLeftRadius: sizeConfig.borderRadius,
+            borderTopRightRadius: sizeConfig.borderRadius,
+          },
+        ]}
         start={{ x: 0, y: 0 }}
         end={{ x: 0, y: 1 }}
         pointerEvents="none"
@@ -363,10 +383,7 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
         ]}
       >
         {loading ? (
-          <ActivityIndicator
-            size="small"
-            color={variantConfig.textColor}
-          />
+          <ActivityIndicator size="small" color={variantConfig.textColor} />
         ) : (
           <>
             {icon && iconPosition === 'left' && renderIcon()}

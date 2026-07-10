@@ -7,8 +7,10 @@ const NFT_THEME_COLORS_STORAGE_KEY = '@voi_wallet_nft_theme_colors';
 const NFT_THEME_PREFERRED_MODE_KEY = '@voi_wallet_nft_theme_mode';
 const NFT_THEME_ENABLED_KEY = '@voi_wallet_nft_theme_enabled';
 const NFT_THEME_PALETTE_INDEX_KEY = '@voi_wallet_nft_theme_palette_index';
-const NFT_THEME_BACKGROUND_ENABLED_KEY = '@voi_wallet_nft_theme_background_enabled';
-const NFT_THEME_OVERLAY_INTENSITY_KEY = '@voi_wallet_nft_theme_overlay_intensity';
+const NFT_THEME_BACKGROUND_ENABLED_KEY =
+  '@voi_wallet_nft_theme_background_enabled';
+const NFT_THEME_OVERLAY_INTENSITY_KEY =
+  '@voi_wallet_nft_theme_overlay_intensity';
 
 export interface NFTThemeData {
   contractId: number;
@@ -52,7 +54,10 @@ export async function saveNFTTheme(
       backgroundImageEnabled,
     };
 
-    await AsyncStorage.setItem(NFT_THEME_STORAGE_KEY, JSON.stringify(storedTheme));
+    await AsyncStorage.setItem(
+      NFT_THEME_STORAGE_KEY,
+      JSON.stringify(storedTheme)
+    );
   } catch (error) {
     console.error('Failed to save NFT theme:', error);
     throw error;
@@ -70,7 +75,7 @@ export async function loadNFTTheme(): Promise<StoredNFTTheme | null> {
     }
 
     const storedTheme: StoredNFTTheme = JSON.parse(storedData);
-    
+
     // Validate the stored theme has all required fields
     if (
       !storedTheme.nftData ||
@@ -149,7 +154,10 @@ export async function loadNFTThemeEnabled(): Promise<boolean> {
  */
 export async function saveNFTThemeEnabled(enabled: boolean): Promise<void> {
   try {
-    await AsyncStorage.setItem(NFT_THEME_ENABLED_KEY, enabled ? 'true' : 'false');
+    await AsyncStorage.setItem(
+      NFT_THEME_ENABLED_KEY,
+      enabled ? 'true' : 'false'
+    );
   } catch (error) {
     console.error('Failed to save NFT theme enabled state:', error);
     throw error;
@@ -198,9 +206,14 @@ export async function loadBackgroundImageEnabled(): Promise<boolean> {
 /**
  * Save background image enabled state to storage
  */
-export async function saveBackgroundImageEnabled(enabled: boolean): Promise<void> {
+export async function saveBackgroundImageEnabled(
+  enabled: boolean
+): Promise<void> {
   try {
-    await AsyncStorage.setItem(NFT_THEME_BACKGROUND_ENABLED_KEY, enabled ? 'true' : 'false');
+    await AsyncStorage.setItem(
+      NFT_THEME_BACKGROUND_ENABLED_KEY,
+      enabled ? 'true' : 'false'
+    );
   } catch (error) {
     console.error('Failed to save background image enabled state:', error);
     throw error;
@@ -227,7 +240,10 @@ export async function loadOverlayIntensity(): Promise<number> {
  */
 export async function saveOverlayIntensity(intensity: number): Promise<void> {
   try {
-    await AsyncStorage.setItem(NFT_THEME_OVERLAY_INTENSITY_KEY, intensity.toString());
+    await AsyncStorage.setItem(
+      NFT_THEME_OVERLAY_INTENSITY_KEY,
+      intensity.toString()
+    );
   } catch (error) {
     console.error('Failed to save overlay intensity:', error);
     throw error;

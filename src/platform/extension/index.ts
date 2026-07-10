@@ -4,7 +4,10 @@
  */
 
 export { ExtensionCryptoAdapter, extensionCrypto } from './crypto';
-export { ExtensionSecureStorageAdapter, extensionSecureStorage } from './secureStorage';
+export {
+  ExtensionSecureStorageAdapter,
+  extensionSecureStorage,
+} from './secureStorage';
 export { ExtensionStorageAdapter, extensionStorage } from './storage';
 export { ExtensionBiometricAdapter, extensionBiometrics } from './biometrics';
 export { ExtensionDeviceIdAdapter, extensionDeviceId } from './deviceId';

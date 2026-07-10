@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
-import {
-  Alert,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+} from 'react';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
@@ -168,10 +168,17 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
       return fromRoute || ledgerTransportService.getConnectedDevice() || null;
     }
   );
-  const [importState, dispatch] = useReducer(importReducer, INITIAL_IMPORT_STATE);
+  const [importState, dispatch] = useReducer(
+    importReducer,
+    INITIAL_IMPORT_STATE
+  );
   const [showAuthDiscovery, setShowAuthDiscovery] = useState(false);
-  const [importedLedgerAccounts, setImportedLedgerAccounts] = useState<LedgerAccountDiscoveryResult[]>([]);
-  const [accountLabels, setAccountLabels] = useState<Record<number, string>>({});
+  const [importedLedgerAccounts, setImportedLedgerAccounts] = useState<
+    LedgerAccountDiscoveryResult[]
+  >([]);
+  const [accountLabels, setAccountLabels] = useState<Record<number, string>>(
+    {}
+  );
 
   const {
     accounts,
@@ -195,9 +202,7 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
       accounts.forEach((account) => {
         const existing = prev[account.derivationIndex];
         next[account.derivationIndex] =
-          existing !== undefined
-            ? existing
-            : account.accountLabel ?? '';
+          existing !== undefined ? existing : (account.accountLabel ?? '');
       });
       return next;
     });
@@ -254,7 +259,10 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     const device = ensureDeviceConnected();
     if (!device) {
       setConnectionModalVisible(true);
-      dispatch({ type: 'setStatus', message: 'Connect your Ledger device to continue' });
+      dispatch({
+        type: 'setStatus',
+        message: 'Connect your Ledger device to continue',
+      });
       return;
     }
 
@@ -325,12 +333,15 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     [dispatch]
   );
 
-  const handleAccountLabelChange = useCallback((index: number, value: string) => {
-    setAccountLabels((prev) => ({
-      ...prev,
-      [index]: value,
-    }));
-  }, []);
+  const handleAccountLabelChange = useCallback(
+    (index: number, value: string) => {
+      setAccountLabels((prev) => ({
+        ...prev,
+        [index]: value,
+      }));
+    },
+    []
+  );
 
   const handleVerifyAddress = useCallback(
     async (account: LedgerAccountDiscoveryResult) => {
@@ -404,9 +415,11 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
             publicKey: account.publicKey,
           };
 
-          const normalizedLabel =
-            (accountLabels[account.derivationIndex] ?? account.accountLabel ?? '')
-              .trim();
+          const normalizedLabel = (
+            accountLabels[account.derivationIndex] ??
+            account.accountLabel ??
+            ''
+          ).trim();
 
           const importRequest: ImportLedgerAccountRequest = {
             type: AccountType.LEDGER,
@@ -415,8 +428,7 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
             derivationIndex: account.derivationIndex,
             derivationPath: account.derivationPath,
             label:
-              normalizedLabel ||
-              `Ledger Account ${account.derivationIndex}`,
+              normalizedLabel || `Ledger Account ${account.derivationIndex}`,
           };
 
           await MultiAccountWalletService.importLedgerAccount(
@@ -483,18 +495,24 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
 
   const selectedCount = selectedIndexes.size;
   const previewAccountLabel = previewAccount
-    ? accountLabels[previewAccount.derivationIndex] ??
+    ? (accountLabels[previewAccount.derivationIndex] ??
       previewAccount.accountLabel ??
-      ''
+      '')
     : '';
 
-  const updateStartIndex = useCallback((value: number) => {
-    dispatch({ type: 'setStartIndex', value });
-  }, [dispatch]);
+  const updateStartIndex = useCallback(
+    (value: number) => {
+      dispatch({ type: 'setStartIndex', value });
+    },
+    [dispatch]
+  );
 
-  const updateCount = useCallback((value: number) => {
-    dispatch({ type: 'setCount', value });
-  }, [dispatch]);
+  const updateCount = useCallback(
+    (value: number) => {
+      dispatch({ type: 'setCount', value });
+    },
+    [dispatch]
+  );
 
   const handlePreviewAccount = useCallback(
     (account?: LedgerAccountDiscoveryResult) => {
@@ -590,9 +608,15 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
                 >
                   <View>
                     <Text style={styles.deviceBannerTitle}>Ledger Device</Text>
-                    <Text style={styles.deviceBannerSubtitle}>{deviceSummary}</Text>
+                    <Text style={styles.deviceBannerSubtitle}>
+                      {deviceSummary}
+                    </Text>
                   </View>
-                  <Ionicons name="swap-horizontal" size={20} color={colors.textMuted} />
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={20}
+                    color={colors.textMuted}
+                  />
                 </TouchableOpacity>
 
                 {statusMessage ? (
@@ -609,7 +633,9 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
                 onImportAccounts={handleImportAccounts}
                 isVerifying={isVerifying}
                 isImporting={isImporting}
-                importDisabled={accounts.every((account) => account.existsInWallet)}
+                importDisabled={accounts.every(
+                  (account) => account.existsInWallet
+                )}
                 accountLabel={previewAccountLabel}
                 onAccountLabelChange={
                   previewAccount

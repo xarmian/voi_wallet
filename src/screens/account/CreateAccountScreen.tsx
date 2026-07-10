@@ -43,7 +43,9 @@ export default function CreateAccountScreen() {
         state.routes?.length === 1 &&
         state.routes[0]?.name === 'CreateAccount'
       ) {
-        const currentParams = state.routes[0]?.params as Readonly<object | undefined>;
+        const currentParams = state.routes[0]?.params as Readonly<
+          object | undefined
+        >;
 
         navigation.reset({
           index: 1,
@@ -139,11 +141,7 @@ export default function CreateAccountScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-          <Ionicons
-            name="arrow-back"
-            size={24}
-            color={themeColors.primary}
-          />
+          <Ionicons name="arrow-back" size={24} color={themeColors.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Create New Account</Text>
         <View style={styles.placeholder} />

@@ -39,7 +39,8 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
 
-  const [selectedSlippage, setSelectedSlippage] = useState<number>(currentSlippage);
+  const [selectedSlippage, setSelectedSlippage] =
+    useState<number>(currentSlippage);
   const [customSlippage, setCustomSlippage] = useState<string>('');
   const [isCustom, setIsCustom] = useState<boolean>(false);
   const [slideAnim] = useState(new Animated.Value(0));
@@ -80,7 +81,8 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
 
     // Prevent multiple decimal points
     const parts = cleaned.split('.');
-    const formatted = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+    const formatted =
+      parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
 
     setCustomSlippage(formatted);
     setIsCustom(true);
@@ -93,7 +95,10 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
 
   const handleSave = async () => {
     try {
-      await AsyncStorage.setItem(SLIPPAGE_STORAGE_KEY, selectedSlippage.toString());
+      await AsyncStorage.setItem(
+        SLIPPAGE_STORAGE_KEY,
+        selectedSlippage.toString()
+      );
       onSave(selectedSlippage);
       onClose();
     } catch (error) {
@@ -129,10 +134,7 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
         <View style={styles.overlay}>
           <TouchableWithoutFeedback>
             <Animated.View
-              style={[
-                styles.modalContainer,
-                { transform: [{ translateY }] },
-              ]}
+              style={[styles.modalContainer, { transform: [{ translateY }] }]}
             >
               {/* Header */}
               <View style={styles.header}>
@@ -144,24 +146,29 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
 
               {/* Info */}
               <Text style={styles.description}>
-                Slippage is the difference between the expected price and the executed price.
+                Slippage is the difference between the expected price and the
+                executed price.
               </Text>
 
               {/* Preset Options */}
               <View style={styles.presetsContainer}>
-                {PRESET_SLIPPAGES.map(slippage => (
+                {PRESET_SLIPPAGES.map((slippage) => (
                   <TouchableOpacity
                     key={slippage}
                     style={[
                       styles.presetButton,
-                      !isCustom && selectedSlippage === slippage && styles.presetButtonActive,
+                      !isCustom &&
+                        selectedSlippage === slippage &&
+                        styles.presetButtonActive,
                     ]}
                     onPress={() => handlePresetSelect(slippage)}
                   >
                     <Text
                       style={[
                         styles.presetText,
-                        !isCustom && selectedSlippage === slippage && styles.presetTextActive,
+                        !isCustom &&
+                          selectedSlippage === slippage &&
+                          styles.presetTextActive,
                       ]}
                     >
                       {slippage}%
@@ -173,7 +180,12 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
               {/* Custom Input */}
               <View style={styles.customContainer}>
                 <Text style={styles.customLabel}>Custom</Text>
-                <View style={[styles.customInputContainer, isCustom && styles.customInputActive]}>
+                <View
+                  style={[
+                    styles.customInputContainer,
+                    isCustom && styles.customInputActive,
+                  ]}
+                >
                   <TextInput
                     style={styles.customInput}
                     value={customSlippage}
@@ -190,7 +202,11 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
               {/* Warning Message */}
               {getWarningMessage() && (
                 <View style={styles.warningContainer}>
-                  <Ionicons name="warning" size={16} color={themeColors.warning} />
+                  <Ionicons
+                    name="warning"
+                    size={16}
+                    color={themeColors.warning}
+                  />
                   <Text style={styles.warningText}>{getWarningMessage()}</Text>
                 </View>
               )}
@@ -199,7 +215,8 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
               <TouchableOpacity
                 style={[
                   styles.saveButton,
-                  (selectedSlippage <= 0 || selectedSlippage > 50) && styles.saveButtonDisabled,
+                  (selectedSlippage <= 0 || selectedSlippage > 50) &&
+                    styles.saveButtonDisabled,
                 ]}
                 onPress={handleSave}
                 disabled={selectedSlippage <= 0 || selectedSlippage > 50}

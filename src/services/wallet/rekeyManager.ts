@@ -190,7 +190,9 @@ export class RekeyManager {
           // Check if we have a private key for this account - if so, it's a STANDARD account
           let hasPrivateKey = false;
           try {
-            const { AccountSecureStorage } = await import('@/services/secure/AccountSecureStorage');
+            const { AccountSecureStorage } = await import(
+              '@/services/secure/AccountSecureStorage'
+            );
             await AccountSecureStorage.getPrivateKey(account.id);
             hasPrivateKey = true;
           } catch {
@@ -198,7 +200,9 @@ export class RekeyManager {
           }
 
           if (hasPrivateKey) {
-            console.log(`[RekeyManager] Converting rekeyed account back to standard (has private key): ${account.address.slice(0, 8)}...`);
+            console.log(
+              `[RekeyManager] Converting rekeyed account back to standard (has private key): ${account.address.slice(0, 8)}...`
+            );
             const standardAccount: StandardAccountMetadata = {
               id: account.id,
               address: account.address,
@@ -213,7 +217,9 @@ export class RekeyManager {
             };
             return standardAccount;
           } else {
-            console.log(`[RekeyManager] Converting rekeyed account to watch (no private key): ${account.address.slice(0, 8)}...`);
+            console.log(
+              `[RekeyManager] Converting rekeyed account to watch (no private key): ${account.address.slice(0, 8)}...`
+            );
             const watchAccount: WatchAccountMetadata = {
               id: account.id,
               address: account.address,
@@ -428,7 +434,9 @@ export class RekeyManager {
     wallet: Wallet
   ): Promise<RekeyedAccountMetadata> {
     if (sourceAccount.type === AccountType.REMOTE_SIGNER) {
-      throw new Error('Cannot rekey a remote signer account to another remote signer');
+      throw new Error(
+        'Cannot rekey a remote signer account to another remote signer'
+      );
     }
 
     // Verify the airgap account exists in wallet
@@ -462,7 +470,8 @@ export class RekeyManager {
       canSign: true, // Airgap accounts can always sign via QR flow
       rekeyedFrom:
         sourceAccount.type === AccountType.REKEYED
-          ? ((sourceAccount as RekeyedAccountMetadata).rekeyedFrom ?? sourceAccount.address)
+          ? ((sourceAccount as RekeyedAccountMetadata).rekeyedFrom ??
+            sourceAccount.address)
           : sourceAccount.address,
     };
   }

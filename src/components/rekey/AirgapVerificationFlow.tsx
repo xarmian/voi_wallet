@@ -23,7 +23,10 @@ import { RemoteSignerAccountMetadata } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import { TransactionService } from '@/services/transactions';
 import { RemoteSignerService } from '@/services/remoteSigner';
-import { RemoteSignerRequest, RemoteSignerResponse } from '@/types/remoteSigner';
+import {
+  RemoteSignerRequest,
+  RemoteSignerResponse,
+} from '@/types/remoteSigner';
 import { AnimatedQRCode } from '@/components/remoteSigner/AnimatedQRCode';
 import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
 import { verifySignedTransaction } from '@/utils/signatureVerification';
@@ -71,7 +74,8 @@ export function AirgapVerificationFlow({
   const [state, setState] = useState<VerificationState>('building');
   const [error, setError] = useState<string | null>(null);
   const [requestPayload, setRequestPayload] = useState<string | null>(null);
-  const [signingRequest, setSigningRequest] = useState<RemoteSignerRequest | null>(null);
+  const [signingRequest, setSigningRequest] =
+    useState<RemoteSignerRequest | null>(null);
 
   // Build verification transaction on mount
   useEffect(() => {
@@ -83,10 +87,11 @@ export function AirgapVerificationFlow({
         setError(null);
 
         // Build a zero-amount self-payment transaction
-        const verificationTxn = await TransactionService.buildVerificationTransaction({
-          signerAddress: targetAccount.address,
-          networkId,
-        });
+        const verificationTxn =
+          await TransactionService.buildVerificationTransaction({
+            signerAddress: targetAccount.address,
+            networkId,
+          });
 
         if (cancelled) return;
 
@@ -106,7 +111,10 @@ export function AirgapVerificationFlow({
         setState('displaying_qr');
       } catch (err) {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : 'Failed to build verification transaction';
+        const message =
+          err instanceof Error
+            ? err.message
+            : 'Failed to build verification transaction';
         setError(message);
         setState('error');
       }
@@ -125,10 +133,11 @@ export function AirgapVerificationFlow({
       setError(null);
 
       // Build a zero-amount self-payment transaction
-      const verificationTxn = await TransactionService.buildVerificationTransaction({
-        signerAddress: targetAccount.address,
-        networkId,
-      });
+      const verificationTxn =
+        await TransactionService.buildVerificationTransaction({
+          signerAddress: targetAccount.address,
+          networkId,
+        });
 
       // Create a remote signer request
       const request = await RemoteSignerService.createSingleTxnRequest(
@@ -143,7 +152,10 @@ export function AirgapVerificationFlow({
       setRequestPayload(payload);
       setState('displaying_qr');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to build verification transaction';
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to build verification transaction';
       setError(message);
       setState('error');
     }
@@ -170,19 +182,27 @@ export function AirgapVerificationFlow({
 
         // Check if the signing was rejected
         if (!signerResponse.ok) {
-          throw new Error(signerResponse.err?.m || 'Signing was rejected on the airgap device');
+          throw new Error(
+            signerResponse.err?.m || 'Signing was rejected on the airgap device'
+          );
         }
 
         // Validate response matches our request
         if (signingRequest) {
-          const validation = RemoteSignerService.validateResponse(signerResponse, signingRequest);
+          const validation = RemoteSignerService.validateResponse(
+            signerResponse,
+            signingRequest
+          );
           if (!validation.valid) {
-            throw new Error(validation.error || 'Response does not match request');
+            throw new Error(
+              validation.error || 'Response does not match request'
+            );
           }
         }
 
         // Extract the signed transaction
-        const signedTxns = RemoteSignerService.extractSignedTransactions(signerResponse);
+        const signedTxns =
+          RemoteSignerService.extractSignedTransactions(signerResponse);
         if (signedTxns.length === 0) {
           throw new Error('No signed transactions in response');
         }
@@ -190,7 +210,9 @@ export function AirgapVerificationFlow({
         // SECURITY: Ensure exactly one transaction was returned
         // This prevents transaction group substitution attacks
         if (signedTxns.length !== 1) {
-          throw new Error(`Expected 1 signed transaction, got ${signedTxns.length}`);
+          throw new Error(
+            `Expected 1 signed transaction, got ${signedTxns.length}`
+          );
         }
 
         // Verify the signature locally
@@ -201,13 +223,16 @@ export function AirgapVerificationFlow({
         );
 
         if (!verificationResult.valid) {
-          throw new Error(verificationResult.error || 'Signature verification failed');
+          throw new Error(
+            verificationResult.error || 'Signature verification failed'
+          );
         }
 
         // Success! User will click Continue button to proceed
         setState('success');
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to verify signature';
+        const message =
+          err instanceof Error ? err.message : 'Failed to verify signature';
         setError(message);
         setState('error');
       }
@@ -245,10 +270,20 @@ export function AirgapVerificationFlow({
       case 'displaying_qr':
         return (
           <View style={styles.qrContent}>
-            <View style={[styles.infoBox, { backgroundColor: theme.colors.infoLight }]}>
-              <Ionicons name="information-circle" size={20} color={theme.colors.info} />
+            <View
+              style={[
+                styles.infoBox,
+                { backgroundColor: theme.colors.infoLight },
+              ]}
+            >
+              <Ionicons
+                name="information-circle"
+                size={20}
+                color={theme.colors.info}
+              />
               <Text style={[styles.infoText, { color: theme.colors.info }]}>
-                Scan this QR code with your airgap signer device to verify it can sign transactions.
+                Scan this QR code with your airgap signer device to verify it
+                can sign transactions.
               </Text>
             </View>
 
@@ -262,26 +297,46 @@ export function AirgapVerificationFlow({
             )}
 
             <View style={styles.instructions}>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 1. Open your airgap signer app
               </Text>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 2. Scan this QR code
               </Text>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 3. Review and sign the verification transaction
               </Text>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 4. Tap "Scan Signed Response" below
               </Text>
             </View>
 
             <TouchableOpacity
-              style={[styles.primaryButton, { backgroundColor: theme.colors.primary }]}
+              style={[
+                styles.primaryButton,
+                { backgroundColor: theme.colors.primary },
+              ]}
               onPress={handleScanResponse}
             >
-              <Ionicons name="qr-code-outline" size={20} color={theme.colors.buttonText} />
-              <Text style={[styles.primaryButtonText, { color: theme.colors.buttonText }]}>
+              <Ionicons
+                name="qr-code-outline"
+                size={20}
+                color={theme.colors.buttonText}
+              />
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  { color: theme.colors.buttonText },
+                ]}
+              >
                 Scan Signed Response
               </Text>
             </TouchableOpacity>
@@ -298,11 +353,16 @@ export function AirgapVerificationFlow({
               compact
             />
             <TouchableOpacity
-              style={[styles.backButton, { backgroundColor: theme.colors.card }]}
+              style={[
+                styles.backButton,
+                { backgroundColor: theme.colors.card },
+              ]}
               onPress={handleBackToQR}
             >
               <Ionicons name="arrow-back" size={20} color={theme.colors.text} />
-              <Text style={[styles.backButtonText, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.backButtonText, { color: theme.colors.text }]}
+              >
                 Back to QR Code
               </Text>
             </TouchableOpacity>
@@ -322,20 +382,44 @@ export function AirgapVerificationFlow({
       case 'success':
         return (
           <View style={styles.centeredContent}>
-            <View style={[styles.successIcon, { backgroundColor: theme.colors.successLight }]}>
-              <Ionicons name="checkmark-circle" size={64} color={theme.colors.success} />
+            <View
+              style={[
+                styles.successIcon,
+                { backgroundColor: theme.colors.successLight },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={64}
+                color={theme.colors.success}
+              />
             </View>
-            <Text style={[styles.successTitle, { color: theme.colors.success }]}>
+            <Text
+              style={[styles.successTitle, { color: theme.colors.success }]}
+            >
               Verification Successful
             </Text>
-            <Text style={[styles.successSubtitle, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.successSubtitle,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               The airgap device has been verified.
             </Text>
             <TouchableOpacity
-              style={[styles.primaryButton, { backgroundColor: theme.colors.success, marginTop: 24 }]}
+              style={[
+                styles.primaryButton,
+                { backgroundColor: theme.colors.success, marginTop: 24 },
+              ]}
               onPress={onVerificationSuccess}
             >
-              <Text style={[styles.primaryButtonText, { color: theme.colors.buttonText }]}>
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  { color: theme.colors.buttonText },
+                ]}
+              >
                 Continue
               </Text>
             </TouchableOpacity>
@@ -345,32 +429,68 @@ export function AirgapVerificationFlow({
       case 'error':
         return (
           <View style={styles.centeredContent}>
-            <View style={[styles.errorIcon, { backgroundColor: theme.colors.errorLight }]}>
-              <Ionicons name="close-circle" size={64} color={theme.colors.error} />
+            <View
+              style={[
+                styles.errorIcon,
+                { backgroundColor: theme.colors.errorLight },
+              ]}
+            >
+              <Ionicons
+                name="close-circle"
+                size={64}
+                color={theme.colors.error}
+              />
             </View>
             <Text style={[styles.errorTitle, { color: theme.colors.error }]}>
               Verification Failed
             </Text>
-            <Text style={[styles.errorMessage, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.errorMessage,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               {error || 'An unknown error occurred'}
             </Text>
 
             <View style={styles.errorActions}>
               <TouchableOpacity
-                style={[styles.retryButton, { backgroundColor: theme.colors.primary }]}
+                style={[
+                  styles.retryButton,
+                  { backgroundColor: theme.colors.primary },
+                ]}
                 onPress={handleRetry}
               >
-                <Ionicons name="refresh" size={20} color={theme.colors.buttonText} />
-                <Text style={[styles.retryButtonText, { color: theme.colors.buttonText }]}>
+                <Ionicons
+                  name="refresh"
+                  size={20}
+                  color={theme.colors.buttonText}
+                />
+                <Text
+                  style={[
+                    styles.retryButtonText,
+                    { color: theme.colors.buttonText },
+                  ]}
+                >
                   Try Again
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.cancelButton, { borderColor: theme.colors.border }]}
-                onPress={() => onVerificationFailure(error || 'Verification failed')}
+                style={[
+                  styles.cancelButton,
+                  { borderColor: theme.colors.border },
+                ]}
+                onPress={() =>
+                  onVerificationFailure(error || 'Verification failed')
+                }
               >
-                <Text style={[styles.cancelButtonText, { color: theme.colors.textSecondary }]}>
+                <Text
+                  style={[
+                    styles.cancelButtonText,
+                    { color: theme.colors.textSecondary },
+                  ]}
+                >
                   Cancel
                 </Text>
               </TouchableOpacity>
@@ -390,9 +510,14 @@ export function AirgapVerificationFlow({
       presentationStyle="pageSheet"
       onRequestClose={onCancel}
     >
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]} edges={['top', 'bottom']}>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor: theme.colors.background }]}
+        edges={['top', 'bottom']}
+      >
         {/* Header */}
-        <View style={[styles.header, { borderBottomColor: theme.colors.border }]}>
+        <View
+          style={[styles.header, { borderBottomColor: theme.colors.border }]}
+        >
           <TouchableOpacity
             style={styles.closeButton}
             onPress={onCancel}
@@ -413,7 +538,12 @@ export function AirgapVerificationFlow({
             <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
               Verify Airgap Signer
             </Text>
-            <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.headerSubtitle,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               {targetAccount.label || targetAccount.address.slice(0, 8) + '...'}
             </Text>
           </View>

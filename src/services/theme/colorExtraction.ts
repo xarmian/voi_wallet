@@ -69,9 +69,7 @@ export async function extractColorsWithPalettes(
 /**
  * Process raw color extraction results into a structured palette
  */
-function processColors(
-  colors: ImageColorsResult
-): ExtractedColors {
+function processColors(colors: ImageColorsResult): ExtractedColors {
   // Handle different color formats returned by react-native-image-colors
   let dominant = '#000000';
   let vibrant = '#000000';
@@ -141,8 +139,7 @@ function isColorDark(color: string): boolean {
   if (!rgb) return true; // Default to dark if parsing fails
 
   // Calculate luminance using relative luminance formula
-  const luminance =
-    (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+  const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
 
   return luminance < 0.5;
 }

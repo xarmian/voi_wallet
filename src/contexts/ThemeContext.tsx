@@ -23,7 +23,11 @@ import {
   clearNFTTheme as clearNFTThemeStorage,
   type NFTThemeData,
 } from '../services/theme/themeStorage';
-import { extractColorsWithPalettes, type ExtractedColors, type ColorPalette } from '../services/theme/colorExtraction';
+import {
+  extractColorsWithPalettes,
+  type ExtractedColors,
+  type ColorPalette,
+} from '../services/theme/colorExtraction';
 import { generateThemeFromColors } from '../services/theme/themeGenerator';
 
 interface ThemeContextType {
@@ -60,15 +64,17 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     Appearance.getColorScheme()
   );
   const [nftThemeEnabled, setNftThemeEnabledState] = useState<boolean>(false);
-  const [nftBackgroundEnabled, setNftBackgroundEnabledState] = useState<boolean>(true);
-  const [nftOverlayIntensity, setNftOverlayIntensityState] = useState<number>(0.5);
-  const [selectedPaletteIndex, setSelectedPaletteIndexState] = useState<number>(0);
+  const [nftBackgroundEnabled, setNftBackgroundEnabledState] =
+    useState<boolean>(true);
+  const [nftOverlayIntensity, setNftOverlayIntensityState] =
+    useState<number>(0.5);
+  const [selectedPaletteIndex, setSelectedPaletteIndexState] =
+    useState<number>(0);
   const [nftThemeData, setNftThemeDataState] = useState<NFTThemeData | null>(
     null
   );
-  const [nftExtractedColors, setNftExtractedColors] = useState<
-    ExtractedColors | null
-  >(null);
+  const [nftExtractedColors, setNftExtractedColors] =
+    useState<ExtractedColors | null>(null);
   const [nftPalettes, setNftPalettes] = useState<ColorPalette[]>([]);
 
   // Get current base theme mode (light or dark)
@@ -94,7 +100,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     const currentMode = getCurrentBaseThemeMode();
     // Fallback to first palette if selectedPaletteIndex is out of bounds
     const selectedPalette = nftPalettes[selectedPaletteIndex] || nftPalettes[0];
-    const backgroundUrl = nftBackgroundEnabled ? nftThemeData.imageUrl : undefined;
+    const backgroundUrl = nftBackgroundEnabled
+      ? nftThemeData.imageUrl
+      : undefined;
 
     return generateThemeFromColors(
       nftExtractedColors,
@@ -102,7 +110,15 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
       backgroundUrl,
       selectedPalette
     );
-  }, [nftThemeData, nftExtractedColors, nftPalettes, selectedPaletteIndex, nftBackgroundEnabled, themeMode, systemColorScheme]);
+  }, [
+    nftThemeData,
+    nftExtractedColors,
+    nftPalettes,
+    selectedPaletteIndex,
+    nftBackgroundEnabled,
+    themeMode,
+    systemColorScheme,
+  ]);
 
   const getCurrentTheme = (): Theme => {
     // If NFT theme is enabled, regenerate it based on current base theme mode
@@ -257,7 +273,8 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
         const storedNFTTheme = await loadNFTTheme();
         if (storedNFTTheme) {
           // Migrate to base theme based on preferred mode
-          const baseMode = storedNFTTheme.preferredMode === 'dark' ? 'dark' : 'light';
+          const baseMode =
+            storedNFTTheme.preferredMode === 'dark' ? 'dark' : 'light';
           await AsyncStorage.setItem(THEME_STORAGE_KEY, baseMode);
           setThemeModeState(baseMode);
 
@@ -290,15 +307,22 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
             // Load palettes if available, or generate them for legacy themes
             if (storedNFTTheme.palettes && storedNFTTheme.palettes.length > 0) {
               setNftPalettes(storedNFTTheme.palettes);
-              setSelectedPaletteIndexState(storedNFTTheme.selectedPaletteIndex || 0);
+              setSelectedPaletteIndexState(
+                storedNFTTheme.selectedPaletteIndex || 0
+              );
             } else {
               // Migration: Generate palettes for existing NFT themes
               try {
-                const extractedData = await extractColorsWithPalettes(storedNFTTheme.nftData.imageUrl);
+                const extractedData = await extractColorsWithPalettes(
+                  storedNFTTheme.nftData.imageUrl
+                );
                 setNftPalettes(extractedData.palettes);
                 setSelectedPaletteIndexState(0);
               } catch (error) {
-                console.error('Failed to generate palettes for existing NFT theme:', error);
+                console.error(
+                  'Failed to generate palettes for existing NFT theme:',
+                  error
+                );
                 // Clear corrupted theme data to prevent crash loop
                 await clearNFTThemeStorage();
                 await saveNFTThemeEnabled(false);
@@ -307,16 +331,20 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
             }
 
             // Load background enabled state
-            const bgEnabled = storedNFTTheme.backgroundImageEnabled !== undefined
-              ? storedNFTTheme.backgroundImageEnabled
-              : await loadBackgroundImageEnabled();
+            const bgEnabled =
+              storedNFTTheme.backgroundImageEnabled !== undefined
+                ? storedNFTTheme.backgroundImageEnabled
+                : await loadBackgroundImageEnabled();
             setNftBackgroundEnabledState(bgEnabled);
 
             // Load overlay intensity
             const intensity = await loadOverlayIntensity();
             setNftOverlayIntensityState(intensity);
           } catch (error) {
-            console.error('Failed to load NFT theme, clearing theme data:', error);
+            console.error(
+              'Failed to load NFT theme, clearing theme data:',
+              error
+            );
             // Clear all NFT theme state on error to prevent crash loop
             setNftThemeDataState(null);
             setNftExtractedColors(null);
