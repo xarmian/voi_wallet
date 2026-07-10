@@ -40,6 +40,13 @@ export class NetworkService {
   private mimirService?: MimirApiService;
   private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> = new Map();
   private rekeyInfoCacheTTL: number = 10000; // 10 second cache
+  // Cache of immutable ASA params (decimals/name/unitName). Cleared on
+  // switchNetwork (this instance is reused across networks). Keyed by the asset
+  // ID as a string so uint64 IDs above Number.MAX_SAFE_INTEGER can't collide.
+  private assetParamsCache: Map<
+    string,
+    { decimals: number; name?: string; unitName?: string }
+  > = new Map();
 
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
@@ -128,6 +135,11 @@ export class NetworkService {
       // Update internal state
       this.currentNetworkId = networkId;
       this.config = newConfig;
+
+      // This instance is reused across networks (instances.set below), so drop
+      // the per-network asset-params cache to avoid serving another network's
+      // decimals for a colliding asset ID.
+      this.assetParamsCache.clear();
 
       // Reinitialize clients with new configuration
       this.initializeClients();
@@ -237,16 +249,40 @@ export class NetworkService {
       const algodAssets: AssetBalance[] = [];
       if (accountInfo.value.assets) {
         for (const asset of accountInfo.value.assets) {
+          const assetId = Number(asset.assetId);
+          const assetKey = String(asset.assetId);
+
+          // Asset params are immutable: reuse the cached entry and skip the
+          // network call entirely once we've seen this asset before.
+          const cachedParams = this.assetParamsCache.get(assetKey);
+          if (cachedParams) {
+            algodAssets.push({
+              assetId,
+              amount: asset.amount,
+              decimals: cachedParams.decimals,
+              name: cachedParams.name,
+              unitName: cachedParams.unitName,
+              assetType: 'asa',
+            });
+            continue;
+          }
+
           try {
             const assetInfo = await this.algodClient
-              .getAssetByID(Number(asset.assetId))
+              .getAssetByID(assetId)
               .do();
-            algodAssets.push({
-              assetId: Number(asset.assetId),
-              amount: asset.amount,
-              decimals: assetInfo.params.decimals || 0,
+            const params = {
+              decimals: Number(assetInfo.params.decimals ?? 0),
               name: assetInfo.params.name,
               unitName: assetInfo.params.unitName,
+            };
+            this.assetParamsCache.set(assetKey, params);
+            algodAssets.push({
+              assetId,
+              amount: asset.amount,
+              decimals: params.decimals,
+              name: params.name,
+              unitName: params.unitName,
               assetType: 'asa',
             });
           } catch (assetError) {
@@ -254,12 +290,10 @@ export class NetworkService {
               `Failed to fetch asset info for ${asset.assetId}:`,
               assetError
             );
-            algodAssets.push({
-              assetId: Number(asset.assetId),
-              amount: asset.amount,
-              decimals: 0,
-              assetType: 'asa',
-            });
+            // Never fall back to decimals: 0 for an unknown asset — that would
+            // display a 10^N x inflated balance. Omit the asset until a later
+            // refresh can resolve its real params.
+            continue;
           }
         }
       }

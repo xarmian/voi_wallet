@@ -205,6 +205,7 @@ export default function SendScreen() {
 
   // Pre-fill form fields from payment request parameters
   useEffect(() => {
+    let cancelled = false;
     if (routeParams) {
       if (
         routeParams.recipient &&
@@ -213,29 +214,55 @@ export default function SendScreen() {
         setRecipientInput(routeParams.recipient);
       }
       if (routeParams.amount && /^\d+$/.test(routeParams.amount)) {
-        // Convert from smallest units to display format
-        // For native tokens (no asset parameter), use 6 decimals
-        // For assets, look up the asset or default to 0
-        const assetIdRaw = routeParams.asset ? parseInt(routeParams.asset) : undefined;
-        const decimals = assetIdRaw === undefined ? 6 : 0;
-
+        // routeParams.amount is RAW base units. Resolve the asset's real
+        // decimals and convert base -> display exactly once. Native tokens
+        // (no asset / asset 0) use 6 decimals; otherwise look up the ASA.
+        const assetIdRaw = routeParams.asset
+          ? parseInt(routeParams.asset)
+          : undefined;
         const rawAmount = BigInt(routeParams.amount);
-        const divisor = BigInt(10) ** BigInt(decimals);
-        const wholePart = rawAmount / divisor;
-        const fractionalPart = rawAmount % divisor;
 
-        let displayAmount = wholePart.toString();
-        if (fractionalPart > 0) {
-          const fractionalStr = fractionalPart
-            .toString()
-            .padStart(decimals, '0')
-            .replace(/0+$/, '');
-          if (fractionalStr) {
-            displayAmount += '.' + fractionalStr;
+        (async () => {
+          let decimals: number;
+          if (assetIdRaw === undefined || assetIdRaw === 0) {
+            decimals = 6;
+          } else {
+            try {
+              const info = await NetworkService.getInstance(
+                selectedNetworkId
+              ).getAssetInfo(assetIdRaw);
+              const rawDecimals = info?.params?.decimals;
+              if (rawDecimals === undefined || rawDecimals === null) {
+                // Params unavailable (e.g. a 404 resolves to null): don't
+                // prefill a wrong-magnitude amount.
+                return;
+              }
+              decimals = Number(rawDecimals);
+            } catch {
+              // Don't guess a wrong value: leave the field empty on failure.
+              return;
+            }
           }
-        }
 
-        setAmount(displayAmount);
+          const divisor = BigInt(10) ** BigInt(decimals);
+          const wholePart = rawAmount / divisor;
+          const fractionalPart = rawAmount % divisor;
+
+          let displayAmount = wholePart.toString();
+          if (fractionalPart > 0) {
+            const fractionalStr = fractionalPart
+              .toString()
+              .padStart(decimals, '0')
+              .replace(/0+$/, '');
+            if (fractionalStr) {
+              displayAmount += '.' + fractionalStr;
+            }
+          }
+
+          if (!cancelled) {
+            setAmount(displayAmount);
+          }
+        })();
       }
       if (routeParams.note) {
         // Sanitize note to prevent potential issues
@@ -260,6 +287,9 @@ export default function SendScreen() {
         }
       }
     }
+    return () => {
+      cancelled = true;
+    };
   }, [routeParams]);
 
   const activeAccount = useActiveAccount();
@@ -298,7 +328,11 @@ export default function SendScreen() {
     const fetchAssetOptions = async () => {
       if (!activeAccount) return;
 
-      const initialAssetId = routeParams?.assetId;
+      const initialAssetId = routeParams?.asset
+        ? isNaN(parseInt(routeParams.asset, 10))
+          ? undefined
+          : parseInt(routeParams.asset, 10)
+        : routeParams?.assetId;
 
       setIsLoadingOptions(true);
       try {
