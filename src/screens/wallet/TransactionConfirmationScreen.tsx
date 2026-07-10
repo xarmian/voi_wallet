@@ -264,6 +264,10 @@ export default function TransactionConfirmationScreen() {
         tokenId: params.tokenId,
         fee: params.estimatedFee,
         isSuccess: true,
+        // Pending vs confirmed: comes from the auth result when available
+        // (e.g. remote-signer flow). Undefined on the standard flow, which the
+        // result screen treats as confirmed success (backward-compatible).
+        confirmed: result?.confirmed,
         homeRoute: params.assetType === 'arc72' ? 'NFTMain' : 'HomeMain',
         networkId: params.networkId,
       });

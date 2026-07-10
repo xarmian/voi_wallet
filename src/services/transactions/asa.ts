@@ -260,7 +260,7 @@ export async function submitAsaOptIn(
   const signedTxn = await SecureKeyManager.signTransaction(txn, address, pin);
 
   // Submit transaction
-  const txId = await networkService.submitTransaction(signedTxn);
+  const { txId } = await networkService.submitTransaction(signedTxn);
 
   return txId;
 }
@@ -293,7 +293,7 @@ export async function submitAsaOptOut(
   const signedTxn = await SecureKeyManager.signTransaction(txn, address, pin);
 
   // Submit transaction
-  const txId = await networkService.submitTransaction(signedTxn);
+  const { txId } = await networkService.submitTransaction(signedTxn);
 
   return txId;
 }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "443500056234",
+    "project_id": "voi-wallet-c3f1e",
+    "storage_bucket": "voi-wallet-c3f1e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:443500056234:android:e9b326010ebb0ef1f50ad3",
+        "android_client_info": {
+          "package_name": "com.voinetwork.wallet.dev"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCzwliQxdprdV1UMjFpVL2toDlrpevw-3o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
