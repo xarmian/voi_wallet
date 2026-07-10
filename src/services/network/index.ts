@@ -197,11 +197,44 @@ export class NetworkService {
     return this.config.features[feature];
   }
 
+  // algod/indexer clients have no built-in timeout/abort (unlike the Mimir
+  // service), so a hung/unresponsive node would leave balance spinners stuck
+  // and sends hanging. Bound each call so the caller can surface an error and
+  // clear loading state. (Promise.race unblocks the awaiter; the socket may
+  // linger, but the UI no longer hangs.)
+  private static readonly REQUEST_TIMEOUT_MS = 15000;
+
+  private withTimeout<T>(
+    promise: Promise<T>,
+    label: string,
+    timeoutMs: number = NetworkService.REQUEST_TIMEOUT_MS
+  ): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(
+        () =>
+          reject(
+            new NetworkError(
+              `${label} timed out after ${timeoutMs}ms`,
+              this.currentNetworkId
+            )
+          ),
+        timeoutMs
+      );
+    });
+    return Promise.race([promise, timeout]).finally(() =>
+      clearTimeout(timeoutId)
+    ) as Promise<T>;
+  }
+
   async checkNetworkHealth(): Promise<NetworkStatus> {
     try {
       const [algodStatus, indexerHealth] = await Promise.allSettled([
-        this.algodClient.status().do(),
-        this.indexerClient.makeHealthCheck().do(),
+        this.withTimeout(this.algodClient.status().do(), 'algod status'),
+        this.withTimeout(
+          this.indexerClient.makeHealthCheck().do(),
+          'indexer health'
+        ),
       ]);
 
       const isAlgodHealthy = algodStatus.status === 'fulfilled';
@@ -236,7 +269,10 @@ export class NetworkService {
       // Fetch basic account info, Mimir assets, pricing, and rekey info in parallel
       const [accountInfo, mimirAssets, priceData, rekeyInfo] =
         await Promise.allSettled([
-          this.algodClient.accountInformation(address).do(),
+          this.withTimeout(
+            this.algodClient.accountInformation(address).do(),
+            'account info'
+          ),
           this.getMimirAssets(address),
           this.getPricingData(address),
           this.getAccountRekeyInfo(address),
@@ -268,9 +304,10 @@ export class NetworkService {
           }
 
           try {
-            const assetInfo = await this.algodClient
-              .getAssetByID(assetId)
-              .do();
+            const assetInfo = await this.withTimeout(
+              this.algodClient.getAssetByID(assetId).do(),
+              `asset ${assetId}`
+            );
             const params = {
               decimals: Number(assetInfo.params.decimals ?? 0),
               name: assetInfo.params.name,
@@ -723,7 +760,10 @@ export class NetworkService {
 
   async getSuggestedParams(): Promise<algosdk.SuggestedParams> {
     try {
-      return await this.algodClient.getTransactionParams().do();
+      return await this.withTimeout(
+        this.algodClient.getTransactionParams().do(),
+        'suggested params'
+      );
     } catch (error) {
       console.error('Failed to get suggested params:', error);
       throw new Error(
@@ -736,6 +776,10 @@ export class NetworkService {
     signedTxn: Uint8Array | Uint8Array[]
   ): Promise<string> {
     try {
+      // NOTE: sendRawTransaction is intentionally NOT wrapped with a client-side
+      // timeout here. A timeout after the node accepted the tx would report a
+      // false failure and invite a double-send; adding a submit timeout safely
+      // requires already-in-ledger detection, handled together in TASK-22.
       const res = await this.algodClient.sendRawTransaction(signedTxn).do();
       const txId =
         (res as unknown as { txId?: string; txid?: string }).txId ??
@@ -1073,7 +1117,10 @@ export class NetworkService {
    */
   async getAssetInfo(assetId: number): Promise<any> {
     try {
-      const assetInfo = await this.algodClient.getAssetByID(assetId).do();
+      const assetInfo = await this.withTimeout(
+        this.algodClient.getAssetByID(assetId).do(),
+        `asset ${assetId}`
+      );
       return assetInfo;
     } catch (error) {
       console.error(`Failed to fetch asset info for ${assetId}:`, error);
