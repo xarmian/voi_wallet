@@ -155,8 +155,8 @@ export class MessagingService {
         networkId: NetworkId.VOI_MAINNET,
       };
 
-      // Send the transaction
-      const txId = await TransactionService.sendTransaction(
+      // Send the transaction (bare txId; confirmation state not needed here)
+      const { txId } = await TransactionService.sendTransaction(
         params,
         account as WalletAccount,
         pin

@@ -1260,7 +1260,7 @@ export class TransactionAuthController {
           });
         },
 
-        onNetworkConfirmed: (txId) => {
+        onNetworkConfirmed: (txId, confirmed) => {
           this.isSigningInProgress = false;
           this.updateState({
             state: 'completed',
@@ -1268,6 +1268,10 @@ export class TransactionAuthController {
             result: {
               success: true,
               transactionId: txId,
+              // Propagate submit-vs-confirm so the result screen can show a
+              // pending state instead of a false "Transaction Sent!". Undefined
+              // stays backward-compatible (treated as confirmed success).
+              confirmed,
             },
           });
         },

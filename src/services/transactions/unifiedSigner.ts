@@ -44,7 +44,7 @@ export interface UnifiedSigningCallbacks {
 
   // Network phase
   onNetworkSubmit?: () => void;
-  onNetworkConfirmed?: (txId: string) => void;
+  onNetworkConfirmed?: (txId: string, confirmed?: boolean) => void;
   onNetworkError?: (error: Error) => void;
 
   // Completion
@@ -233,7 +233,7 @@ export class UnifiedTransactionSigner {
 
     try {
       // Use existing TransactionService with unified callbacks
-      const txId = await TransactionService.sendTransaction(
+      const { txId, confirmed } = await TransactionService.sendTransaction(
         request.transferParams,
         request.account,
         request.pin,
@@ -249,6 +249,7 @@ export class UnifiedTransactionSigner {
       return {
         success: true,
         transactionId: txId,
+        confirmed,
       };
 
     } catch (error) {
@@ -269,10 +270,11 @@ export class UnifiedTransactionSigner {
 
     try {
       let txId: string;
+      let confirmed: boolean;
 
       if (request.type === 'rekey_reverse') {
         // Reverse rekey - return authority to original account
-        txId = await TransactionService.sendRekeyReverseTransaction(
+        ({ txId, confirmed } = await TransactionService.sendRekeyReverseTransaction(
           {
             fromAddress: request.rekeyParams.fromAddress,
             note: request.rekeyParams.note,
@@ -287,14 +289,14 @@ export class UnifiedTransactionSigner {
             onNetworkSubmit: callbacks?.onNetworkSubmit,
             onNetworkConfirmed: callbacks?.onNetworkConfirmed,
           }
-        );
+        ));
       } else {
         // Standard rekey to another account
         if (!request.rekeyParams.rekeyToAddress) {
           throw new Error('Target rekey address required for rekey operation');
         }
 
-        txId = await TransactionService.sendRekeyTransaction(
+        ({ txId, confirmed } = await TransactionService.sendRekeyTransaction(
           {
             fromAddress: request.rekeyParams.fromAddress,
             rekeyToAddress: request.rekeyParams.rekeyToAddress,
@@ -310,12 +312,13 @@ export class UnifiedTransactionSigner {
             onNetworkSubmit: callbacks?.onNetworkSubmit,
             onNetworkConfirmed: callbacks?.onNetworkConfirmed,
           }
-        );
+        ));
       }
 
       return {
         success: true,
         transactionId: txId,
+        confirmed,
       };
 
     } catch (error) {

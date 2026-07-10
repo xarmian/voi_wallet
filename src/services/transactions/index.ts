@@ -56,7 +56,10 @@ export interface SignProgressCallbacks {
   onLedgerSigned?: (ctx: { index: number; total: number }) => void;
   onLedgerRejected?: (ctx: { index: number; total: number; error: Error }) => void;
   onNetworkSubmit?: () => void;
-  onNetworkConfirmed?: (txId: string) => void;
+  // `confirmed` is false when the tx was submitted but not yet confirmed within
+  // the round window. Carried here (not just in the return value) because the
+  // auth modal consumes the result published from this callback.
+  onNetworkConfirmed?: (txId: string, confirmed?: boolean) => void;
 }
 
 export class TransactionService {
@@ -660,7 +663,7 @@ export class TransactionService {
     account: WalletAccount,
     pin?: string,
     callbacks?: SignProgressCallbacks
-  ): Promise<string> {
+  ): Promise<{ txId: string; confirmed: boolean }> {
     try {
       const cacheKey = TransactionService.getTransactionCacheKey(params);
 
@@ -679,12 +682,11 @@ export class TransactionService {
 
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
-      // submitWithRetries now returns { txId, confirmed }. These send functions
-      // return a bare string txId to their callers (signature intentionally not
-      // widened), so `confirmed` is not propagated on this path — the UI's
-      // pending state defaults to the backward-compatible "success" view.
-      const { txId } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
-      callbacks?.onNetworkConfirmed?.(txId);
+      // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
+      // callers (and ultimately the UI) can distinguish a confirmed send from a
+      // submitted-but-still-pending one.
+      const { txId, confirmed } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
+      callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction for replay protection.
       // Pass the exact amount as a string so the tracker's identical-transaction
@@ -701,7 +703,7 @@ export class TransactionService {
 
       TransactionService.clearCachedTransaction(cacheKey);
 
-      return txId;
+      return { txId, confirmed };
     } catch (error) {
       const userRejected = TransactionService.isLedgerUserRejected(error);
       console.error('Failed to send transaction:', error);
@@ -1428,7 +1430,7 @@ export class TransactionService {
     account: Pick<WalletAccount, 'address'>,
     pin?: string,
     callbacks?: SignProgressCallbacks
-  ): Promise<string> {
+  ): Promise<{ txId: string; confirmed: boolean }> {
     try {
       const cacheKey = TransactionService.getRekeyCacheKey({
         fromAddress: params.fromAddress,
@@ -1452,12 +1454,11 @@ export class TransactionService {
 
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
-      // submitWithRetries now returns { txId, confirmed }. These send functions
-      // return a bare string txId to their callers (signature intentionally not
-      // widened), so `confirmed` is not propagated on this path — the UI's
-      // pending state defaults to the backward-compatible "success" view.
-      const { txId } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
-      callbacks?.onNetworkConfirmed?.(txId);
+      // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
+      // callers (and ultimately the UI) can distinguish a confirmed send from a
+      // submitted-but-still-pending one.
+      const { txId, confirmed } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
+      callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction
       await TransactionTracker.recordTransaction(
@@ -1475,7 +1476,7 @@ export class TransactionService {
 
       TransactionService.clearCachedTransaction(cacheKey);
 
-      return txId;
+      return { txId, confirmed };
     } catch (error) {
       const userRejected = TransactionService.isLedgerUserRejected(error);
       console.error('Failed to send rekey transaction:', error);
@@ -1576,7 +1577,7 @@ export class TransactionService {
     account: Pick<WalletAccount, 'address'>,
     pin?: string,
     callbacks?: SignProgressCallbacks
-  ): Promise<string> {
+  ): Promise<{ txId: string; confirmed: boolean }> {
     try {
       const cacheKey = TransactionService.getRekeyCacheKey({
         fromAddress: params.fromAddress,
@@ -1600,12 +1601,11 @@ export class TransactionService {
 
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
-      // submitWithRetries now returns { txId, confirmed }. These send functions
-      // return a bare string txId to their callers (signature intentionally not
-      // widened), so `confirmed` is not propagated on this path — the UI's
-      // pending state defaults to the backward-compatible "success" view.
-      const { txId } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
-      callbacks?.onNetworkConfirmed?.(txId);
+      // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
+      // callers (and ultimately the UI) can distinguish a confirmed send from a
+      // submitted-but-still-pending one.
+      const { txId, confirmed } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
+      callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction
       await TransactionTracker.recordTransaction(
@@ -1623,7 +1623,7 @@ export class TransactionService {
 
       TransactionService.clearCachedTransaction(cacheKey);
 
-      return txId;
+      return { txId, confirmed };
     } catch (error) {
       const userRejected = TransactionService.isLedgerUserRejected(error);
       console.error('Failed to send reverse rekey transaction:', error);
