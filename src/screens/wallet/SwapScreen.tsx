@@ -659,7 +659,8 @@ export default function SwapScreen() {
         });
 
         // Submit transaction group
-        txId = await networkService.submitTransaction(signedTxns);
+        const submitRes = await networkService.submitTransaction(signedTxns);
+        txId = submitRes.txId;
       }
 
       const shortTxId =

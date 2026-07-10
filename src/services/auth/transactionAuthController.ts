@@ -1873,14 +1873,18 @@ export class TransactionAuthController {
       const networkService = NetworkService.getInstance();
 
       // Submit the signed transactions
-      const transactionId = await networkService.submitTransaction(
-        signedTxns.length === 1 ? signedTxns[0] : signedTxns
-      );
+      const { txId: transactionId, confirmed } =
+        await networkService.submitTransaction(
+          signedTxns.length === 1 ? signedTxns[0] : signedTxns
+        );
 
-      // Success!
+      // Success! `confirmed === false` means the tx was submitted but not yet
+      // confirmed within the round window (pending, not failed); the result
+      // screen surfaces this as a distinct pending state.
       const successResult: UnifiedSigningResult = {
         success: true,
         transactionId,
+        confirmed,
         signedTransactions: signedTxns,
       };
 

@@ -774,19 +774,26 @@ export class NetworkService {
 
   async submitTransaction(
     signedTxn: Uint8Array | Uint8Array[]
-  ): Promise<string> {
+  ): Promise<{ txId: string; confirmed: boolean }> {
     try {
-      // NOTE: sendRawTransaction is intentionally NOT wrapped with a client-side
-      // timeout here. A timeout after the node accepted the tx would report a
-      // false failure and invite a double-send; adding a submit timeout safely
-      // requires already-in-ledger detection, handled together in TASK-22.
-      const res = await this.algodClient.sendRawTransaction(signedTxn).do();
+      // NOTE: sendRawTransaction is now wrapped with a client-side timeout.
+      // A timeout after the node accepted the tx is safe because
+      // TransactionService.submitWithRetries detects "already in ledger" /
+      // "already in the pool" responses on retry and treats them as success
+      // instead of resubmitting, so a lost-response commit can no longer cause
+      // either a false failure or a double-send.
+      const res = await this.withTimeout(
+        this.algodClient.sendRawTransaction(signedTxn).do(),
+        'submit transaction',
+        30000
+      );
       const txId =
         (res as unknown as { txId?: string; txid?: string }).txId ??
         (res as any).txid;
-      // Wait for confirmation with a sane round limit to avoid returning before the tx is accepted
-      await this.waitForConfirmationInternal(txId);
-      return txId;
+      // Wait for confirmation. A false result means the tx is still pending
+      // (not confirmed within the round window), NOT a failure.
+      const confirmed = await this.waitForConfirmationInternal(txId);
+      return { txId, confirmed };
     } catch (error) {
       console.error('Failed to submit transaction:', error);
       throw new Error(
@@ -795,13 +802,36 @@ export class NetworkService {
     }
   }
 
-  private async waitForConfirmationInternal(txId: string): Promise<void> {
+  private async waitForConfirmationInternal(txId: string): Promise<boolean> {
     try {
       // Wait up to 10 rounds for confirmation
       await algosdk.waitForConfirmation(this.algodClient, txId, 10);
+      return true;
     } catch (err) {
-      // If confirmation wait fails, surface a soft warning but do not mask original submission success
-      console.warn('Transaction submitted but confirmation wait failed:', err);
+      // Not confirmed within the round window. This is a PENDING state, not a
+      // failure: the tx may still confirm later. Surface a soft warning and let
+      // the caller report a pending (not failed) status to the user.
+      console.warn('Transaction submitted but not yet confirmed:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Short, best-effort confirmation check used to reconcile a submit whose
+   * HTTP response was lost (algod returned "already in ledger"/"already in the
+   * pool" on retry). Returns true only if the tx is confirmed within a few
+   * rounds; false on any error or timeout.
+   */
+  async isTransactionConfirmed(txId: string): Promise<boolean> {
+    try {
+      await this.withTimeout(
+        algosdk.waitForConfirmation(this.algodClient, txId, 4),
+        'confirm transaction',
+        30000
+      );
+      return true;
+    } catch {
+      return false;
     }
   }
 

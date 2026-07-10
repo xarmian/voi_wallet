@@ -42,6 +42,10 @@ interface TransactionResultParams {
   assetId?: number;
   fee?: number;
   isSuccess: boolean;
+  // Whether the tx was confirmed within the round window. Only meaningful when
+  // isSuccess is true: `false` => submitted but still pending (distinct UI);
+  // `undefined`/true => treat as confirmed success (backward-compatible default).
+  confirmed?: boolean;
   errorMessage?: string;
   homeRoute?: string; // Route to navigate back to (e.g., 'HomeMain' or 'NFTMain')
   networkId?: string;
@@ -83,21 +87,25 @@ export default function TransactionResultScreen() {
     });
   };
 
+  // Pending = submitted successfully but not yet confirmed within the round
+  // window. Only `confirmed === false` triggers this; undefined/true keep the
+  // existing "Transaction Sent!" success UI (backward-compatible default).
+  const isPending = params.isSuccess === true && params.confirmed === false;
+
   const getStatusIcon = () => {
+    if (isPending) return 'time';
     return params.isSuccess ? 'checkmark-circle' : 'close-circle';
   };
 
-  const getStatusColor = () => {
-    return params.isSuccess
-      ? styles.successColor.color
-      : styles.errorColor.color;
-  };
-
   const getStatusTitle = () => {
+    if (isPending) return 'Transaction Pending';
     return params.isSuccess ? 'Transaction Sent!' : 'Transaction Failed';
   };
 
   const getStatusMessage = () => {
+    if (isPending) {
+      return 'Submitted — waiting for confirmation. It may still confirm; check your history.';
+    }
     if (params.isSuccess) {
       return 'Your transaction has been submitted to the network and will be confirmed shortly.';
     }
@@ -107,7 +115,11 @@ export default function TransactionResultScreen() {
     );
   };
 
-  const statusColor = params.isSuccess ? theme.colors.success : theme.colors.error;
+  const statusColor = isPending
+    ? theme.colors.warning
+    : params.isSuccess
+      ? theme.colors.success
+      : theme.colors.error;
 
   return (
     <NFTBackground>

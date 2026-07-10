@@ -59,6 +59,12 @@ export interface UnifiedSigningResult {
   success: boolean;
   transactionId?: string;
   transactionIds?: string[];
+  /**
+   * Whether the submitted transaction was confirmed within the round window.
+   * `false` = submitted but still pending (NOT a failure); `undefined` = not
+   * tracked on this path, treated as success by the UI for backward compat.
+   */
+  confirmed?: boolean;
   error?: Error;
   signedTransactions?: Uint8Array | Uint8Array[] | string[];
 }

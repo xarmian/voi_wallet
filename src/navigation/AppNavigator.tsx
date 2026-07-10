@@ -279,6 +279,7 @@ export type WalletStackParamList = {
     assetId?: number;
     fee?: number;
     isSuccess: boolean;
+    confirmed?: boolean;
     errorMessage?: string;
     networkId?: NetworkId;
   };
@@ -347,6 +348,7 @@ export type NFTStackParamList = {
     note?: string;
     estimatedFee: number;
     success: boolean;
+    confirmed?: boolean;
     error?: string;
     networkId?: NetworkId;
   };
