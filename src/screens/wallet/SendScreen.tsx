@@ -37,8 +37,8 @@ import {
 import {
   formatNativeBalance,
   formatAssetBalance,
-  subtractBigIntSafe,
   parseAmountToBaseUnits,
+  formatBaseUnitsToAmount,
   sanitizeAmountInput,
 } from '@/utils/bigint';
 import { AccountType, type WalletAccount } from '@/types/wallet';
@@ -735,6 +735,52 @@ export default function SendScreen() {
     // Exact string -> base-units conversion (no float precision loss).
     return parseAmountToBaseUnits(amount, getAssetDecimals());
   };
+
+  // Exact spendable base-unit amount for the currently-selected asset.
+  const getSpendableBase = (): bigint => {
+    const option = getCurrentAssetOption();
+    // Native token: spendable = balance - fee - minBalance (minBalance grows with
+    // opt-ins). Asset: full balance (the fee is paid in the native token).
+    const isNative = option
+      ? option.assetId === 0
+      : effectiveAssetId === 0 || !effectiveAssetId;
+    try {
+      if (isNative) {
+        const bal = BigInt(option?.balance ?? accountBalance?.amount ?? 0);
+        const minBal = BigInt(accountBalance?.minBalance ?? 0);
+        const fee = BigInt(Math.trunc(estimatedFee || 0));
+        const spendable = bal - fee - minBal;
+        return spendable > 0n ? spendable : 0n;
+      }
+      const bal = option?.balance ?? getCurrentAsset()?.amount ?? 0;
+      return BigInt(bal);
+    } catch {
+      return 0n;
+    }
+  };
+
+  // Inline (as-you-type) amount validation — mirrors the recipient inline-error
+  // pattern. Exact BigInt comparison against the spendable base-unit amount.
+  const amountError = React.useMemo<string | null>(() => {
+    if (!amount) return null;
+    const option = getCurrentAssetOption();
+    const isNative = option
+      ? option.assetId === 0
+      : effectiveAssetId === 0 || !effectiveAssetId;
+    try {
+      const parsed = parseAmountToBaseUnits(amount, getAssetDecimals());
+      if (parsed <= 0n) return 'Enter an amount greater than 0';
+      if (parsed > getSpendableBase()) {
+        return isNative
+          ? 'Amount exceeds spendable balance (after fees & minimum balance)'
+          : 'Amount exceeds your balance';
+      }
+      return null;
+    } catch {
+      return 'Enter a valid amount';
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amount, accountBalance, estimatedFee, effectiveAssetId, selectedAsset, assetOptions]);
 
   // Removed problematic useEffect that was causing infinite balance reloading
 
@@ -1516,7 +1562,10 @@ export default function SendScreen() {
               >
                 <Text style={styles.inputLabelInContainer}>Amount ({getAssetSymbol()})</Text>
                 <TextInput
-                  style={styles.textInputInContainer}
+                  style={[
+                    styles.textInputInContainer,
+                    amountError && styles.textInputError,
+                  ]}
                   placeholder={`0.${'0'.repeat(getAssetDecimals())}`}
                   placeholderTextColor={themeColors.placeholder}
                   value={amount}
@@ -1526,35 +1575,30 @@ export default function SendScreen() {
                   keyboardType="decimal-pad"
                   editable={!isSending}
                 />
-                {amount && parseFloat(amount) > 0 && (
-                  <Text style={styles.maxButton}>
-                    Max:{' '}
-                    {(() => {
-                      const option = getCurrentAssetOption();
-                      if (option) {
-                        // For native tokens, subtract the estimated fee
-                        if (option.assetId === 0) {
-                          const maxAmount = subtractBigIntSafe(option.balance, estimatedFee);
-                          return `${formatAssetBalance(maxAmount, option.decimals)} ${option.symbol}`;
-                        }
-                        // For non-native tokens, show full balance
-                        return `${formatAssetBalance(option.balance, option.decimals)} ${option.symbol}`;
-                      }
-
-                      // Fallback to legacy logic
-                      if (accountBalance) {
-                        if (effectiveAssetId === 0 || !effectiveAssetId) {
-                          return `${formatBalance(subtractBigIntSafe(accountBalance.amount, estimatedFee))} ${transactionNetworkConfig.nativeToken}`;
-                        } else {
-                          const asset = getCurrentAsset();
-                          if (asset) {
-                            return `${formatAssetBalance(asset.amount, asset.decimals)} ${getAssetSymbol()}`;
-                          }
-                        }
-                      }
-                      return `0 ${getAssetSymbol()}`;
-                    })()}
-                  </Text>
+                {amountError && (
+                  <Text style={styles.errorText}>{amountError}</Text>
+                )}
+                {getSpendableBase() > 0n && (
+                  <TouchableOpacity
+                    onPress={() =>
+                      setAmount(
+                        formatBaseUnitsToAmount(
+                          getSpendableBase(),
+                          getAssetDecimals()
+                        )
+                      )
+                    }
+                    disabled={isSending}
+                  >
+                    <Text style={styles.maxButton}>
+                      Max:{' '}
+                      {formatBaseUnitsToAmount(
+                        getSpendableBase(),
+                        getAssetDecimals()
+                      )}{' '}
+                      {getAssetSymbol()}
+                    </Text>
+                  </TouchableOpacity>
                 )}
               </BlurredContainer>
             )}
@@ -1647,6 +1691,7 @@ export default function SendScreen() {
               disabled={
                 !recipientAddress ||
                 (!contextNftToken && !amount) ||
+                !!amountError ||
                 isSending ||
                 (activeAccount?.type === AccountType.WATCH && !hasLedgerSigner)
               }
