@@ -43,6 +43,13 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
+import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
+import {
+  detectTransactionDangers,
+  aggregateDangers,
+  hasAnyDanger,
+  TransactionDangers,
+} from '@/utils/transactionDangers';
 
 type TransactionRequestScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -66,6 +73,7 @@ interface ParsedTransaction {
   note?: string;
   assetId?: number;
   type: string;
+  dangers?: TransactionDangers;
 }
 
 export default function TransactionRequestScreen({ navigation, route }: Props) {
@@ -89,9 +97,28 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
   const [networkCurrency, setNetworkCurrency] = useState<string>('TOKEN');
+  const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
 
   // Use the unified auth controller
   const authController = useTransactionAuthController();
+
+  // S-01: derive authority-transfer / balance-sweep dangers directly from the
+  // WalletConnect transactions that would be signed on this screen's direct path.
+  // (parsedTransactions/decodedTransactions are not populated in this screen.)
+  const aggregatedDangers = useMemo<TransactionDangers>(() => {
+    const list: TransactionDangers[] = [];
+    for (const wtxn of transactions) {
+      try {
+        const txnBytes = Buffer.from(wtxn.txn, 'base64');
+        const decoded = algosdk.decodeUnsignedTransaction(txnBytes);
+        list.push(detectTransactionDangers(decoded));
+      } catch {
+        // Pre-signed / undecodable transaction — no danger fields surfaced.
+      }
+    }
+    return aggregateDangers(list);
+  }, [transactions]);
+  const hasDanger = hasAnyDanger(aggregatedDangers);
 
   useEffect(() => {
     loadAccountsAndTransactions();
@@ -241,6 +268,14 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   };
 
   const handleApprove = () => {
+    if (hasDanger && !dangerAcknowledged) {
+      Alert.alert(
+        'Confirmation required',
+        'Please acknowledge the highlighted account-security warning before signing.'
+      );
+      return;
+    }
+
     if (!selectedAccount) {
       Alert.alert('Error', 'Please select an account to sign with');
       return;
@@ -528,6 +563,15 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         </View>
 
         {renderTransactionSummary()}
+
+        {hasDanger && (
+          <TransactionDangerBanner
+            dangers={aggregatedDangers}
+            acknowledged={dangerAcknowledged}
+            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
+          />
+        )}
+
         {renderAccountSelector()}
 
         <View style={styles.warningContainer}>
@@ -551,7 +595,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         <TouchableOpacity
           style={[styles.button, styles.approveButton]}
           onPress={handleApprove}
-          disabled={!selectedAccount}
+          disabled={!selectedAccount || (hasDanger && !dangerAcknowledged)}
         >
           <Text style={styles.approveButtonText}>Sign</Text>
         </TouchableOpacity>
