@@ -918,6 +918,13 @@ export class TransactionService {
         if (compareBigInt(accountBalance.amount, estimatedFee) < 0) {
           errors.push('Insufficient VOI balance for transaction fee');
         }
+
+        // Paying the fee must not drop the native balance below the account's MBR.
+        const remainingAfterFee =
+          BigInt(accountBalance.amount) - BigInt(Math.trunc(estimatedFee));
+        if (compareBigInt(remainingAfterFee, accountBalance.minBalance) < 0) {
+          errors.push('Transaction would violate minimum balance requirement');
+        }
       } else {
         // VOI payment validation — keep the entire balance check in bigint so
         // large balances/amounts are never downcast to Number.
