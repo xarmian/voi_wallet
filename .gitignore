@@ -62,3 +62,4 @@ google-services.json
 google-services-dev.json
 .gitignore.save
 .pad.toml
+docs/
