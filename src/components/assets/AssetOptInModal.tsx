@@ -24,7 +24,10 @@ import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NetworkId } from '@/types/network';
-import { getNetworkConfig, NETWORK_CONFIGURATIONS } from '@/services/network/config';
+import {
+  getNetworkConfig,
+  NETWORK_CONFIGURATIONS,
+} from '@/services/network/config';
 
 interface AssetInfo {
   assetId: number;
@@ -62,7 +65,8 @@ export default function AssetOptInModal({
   const themeColors = useThemeColors();
   const insets = useSafeAreaInsets();
   const activeAccount = useActiveAccount();
-  const [selectedNetworkId, setSelectedNetworkId] = useState<NetworkId>('voi-mainnet');
+  const [selectedNetworkId, setSelectedNetworkId] =
+    useState<NetworkId>('voi-mainnet');
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -298,232 +302,225 @@ export default function AssetOptInModal({
           scrollEventThrottle={400}
           extraScrollHeight={50}
         >
-            {/* Network Selector */}
-            <View style={styles.networkSection}>
-              <Text style={styles.inputLabel}>Network</Text>
-              <View style={styles.networkSelectorContainer}>
-                {Object.values(NETWORK_CONFIGURATIONS).map((config) => (
-                  <TouchableOpacity
-                    key={config.id}
+          {/* Network Selector */}
+          <View style={styles.networkSection}>
+            <Text style={styles.inputLabel}>Network</Text>
+            <View style={styles.networkSelectorContainer}>
+              {Object.values(NETWORK_CONFIGURATIONS).map((config) => (
+                <TouchableOpacity
+                  key={config.id}
+                  style={[
+                    styles.networkOption,
+                    selectedNetworkId === config.id &&
+                      styles.networkOptionSelected,
+                  ]}
+                  onPress={() => {
+                    setSelectedNetworkId(config.id);
+                    // Reset search results when network changes
+                    setSearchResults([]);
+                    setSelectedAsset(null);
+                    setError('');
+                  }}
+                  disabled={isProcessing}
+                >
+                  <View
                     style={[
-                      styles.networkOption,
-                      selectedNetworkId === config.id && styles.networkOptionSelected,
+                      styles.networkDot,
+                      { backgroundColor: config.color },
                     ]}
-                    onPress={() => {
-                      setSelectedNetworkId(config.id);
-                      // Reset search results when network changes
-                      setSearchResults([]);
-                      setSelectedAsset(null);
-                      setError('');
-                    }}
-                    disabled={isProcessing}
+                  />
+                  <Text
+                    style={[
+                      styles.networkOptionText,
+                      selectedNetworkId === config.id &&
+                        styles.networkOptionTextSelected,
+                    ]}
                   >
-                    <View
-                      style={[
-                        styles.networkDot,
-                        { backgroundColor: config.color },
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.networkOptionText,
-                        selectedNetworkId === config.id && styles.networkOptionTextSelected,
-                      ]}
-                    >
-                      {config.name}
-                    </Text>
-                    {selectedNetworkId === config.id && (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={20}
-                        color={themeColors.primary}
-                      />
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Search Input */}
-            <View style={styles.searchSection}>
-              <Text style={styles.inputLabel}>Asset Search</Text>
-              <View style={styles.searchInputContainer}>
-                <TextInput
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Enter Asset ID or name"
-                  placeholderTextColor={themeColors.textMuted}
-                  style={styles.searchInput}
-                  editable={!isProcessing}
-                  onSubmitEditing={() => searchAssets()}
-                  returnKeyType="search"
-                />
-                <TouchableOpacity
-                  onPress={searchAssets}
-                  disabled={searching || isProcessing}
-                  style={styles.searchButton}
-                >
-                  {searching ? (
-                    <ActivityIndicator
-                      size="small"
-                      color={themeColors.primary}
-                    />
-                  ) : (
-                    <Ionicons
-                      name="search"
-                      size={20}
-                      color={themeColors.primary}
-                    />
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Error Message */}
-            {error && (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>{error}</Text>
-              </View>
-            )}
-
-            {/* Search Results */}
-            {searchResults.length > 0 && !selectedAsset && (
-              <View style={styles.searchResultsContainer}>
-                <Text style={styles.searchResultsTitle}>
-                  Search Results ({searchResults.length}
-                  {hasMore ? '+' : ''})
-                </Text>
-                {searchResults.map((result) => (
-                  <TouchableOpacity
-                    key={result.index}
-                    style={styles.searchResultItem}
-                    onPress={() => selectAsset(result)}
-                  >
-                    <View style={styles.searchResultContent}>
-                      <Text style={styles.searchResultName}>
-                        {result.params.name || `Asset ${result.index}`}
-                      </Text>
-                      {result.params['unit-name'] && (
-                        <Text style={styles.searchResultSymbol}>
-                          {result.params['unit-name']}
-                        </Text>
-                      )}
-                      <Text style={styles.searchResultId}>
-                        ID: {result.index}
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={20}
-                      color={themeColors.textMuted}
-                    />
-                  </TouchableOpacity>
-                ))}
-
-                {/* Load More Indicator */}
-                {loadingMore && (
-                  <View style={styles.loadingMoreContainer}>
-                    <ActivityIndicator
-                      size="small"
-                      color={themeColors.primary}
-                    />
-                    <Text style={styles.loadingMoreText}>
-                      Loading more assets...
-                    </Text>
-                  </View>
-                )}
-
-                {/* Load More Button (fallback for manual loading) */}
-                {hasMore && !loadingMore && (
-                  <TouchableOpacity
-                    style={styles.loadMoreButton}
-                    onPress={loadMoreAssets}
-                  >
-                    <Ionicons
-                      name="chevron-down"
-                      size={20}
-                      color={themeColors.primary}
-                    />
-                    <Text style={styles.loadMoreText}>Load More Assets</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-
-            {/* Selected Asset Info */}
-            {selectedAsset && !error && (
-              <View style={styles.assetInfoContainer}>
-                <Text style={styles.assetName}>{selectedAsset.name}</Text>
-                {selectedAsset.unitName && (
-                  <Text style={styles.assetUnitName}>
-                    {selectedAsset.unitName}
+                    {config.name}
                   </Text>
-                )}
-
-                <View style={styles.assetDetails}>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Asset ID</Text>
-                    <Text style={styles.detailValue}>
-                      {selectedAsset.assetId}
-                    </Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Total Supply</Text>
-                    <Text style={styles.detailValue}>
-                      {formatAmount(
-                        selectedAsset.total,
-                        selectedAsset.decimals
-                      )}
-                    </Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Decimals</Text>
-                    <Text style={styles.detailValue}>
-                      {selectedAsset.decimals}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* MBR Cost Warning */}
-                <View style={styles.warningContainer}>
-                  <View style={styles.warningContent}>
+                  {selectedNetworkId === config.id && (
                     <Ionicons
-                      name="information-circle"
-                      size={16}
-                      color={themeColors.warning}
+                      name="checkmark-circle"
+                      size={20}
+                      color={themeColors.primary}
                     />
-                    <Text style={styles.warningText}>
-                      Opting in requires {(mbrCost / 1000000).toFixed(1)} VOI to
-                      be locked for minimum balance
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* Action Buttons */}
-            {selectedAsset && !error && (
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  onPress={onClose}
-                  disabled={isProcessing}
-                  style={styles.cancelButton}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleOptIn}
-                  disabled={isProcessing}
-                  style={styles.optInButton}
-                >
-                  {isProcessing ? (
-                    <ActivityIndicator size="small" color="white" />
-                  ) : (
-                    <Text style={styles.optInButtonText}>Opt In</Text>
                   )}
                 </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* Search Input */}
+          <View style={styles.searchSection}>
+            <Text style={styles.inputLabel}>Asset Search</Text>
+            <View style={styles.searchInputContainer}>
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Enter Asset ID or name"
+                placeholderTextColor={themeColors.textMuted}
+                style={styles.searchInput}
+                editable={!isProcessing}
+                onSubmitEditing={() => searchAssets()}
+                returnKeyType="search"
+              />
+              <TouchableOpacity
+                onPress={searchAssets}
+                disabled={searching || isProcessing}
+                style={styles.searchButton}
+              >
+                {searching ? (
+                  <ActivityIndicator size="small" color={themeColors.primary} />
+                ) : (
+                  <Ionicons
+                    name="search"
+                    size={20}
+                    color={themeColors.primary}
+                  />
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Error Message */}
+          {error && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+
+          {/* Search Results */}
+          {searchResults.length > 0 && !selectedAsset && (
+            <View style={styles.searchResultsContainer}>
+              <Text style={styles.searchResultsTitle}>
+                Search Results ({searchResults.length}
+                {hasMore ? '+' : ''})
+              </Text>
+              {searchResults.map((result) => (
+                <TouchableOpacity
+                  key={result.index}
+                  style={styles.searchResultItem}
+                  onPress={() => selectAsset(result)}
+                >
+                  <View style={styles.searchResultContent}>
+                    <Text style={styles.searchResultName}>
+                      {result.params.name || `Asset ${result.index}`}
+                    </Text>
+                    {result.params['unit-name'] && (
+                      <Text style={styles.searchResultSymbol}>
+                        {result.params['unit-name']}
+                      </Text>
+                    )}
+                    <Text style={styles.searchResultId}>
+                      ID: {result.index}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={20}
+                    color={themeColors.textMuted}
+                  />
+                </TouchableOpacity>
+              ))}
+
+              {/* Load More Indicator */}
+              {loadingMore && (
+                <View style={styles.loadingMoreContainer}>
+                  <ActivityIndicator size="small" color={themeColors.primary} />
+                  <Text style={styles.loadingMoreText}>
+                    Loading more assets...
+                  </Text>
+                </View>
+              )}
+
+              {/* Load More Button (fallback for manual loading) */}
+              {hasMore && !loadingMore && (
+                <TouchableOpacity
+                  style={styles.loadMoreButton}
+                  onPress={loadMoreAssets}
+                >
+                  <Ionicons
+                    name="chevron-down"
+                    size={20}
+                    color={themeColors.primary}
+                  />
+                  <Text style={styles.loadMoreText}>Load More Assets</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {/* Selected Asset Info */}
+          {selectedAsset && !error && (
+            <View style={styles.assetInfoContainer}>
+              <Text style={styles.assetName}>{selectedAsset.name}</Text>
+              {selectedAsset.unitName && (
+                <Text style={styles.assetUnitName}>
+                  {selectedAsset.unitName}
+                </Text>
+              )}
+
+              <View style={styles.assetDetails}>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Asset ID</Text>
+                  <Text style={styles.detailValue}>
+                    {selectedAsset.assetId}
+                  </Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Total Supply</Text>
+                  <Text style={styles.detailValue}>
+                    {formatAmount(selectedAsset.total, selectedAsset.decimals)}
+                  </Text>
+                </View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Decimals</Text>
+                  <Text style={styles.detailValue}>
+                    {selectedAsset.decimals}
+                  </Text>
+                </View>
               </View>
-            )}
+
+              {/* MBR Cost Warning */}
+              <View style={styles.warningContainer}>
+                <View style={styles.warningContent}>
+                  <Ionicons
+                    name="information-circle"
+                    size={16}
+                    color={themeColors.warning}
+                  />
+                  <Text style={styles.warningText}>
+                    Opting in requires {(mbrCost / 1000000).toFixed(1)} VOI to
+                    be locked for minimum balance
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Action Buttons */}
+          {selectedAsset && !error && (
+            <View style={styles.actionButtons}>
+              <TouchableOpacity
+                onPress={onClose}
+                disabled={isProcessing}
+                style={styles.cancelButton}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleOptIn}
+                disabled={isProcessing}
+                style={styles.optInButton}
+              >
+                {isProcessing ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text style={styles.optInButtonText}>Opt In</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
         </KeyboardAwareScrollView>
       </View>
 

@@ -65,17 +65,21 @@ export default function AccountSearchScreen() {
         const nameInfo = await envoiService.getName(trimmedQuery);
 
         if (nameInfo) {
-          setSearchResults([{
-            address: nameInfo.address,
-            name: nameInfo.name,
-            avatar: nameInfo.avatar,
-            bio: nameInfo.bio,
-          }]);
+          setSearchResults([
+            {
+              address: nameInfo.address,
+              name: nameInfo.name,
+              avatar: nameInfo.avatar,
+              bio: nameInfo.bio,
+            },
+          ]);
         } else {
           // Valid address but no Envoi name
-          setSearchResults([{
-            address: trimmedQuery,
-          }]);
+          setSearchResults([
+            {
+              address: trimmedQuery,
+            },
+          ]);
         }
       } else {
         // Use search pattern endpoint for partial name matches
@@ -146,42 +150,53 @@ export default function AccountSearchScreen() {
   const removeFriend = useFriendsStore((state) => state.removeFriend);
   const getFriend = useFriendsStore((state) => state.getFriend);
 
-  const handleResultPress = useCallback((result: SearchResult) => {
-    // Navigate to the account profile with the selected address
-    navigation.navigate('AccountInfo' as any, { address: result.address });
-  }, [navigation]);
+  const handleResultPress = useCallback(
+    (result: SearchResult) => {
+      // Navigate to the account profile with the selected address
+      navigation.navigate('AccountInfo' as any, { address: result.address });
+    },
+    [navigation]
+  );
 
-  const handleToggleFriend = useCallback(async (result: SearchResult) => {
-    if (!result.name) {
-      Alert.alert('Cannot Add Friend', 'This account does not have an Envoi name.');
-      return;
-    }
-
-    const friend = getFriend(result.name);
-    const isCurrentlyFriend = friend !== null;
-
-    try {
-      if (isCurrentlyFriend) {
-        await removeFriend(result.name);
-        Alert.alert('Friend Removed', `${result.name} has been removed from your friends.`);
-      } else {
-        await addFriend(result.name);
-        Alert.alert('Friend Added', `${result.name} has been added to your friends!`);
+  const handleToggleFriend = useCallback(
+    async (result: SearchResult) => {
+      if (!result.name) {
+        Alert.alert(
+          'Cannot Add Friend',
+          'This account does not have an Envoi name.'
+        );
+        return;
       }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Operation failed';
-      Alert.alert('Error', errorMessage);
-    }
-  }, [addFriend, removeFriend, getFriend]);
+
+      const friend = getFriend(result.name);
+      const isCurrentlyFriend = friend !== null;
+
+      try {
+        if (isCurrentlyFriend) {
+          await removeFriend(result.name);
+          Alert.alert(
+            'Friend Removed',
+            `${result.name} has been removed from your friends.`
+          );
+        } else {
+          await addFriend(result.name);
+          Alert.alert(
+            'Friend Added',
+            `${result.name} has been added to your friends!`
+          );
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : 'Operation failed';
+        Alert.alert('Error', errorMessage);
+      }
+    },
+    [addFriend, removeFriend, getFriend]
+  );
 
   const renderAvatar = (item: SearchResult) => {
     if (item.avatar) {
-      return (
-        <Image
-          source={{ uri: item.avatar }}
-          style={styles.avatar}
-        />
-      );
+      return <Image source={{ uri: item.avatar }} style={styles.avatar} />;
     }
 
     // Fallback to AccountAvatar for generated avatars
@@ -197,56 +212,70 @@ export default function AccountSearchScreen() {
     );
   };
 
-  const renderSearchResult = useCallback(({ item }: { item: SearchResult }) => {
-    const friend = item.name ? getFriend(item.name) : null;
-    const isCurrentlyFriend = friend !== null;
+  const renderSearchResult = useCallback(
+    ({ item }: { item: SearchResult }) => {
+      const friend = item.name ? getFriend(item.name) : null;
+      const isCurrentlyFriend = friend !== null;
 
-    return (
-      <View style={styles.resultCard}>
-        <TouchableOpacity
-          style={styles.resultItem}
-          onPress={() => handleResultPress(item)}
-          activeOpacity={0.7}
-        >
-          {renderAvatar(item)}
-          <View style={styles.resultInfo}>
-            {item.name && (
-              <Text style={styles.resultName}>{item.name}</Text>
-            )}
-            <Text style={styles.resultAddress}>{formatAddress(item.address)}</Text>
-            {item.bio && (
-              <Text style={styles.resultBio} numberOfLines={2}>
-                {item.bio}
-              </Text>
-            )}
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={styles.chevron.color} />
-        </TouchableOpacity>
-
-        {item.name && (
+      return (
+        <View style={styles.resultCard}>
           <TouchableOpacity
-            style={[styles.friendButton, isCurrentlyFriend && styles.friendButtonRemove]}
-            onPress={() => handleToggleFriend(item)}
+            style={styles.resultItem}
+            onPress={() => handleResultPress(item)}
             activeOpacity={0.7}
           >
+            {renderAvatar(item)}
+            <View style={styles.resultInfo}>
+              {item.name && <Text style={styles.resultName}>{item.name}</Text>}
+              <Text style={styles.resultAddress}>
+                {formatAddress(item.address)}
+              </Text>
+              {item.bio && (
+                <Text style={styles.resultBio} numberOfLines={2}>
+                  {item.bio}
+                </Text>
+              )}
+            </View>
             <Ionicons
-              name={isCurrentlyFriend ? 'person-remove' : 'person-add'}
-              size={18}
-              color={isCurrentlyFriend ? styles.friendButtonRemoveText.color : '#FFFFFF'}
+              name="chevron-forward"
+              size={20}
+              color={styles.chevron.color}
             />
-            <Text
-              style={[
-                styles.friendButtonText,
-                isCurrentlyFriend && styles.friendButtonRemoveText
-              ]}
-            >
-              {isCurrentlyFriend ? 'Remove Friend' : 'Add to Friends'}
-            </Text>
           </TouchableOpacity>
-        )}
-      </View>
-    );
-  }, [styles, handleResultPress, handleToggleFriend, getFriend, renderAvatar]);
+
+          {item.name && (
+            <TouchableOpacity
+              style={[
+                styles.friendButton,
+                isCurrentlyFriend && styles.friendButtonRemove,
+              ]}
+              onPress={() => handleToggleFriend(item)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={isCurrentlyFriend ? 'person-remove' : 'person-add'}
+                size={18}
+                color={
+                  isCurrentlyFriend
+                    ? styles.friendButtonRemoveText.color
+                    : '#FFFFFF'
+                }
+              />
+              <Text
+                style={[
+                  styles.friendButtonText,
+                  isCurrentlyFriend && styles.friendButtonRemoveText,
+                ]}
+              >
+                {isCurrentlyFriend ? 'Remove Friend' : 'Add to Friends'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    },
+    [styles, handleResultPress, handleToggleFriend, getFriend, renderAvatar]
+  );
 
   const renderEmptyState = () => {
     if (isLoading) {
@@ -259,7 +288,8 @@ export default function AccountSearchScreen() {
           <Ionicons name="search" size={64} color={styles.emptyIcon.color} />
           <Text style={styles.emptyTitle}>Search for Accounts</Text>
           <Text style={styles.emptyText}>
-            Enter an Algorand address or Envoi name to find users and view their profiles
+            Enter an Algorand address or Envoi name to find users and view their
+            profiles
           </Text>
         </View>
       );
@@ -268,7 +298,11 @@ export default function AccountSearchScreen() {
     if (searchResults.length === 0) {
       return (
         <View style={styles.emptyState}>
-          <Ionicons name="alert-circle-outline" size={64} color={styles.emptyIcon.color} />
+          <Ionicons
+            name="alert-circle-outline"
+            size={64}
+            color={styles.emptyIcon.color}
+          />
           <Text style={styles.emptyTitle}>No Results Found</Text>
           <Text style={styles.emptyText}>
             We couldn't find any accounts matching your search
@@ -292,7 +326,11 @@ export default function AccountSearchScreen() {
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
-            <Ionicons name="chevron-back" size={24} color={styles.headerText.color} />
+            <Ionicons
+              name="chevron-back"
+              size={24}
+              color={styles.headerText.color}
+            />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Search Accounts</Text>
           <View style={styles.headerSpacer} />
@@ -322,7 +360,11 @@ export default function AccountSearchScreen() {
                   setHasSearched(false);
                 }}
               >
-                <Ionicons name="close-circle" size={20} color={styles.searchIcon.color} />
+                <Ionicons
+                  name="close-circle"
+                  size={20}
+                  color={styles.searchIcon.color}
+                />
               </TouchableOpacity>
             )}
           </View>

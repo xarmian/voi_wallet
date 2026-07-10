@@ -142,9 +142,7 @@ export async function clearAllData(): Promise<void> {
  * Restore accounts from backup data
  * Creates new wallet structure and stores all accounts
  */
-export async function restoreAccounts(
-  accounts: BackupAccountData[]
-): Promise<{
+export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
   total: number;
   standard: number;
   watch: number;
@@ -185,7 +183,9 @@ export async function restoreAccounts(
           }
 
           // Derive account from mnemonic
-          const algoAccount = algosdk.mnemonicToSecretKey(backupAccount.mnemonic);
+          const algoAccount = algosdk.mnemonicToSecretKey(
+            backupAccount.mnemonic
+          );
 
           const standardAccount: StandardAccountMetadata = {
             id: backupAccount.id,
@@ -207,7 +207,10 @@ export async function restoreAccounts(
           };
 
           // Store account securely (this encrypts the private key)
-          await AccountSecureStorage.storeAccount(standardAccount, algoAccount.sk);
+          await AccountSecureStorage.storeAccount(
+            standardAccount,
+            algoAccount.sk
+          );
 
           // Clear secret key from memory
           algoAccount.sk.fill(0);
@@ -282,7 +285,8 @@ export async function restoreAccounts(
             avatarUrl: backupAccount.avatarUrl,
             deviceId: backupAccount.deviceId || '',
             derivationIndex: backupAccount.derivationIndex || 0,
-            derivationPath: backupAccount.ledgerDerivationPath || "44'/283'/0'/0/0",
+            derivationPath:
+              backupAccount.ledgerDerivationPath || "44'/283'/0'/0/0",
             deviceName: backupAccount.deviceName,
           };
 
@@ -478,7 +482,10 @@ export async function restoreFriends(friends: Friend[]): Promise<number> {
       return 0;
     }
 
-    await AsyncStorage.setItem(STORAGE_KEYS.FRIENDS_LIST, JSON.stringify(friends));
+    await AsyncStorage.setItem(
+      STORAGE_KEYS.FRIENDS_LIST,
+      JSON.stringify(friends)
+    );
     return friends.length;
   } catch (error) {
     console.warn('Failed to restore friends list:', error);
@@ -563,12 +570,16 @@ export async function restoreRemoteSignerSettings(
           return false;
         }
         if (typeof signer.pairedAt !== 'number') {
-          console.warn(`Skipping paired signer ${signer.deviceId} - invalid pairedAt`);
+          console.warn(
+            `Skipping paired signer ${signer.deviceId} - invalid pairedAt`
+          );
           return false;
         }
         // Validate addresses array
         if (!Array.isArray(signer.addresses) || signer.addresses.length === 0) {
-          console.warn(`Skipping paired signer ${signer.deviceId} - invalid or empty addresses`);
+          console.warn(
+            `Skipping paired signer ${signer.deviceId} - invalid or empty addresses`
+          );
           return false;
         }
         return true;

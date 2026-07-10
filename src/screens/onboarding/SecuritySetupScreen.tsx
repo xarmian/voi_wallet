@@ -265,10 +265,24 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
             {biometricAvailable && (
               <View style={styles.biometricContainer}>
                 <View style={styles.biometricLeft}>
-                  <View style={[styles.biometricIcon, { backgroundColor: `${theme.colors.primary}15` }]}>
-                    <Ionicons name="finger-print" size={20} color={theme.colors.primary} />
+                  <View
+                    style={[
+                      styles.biometricIcon,
+                      { backgroundColor: `${theme.colors.primary}15` },
+                    ]}
+                  >
+                    <Ionicons
+                      name="finger-print"
+                      size={20}
+                      color={theme.colors.primary}
+                    />
                   </View>
-                  <Text style={[styles.biometricLabel, { color: theme.colors.text }]}>
+                  <Text
+                    style={[
+                      styles.biometricLabel,
+                      { color: theme.colors.text },
+                    ]}
+                  >
                     Enable Biometric Authentication
                   </Text>
                 </View>
@@ -287,7 +301,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
 
           <GlassButton
             variant="primary"
-            label={submitting ? (setupStep || 'Setting up...') : 'Complete Setup'}
+            label={submitting ? setupStep || 'Setting up...' : 'Complete Setup'}
             icon={submitting ? undefined : 'checkmark-circle'}
             loading={submitting}
             disabled={!pin || !confirmPin || submitting}

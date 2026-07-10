@@ -33,7 +33,8 @@ export default function NetworkIndicator({
   const styles = useThemedStyles(createStyles);
 
   // Use prop override or global state
-  const effectiveViewMode = viewMode || (isMultiNetworkView ? 'multi-network' : 'single-network');
+  const effectiveViewMode =
+    viewMode || (isMultiNetworkView ? 'multi-network' : 'single-network');
   const isShowingMultiNetwork = effectiveViewMode === 'multi-network';
 
   const sizeStyles = {
@@ -59,7 +60,11 @@ export default function NetworkIndicator({
   // Multi-network view: Show all network badges as pills
   if (isShowingMultiNetwork) {
     return (
-      <Container style={[styles.container, styles.multiNetworkContainer]} onPress={onPress} disabled={!onPress}>
+      <Container
+        style={[styles.container, styles.multiNetworkContainer]}
+        onPress={onPress}
+        disabled={!onPress}
+      >
         <View style={[styles.pillsContainer, { gap: sizeStyles.gap }]}>
           {availableNetworks.map((networkId) => {
             const config = getNetworkConfig(networkId);
@@ -108,9 +113,7 @@ export default function NetworkIndicator({
         ]}
       >
         {showName && (
-          <Text style={[styles.pillText, sizeStyles.text]}>
-            {shortName}
-          </Text>
+          <Text style={[styles.pillText, sizeStyles.text]}>{shortName}</Text>
         )}
       </View>
     </Container>

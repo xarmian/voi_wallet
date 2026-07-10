@@ -6,13 +6,7 @@
  */
 
 import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Switch,
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -102,7 +96,13 @@ function SettingToggle({
   );
 }
 
-function SectionHeader({ title, icon }: { title: string; icon: keyof typeof Ionicons.glyphMap }) {
+function SectionHeader({
+  title,
+  icon,
+}: {
+  title: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
   const { theme } = useTheme();
   const themeColors = useThemeColors();
 
@@ -146,9 +146,13 @@ export default function ExperimentalFeaturesScreen() {
   const styles = useThemedStyles(createStyles);
 
   const swapEnabled = useExperimentalStore((state) => state.swapEnabled);
-  const messagingEnabled = useExperimentalStore((state) => state.messagingEnabled);
+  const messagingEnabled = useExperimentalStore(
+    (state) => state.messagingEnabled
+  );
   const setSwapEnabled = useExperimentalStore((state) => state.setSwapEnabled);
-  const setMessagingEnabled = useExperimentalStore((state) => state.setMessagingEnabled);
+  const setMessagingEnabled = useExperimentalStore(
+    (state) => state.setMessagingEnabled
+  );
 
   return (
     <NFTBackground>
@@ -172,8 +176,8 @@ export default function ExperimentalFeaturesScreen() {
                 style={{ marginRight: theme.spacing.sm }}
               />
               <Text style={[styles.warningText, { color: themeColors.text }]}>
-                These features are still in development and may not work as expected.
-                Enable at your own discretion.
+                These features are still in development and may not work as
+                expected. Enable at your own discretion.
               </Text>
             </View>
           </GlassCard>
@@ -207,8 +211,8 @@ export default function ExperimentalFeaturesScreen() {
                 style={{ marginRight: theme.spacing.sm }}
               />
               <Text style={[styles.infoText, { color: themeColors.textMuted }]}>
-                Experimental features will graduate to full features once they are stable and
-                thoroughly tested. Feedback is welcome!
+                Experimental features will graduate to full features once they
+                are stable and thoroughly tested. Feedback is welcome!
               </Text>
             </View>
           </GlassCard>

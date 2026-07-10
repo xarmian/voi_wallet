@@ -246,7 +246,11 @@ export default function ChangePinScreen() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <UniversalHeader title="PIN" showBack onBack={() => navigation.goBack()} />
+        <UniversalHeader
+          title="PIN"
+          showBack
+          onBack={() => navigation.goBack()}
+        />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
         </View>
@@ -256,7 +260,11 @@ export default function ChangePinScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader title={isInitialSetup ? 'Set PIN' : 'Change PIN'} showBack onBack={handleBack} />
+      <UniversalHeader
+        title={isInitialSetup ? 'Set PIN' : 'Change PIN'}
+        showBack
+        onBack={handleBack}
+      />
 
       <KeyboardAwareScrollView
         style={styles.scrollView}
@@ -301,7 +309,11 @@ export default function ChangePinScreen() {
             <ActivityIndicator size="small" color="white" />
           ) : (
             <Text style={styles.nextButtonText}>
-              {currentStep === 'confirm' ? (isInitialSetup ? 'Set PIN' : 'Change PIN') : 'Next'}
+              {currentStep === 'confirm'
+                ? isInitialSetup
+                  ? 'Set PIN'
+                  : 'Change PIN'
+                : 'Next'}
             </Text>
           )}
         </TouchableOpacity>

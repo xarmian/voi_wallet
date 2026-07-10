@@ -43,7 +43,10 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
 
-  const formatAmount = (amount: string, decimals: number | undefined): string => {
+  const formatAmount = (
+    amount: string,
+    decimals: number | undefined
+  ): string => {
     try {
       if (decimals === undefined || !amount) return '0';
       // API returns amounts in base units, convert to display units
@@ -87,14 +90,16 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
         return `Direct (${pools[0].dex.toUpperCase()})`;
       }
       // Multiple pools in direct route
-      const dexes = [...new Set(pools.map(pool => pool.dex.toUpperCase()))];
+      const dexes = [...new Set(pools.map((pool) => pool.dex.toUpperCase()))];
       return `${pools.length} pools via ${dexes.join(', ')}`;
     }
 
     // Handle multi-hop routes with hops array
     if (quote.route.type === 'multi-hop' && quote.route.hops) {
-      const allPools = quote.route.hops.flatMap(hop => hop.pools);
-      const dexes = [...new Set(allPools.map(pool => pool.dex.toUpperCase()))];
+      const allPools = quote.route.hops.flatMap((hop) => hop.pools);
+      const dexes = [
+        ...new Set(allPools.map((pool) => pool.dex.toUpperCase())),
+      ];
       return `${quote.route.totalPools} pools via ${dexes.join(', ')}`;
     }
 
@@ -124,7 +129,11 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
     return (
       <GlassCard variant="medium" style={styles.container} animated={false}>
         <View style={styles.placeholderContainer}>
-          <Ionicons name="swap-horizontal" size={32} color={themeColors.textMuted} />
+          <Ionicons
+            name="swap-horizontal"
+            size={32}
+            color={themeColors.textMuted}
+          />
           <Text style={styles.placeholderText}>
             Enter an amount to get a quote
           </Text>
@@ -152,11 +161,18 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
             onPress={onSlippagePress}
             disabled={loading}
           >
-            <Ionicons name="settings-outline" size={18} color={themeColors.text} />
+            <Ionicons
+              name="settings-outline"
+              size={18}
+              color={themeColors.text}
+            />
             <Text style={styles.headerButtonText}>{slippage}%</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.headerButton, loading && styles.refreshButtonLoading]}
+            style={[
+              styles.headerButton,
+              loading && styles.refreshButtonLoading,
+            ]}
             onPress={onRefresh}
             disabled={loading}
           >
@@ -220,7 +236,10 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
             </TouchableOpacity>
           </View>
           <Text style={styles.quoteValue}>
-            {formatAmount(quote.minimumOutputAmount || '0', outputToken?.decimals)}{' '}
+            {formatAmount(
+              quote.minimumOutputAmount || '0',
+              outputToken?.decimals
+            )}{' '}
             {outputToken?.symbol}
           </Text>
         </View>
@@ -248,7 +267,6 @@ export const SwapQuoteDisplay: React.FC<SwapQuoteDisplayProps> = ({
             />
           </View>
         </TouchableOpacity>
-
       </View>
 
       {/* Warning for high price impact */}
@@ -386,9 +404,10 @@ const createStyles = (theme: Theme) =>
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.5)'
-        : 'rgba(255, 255, 255, 0.6)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.5)'
+          : 'rgba(255, 255, 255, 0.6)',
       borderRadius: theme.borderRadius.xl,
       zIndex: 10,
       alignItems: 'center',

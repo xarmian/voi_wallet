@@ -95,12 +95,21 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
       gap,
       ...rest
     } = styleObj;
-    return { flexDirection, justifyContent, alignItems, alignSelf, flexWrap, gap };
+    return {
+      flexDirection,
+      justifyContent,
+      alignItems,
+      alignSelf,
+      flexWrap,
+      gap,
+    };
   };
 
   const containerStyle = style
     ? Array.isArray(style)
-      ? style.map((s) => removeVisualConflicts(s)).filter((s) => s && Object.keys(s).length > 0)
+      ? style
+          .map((s) => removeVisualConflicts(s))
+          .filter((s) => s && Object.keys(s).length > 0)
       : removeVisualConflicts(style)
     : {};
 
@@ -119,7 +128,12 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
     return theme.mode === 'dark'
       ? `rgba(0, 0, 0, 0.25)`
       : `rgba(255, 255, 255, 0.05)`;
-  }, [backgroundColor, hasNFTBackground, glassConfig.backgroundColor, theme.mode]);
+  }, [
+    backgroundColor,
+    hasNFTBackground,
+    glassConfig.backgroundColor,
+    theme.mode,
+  ]);
 
   // Highlight gradient colors (subtle top edge highlight for depth)
   const highlightGradientColors = useMemo((): [string, string] => {
@@ -177,12 +191,12 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
         )}
 
         {/* Inner border */}
-        {innerBorderStyle && <View style={innerBorderStyle} pointerEvents="none" />}
+        {innerBorderStyle && (
+          <View style={innerBorderStyle} pointerEvents="none" />
+        )}
 
         {/* Content */}
-        <View style={[styles.content, layoutStyle]}>
-          {children}
-        </View>
+        <View style={[styles.content, layoutStyle]}>{children}</View>
       </View>
     );
   }
@@ -230,12 +244,12 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
       )}
 
       {/* Inner border for glass edge effect */}
-      {innerBorderStyle && <View style={innerBorderStyle} pointerEvents="none" />}
+      {innerBorderStyle && (
+        <View style={innerBorderStyle} pointerEvents="none" />
+      )}
 
       {/* Content - positioned above overlay */}
-      <View style={[styles.content, layoutStyle]}>
-        {children}
-      </View>
+      <View style={[styles.content, layoutStyle]}>{children}</View>
     </SafeBlurView>
   );
 };

@@ -10,7 +10,11 @@ import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSupabaseClient, isSupabaseConfigured, setDeviceId } from '../supabase';
+import {
+  getSupabaseClient,
+  isSupabaseConfigured,
+  setDeviceId,
+} from '../supabase';
 import {
   NotificationPreferences,
   DEFAULT_NOTIFICATION_PREFERENCES,
@@ -56,8 +60,12 @@ class NotificationService {
   private pushToken: string | null = null;
   private notificationListener: Notifications.Subscription | null = null;
   private responseListener: Notifications.Subscription | null = null;
-  private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
-  private onNotificationTap: ((data: NotificationData) => void | Promise<void>) | null = null;
+  private appStateSubscription: ReturnType<
+    typeof AppState.addEventListener
+  > | null = null;
+  private onNotificationTap:
+    | ((data: NotificationData) => void | Promise<void>)
+    | null = null;
   private pendingNotificationTap: NotificationData | null = null;
 
   private constructor() {
@@ -84,7 +92,9 @@ class NotificationService {
     configureNotificationHandler();
 
     if (!isSupabaseConfigured()) {
-      console.log('Supabase not configured, skipping notification initialization');
+      console.log(
+        'Supabase not configured, skipping notification initialization'
+      );
       return;
     }
 
@@ -99,16 +109,25 @@ class NotificationService {
     const lastResponse = await Notifications.getLastNotificationResponseAsync();
     if (lastResponse) {
       const notificationId = lastResponse.notification.request.identifier;
-      const lastHandledId = await AsyncStorage.getItem(LAST_HANDLED_NOTIFICATION_KEY);
+      const lastHandledId = await AsyncStorage.getItem(
+        LAST_HANDLED_NOTIFICATION_KEY
+      );
 
       // Only process if we haven't already handled this notification
       if (notificationId !== lastHandledId) {
-        const data = lastResponse.notification.request.content.data as NotificationData;
+        const data = lastResponse.notification.request.content
+          .data as NotificationData;
         if (data && data.type) {
-          console.log('[Notifications] Cold start from notification:', notificationId);
+          console.log(
+            '[Notifications] Cold start from notification:',
+            notificationId
+          );
 
           // Mark as handled BEFORE processing
-          await AsyncStorage.setItem(LAST_HANDLED_NOTIFICATION_KEY, notificationId);
+          await AsyncStorage.setItem(
+            LAST_HANDLED_NOTIFICATION_KEY,
+            notificationId
+          );
 
           if (this.onNotificationTap) {
             this.onNotificationTap(data);
@@ -147,12 +166,17 @@ class NotificationService {
   /**
    * Set callback for notification taps
    */
-  setNotificationTapHandler(handler: (data: NotificationData) => void | Promise<void>): void {
+  setNotificationTapHandler(
+    handler: (data: NotificationData) => void | Promise<void>
+  ): void {
     this.onNotificationTap = handler;
 
     // If there was a pending notification tap before the handler was set, process it now
     if (this.pendingNotificationTap) {
-      console.log('Processing pending notification tap:', this.pendingNotificationTap);
+      console.log(
+        'Processing pending notification tap:',
+        this.pendingNotificationTap
+      );
       const pendingData = this.pendingNotificationTap;
       this.pendingNotificationTap = null;
       handler(pendingData);
@@ -183,7 +207,8 @@ class NotificationService {
       return false;
     }
 
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    const { status: existingStatus } =
+      await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
     if (existingStatus !== 'granted') {
@@ -217,7 +242,8 @@ class NotificationService {
 
     try {
       // Get Expo push token
-      const projectId = Constants.expoConfig?.extra?.eas?.projectId ||
+      const projectId =
+        Constants.expoConfig?.extra?.eas?.projectId ||
         Constants.easConfig?.projectId;
 
       if (!projectId) {
@@ -231,18 +257,21 @@ class NotificationService {
       this.pushToken = tokenData.data;
 
       // Register with server (using voiwallet schema)
-      const { error } = await supabase.schema('voiwallet').from('push_tokens').upsert(
-        {
-          device_id: this.deviceId,
-          push_token: this.pushToken,
-          platform: Platform.OS as 'ios' | 'android',
-          last_active_at: new Date().toISOString(),
-          is_valid: true,
-        },
-        {
-          onConflict: 'device_id,push_token',
-        }
-      );
+      const { error } = await supabase
+        .schema('voiwallet')
+        .from('push_tokens')
+        .upsert(
+          {
+            device_id: this.deviceId,
+            push_token: this.pushToken,
+            platform: Platform.OS as 'ios' | 'android',
+            last_active_at: new Date().toISOString(),
+            is_valid: true,
+          },
+          {
+            onConflict: 'device_id,push_token',
+          }
+        );
 
       if (error) {
         console.error('Failed to register push token:', error);
@@ -269,7 +298,9 @@ class NotificationService {
     // Validate address parameter to prevent data corruption
     const validatedAddress = this.validateAddress(address, 'subscribeAccount');
     if (!validatedAddress) {
-      console.error('[NotificationService] subscribeAccount called with invalid address, skipping subscription');
+      console.error(
+        '[NotificationService] subscribeAccount called with invalid address, skipping subscription'
+      );
       return false;
     }
 
@@ -281,25 +312,28 @@ class NotificationService {
 
     const prefs = { ...DEFAULT_NOTIFICATION_PREFERENCES, ...preferences };
 
-    const { error } = await supabase.schema('voiwallet').from('account_subscriptions').upsert(
-      {
-        device_id: this.deviceId,
-        account_address: validatedAddress,
-        notify_messages: prefs.messages,
-        notify_voi_payments: prefs.voiPayments,
-        notify_arc200_transfers: prefs.arc200Transfers,
-        notify_arc72_transfers: prefs.arc72Transfers,
-        notify_outgoing_confirmations: prefs.outgoingConfirmations,
-        notify_price_alerts: prefs.priceAlerts,
-        min_voi_amount: prefs.minVoiAmount,
-        min_arc200_amount: prefs.minArc200Amount,
-        price_alert_threshold_percent: prefs.priceAlertThreshold,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: 'device_id,account_address',
-      }
-    );
+    const { error } = await supabase
+      .schema('voiwallet')
+      .from('account_subscriptions')
+      .upsert(
+        {
+          device_id: this.deviceId,
+          account_address: validatedAddress,
+          notify_messages: prefs.messages,
+          notify_voi_payments: prefs.voiPayments,
+          notify_arc200_transfers: prefs.arc200Transfers,
+          notify_arc72_transfers: prefs.arc72Transfers,
+          notify_outgoing_confirmations: prefs.outgoingConfirmations,
+          notify_price_alerts: prefs.priceAlerts,
+          min_voi_amount: prefs.minVoiAmount,
+          min_arc200_amount: prefs.minArc200Amount,
+          price_alert_threshold_percent: prefs.priceAlertThreshold,
+          updated_at: new Date().toISOString(),
+        },
+        {
+          onConflict: 'device_id,account_address',
+        }
+      );
 
     if (error) {
       console.error('Failed to subscribe account:', error);
@@ -343,9 +377,14 @@ class NotificationService {
    */
   async unsubscribeAccount(address: string): Promise<boolean> {
     // Validate address parameter
-    const validatedAddress = this.validateAddress(address, 'unsubscribeAccount');
+    const validatedAddress = this.validateAddress(
+      address,
+      'unsubscribeAccount'
+    );
     if (!validatedAddress) {
-      console.error('[NotificationService] unsubscribeAccount called with invalid address, skipping');
+      console.error(
+        '[NotificationService] unsubscribeAccount called with invalid address, skipping'
+      );
       return false;
     }
 
@@ -380,7 +419,9 @@ class NotificationService {
     // Validate address parameter
     const validatedAddress = this.validateAddress(address, 'updatePreferences');
     if (!validatedAddress) {
-      console.error('[NotificationService] updatePreferences called with invalid address, skipping');
+      console.error(
+        '[NotificationService] updatePreferences called with invalid address, skipping'
+      );
       return false;
     }
 
@@ -438,7 +479,9 @@ class NotificationService {
    * Get notification preferences for an account
    * @param address - Algorand address (58-char format)
    */
-  async getPreferences(address: string): Promise<NotificationPreferences | null> {
+  async getPreferences(
+    address: string
+  ): Promise<NotificationPreferences | null> {
     // Validate address parameter
     const validatedAddress = this.validateAddress(address, 'getPreferences');
     if (!validatedAddress) {
@@ -517,19 +560,32 @@ class NotificationService {
       // Log warning with details for debugging
       console.warn(
         `[NotificationService] ${context}: Received object instead of address string.`,
-        'Keys:', Object.keys(obj),
-        'Has address:', 'address' in obj,
-        'Has publicKey:', 'publicKey' in obj
+        'Keys:',
+        Object.keys(obj),
+        'Has address:',
+        'address' in obj,
+        'Has publicKey:',
+        'publicKey' in obj
       );
 
       // Try to extract address from the object
-      if ('address' in obj && typeof obj.address === 'string' && obj.address.length === 58) {
-        console.warn(`[NotificationService] ${context}: Recovered address from object:`, obj.address);
+      if (
+        'address' in obj &&
+        typeof obj.address === 'string' &&
+        obj.address.length === 58
+      ) {
+        console.warn(
+          `[NotificationService] ${context}: Recovered address from object:`,
+          obj.address
+        );
         return obj.address;
       }
     }
 
-    console.error(`[NotificationService] ${context}: Invalid address parameter:`, address);
+    console.error(
+      `[NotificationService] ${context}: Invalid address parameter:`,
+      address
+    );
     return null;
   }
 
@@ -561,9 +617,10 @@ class NotificationService {
     );
 
     // Handle notification taps
-    this.responseListener = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
-        const data = response.notification.request.content.data as NotificationData;
+    this.responseListener =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = response.notification.request.content
+          .data as NotificationData;
         console.log('Notification tapped:', data);
 
         if (this.onNotificationTap) {
@@ -573,11 +630,12 @@ class NotificationService {
           console.log('No notification tap handler set yet, storing for later');
           this.pendingNotificationTap = data;
         }
-      }
-    );
+      });
   }
 
-  private handleAppStateChange = async (nextAppState: AppStateStatus): Promise<void> => {
+  private handleAppStateChange = async (
+    nextAppState: AppStateStatus
+  ): Promise<void> => {
     if (nextAppState === 'active') {
       // Update last_active_at when app comes to foreground
       const supabase = getSupabaseClient();

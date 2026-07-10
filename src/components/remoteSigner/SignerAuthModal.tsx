@@ -67,7 +67,8 @@ export default function SignerAuthModal({
       try {
         const compatible = await LocalAuthentication.hasHardwareAsync();
         const enrolled = await LocalAuthentication.isEnrolledAsync();
-        const biometricEnabled = await AccountSecureStorage.isBiometricEnabled();
+        const biometricEnabled =
+          await AccountSecureStorage.isBiometricEnabled();
         setBiometricAvailable(compatible && enrolled && biometricEnabled);
       } catch {
         setBiometricAvailable(false);
@@ -148,7 +149,9 @@ export default function SignerAuthModal({
           setLockUntil(Date.now() + LOCKOUT_DURATION);
           setError('Too many attempts. Try again in 30 seconds.');
         } else {
-          setError(`Incorrect PIN. ${MAX_ATTEMPTS - attempts} attempts remaining.`);
+          setError(
+            `Incorrect PIN. ${MAX_ATTEMPTS - attempts} attempts remaining.`
+          );
         }
       }
     } catch (error) {
@@ -205,7 +208,10 @@ export default function SignerAuthModal({
           style={[
             styles.pinDot,
             i < pin.length && styles.pinDotFilled,
-            { backgroundColor: i < pin.length ? theme.colors.primary : theme.colors.border },
+            {
+              backgroundColor:
+                i < pin.length ? theme.colors.primary : theme.colors.border,
+            },
           ]}
         />
       ))}
@@ -214,68 +220,75 @@ export default function SignerAuthModal({
 
   const renderNumberPad = () => (
     <View style={styles.numberPad}>
-      {[['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['bio', '0', 'del']].map(
-        (row, rowIndex) => (
-          <View key={rowIndex} style={styles.numberRow}>
-            {row.map((key) => {
-              if (key === 'bio') {
-                if (!biometricAvailable) {
-                  return <View key={key} style={styles.numberButton} />;
-                }
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    style={styles.numberButton}
-                    onPress={handleBiometricAuth}
-                    disabled={isVerifying || isLocked}
-                  >
-                    <Ionicons
-                      name="finger-print"
-                      size={28}
-                      color={isLocked ? theme.colors.textMuted : theme.colors.primary}
-                    />
-                  </TouchableOpacity>
-                );
+      {[
+        ['1', '2', '3'],
+        ['4', '5', '6'],
+        ['7', '8', '9'],
+        ['bio', '0', 'del'],
+      ].map((row, rowIndex) => (
+        <View key={rowIndex} style={styles.numberRow}>
+          {row.map((key) => {
+            if (key === 'bio') {
+              if (!biometricAvailable) {
+                return <View key={key} style={styles.numberButton} />;
               }
-
-              if (key === 'del') {
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    style={styles.numberButton}
-                    onPress={handleBackspace}
-                    disabled={isVerifying || isLocked}
-                  >
-                    <Ionicons
-                      name="backspace-outline"
-                      size={24}
-                      color={isLocked ? theme.colors.textMuted : theme.colors.text}
-                    />
-                  </TouchableOpacity>
-                );
-              }
-
               return (
                 <TouchableOpacity
                   key={key}
-                  style={[styles.numberButton, styles.numberButtonWithBg]}
-                  onPress={() => handleNumberPress(key)}
+                  style={styles.numberButton}
+                  onPress={handleBiometricAuth}
                   disabled={isVerifying || isLocked}
                 >
-                  <Text
-                    style={[
-                      styles.numberText,
-                      (isVerifying || isLocked) && styles.numberTextDisabled,
-                    ]}
-                  >
-                    {key}
-                  </Text>
+                  <Ionicons
+                    name="finger-print"
+                    size={28}
+                    color={
+                      isLocked ? theme.colors.textMuted : theme.colors.primary
+                    }
+                  />
                 </TouchableOpacity>
               );
-            })}
-          </View>
-        )
-      )}
+            }
+
+            if (key === 'del') {
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={styles.numberButton}
+                  onPress={handleBackspace}
+                  disabled={isVerifying || isLocked}
+                >
+                  <Ionicons
+                    name="backspace-outline"
+                    size={24}
+                    color={
+                      isLocked ? theme.colors.textMuted : theme.colors.text
+                    }
+                  />
+                </TouchableOpacity>
+              );
+            }
+
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[styles.numberButton, styles.numberButtonWithBg]}
+                onPress={() => handleNumberPress(key)}
+                disabled={isVerifying || isLocked}
+              >
+                <Text
+                  style={[
+                    styles.numberText,
+                    (isVerifying || isLocked) && styles.numberTextDisabled,
+                  ]}
+                >
+                  {key}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ))}
     </View>
   );
 

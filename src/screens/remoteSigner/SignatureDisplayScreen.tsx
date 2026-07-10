@@ -44,7 +44,8 @@ const showAlert = (
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find((b) => b.style !== 'cancel') || buttons[0];
+        const confirmButton =
+          buttons.find((b) => b.style !== 'cancel') || buttons[0];
         confirmButton?.onPress?.();
       } else {
         const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -78,11 +79,18 @@ export default function SignatureDisplayScreen() {
   const { request, pin } = route.params;
 
   const accounts = useWalletStore((state) => state.wallet?.accounts ?? []);
-  const setPendingRequest = useRemoteSignerStore((state) => state.setPendingRequest);
-  const markRequestProcessed = useRemoteSignerStore((state) => state.markRequestProcessed);
+  const setPendingRequest = useRemoteSignerStore(
+    (state) => state.setPendingRequest
+  );
+  const markRequestProcessed = useRemoteSignerStore(
+    (state) => state.markRequestProcessed
+  );
 
   const [screenState, setScreenState] = useState<ScreenState>('signing');
-  const [signingProgress, setSigningProgress] = useState({ current: 0, total: 0 });
+  const [signingProgress, setSigningProgress] = useState({
+    current: 0,
+    total: 0,
+  });
   const [response, setResponse] = useState<RemoteSignerResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasStartedSigning, setHasStartedSigning] = useState(false);
@@ -117,19 +125,27 @@ export default function SignatureDisplayScreen() {
 
           // Find the account with this address
           const account = accounts.find(
-            (acc: AccountMetadata) => acc.address === signerAddress && acc.type === AccountType.STANDARD
+            (acc: AccountMetadata) =>
+              acc.address === signerAddress && acc.type === AccountType.STANDARD
           );
 
           if (!account) {
-            throw new Error(`No signing key found for address: ${signerAddress}`);
+            throw new Error(
+              `No signing key found for address: ${signerAddress}`
+            );
           }
 
           // Get the private key
           // If PIN was provided (PIN auth), use it
           // If no PIN (biometric auth), getPrivateKey will use biometric-protected storage
-          const privateKey = await AccountSecureStorage.getPrivateKey(account.id, pin);
+          const privateKey = await AccountSecureStorage.getPrivateKey(
+            account.id,
+            pin
+          );
           if (!privateKey) {
-            throw new Error(`Could not retrieve private key for account: ${account.label || account.address}`);
+            throw new Error(
+              `Could not retrieve private key for account: ${account.label || account.address}`
+            );
           }
 
           // Sign the transaction
@@ -156,13 +172,22 @@ export default function SignatureDisplayScreen() {
         setScreenState('display');
       } catch (error) {
         console.error('Signing failed:', error);
-        setErrorMessage(error instanceof Error ? error.message : 'Signing failed');
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Signing failed'
+        );
         setScreenState('error');
       }
     };
 
     signTransactions();
-  }, [hasStartedSigning, request, pin, accounts, markRequestProcessed, setPendingRequest]);
+  }, [
+    hasStartedSigning,
+    request,
+    pin,
+    accounts,
+    markRequestProcessed,
+    setPendingRequest,
+  ]);
 
   const handleDone = () => {
     navigation.popToTop();
@@ -198,7 +223,11 @@ export default function SignatureDisplayScreen() {
       contentContainerStyle={styles.displayContent}
     >
       <View style={styles.successHeader}>
-        <Ionicons name="checkmark-circle" size={48} color={theme.colors.success} />
+        <Ionicons
+          name="checkmark-circle"
+          size={48}
+          color={theme.colors.success}
+        />
         <Text style={styles.successTitle}>Transaction Signed</Text>
         <Text style={styles.successSubtitle}>
           Scan this QR code with your wallet device to complete the transaction
@@ -224,9 +253,7 @@ export default function SignatureDisplayScreen() {
         {qrData && (
           <>
             <Text style={styles.responseLabel}>QR Data Size</Text>
-            <Text style={styles.responseValue}>
-              {qrData.length} bytes
-            </Text>
+            <Text style={styles.responseValue}>{qrData.length} bytes</Text>
           </>
         )}
       </View>

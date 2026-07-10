@@ -145,7 +145,6 @@ export default function AccountAvatar({
   const [avatarError, setAvatarError] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
-
   const safeAddress = address || 'default';
   const colors = generateColors(safeAddress);
   const initialsColor = getReadableTextColor(colors[0]);
@@ -178,7 +177,9 @@ export default function AccountAvatar({
 
     const persistedAvatar =
       storeAccount?.avatarUrl ??
-      (storeAccount ? store.accountStates[storeAccount.id]?.envoiName?.avatar : null);
+      (storeAccount
+        ? store.accountStates[storeAccount.id]?.envoiName?.avatar
+        : null);
 
     if (persistedAvatar && persistedAvatar !== initialUrl) {
       initialUrl = persistedAvatar;

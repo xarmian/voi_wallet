@@ -35,7 +35,11 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import AccountAvatar from '@/components/account/AccountAvatar';
-import { useSignableAccounts, useActiveAccount, useWalletStore } from '@/store/walletStore';
+import {
+  useSignableAccounts,
+  useActiveAccount,
+  useWalletStore,
+} from '@/store/walletStore';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 
 type AirgapStackParamList = {
@@ -154,21 +158,24 @@ export default function AirgapHomeScreen() {
       const typeLabel = getAccountTypeLabel(item.type);
 
       return (
-        <Animated.View key={item.id} entering={FadeInDown.delay(100 + index * 50).springify()}>
+        <Animated.View
+          key={item.id}
+          entering={FadeInDown.delay(100 + index * 50).springify()}
+        >
           <View style={styles.accountItem}>
-            <AccountAvatar
-              address={item.address}
-              size={40}
-              account={item}
-            />
+            <AccountAvatar address={item.address} size={40} account={item} />
             <View style={styles.accountInfo}>
               <View style={styles.accountNameRow}>
                 <Text style={styles.accountName} numberOfLines={1}>
                   {item.label || 'Account'}
                 </Text>
-                {typeLabel && <Text style={styles.accountTypeLabel}>{typeLabel}</Text>}
+                {typeLabel && (
+                  <Text style={styles.accountTypeLabel}>{typeLabel}</Text>
+                )}
               </View>
-              <Text style={styles.accountAddress}>{formatAddress(item.address)}</Text>
+              <Text style={styles.accountAddress}>
+                {formatAddress(item.address)}
+              </Text>
             </View>
           </View>
         </Animated.View>
@@ -189,7 +196,9 @@ export default function AirgapHomeScreen() {
           <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
             <View style={styles.headerContent}>
               <Text style={styles.headerTitle}>Voi Signer</Text>
-              <Text style={styles.headerSubtitle}>Air-gapped Signing Device</Text>
+              <Text style={styles.headerSubtitle}>
+                Air-gapped Signing Device
+              </Text>
             </View>
             <TouchableOpacity
               style={styles.accountButton}
@@ -203,7 +212,11 @@ export default function AirgapHomeScreen() {
                 />
               ) : (
                 <View style={styles.accountButtonPlaceholder}>
-                  <Ionicons name="person-outline" size={20} color={colors.textMuted} />
+                  <Ionicons
+                    name="person-outline"
+                    size={20}
+                    color={colors.textMuted}
+                  />
                 </View>
               )}
             </TouchableOpacity>
@@ -211,10 +224,21 @@ export default function AirgapHomeScreen() {
 
           {/* Hero section - Mode indicator */}
           <Animated.View entering={FadeInDown.delay(100).springify()}>
-            <GlassCard variant="medium" borderGlow glowColor={colors.warning} padding="lg">
+            <GlassCard
+              variant="medium"
+              borderGlow
+              glowColor={colors.warning}
+              padding="lg"
+            >
               <View style={styles.heroContent}>
-                <Animated.View style={[styles.heroIconContainer, iconAnimatedStyle]}>
-                  <Ionicons name="shield-checkmark" size={48} color={colors.warning} />
+                <Animated.View
+                  style={[styles.heroIconContainer, iconAnimatedStyle]}
+                >
+                  <Ionicons
+                    name="shield-checkmark"
+                    size={48}
+                    color={colors.warning}
+                  />
                 </Animated.View>
                 <Text style={styles.heroTitle}>Air-gapped Signer</Text>
                 <Text style={styles.heroSubtitle}>
@@ -267,9 +291,7 @@ export default function AirgapHomeScreen() {
           </Animated.View>
 
           {/* Settings action */}
-          <Animated.View
-            entering={FadeInDown.delay(350).springify()}
-          >
+          <Animated.View entering={FadeInDown.delay(350).springify()}>
             <GlassButton
               variant="secondary"
               size="md"
@@ -322,10 +344,14 @@ export default function AirgapHomeScreen() {
           {/* Info card */}
           <Animated.View entering={FadeInDown.delay(500).springify()}>
             <View style={styles.infoCard}>
-              <Ionicons name="information-circle-outline" size={20} color={colors.textMuted} />
+              <Ionicons
+                name="information-circle-outline"
+                size={20}
+                color={colors.textMuted}
+              />
               <Text style={styles.infoText}>
-                This device operates offline. Scan QR codes from your online wallet to sign
-                transactions securely.
+                This device operates offline. Scan QR codes from your online
+                wallet to sign transactions securely.
               </Text>
             </View>
           </Animated.View>

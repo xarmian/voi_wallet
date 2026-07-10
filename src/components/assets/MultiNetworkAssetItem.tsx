@@ -39,11 +39,14 @@ export default function MultiNetworkAssetItem({
       return asset.sourceBalances;
     }
 
-    const targetNetworkId = networkFilter === 'voi'
-      ? NetworkId.VOI_MAINNET
-      : NetworkId.ALGORAND_MAINNET;
+    const targetNetworkId =
+      networkFilter === 'voi'
+        ? NetworkId.VOI_MAINNET
+        : NetworkId.ALGORAND_MAINNET;
 
-    return asset.sourceBalances.filter(source => source.networkId === targetNetworkId);
+    return asset.sourceBalances.filter(
+      (source) => source.networkId === targetNetworkId
+    );
   };
 
   const formatBalance = () => {
@@ -51,10 +54,11 @@ export default function MultiNetworkAssetItem({
 
     // Calculate total amount across filtered networks
     let totalAmount = 0;
-    filteredBalances.forEach(source => {
-      const amount = typeof source.balance.amount === 'bigint'
-        ? Number(source.balance.amount)
-        : source.balance.amount;
+    filteredBalances.forEach((source) => {
+      const amount =
+        typeof source.balance.amount === 'bigint'
+          ? Number(source.balance.amount)
+          : source.balance.amount;
       totalAmount += amount;
     });
 
@@ -64,7 +68,9 @@ export default function MultiNetworkAssetItem({
 
   const getAssetName = () => {
     // Use the asset name from the mapping if available (including for native tokens)
-    return asset.name || asset.unitName || asset.symbol || `Asset ${asset.assetId}`;
+    return (
+      asset.name || asset.unitName || asset.symbol || `Asset ${asset.assetId}`
+    );
   };
 
   const getAssetSymbol = () => {
@@ -142,7 +148,11 @@ export default function MultiNetworkAssetItem({
 
     // For assets with assetId 0 (native tokens), try to show the network's token image
     // This handles cases where native tokens don't have a custom imageUrl
-    if (asset.assetId === 0 || (asset.isMapped && asset.sourceBalances.some(s => s.balance.assetId === 0))) {
+    if (
+      asset.assetId === 0 ||
+      (asset.isMapped &&
+        asset.sourceBalances.some((s) => s.balance.assetId === 0))
+    ) {
       // For mapped native tokens, use the primary network's icon as fallback
       const primaryNetworkConfig = getNetworkConfig(asset.primaryNetwork);
       return (
@@ -156,11 +166,7 @@ export default function MultiNetworkAssetItem({
     // Default placeholder for other assets without images
     return (
       <View style={styles.placeholderIcon}>
-        <Ionicons
-          name="disc"
-          size={24}
-          color={styles.placeholderIcon.color}
-        />
+        <Ionicons name="disc" size={24} color={styles.placeholderIcon.color} />
       </View>
     );
   };
@@ -168,12 +174,15 @@ export default function MultiNetworkAssetItem({
   const renderNetworkBadges = () => {
     // Use filtered source balances
     const filteredBalances = getFilteredSourceBalances();
-    const networks = filteredBalances.length > 0
-      ? filteredBalances
-      : [{ networkId: asset.primaryNetwork, balance: asset }];
+    const networks =
+      filteredBalances.length > 0
+        ? filteredBalances
+        : [{ networkId: asset.primaryNetwork, balance: asset }];
 
     // Deduplicate networks - only show each network once
-    const uniqueNetworks = Array.from(new Set(networks.map(n => n.networkId)));
+    const uniqueNetworks = Array.from(
+      new Set(networks.map((n) => n.networkId))
+    );
 
     return (
       <View style={styles.networkBadgesContainer}>

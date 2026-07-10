@@ -26,7 +26,9 @@ interface SignerModeBannerProps {
   onScanPress: () => void;
 }
 
-export default function SignerModeBanner({ onScanPress }: SignerModeBannerProps) {
+export default function SignerModeBanner({
+  onScanPress,
+}: SignerModeBannerProps) {
   const styles = useThemedStyles(createStyles);
   const iconPulse = useSharedValue(1);
 
@@ -61,11 +63,17 @@ export default function SignerModeBanner({ onScanPress }: SignerModeBannerProps)
           {/* Mode indicator */}
           <View style={styles.modeRow}>
             <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>
-              <Ionicons name="shield-checkmark" size={24} color={styles.icon.color} />
+              <Ionicons
+                name="shield-checkmark"
+                size={24}
+                color={styles.icon.color}
+              />
             </Animated.View>
             <View style={styles.textContainer}>
               <Text style={styles.title}>Signing Mode</Text>
-              <Text style={styles.subtitle}>Air-gapped transaction signing</Text>
+              <Text style={styles.subtitle}>
+                Air-gapped transaction signing
+              </Text>
             </View>
           </View>
 
@@ -75,7 +83,11 @@ export default function SignerModeBanner({ onScanPress }: SignerModeBannerProps)
             onPress={onScanPress}
             activeOpacity={0.8}
           >
-            <Ionicons name="scan-outline" size={20} color={styles.scanButtonText.color} />
+            <Ionicons
+              name="scan-outline"
+              size={20}
+              color={styles.scanButtonText.color}
+            />
             <Text style={styles.scanButtonText}>Scan Signing Request</Text>
           </TouchableOpacity>
         </View>

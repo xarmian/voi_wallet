@@ -10,19 +10,12 @@ import type { PlatformType, PlatformCapabilities } from './types';
  */
 export function detectPlatform(): PlatformType {
   // Check for Chrome extension environment
-  if (
-    typeof chrome !== 'undefined' &&
-    chrome.runtime &&
-    chrome.runtime.id
-  ) {
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
     return 'extension';
   }
 
   // Check for React Native environment
-  if (
-    typeof navigator !== 'undefined' &&
-    navigator.product === 'ReactNative'
-  ) {
+  if (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') {
     return 'mobile';
   }
 

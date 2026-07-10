@@ -24,7 +24,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
+import {
+  useNavigation,
+  useFocusEffect,
+  useRoute,
+  RouteProp,
+} from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -47,8 +52,14 @@ import { useActiveAccount } from '@/store/walletStore';
 import { ClaimableItem, toSerializableClaimableItem } from '@/types/claimable';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
 
-type NavigationProp = NativeStackNavigationProp<WalletStackParamList, 'ClaimableTokens'>;
-type ClaimableTokensRouteProp = RouteProp<WalletStackParamList, 'ClaimableTokens'>;
+type NavigationProp = NativeStackNavigationProp<
+  WalletStackParamList,
+  'ClaimableTokens'
+>;
+type ClaimableTokensRouteProp = RouteProp<
+  WalletStackParamList,
+  'ClaimableTokens'
+>;
 
 const PENDING_REFRESH_DELAY = 8000; // 8 seconds
 const RETRY_REFRESH_DELAY = 5000; // 5 seconds for retry if claimed items still present
@@ -89,7 +100,11 @@ export default function ClaimableTokensScreen() {
     const pendingRefresh = route.params?.pendingRefresh;
     const claimedItemIds = route.params?.claimedItemIds;
 
-    if (pendingRefresh && !pendingRefreshHandled.current && activeAccount?.address) {
+    if (
+      pendingRefresh &&
+      !pendingRefreshHandled.current &&
+      activeAccount?.address
+    ) {
       pendingRefreshHandled.current = true;
       setIsPendingRefresh(true);
 
@@ -101,7 +116,10 @@ export default function ClaimableTokensScreen() {
       );
 
       // Clear the params immediately to prevent re-triggering
-      navigation.setParams({ pendingRefresh: undefined, claimedItemIds: undefined });
+      navigation.setParams({
+        pendingRefresh: undefined,
+        claimedItemIds: undefined,
+      });
 
       // Schedule refresh after delay (store in ref so it persists across effect re-runs)
       pendingRefreshTimeoutRef.current = setTimeout(async () => {
@@ -109,8 +127,8 @@ export default function ClaimableTokensScreen() {
 
         // Check if any claimed items are still present in the list
         const { claimableItems } = useClaimableStore.getState();
-        const claimedStillPresent = claimedItemIds?.some(id =>
-          claimableItems.some(item => item.id === id)
+        const claimedStillPresent = claimedItemIds?.some((id) =>
+          claimableItems.some((item) => item.id === id)
         );
 
         if (claimedStillPresent) {
@@ -130,7 +148,14 @@ export default function ClaimableTokensScreen() {
         }
       }, PENDING_REFRESH_DELAY);
     }
-  }, [route.params?.pendingRefresh, route.params?.claimedItemIds, activeAccount?.address, fetchApprovals, navigation, pulseOpacity]);
+  }, [
+    route.params?.pendingRefresh,
+    route.params?.claimedItemIds,
+    activeAccount?.address,
+    fetchApprovals,
+    navigation,
+    pulseOpacity,
+  ]);
 
   // Cleanup timeout on unmount only (separate effect with empty deps)
   useEffect(() => {
@@ -166,7 +191,9 @@ export default function ClaimableTokensScreen() {
   const handleItemPress = useCallback(
     (item: ClaimableItem) => {
       if (!item.isClaimable) return;
-      navigation.navigate('ClaimToken', { claimableItem: toSerializableClaimableItem(item) });
+      navigation.navigate('ClaimToken', {
+        claimableItem: toSerializableClaimableItem(item),
+      });
     },
     [navigation]
   );
@@ -177,7 +204,9 @@ export default function ClaimableTokensScreen() {
       (item) => item.isClaimable && !hiddenApprovals.has(item.id)
     );
     if (claimableItems.length === 0) return;
-    navigation.navigate('ClaimAllConfirmation', { items: claimableItems.map(toSerializableClaimableItem) });
+    navigation.navigate('ClaimAllConfirmation', {
+      items: claimableItems.map(toSerializableClaimableItem),
+    });
   }, [displayedItems, hiddenApprovals, navigation]);
 
   // Get count of claimable (non-hidden) items
@@ -214,7 +243,13 @@ export default function ClaimableTokensScreen() {
         </TouchableOpacity>
       );
     },
-    [hiddenApprovals, hideApproval, unhideApproval, styles, theme.colors.primary]
+    [
+      hiddenApprovals,
+      hideApproval,
+      unhideApproval,
+      styles,
+      theme.colors.primary,
+    ]
   );
 
   // Render header right action (Claim All button)
@@ -235,7 +270,11 @@ export default function ClaimableTokensScreen() {
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
       <View style={styles.emptyIconContainer}>
-        <Ionicons name="gift-outline" size={64} color={styles.emptyIcon.color} />
+        <Ionicons
+          name="gift-outline"
+          size={64}
+          color={styles.emptyIcon.color}
+        />
       </View>
       <Text style={styles.emptyTitle}>No Claimable Tokens</Text>
       <Text style={styles.emptySubtitle}>
@@ -307,8 +346,13 @@ export default function ClaimableTokensScreen() {
             <>
               {/* Pending refresh indicator */}
               {isPendingRefresh && (
-                <Animated.View style={[styles.pendingRefreshBanner, pulseAnimatedStyle]}>
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                <Animated.View
+                  style={[styles.pendingRefreshBanner, pulseAnimatedStyle]}
+                >
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.primary}
+                  />
                   <Text style={styles.pendingRefreshText}>
                     Updating claim status...
                   </Text>
@@ -316,7 +360,11 @@ export default function ClaimableTokensScreen() {
               )}
 
               {/* Summary card */}
-              <GlassCard variant="light" padding="md" style={styles.summaryCard}>
+              <GlassCard
+                variant="light"
+                padding="md"
+                style={styles.summaryCard}
+              >
                 <View style={styles.summaryRow}>
                   <View style={styles.summaryItem}>
                     <Text style={styles.summaryValue}>{visibleCount}</Text>

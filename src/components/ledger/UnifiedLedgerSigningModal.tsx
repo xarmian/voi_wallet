@@ -36,12 +36,12 @@ export interface UnifiedLedgerSigningModalProps {
 }
 
 type ModalState =
-  | 'connecting'        // Finding and connecting to device
-  | 'verifying'         // Checking device is unlocked and has right app
-  | 'ready'             // Device ready for signing
-  | 'signing'           // Transaction signing in progress
-  | 'error'             // Error occurred
-  | 'success';          // Operation completed successfully
+  | 'connecting' // Finding and connecting to device
+  | 'verifying' // Checking device is unlocked and has right app
+  | 'ready' // Device ready for signing
+  | 'signing' // Transaction signing in progress
+  | 'error' // Error occurred
+  | 'success'; // Operation completed successfully
 
 interface UIState {
   modalState: ModalState;
@@ -84,7 +84,9 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
   useEffect(() => {
     if (!visible) return;
 
-    const unsubscribe = simpleLedgerManager.onStateChange(handleLedgerStateChange);
+    const unsubscribe = simpleLedgerManager.onStateChange(
+      handleLedgerStateChange
+    );
     return unsubscribe;
   }, [visible]);
 
@@ -105,68 +107,71 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
     }
   }, [visible]);
 
-  const handleLedgerStateChange = useCallback((stateChange: LedgerStateChange) => {
-    setUIState(prevState => {
-      const newState = { ...prevState };
-      newState.ledgerState = stateChange.state;
+  const handleLedgerStateChange = useCallback(
+    (stateChange: LedgerStateChange) => {
+      setUIState((prevState) => {
+        const newState = { ...prevState };
+        newState.ledgerState = stateChange.state;
 
-      switch (stateChange.state) {
-        case 'discovering':
-          newState.modalState = 'connecting';
-          newState.canRetry = false;
-          break;
+        switch (stateChange.state) {
+          case 'discovering':
+            newState.modalState = 'connecting';
+            newState.canRetry = false;
+            break;
 
-        case 'connecting':
-          newState.modalState = 'connecting';
-          newState.canRetry = false;
-          break;
+          case 'connecting':
+            newState.modalState = 'connecting';
+            newState.canRetry = false;
+            break;
 
-        case 'ready':
-          newState.modalState = 'ready';
-          newState.canRetry = false;
-          newState.errorInfo = undefined;
-          // Automatically start device verification
-          setTimeout(() => verifyDeviceReady(), 500);
-          break;
+          case 'ready':
+            newState.modalState = 'ready';
+            newState.canRetry = false;
+            newState.errorInfo = undefined;
+            // Automatically start device verification
+            setTimeout(() => verifyDeviceReady(), 500);
+            break;
 
-        case 'signing':
-          newState.modalState = 'signing';
-          newState.canRetry = false;
-          break;
+          case 'signing':
+            newState.modalState = 'signing';
+            newState.canRetry = false;
+            break;
 
-        case 'error':
-          newState.modalState = 'error';
-          newState.errorInfo = stateChange.error;
-          newState.canRetry = stateChange.error?.retryable || false;
-
-          // Auto-retry for certain errors
-          if (shouldAutoRetry(stateChange.error?.type)) {
-            setTimeout(() => handleAutoRetry(stateChange.error?.type), 2000);
-          }
-          break;
-
-        case 'disconnected':
-          if (newState.modalState === 'signing') {
-            // Device disconnected during signing - this is recoverable
+          case 'error':
             newState.modalState = 'error';
-            newState.errorInfo = {
-              type: 'connection_failed',
-              message: 'Device disconnected during signing',
-              retryable: true,
-              userAction: 'Please reconnect your device and try again',
-            };
-            newState.canRetry = true;
-          }
-          break;
-      }
+            newState.errorInfo = stateChange.error;
+            newState.canRetry = stateChange.error?.retryable || false;
 
-      return newState;
-    });
-  }, []);
+            // Auto-retry for certain errors
+            if (shouldAutoRetry(stateChange.error?.type)) {
+              setTimeout(() => handleAutoRetry(stateChange.error?.type), 2000);
+            }
+            break;
+
+          case 'disconnected':
+            if (newState.modalState === 'signing') {
+              // Device disconnected during signing - this is recoverable
+              newState.modalState = 'error';
+              newState.errorInfo = {
+                type: 'connection_failed',
+                message: 'Device disconnected during signing',
+                retryable: true,
+                userAction: 'Please reconnect your device and try again',
+              };
+              newState.canRetry = true;
+            }
+            break;
+        }
+
+        return newState;
+      });
+    },
+    []
+  );
 
   const startConnection = async () => {
     try {
-      setUIState(prev => ({ ...prev, modalState: 'connecting' }));
+      setUIState((prev) => ({ ...prev, modalState: 'connecting' }));
       await simpleLedgerManager.connect(deviceId);
     } catch (error) {
       console.error('Connection failed:', error);
@@ -176,11 +181,11 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
 
   const verifyDeviceReady = async () => {
     try {
-      setUIState(prev => ({ ...prev, modalState: 'verifying' }));
+      setUIState((prev) => ({ ...prev, modalState: 'verifying' }));
       const isReady = await simpleLedgerManager.verifyDeviceReady();
 
       if (isReady) {
-        setUIState(prev => ({ ...prev, modalState: 'ready' }));
+        setUIState((prev) => ({ ...prev, modalState: 'ready' }));
         onSuccess();
       }
       // If not ready, error will be set by the manager
@@ -207,11 +212,11 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
     if (isRetrying || autoRetryCount >= 3) return;
 
     setIsRetrying(true);
-    setAutoRetryCount(prev => prev + 1);
+    setAutoRetryCount((prev) => prev + 1);
 
     try {
       // Wait a bit before retrying
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       if (errorType === 'device_locked' || errorType === 'app_not_open') {
         // For these errors, just verify again
@@ -246,7 +251,8 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
         return {
           icon: 'search' as const,
           title: 'Finding Ledger Device',
-          message: 'Looking for your Ledger device. Please ensure it\'s connected and unlocked.',
+          message:
+            "Looking for your Ledger device. Please ensure it's connected and unlocked.",
           color: colors.primary,
           showProgress: true,
         };
@@ -255,7 +261,8 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
         return {
           icon: 'shield-checkmark' as const,
           title: 'Verifying Device',
-          message: 'Checking that your Ledger is unlocked and the Algorand app is open.',
+          message:
+            'Checking that your Ledger is unlocked and the Algorand app is open.',
           color: colors.primary,
           showProgress: true,
         };
@@ -366,10 +373,12 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
         <TouchableOpacity
           key="help"
           style={[styles.button, styles.helpButton]}
-          onPress={() => setUIState(prev => ({
-            ...prev,
-            showTroubleshooting: !prev.showTroubleshooting
-          }))}
+          onPress={() =>
+            setUIState((prev) => ({
+              ...prev,
+              showTroubleshooting: !prev.showTroubleshooting,
+            }))
+          }
         >
           <Text style={styles.helpButtonText}>
             {uiState.showTroubleshooting ? 'Hide Help' : 'Need Help?'}
@@ -378,11 +387,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
       );
     }
 
-    return (
-      <View style={styles.buttonContainer}>
-        {buttons}
-      </View>
-    );
+    return <View style={styles.buttonContainer}>{buttons}</View>;
   };
 
   const renderTroubleshootingSteps = () => {
@@ -412,7 +417,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
           'Press both buttons on your Ledger device to wake it up',
           'Enter your PIN to unlock the device',
           'Wait for the main menu to appear',
-          'Try again'
+          'Try again',
         ];
 
       case 'app_not_open':
@@ -420,7 +425,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
           'Navigate to the Algorand app on your Ledger device',
           'Press both buttons to open the app',
           'Wait for "Application is ready" message',
-          'Try again'
+          'Try again',
         ];
 
       case 'device_not_found':
@@ -428,7 +433,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
           'Check that your Ledger device is connected via USB or Bluetooth',
           'Make sure the device is powered on and unlocked',
           'For Bluetooth: Check that Bluetooth is enabled on your phone',
-          'Try disconnecting and reconnecting the device'
+          'Try disconnecting and reconnecting the device',
         ];
 
       case 'connection_failed':
@@ -436,7 +441,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
           'Check the connection between your device and Ledger',
           'Make sure no other apps are using the Ledger device',
           'Try restarting the Ledger device',
-          'For Bluetooth: Try turning Bluetooth off and on'
+          'For Bluetooth: Try turning Bluetooth off and on',
         ];
 
       case 'permission_denied':
@@ -444,7 +449,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
           'Open your device Settings app',
           'Find this app in the app list',
           'Enable Bluetooth permissions',
-          'Restart this app and try again'
+          'Restart this app and try again',
         ];
 
       default:
@@ -452,7 +457,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
           'Check that your Ledger device is connected and unlocked',
           'Make sure the Algorand app is open on your Ledger',
           'Try restarting your Ledger device',
-          'If the problem persists, restart this app'
+          'If the problem persists, restart this app',
         ];
     }
   };
@@ -484,16 +489,11 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
               />
             )}
 
-            <Text style={[
-              styles.statusTitle,
-              { color: statusDisplay.color }
-            ]}>
+            <Text style={[styles.statusTitle, { color: statusDisplay.color }]}>
               {statusDisplay.title}
             </Text>
 
-            <Text style={styles.statusMessage}>
-              {statusDisplay.message}
-            </Text>
+            <Text style={styles.statusMessage}>{statusDisplay.message}</Text>
 
             {uiState.errorInfo?.userAction && (
               <Text style={styles.userActionText}>
@@ -504,7 +504,8 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
             {signingProgress && uiState.modalState === 'signing' && (
               <View style={styles.progressContainer}>
                 <Text style={styles.progressText}>
-                  {signingProgress.message || `Step ${signingProgress.current} of ${signingProgress.total}`}
+                  {signingProgress.message ||
+                    `Step ${signingProgress.current} of ${signingProgress.total}`}
                 </Text>
               </View>
             )}

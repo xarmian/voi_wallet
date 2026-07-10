@@ -71,7 +71,8 @@ export class SnowballApiService {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new SnowballApiError(
-          errorData.message || `HTTP ${response.status}: ${response.statusText}`,
+          errorData.message ||
+            `HTTP ${response.status}: ${response.statusText}`,
           response.status
         );
       }
@@ -84,9 +85,13 @@ export class SnowballApiService {
       if (
         retryCount < MAX_RETRIES &&
         (error instanceof TypeError || // Network error
-          (error instanceof SnowballApiError && error.statusCode && error.statusCode >= 500))
+          (error instanceof SnowballApiError &&
+            error.statusCode &&
+            error.statusCode >= 500))
       ) {
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)));
+        await new Promise((resolve) =>
+          setTimeout(resolve, RETRY_DELAY * (retryCount + 1))
+        );
         return this.makeRequest<T>(endpoint, options, retryCount + 1);
       }
 
@@ -124,12 +129,15 @@ export class SnowballApiService {
 
       // Ensure we got an array
       if (!Array.isArray(tokens)) {
-        console.error('Invalid response from Snowball API - expected tokens array, got:', typeof tokens);
+        console.error(
+          'Invalid response from Snowball API - expected tokens array, got:',
+          typeof tokens
+        );
         return this.tokensCache?.data || [];
       }
 
       // Normalize token IDs to numbers
-      const normalizedTokens = tokens.map(token => ({
+      const normalizedTokens = tokens.map((token) => ({
         ...token,
         id: typeof token.id === 'string' ? parseInt(token.id, 10) : token.id,
       }));
@@ -187,7 +195,9 @@ export class SnowballApiService {
   /**
    * Build unwrap transaction group
    */
-  public async unwrap(request: UnwrapRequest): Promise<{ transactions: string[] }> {
+  public async unwrap(
+    request: UnwrapRequest
+  ): Promise<{ transactions: string[] }> {
     return await this.makeRequest<{ transactions: string[] }>('/unwrap', {
       method: 'POST',
       body: JSON.stringify(request),
@@ -214,7 +224,7 @@ export class SnowballApiService {
         return false;
       }
 
-      return tokens.some(token => token.id === tokenId);
+      return tokens.some((token) => token.id === tokenId);
     } catch (error) {
       console.error('Error checking token swappability:', error);
       return false;
@@ -224,13 +234,15 @@ export class SnowballApiService {
   /**
    * Get token by ID
    */
-  public async getTokenById(tokenId: number): Promise<SnowballToken | undefined> {
+  public async getTokenById(
+    tokenId: number
+  ): Promise<SnowballToken | undefined> {
     try {
       const tokens = await this.getTokens();
       if (!Array.isArray(tokens)) {
         return undefined;
       }
-      return tokens.find(token => token.id === tokenId);
+      return tokens.find((token) => token.id === tokenId);
     } catch (error) {
       console.error('Error getting token by ID:', error);
       return undefined;
@@ -248,7 +260,7 @@ export class SnowballApiService {
       }
       const lowerQuery = query.toLowerCase();
       return tokens.filter(
-        token =>
+        (token) =>
           token.symbol.toLowerCase().includes(lowerQuery) ||
           token.name.toLowerCase().includes(lowerQuery)
       );

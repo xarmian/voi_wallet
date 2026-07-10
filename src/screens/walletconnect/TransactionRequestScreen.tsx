@@ -22,15 +22,15 @@ import {
   WalletTransaction,
 } from '@/services/walletconnect';
 import { MultiAccountWalletService } from '@/services/wallet';
-import { AccountMetadata, AccountType, LedgerAccountMetadata } from '@/types/wallet';
+import {
+  AccountMetadata,
+  AccountType,
+  LedgerAccountMetadata,
+} from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
-import {
-  useTransactionAuthController,
-} from '@/services/auth/transactionAuthController';
-import {
-  UnifiedTransactionRequest,
-} from '@/services/transactions/unifiedSigner';
+import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
+import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import {
   truncateAddress,
   getNetworkNameByChainId,
@@ -84,7 +84,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [currentRequest, setCurrentRequest] = useState<UnifiedTransactionRequest | null>(null);
+  const [currentRequest, setCurrentRequest] =
+    useState<UnifiedTransactionRequest | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [parsedTransactions, setParsedTransactions] = useState<
     ParsedTransaction[]
@@ -172,7 +173,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
             const txnBytes = Buffer.from(txns[0].txn, 'base64');
             const txn = algosdk.decodeUnsignedTransaction(txnBytes);
             const txnAny = txn as any;
-            const genesisSource = txnAny.genesisHash || txnAny.gh || txn?.genesisHash;
+            const genesisSource =
+              txnAny.genesisHash || txnAny.gh || txn?.genesisHash;
             const chainIdFromGenesis = getChainIdByGenesisHash(genesisSource);
             if (chainIdFromGenesis) {
               derivedChainId = chainIdFromGenesis;
@@ -194,7 +196,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
             if (txnAny.sender && txnAny.sender.publicKey) {
               fromAddress = algosdk.encodeAddress(txnAny.sender.publicKey);
             }
-            const account = allAccounts.find((acc) => acc.address === fromAddress);
+            const account = allAccounts.find(
+              (acc) => acc.address === fromAddress
+            );
             if (account) {
               setSelectedAccount(account);
             }
@@ -220,27 +224,38 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
             const txn = algosdk.decodeUnsignedTransaction(txnBytes);
             const txnAny = txn as any;
             let senderAddress: string | null = null;
-            
+
             // Extract sender address from decoded transaction
             if (txnAny.sender && txnAny.sender.publicKey) {
               senderAddress = algosdk.encodeAddress(txnAny.sender.publicKey);
             }
-            
+
             // Try to find account by sender address, or fall back to signers array if provided
             if (senderAddress) {
-              signingAccount = allAccounts.find((acc) => acc.address === senderAddress) || allAccounts[0];
+              signingAccount =
+                allAccounts.find((acc) => acc.address === senderAddress) ||
+                allAccounts[0];
             } else if (txns[0].signers?.[0]) {
-              signingAccount = allAccounts.find((acc) => acc.address === txns[0].signers?.[0]) || allAccounts[0];
+              signingAccount =
+                allAccounts.find(
+                  (acc) => acc.address === txns[0].signers?.[0]
+                ) || allAccounts[0];
             }
           } catch (error) {
-            console.error('Failed to decode transaction for signing account:', error);
+            console.error(
+              'Failed to decode transaction for signing account:',
+              error
+            );
             // Fall back to signers array if decoding fails
             if (txns[0].signers?.[0]) {
-              signingAccount = allAccounts.find((acc) => acc.address === txns[0].signers?.[0]) || allAccounts[0];
+              signingAccount =
+                allAccounts.find(
+                  (acc) => acc.address === txns[0].signers?.[0]
+                ) || allAccounts[0];
             }
           }
         }
-        
+
         if (signingAccount) {
           // Register callbacks in the callback registry to avoid serialization warnings
           const callbackId = registerNavigationCallbacks({
@@ -289,7 +304,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         transactions,
         accountAddress: selectedAccount.address,
         // Pass pre-decoded transactions to avoid double-parsing during signing
-        decodedTransactions: decodedTransactions.length === transactions.length ? decodedTransactions : undefined,
+        decodedTransactions:
+          decodedTransactions.length === transactions.length
+            ? decodedTransactions
+            : undefined,
       },
     };
 
@@ -365,9 +383,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         }
       } catch (error) {
         console.error('Failed to respond to WalletConnect:', error);
-        const errorMessage = error instanceof Error
-          ? error.message
-          : 'Failed to respond to dApp';
+        const errorMessage =
+          error instanceof Error ? error.message : 'Failed to respond to dApp';
         navigation.navigate('WalletConnectError', { error: errorMessage });
       }
     } else {
@@ -385,9 +402,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       await handleWalletConnectSuccess(result);
     } else {
       // Handle signing failure
-      const errorMessage = result instanceof Error
-        ? result.message
-        : 'Failed to sign transactions';
+      const errorMessage =
+        result instanceof Error
+          ? result.message
+          : 'Failed to sign transactions';
       navigation.navigate('WalletConnectError', { error: errorMessage });
     }
   };
@@ -399,14 +417,21 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       if (version === 1) {
         // Handle v1 rejection
         const v1Client = WalletConnectV1Client.getInstance();
-        await v1Client.rejectRequest((requestEvent as any).id, 'User rejected the request');
+        await v1Client.rejectRequest(
+          (requestEvent as any).id,
+          'User rejected the request'
+        );
       } else {
         // Handle v2 rejection
         const wcService = WalletConnectService.getInstance();
-        await wcService.rejectRequest((requestEvent as any).topic, (requestEvent as any).id, {
-          code: 5001,
-          message: 'User rejected the request',
-        });
+        await wcService.rejectRequest(
+          (requestEvent as any).topic,
+          (requestEvent as any).id,
+          {
+            code: 5001,
+            message: 'User rejected the request',
+          }
+        );
       }
       rejectionSent = true;
     } catch (error) {
@@ -423,7 +448,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         type: 'walletConnectRejected',
         text1: 'Transaction Request Rejected',
         text2: `You declined to sign this transaction. ${
-          queueSize > 0 ? 'Processing next request...' : 'You can return to the dApp.'
+          queueSize > 0
+            ? 'Processing next request...'
+            : 'You can return to the dApp.'
         }`,
         visibilityTime: 4000,
         position: 'top',
@@ -757,7 +784,10 @@ const createStyles = (theme: Theme) =>
     },
     warningContainer: {
       flexDirection: 'row',
-      backgroundColor: theme.mode === 'light' ? 'rgba(255,149,0,0.1)' : 'rgba(255,159,10,0.15)',
+      backgroundColor:
+        theme.mode === 'light'
+          ? 'rgba(255,149,0,0.1)'
+          : 'rgba(255,159,10,0.15)',
       borderWidth: 1,
       borderColor: theme.colors.warning + '40', // Add a subtle border for better visibility
       borderRadius: 12,

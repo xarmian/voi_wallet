@@ -21,7 +21,12 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useMessagesStore, useSortedThreads, useHiddenThreadsCount, useShowHiddenThreads } from '@/store/messagesStore';
+import {
+  useMessagesStore,
+  useSortedThreads,
+  useHiddenThreadsCount,
+  useShowHiddenThreads,
+} from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
 import { useActiveAccount, useAccounts } from '@/store/walletStore';
 import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
@@ -41,7 +46,9 @@ export default function MessagesInboxScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
   const navigation =
-    useNavigation<NativeStackNavigationProp<FriendsStackParamList, 'MessagesInbox'>>();
+    useNavigation<
+      NativeStackNavigationProp<FriendsStackParamList, 'MessagesInbox'>
+    >();
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
@@ -99,15 +106,26 @@ export default function MessagesInboxScreen() {
     if (!activeAccount) return false;
 
     // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER || activeAccount.type === 'ledger') {
+    if (
+      activeAccount.type === AccountType.LEDGER ||
+      activeAccount.type === 'ledger'
+    ) {
       return true;
     }
 
     // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED || activeAccount.type === 'rekeyed') {
+    if (
+      activeAccount.type === AccountType.REKEYED ||
+      activeAccount.type === 'rekeyed'
+    ) {
       const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(acc => acc.address === rekeyedAccount.authAddress);
-      if (authAccount?.type === AccountType.LEDGER || authAccount?.type === 'ledger') {
+      const authAccount = allAccounts.find(
+        (acc) => acc.address === rekeyedAccount.authAddress
+      );
+      if (
+        authAccount?.type === AccountType.LEDGER ||
+        authAccount?.type === 'ledger'
+      ) {
         return true;
       }
     }
@@ -147,18 +165,29 @@ export default function MessagesInboxScreen() {
         // Stop polling when screen loses focus
         stopPolling();
       };
-    }, [activeAccount?.address, isInitialized, checkIsLedgerBacked, checkKeyRegistration, fetchAllThreads, startPolling, stopPolling])
+    }, [
+      activeAccount?.address,
+      isInitialized,
+      checkIsLedgerBacked,
+      checkKeyRegistration,
+      fetchAllThreads,
+      startPolling,
+      stopPolling,
+    ])
   );
 
   // Handle back button for modals
   useEffect(() => {
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (isAccountModalVisible) {
-        setIsAccountModalVisible(false);
-        return true;
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        if (isAccountModalVisible) {
+          setIsAccountModalVisible(false);
+          return true;
+        }
+        return false;
       }
-      return false;
-    });
+    );
 
     return () => backHandler.remove();
   }, [isAccountModalVisible]);
@@ -223,7 +252,12 @@ export default function MessagesInboxScreen() {
     } finally {
       setIsRegistering(false);
     }
-  }, [activeAccount?.address, isRegistering, registerMessagingKey, fetchAllThreads]);
+  }, [
+    activeAccount?.address,
+    isRegistering,
+    registerMessagingKey,
+    fetchAllThreads,
+  ]);
 
   // Handle hiding/unhiding a thread
   const handleHideThread = useCallback(
@@ -297,7 +331,10 @@ export default function MessagesInboxScreen() {
     (thread: MessageThread) => {
       const friend = friends.find((f) => f.address === thread.friendAddress);
       return {
-        name: friend?.envoiName || thread.friendEnvoiName || formatAddress(thread.friendAddress),
+        name:
+          friend?.envoiName ||
+          thread.friendEnvoiName ||
+          formatAddress(thread.friendAddress),
         avatar: friend?.avatar,
         address: thread.friendAddress,
       };
@@ -359,7 +396,10 @@ export default function MessagesInboxScreen() {
         overshootRight={false}
       >
         <BlurredContainer
-          style={[styles.threadItem, isHidden && showHiddenThreads && styles.threadItemHidden]}
+          style={[
+            styles.threadItem,
+            isHidden && showHiddenThreads && styles.threadItemHidden,
+          ]}
           borderRadius={theme.borderRadius.lg}
         >
           <TouchableOpacity
@@ -371,7 +411,10 @@ export default function MessagesInboxScreen() {
           >
             <View style={styles.avatarContainer}>
               {friendInfo.avatar ? (
-                <Image source={{ uri: friendInfo.avatar }} style={styles.avatar} />
+                <Image
+                  source={{ uri: friendInfo.avatar }}
+                  style={styles.avatar}
+                />
               ) : (
                 <AccountAvatar
                   address={friendInfo.address}
@@ -392,7 +435,10 @@ export default function MessagesInboxScreen() {
             <View style={styles.threadContent}>
               <View style={styles.threadHeader}>
                 <Text
-                  style={[styles.threadName, hasUnread && styles.threadNameUnread]}
+                  style={[
+                    styles.threadName,
+                    hasUnread && styles.threadNameUnread,
+                  ]}
                   numberOfLines={1}
                 >
                   {friendInfo.name}
@@ -405,14 +451,22 @@ export default function MessagesInboxScreen() {
               </View>
               <View style={styles.threadPreview}>
                 <Text
-                  style={[styles.threadMessage, hasUnread && styles.threadMessageUnread]}
+                  style={[
+                    styles.threadMessage,
+                    hasUnread && styles.threadMessageUnread,
+                  ]}
                   numberOfLines={1}
                 >
                   {thread.lastMessage?.direction === 'sent' ? 'You: ' : ''}
                   {thread.lastMessage?.content || 'No messages yet'}
                 </Text>
                 {hasUnread && (
-                  <View style={[styles.unreadBadge, { backgroundColor: theme.colors.primary }]}>
+                  <View
+                    style={[
+                      styles.unreadBadge,
+                      { backgroundColor: theme.colors.primary },
+                    ]}
+                  >
                     <Text style={styles.unreadBadgeText}>
                       {thread.unreadCount > 99 ? '99+' : thread.unreadCount}
                     </Text>
@@ -431,15 +485,26 @@ export default function MessagesInboxScreen() {
     if (!activeAccount) return false;
 
     // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER || activeAccount.type === 'ledger') {
+    if (
+      activeAccount.type === AccountType.LEDGER ||
+      activeAccount.type === 'ledger'
+    ) {
       return true;
     }
 
     // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED || activeAccount.type === 'rekeyed') {
+    if (
+      activeAccount.type === AccountType.REKEYED ||
+      activeAccount.type === 'rekeyed'
+    ) {
       const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(acc => acc.address === rekeyedAccount.authAddress);
-      if (authAccount?.type === AccountType.LEDGER || authAccount?.type === 'ledger') {
+      const authAccount = allAccounts.find(
+        (acc) => acc.address === rekeyedAccount.authAddress
+      );
+      if (
+        authAccount?.type === AccountType.LEDGER ||
+        authAccount?.type === 'ledger'
+      ) {
         return true;
       }
     }
@@ -451,11 +516,16 @@ export default function MessagesInboxScreen() {
   const renderLedgerUnsupported = () => {
     return (
       <View style={styles.emptyState}>
-        <Ionicons name="hardware-chip-outline" size={64} color={theme.colors.textMuted} />
+        <Ionicons
+          name="hardware-chip-outline"
+          size={64}
+          color={theme.colors.textMuted}
+        />
         <Text style={styles.emptyTitle}>Ledger Not Supported</Text>
         <Text style={styles.emptyText}>
-          Encrypted messaging requires signing a challenge message, which the Ledger Algorand app
-          doesn't support. Please switch to a standard account to use messaging.
+          Encrypted messaging requires signing a challenge message, which the
+          Ledger Algorand app doesn't support. Please switch to a standard
+          account to use messaging.
         </Text>
       </View>
     );
@@ -468,8 +538,8 @@ export default function MessagesInboxScreen() {
         <Ionicons name="key-outline" size={64} color={theme.colors.primary} />
         <Text style={styles.emptyTitle}>Enable Encrypted Messaging</Text>
         <Text style={styles.emptyText}>
-          To receive encrypted messages, you need to publish your messaging key to the blockchain.
-          This is a one-time setup.
+          To receive encrypted messages, you need to publish your messaging key
+          to the blockchain. This is a one-time setup.
         </Text>
         <Text style={styles.feeText}>
           Transaction fee: {MESSAGE_FEE_DISPLAY}
@@ -519,7 +589,11 @@ export default function MessagesInboxScreen() {
     if (searchQuery.trim()) {
       return (
         <View style={styles.emptyState}>
-          <Ionicons name="search-outline" size={64} color={theme.colors.textMuted} />
+          <Ionicons
+            name="search-outline"
+            size={64}
+            color={theme.colors.textMuted}
+          />
           <Text style={styles.emptyTitle}>No conversations found</Text>
           <Text style={styles.emptyText}>Try a different search term</Text>
         </View>
@@ -528,7 +602,11 @@ export default function MessagesInboxScreen() {
 
     return (
       <View style={styles.emptyState}>
-        <Ionicons name="chatbubbles-outline" size={64} color={theme.colors.textMuted} />
+        <Ionicons
+          name="chatbubbles-outline"
+          size={64}
+          color={theme.colors.textMuted}
+        />
         <Text style={styles.emptyTitle}>No messages yet</Text>
         <Text style={styles.emptyText}>
           Start a conversation with someone on the Voi Network
@@ -562,19 +640,39 @@ export default function MessagesInboxScreen() {
                     onPress={toggleShowHiddenThreads}
                   >
                     <Ionicons
-                      name={showHiddenThreads ? 'eye-outline' : 'eye-off-outline'}
+                      name={
+                        showHiddenThreads ? 'eye-outline' : 'eye-off-outline'
+                      }
                       size={22}
-                      color={showHiddenThreads ? theme.colors.primary : theme.colors.textMuted}
+                      color={
+                        showHiddenThreads
+                          ? theme.colors.primary
+                          : theme.colors.textMuted
+                      }
                     />
                     {!showHiddenThreads && (
-                      <View style={[styles.hiddenCountBadge, { backgroundColor: theme.colors.textMuted }]}>
-                        <Text style={styles.hiddenCountText}>{hiddenThreadsCount}</Text>
+                      <View
+                        style={[
+                          styles.hiddenCountBadge,
+                          { backgroundColor: theme.colors.textMuted },
+                        ]}
+                      >
+                        <Text style={styles.hiddenCountText}>
+                          {hiddenThreadsCount}
+                        </Text>
                       </View>
                     )}
                   </TouchableOpacity>
                 )}
-                <TouchableOpacity style={styles.headerActionButton} onPress={handleNewMessage}>
-                  <Ionicons name="create-outline" size={24} color={theme.colors.primary} />
+                <TouchableOpacity
+                  style={styles.headerActionButton}
+                  onPress={handleNewMessage}
+                >
+                  <Ionicons
+                    name="create-outline"
+                    size={24}
+                    color={theme.colors.primary}
+                  />
                 </TouchableOpacity>
               </View>
             ) : undefined
@@ -585,7 +683,11 @@ export default function MessagesInboxScreen() {
         {!isLedgerBacked && isKeyRegistered && (
           <BlurredContainer style={styles.searchContainer} borderRadius={0}>
             <View style={styles.searchInputContainer}>
-              <Ionicons name="search" size={20} color={theme.colors.textMuted} />
+              <Ionicons
+                name="search"
+                size={20}
+                color={theme.colors.textMuted}
+              />
               <TextInput
                 style={styles.searchInput}
                 placeholder="Search conversations"
@@ -597,7 +699,11 @@ export default function MessagesInboxScreen() {
               />
               {searchQuery.length > 0 && (
                 <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Ionicons name="close-circle" size={20} color={theme.colors.textMuted} />
+                  <Ionicons
+                    name="close-circle"
+                    size={20}
+                    color={theme.colors.textMuted}
+                  />
                 </TouchableOpacity>
               )}
             </View>
@@ -607,7 +713,10 @@ export default function MessagesInboxScreen() {
         {/* Messages List */}
         <ScrollView
           contentContainerStyle={
-            isLedgerBacked || isCheckingRegistration || filteredThreads.length === 0 || !isKeyRegistered
+            isLedgerBacked ||
+            isCheckingRegistration ||
+            filteredThreads.length === 0 ||
+            !isKeyRegistered
               ? styles.emptyListContent
               : styles.listContent
           }
@@ -621,7 +730,10 @@ export default function MessagesInboxScreen() {
             ) : undefined
           }
         >
-          {isLedgerBacked || isCheckingRegistration || !isKeyRegistered || filteredThreads.length === 0
+          {isLedgerBacked ||
+          isCheckingRegistration ||
+          !isKeyRegistered ||
+          filteredThreads.length === 0
             ? renderEmptyState()
             : filteredThreads.map(renderThreadItem)}
         </ScrollView>

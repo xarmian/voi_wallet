@@ -89,11 +89,16 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   // Padding values based on preset
   const paddingValue = useMemo(() => {
     switch (padding) {
-      case 'none': return 0;
-      case 'sm': return theme.spacing.sm;
-      case 'md': return theme.spacing.md;
-      case 'lg': return theme.spacing.lg;
-      default: return theme.spacing.md;
+      case 'none':
+        return 0;
+      case 'sm':
+        return theme.spacing.sm;
+      case 'md':
+        return theme.spacing.md;
+      case 'lg':
+        return theme.spacing.lg;
+      default:
+        return theme.spacing.md;
     }
   }, [padding, theme.spacing]);
 
@@ -130,18 +135,21 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   }, [borderGlow, resolvedGlowColor, theme.mode]);
 
   // Container styles
-  const containerStyles = useMemo(() => [
-    styles.container,
-    {
-      borderRadius: resolvedBorderRadius,
-      ...(borderColor && {
-        borderWidth: 1,
-        borderColor,
-      }),
-    },
-    glowShadowStyle,
-    style,
-  ], [resolvedBorderRadius, borderColor, glowShadowStyle, style]);
+  const containerStyles = useMemo(
+    () => [
+      styles.container,
+      {
+        borderRadius: resolvedBorderRadius,
+        ...(borderColor && {
+          borderWidth: 1,
+          borderColor,
+        }),
+      },
+      glowShadowStyle,
+      style,
+    ],
+    [resolvedBorderRadius, borderColor, glowShadowStyle, style]
+  );
 
   // Blur tint based on variant and theme mode
   const blurTint = useMemo(() => {
@@ -184,10 +192,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({
 
       {/* Semi-transparent overlay for consistent glass effect */}
       <View
-        style={[
-          styles.overlay,
-          { backgroundColor: overlayBackgroundColor },
-        ]}
+        style={[styles.overlay, { backgroundColor: overlayBackgroundColor }]}
         pointerEvents="none"
       />
 
@@ -196,7 +201,10 @@ export const GlassCard: React.FC<GlassCardProps> = ({
         colors={highlightGradientColors as [string, string]}
         style={[
           styles.highlightGradient,
-          { borderTopLeftRadius: resolvedBorderRadius - 1, borderTopRightRadius: resolvedBorderRadius - 1 },
+          {
+            borderTopLeftRadius: resolvedBorderRadius - 1,
+            borderTopRightRadius: resolvedBorderRadius - 1,
+          },
         ]}
         start={{ x: 0, y: 0 }}
         end={{ x: 0, y: 1 }}
@@ -240,7 +248,10 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   // Non-pressable version
   if (animated) {
     return (
-      <Animated.View style={[containerStyles, animatedContainerStyle]} testID={testID}>
+      <Animated.View
+        style={[containerStyles, animatedContainerStyle]}
+        testID={testID}
+      >
         {renderContent()}
       </Animated.View>
     );

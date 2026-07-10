@@ -284,10 +284,7 @@ export default function EnvoiProfileCard({
   };
 
   return (
-    <GlassCard
-      style={styles.container}
-      variant="medium"
-    >
+    <GlassCard style={styles.container} variant="medium">
       {title && <Text style={styles.title}>{title}</Text>}
 
       <View style={styles.profileContainer}>
@@ -314,9 +311,16 @@ export default function EnvoiProfileCard({
             {displayName || formatAddress(address)}
           </Text>
 
-          <TouchableOpacity onPress={copyAddressToClipboard} style={styles.addressContainer}>
+          <TouchableOpacity
+            onPress={copyAddressToClipboard}
+            style={styles.addressContainer}
+          >
             <Text style={styles.profileAddress}>{formatAddress(address)}</Text>
-            <Ionicons name="copy-outline" size={14} color={themeColors.textSecondary} />
+            <Ionicons
+              name="copy-outline"
+              size={14}
+              color={themeColors.textSecondary}
+            />
           </TouchableOpacity>
         </View>
       </View>

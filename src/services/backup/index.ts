@@ -59,7 +59,9 @@ async function getBackupDirectory(): Promise<Directory> {
  * Backup Service class
  */
 export class BackupService {
-  private static progressCallback?: (progress: BackupProgress | RestoreProgress) => void;
+  private static progressCallback?: (
+    progress: BackupProgress | RestoreProgress
+  ) => void;
 
   /**
    * Set progress callback for UI updates
@@ -80,7 +82,9 @@ export class BackupService {
   /**
    * Report progress to UI
    */
-  private static reportProgress(progress: BackupProgress | RestoreProgress): void {
+  private static reportProgress(
+    progress: BackupProgress | RestoreProgress
+  ): void {
     if (this.progressCallback) {
       this.progressCallback(progress);
     }
@@ -93,7 +97,10 @@ export class BackupService {
    * @param pin - Optional PIN for authentication (required to access mnemonics)
    * @returns Backup result with file info
    */
-  static async createBackup(password: string, pin?: string): Promise<BackupResult> {
+  static async createBackup(
+    password: string,
+    pin?: string
+  ): Promise<BackupResult> {
     try {
       // Step 1: Collect accounts
       this.reportProgress({
@@ -216,7 +223,10 @@ export class BackupService {
       try {
         encrypted = JSON.parse(fileContent) as EncryptedBackupFile;
       } catch {
-        throw new BackupError('Invalid backup file format', 'INVALID_FILE_FORMAT');
+        throw new BackupError(
+          'Invalid backup file format',
+          'INVALID_FILE_FORMAT'
+        );
       }
 
       // Step 2: Validate format
@@ -246,10 +256,7 @@ export class BackupService {
       try {
         backup = JSON.parse(decrypted) as VoiBackupFile;
       } catch {
-        throw new BackupError(
-          'Backup data is corrupted',
-          'DECRYPTION_FAILED'
-        );
+        throw new BackupError('Backup data is corrupted', 'DECRYPTION_FAILED');
       }
 
       // Step 4: Validate backup structure
@@ -319,7 +326,10 @@ export class BackupService {
       try {
         encrypted = JSON.parse(fileContent) as EncryptedBackupFile;
       } catch {
-        throw new BackupError('Invalid backup file format', 'INVALID_FILE_FORMAT');
+        throw new BackupError(
+          'Invalid backup file format',
+          'INVALID_FILE_FORMAT'
+        );
       }
 
       // Validate format
@@ -450,4 +460,8 @@ export class BackupService {
 
 // Re-export types
 export * from './types';
-export { validatePasswordStrength, getPasswordStrengthLabel, getPasswordStrengthColor } from './encryption';
+export {
+  validatePasswordStrength,
+  getPasswordStrengthLabel,
+  getPasswordStrengthColor,
+} from './encryption';

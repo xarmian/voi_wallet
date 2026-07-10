@@ -42,7 +42,10 @@ import {
   sanitizeAmountInput,
 } from '@/utils/bigint';
 import { AccountType, type WalletAccount } from '@/types/wallet';
-import { useCurrentNetwork, useCurrentNetworkConfig } from '@/store/networkStore';
+import {
+  useCurrentNetwork,
+  useCurrentNetworkConfig,
+} from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { NFTToken } from '@/types/nft';
@@ -136,7 +139,9 @@ export default function SendScreen() {
   const contextMappingId = routeParams?.mappingId;
 
   // State for the network-specific asset ID
-  const [networkSpecificAssetId, setNetworkSpecificAssetId] = useState<number | null>(null);
+  const [networkSpecificAssetId, setNetworkSpecificAssetId] = useState<
+    number | null
+  >(null);
 
   // Resolve the correct assetId for the selected network
   useEffect(() => {
@@ -156,13 +161,15 @@ export default function SendScreen() {
       const mappings = await tokenMappingService.getTokenMappings();
 
       // Find which mapping contains this asset ID (on ANY network)
-      const mapping = mappings.find(m =>
-        m.tokens.some(t => t.assetId === initialAssetId)
+      const mapping = mappings.find((m) =>
+        m.tokens.some((t) => t.assetId === initialAssetId)
       );
 
       if (mapping) {
         // Find the token for the selected network
-        const tokenForNetwork = mapping.tokens.find(t => t.networkId === selectedNetworkId);
+        const tokenForNetwork = mapping.tokens.find(
+          (t) => t.networkId === selectedNetworkId
+        );
 
         if (tokenForNetwork) {
           setNetworkSpecificAssetId(tokenForNetwork.assetId);
@@ -181,7 +188,9 @@ export default function SendScreen() {
 
   // Determine the effective asset ID to use - context takes precedence over selected
   const effectiveAssetId =
-    contextAssetId !== undefined && contextAssetId !== null ? contextAssetId : selectedAssetId;
+    contextAssetId !== undefined && contextAssetId !== null
+      ? contextAssetId
+      : selectedAssetId;
   const hasNoContext = contextAssetId === undefined || contextAssetId === null;
 
   // Initialize selectedAssetId to native token when no context is provided
@@ -228,9 +237,10 @@ export default function SendScreen() {
             decimals = 6;
           } else {
             try {
-              const info = await NetworkService.getInstance(
-                selectedNetworkId
-              ).getAssetInfo(assetIdRaw);
+              const info =
+                await NetworkService.getInstance(
+                  selectedNetworkId
+                ).getAssetInfo(assetIdRaw);
               const rawDecimals = info?.params?.decimals;
               if (rawDecimals === undefined || rawDecimals === null) {
                 // Params unavailable (e.g. a 404 resolves to null): don't
@@ -281,7 +291,8 @@ export default function SendScreen() {
       // Fee parameter from ARC-0090 URI
       if (routeParams.fee && /^\d+$/.test(routeParams.fee)) {
         const feeInMicrounits = parseInt(routeParams.fee);
-        if (feeInMicrounits >= 1000) { // Minimum fee is 1000 microunits
+        if (feeInMicrounits >= 1000) {
+          // Minimum fee is 1000 microunits
           setUriFee(feeInMicrounits);
           setEstimatedFee(feeInMicrounits);
         }
@@ -298,17 +309,19 @@ export default function SendScreen() {
   );
 
   // State for all available versions of this asset across networks
-  const [assetOptions, setAssetOptions] = useState<Array<{
-    networkId: NetworkId;
-    assetId: number;
-    balance: bigint;
-    decimals: number;
-    symbol: string;
-    name: string;
-    assetType?: 'asa' | 'arc200' | 'arc72';
-    contractId?: number;
-    imageUrl?: string;
-  }>>([]);
+  const [assetOptions, setAssetOptions] = useState<
+    Array<{
+      networkId: NetworkId;
+      assetId: number;
+      balance: bigint;
+      decimals: number;
+      symbol: string;
+      name: string;
+      assetType?: 'asa' | 'arc200' | 'arc72';
+      contractId?: number;
+      imageUrl?: string;
+    }>
+  >([]);
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
 
   // Selected asset state
@@ -321,7 +334,9 @@ export default function SendScreen() {
   const [accountBalance, setAccountBalance] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const { balance: multiNetworkBalance } = useMultiNetworkBalance(activeAccount?.id || '');
+  const { balance: multiNetworkBalance } = useMultiNetworkBalance(
+    activeAccount?.id || ''
+  );
 
   // Fetch all available versions of this asset across networks
   useEffect(() => {
@@ -343,8 +358,8 @@ export default function SendScreen() {
         // When no asset context is provided, show all network tokens (native + bridged)
         if (initialAssetId === undefined) {
           // Find all mappings that contain native tokens (assetId: 0)
-          const nativeTokenMappings = mappings.filter(m =>
-            m.tokens.some(t => t.assetId === 0)
+          const nativeTokenMappings = mappings.filter((m) =>
+            m.tokens.some((t) => t.assetId === 0)
           );
 
           // For each native token mapping, get balances from multi-network balance
@@ -372,8 +387,10 @@ export default function SendScreen() {
           // Has asset context - show only versions of this specific asset
           // If mappingId is provided, use it directly (most reliable)
           let mapping = contextMappingId
-            ? mappings.find(m => m.mappingId === contextMappingId)
-            : mappings.find(m => m.tokens.some(t => t.assetId === initialAssetId));
+            ? mappings.find((m) => m.mappingId === contextMappingId)
+            : mappings.find((m) =>
+                m.tokens.some((t) => t.assetId === initialAssetId)
+              );
 
           if (mapping) {
             // Find the mapped asset in multi-network balance
@@ -381,7 +398,11 @@ export default function SendScreen() {
               (a) => a.mappingId === mapping.mappingId && a.isMapped
             );
 
-            if (mappedAsset && mappedAsset.sourceBalances && mappedAsset.sourceBalances.length > 0) {
+            if (
+              mappedAsset &&
+              mappedAsset.sourceBalances &&
+              mappedAsset.sourceBalances.length > 0
+            ) {
               // Build options from sourceBalances (includes native tokens with assetId 0)
               for (const source of mappedAsset.sourceBalances) {
                 options.push({
@@ -396,10 +417,13 @@ export default function SendScreen() {
               }
             } else {
               // Mapped but no balance data - fetch directly from network
-              const networkId = (routeParams?.networkId as NetworkId) || currentNetwork;
+              const networkId =
+                (routeParams?.networkId as NetworkId) || currentNetwork;
               const networkService = NetworkService.getInstance(networkId);
-              const accountInfo = await networkService.getAlgodClient()
-                .accountInformation(activeAccount.address).do();
+              const accountInfo = await networkService
+                .getAlgodClient()
+                .accountInformation(activeAccount.address)
+                .do();
 
               // Handle native token (assetId 0)
               if (initialAssetId === 0) {
@@ -423,7 +447,10 @@ export default function SendScreen() {
                 );
 
                 if (assetHolding) {
-                  const assetInfo = await networkService.getAlgodClient().getAssetByID(initialAssetId).do();
+                  const assetInfo = await networkService
+                    .getAlgodClient()
+                    .getAssetByID(initialAssetId)
+                    .do();
 
                   options.push({
                     networkId,
@@ -439,25 +466,34 @@ export default function SendScreen() {
             }
           } else {
             // Not in a mapping, just show this one asset
-            const networkId = (routeParams?.networkId as NetworkId) || currentNetwork;
+            const networkId =
+              (routeParams?.networkId as NetworkId) || currentNetwork;
 
             // First check if we have this asset in accountBalance (includes ARC-200)
-            const balance = await NetworkService.getInstance(networkId).getAccountBalance(activeAccount.address);
+            const balance = await NetworkService.getInstance(
+              networkId
+            ).getAccountBalance(activeAccount.address);
             const asset = balance.assets?.find(
-              (a) => a.assetId === initialAssetId || (a.assetType === 'arc200' && a.contractId === initialAssetId)
+              (a) =>
+                a.assetId === initialAssetId ||
+                (a.assetType === 'arc200' && a.contractId === initialAssetId)
             );
 
             if (asset) {
               // Found in accountBalance (ASA or ARC-200)
               options.push({
                 networkId,
-                assetId: asset.assetType === 'arc200' ? asset.contractId : asset.assetId,
+                assetId:
+                  asset.assetType === 'arc200'
+                    ? asset.contractId
+                    : asset.assetId,
                 balance: asset.amount,
                 decimals: asset.decimals,
                 symbol: asset.symbol || contextAssetName || '',
                 name: asset.name || contextAssetName || '',
                 assetType: asset.assetType,
-                contractId: asset.assetType === 'arc200' ? asset.contractId : undefined,
+                contractId:
+                  asset.assetType === 'arc200' ? asset.contractId : undefined,
                 imageUrl: asset.imageUrl,
               });
             } else if (initialAssetId === 0) {
@@ -484,9 +520,10 @@ export default function SendScreen() {
 
           if (initialAssetId === undefined) {
             // No asset context: default to current network's native token
-            const defaultOption = options.find(
-              o => o.networkId === currentNetwork && o.assetId === 0
-            ) || options[0];
+            const defaultOption =
+              options.find(
+                (o) => o.networkId === currentNetwork && o.assetId === 0
+              ) || options[0];
 
             setSelectedAsset({
               networkId: defaultOption.networkId,
@@ -495,12 +532,19 @@ export default function SendScreen() {
           } else {
             // Has asset context: match both networkId AND assetId
             let matchingOption = routeNetworkId
-              ? options.find(o => o.networkId === routeNetworkId && o.assetId === initialAssetId)
+              ? options.find(
+                  (o) =>
+                    o.networkId === routeNetworkId &&
+                    o.assetId === initialAssetId
+                )
               : null;
 
             // If no route networkId specified, use the current network
             if (!matchingOption && !routeNetworkId) {
-              matchingOption = options.find(o => o.networkId === currentNetwork && o.assetId === initialAssetId);
+              matchingOption = options.find(
+                (o) =>
+                  o.networkId === currentNetwork && o.assetId === initialAssetId
+              );
             }
 
             // Fallback to first option only if no match found
@@ -522,35 +566,50 @@ export default function SendScreen() {
     };
 
     fetchAssetOptions();
-  }, [activeAccount?.address, routeParams?.assetId, routeParams?.networkId, contextMappingId, multiNetworkBalance?.assets, currentNetwork]);
+  }, [
+    activeAccount?.address,
+    routeParams?.assetId,
+    routeParams?.networkId,
+    contextMappingId,
+    multiNetworkBalance?.assets,
+    currentNetwork,
+  ]);
 
   // Balance is already in assetOptions - no need to fetch separately
 
   // Handle Android back button for local modals
   useEffect(() => {
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      // Close modals in order of priority (most recently likely opened first)
-      if (showAssetSelector) {
-        setShowAssetSelector(false);
-        return true;
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        // Close modals in order of priority (most recently likely opened first)
+        if (showAssetSelector) {
+          setShowAssetSelector(false);
+          return true;
+        }
+        if (isAddAccountModalVisible) {
+          setIsAddAccountModalVisible(false);
+          return true;
+        }
+        if (isAccountRecipientModalVisible) {
+          setIsAccountRecipientModalVisible(false);
+          return true;
+        }
+        if (isAccountModalVisible) {
+          setIsAccountModalVisible(false);
+          return true;
+        }
+        return false; // Let default back behavior happen
       }
-      if (isAddAccountModalVisible) {
-        setIsAddAccountModalVisible(false);
-        return true;
-      }
-      if (isAccountRecipientModalVisible) {
-        setIsAccountRecipientModalVisible(false);
-        return true;
-      }
-      if (isAccountModalVisible) {
-        setIsAccountModalVisible(false);
-        return true;
-      }
-      return false; // Let default back behavior happen
-    });
+    );
 
     return () => backHandler.remove();
-  }, [isAccountModalVisible, isAddAccountModalVisible, isAccountRecipientModalVisible, showAssetSelector]);
+  }, [
+    isAccountModalVisible,
+    isAddAccountModalVisible,
+    isAccountRecipientModalVisible,
+    showAssetSelector,
+  ]);
 
   // Determine signing capability and Ledger signer presence for the active account
   useEffect(() => {
@@ -639,7 +698,9 @@ export default function SendScreen() {
   const getCurrentAssetOption = () => {
     if (!selectedAsset) return null;
     return assetOptions.find(
-      (opt) => opt.networkId === selectedAsset.networkId && opt.assetId === selectedAsset.assetId
+      (opt) =>
+        opt.networkId === selectedAsset.networkId &&
+        opt.assetId === selectedAsset.assetId
     );
   };
 
@@ -780,7 +841,14 @@ export default function SendScreen() {
       return 'Enter a valid amount';
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amount, accountBalance, estimatedFee, effectiveAssetId, selectedAsset, assetOptions]);
+  }, [
+    amount,
+    accountBalance,
+    estimatedFee,
+    effectiveAssetId,
+    selectedAsset,
+    assetOptions,
+  ]);
 
   // Removed problematic useEffect that was causing infinite balance reloading
 
@@ -814,7 +882,10 @@ export default function SendScreen() {
       // Skip resolution if we already have a valid address that matches the input
       if (recipientAddress && algosdk.isValidAddress(recipientAddress)) {
         // If the input matches the resolved address or resolved name, don't re-resolve
-        if (input === recipientAddress || (resolvedName && input === resolvedName)) {
+        if (
+          input === recipientAddress ||
+          (resolvedName && input === resolvedName)
+        ) {
           return;
         }
       }
@@ -1107,7 +1178,8 @@ export default function SendScreen() {
         to: recipientAddress || 'PLACEHOLDER',
         amount: amountInBaseUnits,
         note: note || undefined,
-        assetId: assetType === 'asa' ? (effectiveAssetId ?? undefined) : undefined,
+        assetId:
+          assetType === 'asa' ? (effectiveAssetId ?? undefined) : undefined,
         assetType,
         contractId,
         networkId: selectedAsset?.networkId || selectedNetworkId,
@@ -1176,7 +1248,7 @@ export default function SendScreen() {
             tokenId: contextNftToken.tokenId,
             networkId: contextNftToken.networkId as NetworkId,
           },
-          (activeAccount as unknown as WalletAccount)
+          activeAccount as unknown as WalletAccount
         );
 
         if (validationErrors.length > 0) {
@@ -1189,7 +1261,9 @@ export default function SendScreen() {
           recipient: recipientAddress.trim(),
           recipientName: resolvedName || undefined,
           amount: '1', // Display as 1 NFT
-          assetSymbol: contextNftToken.metadata.name || `Token #${contextNftToken.tokenId}`,
+          assetSymbol:
+            contextNftToken.metadata.name ||
+            `Token #${contextNftToken.tokenId}`,
           assetId: undefined,
           assetType: 'arc72',
           contractId: contextNftToken.contractId,
@@ -1197,7 +1271,7 @@ export default function SendScreen() {
           assetDecimals: 0, // NFTs have 0 decimals
           note: note || undefined,
           estimatedFee: estimatedFee,
-          fromAccount: (activeAccount as unknown as WalletAccount),
+          fromAccount: activeAccount as unknown as WalletAccount,
           nftToken: contextNftToken,
           networkId: contextNftToken.networkId as NetworkId,
           assetImageUrl: contextNftToken.imageUrl, // Pass NFT image
@@ -1254,7 +1328,7 @@ export default function SendScreen() {
           contractId,
           networkId: selectedAsset.networkId,
         },
-        (activeAccount as unknown as WalletAccount)
+        activeAccount as unknown as WalletAccount
       );
 
       if (validationErrors.length > 0) {
@@ -1263,27 +1337,30 @@ export default function SendScreen() {
       }
 
       // Get mapping ID if this asset is part of a multi-network mapping
-      const mappingId = contextMappingId ||
+      const mappingId =
+        contextMappingId ||
         multiNetworkBalance?.assets.find(
-          a => a.assetId === assetOption.assetId && a.networkId === selectedAsset.networkId
+          (a) =>
+            a.assetId === assetOption.assetId &&
+            a.networkId === selectedAsset.networkId
         )?.mappingId;
 
       // Navigate to transaction confirmation screen
       (navigation as any).navigate('TransactionConfirmation', {
-          recipient: recipientAddress.trim(),
-          recipientName: resolvedName || undefined,
-          amount: amount,
-          assetSymbol: getAssetSymbol(),
-          assetId: assetOption.assetId === 0 ? undefined : assetOption.assetId,
-          assetType: assetType,
-          contractId: contractId,
-          assetDecimals: getAssetDecimals(),
-          note: note || undefined,
-          estimatedFee: estimatedFee,
-          fromAccount: (activeAccount as unknown as WalletAccount),
-          networkId: selectedAsset.networkId,
-          assetImageUrl: assetImageUrl,
-          mappingId: mappingId,
+        recipient: recipientAddress.trim(),
+        recipientName: resolvedName || undefined,
+        amount: amount,
+        assetSymbol: getAssetSymbol(),
+        assetId: assetOption.assetId === 0 ? undefined : assetOption.assetId,
+        assetType: assetType,
+        contractId: contractId,
+        assetDecimals: getAssetDecimals(),
+        note: note || undefined,
+        estimatedFee: estimatedFee,
+        fromAccount: activeAccount as unknown as WalletAccount,
+        networkId: selectedAsset.networkId,
+        assetImageUrl: assetImageUrl,
+        mappingId: mappingId,
       });
     } catch (error) {
       console.error('Error preparing transaction:', error);
@@ -1381,11 +1458,11 @@ export default function SendScreen() {
           onBackPress={() => navigation.goBack()}
         />
 
-      <KeyboardAwareScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-      >
-        <View style={styles.content}>
+        <KeyboardAwareScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+        >
+          <View style={styles.content}>
             {/* NFT Token Details (shown at top when NFT is present) */}
             {contextNftToken && (
               <View style={styles.nftTokenContainer}>
@@ -1399,7 +1476,8 @@ export default function SendScreen() {
                   )}
                   <View style={styles.nftTokenInfo}>
                     <Text style={styles.nftTokenName}>
-                      {contextNftToken.metadata.name || `Token #${contextNftToken.tokenId}`}
+                      {contextNftToken.metadata.name ||
+                        `Token #${contextNftToken.tokenId}`}
                     </Text>
                     <Text style={styles.nftTokenId}>
                       Token ID: {contextNftToken.tokenId}
@@ -1420,7 +1498,9 @@ export default function SendScreen() {
             {/* Asset Selector - show all available versions of this asset or network tokens */}
             {!contextNftToken && assetOptions.length > 0 && (
               <NetworkAssetSelector
-                tokenName={hasNoContext ? 'Network Tokens' : (contextAssetName || 'Asset')}
+                tokenName={
+                  hasNoContext ? 'Network Tokens' : contextAssetName || 'Asset'
+                }
                 options={assetOptions}
                 selectedAssetId={selectedAsset?.assetId}
                 selectedNetworkId={selectedAsset?.networkId}
@@ -1438,7 +1518,9 @@ export default function SendScreen() {
               borderRadius={theme.borderRadius.md}
               style={styles.inputContainer}
             >
-              <Text style={styles.inputLabelInContainer}>Recipient Address or Name</Text>
+              <Text style={styles.inputLabelInContainer}>
+                Recipient Address or Name
+              </Text>
               <View style={styles.inputWithButton}>
                 <TextInput
                   style={[
@@ -1560,7 +1642,9 @@ export default function SendScreen() {
                 borderRadius={theme.borderRadius.md}
                 style={styles.inputContainer}
               >
-                <Text style={styles.inputLabelInContainer}>Amount ({getAssetSymbol()})</Text>
+                <Text style={styles.inputLabelInContainer}>
+                  Amount ({getAssetSymbol()})
+                </Text>
                 <TextInput
                   style={[
                     styles.textInputInContainer,
@@ -1638,18 +1722,26 @@ export default function SendScreen() {
                 </Text>
                 {contextNftToken ? (
                   <Text style={styles.totalLabel}>
-                    NFT Transfer + Fee: {(estimatedFee / 1000000).toFixed(6)} {transactionNetworkConfig.nativeToken}
+                    NFT Transfer + Fee: {(estimatedFee / 1000000).toFixed(6)}{' '}
+                    {transactionNetworkConfig.nativeToken}
                   </Text>
                 ) : amount && parseFloat(amount) > 0 ? (
                   (() => {
                     const assetOption = getCurrentAssetOption();
-                    const isNativeToken = assetOption ? assetOption.assetId === 0 : (effectiveAssetId === 0 || !effectiveAssetId);
+                    const isNativeToken = assetOption
+                      ? assetOption.assetId === 0
+                      : effectiveAssetId === 0 || !effectiveAssetId;
 
                     if (isNativeToken) {
                       // For native tokens, show combined total
                       return (
                         <Text style={styles.totalLabel}>
-                          Total: {(parseFloat(amount) + estimatedFee / 1000000).toFixed(6)} {transactionNetworkConfig.nativeToken}
+                          Total:{' '}
+                          {(
+                            parseFloat(amount) +
+                            estimatedFee / 1000000
+                          ).toFixed(6)}{' '}
+                          {transactionNetworkConfig.nativeToken}
                         </Text>
                       );
                     } else {
@@ -1657,7 +1749,10 @@ export default function SendScreen() {
                       const assetId = assetOption?.assetId;
                       return (
                         <Text style={styles.totalLabel}>
-                          Amount: {amount} {getAssetSymbol()}{assetId ? ` (ID: ${assetId})` : ''} + Fee: {(estimatedFee / 1000000).toFixed(6)} {transactionNetworkConfig.nativeToken}
+                          Amount: {amount} {getAssetSymbol()}
+                          {assetId ? ` (ID: ${assetId})` : ''} + Fee:{' '}
+                          {(estimatedFee / 1000000).toFixed(6)}{' '}
+                          {transactionNetworkConfig.nativeToken}
                         </Text>
                       );
                     }
@@ -1684,7 +1779,11 @@ export default function SendScreen() {
             )}
 
             <GlassButton
-              variant={activeAccount?.type === AccountType.WATCH && !hasLedgerSigner ? 'secondary' : 'primary'}
+              variant={
+                activeAccount?.type === AccountType.WATCH && !hasLedgerSigner
+                  ? 'secondary'
+                  : 'primary'
+              }
               label={isSending ? 'Sending...' : 'Send Transaction'}
               icon={isSending ? undefined : 'paper-plane'}
               loading={isSending}
@@ -1700,114 +1799,121 @@ export default function SendScreen() {
               glow
               size="lg"
             />
-        </View>
-      </KeyboardAwareScrollView>
+          </View>
+        </KeyboardAwareScrollView>
 
-      {/* Account List Modal */}
-      <AccountListModal
-        isVisible={isAccountModalVisible}
-        onClose={handleAccountModalClose}
-        onAddAccount={handleAddAccount}
-      />
+        {/* Account List Modal */}
+        <AccountListModal
+          isVisible={isAccountModalVisible}
+          onClose={handleAccountModalClose}
+          onAddAccount={handleAddAccount}
+        />
 
-      {/* Add Account Modal */}
-      <AddAccountModal
-        isVisible={isAddAccountModalVisible}
-        onClose={() => setIsAddAccountModalVisible(false)}
-        onCreateAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'CreateAccount',
-              },
-            })
-          );
-        }}
-        onImportAccount={() => {
-          setIsAddAccountModalVisible(false);
-          navigation.dispatch(
-            CommonActions.navigate({
-              name: 'Settings',
-              params: {
-                screen: 'MnemonicImport',
-              },
-            })
-          );
-        }}
-        onImportLedgerAccount={() => {
-          setIsAddAccountModalVisible(false);
-          (navigation as any).navigate('LedgerAccountImport');
-        }}
-        onImportQRAccount={() => {
-          setIsAddAccountModalVisible(false);
-          (navigation as any).navigate('QRAccountImport');
-        }}
-        onAddWatchAccount={() => {
-          setIsAddAccountModalVisible(false);
-          (navigation as any).navigate('Settings', { screen: 'AddWatchAccount' });
-        }}
-      />
+        {/* Add Account Modal */}
+        <AddAccountModal
+          isVisible={isAddAccountModalVisible}
+          onClose={() => setIsAddAccountModalVisible(false)}
+          onCreateAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'CreateAccount',
+                },
+              })
+            );
+          }}
+          onImportAccount={() => {
+            setIsAddAccountModalVisible(false);
+            navigation.dispatch(
+              CommonActions.navigate({
+                name: 'Settings',
+                params: {
+                  screen: 'MnemonicImport',
+                },
+              })
+            );
+          }}
+          onImportLedgerAccount={() => {
+            setIsAddAccountModalVisible(false);
+            (navigation as any).navigate('LedgerAccountImport');
+          }}
+          onImportQRAccount={() => {
+            setIsAddAccountModalVisible(false);
+            (navigation as any).navigate('QRAccountImport');
+          }}
+          onAddWatchAccount={() => {
+            setIsAddAccountModalVisible(false);
+            (navigation as any).navigate('Settings', {
+              screen: 'AddWatchAccount',
+            });
+          }}
+        />
 
-      {/* Account Recipient Modal */}
-      <AccountRecipientModal
-        isVisible={isAccountRecipientModalVisible}
-        onClose={() => setIsAccountRecipientModalVisible(false)}
-        onAccountSelect={handleAccountRecipientSelect}
-      />
+        {/* Account Recipient Modal */}
+        <AccountRecipientModal
+          isVisible={isAccountRecipientModalVisible}
+          onClose={() => setIsAccountRecipientModalVisible(false)}
+          onAccountSelect={handleAccountRecipientSelect}
+        />
 
-      {/* Asset Selector Modal */}
-      <Modal
-        visible={showAssetSelector}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowAssetSelector(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.assetSelectorModal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Asset</Text>
-              <TouchableOpacity
-                onPress={() => setShowAssetSelector(false)}
-                style={styles.modalCloseButton}
-              >
-                <Ionicons
-                  name="close"
-                  size={24}
-                  color={themeColors.textSecondary}
-                />
-              </TouchableOpacity>
-            </View>
+        {/* Asset Selector Modal */}
+        <Modal
+          visible={showAssetSelector}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowAssetSelector(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.assetSelectorModal}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Select Asset</Text>
+                <TouchableOpacity
+                  onPress={() => setShowAssetSelector(false)}
+                  style={styles.modalCloseButton}
+                >
+                  <Ionicons
+                    name="close"
+                    size={24}
+                    color={themeColors.textSecondary}
+                  />
+                </TouchableOpacity>
+              </View>
 
-            <ScrollView style={styles.assetList}>
-              {getAvailableAssets().map((asset) => (
+              <ScrollView style={styles.assetList}>
+                {getAvailableAssets().map((asset) => (
                   <TouchableOpacity
                     key={String(asset.id)}
-                  style={[
-                    styles.assetOption,
-                    effectiveAssetId === asset.id && styles.assetOptionSelected,
-                  ]}
-                onPress={() => handleAssetSelect(Number(asset.id))}
-                >
-                  <View style={styles.assetOptionContent}>
-                    <Text style={styles.assetOptionName}>{asset.name}</Text>
-                    <Text style={styles.assetOptionSymbol}>{asset.symbol}</Text>
-                  </View>
-                  <Text style={styles.assetOptionBalance}>{asset.balance}</Text>
-                  {effectiveAssetId === asset.id && (
-                    <Ionicons
-                      name="checkmark"
-                      size={20}
-                      color={themeColors.primary}
-                    />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+                    style={[
+                      styles.assetOption,
+                      effectiveAssetId === asset.id &&
+                        styles.assetOptionSelected,
+                    ]}
+                    onPress={() => handleAssetSelect(Number(asset.id))}
+                  >
+                    <View style={styles.assetOptionContent}>
+                      <Text style={styles.assetOptionName}>{asset.name}</Text>
+                      <Text style={styles.assetOptionSymbol}>
+                        {asset.symbol}
+                      </Text>
+                    </View>
+                    <Text style={styles.assetOptionBalance}>
+                      {asset.balance}
+                    </Text>
+                    {effectiveAssetId === asset.id && (
+                      <Ionicons
+                        name="checkmark"
+                        size={20}
+                        color={themeColors.primary}
+                      />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
       </SafeAreaView>
     </NFTBackground>
   );
@@ -1875,9 +1981,10 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 1.0)'
-        : 'rgba(255, 255, 255, 1.0)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 1.0)'
+          : 'rgba(255, 255, 255, 1.0)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 16,
     },
@@ -1889,37 +1996,40 @@ const createStyles = (theme: Theme) =>
       marginBottom: theme.spacing.sm,
     },
     textInput: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(255, 255, 255, 0.4)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.1)'
+          : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       fontSize: 16,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.15)'
+          : 'rgba(255, 255, 255, 0.5)',
       color: theme.colors.text,
     },
     // TextInput style for inside BlurredContainer (subtle inner styling)
     textInputInContainer: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.2)'
-        : 'rgba(255, 255, 255, 0.3)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.2)'
+          : 'rgba(255, 255, 255, 0.3)',
       borderRadius: theme.borderRadius.sm,
       padding: theme.spacing.md,
       fontSize: 16,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(0, 0, 0, 0.05)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.1)'
+          : 'rgba(0, 0, 0, 0.05)',
       color: theme.colors.text,
     },
     // Style for read-only inputs (e.g., xnote from ARC-0090)
     readOnlyInput: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.3)'
-        : 'rgba(0, 0, 0, 0.05)',
+      backgroundColor:
+        theme.mode === 'dark' ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.05)',
       opacity: 0.8,
     },
     inputWithButton: {
@@ -1928,33 +2038,37 @@ const createStyles = (theme: Theme) =>
       position: 'relative',
     },
     textInputWithButton: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(255, 255, 255, 0.4)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.1)'
+          : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       paddingRight: 100, // Make room for both buttons
       fontSize: 16,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.15)'
+          : 'rgba(255, 255, 255, 0.5)',
       flex: 1,
       color: theme.colors.text,
     },
     // TextInput with button style for inside BlurredContainer
     textInputWithButtonInContainer: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.2)'
-        : 'rgba(255, 255, 255, 0.3)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.2)'
+          : 'rgba(255, 255, 255, 0.3)',
       borderRadius: theme.borderRadius.sm,
       padding: theme.spacing.md,
       paddingRight: 100, // Make room for both buttons
       fontSize: 16,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(0, 0, 0, 0.05)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.1)'
+          : 'rgba(0, 0, 0, 0.05)',
       flex: 1,
       color: theme.colors.text,
     },
@@ -2011,13 +2125,15 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
     },
     watchAccountWarning: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.08)'
-        : 'rgba(255, 255, 255, 0.35)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.08)'
+          : 'rgba(255, 255, 255, 0.35)',
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.12)'
-        : 'rgba(255, 255, 255, 0.45)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.12)'
+          : 'rgba(255, 255, 255, 0.45)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.lg,
@@ -2075,14 +2191,16 @@ const createStyles = (theme: Theme) =>
     },
     searchResults: {
       marginTop: theme.spacing.sm,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(30, 30, 40, 0.9)'
-        : 'rgba(255, 255, 255, 0.85)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(30, 30, 40, 0.9)'
+          : 'rgba(255, 255, 255, 0.85)',
       borderRadius: theme.borderRadius.md,
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.15)'
+          : 'rgba(255, 255, 255, 0.5)',
       overflow: 'hidden',
     },
     searchResultItem: {
@@ -2246,17 +2364,19 @@ const createStyles = (theme: Theme) =>
       marginBottom: theme.spacing.lg,
     },
     nftTokenDetails: {
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(255, 255, 255, 0.4)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.1)'
+          : 'rgba(255, 255, 255, 0.4)',
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       flexDirection: 'row',
       alignItems: 'flex-start',
       borderWidth: 1,
-      borderColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.15)'
-        : 'rgba(255, 255, 255, 0.5)',
+      borderColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.15)'
+          : 'rgba(255, 255, 255, 0.5)',
     },
     nftTokenImage: {
       width: 80,

@@ -78,9 +78,13 @@ export class AnimatedQRService {
    * @param config - Optional configuration
    * @returns Encoding result with frames
    */
-  static encode(data: string, config?: AnimatedQRConfig): AnimatedQREncodeResult {
+  static encode(
+    data: string,
+    config?: AnimatedQRConfig
+  ): AnimatedQREncodeResult {
     const maxFragmentLength =
-      config?.maxFragmentLength ?? REMOTE_SIGNER_CONSTANTS.ANIMATED_QR_FRAME_BYTES;
+      config?.maxFragmentLength ??
+      REMOTE_SIGNER_CONSTANTS.ANIMATED_QR_FRAME_BYTES;
     const fps = config?.fps ?? REMOTE_SIGNER_CONSTANTS.ANIMATED_QR_FPS;
 
     // Convert string to Uint8Array
@@ -151,7 +155,10 @@ export class AnimatedQRService {
    * @param frame - The scanned QR code content
    * @returns Current decode state
    */
-  static processFrame(decoder: URDecoder, frame: string): AnimatedQRDecodeState {
+  static processFrame(
+    decoder: URDecoder,
+    frame: string
+  ): AnimatedQRDecodeState {
     try {
       // Receive the part (URDecoder handles duplicate detection)
       decoder.receivePart(frame.toLowerCase());
@@ -306,7 +313,9 @@ export class AnimatedQRService {
       // Convert back to string
       const textDecoder = new TextDecoder();
       const data = textDecoder.decode(
-        decodedBytes instanceof Uint8Array ? decodedBytes : new Uint8Array(decodedBytes)
+        decodedBytes instanceof Uint8Array
+          ? decodedBytes
+          : new Uint8Array(decodedBytes)
       );
 
       return data;

@@ -27,7 +27,8 @@ export const useExperimentalStore = create<ExperimentalState>()(
       messagingEnabled: false,
 
       setSwapEnabled: (enabled: boolean) => set({ swapEnabled: enabled }),
-      setMessagingEnabled: (enabled: boolean) => set({ messagingEnabled: enabled }),
+      setMessagingEnabled: (enabled: boolean) =>
+        set({ messagingEnabled: enabled }),
     }),
     {
       name: 'experimental-features',
@@ -37,5 +38,7 @@ export const useExperimentalStore = create<ExperimentalState>()(
 );
 
 // Convenience hooks for individual features
-export const useIsSwapEnabled = () => useExperimentalStore((state) => state.swapEnabled);
-export const useIsMessagingEnabled = () => useExperimentalStore((state) => state.messagingEnabled);
+export const useIsSwapEnabled = () =>
+  useExperimentalStore((state) => state.swapEnabled);
+export const useIsMessagingEnabled = () =>
+  useExperimentalStore((state) => state.messagingEnabled);

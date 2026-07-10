@@ -7,9 +7,8 @@
 import type { StorageAdapter } from '../types';
 
 // Check if chrome.storage is available
-const hasChromeStorage = typeof chrome !== 'undefined' &&
-  chrome.storage &&
-  chrome.storage.local;
+const hasChromeStorage =
+  typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local;
 
 export class ExtensionStorageAdapter implements StorageAdapter {
   async getItem(key: string): Promise<string | null> {

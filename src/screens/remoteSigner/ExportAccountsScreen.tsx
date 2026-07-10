@@ -23,7 +23,10 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
-import { useRemoteSignerStore, useSignerConfig } from '@/store/remoteSignerStore';
+import {
+  useRemoteSignerStore,
+  useSignerConfig,
+} from '@/store/remoteSignerStore';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { AccountType, AccountMetadata } from '@/types/wallet';
 import { formatAddress } from '@/utils/address';
@@ -84,7 +87,9 @@ export default function ExportAccountsScreen() {
   };
 
   const selectAll = () => {
-    setSelectedAccountIds(new Set(signableAccounts.map((a: AccountMetadata) => a.id)));
+    setSelectedAccountIds(
+      new Set(signableAccounts.map((a: AccountMetadata) => a.id))
+    );
   };
 
   const selectNone = () => {
@@ -202,13 +207,17 @@ export default function ExportAccountsScreen() {
         <View style={styles.accountSection}>
           <View style={styles.accountHeader}>
             <Text style={styles.sectionTitle}>
-              Select Accounts ({selectedAccountIds.size}/{signableAccounts.length})
+              Select Accounts ({selectedAccountIds.size}/
+              {signableAccounts.length})
             </Text>
             <View style={styles.selectButtons}>
               <TouchableOpacity onPress={selectAll} style={styles.selectButton}>
                 <Text style={styles.selectButtonText}>All</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={selectNone} style={styles.selectButton}>
+              <TouchableOpacity
+                onPress={selectNone}
+                style={styles.selectButton}
+              >
                 <Text style={styles.selectButtonText}>None</Text>
               </TouchableOpacity>
             </View>
@@ -219,7 +228,8 @@ export default function ExportAccountsScreen() {
               key={account.id}
               style={[
                 styles.accountItem,
-                selectedAccountIds.has(account.id) && styles.accountItemSelected,
+                selectedAccountIds.has(account.id) &&
+                  styles.accountItemSelected,
               ]}
               onPress={() => toggleAccount(account.id)}
             >
@@ -239,7 +249,9 @@ export default function ExportAccountsScreen() {
                 )}
               </View>
               <View style={styles.accountInfo}>
-                <Text style={styles.accountName}>{account.label || formatAddress(account.address)}</Text>
+                <Text style={styles.accountName}>
+                  {account.label || formatAddress(account.address)}
+                </Text>
                 <Text style={styles.accountAddress}>
                   {formatAddress(account.address)}
                 </Text>
@@ -261,8 +273,8 @@ export default function ExportAccountsScreen() {
               />
             </View>
             <Text style={styles.qrHint}>
-              Open the Voi Wallet app on your online device and scan this QR code
-              to import these accounts.
+              Open the Voi Wallet app on your online device and scan this QR
+              code to import these accounts.
             </Text>
           </View>
         )}

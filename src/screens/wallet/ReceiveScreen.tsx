@@ -120,7 +120,9 @@ export default function ReceiveScreen() {
     <NFTBackground>
       <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
-          title={contextAssetName ? `Receive ${contextAssetName}` : 'Receive VOI'}
+          title={
+            contextAssetName ? `Receive ${contextAssetName}` : 'Receive VOI'
+          }
           onAccountSelectorPress={handleAccountSelectorPress}
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
@@ -134,10 +136,17 @@ export default function ReceiveScreen() {
         >
           {accountBalance && (
             <GlassCard variant="light" style={styles.balanceContainer}>
-              <Text style={[styles.balanceLabel, { color: theme.colors.textSecondary }]}>
+              <Text
+                style={[
+                  styles.balanceLabel,
+                  { color: theme.colors.textSecondary },
+                ]}
+              >
                 Current Balance
               </Text>
-              <Text style={[styles.balanceAmount, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.balanceAmount, { color: theme.colors.text }]}
+              >
                 {formatBalance(accountBalance.amount)} VOI
               </Text>
             </GlassCard>
@@ -155,7 +164,9 @@ export default function ReceiveScreen() {
               </GlassCard>
 
               <View style={styles.addressContainer}>
-                <Text style={[styles.addressLabel, { color: theme.colors.text }]}>
+                <Text
+                  style={[styles.addressLabel, { color: theme.colors.text }]}
+                >
                   Your Address
                 </Text>
                 <GlassCard
@@ -167,8 +178,17 @@ export default function ReceiveScreen() {
                     {activeAccount.address}
                   </Text>
                   <View style={styles.tapToCopyContainer}>
-                    <Ionicons name="copy-outline" size={14} color={theme.colors.primary} />
-                    <Text style={[styles.tapToCopy, { color: theme.colors.primary }]}>
+                    <Ionicons
+                      name="copy-outline"
+                      size={14}
+                      color={theme.colors.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.tapToCopy,
+                        { color: theme.colors.primary },
+                      ]}
+                    >
                       Tap to copy
                     </Text>
                   </View>
@@ -282,9 +302,10 @@ const createStyles = (theme: Theme) =>
       fontSize: theme.typography.caption.fontSize,
       marginBottom: theme.spacing.xs,
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.8)'
-        : 'rgba(255, 255, 255, 0.9)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.8)'
+          : 'rgba(255, 255, 255, 0.9)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 10,
     },
@@ -308,9 +329,10 @@ const createStyles = (theme: Theme) =>
       marginBottom: theme.spacing.sm,
       textAlign: 'center',
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.8)'
-        : 'rgba(255, 255, 255, 0.9)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.8)'
+          : 'rgba(255, 255, 255, 0.9)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 10,
     },

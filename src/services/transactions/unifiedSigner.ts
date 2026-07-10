@@ -5,7 +5,10 @@ import {
   UnsignedTransaction,
   UnsignedTransactionGroup,
 } from '@/services/transactions';
-import { WalletConnectService, WalletTransaction } from '@/services/walletconnect';
+import {
+  WalletConnectService,
+  WalletTransaction,
+} from '@/services/walletconnect';
 import {
   WalletAccount,
   AccountType,
@@ -40,7 +43,11 @@ export interface UnifiedSigningCallbacks {
   onSigningStart?: () => void;
   onLedgerPrompt?: (ctx: { index: number; total: number }) => void;
   onLedgerSigned?: (ctx: { index: number; total: number }) => void;
-  onLedgerRejected?: (ctx: { index: number; total: number; error: Error }) => void;
+  onLedgerRejected?: (ctx: {
+    index: number;
+    total: number;
+    error: Error;
+  }) => void;
 
   // Network phase
   onNetworkSubmit?: () => void;
@@ -208,10 +215,13 @@ export class UnifiedTransactionSigner {
 
       callbacks?.onComplete?.(result);
       return result;
-
     } catch (error) {
-      const errorObj = error instanceof Error ? error : new Error(String(error));
-      const failResult: UnifiedSigningResult = { success: false, error: errorObj };
+      const errorObj =
+        error instanceof Error ? error : new Error(String(error));
+      const failResult: UnifiedSigningResult = {
+        success: false,
+        error: errorObj,
+      };
 
       callbacks?.onError?.(errorObj);
       callbacks?.onComplete?.(failResult);
@@ -251,7 +261,6 @@ export class UnifiedTransactionSigner {
         transactionId: txId,
         confirmed,
       };
-
     } catch (error) {
       throw error;
     }
@@ -274,22 +283,23 @@ export class UnifiedTransactionSigner {
 
       if (request.type === 'rekey_reverse') {
         // Reverse rekey - return authority to original account
-        ({ txId, confirmed } = await TransactionService.sendRekeyReverseTransaction(
-          {
-            fromAddress: request.rekeyParams.fromAddress,
-            note: request.rekeyParams.note,
-            networkId: request.rekeyParams.networkId || request.networkId,
-          },
-          { address: request.account.address },
-          request.pin,
-          {
-            onLedgerPrompt: callbacks?.onLedgerPrompt,
-            onLedgerSigned: callbacks?.onLedgerSigned,
-            onLedgerRejected: callbacks?.onLedgerRejected,
-            onNetworkSubmit: callbacks?.onNetworkSubmit,
-            onNetworkConfirmed: callbacks?.onNetworkConfirmed,
-          }
-        ));
+        ({ txId, confirmed } =
+          await TransactionService.sendRekeyReverseTransaction(
+            {
+              fromAddress: request.rekeyParams.fromAddress,
+              note: request.rekeyParams.note,
+              networkId: request.rekeyParams.networkId || request.networkId,
+            },
+            { address: request.account.address },
+            request.pin,
+            {
+              onLedgerPrompt: callbacks?.onLedgerPrompt,
+              onLedgerSigned: callbacks?.onLedgerSigned,
+              onLedgerRejected: callbacks?.onLedgerRejected,
+              onNetworkSubmit: callbacks?.onNetworkSubmit,
+              onNetworkConfirmed: callbacks?.onNetworkConfirmed,
+            }
+          ));
       } else {
         // Standard rekey to another account
         if (!request.rekeyParams.rekeyToAddress) {
@@ -320,7 +330,6 @@ export class UnifiedTransactionSigner {
         transactionId: txId,
         confirmed,
       };
-
     } catch (error) {
       throw error;
     }
@@ -348,7 +357,8 @@ export class UnifiedTransactionSigner {
       // Use pre-decoded transactions if available to avoid double-parsing
       const useDecodedCache =
         request.walletConnectParams.decodedTransactions &&
-        request.walletConnectParams.decodedTransactions.length === request.walletConnectParams.transactions.length;
+        request.walletConnectParams.decodedTransactions.length ===
+          request.walletConnectParams.transactions.length;
 
       // Detect if this is a Ledger account - Ledger requires sequential signing due to hardware constraints
       const isLedgerAccount = request.account.type === AccountType.LEDGER;
@@ -357,7 +367,11 @@ export class UnifiedTransactionSigner {
       // For standard accounts: sign in parallel for better performance
       if (isLedgerAccount) {
         // Sequential signing for Ledger
-        for (let i = 0; i < request.walletConnectParams.transactions.length; i++) {
+        for (
+          let i = 0;
+          i < request.walletConnectParams.transactions.length;
+          i++
+        ) {
           callbacks?.onLedgerPrompt?.({ index: i + 1, total });
 
           // Sign individual transaction
@@ -370,7 +384,10 @@ export class UnifiedTransactionSigner {
             // If it fails, the transaction is already signed (e.g., logic sig) - pass through
             let txn: algosdk.Transaction;
             try {
-              if (useDecodedCache && request.walletConnectParams.decodedTransactions?.[i]) {
+              if (
+                useDecodedCache &&
+                request.walletConnectParams.decodedTransactions?.[i]
+              ) {
                 txn = request.walletConnectParams.decodedTransactions[i];
               } else {
                 txn = algosdk.decodeUnsignedTransaction(txnBytes);
@@ -417,11 +434,15 @@ export class UnifiedTransactionSigner {
 
             signedTxns.push(Buffer.from(signedTxnBlob).toString('base64'));
             callbacks?.onLedgerSigned?.({ index: i + 1, total });
-
           } catch (error) {
-            const errorObj = error instanceof Error ? error : new Error(String(error));
+            const errorObj =
+              error instanceof Error ? error : new Error(String(error));
             const sanitizedError = this.sanitizeBLEError(error);
-            callbacks?.onLedgerRejected?.({ index: i + 1, total, error: sanitizedError });
+            callbacks?.onLedgerRejected?.({
+              index: i + 1,
+              total,
+              error: sanitizedError,
+            });
             throw sanitizedError;
           }
         }
@@ -429,62 +450,72 @@ export class UnifiedTransactionSigner {
         // Parallel signing for standard accounts (much faster!)
         callbacks?.onLedgerPrompt?.({ index: 1, total });
 
-        const signingPromises = request.walletConnectParams!.transactions.map(async (wtxn, i) => {
-          try {
-            const txnBytes = Buffer.from(wtxn.txn, 'base64');
-
-            // Try to decode as unsigned transaction
-            // If it fails, the transaction is already signed (e.g., logic sig) - pass through
-            let txn: algosdk.Transaction;
+        const signingPromises = request.walletConnectParams!.transactions.map(
+          async (wtxn, i) => {
             try {
-              if (useDecodedCache && request.walletConnectParams!.decodedTransactions?.[i]) {
-                txn = request.walletConnectParams!.decodedTransactions[i];
-              } else {
-                txn = algosdk.decodeUnsignedTransaction(txnBytes);
+              const txnBytes = Buffer.from(wtxn.txn, 'base64');
+
+              // Try to decode as unsigned transaction
+              // If it fails, the transaction is already signed (e.g., logic sig) - pass through
+              let txn: algosdk.Transaction;
+              try {
+                if (
+                  useDecodedCache &&
+                  request.walletConnectParams!.decodedTransactions?.[i]
+                ) {
+                  txn = request.walletConnectParams!.decodedTransactions[i];
+                } else {
+                  txn = algosdk.decodeUnsignedTransaction(txnBytes);
+                }
+              } catch (decodeError) {
+                // Transaction is already signed (logic sig, etc.) - pass through as-is
+                return wtxn.txn;
               }
-            } catch (decodeError) {
-              // Transaction is already signed (logic sig, etc.) - pass through as-is
-              return wtxn.txn;
+
+              // Verify we have a valid transaction with sender info
+              if (!txn || !txn.sender || !txn.sender.publicKey) {
+                // Invalid or already-signed transaction - pass through
+                return wtxn.txn;
+              }
+
+              // Get the transaction sender address
+              const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
+
+              // Determine signer address
+              let signerAddress = request.walletConnectParams!.accountAddress;
+              if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
+                signerAddress = wtxn.signers[0];
+              }
+              if (wtxn.authAddr) {
+                signerAddress = wtxn.authAddr;
+              }
+
+              // Skip signing if the transaction sender doesn't match our account
+              // This handles cases where the transaction is for a different signer
+              if (txnSender !== signerAddress) {
+                return wtxn.txn;
+              }
+
+              const signedTxnBlob = await SecureKeyManager.signTransaction(
+                txn,
+                signerAddress,
+                request.pin
+              );
+
+              return Buffer.from(signedTxnBlob).toString('base64');
+            } catch (error) {
+              const errorObj =
+                error instanceof Error ? error : new Error(String(error));
+              const sanitizedError = this.sanitizeBLEError(error);
+              callbacks?.onLedgerRejected?.({
+                index: i + 1,
+                total,
+                error: sanitizedError,
+              });
+              throw sanitizedError;
             }
-
-            // Verify we have a valid transaction with sender info
-            if (!txn || !txn.sender || !txn.sender.publicKey) {
-              // Invalid or already-signed transaction - pass through
-              return wtxn.txn;
-            }
-
-            // Get the transaction sender address
-            const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
-
-            // Determine signer address
-            let signerAddress = request.walletConnectParams!.accountAddress;
-            if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
-              signerAddress = wtxn.signers[0];
-            }
-            if (wtxn.authAddr) {
-              signerAddress = wtxn.authAddr;
-            }
-
-            // Skip signing if the transaction sender doesn't match our account
-            // This handles cases where the transaction is for a different signer
-            if (txnSender !== signerAddress) {
-              return wtxn.txn;
-            }
-
-            const signedTxnBlob = await SecureKeyManager.signTransaction(
-              txn,
-              signerAddress,
-              request.pin
-            );
-
-            return Buffer.from(signedTxnBlob).toString('base64');
-          } catch (error) {
-            const errorObj = error instanceof Error ? error : new Error(String(error));
-            const sanitizedError = this.sanitizeBLEError(error);
-            callbacks?.onLedgerRejected?.({ index: i + 1, total, error: sanitizedError });
-            throw sanitizedError;
           }
-        });
+        );
 
         // Sign all transactions in parallel
         const results = await Promise.all(signingPromises);
@@ -497,7 +528,9 @@ export class UnifiedTransactionSigner {
 
       // Clear private key cache for security (cache is inside AccountSecureStorage)
       // Note: Cache auto-expires after 60s, but we clear immediately for security
-      const { AccountSecureStorage } = await import('@/services/secure/AccountSecureStorage');
+      const { AccountSecureStorage } = await import(
+        '@/services/secure/AccountSecureStorage'
+      );
       AccountSecureStorage.clearPrivateKeyCache();
 
       // All transactions signed successfully
@@ -507,10 +540,11 @@ export class UnifiedTransactionSigner {
         success: true,
         signedTransactions: signedTxns,
       };
-
     } catch (error) {
       // Clear private key cache on error too for security
-      const { AccountSecureStorage } = await import('@/services/secure/AccountSecureStorage');
+      const { AccountSecureStorage } = await import(
+        '@/services/secure/AccountSecureStorage'
+      );
       AccountSecureStorage.clearPrivateKeyCache();
       throw error;
     }
@@ -532,7 +566,7 @@ export class UnifiedTransactionSigner {
     if (request.account.type === AccountType.REMOTE_SIGNER) {
       throw new RemoteSignerRequiredError(
         'This account uses remote signing via QR codes. ' +
-        'Please use the remote signer flow instead of direct signing.'
+          'Please use the remote signer flow instead of direct signing.'
       );
     }
 
@@ -548,7 +582,9 @@ export class UnifiedTransactionSigner {
       case 'arc200_transfer':
       case 'arc72_transfer':
         if (!request.transferParams) {
-          throw new Error('Transfer parameters required for transfer transactions');
+          throw new Error(
+            'Transfer parameters required for transfer transactions'
+          );
         }
         break;
 
@@ -571,13 +607,17 @@ export class UnifiedTransactionSigner {
 
       case 'keyreg':
         if (!request.keyregParams) {
-          throw new Error('Keyreg parameters required for key registration transactions');
+          throw new Error(
+            'Keyreg parameters required for key registration transactions'
+          );
         }
         break;
 
       case 'appl':
         if (!request.applParams) {
-          throw new Error('Application parameters required for app call transactions');
+          throw new Error(
+            'Application parameters required for app call transactions'
+          );
         }
         if (!request.applParams.appId) {
           throw new Error('Application ID required for app call transactions');
@@ -601,7 +641,9 @@ export class UnifiedTransactionSigner {
         if (!request.transferParams) {
           throw new Error('Transfer parameters required');
         }
-        return await TransactionService.estimateTransactionCost(request.transferParams);
+        return await TransactionService.estimateTransactionCost(
+          request.transferParams
+        );
 
       case 'rekey':
       case 'rekey_reverse':
@@ -615,19 +657,24 @@ export class UnifiedTransactionSigner {
           throw new Error('Batch parameters required');
         }
         // Estimate based on number of transactions
-        const transactionCount = request.walletConnectParams.transactions.length;
+        const transactionCount =
+          request.walletConnectParams.transactions.length;
         const batchFee = 1000 * transactionCount; // Base fee per transaction
         return { fee: batchFee, total: batchFee };
 
       default:
-        throw new Error(`Cost estimation not supported for transaction type: ${request.type}`);
+        throw new Error(
+          `Cost estimation not supported for transaction type: ${request.type}`
+        );
     }
   }
 
   /**
    * Validate transaction before signing (without PIN)
    */
-  async validateTransaction(request: UnifiedTransactionRequest): Promise<string[]> {
+  async validateTransaction(
+    request: UnifiedTransactionRequest
+  ): Promise<string[]> {
     const errors: string[] = [];
 
     try {
@@ -640,10 +687,11 @@ export class UnifiedTransactionSigner {
         case 'arc200_transfer':
         case 'arc72_transfer':
           if (request.transferParams) {
-            const validationErrors = await TransactionService.validateTransaction(
-              request.transferParams,
-              request.account
-            );
+            const validationErrors =
+              await TransactionService.validateTransaction(
+                request.transferParams,
+                request.account
+              );
             errors.push(...validationErrors);
           }
           break;
@@ -652,7 +700,10 @@ export class UnifiedTransactionSigner {
           if (request.rekeyParams && request.rekeyParams.rekeyToAddress) {
             // We would need to pass wallet instance for full validation
             // For now, just basic validation
-            if (request.rekeyParams.fromAddress === request.rekeyParams.rekeyToAddress) {
+            if (
+              request.rekeyParams.fromAddress ===
+              request.rekeyParams.rekeyToAddress
+            ) {
               errors.push('Cannot rekey an account to itself');
             }
           }
@@ -671,7 +722,6 @@ export class UnifiedTransactionSigner {
           }
           break;
       }
-
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -847,7 +897,9 @@ export class UnifiedTransactionSigner {
     }
 
     if (error instanceof LedgerAppNotOpenError) {
-      return new LedgerAppNotOpenError('Please open the Algorand app on your Ledger device.');
+      return new LedgerAppNotOpenError(
+        'Please open the Algorand app on your Ledger device.'
+      );
     }
 
     if (error instanceof LedgerUserRejectedError) {

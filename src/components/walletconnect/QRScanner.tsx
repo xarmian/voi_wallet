@@ -39,10 +39,11 @@ const showAlert = (
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find(b => b.style !== 'cancel') || buttons[0];
+        const confirmButton =
+          buttons.find((b) => b.style !== 'cancel') || buttons[0];
         confirmButton?.onPress?.();
       } else {
-        const cancelButton = buttons.find(b => b.style === 'cancel');
+        const cancelButton = buttons.find((b) => b.style === 'cancel');
         cancelButton?.onPress?.();
       }
     } else {
@@ -83,15 +84,18 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   }, []);
 
   // Scan QR code from image data using jsQR
-  const scanQRFromImageData = useCallback((imageData: ImageData): string | null => {
-    try {
-      const code = jsQR(imageData.data, imageData.width, imageData.height);
-      return code?.data || null;
-    } catch (e) {
-      console.error('jsQR error:', e);
-      return null;
-    }
-  }, []);
+  const scanQRFromImageData = useCallback(
+    (imageData: ImageData): string | null => {
+      try {
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        return code?.data || null;
+      } catch (e) {
+        console.error('jsQR error:', e);
+        return null;
+      }
+    },
+    []
+  );
 
   // Web: Handle screen capture
   const handleScreenCapture = async () => {
@@ -112,7 +116,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       await video.play();
 
       // Wait a moment for video to be ready
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Create canvas and draw video frame
       const canvas = document.createElement('canvas');
@@ -158,7 +162,9 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   };
 
   // Web: Handle file upload
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0];
     if (!file || isProcessing) return;
 
@@ -182,7 +188,12 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
             }
 
             ctx.drawImage(img, 0, 0);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(
+              0,
+              0,
+              canvas.width,
+              canvas.height
+            );
             const data = scanQRFromImageData(imageData);
             resolve(data);
           };
@@ -317,20 +328,16 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         errorMessage = error.message;
       }
 
-      showAlert(
-        'QR Code Error',
-        errorMessage,
-        [
-          {
-            text: 'Try Again',
-            onPress: () => {
-              setScanned(false);
-              setIsProcessing(false);
-            },
+      showAlert('QR Code Error', errorMessage, [
+        {
+          text: 'Try Again',
+          onPress: () => {
+            setScanned(false);
+            setIsProcessing(false);
           },
-          { text: 'Cancel', style: 'cancel', onPress: onClose },
-        ]
-      );
+        },
+        { text: 'Cancel', style: 'cancel', onPress: onClose },
+      ]);
     }
   };
 
@@ -363,7 +370,12 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   const handleArc0090Uri = async (uri: string) => {
     try {
       const uriType = getArc0090UriType(uri);
-      console.log('[QRScanner] handleArc0090Uri - uriType:', uriType, 'uri:', uri);
+      console.log(
+        '[QRScanner] handleArc0090Uri - uriType:',
+        uriType,
+        'uri:',
+        uri
+      );
 
       const deepLinkService = DeepLinkService.getInstance();
       const handled = await deepLinkService.testDeepLink(uri);
@@ -374,9 +386,13 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         // has already navigated to a new screen using StackActions.replace.
         // Calling onSuccess() would trigger handleSuccess in QRScannerScreen
         // which has a setTimeout that calls goBack(), dismissing the new screen.
-        console.log('[QRScanner] handleArc0090Uri - navigation handled by deep link service');
+        console.log(
+          '[QRScanner] handleArc0090Uri - navigation handled by deep link service'
+        );
       } else {
-        console.log('[QRScanner] handleArc0090Uri - not handled, resetting scanner');
+        console.log(
+          '[QRScanner] handleArc0090Uri - not handled, resetting scanner'
+        );
         // Reset scanner state so user can try again
         setScanned(false);
         setIsProcessing(false);
@@ -505,25 +521,22 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       // Process the pasted URI through the same logic as scanned QR codes
       await handleBarCodeScanned({ type: 'qr', data: rawValue });
     } catch (error) {
-      let errorMessage = 'Failed to process clipboard content. Please try again.';
+      let errorMessage =
+        'Failed to process clipboard content. Please try again.';
       if (error instanceof Error) {
         errorMessage = error.message;
       }
 
-      showAlert(
-        'Paste Error',
-        errorMessage,
-        [
-          {
-            text: 'Try Again',
-            onPress: () => {
-              setScanned(false);
-              setIsProcessing(false);
-            },
+      showAlert('Paste Error', errorMessage, [
+        {
+          text: 'Try Again',
+          onPress: () => {
+            setScanned(false);
+            setIsProcessing(false);
           },
-          { text: 'Cancel', style: 'cancel', onPress: onClose },
-        ]
-      );
+        },
+        { text: 'Cancel', style: 'cancel', onPress: onClose },
+      ]);
     }
   };
 
@@ -567,9 +580,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
           <Ionicons
             name="clipboard-outline"
             size={20}
-            color={
-              scanned || isProcessing ? theme.colors.textMuted : '#FFFFFF'
-            }
+            color={scanned || isProcessing ? theme.colors.textMuted : '#FFFFFF'}
           />
           <Text
             style={[
@@ -594,7 +605,9 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
 
   // Web: Render web-specific scanner UI
   const renderWebScanner = () => (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <View
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+    >
       {/* Hidden file input for image upload */}
       {Platform.OS === 'web' && (
         <input
@@ -610,17 +623,27 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         <TouchableOpacity style={styles.webCloseButton} onPress={onClose}>
           <Ionicons name="close" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.webTitle, { color: theme.colors.text }]}>Scan QR Code</Text>
+        <Text style={[styles.webTitle, { color: theme.colors.text }]}>
+          Scan QR Code
+        </Text>
         <View style={styles.placeholder} />
       </View>
 
       <View style={styles.webContent}>
-        <View style={[styles.webIconContainer, { backgroundColor: theme.colors.surface }]}>
+        <View
+          style={[
+            styles.webIconContainer,
+            { backgroundColor: theme.colors.surface },
+          ]}
+        >
           <Ionicons name="qr-code" size={80} color={theme.colors.primary} />
         </View>
 
-        <Text style={[styles.webDescription, { color: theme.colors.textSecondary }]}>
-          Scan a QR code from your screen, upload an image, or paste a URI from clipboard
+        <Text
+          style={[styles.webDescription, { color: theme.colors.textSecondary }]}
+        >
+          Scan a QR code from your screen, upload an image, or paste a URI from
+          clipboard
         </Text>
 
         {/* Screen Capture Button */}
@@ -655,7 +678,12 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
           disabled={isProcessing}
         >
           <Ionicons name="image" size={24} color={theme.colors.primary} />
-          <Text style={[styles.webButtonSecondaryText, { color: theme.colors.primary }]}>
+          <Text
+            style={[
+              styles.webButtonSecondaryText,
+              { color: theme.colors.primary },
+            ]}
+          >
             Upload QR Code Image
           </Text>
         </TouchableOpacity>
@@ -672,7 +700,12 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
           disabled={isProcessing}
         >
           <Ionicons name="clipboard" size={24} color={theme.colors.primary} />
-          <Text style={[styles.webButtonSecondaryText, { color: theme.colors.primary }]}>
+          <Text
+            style={[
+              styles.webButtonSecondaryText,
+              { color: theme.colors.primary },
+            ]}
+          >
             Paste URI from Clipboard
           </Text>
         </TouchableOpacity>
@@ -680,13 +713,23 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         {isProcessing && (
           <View style={styles.webProcessingContainer}>
             <ActivityIndicator color={theme.colors.primary} size="large" />
-            <Text style={[styles.webProcessingText, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.webProcessingText,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               Processing...
             </Text>
           </View>
         )}
 
-        <Text style={[styles.webSupportedFormats, { color: theme.colors.textMuted }]}>
+        <Text
+          style={[
+            styles.webSupportedFormats,
+            { color: theme.colors.textMuted },
+          ]}
+        >
           Supports WalletConnect, Voi/Algorand payment requests, and addresses
         </Text>
       </View>

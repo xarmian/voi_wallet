@@ -19,7 +19,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme } from '../../constants/themes';
-import { SwapToken, UnifiedRoute, UnifiedRoutePool, UnifiedRouteHop } from '../../services/swap/types';
+import {
+  SwapToken,
+  UnifiedRoute,
+  UnifiedRoutePool,
+  UnifiedRouteHop,
+} from '../../services/swap/types';
 import { SwapService } from '../../services/swap';
 import { NetworkId } from '../../types/network';
 import { useNetworkStore } from '../../store/networkStore';
@@ -55,12 +60,14 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
 }) => {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const currentNetwork = useNetworkStore(state => state.currentNetwork);
+  const currentNetwork = useNetworkStore((state) => state.currentNetwork);
 
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [slideAnim] = useState(new Animated.Value(0));
-  const [intermediateTokens, setIntermediateTokens] = useState<Map<string, SwapToken>>(new Map());
+  const [intermediateTokens, setIntermediateTokens] = useState<
+    Map<string, SwapToken>
+  >(new Map());
 
   useEffect(() => {
     if (visible) {
@@ -100,7 +107,11 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
 
       // Fetch intermediate tokens for multi-hop routes
       // In UnifiedRoute, hops may have inputToken/outputToken as SwapToken | null
-      if (route.type === 'multi-hop' && route.hops && Array.isArray(route.hops)) {
+      if (
+        route.type === 'multi-hop' &&
+        route.hops &&
+        Array.isArray(route.hops)
+      ) {
         // Collect intermediate tokens from hops that have them
         for (const hop of route.hops) {
           if (hop.inputToken) {
@@ -115,10 +126,16 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       setIntermediateTokens(tokenMap);
 
       // Handle direct routes with pools array
-      if (route.type === 'direct' && route.pools && Array.isArray(route.pools) && route.pools.length > 0) {
+      if (
+        route.type === 'direct' &&
+        route.pools &&
+        Array.isArray(route.pools) &&
+        route.pools.length > 0
+      ) {
         steps = route.pools.map((pool, index) => {
           const tokenIn = index === 0 ? inputToken : undefined;
-          const tokenOut = index === route.pools!.length - 1 ? outputToken : undefined;
+          const tokenOut =
+            index === route.pools!.length - 1 ? outputToken : undefined;
 
           return {
             pool,
@@ -131,20 +148,31 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       }
 
       // Handle multi-hop routes with hops array
-      if (route.type === 'multi-hop' && route.hops && Array.isArray(route.hops) && route.hops.length > 0) {
+      if (
+        route.type === 'multi-hop' &&
+        route.hops &&
+        Array.isArray(route.hops) &&
+        route.hops.length > 0
+      ) {
         steps = route.hops.flatMap((hop, hopIndex) => {
-          if (!hop.pools || !Array.isArray(hop.pools) || hop.pools.length === 0) {
-            console.warn(`RouteDetailModal: Hop ${hopIndex} has no pools or invalid pools array`);
+          if (
+            !hop.pools ||
+            !Array.isArray(hop.pools) ||
+            hop.pools.length === 0
+          ) {
+            console.warn(
+              `RouteDetailModal: Hop ${hopIndex} has no pools or invalid pools array`
+            );
             return [];
           }
-            
+
           // Get tokens for this hop from the hop's inputToken/outputToken (SwapToken | null)
-          const hopInputToken = hopIndex === 0
-            ? inputToken
-            : (hop.inputToken || undefined);
-          const hopOutputToken = hopIndex === route.hops!.length - 1
-            ? outputToken
-            : (hop.outputToken || undefined);
+          const hopInputToken =
+            hopIndex === 0 ? inputToken : hop.inputToken || undefined;
+          const hopOutputToken =
+            hopIndex === route.hops!.length - 1
+              ? outputToken
+              : hop.outputToken || undefined;
 
           return hop.pools.map((pool, poolIndex) => {
             // First pool of hop uses hop's inputToken
@@ -185,7 +213,10 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       }
 
       if (steps.length === 0) {
-        console.warn('RouteDetailModal: No route steps generated. Route structure:', route);
+        console.warn(
+          'RouteDetailModal: No route steps generated. Route structure:',
+          route
+        );
       } else {
         console.log(`RouteDetailModal: Generated ${steps.length} route steps`);
       }
@@ -214,7 +245,10 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
     }
   };
 
-  const renderTokenIcon = (token: SwapToken | undefined, fallbackSymbol: string) => {
+  const renderTokenIcon = (
+    token: SwapToken | undefined,
+    fallbackSymbol: string
+  ) => {
     if (!token) {
       return (
         <View style={styles.tokenIcon}>
@@ -235,19 +269,16 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
           />
         );
       } else {
-        return (
-          <Image
-            source={imageSource.source}
-            style={styles.tokenIcon}
-          />
-        );
+        return <Image source={imageSource.source} style={styles.tokenIcon} />;
       }
     }
 
     // Fallback to placeholder
     return (
       <View style={styles.tokenIcon}>
-        <Text style={styles.tokenIconText}>{token.symbol?.[0] || fallbackSymbol[0]}</Text>
+        <Text style={styles.tokenIconText}>
+          {token.symbol?.[0] || fallbackSymbol[0]}
+        </Text>
       </View>
     );
   };
@@ -267,10 +298,7 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       <View style={styles.overlay}>
         <Pressable style={styles.backdrop} onPress={onClose} />
         <Animated.View
-          style={[
-            styles.modalContainer,
-            { transform: [{ translateY }] },
-          ]}
+          style={[styles.modalContainer, { transform: [{ translateY }] }]}
         >
           {/* Header */}
           <View style={styles.header}>
@@ -291,12 +319,16 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
               {loading ? (
                 <View style={styles.loadingContainer}>
                   <ActivityIndicator size="large" color={themeColors.primary} />
-                  <Text style={styles.loadingText}>Loading route details...</Text>
+                  <Text style={styles.loadingText}>
+                    Loading route details...
+                  </Text>
                 </View>
               ) : routeSteps.length === 0 ? (
                 <View style={styles.loadingContainer}>
                   <Text style={styles.loadingText}>No route steps found</Text>
-                  <Text style={styles.loadingText}>Route: {route ? JSON.stringify(route, null, 2) : 'null'}</Text>
+                  <Text style={styles.loadingText}>
+                    Route: {route ? JSON.stringify(route, null, 2) : 'null'}
+                  </Text>
                 </View>
               ) : (
                 <>
@@ -304,7 +336,9 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                   <View style={styles.summaryContainer}>
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>Total Pools</Text>
-                      <Text style={styles.summaryValue}>{routeSteps.length}</Text>
+                      <Text style={styles.summaryValue}>
+                        {routeSteps.length}
+                      </Text>
                     </View>
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>Route Type</Text>
@@ -315,7 +349,9 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                     {route?.hops && (
                       <View style={styles.summaryRow}>
                         <Text style={styles.summaryLabel}>Hops</Text>
-                        <Text style={styles.summaryValue}>{route.hops.length}</Text>
+                        <Text style={styles.summaryValue}>
+                          {route.hops.length}
+                        </Text>
                       </View>
                     )}
                   </View>
@@ -327,9 +363,13 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                         {/* Step Number */}
                         <View style={styles.stepHeader}>
                           <View style={styles.stepNumber}>
-                            <Text style={styles.stepNumberText}>{index + 1}</Text>
+                            <Text style={styles.stepNumberText}>
+                              {index + 1}
+                            </Text>
                           </View>
-                          <Text style={styles.dexName}>{step.pool.dex.toUpperCase()}</Text>
+                          <Text style={styles.dexName}>
+                            {step.pool.dex.toUpperCase()}
+                          </Text>
                         </View>
 
                         {/* Token Pair */}
@@ -341,7 +381,10 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                                 {step.tokenIn?.symbol || inputToken.symbol}
                               </Text>
                               <Text style={styles.tokenAmount}>
-                                {formatAmount(step.pool.inputAmount, step.tokenIn?.decimals || inputToken.decimals)}
+                                {formatAmount(
+                                  step.pool.inputAmount,
+                                  step.tokenIn?.decimals || inputToken.decimals
+                                )}
                               </Text>
                             </View>
                           </View>
@@ -359,7 +402,11 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                                 {step.tokenOut?.symbol || outputToken.symbol}
                               </Text>
                               <Text style={styles.tokenAmount}>
-                                {formatAmount(step.pool.outputAmount, step.tokenOut?.decimals || outputToken.decimals)}
+                                {formatAmount(
+                                  step.pool.outputAmount,
+                                  step.tokenOut?.decimals ||
+                                    outputToken.decimals
+                                )}
                               </Text>
                             </View>
                           </View>
@@ -369,7 +416,9 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                         <View style={styles.poolInfo}>
                           <View style={styles.poolInfoRow}>
                             <Text style={styles.poolInfoLabel}>Pool ID</Text>
-                            <Text style={styles.poolInfoValue}>{step.pool.poolId}</Text>
+                            <Text style={styles.poolInfoValue}>
+                              {step.pool.poolId}
+                            </Text>
                           </View>
                         </View>
                       </View>
@@ -391,15 +440,27 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
                   <View style={styles.finalSummary}>
                     <View style={styles.finalSummaryContent}>
                       <View style={styles.finalSummaryRow}>
-                        <Text style={styles.finalSummaryLabel}>Estimated output</Text>
+                        <Text style={styles.finalSummaryLabel}>
+                          Estimated output
+                        </Text>
                         <Text style={styles.finalSummaryValue}>
-                          {formatAmount(estimatedOutput || '0', outputToken.decimals)} {outputToken.symbol}
+                          {formatAmount(
+                            estimatedOutput || '0',
+                            outputToken.decimals
+                          )}{' '}
+                          {outputToken.symbol}
                         </Text>
                       </View>
                       <View style={styles.finalSummaryRow}>
-                        <Text style={styles.finalSummaryLabel}>Minimum received</Text>
+                        <Text style={styles.finalSummaryLabel}>
+                          Minimum received
+                        </Text>
                         <Text style={styles.minimumValue}>
-                          {formatAmount(minimumOutput || '0', outputToken.decimals)} {outputToken.symbol}
+                          {formatAmount(
+                            minimumOutput || '0',
+                            outputToken.decimals
+                          )}{' '}
+                          {outputToken.symbol}
                         </Text>
                       </View>
                     </View>

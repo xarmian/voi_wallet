@@ -28,7 +28,9 @@ import { NetworkService, VoiNetworkService } from '../services/network';
 import { NetworkId } from '../types/network';
 import EnvoiService, { EnvoiNameInfo } from '../services/envoi';
 import { MimirApiService, Arc200TokenMetadata } from '../services/mimir';
-import tokenMappingService, { TokenMappingService } from '../services/token-mapping';
+import tokenMappingService, {
+  TokenMappingService,
+} from '../services/token-mapping';
 import { MultiNetworkBalanceService } from '../services/network/multi-network';
 import {
   TokenMapping,
@@ -66,11 +68,14 @@ interface AccountUIState {
     isLoadingMore: boolean;
   };
   // Pagination state for asset-specific transactions
-  assetTransactionsPagination?: Record<string, {
-    nextToken?: string;
-    hasMore: boolean;
-    isLoadingMore: boolean;
-  }>;
+  assetTransactionsPagination?: Record<
+    string,
+    {
+      nextToken?: string;
+      hasMore: boolean;
+      isLoadingMore: boolean;
+    }
+  >;
   // Multi-network balance state
   multiNetworkBalance?: MultiNetworkBalance;
   isMultiNetworkBalanceLoading: boolean;
@@ -144,7 +149,10 @@ interface WalletState {
   toggleAccountVisibility: (accountId: string) => Promise<void>;
 
   // Balance and transaction management
-  loadAccountBalance: (accountId: string, forceRefresh?: boolean) => Promise<void>;
+  loadAccountBalance: (
+    accountId: string,
+    forceRefresh?: boolean
+  ) => Promise<void>;
   loadAccountTransactions: (accountId: string) => Promise<void>;
   loadAssetTransactions: (
     accountId: string,
@@ -177,7 +185,10 @@ interface WalletState {
   setViewMode: (mode: 'single-network' | 'multi-network') => Promise<void>;
   toggleViewMode: () => Promise<void>;
   setAssetNetworkFilter: (filter: 'all' | 'voi' | 'algorand') => Promise<void>;
-  loadMultiNetworkBalance: (accountId: string, forceRefresh?: boolean) => Promise<void>;
+  loadMultiNetworkBalance: (
+    accountId: string,
+    forceRefresh?: boolean
+  ) => Promise<void>;
   loadTokenMappings: (forceRefresh?: boolean) => Promise<void>;
   refreshTokenMappings: () => Promise<void>;
 
@@ -230,7 +241,8 @@ const createInitialAccountState = (): AccountUIState => ({
 
 // Helper functions for persistent balance cache
 const BALANCE_CACHE_KEY = '@voi_wallet_balance_cache_v2'; // v2: Network-aware caching
-const MULTI_NETWORK_BALANCE_CACHE_KEY = '@voi_wallet_multi_network_balance_cache';
+const MULTI_NETWORK_BALANCE_CACHE_KEY =
+  '@voi_wallet_multi_network_balance_cache';
 
 interface PersistedBalanceData {
   balance: AccountBalance;
@@ -244,7 +256,10 @@ interface PersistedMultiNetworkBalanceData {
 }
 
 // Generate cache key for single-network balance
-const getSingleNetworkCacheKey = (accountId: string, networkId: NetworkId): string => {
+const getSingleNetworkCacheKey = (
+  accountId: string,
+  networkId: NetworkId
+): string => {
   return `${accountId}_single_${networkId}`;
 };
 
@@ -253,7 +268,9 @@ const getMultiNetworkCacheKey = (accountId: string): string => {
   return `${accountId}_multi`;
 };
 
-const persistBalanceCache = async (balanceCache: Record<string, PersistedBalanceData>) => {
+const persistBalanceCache = async (
+  balanceCache: Record<string, PersistedBalanceData>
+) => {
   try {
     // Custom JSON serialization that handles BigInt values
     const serializedData = JSON.stringify(balanceCache, (key, value) => {
@@ -268,7 +285,9 @@ const persistBalanceCache = async (balanceCache: Record<string, PersistedBalance
   }
 };
 
-const loadPersistedBalanceCache = async (): Promise<Record<string, PersistedBalanceData>> => {
+const loadPersistedBalanceCache = async (): Promise<
+  Record<string, PersistedBalanceData>
+> => {
   try {
     const cached = await AsyncStorage.getItem(BALANCE_CACHE_KEY);
     if (cached) {
@@ -332,7 +351,9 @@ const persistMultiNetworkBalanceCache = async (
   }
 };
 
-const loadPersistedMultiNetworkBalanceCache = async (): Promise<Record<string, PersistedMultiNetworkBalanceData>> => {
+const loadPersistedMultiNetworkBalanceCache = async (): Promise<
+  Record<string, PersistedMultiNetworkBalanceData>
+> => {
   try {
     const cached = await AsyncStorage.getItem(MULTI_NETWORK_BALANCE_CACHE_KEY);
     if (cached) {
@@ -344,7 +365,10 @@ const loadPersistedMultiNetworkBalanceCache = async (): Promise<Record<string, P
       });
     }
   } catch (error) {
-    console.warn('Failed to load persisted multi-network balance cache:', error);
+    console.warn(
+      'Failed to load persisted multi-network balance cache:',
+      error
+    );
   }
   return {};
 };
@@ -372,7 +396,11 @@ const persistMultiNetworkBalanceToStorage = async (
     // Persist the updated cache
     await persistMultiNetworkBalanceCache(updatedCache);
   } catch (error) {
-    console.warn('Failed to persist multi-network balance for account:', accountId, error);
+    console.warn(
+      'Failed to persist multi-network balance for account:',
+      accountId,
+      error
+    );
   }
 };
 
@@ -410,9 +438,16 @@ export const useWalletStore = create<WalletState>()(
 
         // Load persisted asset network filter
         try {
-          const persistedFilter = await AsyncStorage.getItem('@wallet-asset-network-filter');
-          if (persistedFilter && ['all', 'voi', 'algorand'].includes(persistedFilter)) {
-            set({ assetNetworkFilter: persistedFilter as 'all' | 'voi' | 'algorand' });
+          const persistedFilter = await AsyncStorage.getItem(
+            '@wallet-asset-network-filter'
+          );
+          if (
+            persistedFilter &&
+            ['all', 'voi', 'algorand'].includes(persistedFilter)
+          ) {
+            set({
+              assetNetworkFilter: persistedFilter as 'all' | 'voi' | 'algorand',
+            });
           }
         } catch (error) {
           console.warn('Failed to load persisted asset network filter:', error);
@@ -420,7 +455,8 @@ export const useWalletStore = create<WalletState>()(
 
         // Load persisted asset filter settings
         try {
-          const filterSettings = await AssetFilterStorage.loadAssetFilterSettings();
+          const filterSettings =
+            await AssetFilterStorage.loadAssetFilterSettings();
           set({
             assetSortBy: filterSettings.sortBy,
             assetSortOrder: filterSettings.sortOrder,
@@ -429,7 +465,10 @@ export const useWalletStore = create<WalletState>()(
             assetNativeTokensFirst: filterSettings.nativeTokensFirst,
           });
         } catch (error) {
-          console.warn('Failed to load persisted asset filter settings:', error);
+          console.warn(
+            'Failed to load persisted asset filter settings:',
+            error
+          );
         }
 
         const wallet = await MultiAccountWalletService.getCurrentWallet();
@@ -447,7 +486,8 @@ export const useWalletStore = create<WalletState>()(
 
           if (currentViewMode === 'multi-network') {
             // Load multi-network cached balances
-            const persistedMultiCache = await loadPersistedMultiNetworkBalanceCache();
+            const persistedMultiCache =
+              await loadPersistedMultiNetworkBalanceCache();
 
             wallet.accounts.forEach((account) => {
               const cacheKey = getMultiNetworkCacheKey(account.id);
@@ -466,11 +506,18 @@ export const useWalletStore = create<WalletState>()(
             const persistedCache = await loadPersistedBalanceCache();
 
             wallet.accounts.forEach((account) => {
-              const cacheKey = getSingleNetworkCacheKey(account.id, currentNetwork);
+              const cacheKey = getSingleNetworkCacheKey(
+                account.id,
+                currentNetwork
+              );
               const persistedData = persistedCache[cacheKey];
 
               // Verify the cached data is for the current network
-              if (persistedData && persistedData.balance && persistedData.networkId === currentNetwork) {
+              if (
+                persistedData &&
+                persistedData.balance &&
+                persistedData.networkId === currentNetwork
+              ) {
                 accountStates[account.id] = {
                   ...accountStates[account.id],
                   balance: persistedData.balance,
@@ -506,7 +553,6 @@ export const useWalletStore = create<WalletState>()(
       await initialize();
     },
 
-
     // Account management
     createAccount: async (request: CreateAccountRequest) => {
       try {
@@ -535,8 +581,16 @@ export const useWalletStore = create<WalletState>()(
         // Auto-subscribe new account to notifications if service is initialized
         if (notificationService.getDeviceId()) {
           notificationService
-            .subscribeAccount(newAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
-            .catch(err => console.warn('Failed to subscribe new account to notifications:', err));
+            .subscribeAccount(
+              newAccount.address,
+              DEFAULT_NOTIFICATION_PREFERENCES
+            )
+            .catch((err) =>
+              console.warn(
+                'Failed to subscribe new account to notifications:',
+                err
+              )
+            );
           realtimeService.addAddress(newAccount.address);
         }
 
@@ -571,8 +625,16 @@ export const useWalletStore = create<WalletState>()(
         // Auto-subscribe imported account to notifications if service is initialized
         if (notificationService.getDeviceId()) {
           notificationService
-            .subscribeAccount(importedAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
-            .catch(err => console.warn('Failed to subscribe imported account to notifications:', err));
+            .subscribeAccount(
+              importedAccount.address,
+              DEFAULT_NOTIFICATION_PREFERENCES
+            )
+            .catch((err) =>
+              console.warn(
+                'Failed to subscribe imported account to notifications:',
+                err
+              )
+            );
           realtimeService.addAddress(importedAccount.address);
         }
 
@@ -611,7 +673,12 @@ export const useWalletStore = create<WalletState>()(
               ...DEFAULT_NOTIFICATION_PREFERENCES,
               messages: false, // Watch accounts can't decrypt messages
             })
-            .catch(err => console.warn('Failed to subscribe watch account to notifications:', err));
+            .catch((err) =>
+              console.warn(
+                'Failed to subscribe watch account to notifications:',
+                err
+              )
+            );
           realtimeService.addAddress(watchAccount.address);
         }
 
@@ -648,8 +715,16 @@ export const useWalletStore = create<WalletState>()(
         // Auto-subscribe rekeyed account to notifications if service is initialized
         if (notificationService.getDeviceId()) {
           notificationService
-            .subscribeAccount(rekeyedAccount.address, DEFAULT_NOTIFICATION_PREFERENCES)
-            .catch(err => console.warn('Failed to subscribe rekeyed account to notifications:', err));
+            .subscribeAccount(
+              rekeyedAccount.address,
+              DEFAULT_NOTIFICATION_PREFERENCES
+            )
+            .catch((err) =>
+              console.warn(
+                'Failed to subscribe rekeyed account to notifications:',
+                err
+              )
+            );
           realtimeService.addAddress(rekeyedAccount.address);
         }
 
@@ -666,7 +741,9 @@ export const useWalletStore = create<WalletState>()(
       }
     },
 
-    addRemoteSignerAccount: async (request: ImportRemoteSignerAccountRequest) => {
+    addRemoteSignerAccount: async (
+      request: ImportRemoteSignerAccountRequest
+    ) => {
       try {
         set({ isLoading: true, lastError: null });
 
@@ -690,7 +767,12 @@ export const useWalletStore = create<WalletState>()(
               ...DEFAULT_NOTIFICATION_PREFERENCES,
               messages: false, // Remote signer accounts can't decrypt messages locally
             })
-            .catch(err => console.warn('Failed to subscribe remote signer account to notifications:', err));
+            .catch((err) =>
+              console.warn(
+                'Failed to subscribe remote signer account to notifications:',
+                err
+              )
+            );
           realtimeService.addAddress(remoteSignerAccount.address);
         }
 
@@ -713,7 +795,9 @@ export const useWalletStore = create<WalletState>()(
 
         // Get the account address before deletion for unsubscribing
         const { wallet: currentWallet } = get();
-        const accountToDelete = currentWallet?.accounts.find(a => a.id === accountId);
+        const accountToDelete = currentWallet?.accounts.find(
+          (a) => a.id === accountId
+        );
         const addressToUnsubscribe = accountToDelete?.address;
 
         await MultiAccountWalletService.deleteAccount(accountId);
@@ -732,7 +816,12 @@ export const useWalletStore = create<WalletState>()(
         if (addressToUnsubscribe && notificationService.getDeviceId()) {
           notificationService
             .unsubscribeAccount(addressToUnsubscribe)
-            .catch(err => console.warn('Failed to unsubscribe deleted account from notifications:', err));
+            .catch((err) =>
+              console.warn(
+                'Failed to unsubscribe deleted account from notifications:',
+                err
+              )
+            );
           realtimeService.removeAddress(addressToUnsubscribe);
         }
       } catch (error) {
@@ -869,7 +958,8 @@ export const useWalletStore = create<WalletState>()(
         // Define cache expiry time (30 seconds for background refresh logic)
         const CACHE_EXPIRY_MS = 30 * 1000;
         const now = Date.now();
-        const isCacheExpired = now - accountState.balanceLastUpdated > CACHE_EXPIRY_MS;
+        const isCacheExpired =
+          now - accountState.balanceLastUpdated > CACHE_EXPIRY_MS;
         const hasExistingBalance = !!accountState.balance;
 
         // If we have cached data and not forcing refresh, check if we need background update
@@ -908,7 +998,6 @@ export const useWalletStore = create<WalletState>()(
         // Process rekey information if available (both rekeyed and non-rekeyed states)
         let updatedWallet = get().wallet;
         if (balance.rekeyInfo && updatedWallet) {
-
           // Update the account with rekey information
           const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
             account,
@@ -1430,8 +1519,12 @@ export const useWalletStore = create<WalletState>()(
       const balancePromises = wallet.accounts.map(async (account) => {
         try {
           // Resolve account fresh from service
-          const freshAccount = await MultiAccountWalletService.getAccount(account.id);
-          const balance = await networkService.getAccountBalance(freshAccount.address);
+          const freshAccount = await MultiAccountWalletService.getAccount(
+            account.id
+          );
+          const balance = await networkService.getAccountBalance(
+            freshAccount.address
+          );
 
           return {
             accountId: account.id,
@@ -1444,7 +1537,8 @@ export const useWalletStore = create<WalletState>()(
             accountId: account.id,
             account,
             balance: null,
-            error: error instanceof Error ? error.message : 'Failed to load balance',
+            error:
+              error instanceof Error ? error.message : 'Failed to load balance',
           };
         }
       });
@@ -1452,15 +1546,19 @@ export const useWalletStore = create<WalletState>()(
       const results = await Promise.allSettled(balancePromises);
 
       // Prepare batch state update
-      const updatedAccountStates: Record<string, AccountUIState> = { ...accountStates };
-      const rekeyUpdates: Array<{ account: AccountMetadata; balance: any }> = [];
+      const updatedAccountStates: Record<string, AccountUIState> = {
+        ...accountStates,
+      };
+      const rekeyUpdates: Array<{ account: AccountMetadata; balance: any }> =
+        [];
       let updatedWallet = get().wallet;
 
       // Process all results
       for (const result of results) {
         if (result.status === 'fulfilled') {
           const { accountId, account, balance, error } = result.value;
-          const currentState = updatedAccountStates[accountId] || createInitialAccountState();
+          const currentState =
+            updatedAccountStates[accountId] || createInitialAccountState();
 
           if (error) {
             // Update with error
@@ -1488,7 +1586,12 @@ export const useWalletStore = create<WalletState>()(
 
             // Persist balance to storage asynchronously
             setTimeout(() => {
-              persistBalanceToStorage(accountId, balance, now, currentNetworkId);
+              persistBalanceToStorage(
+                accountId,
+                balance,
+                now,
+                currentNetworkId
+              );
             }, 0);
           }
         }
@@ -1521,9 +1624,14 @@ export const useWalletStore = create<WalletState>()(
 
           if (shouldPersistMetadata) {
             try {
-              await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
+              await MultiAccountWalletService.updateAccountMetadata(
+                updatedAccount
+              );
             } catch (persistError) {
-              console.warn('Failed to persist rekey metadata update:', persistError);
+              console.warn(
+                'Failed to persist rekey metadata update:',
+                persistError
+              );
             }
           }
 
@@ -1559,7 +1667,10 @@ export const useWalletStore = create<WalletState>()(
 
         // Skip if we already have envoi data (unless it's been more than 5 minutes)
         // Allow reloading if the current value is null (failed previous load)
-        if (accountState.envoiName !== undefined && accountState.envoiName !== null) {
+        if (
+          accountState.envoiName !== undefined &&
+          accountState.envoiName !== null
+        ) {
           return;
         }
 
@@ -1574,8 +1685,11 @@ export const useWalletStore = create<WalletState>()(
         const envoiName = await envoiService.getName(account.address);
 
         const nextAvatarUrl = envoiName?.avatar ?? undefined;
-        const shouldUpdateAvatar = (account.avatarUrl ?? undefined) !== nextAvatarUrl;
-        const avatarUpdatedAt = nextAvatarUrl ? new Date().toISOString() : undefined;
+        const shouldUpdateAvatar =
+          (account.avatarUrl ?? undefined) !== nextAvatarUrl;
+        const avatarUpdatedAt = nextAvatarUrl
+          ? new Date().toISOString()
+          : undefined;
 
         set((state) => {
           const currentAccountState =
@@ -1606,7 +1720,7 @@ export const useWalletStore = create<WalletState>()(
             ...updatedAccounts[accountIndex],
             avatarUrl: nextAvatarUrl,
             avatarUpdatedAt,
-          } as typeof updatedAccounts[number];
+          } as (typeof updatedAccounts)[number];
 
           return {
             accountStates: nextAccountStates,
@@ -1715,14 +1829,17 @@ export const useWalletStore = create<WalletState>()(
           };
 
           try {
-            const accountMetadata = await MultiAccountWalletService.getAccount(id);
+            const accountMetadata =
+              await MultiAccountWalletService.getAccount(id);
             accountMetadataMap[id] = accountMetadata;
             const nextAvatarUrl = envoiName?.avatar ?? undefined;
             if ((accountMetadata.avatarUrl ?? undefined) !== nextAvatarUrl) {
               metadataUpdates.push({
                 accountId: id,
                 nextAvatarUrl,
-                avatarUpdatedAt: nextAvatarUrl ? new Date().toISOString() : undefined,
+                avatarUpdatedAt: nextAvatarUrl
+                  ? new Date().toISOString()
+                  : undefined,
               });
             }
           } catch (error) {
@@ -1785,7 +1902,9 @@ export const useWalletStore = create<WalletState>()(
                 avatarUpdatedAt: update.avatarUpdatedAt,
               } as AccountMetadata;
 
-              await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
+              await MultiAccountWalletService.updateAccountMetadata(
+                updatedAccount
+              );
             })
           );
         }
@@ -1938,8 +2057,7 @@ export const useWalletStore = create<WalletState>()(
         // Discard results if the network switched mid-flight —
         // getCachedAssetParams resolves against the now-current network, so the
         // params wouldn't belong to the network we started for.
-        const stillCurrent =
-          networkService.getCurrentNetworkId() === networkId;
+        const stillCurrent = networkService.getCurrentNetworkId() === networkId;
 
         // Re-read state after the await so we don't clobber concurrent updates
         const current = get();
@@ -2013,7 +2131,10 @@ export const useWalletStore = create<WalletState>()(
           const updatedStates = { ...get().accountStates };
 
           wallet.accounts.forEach((account) => {
-            const cacheKey = getSingleNetworkCacheKey(account.id, currentNetwork);
+            const cacheKey = getSingleNetworkCacheKey(
+              account.id,
+              currentNetwork
+            );
             const cachedData = singleCache[cacheKey];
 
             if (cachedData && cachedData.networkId === currentNetwork) {
@@ -2032,7 +2153,8 @@ export const useWalletStore = create<WalletState>()(
 
     toggleViewMode: async () => {
       const { viewMode, setViewMode } = get();
-      const newMode = viewMode === 'single-network' ? 'multi-network' : 'single-network';
+      const newMode =
+        viewMode === 'single-network' ? 'multi-network' : 'single-network';
       await setViewMode(newMode);
     },
 
@@ -2047,15 +2169,20 @@ export const useWalletStore = create<WalletState>()(
       }
     },
 
-    loadMultiNetworkBalance: async (accountId: string, forceRefresh = false) => {
+    loadMultiNetworkBalance: async (
+      accountId: string,
+      forceRefresh = false
+    ) => {
       try {
         const { accountStates, tokenMappings } = get();
-        const accountState = accountStates[accountId] || createInitialAccountState();
+        const accountState =
+          accountStates[accountId] || createInitialAccountState();
 
         // Define cache expiry time
         const CACHE_EXPIRY_MS = 30 * 1000; // 30 seconds
         const now = Date.now();
-        const isCacheExpired = now - accountState.multiNetworkBalanceLastUpdated > CACHE_EXPIRY_MS;
+        const isCacheExpired =
+          now - accountState.multiNetworkBalanceLastUpdated > CACHE_EXPIRY_MS;
         const hasExistingBalance = !!accountState.multiNetworkBalance;
 
         // Use cache if available and not expired
@@ -2087,9 +2214,10 @@ export const useWalletStore = create<WalletState>()(
         }
 
         // Fetch multi-network balance
-        const multiNetworkBalance = await MultiNetworkBalanceService.getAggregatedBalance(
-          account.address
-        );
+        const multiNetworkBalance =
+          await MultiNetworkBalanceService.getAggregatedBalance(
+            account.address
+          );
 
         set({
           accountStates: {
@@ -2105,11 +2233,16 @@ export const useWalletStore = create<WalletState>()(
 
         // Persist the multi-network balance cache
         setTimeout(() => {
-          persistMultiNetworkBalanceToStorage(accountId, multiNetworkBalance, now);
+          persistMultiNetworkBalanceToStorage(
+            accountId,
+            multiNetworkBalance,
+            now
+          );
         }, 0);
       } catch (error) {
         const { accountStates } = get();
-        const accountState = accountStates[accountId] || createInitialAccountState();
+        const accountState =
+          accountStates[accountId] || createInitialAccountState();
         set({
           accountStates: {
             ...accountStates,
@@ -2123,7 +2256,10 @@ export const useWalletStore = create<WalletState>()(
             },
           },
         });
-        console.error('[WalletStore] Failed to load multi-network balance:', error);
+        console.error(
+          '[WalletStore] Failed to load multi-network balance:',
+          error
+        );
       }
     },
 
@@ -2138,7 +2274,8 @@ export const useWalletStore = create<WalletState>()(
 
         set({ isTokenMappingsLoading: true });
 
-        const mappings = await tokenMappingService.getTokenMappings(forceRefresh);
+        const mappings =
+          await tokenMappingService.getTokenMappings(forceRefresh);
 
         set({
           tokenMappings: mappings,
@@ -2224,9 +2361,12 @@ export const useWalletStore = create<WalletState>()(
         set({
           assetSortBy: DEFAULT_ASSET_FILTER_SETTINGS.sortBy,
           assetSortOrder: DEFAULT_ASSET_FILTER_SETTINGS.sortOrder,
-          assetFilterBalanceThreshold: DEFAULT_ASSET_FILTER_SETTINGS.balanceThreshold,
-          assetFilterValueThreshold: DEFAULT_ASSET_FILTER_SETTINGS.valueThreshold,
-          assetNativeTokensFirst: DEFAULT_ASSET_FILTER_SETTINGS.nativeTokensFirst,
+          assetFilterBalanceThreshold:
+            DEFAULT_ASSET_FILTER_SETTINGS.balanceThreshold,
+          assetFilterValueThreshold:
+            DEFAULT_ASSET_FILTER_SETTINGS.valueThreshold,
+          assetNativeTokensFirst:
+            DEFAULT_ASSET_FILTER_SETTINGS.nativeTokensFirst,
         });
       } catch (error) {
         console.error('Failed to reset asset filter settings:', error);
@@ -2316,9 +2456,15 @@ export const useWalletStore = create<WalletState>()(
           set({ accountStates: updatedStates });
         }
 
-        console.log('[WalletStore] Cleared single-network cache', accountId ? `for ${accountId}` : '(all)');
+        console.log(
+          '[WalletStore] Cleared single-network cache',
+          accountId ? `for ${accountId}` : '(all)'
+        );
       } catch (error) {
-        console.error('[WalletStore] Failed to clear single-network cache:', error);
+        console.error(
+          '[WalletStore] Failed to clear single-network cache:',
+          error
+        );
       }
     },
 
@@ -2352,9 +2498,15 @@ export const useWalletStore = create<WalletState>()(
           await AsyncStorage.removeItem(MULTI_NETWORK_BALANCE_CACHE_KEY);
         }
 
-        console.log('[WalletStore] Cleared multi-network cache', accountId ? `for ${accountId}` : '(all)');
+        console.log(
+          '[WalletStore] Cleared multi-network cache',
+          accountId ? `for ${accountId}` : '(all)'
+        );
       } catch (error) {
-        console.error('[WalletStore] Failed to clear multi-network cache:', error);
+        console.error(
+          '[WalletStore] Failed to clear multi-network cache:',
+          error
+        );
       }
     },
 
@@ -2381,7 +2533,10 @@ export const useWalletStore = create<WalletState>()(
         set({ accountStates: clearedStates });
         console.log('[WalletStore] Cleared all balance cache');
       } catch (error) {
-        console.error('[WalletStore] Failed to clear all balance cache:', error);
+        console.error(
+          '[WalletStore] Failed to clear all balance cache:',
+          error
+        );
       }
     },
   }))
@@ -2400,7 +2555,10 @@ const EMPTY_STANDARD_ACCOUNTS: StandardAccountMetadata[] = [];
 const EMPTY_WATCH_ACCOUNTS: WatchAccountMetadata[] = [];
 const EMPTY_REKEYED_ACCOUNTS: RekeyedAccountMetadata[] = [];
 // Signable accounts are those that can directly sign transactions (STANDARD or LEDGER)
-const EMPTY_SIGNABLE_ACCOUNTS: (StandardAccountMetadata | LedgerAccountMetadata)[] = [];
+const EMPTY_SIGNABLE_ACCOUNTS: (
+  | StandardAccountMetadata
+  | LedgerAccountMetadata
+)[] = [];
 const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   isLoading: false,
   lastError: null,
@@ -2421,7 +2579,10 @@ let lastWalletForDerived: Wallet | null | undefined = undefined;
 let cachedStandardAccounts: StandardAccountMetadata[] = EMPTY_STANDARD_ACCOUNTS;
 let cachedWatchAccounts: WatchAccountMetadata[] = EMPTY_WATCH_ACCOUNTS;
 let cachedRekeyedAccounts: RekeyedAccountMetadata[] = EMPTY_REKEYED_ACCOUNTS;
-let cachedSignableAccounts: (StandardAccountMetadata | LedgerAccountMetadata)[] = EMPTY_SIGNABLE_ACCOUNTS;
+let cachedSignableAccounts: (
+  | StandardAccountMetadata
+  | LedgerAccountMetadata
+)[] = EMPTY_SIGNABLE_ACCOUNTS;
 
 function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
   if (wallet === lastWalletForDerived) return;
@@ -2446,7 +2607,8 @@ function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {
     (acc) => acc.type === AccountType.REKEYED
   ) as RekeyedAccountMetadata[];
   cachedSignableAccounts = accounts.filter(
-    (acc) => acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER
+    (acc) =>
+      acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER
   ) as (StandardAccountMetadata | LedgerAccountMetadata)[];
 }
 
@@ -2719,12 +2881,15 @@ export const useIsMultiNetworkView = () =>
 export const useAssetNetworkFilter = () =>
   useWalletStore((state) => state.assetNetworkFilter);
 
-export const useTokenMappings = () => useWalletStore((state) => state.tokenMappings);
+export const useTokenMappings = () =>
+  useWalletStore((state) => state.tokenMappings);
 
 // Asset filter and sort hooks
-export const useAssetSortBy = () => useWalletStore((state) => state.assetSortBy);
+export const useAssetSortBy = () =>
+  useWalletStore((state) => state.assetSortBy);
 
-export const useAssetSortOrder = () => useWalletStore((state) => state.assetSortOrder);
+export const useAssetSortOrder = () =>
+  useWalletStore((state) => state.assetSortOrder);
 
 export const useAssetFilterBalanceThreshold = () =>
   useWalletStore((state) => state.assetFilterBalanceThreshold);
@@ -2759,9 +2924,12 @@ export const useAssetFilterSettings = () =>
       !lastAssetFilterSettings ||
       lastAssetFilterSettings.sortBy !== currentSettings.sortBy ||
       lastAssetFilterSettings.sortOrder !== currentSettings.sortOrder ||
-      lastAssetFilterSettings.balanceThreshold !== currentSettings.balanceThreshold ||
-      lastAssetFilterSettings.valueThreshold !== currentSettings.valueThreshold ||
-      lastAssetFilterSettings.nativeTokensFirst !== currentSettings.nativeTokensFirst
+      lastAssetFilterSettings.balanceThreshold !==
+        currentSettings.balanceThreshold ||
+      lastAssetFilterSettings.valueThreshold !==
+        currentSettings.valueThreshold ||
+      lastAssetFilterSettings.nativeTokensFirst !==
+        currentSettings.nativeTokensFirst
     ) {
       lastAssetFilterSettings = currentSettings;
     }

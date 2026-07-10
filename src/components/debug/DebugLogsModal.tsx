@@ -56,7 +56,10 @@ export const DebugLogsModal: React.FC<DebugLogsModalProps> = ({
   const handleShareLogs = async () => {
     try {
       const logText = logs
-        .map(log => `[${formatTimestamp(log.timestamp)}] ${log.level.toUpperCase()}: ${log.message}`)
+        .map(
+          (log) =>
+            `[${formatTimestamp(log.timestamp)}] ${log.level.toUpperCase()}: ${log.message}`
+        )
         .join('\n');
 
       await Share.share({
@@ -92,71 +95,68 @@ export const DebugLogsModal: React.FC<DebugLogsModalProps> = ({
     >
       <View style={styles.modalWrapper}>
         <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Debug Logs</Text>
-          <View style={styles.headerButtons}>
-            <TouchableOpacity
-              style={[styles.button, styles.shareButton]}
-              onPress={handleShareLogs}
-            >
-              <Text style={styles.shareButtonText}>Share</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.button, styles.clearButton]}
-              onPress={handleClearLogs}
-            >
-              <Text style={styles.clearButtonText}>Clear</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.button, styles.closeButton]}
-              onPress={onClose}
-            >
-              <Text style={styles.closeButtonText}>Close</Text>
-            </TouchableOpacity>
+          <View style={styles.header}>
+            <Text style={styles.title}>Debug Logs</Text>
+            <View style={styles.headerButtons}>
+              <TouchableOpacity
+                style={[styles.button, styles.shareButton]}
+                onPress={handleShareLogs}
+              >
+                <Text style={styles.shareButtonText}>Share</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.clearButton]}
+                onPress={handleClearLogs}
+              >
+                <Text style={styles.clearButtonText}>Clear</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, styles.closeButton]}
+                onPress={onClose}
+              >
+                <Text style={styles.closeButtonText}>Close</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
 
-        <ScrollView
-          style={styles.logsContainer}
-          contentContainerStyle={styles.logsContent}
-          showsVerticalScrollIndicator={true}
-        >
-          {logs.length === 0 ? (
-            <Text style={styles.noLogsText}>
-              No debug logs yet. Try connecting to your Ledger device.
-            </Text>
-          ) : (
-            logs.map((log, index) => (
-              <View key={index} style={styles.logEntry}>
-                <View style={styles.logHeader}>
-                  <Text style={styles.timestamp}>
-                    {formatTimestamp(log.timestamp)}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.level,
-                      { color: getLogColor(log.level) },
-                    ]}
-                  >
-                    {log.level.toUpperCase()}
-                  </Text>
+          <ScrollView
+            style={styles.logsContainer}
+            contentContainerStyle={styles.logsContent}
+            showsVerticalScrollIndicator={true}
+          >
+            {logs.length === 0 ? (
+              <Text style={styles.noLogsText}>
+                No debug logs yet. Try connecting to your Ledger device.
+              </Text>
+            ) : (
+              logs.map((log, index) => (
+                <View key={index} style={styles.logEntry}>
+                  <View style={styles.logHeader}>
+                    <Text style={styles.timestamp}>
+                      {formatTimestamp(log.timestamp)}
+                    </Text>
+                    <Text
+                      style={[styles.level, { color: getLogColor(log.level) }]}
+                    >
+                      {log.level.toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={styles.message}>{log.message}</Text>
+                  {log.data && (
+                    <Text style={styles.data}>
+                      {JSON.stringify(log.data, null, 2)}
+                    </Text>
+                  )}
                 </View>
-                <Text style={styles.message}>{log.message}</Text>
-                {log.data && (
-                  <Text style={styles.data}>
-                    {JSON.stringify(log.data, null, 2)}
-                  </Text>
-                )}
-              </View>
-            ))
-          )}
-        </ScrollView>
+              ))
+            )}
+          </ScrollView>
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            Showing {logs.length} log entries
-          </Text>
-        </View>
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              Showing {logs.length} log entries
+            </Text>
+          </View>
         </SafeAreaView>
       </View>
     </Modal>

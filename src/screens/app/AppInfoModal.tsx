@@ -130,10 +130,7 @@ export default function AppInfoModal() {
         await loadGlobalValue(params.queryParams.global);
       }
 
-      if (
-        params.queryParams?.local &&
-        params.queryParams?.algorandaddress
-      ) {
+      if (params.queryParams?.local && params.queryParams?.algorandaddress) {
         await loadLocalValue(
           params.queryParams.local,
           params.queryParams.algorandaddress
@@ -216,15 +213,15 @@ export default function AppInfoModal() {
 
       if (keyValue.value.type === 1) {
         // bytes - value is Uint8Array from indexer
-        setLocalValue(new TextDecoder().decode(keyValue.value.bytes as Uint8Array));
+        setLocalValue(
+          new TextDecoder().decode(keyValue.value.bytes as Uint8Array)
+        );
       } else {
         setLocalValue(keyValue.value.uint);
       }
     } catch (err) {
       console.error('Failed to load local value:', err);
-      setLocalValue(
-        `Error: ${err instanceof Error ? err.message : 'Unknown'}`
-      );
+      setLocalValue(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
     }
   };
 

@@ -158,7 +158,9 @@ const LedgerConnectionModal: React.FC<LedgerConnectionModalProps> = ({
         setConnectionStatus('connected');
         setSelectedDevice(refreshedDevice);
         setStatusMessage('Ledger device connected');
-        debugLogger.addDebugEntry('Connection successful', { device: refreshedDevice });
+        debugLogger.addDebugEntry('Connection successful', {
+          device: refreshedDevice,
+        });
         onConnected?.(refreshedDevice);
       } else {
         throw new Error('Ledger device connection lost during initialization');
@@ -171,7 +173,10 @@ const LedgerConnectionModal: React.FC<LedgerConnectionModalProps> = ({
           : 'Failed to connect to Ledger device';
       setStatusMessage('');
       setError(message);
-      debugLogger.addDebugEntry('Connection failed', { error: message, deviceId: selectedDevice.id });
+      debugLogger.addDebugEntry('Connection failed', {
+        error: message,
+        deviceId: selectedDevice.id,
+      });
     }
   }, [onConnected, selectedDevice]);
 

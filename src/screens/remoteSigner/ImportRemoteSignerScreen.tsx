@@ -48,7 +48,8 @@ const showAlert = (
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find((b) => b.style !== 'cancel') || buttons[0];
+        const confirmButton =
+          buttons.find((b) => b.style !== 'cancel') || buttons[0];
         confirmButton?.onPress?.();
       } else {
         const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -74,15 +75,17 @@ export default function ImportRemoteSignerScreen() {
   const addRemoteSignerAccount = useWalletStore(
     (state) => state.addRemoteSignerAccount
   );
-  const addPairedSigner = useRemoteSignerStore((state) => state.addPairedSigner);
+  const addPairedSigner = useRemoteSignerStore(
+    (state) => state.addPairedSigner
+  );
 
   const [screenState, setScreenState] = useState<ScreenState>('scanning');
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
   const [pairing, setPairing] = useState<RemoteSignerPairing | null>(null);
-  const [selectedAccountAddresses, setSelectedAccountAddresses] = useState<Set<string>>(
-    new Set()
-  );
+  const [selectedAccountAddresses, setSelectedAccountAddresses] = useState<
+    Set<string>
+  >(new Set());
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,7 +122,10 @@ export default function ImportRemoteSignerScreen() {
       const payload = RemoteSignerService.decodePayload(data);
 
       if (!isRemoteSignerPairing(payload)) {
-        showAlert('Invalid QR Code', 'This QR code is not an air-gapped signer pairing code.');
+        showAlert(
+          'Invalid QR Code',
+          'This QR code is not an air-gapped signer pairing code.'
+        );
         setScanned(false);
         return;
       }
@@ -156,7 +162,9 @@ export default function ImportRemoteSignerScreen() {
   };
 
   // Web file input handler
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -181,7 +189,10 @@ export default function ImportRemoteSignerScreen() {
           if (code?.data) {
             processQRData(code.data);
           } else {
-            showAlert('No QR Code Found', 'Could not find a QR code in the selected image.');
+            showAlert(
+              'No QR Code Found',
+              'Could not find a QR code in the selected image.'
+            );
           }
         };
         image.src = e.target?.result as string;
@@ -245,7 +256,8 @@ export default function ImportRemoteSignerScreen() {
       );
     } catch (error) {
       console.error('Failed to import accounts:', error);
-      const message = error instanceof Error ? error.message : 'Failed to import accounts';
+      const message =
+        error instanceof Error ? error.message : 'Failed to import accounts';
       showAlert('Error', message);
       setScreenState('preview');
     } finally {
@@ -273,15 +285,19 @@ export default function ImportRemoteSignerScreen() {
             />
             <Text style={styles.webTitle}>Import Air-gapped Signer</Text>
             <Text style={styles.webDescription}>
-              Upload an image of the QR code from your signer device, or paste the
-              pairing data from clipboard.
+              Upload an image of the QR code from your signer device, or paste
+              the pairing data from clipboard.
             </Text>
 
             <TouchableOpacity
               style={styles.webButton}
               onPress={() => fileInputRef.current?.click()}
             >
-              <Ionicons name="image-outline" size={20} color={theme.colors.buttonText} />
+              <Ionicons
+                name="image-outline"
+                size={20}
+                color={theme.colors.buttonText}
+              />
               <Text style={styles.webButtonText}>Upload QR Image</Text>
             </TouchableOpacity>
 
@@ -289,8 +305,14 @@ export default function ImportRemoteSignerScreen() {
               style={[styles.webButton, styles.webButtonSecondary]}
               onPress={handlePasteFromClipboard}
             >
-              <Ionicons name="clipboard-outline" size={20} color={theme.colors.primary} />
-              <Text style={[styles.webButtonText, styles.webButtonTextSecondary]}>
+              <Ionicons
+                name="clipboard-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+              <Text
+                style={[styles.webButtonText, styles.webButtonTextSecondary]}
+              >
                 Paste from Clipboard
               </Text>
             </TouchableOpacity>
@@ -320,12 +342,20 @@ export default function ImportRemoteSignerScreen() {
     if (hasPermission === false) {
       return (
         <View style={styles.centerContainer}>
-          <Ionicons name="camera-off-outline" size={48} color={theme.colors.error} />
+          <Ionicons
+            name="camera-off-outline"
+            size={48}
+            color={theme.colors.error}
+          />
           <Text style={styles.statusText}>Camera permission denied</Text>
           <Text style={styles.statusSubtext}>
-            Please enable camera access in your device settings to scan QR codes.
+            Please enable camera access in your device settings to scan QR
+            codes.
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={requestCameraPermission}>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={requestCameraPermission}
+          >
             <Text style={styles.retryButtonText}>Request Permission</Text>
           </TouchableOpacity>
         </View>
@@ -361,14 +391,23 @@ export default function ImportRemoteSignerScreen() {
     if (!pairing) return null;
 
     return (
-      <ScrollView style={styles.previewContainer} contentContainerStyle={styles.previewContent}>
+      <ScrollView
+        style={styles.previewContainer}
+        contentContainerStyle={styles.previewContent}
+      >
         {/* Signer Device Info */}
         <View style={styles.deviceCard}>
           <View style={styles.deviceIconContainer}>
-            <Ionicons name="phone-portrait-outline" size={32} color={theme.colors.primary} />
+            <Ionicons
+              name="phone-portrait-outline"
+              size={32}
+              color={theme.colors.primary}
+            />
           </View>
           <View style={styles.deviceInfo}>
-            <Text style={styles.deviceName}>{pairing.name || 'Unknown Signer'}</Text>
+            <Text style={styles.deviceName}>
+              {pairing.name || 'Unknown Signer'}
+            </Text>
             <Text style={styles.deviceId}>Device ID: {pairing.dev}</Text>
           </View>
         </View>
@@ -377,7 +416,8 @@ export default function ImportRemoteSignerScreen() {
         <View style={styles.accountsSection}>
           <View style={styles.accountsHeader}>
             <Text style={styles.sectionTitle}>
-              Select Accounts to Import ({selectedAccountAddresses.size}/{pairing.accts.length})
+              Select Accounts to Import ({selectedAccountAddresses.size}/
+              {pairing.accts.length})
             </Text>
           </View>
 
@@ -386,13 +426,18 @@ export default function ImportRemoteSignerScreen() {
               key={account.addr}
               style={[
                 styles.accountItem,
-                selectedAccountAddresses.has(account.addr) && styles.accountItemSelected,
+                selectedAccountAddresses.has(account.addr) &&
+                  styles.accountItemSelected,
               ]}
               onPress={() => toggleAccountSelection(account.addr)}
             >
               <View style={styles.accountCheckbox}>
                 {selectedAccountAddresses.has(account.addr) ? (
-                  <Ionicons name="checkbox" size={24} color={theme.colors.primary} />
+                  <Ionicons
+                    name="checkbox"
+                    size={24}
+                    color={theme.colors.primary}
+                  />
                 ) : (
                   <Ionicons
                     name="square-outline"
@@ -405,7 +450,9 @@ export default function ImportRemoteSignerScreen() {
                 {account.label && (
                   <Text style={styles.accountLabel}>{account.label}</Text>
                 )}
-                <Text style={styles.accountAddress}>{formatAddress(account.addr)}</Text>
+                <Text style={styles.accountAddress}>
+                  {formatAddress(account.addr)}
+                </Text>
               </View>
             </TouchableOpacity>
           ))}
@@ -421,7 +468,11 @@ export default function ImportRemoteSignerScreen() {
             onPress={handleImport}
             disabled={selectedAccountAddresses.size === 0}
           >
-            <Ionicons name="download-outline" size={20} color={theme.colors.buttonText} />
+            <Ionicons
+              name="download-outline"
+              size={20}
+              color={theme.colors.buttonText}
+            />
             <Text style={styles.importButtonText}>
               Import {selectedAccountAddresses.size} Account
               {selectedAccountAddresses.size !== 1 ? 's' : ''}
@@ -448,7 +499,10 @@ export default function ImportRemoteSignerScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Import Air-gapped Signer</Text>

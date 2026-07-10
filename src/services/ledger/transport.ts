@@ -98,7 +98,7 @@ export class LedgerTransportService {
     usbAuthorized: Platform.OS !== 'android',
   };
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
-  
+
   // Storage throttling to prevent excessive saves
   private saveThrottleTimers: Map<string, NodeJS.Timeout> = new Map();
   private readonly SAVE_THROTTLE_MS = 1000; // 1 second throttle
@@ -207,7 +207,9 @@ export class LedgerTransportService {
       const cooldownMs = 1500;
       if (since < cooldownMs) {
         const waitMs = cooldownMs - since;
-        console.log(`Ledger Waiting ${waitMs}ms after recent cancel before connecting`);
+        console.log(
+          `Ledger Waiting ${waitMs}ms after recent cancel before connecting`
+        );
         await new Promise((r) => setTimeout(r, waitMs));
       }
       this.lastCancelAt = null;
@@ -245,7 +247,11 @@ export class LedgerTransportService {
     if (this.connectingDeviceId) {
       console.log('Ledger Another Connection In Progress, Waiting...');
       await this.awaitActiveConnection((timeoutMs || 30000) / 3);
-      if (this.currentTransport && this.currentDeviceId === deviceId && !forceReconnect) {
+      if (
+        this.currentTransport &&
+        this.currentDeviceId === deviceId &&
+        !forceReconnect
+      ) {
         console.log('Ledger Reusing Transport After Wait');
         return this.currentTransport;
       }
@@ -271,62 +277,77 @@ export class LedgerTransportService {
           break;
         }
         try {
-        console.log(`Ledger Connection Attempt ${attempt}`);
+          console.log(`Ledger Connection Attempt ${attempt}`);
 
-        // Ensure device is discovered and obtain a fresh descriptor
-        let bleDescriptor: BleDevice | string | undefined = undefined;
-        if (usingBle) {
-          // Give the device longer to appear after being powered on
-          const discovered = await this.waitForDevice(deviceId, 12000);
+          // Ensure device is discovered and obtain a fresh descriptor
+          let bleDescriptor: BleDevice | string | undefined = undefined;
+          if (usingBle) {
+            // Give the device longer to appear after being powered on
+            const discovered = await this.waitForDevice(deviceId, 12000);
+            if (this.cancelRequested) {
+              lastError = new Error('Connection cancelled');
+              break;
+            }
+
+            const freshRecord = this.devices.get(deviceId);
+            bleDescriptor = freshRecord?.descriptor as
+              | BleDevice
+              | string
+              | undefined;
+
+            if (!bleDescriptor) {
+              if (!discovered) {
+                console.log(
+                  'Ledger BLE descriptor unavailable; attempting direct open with device id'
+                );
+              } else {
+                console.log(
+                  'Ledger BLE descriptor missing after discovery; falling back to device id'
+                );
+              }
+              bleDescriptor = deviceId;
+            }
+          }
+          const transport =
+            type === 'ble'
+              ? await this.openBleTransport(deviceId, bleDescriptor)
+              : await this.openUsbTransport(
+                  record?.descriptor ||
+                    this.createUsbDescriptorFromDeviceInfo(record?.info)
+                );
+
+          console.log('Ledger Transport Opened Successfully');
+
           if (this.cancelRequested) {
+            // If cancelled after transport opened, close it immediately and abort
+            try {
+              await transport.close();
+            } catch {}
             lastError = new Error('Connection cancelled');
             break;
           }
 
-          const freshRecord = this.devices.get(deviceId);
-          bleDescriptor = freshRecord?.descriptor as BleDevice | string | undefined;
+          this.attachDisconnectListener(transport, deviceId);
+          this.currentTransport = transport;
+          this.currentDeviceId = deviceId;
+          this.connectingDeviceId = null;
+          this.isConnecting = false;
 
-          if (!bleDescriptor) {
-            if (!discovered) {
-              console.log('Ledger BLE descriptor unavailable; attempting direct open with device id');
-            } else {
-              console.log('Ledger BLE descriptor missing after discovery; falling back to device id');
-            }
-            bleDescriptor = deviceId;
-          }
-        }
-        const transport =
-          type === 'ble'
-            ? await this.openBleTransport(
-                deviceId,
-                bleDescriptor
-              )
-            : await this.openUsbTransport(record?.descriptor || this.createUsbDescriptorFromDeviceInfo(record?.info));
-
-        console.log('Ledger Transport Opened Successfully');
-
-        if (this.cancelRequested) {
-          // If cancelled after transport opened, close it immediately and abort
-          try { await transport.close(); } catch {}
-          lastError = new Error('Connection cancelled');
-          break;
-        }
-
-        this.attachDisconnectListener(transport, deviceId);
-        this.currentTransport = transport;
-        this.currentDeviceId = deviceId;
-        this.connectingDeviceId = null;
-        this.isConnecting = false;
-
-        this.markDeviceConnected(deviceId);
-        console.log('Ledger Connection Complete');
-        return transport;
+          this.markDeviceConnected(deviceId);
+          console.log('Ledger Connection Complete');
+          return transport;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
-          console.log(`Ledger Connection Attempt ${attempt} Failed:`, lastError.message);
+          console.log(
+            `Ledger Connection Attempt ${attempt} Failed:`,
+            lastError.message
+          );
 
           // Don't retry on permission errors
-          if (lastError.message.includes('Permission') || lastError.message.includes('Unauthorized')) {
+          if (
+            lastError.message.includes('Permission') ||
+            lastError.message.includes('Unauthorized')
+          ) {
             break;
           }
 
@@ -343,7 +364,8 @@ export class LedgerTransportService {
             let elapsed = 0;
             const step = 100;
             const tick = () => {
-              if (this.cancelRequested || elapsed >= delay) return resolve(undefined);
+              if (this.cancelRequested || elapsed >= delay)
+                return resolve(undefined);
               elapsed += step;
               setTimeout(tick, step);
             };
@@ -391,7 +413,10 @@ export class LedgerTransportService {
         if (typeof anyTransport.off === 'function') {
           anyTransport.off('disconnect', this.currentDisconnectHandler);
         } else if (typeof anyTransport.removeListener === 'function') {
-          anyTransport.removeListener('disconnect', this.currentDisconnectHandler);
+          anyTransport.removeListener(
+            'disconnect',
+            this.currentDisconnectHandler
+          );
         }
         this.currentDisconnectHandler = null;
       }
@@ -718,7 +743,9 @@ export class LedgerTransportService {
     }
   }
 
-  async startDiscovery(options: { ble?: boolean; usb?: boolean } = {}): Promise<void> {
+  async startDiscovery(
+    options: { ble?: boolean; usb?: boolean } = {}
+  ): Promise<void> {
     const { ble = true, usb = true } = options;
 
     const tasks: Promise<void>[] = [];
@@ -757,7 +784,9 @@ export class LedgerTransportService {
       // Prefer an up-to-date descriptor when available; fallback to deviceId
       const transport = await TransportBLE.open(descriptor ?? deviceId);
       if (this.cancelRequested) {
-        try { (transport as any).close?.(); } catch {}
+        try {
+          (transport as any).close?.();
+        } catch {}
         throw new Error('Connection cancelled');
       }
       return transport;
@@ -842,7 +871,7 @@ export class LedgerTransportService {
       this.markDeviceDisconnected(deviceId);
     };
     this.currentDisconnectHandler = handler;
-    const anyTransport = (transport as any);
+    const anyTransport = transport as any;
     try {
       if (typeof anyTransport.on === 'function') {
         anyTransport.on('disconnect', handler);
@@ -858,13 +887,18 @@ export class LedgerTransportService {
     }
   }
 
-  private async awaitActiveConnection(timeoutMs: number = 30000): Promise<void> {
+  private async awaitActiveConnection(
+    timeoutMs: number = 30000
+  ): Promise<void> {
     if (!this.connectingDeviceId && !this.isConnecting) {
       return;
     }
     let elapsed = 0;
     const step = 150;
-    while ((this.connectingDeviceId || this.isConnecting) && elapsed < timeoutMs) {
+    while (
+      (this.connectingDeviceId || this.isConnecting) &&
+      elapsed < timeoutMs
+    ) {
       await new Promise((resolve) => setTimeout(resolve, step));
       elapsed += step;
     }
@@ -902,14 +936,10 @@ export class LedgerTransportService {
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
         );
         if (sdkVersion < 33) {
-          permissions.push(
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-          );
+          permissions.push(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
         }
       } else {
-        permissions.push(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-        );
+        permissions.push(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
       }
 
       if (permissions.length === 0) {
@@ -921,7 +951,8 @@ export class LedgerTransportService {
       console.log('Ledger BLE permission request results', { results });
       const typedResults = results as Record<Permission, PermissionStatus>;
       const granted = permissions.every(
-        (permission) => typedResults[permission] === PermissionsAndroid.RESULTS.GRANTED
+        (permission) =>
+          typedResults[permission] === PermissionsAndroid.RESULTS.GRANTED
       );
 
       this.updatePermissionsStatus({ bluetoothAuthorized: granted });
@@ -967,8 +998,10 @@ export class LedgerTransportService {
     if (existing && existing.connected) return existing;
 
     const record = this.devices.get(deviceId);
-    const shouldScanBle = this.bleEnabled && (!record || record.info.type !== 'usb');
-    const shouldScanUsb = this.usbEnabled && (!record || record.info.type !== 'ble');
+    const shouldScanBle =
+      this.bleEnabled && (!record || record.info.type !== 'usb');
+    const shouldScanUsb =
+      this.usbEnabled && (!record || record.info.type !== 'ble');
 
     await this.startDiscovery({ ble: shouldScanBle, usb: shouldScanUsb });
 
@@ -1002,7 +1035,10 @@ export class LedgerTransportService {
           }
         };
 
-        const onMatch = (info: LedgerDeviceInfo, source: 'discovered' | 'updated') => {
+        const onMatch = (
+          info: LedgerDeviceInfo,
+          source: 'discovered' | 'updated'
+        ) => {
           if (info.id !== deviceId) {
             return;
           }
@@ -1035,7 +1071,9 @@ export class LedgerTransportService {
   /**
    * Start periodic health checks to ensure the active transport remains responsive.
    */
-  startConnectionHealthMonitoring(intervalMs: number = this.healthCheckIntervalMs): void {
+  startConnectionHealthMonitoring(
+    intervalMs: number = this.healthCheckIntervalMs
+  ): void {
     if (this.healthCheckTimer) {
       return;
     }
@@ -1110,7 +1148,9 @@ export class LedgerTransportService {
         }
       } else {
         // Log but don't disconnect for temporary issues
-        console.log('Ledger Health Check: Temporary communication issue, not disconnecting');
+        console.log(
+          'Ledger Health Check: Temporary communication issue, not disconnecting'
+        );
       }
     }
   }
@@ -1119,11 +1159,11 @@ export class LedgerTransportService {
    * Remove all listeners registered on this service.
    */
   removeAllListeners(): void {
-    (Object.keys(this.listeners) as Array<keyof LedgerTransportEventMap>).forEach(
-      (event) => {
-        this.listeners[event].clear();
-      }
-    );
+    (
+      Object.keys(this.listeners) as Array<keyof LedgerTransportEventMap>
+    ).forEach((event) => {
+      this.listeners[event].clear();
+    });
   }
 
   /**
@@ -1154,15 +1194,17 @@ export class LedgerTransportService {
   /**
    * Save device info to persistent storage with throttling to prevent spam
    */
-  private async saveDeviceToStorage(deviceInfo: LedgerDeviceInfo): Promise<void> {
+  private async saveDeviceToStorage(
+    deviceInfo: LedgerDeviceInfo
+  ): Promise<void> {
     const deviceId = deviceInfo.id;
-    
+
     // Clear any existing timer for this device
     const existingTimer = this.saveThrottleTimers.get(deviceId);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
-    
+
     // Set a new timer to save after the throttle period
     const timer = setTimeout(async () => {
       try {
@@ -1174,7 +1216,7 @@ export class LedgerTransportService {
         // Don't throw - persistence failures shouldn't break functionality
       }
     }, this.SAVE_THROTTLE_MS);
-    
+
     this.saveThrottleTimers.set(deviceId, timer);
   }
 
@@ -1193,8 +1235,15 @@ export class LedgerTransportService {
   /**
    * Create USB descriptor from persisted device info for connection
    */
-  private createUsbDescriptorFromDeviceInfo(deviceInfo?: LedgerDeviceInfo): { vendorId: number; productId: number } | undefined {
-    if (!deviceInfo || deviceInfo.type !== 'usb' || !deviceInfo.vendorId || !deviceInfo.productId) {
+  private createUsbDescriptorFromDeviceInfo(
+    deviceInfo?: LedgerDeviceInfo
+  ): { vendorId: number; productId: number } | undefined {
+    if (
+      !deviceInfo ||
+      deviceInfo.type !== 'usb' ||
+      !deviceInfo.vendorId ||
+      !deviceInfo.productId
+    ) {
       return undefined;
     }
     return {
@@ -1216,7 +1265,7 @@ export class LedgerTransportService {
     this.devices.clear();
     this.removeAllListeners();
     this.connectingDeviceId = null;
-    
+
     // Clear all pending save timers
     for (const timer of this.saveThrottleTimers.values()) {
       clearTimeout(timer);

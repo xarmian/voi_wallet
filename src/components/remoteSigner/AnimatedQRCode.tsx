@@ -10,7 +10,10 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
-import { AnimatedQRService, AnimatedQREncodeResult } from '@/services/remoteSigner/animatedQR';
+import {
+  AnimatedQRService,
+  AnimatedQREncodeResult,
+} from '@/services/remoteSigner/animatedQR';
 import { REMOTE_SIGNER_CONSTANTS } from '@/types/remoteSigner';
 
 interface AnimatedQRCodeProps {
@@ -48,7 +51,8 @@ export function AnimatedQRCode({
   const { theme } = useTheme();
 
   // Encoding state
-  const [encodeResult, setEncodeResult] = useState<AnimatedQREncodeResult | null>(null);
+  const [encodeResult, setEncodeResult] =
+    useState<AnimatedQREncodeResult | null>(null);
   const [currentFrameIndex, setCurrentFrameIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +69,8 @@ export function AnimatedQRCode({
       setError(null);
       onEncodingComplete?.(result);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to encode data';
+      const errorMessage =
+        err instanceof Error ? err.message : 'Failed to encode data';
       setError(errorMessage);
       console.error('AnimatedQRCode encoding error:', err);
     }
@@ -114,8 +119,17 @@ export function AnimatedQRCode({
   if (error) {
     return (
       <View style={[styles.container, { width: size, height: size }]}>
-        <View style={[styles.errorContainer, { backgroundColor: theme.colors.card }]}>
-          <Ionicons name="warning-outline" size={32} color={theme.colors.error} />
+        <View
+          style={[
+            styles.errorContainer,
+            { backgroundColor: theme.colors.card },
+          ]}
+        >
+          <Ionicons
+            name="warning-outline"
+            size={32}
+            color={theme.colors.error}
+          />
           <Text style={[styles.errorText, { color: theme.colors.error }]}>
             {error}
           </Text>
@@ -129,7 +143,9 @@ export function AnimatedQRCode({
     return (
       <View style={[styles.container, { width: size, height: size }]}>
         <View style={[styles.loadingContainer, { backgroundColor }]}>
-          <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+          <Text
+            style={[styles.loadingText, { color: theme.colors.textSecondary }]}
+          >
             Encoding...
           </Text>
         </View>
@@ -142,7 +158,12 @@ export function AnimatedQRCode({
   return (
     <View style={styles.wrapper}>
       {/* QR Code */}
-      <View style={[styles.qrContainer, { backgroundColor, borderRadius: theme.borderRadius.xl }]}>
+      <View
+        style={[
+          styles.qrContainer,
+          { backgroundColor, borderRadius: theme.borderRadius.xl },
+        ]}
+      >
         <QRCode
           value={currentFrame}
           size={size}
@@ -153,7 +174,9 @@ export function AnimatedQRCode({
 
       {/* Frame counter for animated QR */}
       {encodeResult.isAnimated && showFrameCounter && (
-        <View style={[styles.frameCounter, { backgroundColor: theme.colors.card }]}>
+        <View
+          style={[styles.frameCounter, { backgroundColor: theme.colors.card }]}
+        >
           <Text style={[styles.frameCounterText, { color: theme.colors.text }]}>
             Frame {currentFrameIndex + 1} / {encodeResult.frameCount}
           </Text>
@@ -162,9 +185,23 @@ export function AnimatedQRCode({
 
       {/* Animated indicator */}
       {encodeResult.isAnimated && (
-        <View style={[styles.animatedBadge, { backgroundColor: theme.colors.primary }]}>
-          <Ionicons name="play-circle" size={14} color={theme.colors.buttonText} />
-          <Text style={[styles.animatedBadgeText, { color: theme.colors.buttonText }]}>
+        <View
+          style={[
+            styles.animatedBadge,
+            { backgroundColor: theme.colors.primary },
+          ]}
+        >
+          <Ionicons
+            name="play-circle"
+            size={14}
+            color={theme.colors.buttonText}
+          />
+          <Text
+            style={[
+              styles.animatedBadgeText,
+              { color: theme.colors.buttonText },
+            ]}
+          >
             Animated QR
           </Text>
         </View>
@@ -174,14 +211,21 @@ export function AnimatedQRCode({
       {encodeResult.isAnimated && showControls && (
         <View style={styles.controls}>
           <TouchableOpacity
-            style={[styles.controlButton, { backgroundColor: theme.colors.card }]}
+            style={[
+              styles.controlButton,
+              { backgroundColor: theme.colors.card },
+            ]}
             onPress={handlePrevFrame}
           >
             <Ionicons name="play-back" size={20} color={theme.colors.text} />
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.controlButton, styles.playButton, { backgroundColor: theme.colors.primary }]}
+            style={[
+              styles.controlButton,
+              styles.playButton,
+              { backgroundColor: theme.colors.primary },
+            ]}
             onPress={handlePlayPause}
           >
             <Ionicons
@@ -192,7 +236,10 @@ export function AnimatedQRCode({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.controlButton, { backgroundColor: theme.colors.card }]}
+            style={[
+              styles.controlButton,
+              { backgroundColor: theme.colors.card },
+            ]}
             onPress={handleNextFrame}
           >
             <Ionicons name="play-forward" size={20} color={theme.colors.text} />

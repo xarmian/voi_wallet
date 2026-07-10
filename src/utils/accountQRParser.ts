@@ -27,9 +27,7 @@ const scrubString = (value?: string): string | undefined => {
   return ''.padEnd(value.length, '0');
 };
 
-export const getAccountSecret = (
-  id: string
-): AccountSecret | undefined => {
+export const getAccountSecret = (id: string): AccountSecret | undefined => {
   const secret = accountSecretStore.get(id);
   if (!secret) return undefined;
   return { ...secret };
@@ -428,9 +426,8 @@ export class AccountQRParser {
     try {
       if (sanitizedMnemonic) {
         if (MultiAccountWalletService.validateMnemonic(sanitizedMnemonic)) {
-          const walletAccount = MultiAccountWalletService.importFromMnemonic(
-            sanitizedMnemonic
-          );
+          const walletAccount =
+            MultiAccountWalletService.importFromMnemonic(sanitizedMnemonic);
           address = walletAccount.address;
           type = 'standard';
           isValid = true;
@@ -439,9 +436,8 @@ export class AccountQRParser {
         }
       } else if (sanitizedPrivateKey) {
         try {
-          const walletAccount = MultiAccountWalletService.importFromPrivateKey(
-            sanitizedPrivateKey
-          );
+          const walletAccount =
+            MultiAccountWalletService.importFromPrivateKey(sanitizedPrivateKey);
           address = walletAccount.address;
           type = 'standard';
           isValid = true;
@@ -486,7 +482,11 @@ export class AccountQRParser {
       }
 
       // Store secret for valid accounts that are not true duplicates
-      if (isValid && !isDuplicate && (sanitizedMnemonic || sanitizedPrivateKey)) {
+      if (
+        isValid &&
+        !isDuplicate &&
+        (sanitizedMnemonic || sanitizedPrivateKey)
+      ) {
         secretId = storeAccountSecret({
           mnemonic: sanitizedMnemonic,
           privateKey: sanitizedPrivateKey,

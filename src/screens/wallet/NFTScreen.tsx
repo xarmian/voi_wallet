@@ -55,9 +55,11 @@ export default function NFTScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   // Collection tokens state
-  const [selectedCollection, setSelectedCollection] = useState<ARC72Collection | null>(null);
+  const [selectedCollection, setSelectedCollection] =
+    useState<ARC72Collection | null>(null);
   const [collectionTokens, setCollectionTokens] = useState<NFTToken[]>([]);
-  const [isLoadingCollectionTokens, setIsLoadingCollectionTokens] = useState(false);
+  const [isLoadingCollectionTokens, setIsLoadingCollectionTokens] =
+    useState(false);
   const [ownershipMap, setOwnershipMap] = useState<Set<string>>(new Set());
   const [loadingMoreTokens, setLoadingMoreTokens] = useState(false);
   const [nextTokensToken, setNextTokensToken] = useState<number | undefined>();
@@ -65,7 +67,8 @@ export default function NFTScreen() {
 
   // Modals
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
-  const [isAddAccountModalVisible, setIsAddAccountModalVisible] = useState(false);
+  const [isAddAccountModalVisible, setIsAddAccountModalVisible] =
+    useState(false);
 
   // Load my NFTs on mount
   useEffect(() => {
@@ -111,49 +114,57 @@ export default function NFTScreen() {
     }
   }, [activeAccount]);
 
-  const loadCollectionTokens = useCallback(async (reset = false) => {
-    if (!selectedCollection) return;
+  const loadCollectionTokens = useCallback(
+    async (reset = false) => {
+      if (!selectedCollection) return;
 
-    try {
-      if (reset) {
-        setIsLoadingCollectionTokens(true);
-        setCollectionTokens([]);
-        setNextTokensToken(undefined);
+      try {
+        if (reset) {
+          setIsLoadingCollectionTokens(true);
+          setCollectionTokens([]);
+          setNextTokensToken(undefined);
 
-        // Load user's NFTs for ownership check
-        if (activeAccount) {
-          const userNFTs = await NFTService.fetchUserNFTs(activeAccount.address);
-          const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
-          setOwnershipMap(ownership);
+          // Load user's NFTs for ownership check
+          if (activeAccount) {
+            const userNFTs = await NFTService.fetchUserNFTs(
+              activeAccount.address
+            );
+            const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
+            setOwnershipMap(ownership);
+          }
+        } else {
+          setLoadingMoreTokens(true);
         }
-      } else {
-        setLoadingMoreTokens(true);
-      }
 
-      const response = await NFTService.fetchTokensByCollection(
-        selectedCollection.contractId,
-        {
-          limit: 20,
-          nextToken: reset ? undefined : nextTokensToken,
+        const response = await NFTService.fetchTokensByCollection(
+          selectedCollection.contractId,
+          {
+            limit: 20,
+            nextToken: reset ? undefined : nextTokensToken,
+          }
+        );
+
+        if (reset) {
+          setCollectionTokens(response.tokens);
+        } else {
+          setCollectionTokens((prev) => [...prev, ...response.tokens]);
         }
-      );
 
-      if (reset) {
-        setCollectionTokens(response.tokens);
-      } else {
-        setCollectionTokens(prev => [...prev, ...response.tokens]);
+        setNextTokensToken(response.nextToken);
+        setHasMoreTokens(!!response.nextToken);
+      } catch (error) {
+        console.error('Failed to load collection tokens:', error);
+        Alert.alert(
+          'Error',
+          'Failed to load collection tokens. Please try again.'
+        );
+      } finally {
+        setIsLoadingCollectionTokens(false);
+        setLoadingMoreTokens(false);
       }
-
-      setNextTokensToken(response.nextToken);
-      setHasMoreTokens(!!response.nextToken);
-    } catch (error) {
-      console.error('Failed to load collection tokens:', error);
-      Alert.alert('Error', 'Failed to load collection tokens. Please try again.');
-    } finally {
-      setIsLoadingCollectionTokens(false);
-      setLoadingMoreTokens(false);
-    }
-  }, [selectedCollection, nextTokensToken, activeAccount]);
+    },
+    [selectedCollection, nextTokensToken, activeAccount]
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -210,7 +221,11 @@ export default function NFTScreen() {
   };
 
   const handleLoadMoreTokens = () => {
-    if (!loadingMoreTokens && hasMoreTokens && viewMode === 'collection-tokens') {
+    if (
+      !loadingMoreTokens &&
+      hasMoreTokens &&
+      viewMode === 'collection-tokens'
+    ) {
       loadCollectionTokens(false);
     }
   };
@@ -293,7 +308,11 @@ export default function NFTScreen() {
 
     return (
       <View style={styles.collectionHeaderContainer}>
-        <GlassCard variant="medium" style={styles.collectionHeader} padding="none">
+        <GlassCard
+          variant="medium"
+          style={styles.collectionHeader}
+          padding="none"
+        >
           <View style={styles.collectionHeaderContent}>
             <Pressable
               style={[
@@ -302,13 +321,28 @@ export default function NFTScreen() {
               ]}
               onPress={handleBackToCollections}
             >
-              <Ionicons name="chevron-back" size={20} color={theme.colors.text} />
+              <Ionicons
+                name="chevron-back"
+                size={20}
+                color={theme.colors.text}
+              />
             </Pressable>
             <View style={styles.collectionHeaderInfo}>
-              <Text style={[styles.collectionHeaderName, { color: theme.colors.text }]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.collectionHeaderName,
+                  { color: theme.colors.text },
+                ]}
+                numberOfLines={1}
+              >
                 {selectedCollection.name}
               </Text>
-              <Text style={[styles.collectionHeaderSub, { color: theme.colors.textSecondary }]}>
+              <Text
+                style={[
+                  styles.collectionHeaderSub,
+                  { color: theme.colors.textSecondary },
+                ]}
+              >
                 {selectedCollection.totalSupply.toLocaleString()} items
               </Text>
             </View>
@@ -336,7 +370,9 @@ export default function NFTScreen() {
         <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
           No NFTs Found
         </Text>
-        <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+        <Text
+          style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
+        >
           Your NFT collection will appear here when you have ARC-72 tokens
         </Text>
       </GlassCard>
@@ -349,7 +385,12 @@ export default function NFTScreen() {
         return (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.loadingText,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               Loading your NFTs...
             </Text>
           </View>
@@ -384,7 +425,12 @@ export default function NFTScreen() {
         return (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.loadingText,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               Loading tokens...
             </Text>
           </View>
@@ -428,8 +474,8 @@ export default function NFTScreen() {
             viewMode === 'my-nfts'
               ? `${myNFTs.length} NFT${myNFTs.length !== 1 ? 's' : ''}`
               : viewMode === 'collection-tokens' && selectedCollection
-              ? selectedCollection.name
-              : 'Browse Collections'
+                ? selectedCollection.name
+                : 'Browse Collections'
           }
           onAccountSelectorPress={() => setIsAccountModalVisible(true)}
           showAccountSelector={activeTab === 'my-nfts'}
@@ -479,7 +525,10 @@ export default function NFTScreen() {
           }}
           onAddWatchAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('Settings' as never, { screen: 'AddWatchAccount' } as never);
+            navigation.navigate(
+              'Settings' as never,
+              { screen: 'AddWatchAccount' } as never
+            );
           }}
         />
       </SafeAreaView>

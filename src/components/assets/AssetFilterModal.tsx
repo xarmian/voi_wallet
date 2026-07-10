@@ -108,14 +108,21 @@ export default function AssetFilterModal({
   ) => (
     <TouchableOpacity
       key={value}
-      style={[styles.optionButton, sortBy === value && styles.optionButtonActive]}
+      style={[
+        styles.optionButton,
+        sortBy === value && styles.optionButtonActive,
+      ]}
       onPress={() => setSortBy(value)}
     >
       <View style={styles.optionContent}>
         <Ionicons
           name={icon as any}
           size={20}
-          color={sortBy === value ? styles.optionTextActive.color : styles.optionText.color}
+          color={
+            sortBy === value
+              ? styles.optionTextActive.color
+              : styles.optionText.color
+          }
         />
         <Text
           style={[
@@ -127,7 +134,11 @@ export default function AssetFilterModal({
         </Text>
       </View>
       {sortBy === value && (
-        <Ionicons name="checkmark-circle" size={20} color={styles.checkmark.color} />
+        <Ionicons
+          name="checkmark-circle"
+          size={20}
+          color={styles.checkmark.color}
+        />
       )}
     </TouchableOpacity>
   );
@@ -169,12 +180,12 @@ export default function AssetFilterModal({
           <View style={styles.closeButton} />
         </View>
 
-        <KeyboardAvoidingView 
+        <KeyboardAvoidingView
           style={styles.keyboardAvoidingView}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
         >
-          <ScrollView 
+          <ScrollView
             style={styles.content}
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
@@ -240,9 +251,7 @@ export default function AssetFilterModal({
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>
-                  Hide value below (USD):
-                </Text>
+                <Text style={styles.inputLabel}>Hide value below (USD):</Text>
                 <TextInput
                   style={styles.input}
                   value={valueThresholdText}
@@ -260,16 +269,10 @@ export default function AssetFilterModal({
 
           {/* Footer Buttons */}
           <View style={styles.footer}>
-            <TouchableOpacity
-              style={styles.resetButton}
-              onPress={handleReset}
-            >
+            <TouchableOpacity style={styles.resetButton} onPress={handleReset}>
               <Text style={styles.resetButtonText}>Reset to Defaults</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.applyButton}
-              onPress={handleApply}
-            >
+            <TouchableOpacity style={styles.applyButton} onPress={handleApply}>
               <Text style={styles.applyButtonText}>Apply</Text>
             </TouchableOpacity>
           </View>

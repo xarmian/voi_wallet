@@ -618,7 +618,9 @@ export class MultiAccountWalletService {
     }
 
     // Find the account
-    const accountIndex = wallet.accounts.findIndex((acc) => acc.id === accountId);
+    const accountIndex = wallet.accounts.findIndex(
+      (acc) => acc.id === accountId
+    );
     if (accountIndex === -1) {
       throw new AccountNotFoundError('Account not found');
     }
@@ -1044,10 +1046,14 @@ export class MultiAccountWalletService {
 
       // Validate addresses
       if (!algosdk.isValidAddress(authAccount.address)) {
-        throw new InvalidAddressError(`Invalid account address: ${authAccount.address}`);
+        throw new InvalidAddressError(
+          `Invalid account address: ${authAccount.address}`
+        );
       }
       if (!algosdk.isValidAddress(authAccount.authAddress)) {
-        throw new InvalidAddressError(`Invalid auth address: ${authAccount.authAddress}`);
+        throw new InvalidAddressError(
+          `Invalid auth address: ${authAccount.authAddress}`
+        );
       }
 
       // Check if account already exists
@@ -1059,7 +1065,9 @@ export class MultiAccountWalletService {
       }
 
       // Check if we control the auth address (Ledger account)
-      const authAccountInWallet = await this.findAccountByAddress(authAccount.authAddress);
+      const authAccountInWallet = await this.findAccountByAddress(
+        authAccount.authAddress
+      );
       const canSign = Boolean(authAccountInWallet);
 
       if (!canSign) {
@@ -1196,7 +1204,8 @@ export class MultiAccountWalletService {
       }
 
       const networkService = NetworkService.getInstance();
-      const accountInfo = await networkService.getAccountInfo(normalizedOriginal);
+      const accountInfo =
+        await networkService.getAccountInfo(normalizedOriginal);
 
       if (!accountInfo) {
         return false;
@@ -1317,10 +1326,7 @@ export class MultiAccountWalletService {
 
   private static async storeWallet(wallet: Wallet): Promise<void> {
     const persistencePayload = this.sanitizeWalletForPersistence(wallet);
-    await this.storeValue(
-      this.WALLET_KEY,
-      JSON.stringify(persistencePayload)
-    );
+    await this.storeValue(this.WALLET_KEY, JSON.stringify(persistencePayload));
   }
 
   private static getDefaultWalletSettings(): WalletSettings {

@@ -102,5 +102,3 @@ const createStyles = (theme: Theme) =>
       fontWeight: '600',
     },
   });
-
-

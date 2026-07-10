@@ -26,7 +26,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
-import { StandardAccountMetadata, RemoteSignerAccountMetadata } from '@/types/wallet';
+import {
+  StandardAccountMetadata,
+  RemoteSignerAccountMetadata,
+} from '@/types/wallet';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { RemoteSignerResponse } from '@/types/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -68,8 +71,12 @@ export function TransferToAirgapFlow({
   const [state, setState] = useState<TransferState>('disclaimer');
   const [error, setError] = useState<string | null>(null);
   const [privateKeyQrData, setPrivateKeyQrData] = useState<string | null>(null);
-  const [verifiedSignerDeviceId, setVerifiedSignerDeviceId] = useState<string | null>(null);
-  const [verifiedSignerDeviceName, setVerifiedSignerDeviceName] = useState<string | undefined>(undefined);
+  const [verifiedSignerDeviceId, setVerifiedSignerDeviceId] = useState<
+    string | null
+  >(null);
+  const [verifiedSignerDeviceName, setVerifiedSignerDeviceName] = useState<
+    string | undefined
+  >(undefined);
 
   // Handle disclaimer acceptance
   const handleAcceptDisclaimer = useCallback(async () => {
@@ -95,12 +102,18 @@ export function TransferToAirgapFlow({
 
       // Zero out the private key from memory
       privateKey.fill(0);
-
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to prepare transfer';
+      const message =
+        err instanceof Error ? err.message : 'Failed to prepare transfer';
       // Check for authentication errors
-      if (message.includes('Authentication') || message.includes('cancelled') || message.includes('PIN')) {
-        setError('Authentication required to access private key. Please try again.');
+      if (
+        message.includes('Authentication') ||
+        message.includes('cancelled') ||
+        message.includes('PIN')
+      ) {
+        setError(
+          'Authentication required to access private key. Please try again.'
+        );
       } else {
         setError(message);
       }
@@ -131,18 +144,23 @@ export function TransferToAirgapFlow({
 
         // Check if the signing was rejected
         if (!signerResponse.ok) {
-          throw new Error(signerResponse.err?.m || 'Signing was rejected on the airgap device');
+          throw new Error(
+            signerResponse.err?.m || 'Signing was rejected on the airgap device'
+          );
         }
 
         // Extract the signed transaction
-        const signedTxns = RemoteSignerService.extractSignedTransactions(signerResponse);
+        const signedTxns =
+          RemoteSignerService.extractSignedTransactions(signerResponse);
         if (signedTxns.length === 0) {
           throw new Error('No signed transactions in response');
         }
 
         // Verify exactly one transaction
         if (signedTxns.length !== 1) {
-          throw new Error(`Expected 1 signed transaction, got ${signedTxns.length}`);
+          throw new Error(
+            `Expected 1 signed transaction, got ${signedTxns.length}`
+          );
         }
 
         // Verify the signature locally
@@ -153,7 +171,9 @@ export function TransferToAirgapFlow({
         );
 
         if (!verificationResult.valid) {
-          throw new Error(verificationResult.error || 'Signature verification failed');
+          throw new Error(
+            verificationResult.error || 'Signature verification failed'
+          );
         }
 
         // Extract signer device info from the response metadata if available
@@ -164,7 +184,8 @@ export function TransferToAirgapFlow({
         // Move to confirmation step
         setState('confirm_deletion');
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to verify signature';
+        const message =
+          err instanceof Error ? err.message : 'Failed to verify signature';
         setError(message);
         setState('error');
       }
@@ -184,11 +205,12 @@ export function TransferToAirgapFlow({
 
     try {
       // Convert the account
-      const newAccount = await MultiAccountWalletService.convertStandardToRemoteSigner(
-        account.id,
-        verifiedSignerDeviceId,
-        verifiedSignerDeviceName
-      );
+      const newAccount =
+        await MultiAccountWalletService.convertStandardToRemoteSigner(
+          account.id,
+          verifiedSignerDeviceId,
+          verifiedSignerDeviceName
+        );
 
       setState('success');
 
@@ -197,7 +219,8 @@ export function TransferToAirgapFlow({
         onSuccess(newAccount);
       }, 1500);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to convert account';
+      const message =
+        err instanceof Error ? err.message : 'Failed to convert account';
       setError(message);
       setState('error');
     }
@@ -227,65 +250,156 @@ export function TransferToAirgapFlow({
         return (
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={styles.disclaimerContent}>
-              <View style={[styles.warningIcon, { backgroundColor: `${theme.colors.warning}20` }]}>
-                <Ionicons name="warning" size={48} color={theme.colors.warning} />
+              <View
+                style={[
+                  styles.warningIcon,
+                  { backgroundColor: `${theme.colors.warning}20` },
+                ]}
+              >
+                <Ionicons
+                  name="warning"
+                  size={48}
+                  color={theme.colors.warning}
+                />
               </View>
 
-              <Text style={[styles.disclaimerTitle, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.disclaimerTitle, { color: theme.colors.text }]}
+              >
                 Transfer Account to Airgap Device
               </Text>
 
-              <View style={[styles.warningBox, { backgroundColor: `${theme.colors.warning}15`, borderColor: theme.colors.warning }]}>
-                <Ionicons name="shield-checkmark" size={24} color={theme.colors.warning} />
-                <Text style={[styles.warningText, { color: theme.colors.warning }]}>
-                  For maximum security, we recommend creating a new account on your airgap device while it's in airplane mode. This feature is provided for convenience only.
+              <View
+                style={[
+                  styles.warningBox,
+                  {
+                    backgroundColor: `${theme.colors.warning}15`,
+                    borderColor: theme.colors.warning,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="shield-checkmark"
+                  size={24}
+                  color={theme.colors.warning}
+                />
+                <Text
+                  style={[styles.warningText, { color: theme.colors.warning }]}
+                >
+                  For maximum security, we recommend creating a new account on
+                  your airgap device while it's in airplane mode. This feature
+                  is provided for convenience only.
                 </Text>
               </View>
 
               <View style={styles.disclaimerPoints}>
                 <View style={styles.disclaimerPoint}>
-                  <Ionicons name="key-outline" size={20} color={theme.colors.textSecondary} />
-                  <Text style={[styles.pointText, { color: theme.colors.textSecondary }]}>
+                  <Ionicons
+                    name="key-outline"
+                    size={20}
+                    color={theme.colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.pointText,
+                      { color: theme.colors.textSecondary },
+                    ]}
+                  >
                     Your private key will be displayed as a QR code
                   </Text>
                 </View>
                 <View style={styles.disclaimerPoint}>
-                  <Ionicons name="phone-portrait-outline" size={20} color={theme.colors.textSecondary} />
-                  <Text style={[styles.pointText, { color: theme.colors.textSecondary }]}>
+                  <Ionicons
+                    name="phone-portrait-outline"
+                    size={20}
+                    color={theme.colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.pointText,
+                      { color: theme.colors.textSecondary },
+                    ]}
+                  >
                     Scan the QR code with your airgap signer device
                   </Text>
                 </View>
                 <View style={styles.disclaimerPoint}>
-                  <Ionicons name="checkmark-circle-outline" size={20} color={theme.colors.textSecondary} />
-                  <Text style={[styles.pointText, { color: theme.colors.textSecondary }]}>
+                  <Ionicons
+                    name="checkmark-circle-outline"
+                    size={20}
+                    color={theme.colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.pointText,
+                      { color: theme.colors.textSecondary },
+                    ]}
+                  >
                     Verify the transfer with a signed confirmation
                   </Text>
                 </View>
                 <View style={styles.disclaimerPoint}>
-                  <Ionicons name="trash-outline" size={20} color={theme.colors.textSecondary} />
-                  <Text style={[styles.pointText, { color: theme.colors.textSecondary }]}>
+                  <Ionicons
+                    name="trash-outline"
+                    size={20}
+                    color={theme.colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.pointText,
+                      { color: theme.colors.textSecondary },
+                    ]}
+                  >
                     The private key will be removed from this device
                   </Text>
                 </View>
               </View>
 
-              <View style={[styles.accountCard, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
-                <Text style={[styles.accountLabel, { color: theme.colors.textSecondary }]}>
+              <View
+                style={[
+                  styles.accountCard,
+                  {
+                    backgroundColor: theme.colors.card,
+                    borderColor: theme.colors.border,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.accountLabel,
+                    { color: theme.colors.textSecondary },
+                  ]}
+                >
                   Account to Transfer
                 </Text>
-                <Text style={[styles.accountName, { color: theme.colors.text }]}>
+                <Text
+                  style={[styles.accountName, { color: theme.colors.text }]}
+                >
                   {account.label || 'Unnamed Account'}
                 </Text>
-                <Text style={[styles.accountAddress, { color: theme.colors.textMuted }]}>
+                <Text
+                  style={[
+                    styles.accountAddress,
+                    { color: theme.colors.textMuted },
+                  ]}
+                >
                   {account.address.slice(0, 8)}...{account.address.slice(-8)}
                 </Text>
               </View>
 
               <TouchableOpacity
-                style={[styles.primaryButton, { backgroundColor: theme.colors.warning }]}
+                style={[
+                  styles.primaryButton,
+                  { backgroundColor: theme.colors.warning },
+                ]}
                 onPress={handleAcceptDisclaimer}
               >
-                <Text style={[styles.primaryButtonText, { color: theme.colors.buttonText }]}>
+                <Text
+                  style={[
+                    styles.primaryButtonText,
+                    { color: theme.colors.buttonText },
+                  ]}
+                >
                   I Understand, Continue
                 </Text>
               </TouchableOpacity>
@@ -306,9 +420,19 @@ export function TransferToAirgapFlow({
       case 'displaying_qr':
         return (
           <View style={styles.qrContent}>
-            <View style={[styles.warningBanner, { backgroundColor: `${theme.colors.error}15` }]}>
+            <View
+              style={[
+                styles.warningBanner,
+                { backgroundColor: `${theme.colors.error}15` },
+              ]}
+            >
               <Ionicons name="eye-off" size={20} color={theme.colors.error} />
-              <Text style={[styles.warningBannerText, { color: theme.colors.error }]}>
+              <Text
+                style={[
+                  styles.warningBannerText,
+                  { color: theme.colors.error },
+                ]}
+              >
                 This QR code contains your private key. Keep it private!
               </Text>
             </View>
@@ -325,26 +449,46 @@ export function TransferToAirgapFlow({
             )}
 
             <View style={styles.instructions}>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 1. Open the Voi app on your airgap device
               </Text>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 2. Tap "Import from Online Wallet"
               </Text>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 3. Scan this QR code
               </Text>
-              <Text style={[styles.instructionStep, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.instructionStep, { color: theme.colors.text }]}
+              >
                 4. When ready, tap the button below to scan the confirmation
               </Text>
             </View>
 
             <TouchableOpacity
-              style={[styles.primaryButton, { backgroundColor: theme.colors.primary }]}
+              style={[
+                styles.primaryButton,
+                { backgroundColor: theme.colors.primary },
+              ]}
               onPress={handleScanResponse}
             >
-              <Ionicons name="scan-outline" size={20} color={theme.colors.buttonText} />
-              <Text style={[styles.primaryButtonText, { color: theme.colors.buttonText }]}>
+              <Ionicons
+                name="scan-outline"
+                size={20}
+                color={theme.colors.buttonText}
+              />
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  { color: theme.colors.buttonText },
+                ]}
+              >
                 Scan Confirmation QR
               </Text>
             </TouchableOpacity>
@@ -361,11 +505,16 @@ export function TransferToAirgapFlow({
               compact
             />
             <TouchableOpacity
-              style={[styles.backButton, { backgroundColor: theme.colors.card }]}
+              style={[
+                styles.backButton,
+                { backgroundColor: theme.colors.card },
+              ]}
               onPress={handleBackToQR}
             >
               <Ionicons name="arrow-back" size={20} color={theme.colors.text} />
-              <Text style={[styles.backButtonText, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.backButtonText, { color: theme.colors.text }]}
+              >
                 Back to QR Code
               </Text>
             </TouchableOpacity>
@@ -385,40 +534,84 @@ export function TransferToAirgapFlow({
       case 'confirm_deletion':
         return (
           <View style={styles.confirmContent}>
-            <View style={[styles.successIcon, { backgroundColor: `${theme.colors.success}15` }]}>
-              <Ionicons name="checkmark-circle" size={64} color={theme.colors.success} />
+            <View
+              style={[
+                styles.successIcon,
+                { backgroundColor: `${theme.colors.success}15` },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={64}
+                color={theme.colors.success}
+              />
             </View>
 
             <Text style={[styles.confirmTitle, { color: theme.colors.text }]}>
               Verification Successful
             </Text>
 
-            <Text style={[styles.confirmSubtitle, { color: theme.colors.textSecondary }]}>
-              Your airgap device has received the account and can sign transactions.
+            <Text
+              style={[
+                styles.confirmSubtitle,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
+              Your airgap device has received the account and can sign
+              transactions.
             </Text>
 
-            <View style={[styles.dangerBox, { backgroundColor: `${theme.colors.error}15`, borderColor: theme.colors.error }]}>
+            <View
+              style={[
+                styles.dangerBox,
+                {
+                  backgroundColor: `${theme.colors.error}15`,
+                  borderColor: theme.colors.error,
+                },
+              ]}
+            >
               <Ionicons name="warning" size={24} color={theme.colors.error} />
               <Text style={[styles.dangerText, { color: theme.colors.error }]}>
-                Proceeding will permanently remove the private key from this device. This cannot be undone.
+                Proceeding will permanently remove the private key from this
+                device. This cannot be undone.
               </Text>
             </View>
 
             <TouchableOpacity
-              style={[styles.dangerButton, { backgroundColor: theme.colors.error }]}
+              style={[
+                styles.dangerButton,
+                { backgroundColor: theme.colors.error },
+              ]}
               onPress={handleConfirmDeletion}
             >
-              <Ionicons name="trash-outline" size={20} color={theme.colors.buttonText} />
-              <Text style={[styles.primaryButtonText, { color: theme.colors.buttonText }]}>
+              <Ionicons
+                name="trash-outline"
+                size={20}
+                color={theme.colors.buttonText}
+              />
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  { color: theme.colors.buttonText },
+                ]}
+              >
                 Remove Key and Complete Transfer
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.cancelButton, { borderColor: theme.colors.border }]}
+              style={[
+                styles.cancelButton,
+                { borderColor: theme.colors.border },
+              ]}
               onPress={onCancel}
             >
-              <Text style={[styles.cancelButtonText, { color: theme.colors.textSecondary }]}>
+              <Text
+                style={[
+                  styles.cancelButtonText,
+                  { color: theme.colors.textSecondary },
+                ]}
+              >
                 Cancel
               </Text>
             </TouchableOpacity>
@@ -438,13 +631,29 @@ export function TransferToAirgapFlow({
       case 'success':
         return (
           <View style={styles.centeredContent}>
-            <View style={[styles.successIcon, { backgroundColor: `${theme.colors.success}15` }]}>
-              <Ionicons name="checkmark-circle" size={64} color={theme.colors.success} />
+            <View
+              style={[
+                styles.successIcon,
+                { backgroundColor: `${theme.colors.success}15` },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={64}
+                color={theme.colors.success}
+              />
             </View>
-            <Text style={[styles.successTitle, { color: theme.colors.success }]}>
+            <Text
+              style={[styles.successTitle, { color: theme.colors.success }]}
+            >
               Transfer Complete
             </Text>
-            <Text style={[styles.successSubtitle, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.successSubtitle,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               This account now signs transactions via your airgap device.
             </Text>
           </View>
@@ -453,32 +662,66 @@ export function TransferToAirgapFlow({
       case 'error':
         return (
           <View style={styles.centeredContent}>
-            <View style={[styles.errorIcon, { backgroundColor: `${theme.colors.error}15` }]}>
-              <Ionicons name="close-circle" size={64} color={theme.colors.error} />
+            <View
+              style={[
+                styles.errorIcon,
+                { backgroundColor: `${theme.colors.error}15` },
+              ]}
+            >
+              <Ionicons
+                name="close-circle"
+                size={64}
+                color={theme.colors.error}
+              />
             </View>
             <Text style={[styles.errorTitle, { color: theme.colors.error }]}>
               Transfer Failed
             </Text>
-            <Text style={[styles.errorMessage, { color: theme.colors.textSecondary }]}>
+            <Text
+              style={[
+                styles.errorMessage,
+                { color: theme.colors.textSecondary },
+              ]}
+            >
               {error || 'An unknown error occurred'}
             </Text>
 
             <View style={styles.errorActions}>
               <TouchableOpacity
-                style={[styles.retryButton, { backgroundColor: theme.colors.primary }]}
+                style={[
+                  styles.retryButton,
+                  { backgroundColor: theme.colors.primary },
+                ]}
                 onPress={handleRetry}
               >
-                <Ionicons name="refresh" size={20} color={theme.colors.buttonText} />
-                <Text style={[styles.retryButtonText, { color: theme.colors.buttonText }]}>
+                <Ionicons
+                  name="refresh"
+                  size={20}
+                  color={theme.colors.buttonText}
+                />
+                <Text
+                  style={[
+                    styles.retryButtonText,
+                    { color: theme.colors.buttonText },
+                  ]}
+                >
                   Try Again
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.cancelButton, { borderColor: theme.colors.border }]}
+                style={[
+                  styles.cancelButton,
+                  { borderColor: theme.colors.border },
+                ]}
                 onPress={onCancel}
               >
-                <Text style={[styles.cancelButtonText, { color: theme.colors.textSecondary }]}>
+                <Text
+                  style={[
+                    styles.cancelButtonText,
+                    { color: theme.colors.textSecondary },
+                  ]}
+                >
                   Cancel
                 </Text>
               </TouchableOpacity>
@@ -491,7 +734,12 @@ export function TransferToAirgapFlow({
     }
   };
 
-  const canClose = !['generating', 'verifying', 'converting', 'success'].includes(state);
+  const canClose = ![
+    'generating',
+    'verifying',
+    'converting',
+    'success',
+  ].includes(state);
 
   return (
     <Modal
@@ -500,9 +748,14 @@ export function TransferToAirgapFlow({
       presentationStyle="pageSheet"
       onRequestClose={canClose ? onCancel : undefined}
     >
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]} edges={['top', 'bottom']}>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor: theme.colors.background }]}
+        edges={['top', 'bottom']}
+      >
         {/* Header */}
-        <View style={[styles.header, { borderBottomColor: theme.colors.border }]}>
+        <View
+          style={[styles.header, { borderBottomColor: theme.colors.border }]}
+        >
           <TouchableOpacity
             style={styles.closeButton}
             onPress={onCancel}

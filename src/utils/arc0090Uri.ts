@@ -119,8 +119,8 @@ export type Arc0090UriType =
 
 // Genesis hash to NetworkId mapping (base64url encoded, without padding)
 const GENESIS_HASH_MAP: Record<string, NetworkId> = {
-  'r20fSQI8gWe_kFZziNonSPCXLwcQmH_n': NetworkId.VOI_MAINNET, // Voi Mainnet
-  'wGHE2Pwdvd7S12BL5FaOP20EGYesN73k': NetworkId.ALGORAND_MAINNET, // Algorand Mainnet
+  r20fSQI8gWe_kFZziNonSPCXLwcQmH_n: NetworkId.VOI_MAINNET, // Voi Mainnet
+  wGHE2Pwdvd7S12BL5FaOP20EGYesN73k: NetworkId.ALGORAND_MAINNET, // Algorand Mainnet
 };
 
 // Network alias to NetworkId mapping
@@ -533,7 +533,9 @@ function parseApplUri(uri: string): Arc0090ApplUri | null {
     params.box = searchParams.getAll('box');
 
     // Foreign assets (can have multiple)
-    params.asset = searchParams.getAll('asset').filter((id) => /^\d+$/.test(id));
+    params.asset = searchParams
+      .getAll('asset')
+      .filter((id) => /^\d+$/.test(id));
 
     // Foreign accounts (can have multiple)
     params.account = searchParams
@@ -795,7 +797,8 @@ export function validateKeyregUri(uri: Arc0090KeyregUri): ValidationResult {
 
   // Online keyreg requires all participation keys
   if (uri.isOnline) {
-    if (!uri.params.votekey) errors.push('Vote key is required for online keyreg');
+    if (!uri.params.votekey)
+      errors.push('Vote key is required for online keyreg');
     if (!uri.params.selkey)
       errors.push('Selection key is required for online keyreg');
     if (!uri.params.votefst)
@@ -954,7 +957,10 @@ export function createPaymentSummary(parsed: Arc0090PaymentUri): string {
     const assetId = parsed.params.asset ? parseInt(parsed.params.asset) : 0;
     const isNativeToken = assetId === 0;
     const decimals = isNativeToken ? 6 : 0;
-    const displayAmount = convertAmountToDisplay(parsed.params.amount, decimals);
+    const displayAmount = convertAmountToDisplay(
+      parsed.params.amount,
+      decimals
+    );
 
     if (isNativeToken) {
       const tokenName = parsed.scheme === 'algorand' ? 'Algos' : 'VOI';

@@ -113,7 +113,9 @@ export class MessagingService {
     }
 
     // Verify sender has registered their messaging key (defense in depth)
-    const senderRegistered = await isMessagingKeyRegistered(request.senderAddress);
+    const senderRegistered = await isMessagingKeyRegistered(
+      request.senderAddress
+    );
     if (!senderRegistered) {
       throw new Error(
         'You must register for encrypted messaging before sending messages. Please enable messaging first.'
@@ -121,7 +123,9 @@ export class MessagingService {
     }
 
     // Look up recipient's messaging public key
-    const recipientMessagingKey = await getMessagingPublicKey(request.recipientAddress);
+    const recipientMessagingKey = await getMessagingPublicKey(
+      request.recipientAddress
+    );
     if (!recipientMessagingKey) {
       throw new Error(
         'Recipient has not registered for encrypted messaging. They must enable messaging first.'
@@ -129,7 +133,10 @@ export class MessagingService {
     }
 
     // Get the private key to extract sender's public key
-    const privateKey = await AccountSecureStorage.getPrivateKey(account.id, pin);
+    const privateKey = await AccountSecureStorage.getPrivateKey(
+      account.id,
+      pin
+    );
 
     try {
       // Extract sender's Ed25519 public key for identification
@@ -259,7 +266,7 @@ export class MessagingService {
       .select('*')
       .or(
         `and(sender.eq.${userAddress},receiver.eq.${friendAddress}),` +
-        `and(sender.eq.${friendAddress},receiver.eq.${userAddress})`
+          `and(sender.eq.${friendAddress},receiver.eq.${userAddress})`
       )
       .order('round', { ascending: false })
       .limit(limit);
@@ -295,7 +302,9 @@ export class MessagingService {
     for (const msg of mimirMessages) {
       // Only process v2 messages
       if (msg.version !== 2) {
-        console.warn(`Skipping v1 message ${msg.txid} - v1 format not supported`);
+        console.warn(
+          `Skipping v1 message ${msg.txid} - v1 format not supported`
+        );
         continue;
       }
 
@@ -370,14 +379,17 @@ export class MessagingService {
     const response = await query.do();
 
     // Filter for transactions between user and friend
-    const allTxns = (response.transactions || []).filter((txn: Record<string, unknown>) => {
-      const receiver = (txn['payment-transaction'] as Record<string, unknown>)?.receiver ||
-        (txn.paymentTransaction as Record<string, unknown>)?.receiver;
-      return (
-        (txn.sender === userAddress && receiver === friendAddress) ||
-        (txn.sender === friendAddress && receiver === userAddress)
-      );
-    });
+    const allTxns = (response.transactions || []).filter(
+      (txn: Record<string, unknown>) => {
+        const receiver =
+          (txn['payment-transaction'] as Record<string, unknown>)?.receiver ||
+          (txn.paymentTransaction as Record<string, unknown>)?.receiver;
+        return (
+          (txn.sender === userAddress && receiver === friendAddress) ||
+          (txn.sender === friendAddress && receiver === userAddress)
+        );
+      }
+    );
 
     const messages: Message[] = [];
 
@@ -536,7 +548,8 @@ export class MessagingService {
       if (msg.version !== 2) continue;
 
       // Determine friend address (the other party)
-      const friendAddress = msg.sender === userAddress ? msg.receiver : msg.sender;
+      const friendAddress =
+        msg.sender === userAddress ? msg.receiver : msg.sender;
       const direction: MessageDirection =
         msg.sender === userAddress ? 'sent' : 'received';
 
@@ -548,7 +561,10 @@ export class MessagingService {
       if (!verifySender(msg.sender, parsed.payload)) continue;
 
       try {
-        const content = decryptMessageV2(parsed.payload, messagingKeyPair.secretKey);
+        const content = decryptMessageV2(
+          parsed.payload,
+          messagingKeyPair.secretKey
+        );
 
         const message: Message = {
           id: msg.txid,
@@ -571,7 +587,10 @@ export class MessagingService {
 
     // Sort messages in each conversation by timestamp
     for (const [addr, msgs] of conversationMap) {
-      conversationMap.set(addr, msgs.sort((a, b) => a.timestamp - b.timestamp));
+      conversationMap.set(
+        addr,
+        msgs.sort((a, b) => a.timestamp - b.timestamp)
+      );
     }
 
     return conversationMap;
@@ -619,7 +638,8 @@ export class MessagingService {
 
       let friendAddress: string;
       if (direction === 'sent') {
-        friendAddress = txn['payment-transaction']?.receiver ||
+        friendAddress =
+          txn['payment-transaction']?.receiver ||
           txn.paymentTransaction?.receiver ||
           txn.receiver;
       } else {
@@ -664,7 +684,10 @@ export class MessagingService {
 
     // Sort messages in each conversation by timestamp
     for (const [addr, msgs] of conversationMap) {
-      conversationMap.set(addr, msgs.sort((a, b) => a.timestamp - b.timestamp));
+      conversationMap.set(
+        addr,
+        msgs.sort((a, b) => a.timestamp - b.timestamp)
+      );
     }
 
     return conversationMap;
@@ -704,13 +727,18 @@ export class MessagingService {
       throw new Error('No wallet found');
     }
 
-    const account = wallet.accounts.find((acc) => acc.address === accountAddress);
+    const account = wallet.accounts.find(
+      (acc) => acc.address === accountAddress
+    );
     if (!account) {
       throw new Error('Account not found');
     }
 
     // Get the private key and derive messaging keypair
-    const privateKey = await AccountSecureStorage.getPrivateKey(account.id, pin);
+    const privateKey = await AccountSecureStorage.getPrivateKey(
+      account.id,
+      pin
+    );
 
     try {
       return deriveMessagingKeyPairFromSecret(privateKey, accountAddress);
@@ -743,16 +771,25 @@ export class MessagingService {
       throw new Error('No wallet found');
     }
 
-    const account = wallet.accounts.find((acc) => acc.address === accountAddress);
+    const account = wallet.accounts.find(
+      (acc) => acc.address === accountAddress
+    );
     if (!account) {
       throw new Error('Account not found');
     }
 
     // Derive the messaging keypair
-    const messagingKeyPair = await this.deriveMessagingKeyPair(accountAddress, pin);
+    const messagingKeyPair = await this.deriveMessagingKeyPair(
+      accountAddress,
+      pin
+    );
 
     // Register on-chain
-    return registerMessagingKey(messagingKeyPair.publicKey, account as WalletAccount, pin);
+    return registerMessagingKey(
+      messagingKeyPair.publicKey,
+      account as WalletAccount,
+      pin
+    );
   }
 
   /**

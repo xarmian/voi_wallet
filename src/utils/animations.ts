@@ -122,8 +122,14 @@ export function useGlowPulse(
   const startPulse = useCallback(() => {
     glowOpacity.value = withRepeat(
       withSequence(
-        withTiming(maxOpacity, { duration: duration / 2, easing: Easing.inOut(Easing.ease) }),
-        withTiming(minOpacity, { duration: duration / 2, easing: Easing.inOut(Easing.ease) })
+        withTiming(maxOpacity, {
+          duration: duration / 2,
+          easing: Easing.inOut(Easing.ease),
+        }),
+        withTiming(minOpacity, {
+          duration: duration / 2,
+          easing: Easing.inOut(Easing.ease),
+        })
       ),
       -1, // Repeat infinitely
       false // Don't reverse
@@ -157,7 +163,10 @@ export function useEntranceAnimation(
   const translateYValue = useSharedValue(translateY);
 
   const enter = useCallback(() => {
-    opacity.value = withTiming(1, { ...timingConfigs.normal, duration: timingConfigs.normal.duration + delay });
+    opacity.value = withTiming(1, {
+      ...timingConfigs.normal,
+      duration: timingConfigs.normal.duration + delay,
+    });
     translateYValue.value = withSpring(0, springConfigs.smooth);
   }, [opacity, translateYValue, delay]);
 
@@ -190,13 +199,19 @@ export function useNumberTransition(
 ) {
   const animatedValue = useSharedValue(initialValue);
 
-  const setValue = useCallback((newValue: number) => {
-    animatedValue.value = withTiming(newValue, config);
-  }, [animatedValue, config]);
+  const setValue = useCallback(
+    (newValue: number) => {
+      animatedValue.value = withTiming(newValue, config);
+    },
+    [animatedValue, config]
+  );
 
-  const setValueInstant = useCallback((newValue: number) => {
-    animatedValue.value = newValue;
-  }, [animatedValue]);
+  const setValueInstant = useCallback(
+    (newValue: number) => {
+      animatedValue.value = newValue;
+    },
+    [animatedValue]
+  );
 
   return {
     animatedValue,
@@ -241,14 +256,16 @@ export function useStaggeredEntrance(
   baseDelay: number = 50
 ) {
   const opacities = Array.from({ length: itemCount }, () => useSharedValue(0));
-  const translations = Array.from({ length: itemCount }, () => useSharedValue(20));
+  const translations = Array.from({ length: itemCount }, () =>
+    useSharedValue(20)
+  );
 
   const animateIn = useCallback(() => {
     opacities.forEach((opacity, index) => {
       const delay = index * baseDelay;
       opacity.value = withTiming(1, {
         ...timingConfigs.normal,
-        duration: timingConfigs.normal.duration + delay
+        duration: timingConfigs.normal.duration + delay,
       });
     });
     translations.forEach((translation, index) => {
@@ -260,23 +277,26 @@ export function useStaggeredEntrance(
   }, [opacities, translations, baseDelay]);
 
   const reset = useCallback(() => {
-    opacities.forEach(opacity => {
+    opacities.forEach((opacity) => {
       opacity.value = 0;
     });
-    translations.forEach(translation => {
+    translations.forEach((translation) => {
       translation.value = 20;
     });
   }, [opacities, translations]);
 
-  const getItemStyle = useCallback((index: number) => {
-    const opacity = opacities[index];
-    const translateY = translations[index];
+  const getItemStyle = useCallback(
+    (index: number) => {
+      const opacity = opacities[index];
+      const translateY = translations[index];
 
-    return useAnimatedStyle(() => ({
-      opacity: opacity?.value ?? 1,
-      transform: [{ translateY: translateY?.value ?? 0 }],
-    }));
-  }, [opacities, translations]);
+      return useAnimatedStyle(() => ({
+        opacity: opacity?.value ?? 1,
+        transform: [{ translateY: translateY?.value ?? 0 }],
+      }));
+    },
+    [opacities, translations]
+  );
 
   return {
     animateIn,
@@ -311,10 +331,7 @@ export const interpolations = {
 /**
  * Utility to create a delayed animation
  */
-export function withDelay<T>(
-  delay: number,
-  animation: T
-): T {
+export function withDelay<T>(delay: number, animation: T): T {
   // Note: react-native-reanimated has its own withDelay, but this wrapper
   // provides consistent typing
   const { withDelay: reanimatedWithDelay } = require('react-native-reanimated');
@@ -334,15 +351,24 @@ export function useFadeIn(delay: number = 0, duration: number = 300) {
   const fadeIn = useCallback(() => {
     if (delay > 0) {
       setTimeout(() => {
-        opacity.value = withTiming(1, { duration, easing: Easing.out(Easing.ease) });
+        opacity.value = withTiming(1, {
+          duration,
+          easing: Easing.out(Easing.ease),
+        });
       }, delay);
     } else {
-      opacity.value = withTiming(1, { duration, easing: Easing.out(Easing.ease) });
+      opacity.value = withTiming(1, {
+        duration,
+        easing: Easing.out(Easing.ease),
+      });
     }
   }, [opacity, delay, duration]);
 
   const fadeOut = useCallback(() => {
-    opacity.value = withTiming(0, { duration: duration / 2, easing: Easing.in(Easing.ease) });
+    opacity.value = withTiming(0, {
+      duration: duration / 2,
+      easing: Easing.in(Easing.ease),
+    });
   }, [opacity, duration]);
 
   return { animatedStyle, fadeIn, fadeOut, opacity };
@@ -393,8 +419,12 @@ export function useSlideIn(
   delay: number = 0,
   distance: number = 30
 ) {
-  const translateX = useSharedValue(direction === 'left' ? -distance : direction === 'right' ? distance : 0);
-  const translateY = useSharedValue(direction === 'up' ? distance : direction === 'down' ? -distance : 0);
+  const translateX = useSharedValue(
+    direction === 'left' ? -distance : direction === 'right' ? distance : 0
+  );
+  const translateY = useSharedValue(
+    direction === 'up' ? distance : direction === 'down' ? -distance : 0
+  );
   const opacity = useSharedValue(0);
 
   const animatedStyle = useAnimatedStyle(() => ({
@@ -420,8 +450,10 @@ export function useSlideIn(
   }, [translateX, translateY, opacity, delay]);
 
   const reset = useCallback(() => {
-    translateX.value = direction === 'left' ? -distance : direction === 'right' ? distance : 0;
-    translateY.value = direction === 'up' ? distance : direction === 'down' ? -distance : 0;
+    translateX.value =
+      direction === 'left' ? -distance : direction === 'right' ? distance : 0;
+    translateY.value =
+      direction === 'up' ? distance : direction === 'down' ? -distance : 0;
     opacity.value = 0;
   }, [translateX, translateY, opacity, direction, distance]);
 
@@ -432,7 +464,11 @@ export function useSlideIn(
  * Staggered children entrance - for lists
  * Returns a function to get delay for each index
  */
-export function getStaggerDelay(index: number, baseDelay: number = 50, maxDelay: number = 500): number {
+export function getStaggerDelay(
+  index: number,
+  baseDelay: number = 50,
+  maxDelay: number = 500
+): number {
   return Math.min(index * baseDelay, maxDelay);
 }
 
@@ -459,7 +495,10 @@ export function useCardFlip(duration: number = 300) {
 
   const flip = useCallback(() => {
     isFlipped.value = !isFlipped.value;
-    rotateY.value = withTiming(isFlipped.value ? 180 : 0, { duration, easing: Easing.inOut(Easing.ease) });
+    rotateY.value = withTiming(isFlipped.value ? 180 : 0, {
+      duration,
+      easing: Easing.inOut(Easing.ease),
+    });
   }, [rotateY, isFlipped, duration]);
 
   return { frontAnimatedStyle, backAnimatedStyle, flip, isFlipped };

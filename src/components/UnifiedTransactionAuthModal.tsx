@@ -30,7 +30,10 @@ import {
 import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import { AnimatedQRCode, AnimatedQRScanner } from '@/components/remoteSigner';
 import { RemoteSignerService } from '@/services/remoteSigner';
-import { isRemoteSignerResponse, RemoteSignerResponse } from '@/types/remoteSigner';
+import {
+  isRemoteSignerResponse,
+  RemoteSignerResponse,
+} from '@/types/remoteSigner';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -53,7 +56,9 @@ export default function UnifiedTransactionAuthModal({
 }: UnifiedTransactionAuthModalProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const [authState, setAuthState] = useState<TransactionAuthState_Interface>(controller.getState());
+  const [authState, setAuthState] = useState<TransactionAuthState_Interface>(
+    controller.getState()
+  );
   const [pin, setPin] = useState('');
   const [initialized, setInitialized] = useState(false);
   const [biometricAttempted, setBiometricAttempted] = useState(false);
@@ -73,18 +78,39 @@ export default function UnifiedTransactionAuthModal({
   // Initialize signing flow when modal becomes visible with a request (only once per open)
   // Do NOT restart after user rejection/error - only start on first open
   useEffect(() => {
-    if (visible && request && authState.state === 'idle' && !initialized &&
-        !userCancelled && (!authState.error && !authState.ledgerError)) { // Don't restart after errors or cancellation
+    if (
+      visible &&
+      request &&
+      authState.state === 'idle' &&
+      !initialized &&
+      !userCancelled &&
+      !authState.error &&
+      !authState.ledgerError
+    ) {
+      // Don't restart after errors or cancellation
       console.log('UnifiedTransactionAuthModal: initializeSigningFlow');
       controller.initializeSigningFlow(request);
       setInitialized(true);
     }
-  }, [visible, request, controller, authState.state, initialized, userCancelled, authState.error, authState.ledgerError]);
+  }, [
+    visible,
+    request,
+    controller,
+    authState.state,
+    initialized,
+    userCancelled,
+    authState.error,
+    authState.ledgerError,
+  ]);
 
   // Handle completion state - wait for result to be populated before calling onComplete
   // The hasCalledOnComplete guard prevents double-calls when onComplete prop reference changes
   useEffect(() => {
-    if (authState.state === 'completed' && authState.result && !hasCalledOnComplete.current) {
+    if (
+      authState.state === 'completed' &&
+      authState.result &&
+      !hasCalledOnComplete.current
+    ) {
       hasCalledOnComplete.current = true;
       onComplete(true, authState.result);
     }
@@ -103,12 +129,25 @@ export default function UnifiedTransactionAuthModal({
 
   // Auto-prompt for biometric auth when available (only once per open)
   useEffect(() => {
-    if (visible && authState.state === 'authenticating' &&
-        authState.biometricAvailable && !authState.isLocked && !biometricAttempted && !authState.isLedgerFlow) {
+    if (
+      visible &&
+      authState.state === 'authenticating' &&
+      authState.biometricAvailable &&
+      !authState.isLocked &&
+      !biometricAttempted &&
+      !authState.isLedgerFlow
+    ) {
       setBiometricAttempted(true);
       handleBiometricAuth();
     }
-  }, [visible, authState.state, authState.biometricAvailable, authState.isLocked, biometricAttempted, authState.isLedgerFlow]);
+  }, [
+    visible,
+    authState.state,
+    authState.biometricAvailable,
+    authState.isLocked,
+    biometricAttempted,
+    authState.isLedgerFlow,
+  ]);
 
   // Reset guards when modal closes or controller resets
   useEffect(() => {
@@ -121,7 +160,12 @@ export default function UnifiedTransactionAuthModal({
   }, [visible, authState.state]);
 
   const handleNumberPress = (number: string) => {
-    if (authState.isLocked || pin.length >= 6 || authState.state !== 'authenticating') return;
+    if (
+      authState.isLocked ||
+      pin.length >= 6 ||
+      authState.state !== 'authenticating'
+    )
+      return;
 
     const newPin = pin + number;
     setPin(newPin);
@@ -179,21 +223,26 @@ export default function UnifiedTransactionAuthModal({
     controller.startRemoteSignerScan();
   }, [controller]);
 
-  const handleRemoteSignerScanned = useCallback(async (data: string) => {
-    try {
-      // Decode the scanned data
-      const payload = RemoteSignerService.decodePayload(data);
+  const handleRemoteSignerScanned = useCallback(
+    async (data: string) => {
+      try {
+        // Decode the scanned data
+        const payload = RemoteSignerService.decodePayload(data);
 
-      if (!isRemoteSignerResponse(payload)) {
-        console.error('Scanned data is not a valid remote signer response');
-        return;
+        if (!isRemoteSignerResponse(payload)) {
+          console.error('Scanned data is not a valid remote signer response');
+          return;
+        }
+
+        await controller.processRemoteSignerResponse(
+          payload as RemoteSignerResponse
+        );
+      } catch (error) {
+        console.error('Failed to process remote signer response:', error);
       }
-
-      await controller.processRemoteSignerResponse(payload as RemoteSignerResponse);
-    } catch (error) {
-      console.error('Failed to process remote signer response:', error);
-    }
-  }, [controller]);
+    },
+    [controller]
+  );
 
   const handleRemoteSignerCancel = useCallback(() => {
     controller.cancelRemoteSignerFlow();
@@ -206,14 +255,16 @@ export default function UnifiedTransactionAuthModal({
         return {
           icon: 'qr-code' as const,
           title: 'Scan with Signer Device',
-          message: 'Use your air-gapped signer device to scan this QR code and sign the transaction.',
+          message:
+            'Use your air-gapped signer device to scan this QR code and sign the transaction.',
           color: theme.colors.primary,
         };
       case 'waiting_signature':
         return {
           icon: 'scan' as const,
           title: 'Scan Signed Response',
-          message: 'After signing on your signer device, scan the response QR code below.',
+          message:
+            'After signing on your signer device, scan the response QR code below.',
           color: theme.colors.primary,
         };
       case 'processing_response':
@@ -227,7 +278,8 @@ export default function UnifiedTransactionAuthModal({
         return {
           icon: 'alert-circle' as const,
           title: 'Signing Error',
-          message: authState.remoteSignerError || 'Failed to complete remote signing.',
+          message:
+            authState.remoteSignerError || 'Failed to complete remote signing.',
           color: theme.colors.error,
         };
       default:
@@ -241,7 +293,9 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const errorMessageLower = (
-    authState.error?.message || authState.ledgerError || ''
+    authState.error?.message ||
+    authState.ledgerError ||
+    ''
   ).toLowerCase();
 
   const isUserRejectedError =
@@ -250,8 +304,7 @@ export default function UnifiedTransactionAuthModal({
       errorMessageLower.includes('rejected on ledger'));
 
   const isRequestMismatchError =
-    authState.state === 'error' &&
-    errorMessageLower.includes('does not match');
+    authState.state === 'error' && errorMessageLower.includes('does not match');
 
   const getErrorTitle = () => {
     if (isUserRejectedError) return 'Transaction Cancelled';
@@ -266,7 +319,11 @@ export default function UnifiedTransactionAuthModal({
     if (isRequestMismatchError) {
       return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
-    return authState.error?.message || authState.ledgerError || 'An unknown error occurred.';
+    return (
+      authState.error?.message ||
+      authState.ledgerError ||
+      'An unknown error occurred.'
+    );
   };
 
   useEffect(() => {
@@ -283,7 +340,14 @@ export default function UnifiedTransactionAuthModal({
       onComplete(false, { error: err });
       controller.resetAfterDismiss();
     }
-  }, [authState.state, authState.error, authState.ledgerError, isUserRejectedError, onComplete, controller]);
+  }, [
+    authState.state,
+    authState.error,
+    authState.ledgerError,
+    isUserRejectedError,
+    onComplete,
+    controller,
+  ]);
 
   const renderPinDots = () => {
     return (
@@ -294,7 +358,10 @@ export default function UnifiedTransactionAuthModal({
             style={[
               styles.pinDot,
               i < pin.length && styles.pinDotFilled,
-              { backgroundColor: i < pin.length ? theme.colors.primary : 'transparent' },
+              {
+                backgroundColor:
+                  i < pin.length ? theme.colors.primary : 'transparent',
+              },
             ]}
           />
         ))}
@@ -325,12 +392,18 @@ export default function UnifiedTransactionAuthModal({
                     key={key}
                     style={styles.numberButton}
                     onPress={handleBiometricAuth}
-                    disabled={authState.isLocked || authState.state !== 'authenticating'}
+                    disabled={
+                      authState.isLocked || authState.state !== 'authenticating'
+                    }
                   >
                     <Ionicons
                       name="finger-print"
                       size={28}
-                      color={authState.isLocked ? theme.colors.textMuted : theme.colors.primary}
+                      color={
+                        authState.isLocked
+                          ? theme.colors.textMuted
+                          : theme.colors.primary
+                      }
                     />
                   </TouchableOpacity>
                 );
@@ -342,12 +415,18 @@ export default function UnifiedTransactionAuthModal({
                     key={key}
                     style={styles.numberButton}
                     onPress={handleBackspace}
-                    disabled={authState.isLocked || authState.state !== 'authenticating'}
+                    disabled={
+                      authState.isLocked || authState.state !== 'authenticating'
+                    }
                   >
                     <Ionicons
                       name="backspace-outline"
                       size={24}
-                      color={authState.isLocked ? theme.colors.textMuted : theme.colors.text}
+                      color={
+                        authState.isLocked
+                          ? theme.colors.textMuted
+                          : theme.colors.text
+                      }
                     />
                   </TouchableOpacity>
                 );
@@ -358,7 +437,9 @@ export default function UnifiedTransactionAuthModal({
                   key={key}
                   style={[styles.numberButton, styles.numberButtonWithBg]}
                   onPress={() => handleNumberPress(key)}
-                  disabled={authState.isLocked || authState.state !== 'authenticating'}
+                  disabled={
+                    authState.isLocked || authState.state !== 'authenticating'
+                  }
                 >
                   <Text
                     style={[
@@ -395,14 +476,16 @@ export default function UnifiedTransactionAuthModal({
         return {
           icon: 'link' as const,
           title: 'Connecting to Ledger',
-          message: 'Connecting to your Ledger device. Please ensure it is unlocked and the Algorand app is open.',
+          message:
+            'Connecting to your Ledger device. Please ensure it is unlocked and the Algorand app is open.',
           color: theme.colors.primary,
         };
       case 'app_required':
         return {
           icon: 'apps' as const,
           title: 'Open Algorand App',
-          message: 'Please open the Algorand application on your Ledger device.',
+          message:
+            'Please open the Algorand application on your Ledger device.',
           color: theme.colors.primary,
         };
       case 'ready':
@@ -424,7 +507,8 @@ export default function UnifiedTransactionAuthModal({
           icon: 'checkmark-circle' as const,
           title: 'Confirm on Ledger',
           message: authState.signingProgress
-            ? authState.signingProgress.message || 'Please review and approve the transaction on your Ledger device.'
+            ? authState.signingProgress.message ||
+              'Please review and approve the transaction on your Ledger device.'
             : 'Please review and approve the transaction on your Ledger device.',
           color: theme.colors.primary,
         };
@@ -432,7 +516,9 @@ export default function UnifiedTransactionAuthModal({
         return {
           icon: 'link' as const,
           title: 'Connecting to Ledger',
-          message: authState.ledgerError || 'Trying to connect to your Ledger device. Please ensure it is connected, unlocked, and the Algorand app is open.',
+          message:
+            authState.ledgerError ||
+            'Trying to connect to your Ledger device. Please ensure it is connected, unlocked, and the Algorand app is open.',
           color: theme.colors.primary,
         };
       default:
@@ -447,18 +533,24 @@ export default function UnifiedTransactionAuthModal({
 
   // Render remote signer content
   const renderRemoteSignerContent = () => {
-    const remoteDisplay = getRemoteSignerStatusDisplay(authState.remoteSignerStatus);
+    const remoteDisplay = getRemoteSignerStatusDisplay(
+      authState.remoteSignerStatus
+    );
 
     // Show QR scanner when waiting for signature
     if (authState.remoteSignerStatus === 'waiting_signature') {
       return (
         <View style={styles.remoteSignerContainer}>
           <Text style={styles.remoteSignerTitle}>{remoteDisplay.title}</Text>
-          <Text style={styles.remoteSignerMessage}>{remoteDisplay.message}</Text>
+          <Text style={styles.remoteSignerMessage}>
+            {remoteDisplay.message}
+          </Text>
           <View style={styles.scannerContainer}>
             <AnimatedQRScanner
               onScan={handleRemoteSignerScanned}
-              onError={(error) => console.error('Remote signer scan error:', error)}
+              onError={(error) =>
+                console.error('Remote signer scan error:', error)
+              }
               instructionsText="Scan the signed response from your signer device"
               showProgress={true}
               compact={true}
@@ -522,7 +614,9 @@ export default function UnifiedTransactionAuthModal({
             <View style={styles.stepNumber}>
               <Text style={styles.stepNumberText}>1</Text>
             </View>
-            <Text style={styles.stepText}>Scan this QR with your signer device</Text>
+            <Text style={styles.stepText}>
+              Scan this QR with your signer device
+            </Text>
           </View>
           <View style={styles.instructionStep}>
             <View style={styles.stepNumber}>
@@ -559,33 +653,37 @@ export default function UnifiedTransactionAuthModal({
                 size={48}
                 color={ledgerDisplay.color}
               />
-              <Text style={[
-                styles.ledgerTitle,
-                authState.ledgerStatus === 'error' && styles.errorTitle
-              ]}>
+              <Text
+                style={[
+                  styles.ledgerTitle,
+                  authState.ledgerStatus === 'error' && styles.errorTitle,
+                ]}
+              >
                 {ledgerDisplay.title}
               </Text>
-              <Text style={styles.ledgerMessage}>
-                {ledgerDisplay.message}
-              </Text>
+              <Text style={styles.ledgerMessage}>{ledgerDisplay.message}</Text>
 
               {authState.ledgerDevice && (
                 <View style={styles.deviceStatusContainer}>
-                  <View style={[
-                    styles.deviceStatusIndicator,
-                    authState.ledgerDevice.connected
-                      ? styles.deviceConnected
-                      : styles.deviceDisconnected
-                  ]} />
+                  <View
+                    style={[
+                      styles.deviceStatusIndicator,
+                      authState.ledgerDevice.connected
+                        ? styles.deviceConnected
+                        : styles.deviceDisconnected,
+                    ]}
+                  />
                   <Text style={styles.deviceStatusText}>
                     {authState.ledgerDevice.connected
                       ? `${authState.ledgerDevice.name} connected`
-                      : `${authState.ledgerDevice.name} detected`
-                    }
+                      : `${authState.ledgerDevice.name} detected`}
                   </Text>
                 </View>
               )}
-              {(authState.ledgerStatus === 'searching' || authState.ledgerStatus === 'connecting' || authState.ledgerStatus === 'app_required' || authState.ledgerStatus === 'device_locked') && (
+              {(authState.ledgerStatus === 'searching' ||
+                authState.ledgerStatus === 'connecting' ||
+                authState.ledgerStatus === 'app_required' ||
+                authState.ledgerStatus === 'device_locked') && (
                 <View style={styles.buttonContainer}>
                   <TouchableOpacity
                     style={[styles.button, styles.cancelButton]}
@@ -609,7 +707,8 @@ export default function UnifiedTransactionAuthModal({
             {authState.isLocked && (
               <View style={styles.lockoutContainer}>
                 <Text style={styles.lockoutText}>
-                  Authentication temporarily locked due to too many failed attempts
+                  Authentication temporarily locked due to too many failed
+                  attempts
                 </Text>
               </View>
             )}
@@ -627,8 +726,12 @@ export default function UnifiedTransactionAuthModal({
           return (
             <View style={styles.processingContainer}>
               {/* Show different activity indicator based on status */}
-              {(authState.ledgerStatus === 'searching' || authState.ledgerStatus === 'connecting') ? (
-                <ActivityIndicator size="large" color={ledgerDisplay.color as any} />
+              {authState.ledgerStatus === 'searching' ||
+              authState.ledgerStatus === 'connecting' ? (
+                <ActivityIndicator
+                  size="large"
+                  color={ledgerDisplay.color as any}
+                />
               ) : (
                 <Ionicons
                   name={ledgerDisplay.icon}
@@ -636,23 +739,27 @@ export default function UnifiedTransactionAuthModal({
                   color={ledgerDisplay.color}
                 />
               )}
-              <Text style={[
-                styles.processingTitle,
-                authState.ledgerStatus === 'error' && styles.errorTitle
-              ]}>
+              <Text
+                style={[
+                  styles.processingTitle,
+                  authState.ledgerStatus === 'error' && styles.errorTitle,
+                ]}
+              >
                 {ledgerDisplay.title}
               </Text>
               <Text style={styles.processingMessage}>
                 {ledgerDisplay.message}
               </Text>
 
-              {authState.signingProgress && authState.ledgerStatus === 'waiting_confirmation' && (
-                <View style={styles.progressContainer}>
-                  <Text style={styles.progressText}>
-                    Step {authState.signingProgress.currentStep} of {authState.signingProgress.totalSteps}
-                  </Text>
-                </View>
-              )}
+              {authState.signingProgress &&
+                authState.ledgerStatus === 'waiting_confirmation' && (
+                  <View style={styles.progressContainer}>
+                    <Text style={styles.progressText}>
+                      Step {authState.signingProgress.currentStep} of{' '}
+                      {authState.signingProgress.totalSteps}
+                    </Text>
+                  </View>
+                )}
             </View>
           );
         }
@@ -742,7 +849,12 @@ export default function UnifiedTransactionAuthModal({
               style={[styles.button, styles.primaryButton]}
               onPress={handleRemoteSignerScanResponse}
             >
-              <Ionicons name="scan-outline" size={18} color={theme.colors.buttonText} style={{ marginRight: 6 }} />
+              <Ionicons
+                name="scan-outline"
+                size={18}
+                color={theme.colors.buttonText}
+                style={{ marginRight: 6 }}
+              />
               <Text style={styles.primaryButtonText}>Scan Response</Text>
             </TouchableOpacity>
           </View>
@@ -780,7 +892,11 @@ export default function UnifiedTransactionAuthModal({
     }
 
     if (authState.state === 'processing' || authState.state === 'signing') {
-      if (authState.isLedgerFlow && (authState.ledgerStatus === 'error' || authState.ledgerStatus === 'app_required')) {
+      if (
+        authState.isLedgerFlow &&
+        (authState.ledgerStatus === 'error' ||
+          authState.ledgerStatus === 'app_required')
+      ) {
         return (
           <View style={styles.buttonContainer}>
             <TouchableOpacity
@@ -849,9 +965,9 @@ export default function UnifiedTransactionAuthModal({
     );
   };
 
-
   // Use bottom sheet style for standard PIN/biometric auth, centered modal for other flows
-  const useBottomSheet = authState.state === 'authenticating' &&
+  const useBottomSheet =
+    authState.state === 'authenticating' &&
     !authState.isLedgerFlow &&
     !authState.isRemoteSignerFlow;
 
@@ -869,12 +985,17 @@ export default function UnifiedTransactionAuthModal({
       }}
     >
       <View style={useBottomSheet ? styles.bottomSheetOverlay : styles.overlay}>
-        <View style={useBottomSheet ? styles.bottomSheetContainer : styles.modal}>
+        <View
+          style={useBottomSheet ? styles.bottomSheetContainer : styles.modal}
+        >
           {useBottomSheet ? (
             // Bottom sheet header for PIN entry
             <>
               <View style={styles.bottomSheetHeader}>
-                <TouchableOpacity style={styles.bottomSheetCancelButton} onPress={handleCancel}>
+                <TouchableOpacity
+                  style={styles.bottomSheetCancelButton}
+                  onPress={handleCancel}
+                >
                   <Text style={styles.bottomSheetCancelText}>Cancel</Text>
                 </TouchableOpacity>
                 <Text style={styles.bottomSheetTitle}>Authenticate</Text>
@@ -902,7 +1023,9 @@ export default function UnifiedTransactionAuthModal({
                   </Text>
                 ) : authState.pinAttempts > 0 ? (
                   <Text style={styles.bottomSheetError}>
-                    Incorrect PIN. {authState.maxPinAttempts - authState.pinAttempts} attempts remaining.
+                    Incorrect PIN.{' '}
+                    {authState.maxPinAttempts - authState.pinAttempts} attempts
+                    remaining.
                   </Text>
                 ) : null}
                 {renderPinDots()}
@@ -934,11 +1057,13 @@ export default function UnifiedTransactionAuthModal({
 
               {renderButtons()}
 
-              {authState.pinAttempts > 0 && authState.state === 'authenticating' && (
-                <Text style={styles.attemptsText}>
-                  Failed attempts: {authState.pinAttempts}/{authState.maxPinAttempts}
-                </Text>
-              )}
+              {authState.pinAttempts > 0 &&
+                authState.state === 'authenticating' && (
+                  <Text style={styles.attemptsText}>
+                    Failed attempts: {authState.pinAttempts}/
+                    {authState.maxPinAttempts}
+                  </Text>
+                )}
             </>
           )}
         </View>

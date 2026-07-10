@@ -67,7 +67,7 @@ class DebugLogger {
       }
 
       // Notify listeners
-      this.listeners.forEach(listener => {
+      this.listeners.forEach((listener) => {
         try {
           listener(this.logs);
         } catch (error) {
@@ -83,7 +83,7 @@ class DebugLogger {
 
   clearLogs(): void {
     this.logs = [];
-    this.listeners.forEach(listener => {
+    this.listeners.forEach((listener) => {
       try {
         listener(this.logs);
       } catch (error) {
@@ -114,7 +114,7 @@ class DebugLogger {
       this.logs = this.logs.slice(-this.maxLogs);
     }
 
-    this.listeners.forEach(listener => {
+    this.listeners.forEach((listener) => {
       try {
         listener(this.logs);
       } catch (error) {

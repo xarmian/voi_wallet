@@ -99,11 +99,16 @@ export class WalletConnectV1WebSocket {
           const errorObj = new Error('WebSocket error');
 
           if (this.hasEstablishedConnection) {
-            console.warn('WC v1 WebSocket: Error after established connection, awaiting close');
+            console.warn(
+              'WC v1 WebSocket: Error after established connection, awaiting close'
+            );
             return;
           }
 
-          console.error('WC v1 WebSocket: Error establishing connection', error);
+          console.error(
+            'WC v1 WebSocket: Error establishing connection',
+            error
+          );
           this.errorHandler?.(errorObj);
           reject(errorObj);
         };
@@ -162,7 +167,10 @@ export class WalletConnectV1WebSocket {
     return new Promise((resolve) => {
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
         console.warn('WC v1 WebSocket: Cannot subscribe, not connected');
-        console.warn('WC v1 WebSocket: Current state:', this.getReadyStateString());
+        console.warn(
+          'WC v1 WebSocket: Current state:',
+          this.getReadyStateString()
+        );
         resolve();
         return;
       }
@@ -214,7 +222,10 @@ export class WalletConnectV1WebSocket {
   /**
    * Register a message handler with topic info
    */
-  onTopicMessageWithMeta(topic: string, handler: (payload: string, topic: string) => void): void {
+  onTopicMessageWithMeta(
+    topic: string,
+    handler: (payload: string, topic: string) => void
+  ): void {
     this.messageHandlers.set(topic, (payload) => handler(payload, topic));
   }
 
@@ -245,11 +256,16 @@ export class WalletConnectV1WebSocket {
   private getReadyStateString(): string {
     if (!this.socket) return 'NO_SOCKET';
     switch (this.socket.readyState) {
-      case WebSocket.CONNECTING: return 'CONNECTING';
-      case WebSocket.OPEN: return 'OPEN';
-      case WebSocket.CLOSING: return 'CLOSING';
-      case WebSocket.CLOSED: return 'CLOSED';
-      default: return 'UNKNOWN';
+      case WebSocket.CONNECTING:
+        return 'CONNECTING';
+      case WebSocket.OPEN:
+        return 'OPEN';
+      case WebSocket.CLOSING:
+        return 'CLOSING';
+      case WebSocket.CLOSED:
+        return 'CLOSED';
+      default:
+        return 'UNKNOWN';
     }
   }
 
@@ -316,9 +332,7 @@ export class WalletConnectV1WebSocket {
     }
 
     if (this.reconnectAttempts >= WS_MAX_RECONNECT_ATTEMPTS) {
-      console.error(
-        'WC v1 WebSocket: Max reconnection attempts reached'
-      );
+      console.error('WC v1 WebSocket: Max reconnection attempts reached');
       this.errorHandler?.(
         new Error('Failed to reconnect after maximum attempts')
       );

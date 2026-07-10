@@ -519,7 +519,9 @@ export class DeepLinkService {
 
       // Check for legacy voi:// format first (voi://send?to=...)
       if (isLegacyVoiUri(url)) {
-        console.log('[DeepLink] handleArc0090Uri - detected legacy voi:// format');
+        console.log(
+          '[DeepLink] handleArc0090Uri - detected legacy voi:// format'
+        );
         return await this.handleLegacyVoiUri(url);
       }
 
@@ -537,7 +539,10 @@ export class DeepLinkService {
       }
 
       const parsed = parseArc0090Uri(url);
-      console.log('[DeepLink] handleArc0090Uri - parsed:', JSON.stringify(parsed, null, 2));
+      console.log(
+        '[DeepLink] handleArc0090Uri - parsed:',
+        JSON.stringify(parsed, null, 2)
+      );
       if (!parsed) {
         console.error('Failed to parse ARC-0090 URI:', url);
         return false;
@@ -548,7 +553,10 @@ export class DeepLinkService {
         parsed.network,
         parsed.scheme
       );
-      console.log('[DeepLink] handleArc0090Uri - targetNetwork:', targetNetwork);
+      console.log(
+        '[DeepLink] handleArc0090Uri - targetNetwork:',
+        targetNetwork
+      );
 
       // Check network compatibility and prompt for switch if needed
       const networkOk = await this.ensureCorrectNetwork(targetNetwork);
@@ -558,7 +566,10 @@ export class DeepLinkService {
       }
 
       // Route to appropriate handler based on URI type
-      console.log('[DeepLink] handleArc0090Uri - routing to handler for type:', parsed.type);
+      console.log(
+        '[DeepLink] handleArc0090Uri - routing to handler for type:',
+        parsed.type
+      );
       switch (parsed.type) {
         case 'payment':
           return await this.handlePaymentUri(parsed as Arc0090PaymentUri);
@@ -643,7 +654,10 @@ export class DeepLinkService {
       const validation = validatePaymentUri(parsed);
       if (!validation.valid) {
         console.error('Invalid payment URI:', validation.errors);
-        await showAlert('Invalid Payment Request', validation.errors.join('\n'));
+        await showAlert(
+          'Invalid Payment Request',
+          validation.errors.join('\n')
+        );
         return false;
       }
 
@@ -706,7 +720,10 @@ export class DeepLinkService {
    */
   private async handleKeyregUri(parsed: Arc0090KeyregUri): Promise<boolean> {
     try {
-      console.log('[DeepLink] handleKeyregUri - parsed:', JSON.stringify(parsed, null, 2));
+      console.log(
+        '[DeepLink] handleKeyregUri - parsed:',
+        JSON.stringify(parsed, null, 2)
+      );
 
       // Validate keyreg URI
       const validation = validateKeyregUri(parsed);
@@ -721,7 +738,10 @@ export class DeepLinkService {
       }
 
       const currentNetwork = useNetworkStore.getState().currentNetwork;
-      console.log('[DeepLink] handleKeyregUri - currentNetwork:', currentNetwork);
+      console.log(
+        '[DeepLink] handleKeyregUri - currentNetwork:',
+        currentNetwork
+      );
 
       const navParams = {
         address: parsed.address,
@@ -742,13 +762,19 @@ export class DeepLinkService {
         isOnline: parsed.isOnline,
         networkId: currentNetwork,
       };
-      console.log('[DeepLink] handleKeyregUri - navigating to KeyregConfirm with params:', navParams);
+      console.log(
+        '[DeepLink] handleKeyregUri - navigating to KeyregConfirm with params:',
+        navParams
+      );
 
       // Use replace to dismiss the QRScanner and show KeyregConfirm in its place
-      await this.navigateToRoute({
-        screen: 'KeyregConfirm',
-        params: navParams,
-      }, { replace: true });
+      await this.navigateToRoute(
+        {
+          screen: 'KeyregConfirm',
+          params: navParams,
+        },
+        { replace: true }
+      );
 
       console.log('[DeepLink] handleKeyregUri - navigation complete');
       return true;
@@ -777,22 +803,25 @@ export class DeepLinkService {
       const currentNetwork = useNetworkStore.getState().currentNetwork;
 
       // Use replace to dismiss the QRScanner and show AppCallConfirm in its place
-      await this.navigateToRoute({
-        screen: 'AppCallConfirm',
-        params: {
-          senderAddress: parsed.address,
-          appId: parseInt(parsed.params.app[0]),
-          foreignApps: parsed.params.app.slice(1).map((id) => parseInt(id)),
-          method: parsed.params.method,
-          args: parsed.params.arg,
-          boxes: parsed.params.box,
-          foreignAssets: parsed.params.asset?.map((id) => parseInt(id)),
-          foreignAccounts: parsed.params.account,
-          fee: parsed.params.fee ? parseInt(parsed.params.fee) : undefined,
-          note: parsed.params.xnote || parsed.params.note,
-          networkId: currentNetwork,
+      await this.navigateToRoute(
+        {
+          screen: 'AppCallConfirm',
+          params: {
+            senderAddress: parsed.address,
+            appId: parseInt(parsed.params.app[0]),
+            foreignApps: parsed.params.app.slice(1).map((id) => parseInt(id)),
+            method: parsed.params.method,
+            args: parsed.params.arg,
+            boxes: parsed.params.box,
+            foreignAssets: parsed.params.asset?.map((id) => parseInt(id)),
+            foreignAccounts: parsed.params.account,
+            fee: parsed.params.fee ? parseInt(parsed.params.fee) : undefined,
+            note: parsed.params.xnote || parsed.params.note,
+            networkId: currentNetwork,
+          },
         },
-      }, { replace: true });
+        { replace: true }
+      );
 
       return true;
     } catch (error) {
@@ -811,14 +840,17 @@ export class DeepLinkService {
       const currentNetwork = useNetworkStore.getState().currentNetwork;
 
       // Use replace to dismiss the QRScanner and show AppInfoModal in its place
-      await this.navigateToRoute({
-        screen: 'AppInfoModal',
-        params: {
-          appId: parseInt(parsed.appId),
-          networkId: currentNetwork,
-          queryParams: parsed.params,
+      await this.navigateToRoute(
+        {
+          screen: 'AppInfoModal',
+          params: {
+            appId: parseInt(parsed.appId),
+            networkId: currentNetwork,
+            queryParams: parsed.params,
+          },
         },
-      }, { replace: true });
+        { replace: true }
+      );
 
       return true;
     } catch (error) {
@@ -839,15 +871,18 @@ export class DeepLinkService {
       const activeAccountId = walletStore.wallet?.activeAccountId;
 
       // Use replace to dismiss the QRScanner and show AssetDetail in its place
-      await this.navigateToRoute({
-        screen: 'AssetDetail',
-        params: {
-          assetId: parseInt(parsed.assetId),
-          assetName: `Asset ${parsed.assetId}`,
-          accountId: activeAccountId,
-          networkId: currentNetwork,
+      await this.navigateToRoute(
+        {
+          screen: 'AssetDetail',
+          params: {
+            assetId: parseInt(parsed.assetId),
+            assetName: `Asset ${parsed.assetId}`,
+            accountId: activeAccountId,
+            networkId: currentNetwork,
+          },
         },
-      }, { replace: true });
+        { replace: true }
+      );
 
       return true;
     } catch (error) {
@@ -969,9 +1004,24 @@ export class DeepLinkService {
     return match ? match[1] : null;
   }
 
-  private async navigateToRoute(route: DeepLinkRoute, options?: { replace?: boolean }): Promise<void> {
-    console.log('[DeepLink] navigateToRoute - route:', route.screen, 'params:', JSON.stringify(route.params), 'replace:', options?.replace);
-    console.log('[DeepLink] navigateToRoute - navigationRef:', !!this.navigationRef, 'isReady:', this.navigationRef?.isReady());
+  private async navigateToRoute(
+    route: DeepLinkRoute,
+    options?: { replace?: boolean }
+  ): Promise<void> {
+    console.log(
+      '[DeepLink] navigateToRoute - route:',
+      route.screen,
+      'params:',
+      JSON.stringify(route.params),
+      'replace:',
+      options?.replace
+    );
+    console.log(
+      '[DeepLink] navigateToRoute - navigationRef:',
+      !!this.navigationRef,
+      'isReady:',
+      this.navigationRef?.isReady()
+    );
 
     if (!this.navigationRef?.isReady()) {
       console.warn('[DeepLink] Navigation not ready, waiting...');
@@ -984,7 +1034,10 @@ export class DeepLinkService {
     }
 
     try {
-      console.log('[DeepLink] navigateToRoute - calling', options?.replace ? 'dispatch replace' : 'navigate');
+      console.log(
+        '[DeepLink] navigateToRoute - calling',
+        options?.replace ? 'dispatch replace' : 'navigate'
+      );
       // Use type assertion to handle React Navigation's complex generic types
       if (options?.replace) {
         // Use StackActions.replace to replace current screen in stack
@@ -995,9 +1048,15 @@ export class DeepLinkService {
       } else {
         (this.navigationRef as any).navigate(route.screen, route.params);
       }
-      console.log('[DeepLink] navigateToRoute - navigation called successfully');
+      console.log(
+        '[DeepLink] navigateToRoute - navigation called successfully'
+      );
     } catch (error) {
-      console.error('[DeepLink] navigateToRoute - Failed to navigate:', route, error);
+      console.error(
+        '[DeepLink] navigateToRoute - Failed to navigate:',
+        route,
+        error
+      );
       throw error;
     }
   }

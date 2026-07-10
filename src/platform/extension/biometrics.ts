@@ -15,7 +15,8 @@ const WEBAUTHN_CREDENTIAL_KEY = 'voi_webauthn_credential';
 const WEBAUTHN_CHALLENGE_KEY = 'voi_webauthn_challenge';
 
 // Relying Party configuration
-const RP_ID = typeof window !== 'undefined' ? window.location.hostname : 'voiwallet.app';
+const RP_ID =
+  typeof window !== 'undefined' ? window.location.hostname : 'voiwallet.app';
 const RP_NAME = 'Voi Wallet';
 
 export class ExtensionBiometricAdapter implements BiometricAdapter {
@@ -26,7 +27,8 @@ export class ExtensionBiometricAdapter implements BiometricAdapter {
 
     try {
       // Check if platform authenticator is available (e.g., Windows Hello, Touch ID)
-      const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      const available =
+        await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
       return available;
     } catch {
       return false;
@@ -35,7 +37,9 @@ export class ExtensionBiometricAdapter implements BiometricAdapter {
 
   async isEnrolled(): Promise<boolean> {
     // Check if user has registered a WebAuthn credential
-    const credentialId = await extensionStorage.getItem(WEBAUTHN_CREDENTIAL_KEY);
+    const credentialId = await extensionStorage.getItem(
+      WEBAUTHN_CREDENTIAL_KEY
+    );
     return credentialId !== null;
   }
 
@@ -56,11 +60,14 @@ export class ExtensionBiometricAdapter implements BiometricAdapter {
     cancelLabel?: string;
   }): Promise<AuthResult> {
     try {
-      const credentialIdB64 = await extensionStorage.getItem(WEBAUTHN_CREDENTIAL_KEY);
+      const credentialIdB64 = await extensionStorage.getItem(
+        WEBAUTHN_CREDENTIAL_KEY
+      );
       if (!credentialIdB64) {
         return {
           success: false,
-          error: 'No WebAuthn credential registered. Please set up security key first.',
+          error:
+            'No WebAuthn credential registered. Please set up security key first.',
         };
       }
 
@@ -72,19 +79,20 @@ export class ExtensionBiometricAdapter implements BiometricAdapter {
       // Generate challenge
       const challenge = crypto.getRandomValues(new Uint8Array(32));
 
-      const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions = {
-        challenge,
-        rpId: RP_ID,
-        allowCredentials: [
-          {
-            id: credentialId,
-            type: 'public-key',
-            transports: ['usb', 'nfc', 'internal'],
-          },
-        ],
-        userVerification: 'required',
-        timeout: 60000,
-      };
+      const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions =
+        {
+          challenge,
+          rpId: RP_ID,
+          allowCredentials: [
+            {
+              id: credentialId,
+              type: 'public-key',
+              transports: ['usb', 'nfc', 'internal'],
+            },
+          ],
+          userVerification: 'required',
+          timeout: 60000,
+        };
 
       const assertion = await navigator.credentials.get({
         publicKey: publicKeyCredentialRequestOptions,
@@ -150,29 +158,30 @@ export class ExtensionBiometricAdapter implements BiometricAdapter {
       const encoder = new TextEncoder();
       const userIdBuffer = encoder.encode(options.userId);
 
-      const publicKeyCredentialCreationOptions: PublicKeyCredentialCreationOptions = {
-        challenge,
-        rp: {
-          name: RP_NAME,
-          id: RP_ID,
-        },
-        user: {
-          id: userIdBuffer,
-          name: options.userName,
-          displayName: options.userName,
-        },
-        pubKeyCredParams: [
-          { alg: -7, type: 'public-key' }, // ES256
-          { alg: -257, type: 'public-key' }, // RS256
-        ],
-        authenticatorSelection: {
-          authenticatorAttachment: 'platform',
-          userVerification: 'required',
-          residentKey: 'preferred',
-        },
-        timeout: 60000,
-        attestation: 'none',
-      };
+      const publicKeyCredentialCreationOptions: PublicKeyCredentialCreationOptions =
+        {
+          challenge,
+          rp: {
+            name: RP_NAME,
+            id: RP_ID,
+          },
+          user: {
+            id: userIdBuffer,
+            name: options.userName,
+            displayName: options.userName,
+          },
+          pubKeyCredParams: [
+            { alg: -7, type: 'public-key' }, // ES256
+            { alg: -257, type: 'public-key' }, // RS256
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: 'platform',
+            userVerification: 'required',
+            residentKey: 'preferred',
+          },
+          timeout: 60000,
+          attestation: 'none',
+        };
 
       const credential = (await navigator.credentials.create({
         publicKey: publicKeyCredentialCreationOptions,

@@ -221,7 +221,13 @@ export default function SecuritySettingsScreen() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <UniversalHeader title="Security" showBackButton showAccountSelector={false} onAccountSelectorPress={() => {}} onBackPress={() => navigation.goBack()} />
+        <UniversalHeader
+          title="Security"
+          showBackButton
+          showAccountSelector={false}
+          onAccountSelectorPress={() => {}}
+          onBackPress={() => navigation.goBack()}
+        />
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Loading...</Text>
         </View>
@@ -231,7 +237,13 @@ export default function SecuritySettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <UniversalHeader title="Security" showBackButton showAccountSelector={false} onAccountSelectorPress={() => {}} onBackPress={() => navigation.goBack()} />
+      <UniversalHeader
+        title="Security"
+        showBackButton
+        showAccountSelector={false}
+        onAccountSelectorPress={() => {}}
+        onBackPress={() => navigation.goBack()}
+      />
 
       <KeyboardAwareScrollView contentContainerStyle={styles.content}>
         {/* PIN Settings Section */}

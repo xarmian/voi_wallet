@@ -4,7 +4,10 @@
  */
 
 export { MobileCryptoAdapter, mobileCrypto } from './crypto';
-export { MobileSecureStorageAdapter, mobileSecureStorage } from './secureStorage';
+export {
+  MobileSecureStorageAdapter,
+  mobileSecureStorage,
+} from './secureStorage';
 export { MobileStorageAdapter, mobileStorage } from './storage';
 export { MobileBiometricAdapter, mobileBiometrics } from './biometrics';
 export { MobileDeviceIdAdapter, mobileDeviceId } from './deviceId';

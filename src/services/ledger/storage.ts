@@ -35,7 +35,9 @@ export class LedgerDeviceStorage {
    */
   async loadDevices(): Promise<PersistedLedgerDevice[]> {
     try {
-      const stored = await AsyncStorage.getItem(LedgerDeviceStorage.STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(
+        LedgerDeviceStorage.STORAGE_KEY
+      );
       if (!stored) {
         return [];
       }
@@ -43,19 +45,31 @@ export class LedgerDeviceStorage {
       const devices: PersistedLedgerDevice[] = JSON.parse(stored);
 
       // Validate and clean up any invalid entries
-      return devices.filter(device => {
+      return devices.filter((device) => {
         // Type validation
-        if (typeof device.id !== 'string' || device.id.length === 0) return false;
-        if (typeof device.name !== 'string' || device.name.length === 0) return false;
+        if (typeof device.id !== 'string' || device.id.length === 0)
+          return false;
+        if (typeof device.name !== 'string' || device.name.length === 0)
+          return false;
         if (!['ble', 'usb'].includes(device.type)) return false;
 
         // Date validation
-        if (!device.lastSeen || isNaN(new Date(device.lastSeen).getTime())) return false;
-        if (device.lastConnected && isNaN(new Date(device.lastConnected).getTime())) return false;
+        if (!device.lastSeen || isNaN(new Date(device.lastSeen).getTime()))
+          return false;
+        if (
+          device.lastConnected &&
+          isNaN(new Date(device.lastConnected).getTime())
+        )
+          return false;
 
         // Optional numeric validation
-        if (device.productId !== undefined && !Number.isInteger(device.productId)) return false;
-        if (device.vendorId !== undefined && !Number.isInteger(device.vendorId)) return false;
+        if (
+          device.productId !== undefined &&
+          !Number.isInteger(device.productId)
+        )
+          return false;
+        if (device.vendorId !== undefined && !Number.isInteger(device.vendorId))
+          return false;
 
         return true;
       });
@@ -85,7 +99,7 @@ export class LedgerDeviceStorage {
       };
 
       // Update existing device or add new one
-      const existingIndex = devices.findIndex(d => d.id === deviceInfo.id);
+      const existingIndex = devices.findIndex((d) => d.id === deviceInfo.id);
       if (existingIndex >= 0) {
         devices[existingIndex] = persistedDevice;
       } else {
@@ -110,7 +124,7 @@ export class LedgerDeviceStorage {
   async removeDevice(deviceId: string): Promise<void> {
     try {
       const devices = await this.loadDevices();
-      const filtered = devices.filter(d => d.id !== deviceId);
+      const filtered = devices.filter((d) => d.id !== deviceId);
 
       await AsyncStorage.setItem(
         LedgerDeviceStorage.STORAGE_KEY,
@@ -130,7 +144,7 @@ export class LedgerDeviceStorage {
   async findDevice(deviceId: string): Promise<PersistedLedgerDevice | null> {
     try {
       const devices = await this.loadDevices();
-      return devices.find(d => d.id === deviceId) || null;
+      return devices.find((d) => d.id === deviceId) || null;
     } catch (error) {
       console.error('Failed to find persisted Ledger device:', error);
       return null;
@@ -143,7 +157,7 @@ export class LedgerDeviceStorage {
   async updateLastConnected(deviceId: string): Promise<void> {
     try {
       const devices = await this.loadDevices();
-      const deviceIndex = devices.findIndex(d => d.id === deviceId);
+      const deviceIndex = devices.findIndex((d) => d.id === deviceId);
 
       if (deviceIndex >= 0) {
         devices[deviceIndex].lastConnected = new Date().toISOString();

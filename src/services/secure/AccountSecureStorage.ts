@@ -34,7 +34,10 @@ import {
   AuthenticationRequiredError,
 } from '../../types/wallet';
 
-type PersistedAccountMetadata = Omit<SecureAccountStorage, 'encryptedPrivateKey'>;
+type PersistedAccountMetadata = Omit<
+  SecureAccountStorage,
+  'encryptedPrivateKey'
+>;
 
 interface AccountSecretPayload {
   accountId: string;
@@ -78,7 +81,10 @@ export class AccountSecureStorage {
   private static readonly PIN_TIMEOUT_KEY = 'voi_pin_timeout_setting';
 
   // Private key cache for batch signing performance (keeps keys secure within this module)
-  private static privateKeyCache: Map<string, { key: Uint8Array; timestamp: number }> = new Map();
+  private static privateKeyCache: Map<
+    string,
+    { key: Uint8Array; timestamp: number }
+  > = new Map();
   private static readonly CACHE_TTL_MS = 60000; // 60 seconds as suggested
 
   // In-flight request deduplication to prevent cache stampede
@@ -201,7 +207,9 @@ export class AccountSecureStorage {
           JSON.stringify(secretPayload)
         );
       } else {
-        await secureStorage.deleteItem(this.secretKey(accountId)).catch(() => {});
+        await secureStorage
+          .deleteItem(this.secretKey(accountId))
+          .catch(() => {});
       }
 
       await secureStorage.deleteItem(legacyKey).catch(() => {});
@@ -331,14 +339,15 @@ export class AccountSecureStorage {
     const cacheKey = `${accountId}-${pin || 'biometric'}`;
 
     // Periodically clean up expired entries
-    if (Math.random() < 0.1) { // 10% chance on each call
+    if (Math.random() < 0.1) {
+      // 10% chance on each call
       this.cleanupExpiredCacheEntries();
     }
 
     // Check cache first to avoid expensive SecureStore access
     const cached = this.privateKeyCache.get(cacheKey);
     const now = Date.now();
-    if (cached && (now - cached.timestamp) < this.CACHE_TTL_MS) {
+    if (cached && now - cached.timestamp < this.CACHE_TTL_MS) {
       // Return a copy to prevent external modification
       return new Uint8Array(cached.key);
     }
@@ -356,108 +365,109 @@ export class AccountSecureStorage {
       try {
         let unlockMethod: 'pin' | 'biometric' = 'biometric';
 
-      if (pin) {
-        const isValidPin = await this.verifyPin(pin);
-        if (!isValidPin) {
-          throw new AuthenticationRequiredError('Invalid PIN');
-        }
-        unlockMethod = 'pin';
-      }
-
-      let secretPayloadRaw: string | null = null;
-
-      if (unlockMethod === 'pin') {
-        try {
-          secretPayloadRaw = await secureStorage.getItem(
-            this.secretKey(accountId)
-          );
-        } catch (error) {
-          throw new AuthenticationRequiredError(
-            'Failed to access private key with PIN'
-          );
-        }
-      } else {
-        const biometricEnabled = await this.isBiometricEnabled();
-
-        if (biometricEnabled) {
-          try {
-            secretPayloadRaw = await secureStorage.getItemWithAuth(
-              this.secretKey(accountId),
-              { prompt: 'Authenticate to access private key' }
-            );
-          } catch (error) {
-            throw new AuthenticationRequiredError(
-              'Biometric authentication failed or was cancelled'
-            );
+        if (pin) {
+          const isValidPin = await this.verifyPin(pin);
+          if (!isValidPin) {
+            throw new AuthenticationRequiredError('Invalid PIN');
           }
-        } else {
-          const hasPin = await this.hasPin();
-          if (hasPin) {
-            throw new AuthenticationRequiredError(
-              'PIN required to access private key'
-            );
-          }
+          unlockMethod = 'pin';
+        }
 
+        let secretPayloadRaw: string | null = null;
+
+        if (unlockMethod === 'pin') {
           try {
             secretPayloadRaw = await secureStorage.getItem(
               this.secretKey(accountId)
             );
           } catch (error) {
-            throw new AccountRetrievalError('Failed to retrieve account data');
+            throw new AuthenticationRequiredError(
+              'Failed to access private key with PIN'
+            );
+          }
+        } else {
+          const biometricEnabled = await this.isBiometricEnabled();
+
+          if (biometricEnabled) {
+            try {
+              secretPayloadRaw = await secureStorage.getItemWithAuth(
+                this.secretKey(accountId),
+                { prompt: 'Authenticate to access private key' }
+              );
+            } catch (error) {
+              throw new AuthenticationRequiredError(
+                'Biometric authentication failed or was cancelled'
+              );
+            }
+          } else {
+            const hasPin = await this.hasPin();
+            if (hasPin) {
+              throw new AuthenticationRequiredError(
+                'PIN required to access private key'
+              );
+            }
+
+            try {
+              secretPayloadRaw = await secureStorage.getItem(
+                this.secretKey(accountId)
+              );
+            } catch (error) {
+              throw new AccountRetrievalError(
+                'Failed to retrieve account data'
+              );
+            }
           }
         }
-      }
 
-      if (!secretPayloadRaw) {
-        await this.migrateLegacyAccountData(accountId);
-        secretPayloadRaw = await secureStorage.getItem(
-          this.secretKey(accountId)
-        );
-      }
+        if (!secretPayloadRaw) {
+          await this.migrateLegacyAccountData(accountId);
+          secretPayloadRaw = await secureStorage.getItem(
+            this.secretKey(accountId)
+          );
+        }
 
-      if (!secretPayloadRaw) {
-        const metadata = await this.readMetadata(accountId);
-        if (metadata) {
+        if (!secretPayloadRaw) {
+          const metadata = await this.readMetadata(accountId);
+          if (metadata) {
+            throw new AccountStorageError(
+              'Private key not available for this account'
+            );
+          }
+          throw new AccountNotFoundError('Account not found');
+        }
+
+        const parsed: AccountSecretPayload = JSON.parse(secretPayloadRaw);
+        if (!parsed.encryptedPrivateKey) {
           throw new AccountStorageError(
             'Private key not available for this account'
           );
         }
-        throw new AccountNotFoundError('Account not found');
-      }
 
-      const parsed: AccountSecretPayload = JSON.parse(secretPayloadRaw);
-      if (!parsed.encryptedPrivateKey) {
-        throw new AccountStorageError(
-          'Private key not available for this account'
-        );
-      }
+        let privateKey: Uint8Array;
 
-      let privateKey: Uint8Array;
-
-      try {
-        privateKey = await this.decryptPrivateKey(parsed.encryptedPrivateKey);
-      } catch (error) {
-        if (unlockMethod === 'pin' && pin) {
-          privateKey = await this.decryptPrivateKeyWithPin(
-            parsed.encryptedPrivateKey,
-            pin
-          );
-        } else {
-          throw error;
+        try {
+          privateKey = await this.decryptPrivateKey(parsed.encryptedPrivateKey);
+        } catch (error) {
+          if (unlockMethod === 'pin' && pin) {
+            privateKey = await this.decryptPrivateKeyWithPin(
+              parsed.encryptedPrivateKey,
+              pin
+            );
+          } else {
+            throw error;
+          }
         }
-      }
 
         await this.updateLastAccessed(accountId);
 
         // Cache the key for subsequent calls (60-second TTL)
         this.privateKeyCache.set(cacheKey, {
           key: new Uint8Array(privateKey), // Store a copy
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
 
         return privateKey;
       } catch (error) {
-
         if (
           error instanceof AccountNotFoundError ||
           error instanceof AccountStorageError ||
@@ -491,7 +501,7 @@ export class AccountSecureStorage {
    */
   static clearPrivateKeyCache(): void {
     // Zero out all cached keys before clearing for security
-    this.privateKeyCache.forEach(cached => {
+    this.privateKeyCache.forEach((cached) => {
       cached.key.fill(0);
     });
     this.privateKeyCache.clear();
@@ -508,7 +518,7 @@ export class AccountSecureStorage {
     const now = Date.now();
 
     this.privateKeyCache.forEach((cached, key) => {
-      if ((now - cached.timestamp) >= this.CACHE_TTL_MS) {
+      if (now - cached.timestamp >= this.CACHE_TTL_MS) {
         cached.key.fill(0); // Zero out before removing
         this.privateKeyCache.delete(key);
       }
@@ -522,9 +532,9 @@ export class AccountSecureStorage {
 
       // Remove metadata
       await storage.removeItem(this.metadataKey(accountId));
-      await secureStorage.deleteItem(
-        `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`
-      ).catch(() => {});
+      await secureStorage
+        .deleteItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`)
+        .catch(() => {});
 
       // Update account list
       await this.removeFromAccountList(accountId);
@@ -826,10 +836,7 @@ export class AccountSecureStorage {
     try {
       const accountIds = await this.getAllAccountIds();
       const updatedIds = accountIds.filter((id) => id !== accountId);
-      await storage.setItem(
-        this.METADATA_LIST_KEY,
-        JSON.stringify(updatedIds)
-      );
+      await storage.setItem(this.METADATA_LIST_KEY, JSON.stringify(updatedIds));
     } catch (error) {
       throw new AccountStorageError(
         `Failed to update account list: ${(error as Error).message}`
@@ -935,19 +942,11 @@ export class AccountSecureStorage {
 
       if (storedData.format === 'json') {
         this.legacyCheckRequired = false;
-        const candidateHash = this.hashPin(
-          pin,
-          salt,
-          storedData.iterations
-        );
+        const candidateHash = this.hashPin(pin, salt, storedData.iterations);
         if (storedData.hash === candidateHash) {
           if (storedData.iterations !== this.PIN_ITERATIONS) {
             try {
-              const upgradedHash = this.hashPin(
-                pin,
-                salt,
-                this.PIN_ITERATIONS
-              );
+              const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
               await this.persistPinHash(upgradedHash, salt);
             } catch (error) {
               console.warn('Failed to upgrade stored PIN metadata', error);
@@ -965,11 +964,7 @@ export class AccountSecureStorage {
         if (storedData.hash === candidateHash) {
           if (iterations !== this.PIN_ITERATIONS) {
             try {
-              const upgradedHash = this.hashPin(
-                pin,
-                salt,
-                this.PIN_ITERATIONS
-              );
+              const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
               await this.persistPinHash(upgradedHash, salt);
               this.legacyCheckRequired = false;
             } catch (error) {
@@ -1052,13 +1047,10 @@ export class AccountSecureStorage {
   // Biometric Settings
   static async setBiometricEnabled(enabled: boolean): Promise<void> {
     try {
-      await storage.setItem(
-        this.BIOMETRIC_ENABLED_KEY,
-        enabled.toString()
-      );
-      await secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(
-        () => {}
-      );
+      await storage.setItem(this.BIOMETRIC_ENABLED_KEY, enabled.toString());
+      await secureStorage
+        .deleteItem(this.BIOMETRIC_ENABLED_KEY)
+        .catch(() => {});
     } catch (error) {
       throw new AccountStorageError('Failed to store biometric setting');
     }
@@ -1071,9 +1063,9 @@ export class AccountSecureStorage {
         const legacy = await secureStorage.getItem(this.BIOMETRIC_ENABLED_KEY);
         if (legacy) {
           await storage.setItem(this.BIOMETRIC_ENABLED_KEY, legacy);
-          await secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(
-            () => {}
-          );
+          await secureStorage
+            .deleteItem(this.BIOMETRIC_ENABLED_KEY)
+            .catch(() => {});
           enabled = legacy;
         }
       }
@@ -1086,10 +1078,7 @@ export class AccountSecureStorage {
   // PIN Timeout Settings
   static async setPinTimeout(timeoutMinutes: number | 'never'): Promise<void> {
     try {
-      await storage.setItem(
-        this.PIN_TIMEOUT_KEY,
-        String(timeoutMinutes)
-      );
+      await storage.setItem(this.PIN_TIMEOUT_KEY, String(timeoutMinutes));
       await secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {});
     } catch (error) {
       throw new AccountStorageError('Failed to store PIN timeout setting');
@@ -1156,7 +1145,9 @@ export class AccountSecureStorage {
     }
   }
 
-  private static async getOrCreateSalt(regenerate: boolean = false): Promise<string> {
+  private static async getOrCreateSalt(
+    regenerate: boolean = false
+  ): Promise<string> {
     try {
       if (!regenerate) {
         const existing = await secureStorage.getItem(this.SALT_KEY);

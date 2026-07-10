@@ -4,7 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, RouteProp } from '@react-navigation/native';
 import type { MainTabParamList } from '@/navigation/AppNavigator';
 import { useTheme } from '@/contexts/ThemeContext';
-import ThemedWebView, { ThemedWebViewRef } from '@/components/common/ThemedWebView';
+import ThemedWebView, {
+  ThemedWebViewRef,
+} from '@/components/common/ThemedWebView';
 
 const DISCOVER_BASE_URL = 'https://voirewards.com/discover';
 

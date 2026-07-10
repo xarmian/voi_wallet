@@ -54,7 +54,11 @@ export interface UnsignedTransactionGroup {
 export interface SignProgressCallbacks {
   onLedgerPrompt?: (ctx: { index: number; total: number }) => void;
   onLedgerSigned?: (ctx: { index: number; total: number }) => void;
-  onLedgerRejected?: (ctx: { index: number; total: number; error: Error }) => void;
+  onLedgerRejected?: (ctx: {
+    index: number;
+    total: number;
+    error: Error;
+  }) => void;
   onNetworkSubmit?: () => void;
   // `confirmed` is false when the tx was submitted but not yet confirmed within
   // the round window. Carried here (not just in the return value) because the
@@ -122,9 +126,14 @@ export class TransactionService {
     // Prune expired entries first
     TransactionService.pruneExpiredEntries();
     // Evict LRU/oldest entries if over limit
-    if (TransactionService.transactionCache.size >= TransactionService.MAX_CACHE_ENTRIES) {
+    if (
+      TransactionService.transactionCache.size >=
+      TransactionService.MAX_CACHE_ENTRIES
+    ) {
       TransactionService.evictOldestEntries(
-        TransactionService.transactionCache.size - TransactionService.MAX_CACHE_ENTRIES + 1
+        TransactionService.transactionCache.size -
+          TransactionService.MAX_CACHE_ENTRIES +
+          1
       );
     }
     TransactionService.transactionCache.set(cacheKey, {
@@ -149,19 +158,18 @@ export class TransactionService {
   private static evictOldestEntries(count: number): void {
     if (count <= 0) return;
     // Create an array of [key, timestamp] and sort by timestamp ascending
-    const entries = Array.from(TransactionService.transactionCache.entries()).map(
-      ([key, value]) => ({ key, timestamp: value.timestamp })
-    );
+    const entries = Array.from(
+      TransactionService.transactionCache.entries()
+    ).map(([key, value]) => ({ key, timestamp: value.timestamp }));
     entries.sort((a, b) => a.timestamp - b.timestamp);
     for (let i = 0; i < Math.min(count, entries.length); i += 1) {
       TransactionService.transactionCache.delete(entries[i].key);
     }
   }
 
-  private static cacheAndReturn<T extends UnsignedTransaction | UnsignedTransactionGroup>(
-    cacheKey: string,
-    txn: T
-  ): T {
+  private static cacheAndReturn<
+    T extends UnsignedTransaction | UnsignedTransactionGroup,
+  >(cacheKey: string, txn: T): T {
     TransactionService.cacheTransaction(cacheKey, txn);
     return txn;
   }
@@ -182,7 +190,10 @@ export class TransactionService {
     networkId?: NetworkId
   ): Promise<LedgerSigningInfo | null> {
     try {
-      const signingInfo = await SecureKeyManager.getSigningInfo(account.address, networkId);
+      const signingInfo = await SecureKeyManager.getSigningInfo(
+        account.address,
+        networkId
+      );
       if (!signingInfo) {
         return null;
       }
@@ -596,7 +607,12 @@ export class TransactionService {
 
               // If wrong app is open (BOLOS/other), only stop retrying if this is the last attempt
               // This allows the user time to open the Algorand app
-              if (verifyError instanceof Error && verifyError.message.toLowerCase().includes('app is open instead')) {
+              if (
+                verifyError instanceof Error &&
+                verifyError.message
+                  .toLowerCase()
+                  .includes('app is open instead')
+              ) {
                 if (attempt >= maxRetries) {
                   throw verifyError; // Stop retrying only on final attempt
                 }
@@ -634,7 +650,8 @@ export class TransactionService {
             'Transaction cancelled by user'
           );
           if (originalMessage && rejectionError.message !== originalMessage) {
-            rejectionError.stack = friendly.original?.stack ?? rejectionError.stack;
+            rejectionError.stack =
+              friendly.original?.stack ?? rejectionError.stack;
           }
           throw rejectionError;
         }
@@ -671,21 +688,25 @@ export class TransactionService {
       const unsignedTxn = await TransactionService.buildTransaction(params);
 
       // Sign the transaction with recovery-aware handling
-      const signedTxnBlob = await TransactionService.signTransactionWithRecovery(
-        unsignedTxn,
-        account,
-        pin,
-        2,
-        callbacks,
-        params.networkId
-      );
+      const signedTxnBlob =
+        await TransactionService.signTransactionWithRecovery(
+          unsignedTxn,
+          account,
+          pin,
+          2,
+          callbacks,
+          params.networkId
+        );
 
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
       // callers (and ultimately the UI) can distinguish a confirmed send from a
       // submitted-but-still-pending one.
-      const { txId, confirmed } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
+      const { txId, confirmed } = await TransactionService.submitWithRetries(
+        signedTxnBlob,
+        params.networkId
+      );
       callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction for replay protection.
@@ -717,11 +738,9 @@ export class TransactionService {
         } catch {}
       }
       if (userRejected) {
-        throw (
-          error instanceof LedgerUserRejectedError
-            ? error
-            : new LedgerUserRejectedError('Transaction cancelled by user')
-        );
+        throw error instanceof LedgerUserRejectedError
+          ? error
+          : new LedgerUserRejectedError('Transaction cancelled by user');
       }
       throw new Error(
         `Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -893,7 +912,9 @@ export class TransactionService {
         // Check if recipient has opted in to receive this ASA
         if (params.assetId) {
           try {
-            const recipientBalance = await networkService.getAccountBalance(params.to);
+            const recipientBalance = await networkService.getAccountBalance(
+              params.to
+            );
             const recipientHasAsset = recipientBalance.assets.some(
               (a) => a.assetType === 'asa' && a.assetId === params.assetId
             );
@@ -901,16 +922,22 @@ export class TransactionService {
             if (!recipientHasAsset) {
               // Get asset info for better error message
               try {
-                const assetInfo = await networkService.getAlgodClient().getAssetByID(params.assetId).do();
-                const assetName = assetInfo.params.name || assetInfo.params['unit-name'] || `Asset ${params.assetId}`;
+                const assetInfo = await networkService
+                  .getAlgodClient()
+                  .getAssetByID(params.assetId)
+                  .do();
+                const assetName =
+                  assetInfo.params.name ||
+                  assetInfo.params['unit-name'] ||
+                  `Asset ${params.assetId}`;
                 errors.push(
                   `Recipient must opt-in to receive ${assetName} (Asset ID: ${params.assetId}). ` +
-                  `The recipient needs to add this asset to their account before they can receive it.`
+                    `The recipient needs to add this asset to their account before they can receive it.`
                 );
               } catch {
                 errors.push(
                   `Recipient must opt-in to receive Asset ID ${params.assetId}. ` +
-                  `The recipient needs to add this asset to their account before they can receive it.`
+                    `The recipient needs to add this asset to their account before they can receive it.`
                 );
               }
             }
@@ -951,7 +978,11 @@ export class TransactionService {
       errors.push('Failed to validate account balance');
     }
 
-    await TransactionService.appendSigningValidation(errors, account, params.networkId);
+    await TransactionService.appendSigningValidation(
+      errors,
+      account,
+      params.networkId
+    );
 
     return errors;
   }
@@ -966,16 +997,19 @@ export class TransactionService {
       // Handle ARC-72 NFT transfers
       if (assetType === 'arc72') {
         if (!params.contractId || !params.tokenId) {
-          throw new Error('Contract ID and Token ID are required for ARC-72 cost estimation');
+          throw new Error(
+            'Contract ID and Token ID are required for ARC-72 cost estimation'
+          );
         }
 
-        const arc72Estimate = await Arc72TransactionService.estimateArc72TransferCost({
-          from: params.from,
-          to: params.to,
-          tokenId: params.tokenId,
-          contractId: params.contractId,
-          networkId: params.networkId,
-        });
+        const arc72Estimate =
+          await Arc72TransactionService.estimateArc72TransferCost({
+            from: params.from,
+            to: params.to,
+            tokenId: params.tokenId,
+            contractId: params.contractId,
+            networkId: params.networkId,
+          });
 
         return {
           fee: arc72Estimate.total, // Return total (including MBR) as the fee, matching ARC200 pattern
@@ -986,16 +1020,19 @@ export class TransactionService {
       // Handle ARC-200 transfers
       if (assetType === 'arc200') {
         if (!params.contractId) {
-          throw new Error('Contract ID is required for ARC-200 cost estimation');
+          throw new Error(
+            'Contract ID is required for ARC-200 cost estimation'
+          );
         }
 
-        const arc200Estimate = await Arc200TransactionService.estimateArc200TransferCost({
-          from: params.from,
-          to: params.to,
-          amount: params.amount,
-          contractId: params.contractId,
-          networkId: params.networkId,
-        });
+        const arc200Estimate =
+          await Arc200TransactionService.estimateArc200TransferCost({
+            from: params.from,
+            to: params.to,
+            amount: params.amount,
+            contractId: params.contractId,
+            networkId: params.networkId,
+          });
 
         return {
           fee: arc200Estimate.fee, // This now includes MBR if needed
@@ -1038,7 +1075,10 @@ export class TransactionService {
         return;
       }
 
-      const info = await SecureKeyManager.getSigningInfo(account.address, networkId);
+      const info = await SecureKeyManager.getSigningInfo(
+        account.address,
+        networkId
+      );
 
       // If we can sign, no error
       if (info.canSign) return;
@@ -1073,9 +1113,12 @@ export class TransactionService {
       if (!hasLedgerSigner) {
         for (const addr of candidateAddresses) {
           try {
-            const ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(addr, {
-              lookupByAddress: true,
-            });
+            const ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
+              addr,
+              {
+                lookupByAddress: true,
+              }
+            );
             if (ledgerInfo) {
               hasLedgerSigner = true;
               break;
@@ -1296,7 +1339,8 @@ export class TransactionService {
       const networkService = networkId
         ? NetworkService.getInstance(networkId)
         : VoiNetworkService;
-      const accountBalance = await networkService.getAccountBalance(fromAddress);
+      const accountBalance =
+        await networkService.getAccountBalance(fromAddress);
       const isCurrentlyRekeyed = accountBalance.rekeyInfo?.isRekeyed;
 
       // Allow rekeying to self only if currently rekeyed (for reverse rekey)
@@ -1320,10 +1364,16 @@ export class TransactionService {
         );
 
         if (!targetAccount) {
-          errors.push('Target address must be a standard, Ledger, or airgap signer account in your wallet');
+          errors.push(
+            'Target address must be a standard, Ledger, or airgap signer account in your wallet'
+          );
         }
 
-        if (targetAccount && (targetAccount.type === AccountType.LEDGER || targetAccount.type === 'ledger')) {
+        if (
+          targetAccount &&
+          (targetAccount.type === AccountType.LEDGER ||
+            targetAccount.type === 'ledger')
+        ) {
           try {
             const ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
               targetAccount.id ?? targetAccount.address,
@@ -1331,10 +1381,14 @@ export class TransactionService {
             );
 
             if (!ledgerInfo || !ledgerInfo.isDeviceAvailable) {
-              errors.push('Ledger device for the target account is not available. Connect it before rekeying.');
+              errors.push(
+                'Ledger device for the target account is not available. Connect it before rekeying.'
+              );
             }
           } catch (error) {
-            errors.push('Unable to verify Ledger device availability for the target account.');
+            errors.push(
+              'Unable to verify Ledger device availability for the target account.'
+            );
           }
         }
       }
@@ -1357,7 +1411,10 @@ export class TransactionService {
       const estimatedFee = await networkService.estimateTransactionFee();
 
       // If the source account is rekeyed on this network, verify we have the auth signer
-      if (accountBalance.rekeyInfo?.isRekeyed && accountBalance.rekeyInfo?.authAddress) {
+      if (
+        accountBalance.rekeyInfo?.isRekeyed &&
+        accountBalance.rekeyInfo?.authAddress
+      ) {
         const authAddress = accountBalance.rekeyInfo.authAddress;
         const authSigner = wallet.accounts.find(
           (acc: any) =>
@@ -1374,7 +1431,10 @@ export class TransactionService {
           errors.push(
             `Account is rekeyed to ${authAddress.slice(0, 8)}... You need this controlling account in your wallet to perform any rekey operations.`
           );
-        } else if (authSigner.type === AccountType.LEDGER || authSigner.type === 'ledger') {
+        } else if (
+          authSigner.type === AccountType.LEDGER ||
+          authSigner.type === 'ledger'
+        ) {
           // Verify Ledger device is available for the auth signer
           try {
             const ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
@@ -1383,10 +1443,14 @@ export class TransactionService {
             );
 
             if (!ledgerInfo || !ledgerInfo.isDeviceAvailable) {
-              errors.push('Ledger device for the controlling account is not available. Connect it before rekeying.');
+              errors.push(
+                'Ledger device for the controlling account is not available. Connect it before rekeying.'
+              );
             }
           } catch (error) {
-            errors.push('Unable to verify Ledger device availability for the controlling account.');
+            errors.push(
+              'Unable to verify Ledger device availability for the controlling account.'
+            );
           }
         }
         // Note: For REMOTE_SIGNER, we don't need to verify device availability here
@@ -1443,21 +1507,25 @@ export class TransactionService {
         await TransactionService.buildRekeyTransaction(params);
 
       // Sign the transaction with recovery-aware handling
-      const signedTxnBlob = await TransactionService.signTransactionWithRecovery(
-        unsignedTxn,
-        account,
-        pin,
-        2,
-        callbacks,
-        params.networkId
-      );
+      const signedTxnBlob =
+        await TransactionService.signTransactionWithRecovery(
+          unsignedTxn,
+          account,
+          pin,
+          2,
+          callbacks,
+          params.networkId
+        );
 
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
       // callers (and ultimately the UI) can distinguish a confirmed send from a
       // submitted-but-still-pending one.
-      const { txId, confirmed } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
+      const { txId, confirmed } = await TransactionService.submitWithRetries(
+        signedTxnBlob,
+        params.networkId
+      );
       callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction
@@ -1490,11 +1558,9 @@ export class TransactionService {
         } catch {}
       }
       if (userRejected) {
-        throw (
-          error instanceof LedgerUserRejectedError
-            ? error
-            : new LedgerUserRejectedError('Transaction cancelled by user')
-        );
+        throw error instanceof LedgerUserRejectedError
+          ? error
+          : new LedgerUserRejectedError('Transaction cancelled by user');
       }
       throw new Error(
         `Rekey transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -1590,21 +1656,25 @@ export class TransactionService {
         await TransactionService.buildRekeyReverseTransaction(params);
 
       // Sign the transaction with recovery-aware handling
-      const signedTxnBlob = await TransactionService.signTransactionWithRecovery(
-        unsignedTxn,
-        account,
-        pin,
-        2,
-        callbacks,
-        params.networkId
-      );
+      const signedTxnBlob =
+        await TransactionService.signTransactionWithRecovery(
+          unsignedTxn,
+          account,
+          pin,
+          2,
+          callbacks,
+          params.networkId
+        );
 
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
       // callers (and ultimately the UI) can distinguish a confirmed send from a
       // submitted-but-still-pending one.
-      const { txId, confirmed } = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
+      const { txId, confirmed } = await TransactionService.submitWithRetries(
+        signedTxnBlob,
+        params.networkId
+      );
       callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction
@@ -1637,11 +1707,9 @@ export class TransactionService {
         } catch {}
       }
       if (userRejected) {
-        throw (
-          error instanceof LedgerUserRejectedError
-            ? error
-            : new LedgerUserRejectedError('Transaction cancelled by user')
-        );
+        throw error instanceof LedgerUserRejectedError
+          ? error
+          : new LedgerUserRejectedError('Transaction cancelled by user');
       }
       throw new Error(
         `Reverse rekey transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`

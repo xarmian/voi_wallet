@@ -48,7 +48,10 @@ export default function NetworkSelector({
               onPress={() => onNetworkChange(networkId)}
               disabled={disabled}
               activeOpacity={0.7}
-              style={[styles.networkButtonWrapper, disabled && styles.networkButtonDisabled]}
+              style={[
+                styles.networkButtonWrapper,
+                disabled && styles.networkButtonDisabled,
+              ]}
             >
               <BlurredContainer
                 variant={isSelected ? 'medium' : 'light'}
@@ -96,9 +99,10 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.8)'
-        : 'rgba(255, 255, 255, 0.9)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.8)'
+          : 'rgba(255, 255, 255, 0.9)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 10,
     },

@@ -62,8 +62,8 @@ const ThemeItem: React.FC<ThemeItemProps> = ({
               themeValue === 'light'
                 ? 'sunny'
                 : themeValue === 'dark'
-                ? 'moon'
-                : 'phone-portrait'
+                  ? 'moon'
+                  : 'phone-portrait'
             }
             size={20}
             color={theme.colors.text}
@@ -73,10 +73,7 @@ const ThemeItem: React.FC<ThemeItemProps> = ({
         {/* Theme Info */}
         <View style={styles.themeInfo}>
           <Text
-            style={[
-              styles.themeName,
-              isSelected && styles.selectedThemeText,
-            ]}
+            style={[styles.themeName, isSelected && styles.selectedThemeText]}
           >
             {label}
           </Text>
@@ -162,7 +159,7 @@ export default function ThemeSwitcher({
           </View>
         </View>
 
-        <ScrollView 
+        <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.listContainer}
         >
@@ -254,7 +251,11 @@ export default function ThemeSwitcher({
                       {/* Background Image Toggle */}
                       <View style={styles.optionRow}>
                         <View style={styles.optionLabel}>
-                          <Ionicons name="image" size={18} color={theme.colors.textSecondary} />
+                          <Ionicons
+                            name="image"
+                            size={18}
+                            color={theme.colors.textSecondary}
+                          />
                           <Text style={styles.optionText}>
                             Show Background Image
                           </Text>
@@ -273,10 +274,12 @@ export default function ThemeSwitcher({
                       {/* Color Palette Selector */}
                       <View style={styles.paletteContainer}>
                         <View style={styles.optionLabel}>
-                          <Ionicons name="color-palette" size={18} color={theme.colors.textSecondary} />
-                          <Text style={styles.optionText}>
-                            Color Palette
-                          </Text>
+                          <Ionicons
+                            name="color-palette"
+                            size={18}
+                            color={theme.colors.textSecondary}
+                          />
+                          <Text style={styles.optionText}>Color Palette</Text>
                         </View>
                         <View style={styles.paletteButtons}>
                           {nftPalettes.map((palette, index) => (
@@ -284,14 +287,16 @@ export default function ThemeSwitcher({
                               key={index}
                               style={[
                                 styles.paletteButton,
-                                selectedPaletteIndex === index && styles.selectedPaletteButton,
+                                selectedPaletteIndex === index &&
+                                  styles.selectedPaletteButton,
                               ]}
                               onPress={() => handlePaletteSelect(index)}
                             >
                               <Text
                                 style={[
                                   styles.paletteButtonText,
-                                  selectedPaletteIndex === index && styles.selectedPaletteButtonText,
+                                  selectedPaletteIndex === index &&
+                                    styles.selectedPaletteButtonText,
                                 ]}
                               >
                                 {palette.name}

@@ -176,7 +176,11 @@ const LedgerAccountList: React.FC<LedgerAccountListProps> = ({
                 ]}
               >
                 {isSelected && !isImported ? (
-                  <Ionicons name="checkmark" size={14} color={colors.buttonText} />
+                  <Ionicons
+                    name="checkmark"
+                    size={14}
+                    color={colors.buttonText}
+                  />
                 ) : null}
                 {isImported ? (
                   <Ionicons
@@ -254,9 +258,7 @@ export const LedgerAccountImport: React.FC<LedgerAccountImportProps> = ({
   const listHeader = (
     <View style={styles.importHeader}>
       {headerComponent}
-      <RangeControls
-        {...range}
-      />
+      <RangeControls {...range} />
     </View>
   );
 

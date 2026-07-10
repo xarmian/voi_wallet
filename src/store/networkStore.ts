@@ -123,9 +123,14 @@ export const useNetworkStore = create<NetworkStoreState>()(
           const clearSingleNetworkCache =
             useWalletStore.getState().clearSingleNetworkCache;
           await clearSingleNetworkCache(); // Clear all single-network caches
-          console.log('[NetworkStore] Cleared single-network cache after network switch');
+          console.log(
+            '[NetworkStore] Cleared single-network cache after network switch'
+          );
         } catch (cacheError) {
-          console.warn('[NetworkStore] Failed to clear single-network cache:', cacheError);
+          console.warn(
+            '[NetworkStore] Failed to clear single-network cache:',
+            cacheError
+          );
         }
 
         // Update store state

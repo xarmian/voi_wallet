@@ -320,18 +320,12 @@ export default function KeyregConfirmScreen() {
 
       {/* Action Buttons */}
       <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={styles.cancelButton}
-          onPress={handleCancel}
-        >
+        <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
           <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[
-            styles.confirmButton,
-            !account && styles.disabledButton,
-          ]}
+          style={[styles.confirmButton, !account && styles.disabledButton]}
           onPress={handleConfirm}
           disabled={!account}
         >
@@ -348,9 +342,7 @@ export default function KeyregConfirmScreen() {
         request={currentRequest}
         onComplete={handleAuthComplete}
         onCancel={handleAuthCancel}
-        title={
-          params.isOnline ? 'Confirm Go Online' : 'Confirm Go Offline'
-        }
+        title={params.isOnline ? 'Confirm Go Online' : 'Confirm Go Offline'}
         message="Authenticate to sign this key registration transaction"
       />
     </SafeAreaView>

@@ -17,11 +17,11 @@ import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModa
 import TransactionVerification from '@/components/ledger/TransactionVerification';
 import {
   useTransactionAuthController,
-  TransactionAuthController
+  TransactionAuthController,
 } from '@/services/auth/transactionAuthController';
 import {
   unifiedSigner,
-  UnifiedTransactionRequest
+  UnifiedTransactionRequest,
 } from '@/services/transactions/unifiedSigner';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
@@ -38,7 +38,6 @@ import { Theme } from '@/constants/themes';
 import tokenMappingService from '@/services/token-mapping';
 import VoiNetworkService, { NetworkService } from '@/services/network';
 import { useMultiNetworkBalance } from '@/store/walletStore';
-
 
 type TransactionConfirmationScreenRouteProp = RouteProp<
   WalletStackParamList,
@@ -78,21 +77,33 @@ export default function TransactionConfirmationScreen() {
 
   // Get network configuration
   const selectedNetworkId = (params.networkId as NetworkId) || currentNetwork;
-  console.log('[TransactionConfirmation] params.networkId:', params.networkId, 'selectedNetworkId:', selectedNetworkId, 'currentNetwork:', currentNetwork);
+  console.log(
+    '[TransactionConfirmation] params.networkId:',
+    params.networkId,
+    'selectedNetworkId:',
+    selectedNetworkId,
+    'currentNetwork:',
+    currentNetwork
+  );
   const networkConfig = getNetworkConfig(selectedNetworkId);
 
   const [envoiProfile, setEnvoiProfile] = useState<EnvoiNameInfo | null>(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [currentRequest, setCurrentRequest] = useState<UnifiedTransactionRequest | null>(null);
+  const [currentRequest, setCurrentRequest] =
+    useState<UnifiedTransactionRequest | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [fallbackImageUrl, setFallbackImageUrl] = useState<string | undefined>(undefined);
+  const [fallbackImageUrl, setFallbackImageUrl] = useState<string | undefined>(
+    undefined
+  );
 
   // Use the unified auth controller
   const authController = useTransactionAuthController();
 
   // Get multi-network balance to find asset images from other networks
-  const { balance: multiNetworkBalance } = useMultiNetworkBalance(params.fromAccount?.id || '');
+  const { balance: multiNetworkBalance } = useMultiNetworkBalance(
+    params.fromAccount?.id || ''
+  );
 
   useEffect(() => {
     loadEnvoiProfile();
@@ -100,14 +111,18 @@ export default function TransactionConfirmationScreen() {
 
   useEffect(() => {
     loadFallbackImage();
-  }, [params.mappingId, params.assetImageUrl, params.assetId, selectedNetworkId]);
+  }, [
+    params.mappingId,
+    params.assetImageUrl,
+    params.assetId,
+    selectedNetworkId,
+  ]);
 
   useEffect(() => {
     return () => {
       authController.cleanup();
     };
   }, [authController]);
-
 
   const loadEnvoiProfile = async () => {
     if (!params.recipient) return;
@@ -160,7 +175,9 @@ export default function TransactionConfirmationScreen() {
         for (const asset of multiNetworkBalance.assets) {
           // Check if this asset is in the same mapping
           if (asset.mappingId === params.mappingId && asset.imageUrl) {
-            console.log(`[TransactionConfirmation] Using fallback image from ${asset.symbol} on ${asset.networkId}`);
+            console.log(
+              `[TransactionConfirmation] Using fallback image from ${asset.symbol} on ${asset.networkId}`
+            );
             setFallbackImageUrl(asset.imageUrl);
             return;
           }
@@ -170,33 +187,47 @@ export default function TransactionConfirmationScreen() {
       // If we still don't have an image, try fetching asset data from other networks in the mapping
       for (const token of mapping.tokens) {
         // Skip the current asset
-        if (token.assetId === params.assetId && token.networkId === selectedNetworkId) {
+        if (
+          token.assetId === params.assetId &&
+          token.networkId === selectedNetworkId
+        ) {
           continue;
         }
 
         try {
           const networkService = NetworkService.getInstance(token.networkId);
-          const balance = await networkService.getAccountBalance(params.fromAccount.address);
-          const asset = balance?.assets?.find(a => a.assetId === token.assetId);
+          const balance = await networkService.getAccountBalance(
+            params.fromAccount.address
+          );
+          const asset = balance?.assets?.find(
+            (a) => a.assetId === token.assetId
+          );
 
           if (asset?.imageUrl) {
-            console.log(`[TransactionConfirmation] Using fallback image from ${token.symbol} on ${token.networkId}`);
+            console.log(
+              `[TransactionConfirmation] Using fallback image from ${token.symbol} on ${token.networkId}`
+            );
             setFallbackImageUrl(asset.imageUrl);
             return;
           }
         } catch (error) {
-          console.log(`[TransactionConfirmation] Failed to fetch asset data from ${token.networkId}:`, error);
+          console.log(
+            `[TransactionConfirmation] Failed to fetch asset data from ${token.networkId}:`,
+            error
+          );
           // Continue to next token
         }
       }
 
       setFallbackImageUrl(undefined);
     } catch (error) {
-      console.error('[TransactionConfirmation] Failed to load fallback image:', error);
+      console.error(
+        '[TransactionConfirmation] Failed to load fallback image:',
+        error
+      );
       setFallbackImageUrl(undefined);
     }
   };
-
 
   const handleConfirm = () => {
     // Create unified transaction request
@@ -217,13 +248,14 @@ export default function TransactionConfirmationScreen() {
     }
 
     const request: UnifiedTransactionRequest = {
-      type: params.assetType === 'arc200'
-        ? 'arc200_transfer'
-        : params.assetType === 'asa'
-        ? 'asa_transfer'
-        : params.assetType === 'arc72'
-        ? 'arc72_transfer'
-        : 'voi_transfer',
+      type:
+        params.assetType === 'arc200'
+          ? 'arc200_transfer'
+          : params.assetType === 'asa'
+            ? 'asa_transfer'
+            : params.assetType === 'arc72'
+              ? 'arc72_transfer'
+              : 'voi_transfer',
       account: params.fromAccount,
       transferParams: {
         from: params.fromAccount.address,
@@ -273,9 +305,8 @@ export default function TransactionConfirmationScreen() {
       });
     } else {
       // Replace this screen with error result
-      const errorMessage = result instanceof Error
-        ? result.message
-        : 'Transaction failed';
+      const errorMessage =
+        result instanceof Error ? result.message : 'Transaction failed';
 
       navigation.replace('TransactionResult', {
         recipient: params.recipient,
@@ -358,7 +389,10 @@ export default function TransactionConfirmationScreen() {
           total={getTotalAmount()}
           note={params.note}
           networkToken={networkConfig.nativeToken}
-          isVoiTransaction={params.assetType !== 'arc72' && (params.assetId === 0 || !params.assetId)}
+          isVoiTransaction={
+            params.assetType !== 'arc72' &&
+            (params.assetId === 0 || !params.assetId)
+          }
           isNftTransfer={params.assetType === 'arc72'}
           nftToken={params.nftToken}
           isLedgerSigner={false} // Will be handled by auth controller

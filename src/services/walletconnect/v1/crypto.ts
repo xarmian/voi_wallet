@@ -78,10 +78,7 @@ async function generateIV(): Promise<Uint8Array> {
  * Compute HMAC-SHA256 using crypto-js
  * WalletConnect v1 uses proper HMAC, not simple hash(key + data)
  */
-function computeHMAC(
-  key: Uint8Array,
-  data: Uint8Array
-): Uint8Array {
+function computeHMAC(key: Uint8Array, data: Uint8Array): Uint8Array {
   const CryptoJS = require('crypto-js');
 
   // Convert Uint8Arrays to hex strings first, then to WordArrays

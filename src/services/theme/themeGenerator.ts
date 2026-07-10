@@ -1,4 +1,9 @@
-import { Theme, GlassEffect, ShadowStyle, TypographyStyle } from '@/constants/themes';
+import {
+  Theme,
+  GlassEffect,
+  ShadowStyle,
+  TypographyStyle,
+} from '@/constants/themes';
 import { ExtractedColors, ColorPalette } from './colorExtraction';
 
 /**
@@ -58,11 +63,11 @@ export function generateThemeFromColors(
   const text = isDark
     ? lightenColor(colors.text || colors.dominant, 0.95)
     : darkenColor(colors.text || colors.dominant, 0.95);
-  
+
   const textSecondary = isDark
     ? lightenColor(colors.text || colors.dominant, 0.7)
     : darkenColor(colors.text || colors.dominant, 0.7);
-  
+
   const textMuted = isDark
     ? lightenColor(colors.text || colors.dominant, 0.5)
     : darkenColor(colors.text || colors.dominant, 0.5);
@@ -71,7 +76,7 @@ export function generateThemeFromColors(
   const border = isDark
     ? lightenColor(colors.background || colors.dominant, 0.2)
     : darkenColor(colors.background || colors.dominant, 0.1);
-  
+
   const borderLight = isDark
     ? lightenColor(colors.background || colors.dominant, 0.1)
     : darkenColor(colors.background || colors.dominant, 0.05);
@@ -109,9 +114,7 @@ export function generateThemeFromColors(
   const glassHighlight = isDark
     ? 'rgba(255, 255, 255, 0.30)'
     : 'rgba(255, 255, 255, 0.7)';
-  const glassShadow = isDark
-    ? 'rgba(0, 0, 0, 0.4)'
-    : 'rgba(0, 0, 0, 0.1)';
+  const glassShadow = isDark ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.1)';
 
   // Glow colors derived from theme colors
   const glowPrimary = hexToRgba(primary, isDark ? 0.45 : 0.35);
@@ -119,9 +122,7 @@ export function generateThemeFromColors(
   const glowError = hexToRgba(error, isDark ? 0.45 : 0.35);
 
   // Surface variations
-  const surfaceElevated = isDark
-    ? lightenColor(surface, 0.05)
-    : surface;
+  const surfaceElevated = isDark ? lightenColor(surface, 0.05) : surface;
   const surfacePressed = isDark
     ? 'rgba(255, 255, 255, 0.08)'
     : 'rgba(0, 0, 0, 0.04)';
@@ -132,32 +133,46 @@ export function generateThemeFromColors(
       blur: 24,
       opacity: isDark ? 0.18 : 0.75,
       tint: isDark ? 'dark' : 'light',
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(255, 255, 255, 0.75)',
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.24)' : 'rgba(255, 255, 255, 0.5)',
+      backgroundColor: isDark
+        ? 'rgba(255, 255, 255, 0.18)'
+        : 'rgba(255, 255, 255, 0.75)',
+      borderColor: isDark
+        ? 'rgba(255, 255, 255, 0.24)'
+        : 'rgba(255, 255, 255, 0.5)',
       borderWidth: 1,
     },
     medium: {
       blur: 40,
-      opacity: isDark ? 0.22 : 0.80,
+      opacity: isDark ? 0.22 : 0.8,
       tint: isDark ? 'dark' : 'light',
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.22)' : 'rgba(255, 255, 255, 0.80)',
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.28)' : 'rgba(255, 255, 255, 0.6)',
+      backgroundColor: isDark
+        ? 'rgba(255, 255, 255, 0.22)'
+        : 'rgba(255, 255, 255, 0.80)',
+      borderColor: isDark
+        ? 'rgba(255, 255, 255, 0.28)'
+        : 'rgba(255, 255, 255, 0.6)',
       borderWidth: 1,
     },
     heavy: {
       blur: 60,
       opacity: isDark ? 0.28 : 0.85,
       tint: isDark ? 'dark' : 'light',
-      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.28)' : 'rgba(255, 255, 255, 0.85)',
-      borderColor: isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(255, 255, 255, 0.7)',
+      backgroundColor: isDark
+        ? 'rgba(255, 255, 255, 0.28)'
+        : 'rgba(255, 255, 255, 0.85)',
+      borderColor: isDark
+        ? 'rgba(255, 255, 255, 0.35)'
+        : 'rgba(255, 255, 255, 0.7)',
       borderWidth: 1,
     },
     chromatic: {
       blur: 40,
-      opacity: isDark ? 0.20 : 0.75,
+      opacity: isDark ? 0.2 : 0.75,
       tint: 'chromatic',
-      backgroundColor: isDark ? hexToRgba(primary, 0.20) : hexToRgba(primary, 0.15),
-      borderColor: isDark ? hexToRgba(primary, 0.30) : hexToRgba(primary, 0.30),
+      backgroundColor: isDark
+        ? hexToRgba(primary, 0.2)
+        : hexToRgba(primary, 0.15),
+      borderColor: isDark ? hexToRgba(primary, 0.3) : hexToRgba(primary, 0.3),
       borderWidth: 1,
     },
   };
@@ -193,22 +208,68 @@ export function generateThemeFromColors(
     glass: isDark
       ? ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0)']
       : ['rgba(255, 255, 255, 0.2)', 'rgba(255, 255, 255, 0)'],
-    background: [background, isDark ? darkenColor(background, 0.1) : lightenColor(background, 0.05)],
+    background: [
+      background,
+      isDark ? darkenColor(background, 0.1) : lightenColor(background, 0.05),
+    ],
     shimmer: isDark
-      ? ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.15)', 'rgba(255, 255, 255, 0)']
-      : ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.6)', 'rgba(255, 255, 255, 0)'],
+      ? [
+          'rgba(255, 255, 255, 0)',
+          'rgba(255, 255, 255, 0.15)',
+          'rgba(255, 255, 255, 0)',
+        ]
+      : [
+          'rgba(255, 255, 255, 0)',
+          'rgba(255, 255, 255, 0.6)',
+          'rgba(255, 255, 255, 0)',
+        ],
   };
 
   // Typography presets
   const typography: Theme['typography'] = {
-    display: { fontSize: 48, fontWeight: '700', lineHeight: 56, letterSpacing: -0.5 },
-    heading1: { fontSize: 32, fontWeight: '700', lineHeight: 40, letterSpacing: -0.3 },
-    heading2: { fontSize: 24, fontWeight: '600', lineHeight: 32, letterSpacing: -0.2 },
-    heading3: { fontSize: 20, fontWeight: '600', lineHeight: 28, letterSpacing: 0 },
+    display: {
+      fontSize: 48,
+      fontWeight: '700',
+      lineHeight: 56,
+      letterSpacing: -0.5,
+    },
+    heading1: {
+      fontSize: 32,
+      fontWeight: '700',
+      lineHeight: 40,
+      letterSpacing: -0.3,
+    },
+    heading2: {
+      fontSize: 24,
+      fontWeight: '600',
+      lineHeight: 32,
+      letterSpacing: -0.2,
+    },
+    heading3: {
+      fontSize: 20,
+      fontWeight: '600',
+      lineHeight: 28,
+      letterSpacing: 0,
+    },
     body: { fontSize: 16, fontWeight: '400', lineHeight: 24, letterSpacing: 0 },
-    bodySmall: { fontSize: 14, fontWeight: '400', lineHeight: 20, letterSpacing: 0 },
-    caption: { fontSize: 12, fontWeight: '500', lineHeight: 16, letterSpacing: 0.3 },
-    mono: { fontSize: 14, fontWeight: '500', lineHeight: 20, letterSpacing: 0.5 },
+    bodySmall: {
+      fontSize: 14,
+      fontWeight: '400',
+      lineHeight: 20,
+      letterSpacing: 0,
+    },
+    caption: {
+      fontSize: 12,
+      fontWeight: '500',
+      lineHeight: 16,
+      letterSpacing: 0.3,
+    },
+    mono: {
+      fontSize: 14,
+      fontWeight: '500',
+      lineHeight: 20,
+      letterSpacing: 0.5,
+    },
   };
 
   // Animation presets
@@ -400,12 +461,12 @@ function generateSemanticColor(
         ? '#30D158'
         : '#34C759'
       : type === 'warning'
-      ? isDark
-        ? '#FF9F0A'
-        : '#FF9500'
-      : isDark
-      ? '#FF453A'
-      : '#FF3B30';
+        ? isDark
+          ? '#FF9F0A'
+          : '#FF9500'
+        : isDark
+          ? '#FF453A'
+          : '#FF3B30';
   }
 
   // Generate semantic colors by adjusting hue
@@ -420,7 +481,7 @@ function generateSemanticColor(
 
   // Convert RGB to HSL for hue manipulation
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  
+
   // Adjust hue toward target, keep saturation and lightness
   const adjustedHsl = {
     h: lerpHue(hsl.h, targetHue, 0.7),
@@ -434,7 +495,11 @@ function generateSemanticColor(
 /**
  * Convert RGB to HSL
  */
-function rgbToHsl(r: number, g: number, b: number): {
+function rgbToHsl(
+  r: number,
+  g: number,
+  b: number
+): {
   h: number;
   s: number;
   l: number;
@@ -540,7 +605,7 @@ function lerpHue(h1: number, h2: number, t: number): number {
 function ensureContrast(color1: string, color2: string): boolean {
   const rgb1 = hexToRgb(color1);
   const rgb2 = hexToRgb(color2);
-  
+
   if (!rgb1 || !rgb2) return true;
 
   const lum1 = getLuminance(rgb1.r, rgb1.g, rgb1.b);
@@ -577,7 +642,9 @@ function getContrastRatio(color1: string, color2: string): number {
   const lum1 = getLuminance(rgb1.r, rgb1.g, rgb1.b);
   const lum2 = getLuminance(rgb2.r, rgb2.g, rgb2.b);
 
-  return lum1 > lum2 ? (lum1 + 0.05) / (lum2 + 0.05) : (lum2 + 0.05) / (lum1 + 0.05);
+  return lum1 > lum2
+    ? (lum1 + 0.05) / (lum2 + 0.05)
+    : (lum2 + 0.05) / (lum1 + 0.05);
 }
 
 /**
@@ -594,7 +661,10 @@ function ensureInteractiveContrast(
   let attempts = 0;
   const maxAttempts = 20;
 
-  while (getContrastRatio(adjustedColor, backgroundColor) < minContrastRatio && attempts < maxAttempts) {
+  while (
+    getContrastRatio(adjustedColor, backgroundColor) < minContrastRatio &&
+    attempts < maxAttempts
+  ) {
     // If dark mode, lighten the color; if light mode, darken it
     if (isDark) {
       adjustedColor = lightenColor(adjustedColor, 0.1);

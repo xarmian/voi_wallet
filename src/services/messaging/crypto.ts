@@ -31,7 +31,9 @@ import {
  * @returns 32-byte Curve25519 secret key for use with nacl.box
  * @throws Error if conversion fails
  */
-export function ed25519SecretToCurve25519(ed25519Secret: Uint8Array): Uint8Array {
+export function ed25519SecretToCurve25519(
+  ed25519Secret: Uint8Array
+): Uint8Array {
   if (ed25519Secret.length !== 64) {
     throw new Error(
       `Invalid Ed25519 secret key length: expected 64 bytes, got ${ed25519Secret.length}`
@@ -53,7 +55,9 @@ export function ed25519SecretToCurve25519(ed25519Secret: Uint8Array): Uint8Array
  * @returns 32-byte Curve25519 public key for use with nacl.box
  * @throws Error if conversion fails
  */
-export function ed25519PublicToCurve25519(ed25519Public: Uint8Array): Uint8Array {
+export function ed25519PublicToCurve25519(
+  ed25519Public: Uint8Array
+): Uint8Array {
   if (ed25519Public.length !== 32) {
     throw new Error(
       `Invalid Ed25519 public key length: expected 32 bytes, got ${ed25519Public.length}`
@@ -130,7 +134,9 @@ export async function encryptMessage(
 
   // Get recipient's Ed25519 public key from address and convert to Curve25519
   const recipientEd25519Public = getPublicKeyFromAddress(recipientAddress);
-  const recipientCurvePublic = ed25519PublicToCurve25519(recipientEd25519Public);
+  const recipientCurvePublic = ed25519PublicToCurve25519(
+    recipientEd25519Public
+  );
 
   // Generate random nonce
   const nonce = await generateNonce();
@@ -220,7 +226,9 @@ export function createMessageNote(payload: EncryptedMessagePayload): string {
  * @param noteBase64 - Base64-encoded note field from transaction
  * @returns Parsed encrypted payload, or null if not a valid message note
  */
-export function parseMessageNote(noteBase64: string): EncryptedMessagePayload | null {
+export function parseMessageNote(
+  noteBase64: string
+): EncryptedMessagePayload | null {
   try {
     // Decode the note from base64 (as it comes from the indexer)
     const noteBytes = decodeBase64(noteBase64);
@@ -239,7 +247,12 @@ export function parseMessageNote(noteBase64: string): EncryptedMessagePayload | 
     const payload = JSON.parse(jsonPayload) as EncryptedMessagePayload;
 
     // Validate required fields
-    if (!payload.nonce || !payload.ciphertext || !payload.senderPubKey || !payload.timestamp) {
+    if (
+      !payload.nonce ||
+      !payload.ciphertext ||
+      !payload.senderPubKey ||
+      !payload.timestamp
+    ) {
       return null;
     }
 
@@ -266,7 +279,9 @@ export function verifySender(
 
     // Handle both v1 and v2 payload formats
     const senderPubKeyBase64 =
-      'v' in payload && payload.v === 2 ? payload.from : (payload as EncryptedMessagePayload).senderPubKey;
+      'v' in payload && payload.v === 2
+        ? payload.from
+        : (payload as EncryptedMessagePayload).senderPubKey;
 
     const payloadPublicKey = decodeBase64(senderPubKeyBase64);
 
@@ -488,7 +503,9 @@ export function decryptMessageV2(
  * @param payload - Encrypted v2 message payload
  * @returns Note string in format: voi-msg:v2:<base64_payload>
  */
-export function createMessageNoteV2(payload: EncryptedMessagePayloadV2): string {
+export function createMessageNoteV2(
+  payload: EncryptedMessagePayloadV2
+): string {
   const jsonPayload = JSON.stringify(payload);
   const encoder = new TextEncoder();
   const payloadBytes = encoder.encode(jsonPayload);
@@ -504,7 +521,10 @@ export function createMessageNoteV2(payload: EncryptedMessagePayloadV2): string 
  */
 export function parseMessageNoteAny(
   noteBase64: string
-): { version: 1; payload: EncryptedMessagePayload } | { version: 2; payload: EncryptedMessagePayloadV2 } | null {
+):
+  | { version: 1; payload: EncryptedMessagePayload }
+  | { version: 2; payload: EncryptedMessagePayloadV2 }
+  | null {
   try {
     // Decode the note from base64 (as it comes from the indexer)
     const noteBytes = decodeBase64(noteBase64);
@@ -518,7 +538,14 @@ export function parseMessageNoteAny(
       const payload = JSON.parse(jsonPayload) as EncryptedMessagePayloadV2;
 
       // Validate v2 required fields
-      if (payload.v !== 2 || !payload.from || !payload.epk || !payload.n || !payload.c || !payload.t) {
+      if (
+        payload.v !== 2 ||
+        !payload.from ||
+        !payload.epk ||
+        !payload.n ||
+        !payload.c ||
+        !payload.t
+      ) {
         return null;
       }
 
@@ -533,7 +560,12 @@ export function parseMessageNoteAny(
       const payload = JSON.parse(jsonPayload) as EncryptedMessagePayload;
 
       // Validate v1 required fields
-      if (!payload.nonce || !payload.ciphertext || !payload.senderPubKey || !payload.timestamp) {
+      if (
+        !payload.nonce ||
+        !payload.ciphertext ||
+        !payload.senderPubKey ||
+        !payload.timestamp
+      ) {
         return null;
       }
 

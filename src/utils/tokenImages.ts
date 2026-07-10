@@ -25,7 +25,11 @@ export function getTokenImageSource(
   const tokenId = token.id;
 
   // Priority 1: Use logoUrl if available
-  if (token.logoUrl != null && typeof token.logoUrl === 'string' && token.logoUrl.trim() !== '') {
+  if (
+    token.logoUrl != null &&
+    typeof token.logoUrl === 'string' &&
+    token.logoUrl.trim() !== ''
+  ) {
     return { type: 'uri', uri: token.logoUrl };
   }
 

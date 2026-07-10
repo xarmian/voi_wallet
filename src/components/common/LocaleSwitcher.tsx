@@ -45,7 +45,7 @@ const LOCALE_OPTIONS: ReadonlyArray<{
 
 const getLocaleIcon = (locale: string | null): string => {
   if (!locale) return 'phone-portrait';
-  
+
   const country = locale.split('-')[1];
   switch (country) {
     case 'US':
@@ -93,16 +93,11 @@ const LocaleItem: React.FC<LocaleItemProps> = ({
         {/* Locale Info */}
         <View style={styles.localeInfo}>
           <Text
-            style={[
-              styles.localeName,
-              isSelected && styles.selectedLocaleText,
-            ]}
+            style={[styles.localeName, isSelected && styles.selectedLocaleText]}
           >
             {label}
           </Text>
-          <Text style={styles.localeExample}>
-            {example}
-          </Text>
+          <Text style={styles.localeExample}>{example}</Text>
         </View>
 
         {/* Selected Indicator */}

@@ -59,7 +59,9 @@ const SigningPrompt: React.FC<SigningPromptProps> = ({
     >
       <View style={styles.overlay}>
         <View style={styles.container}>
-          <Text style={[styles.title, isError && styles.errorTitle]}>{title}</Text>
+          <Text style={[styles.title, isError && styles.errorTitle]}>
+            {title}
+          </Text>
           <Text style={styles.message}>{message}</Text>
 
           {isError && errorMessage ? (

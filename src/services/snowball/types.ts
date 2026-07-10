@@ -63,8 +63,8 @@ export interface RouteHop {
  */
 export interface Route {
   type: 'direct' | 'multi-hop';
-  pools?: RoutePool[];  // For direct routes
-  hops?: RouteHop[];    // For multi-hop routes
+  pools?: RoutePool[]; // For direct routes
+  hops?: RouteHop[]; // For multi-hop routes
 }
 
 /**

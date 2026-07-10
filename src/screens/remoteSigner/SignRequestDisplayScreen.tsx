@@ -63,7 +63,8 @@ export default function SignRequestDisplayScreen() {
     // Store the pending request with callback
     createPendingSignatureRequest(request, (response) => {
       if (response.ok && response.sigs && onComplete) {
-        const signedTxns = RemoteSignerService.extractSignedTransactions(response);
+        const signedTxns =
+          RemoteSignerService.extractSignedTransactions(response);
         onComplete(signedTxns);
       }
     });
@@ -76,10 +77,7 @@ export default function SignRequestDisplayScreen() {
     navigation.goBack();
   };
 
-  const totalFee = decodedTransactions.reduce(
-    (sum, txn) => sum + txn.fee,
-    0n
-  );
+  const totalFee = decodedTransactions.reduce((sum, txn) => sum + txn.fee, 0n);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -235,7 +233,11 @@ export default function SignRequestDisplayScreen() {
           style={styles.scanButton}
           onPress={handleScanResponse}
         >
-          <Ionicons name="scan-outline" size={20} color={theme.colors.buttonText} />
+          <Ionicons
+            name="scan-outline"
+            size={20}
+            color={theme.colors.buttonText}
+          />
           <Text style={styles.scanButtonText}>Scan Response</Text>
         </TouchableOpacity>
       </View>

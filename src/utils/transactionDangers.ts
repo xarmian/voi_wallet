@@ -43,7 +43,9 @@ export const hasAnyDanger = (d?: TransactionDangers | null): boolean =>
   !!(d && (d.rekeyTo || d.closeRemainderTo || d.assetCloseTo));
 
 /** Aggregate the first target of each danger kind across many transactions. */
-export const aggregateDangers = (list: TransactionDangers[]): TransactionDangers => ({
+export const aggregateDangers = (
+  list: TransactionDangers[]
+): TransactionDangers => ({
   rekeyTo: list.find((d) => d.rekeyTo)?.rekeyTo,
   closeRemainderTo: list.find((d) => d.closeRemainderTo)?.closeRemainderTo,
   assetCloseTo: list.find((d) => d.assetCloseTo)?.assetCloseTo,

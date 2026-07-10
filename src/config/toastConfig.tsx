@@ -66,7 +66,8 @@ export const toastConfig = {
         <View style={styles.queueBadge}>
           <Ionicons name="list" size={16} color="#3B82F6" />
           <Text style={styles.queueText}>
-            {props.queueSize} more request{props.queueSize > 1 ? 's' : ''} pending
+            {props.queueSize} more request{props.queueSize > 1 ? 's' : ''}{' '}
+            pending
           </Text>
         </View>
       )}
@@ -84,7 +85,8 @@ export const toastConfig = {
         <View style={styles.queueBadge}>
           <Ionicons name="list" size={16} color="#3B82F6" />
           <Text style={styles.queueText}>
-            {props.queueSize} more request{props.queueSize > 1 ? 's' : ''} pending
+            {props.queueSize} more request{props.queueSize > 1 ? 's' : ''}{' '}
+            pending
           </Text>
         </View>
       )}

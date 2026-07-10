@@ -14,7 +14,10 @@
  */
 
 // Core Services
-export { SimpleLedgerManager, simpleLedgerManager } from './simpleLedgerManager';
+export {
+  SimpleLedgerManager,
+  simpleLedgerManager,
+} from './simpleLedgerManager';
 export { SimpleLedgerSigner, simpleLedgerSigner } from './simpleLedgerSigner';
 
 // Authentication & State Management

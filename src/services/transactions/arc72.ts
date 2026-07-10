@@ -58,7 +58,8 @@ export class Arc72TransactionService {
     try {
       // Use network service if provided to get account balance (includes ARC-72)
       if (networkService) {
-        const accountBalance = await networkService.getAccountBalance(recipientAddress);
+        const accountBalance =
+          await networkService.getAccountBalance(recipientAddress);
         const arc72Asset = accountBalance.assets?.find(
           (asset: any) =>
             asset.assetType === 'arc72' && asset.contractId === contractId
@@ -313,9 +314,7 @@ export class Arc72TransactionService {
    * Estimate the total cost of an ARC-72 transfer
    * This includes the app call fee and potentially MBR payment
    */
-  static async estimateArc72TransferCost(
-    params: Arc72TransferParams
-  ): Promise<{
+  static async estimateArc72TransferCost(params: Arc72TransferParams): Promise<{
     fee: number;
     mbrAmount: number;
     total: number;

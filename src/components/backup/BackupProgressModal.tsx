@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  Modal,
-  View,
-  Text,
-  StyleSheet,
-  ActivityIndicator,
-} from 'react-native';
+import { Modal, View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';

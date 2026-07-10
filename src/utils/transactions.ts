@@ -7,21 +7,20 @@ import { TransactionInfo } from '@/types/wallet';
 export const dedupeTransactions = (
   transactions: TransactionInfo[]
 ): TransactionInfo[] => {
-    const seen = new Set<string>();
-    const result: TransactionInfo[] = [];
+  const seen = new Set<string>();
+  const result: TransactionInfo[] = [];
 
-    for (const tx of transactions) {
-      const fallbackKey = `${tx.assetId ?? 'na'}-${tx.timestamp ?? 'na'}-${tx.from ?? 'na'}-${tx.to ?? 'na'}-${tx.amount ?? 'na'}`;
-      const key = tx.id || fallbackKey;
+  for (const tx of transactions) {
+    const fallbackKey = `${tx.assetId ?? 'na'}-${tx.timestamp ?? 'na'}-${tx.from ?? 'na'}-${tx.to ?? 'na'}-${tx.amount ?? 'na'}`;
+    const key = tx.id || fallbackKey;
 
-      if (seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-      result.push(tx);
+    if (seen.has(key)) {
+      continue;
     }
 
-    return result;
-};
+    seen.add(key);
+    result.push(tx);
+  }
 
+  return result;
+};

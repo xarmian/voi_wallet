@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Image } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Image,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
@@ -96,7 +103,9 @@ export default function NetworkAssetSelector({
           <View style={styles.singleOptionHeader}>
             <Text style={styles.singleOptionName}>{option.name}</Text>
             <View style={styles.singleOptionNetworkBadge}>
-              <View style={[styles.networkDot, { backgroundColor: config.color }]} />
+              <View
+                style={[styles.networkDot, { backgroundColor: config.color }]}
+              />
               <Text style={styles.singleOptionNetworkName}>
                 {config.name.replace(' Network', '').replace(' Mainnet', '')}
               </Text>
@@ -105,7 +114,8 @@ export default function NetworkAssetSelector({
           <View style={styles.singleOptionBalanceRow}>
             <Text style={styles.singleOptionSymbol}>{option.symbol}</Text>
             <Text style={styles.singleOptionBalance}>
-              {formatAssetBalance(option.balance, option.decimals)} {option.symbol}
+              {formatAssetBalance(option.balance, option.decimals)}{' '}
+              {option.symbol}
             </Text>
           </View>
           {option.assetId !== 0 && (
@@ -126,12 +136,16 @@ export default function NetworkAssetSelector({
       >
         {options.map((option) => {
           const config = getNetworkConfig(option.networkId);
-          const isSelected = option.assetId === selectedAssetId && option.networkId === selectedNetworkId;
+          const isSelected =
+            option.assetId === selectedAssetId &&
+            option.networkId === selectedNetworkId;
 
           return (
             <TouchableOpacity
               key={`${option.networkId}-${option.assetId}`}
-              onPress={() => !disabled && onSelect(option.networkId, option.assetId)}
+              onPress={() =>
+                !disabled && onSelect(option.networkId, option.assetId)
+              }
               disabled={disabled}
               activeOpacity={0.7}
               style={disabled ? styles.cardDisabled : undefined}
@@ -139,27 +153,46 @@ export default function NetworkAssetSelector({
               <BlurredContainer
                 variant={isSelected ? 'medium' : 'light'}
                 borderRadius={styles.card.borderRadius}
-                style={[
-                  styles.card,
-                  isSelected && styles.cardSelected,
-                ]}
+                style={[styles.card, isSelected && styles.cardSelected]}
               >
                 <View style={styles.cardHeader}>
-                  <View style={[styles.networkDot, { backgroundColor: config.color }]} />
-                  <Text style={[styles.networkName, !isSelected && styles.networkNameMuted]}>
-                    {config.name.replace(' Network', '').replace(' Mainnet', '')}
+                  <View
+                    style={[
+                      styles.networkDot,
+                      { backgroundColor: config.color },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.networkName,
+                      !isSelected && styles.networkNameMuted,
+                    ]}
+                  >
+                    {config.name
+                      .replace(' Network', '')
+                      .replace(' Mainnet', '')}
                   </Text>
                 </View>
 
-                <Text style={[styles.assetName, !isSelected && styles.assetNameMuted]}>
+                <Text
+                  style={[
+                    styles.assetName,
+                    !isSelected && styles.assetNameMuted,
+                  ]}
+                >
                   {option.name}
                 </Text>
 
-                <Text style={[styles.balance, !isSelected && styles.balanceMuted]}>
-                  {formatAssetBalance(option.balance, option.decimals)} {option.symbol}
+                <Text
+                  style={[styles.balance, !isSelected && styles.balanceMuted]}
+                >
+                  {formatAssetBalance(option.balance, option.decimals)}{' '}
+                  {option.symbol}
                 </Text>
 
-                <Text style={[styles.assetId, !isSelected && styles.assetIdMuted]}>
+                <Text
+                  style={[styles.assetId, !isSelected && styles.assetIdMuted]}
+                >
                   ID: {option.assetId}
                 </Text>
               </BlurredContainer>
@@ -182,9 +215,10 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       marginBottom: theme.spacing.sm,
       // Text shadow for readability over NFT backgrounds
-      textShadowColor: theme.mode === 'dark'
-        ? 'rgba(0, 0, 0, 0.8)'
-        : 'rgba(255, 255, 255, 0.9)',
+      textShadowColor:
+        theme.mode === 'dark'
+          ? 'rgba(0, 0, 0, 0.8)'
+          : 'rgba(255, 255, 255, 0.9)',
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: 10,
     },
@@ -268,9 +302,10 @@ const createStyles = (theme: Theme) =>
       width: 48,
       height: 48,
       borderRadius: 24,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.12)'
-        : 'rgba(255, 255, 255, 0.6)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.12)'
+          : 'rgba(255, 255, 255, 0.6)',
       justifyContent: 'center',
       alignItems: 'center',
       color: theme.colors.primary,
@@ -294,9 +329,10 @@ const createStyles = (theme: Theme) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: theme.spacing.xs,
-      backgroundColor: theme.mode === 'dark'
-        ? 'rgba(255, 255, 255, 0.12)'
-        : 'rgba(255, 255, 255, 0.6)',
+      backgroundColor:
+        theme.mode === 'dark'
+          ? 'rgba(255, 255, 255, 0.12)'
+          : 'rgba(255, 255, 255, 0.6)',
       paddingHorizontal: theme.spacing.sm,
       paddingVertical: 4,
       borderRadius: theme.borderRadius.sm,

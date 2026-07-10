@@ -25,7 +25,10 @@ interface ClaimableBannerProps {
   onPress: () => void;
 }
 
-export default function ClaimableBanner({ count, onPress }: ClaimableBannerProps) {
+export default function ClaimableBanner({
+  count,
+  onPress,
+}: ClaimableBannerProps) {
   const styles = useThemedStyles(createStyles);
   const iconScale = useSharedValue(1);
 

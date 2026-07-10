@@ -275,13 +275,16 @@ export class TransactionTracker {
    */
   private static async getRateLimits(): Promise<RateLimitRecord> {
     try {
-      const rateLimitData = await this.readJson<RateLimitRecord>(RATE_LIMIT_KEY);
-      return rateLimitData ?? {
-        hourlyCount: 0,
-        dailyCount: 0,
-        lastHourReset: Date.now(),
-        lastDayReset: Date.now(),
-      };
+      const rateLimitData =
+        await this.readJson<RateLimitRecord>(RATE_LIMIT_KEY);
+      return (
+        rateLimitData ?? {
+          hourlyCount: 0,
+          dailyCount: 0,
+          lastHourReset: Date.now(),
+          lastDayReset: Date.now(),
+        }
+      );
     } catch {
       return {
         hourlyCount: 0,

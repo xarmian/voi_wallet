@@ -19,10 +19,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { formatAddress } from '@/utils/address';
-import type {
-  LedgerAccountMetadata,
-  LedgerSigningInfo,
-} from '@/types/wallet';
+import type { LedgerAccountMetadata, LedgerSigningInfo } from '@/types/wallet';
 import {
   ledgerTransportService,
   LedgerDeviceInfo,
@@ -83,7 +80,9 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
     if (!selectedAccountId) {
       return null;
     }
-    return ledgerAccounts.find((account) => account.id === selectedAccountId) || null;
+    return (
+      ledgerAccounts.find((account) => account.id === selectedAccountId) || null
+    );
   }, [ledgerAccounts, selectedAccountId]);
 
   const selectedStatus = useMemo(() => {
@@ -111,9 +110,12 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
       const entries = await Promise.all(
         ledgerAccounts.map(async (account) => {
           try {
-            const info = await SecureKeyManager.getLedgerSigningInfo(account.id, {
-              lookupByAddress: false,
-            });
+            const info = await SecureKeyManager.getLedgerSigningInfo(
+              account.id,
+              {
+                lookupByAddress: false,
+              }
+            );
             return [account.id, info] as const;
           } catch (error) {
             console.warn('Failed to load Ledger status:', error);
@@ -123,10 +125,13 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
       );
 
       if (refreshId === refreshCounterRef.current) {
-        const nextStatusMap = entries.reduce<LedgerStatusMap>((acc, [id, info]) => {
-          acc[id] = info;
-          return acc;
-        }, {});
+        const nextStatusMap = entries.reduce<LedgerStatusMap>(
+          (acc, [id, info]) => {
+            acc[id] = info;
+            return acc;
+          },
+          {}
+        );
         setStatusMap(nextStatusMap);
       }
     } finally {
@@ -168,7 +173,8 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
       return;
     }
     const info = selectedStatus ?? null;
-    const isReady = !!info && (info.isDeviceConnected || info.isDeviceAvailable);
+    const isReady =
+      !!info && (info.isDeviceConnected || info.isDeviceAvailable);
     onStatusUpdate({
       accountId: selectedAccount?.id ?? null,
       info,
@@ -260,8 +266,14 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
 
   if (ledgerAccounts.length === 0) {
     return (
-      <View style={[styles.emptyContainer, { borderColor: theme.colors.border }]}>
-        <Ionicons name="hardware-chip-outline" size={32} color={colors.textSecondary} />
+      <View
+        style={[styles.emptyContainer, { borderColor: theme.colors.border }]}
+      >
+        <Ionicons
+          name="hardware-chip-outline"
+          size={32}
+          color={colors.textSecondary}
+        />
         <Text style={[styles.emptyTitle, { color: colors.text }]}>
           No Ledger accounts available
         </Text>
@@ -270,10 +282,18 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
         </Text>
         {onImportLedgerAccounts ? (
           <TouchableOpacity
-            style={[styles.importButton, { backgroundColor: theme.colors.primary }]}
+            style={[
+              styles.importButton,
+              { backgroundColor: theme.colors.primary },
+            ]}
             onPress={onImportLedgerAccounts}
           >
-            <Text style={[styles.importButtonText, { color: theme.colors.buttonText }]}>
+            <Text
+              style={[
+                styles.importButtonText,
+                { color: theme.colors.buttonText },
+              ]}
+            >
               Import from Ledger
             </Text>
           </TouchableOpacity>
@@ -286,33 +306,56 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
     <View style={[styles.container, { borderColor: theme.colors.border }]}>
       <View style={styles.headerRow}>
         <View style={styles.titleGroup}>
-          <Text style={[styles.title, { color: colors.text }]}>Ledger Signing Account</Text>
+          <Text style={[styles.title, { color: colors.text }]}>
+            Ledger Signing Account
+          </Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
             Select the Ledger account that will control this address
           </Text>
         </View>
         <TouchableOpacity
-          style={[styles.connectButton, { borderColor: theme.colors.borderLight }]}
+          style={[
+            styles.connectButton,
+            { borderColor: theme.colors.borderLight },
+          ]}
           onPress={handleConnectPress}
         >
           <Ionicons name="bluetooth" size={16} color={colors.text} />
-          <Text style={[styles.connectButtonText, { color: colors.text }]}>Connect Ledger</Text>
+          <Text style={[styles.connectButtonText, { color: colors.text }]}>
+            Connect Ledger
+          </Text>
         </TouchableOpacity>
       </View>
 
       {connectedDevice ? (
-        <View style={[styles.deviceBanner, { backgroundColor: theme.colors.primaryLight }]}>
+        <View
+          style={[
+            styles.deviceBanner,
+            { backgroundColor: theme.colors.primaryLight },
+          ]}
+        >
           <Ionicons
             name="hardware-chip-outline"
             size={18}
             color={theme.colors.primary}
           />
           <View style={styles.deviceBannerText}>
-            <Text style={[styles.deviceBannerTitle, { color: theme.colors.primary }]}>
+            <Text
+              style={[
+                styles.deviceBannerTitle,
+                { color: theme.colors.primary },
+              ]}
+            >
               {connectedDevice.name || 'Ledger Device'}
             </Text>
-            <Text style={[styles.deviceBannerSubtitle, { color: colors.textSecondary }]}>
-              {connectedDevice.type === 'ble' ? 'Bluetooth' : 'USB'} · {connectedDevice.id}
+            <Text
+              style={[
+                styles.deviceBannerSubtitle,
+                { color: colors.textSecondary },
+              ]}
+            >
+              {connectedDevice.type === 'ble' ? 'Bluetooth' : 'USB'} ·{' '}
+              {connectedDevice.id}
             </Text>
           </View>
         </View>
@@ -322,7 +365,9 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
         {isLoadingStatuses ? (
           <View style={styles.loadingRow}>
             <ActivityIndicator color={theme.colors.primary} size="small" />
-            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Checking Ledger status...</Text>
+            <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+              Checking Ledger status...
+            </Text>
           </View>
         ) : null}
 
@@ -359,17 +404,21 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
                       { backgroundColor: statusIntentColors[intent] },
                     ]}
                   />
-                  <Text style={[styles.intentText, { color: colors.textSecondary }]}>
+                  <Text
+                    style={[styles.intentText, { color: colors.textSecondary }]}
+                  >
                     {intent === 'connected'
                       ? 'Connected'
                       : intent === 'available'
-                      ? 'Needs connection'
-                      : 'Unavailable'}
+                        ? 'Needs connection'
+                        : 'Unavailable'}
                   </Text>
                 </View>
               </View>
 
-              <Text style={[styles.accountAddress, { color: colors.textSecondary }]}>
+              <Text
+                style={[styles.accountAddress, { color: colors.textSecondary }]}
+              >
                 {formatAddress(account.address)}
               </Text>
               <Text style={[styles.accountMeta, { color: colors.textMuted }]}>

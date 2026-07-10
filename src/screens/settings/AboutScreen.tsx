@@ -43,7 +43,10 @@ export default function AboutScreen() {
 
   const handleCheckForUpdates = async () => {
     if (__DEV__) {
-      Alert.alert('Development Mode', 'Update checking is not available in development mode.');
+      Alert.alert(
+        'Development Mode',
+        'Update checking is not available in development mode.'
+      );
       return;
     }
     await checkForUpdate();
@@ -93,7 +96,12 @@ export default function AboutScreen() {
 
         <View style={styles.appInfoSection}>
           <Text style={styles.appName}>Voi Wallet</Text>
-          <Text style={styles.version}>Version {Constants.expoConfig?.version || Constants.manifest?.version || '1.0.0'}</Text>
+          <Text style={styles.version}>
+            Version{' '}
+            {Constants.expoConfig?.version ||
+              Constants.manifest?.version ||
+              '1.0.0'}
+          </Text>
           <Text style={styles.buildInfo}>
             {updateInfo.type === 'ota'
               ? `${updateInfo.id}${updateInfo.date ? ` • ${updateInfo.date}` : ''}`
@@ -109,9 +117,16 @@ export default function AboutScreen() {
             disabled={isChecking}
           >
             {isChecking ? (
-              <ActivityIndicator size="small" color={styles.checkUpdateText.color} />
+              <ActivityIndicator
+                size="small"
+                color={styles.checkUpdateText.color}
+              />
             ) : (
-              <Ionicons name="refresh" size={18} color={styles.checkUpdateText.color} />
+              <Ionicons
+                name="refresh"
+                size={18}
+                color={styles.checkUpdateText.color}
+              />
             )}
             <Text style={styles.checkUpdateText}>
               {isChecking ? 'Checking...' : 'Check for Updates'}
@@ -176,9 +191,7 @@ export default function AboutScreen() {
         </View>
 
         <View style={styles.footerSection}>
-          <Text style={styles.footerText}>
-            Built for Voi Network with ❤️
-          </Text>
+          <Text style={styles.footerText}>Built for Voi Network with ❤️</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

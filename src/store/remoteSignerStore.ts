@@ -72,11 +72,14 @@ interface RemoteSignerState {
   /** Map of paired signer devices (deviceId -> info) */
   pairedSigners: Map<string, SignerDeviceInfo>;
   /** Pending signature requests waiting for response */
-  pendingSignatureRequests: Map<string, {
-    request: RemoteSignerRequest;
-    createdAt: number;
-    onComplete?: (response: RemoteSignerResponse) => void;
-  }>;
+  pendingSignatureRequests: Map<
+    string,
+    {
+      request: RemoteSignerRequest;
+      createdAt: number;
+      onComplete?: (response: RemoteSignerResponse) => void;
+    }
+  >;
 
   // ============ Actions ============
   /** Initialize the store from persisted storage */
@@ -99,7 +102,10 @@ interface RemoteSignerState {
   /** Check if a request has been processed */
   isRequestProcessed: (requestId: string) => boolean;
   /** Check if a request is valid (not expired, not duplicate) */
-  validateRequest: (request: RemoteSignerRequest) => { valid: boolean; error?: string };
+  validateRequest: (request: RemoteSignerRequest) => {
+    valid: boolean;
+    error?: string;
+  };
   /** Clean up old processed request IDs */
   cleanupProcessedRequests: () => void;
 
@@ -118,7 +124,10 @@ interface RemoteSignerState {
     onComplete?: (response: RemoteSignerResponse) => void
   ) => void;
   /** Complete a pending signature request */
-  completePendingSignatureRequest: (requestId: string, response: RemoteSignerResponse) => void;
+  completePendingSignatureRequest: (
+    requestId: string,
+    response: RemoteSignerResponse
+  ) => void;
   /** Cancel a pending signature request */
   cancelPendingSignatureRequest: (requestId: string) => void;
 }
@@ -157,19 +166,25 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         const appMode: AppMode = storedMode === 'signer' ? 'signer' : 'wallet';
 
         // Load signer config (if exists)
-        const storedConfig = await AsyncStorage.getItem(STORAGE_KEYS.SIGNER_CONFIG);
+        const storedConfig = await AsyncStorage.getItem(
+          STORAGE_KEYS.SIGNER_CONFIG
+        );
         const signerConfig: SignerDeviceConfig | null = storedConfig
           ? JSON.parse(storedConfig)
           : null;
 
         // Load paired signers
-        const storedSigners = await AsyncStorage.getItem(STORAGE_KEYS.PAIRED_SIGNERS);
+        const storedSigners = await AsyncStorage.getItem(
+          STORAGE_KEYS.PAIRED_SIGNERS
+        );
         const pairedSigners = new Map<string, SignerDeviceInfo>(
           storedSigners ? JSON.parse(storedSigners) : []
         );
 
         // Load processed requests (for replay prevention in signer mode)
-        const storedProcessed = await AsyncStorage.getItem(STORAGE_KEYS.PROCESSED_REQUESTS);
+        const storedProcessed = await AsyncStorage.getItem(
+          STORAGE_KEYS.PROCESSED_REQUESTS
+        );
         const processedRequestIds = new Set<string>(
           storedProcessed ? JSON.parse(storedProcessed) : []
         );
@@ -211,11 +226,20 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
           requirePinPerTxn: false,
         };
 
-        await AsyncStorage.setItem(STORAGE_KEYS.SIGNER_CONFIG, JSON.stringify(config));
+        await AsyncStorage.setItem(
+          STORAGE_KEYS.SIGNER_CONFIG,
+          JSON.stringify(config)
+        );
         set({ signerConfig: config });
-        console.log('[RemoteSignerStore] Signer config initialized:', config.deviceId);
+        console.log(
+          '[RemoteSignerStore] Signer config initialized:',
+          config.deviceId
+        );
       } catch (error) {
-        console.error('[RemoteSignerStore] Failed to initialize signer config:', error);
+        console.error(
+          '[RemoteSignerStore] Failed to initialize signer config:',
+          error
+        );
         throw error;
       }
     },
@@ -227,7 +251,10 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       }
 
       const updated = { ...signerConfig, deviceName: name };
-      await AsyncStorage.setItem(STORAGE_KEYS.SIGNER_CONFIG, JSON.stringify(updated));
+      await AsyncStorage.setItem(
+        STORAGE_KEYS.SIGNER_CONFIG,
+        JSON.stringify(updated)
+      );
       set({ signerConfig: updated });
     },
 
@@ -262,7 +289,10 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         STORAGE_KEYS.PROCESSED_REQUESTS,
         JSON.stringify(Array.from(updated))
       ).catch((err) =>
-        console.warn('[RemoteSignerStore] Failed to persist processed requests:', err)
+        console.warn(
+          '[RemoteSignerStore] Failed to persist processed requests:',
+          err
+        )
       );
     },
 
@@ -331,7 +361,9 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       // For now, we just keep all processed IDs
       // A more sophisticated implementation would track timestamps
       // and remove entries older than CLEANUP_AGE_MS
-      console.log('[RemoteSignerStore] Cleanup processed requests (not implemented yet)');
+      console.log(
+        '[RemoteSignerStore] Cleanup processed requests (not implemented yet)'
+      );
     },
 
     // ============ Wallet Mode Actions ============
@@ -392,8 +424,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       set({ pendingSignatureRequests: updated });
     },
 
-    completePendingSignatureRequest: (requestId: string, response: RemoteSignerResponse) => {
-      const { pendingSignatureRequests, updateSignerActivity, pairedSigners } = get();
+    completePendingSignatureRequest: (
+      requestId: string,
+      response: RemoteSignerResponse
+    ) => {
+      const { pendingSignatureRequests, updateSignerActivity, pairedSigners } =
+        get();
       const pending = pendingSignatureRequests.get(requestId);
 
       if (pending) {
@@ -406,7 +442,9 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         for (const [deviceId, signerInfo] of entries) {
           const signerAddresses = new Set(signerInfo.addresses);
           const requestAddresses = pending.request.txns.map((t) => t.s);
-          const hasMatch = requestAddresses.some((addr) => signerAddresses.has(addr));
+          const hasMatch = requestAddresses.some((addr) =>
+            signerAddresses.has(addr)
+          );
 
           if (hasMatch) {
             updateSignerActivity(deviceId);

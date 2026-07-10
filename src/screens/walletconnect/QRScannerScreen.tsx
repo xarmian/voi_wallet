@@ -48,7 +48,6 @@ const resolveAlgorandAddress = (value: string): string | null => {
 };
 
 export default function QRScannerScreen({ navigation }: Props) {
-
   const getPaymentParamsFromUri = (uri: string): Record<string, any> | null => {
     if (!isAlgorandPaymentUri(uri)) {
       return null;

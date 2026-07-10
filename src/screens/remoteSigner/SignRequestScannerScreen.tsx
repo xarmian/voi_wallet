@@ -23,7 +23,10 @@ import jsQR from 'jsqr';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
-import { useRemoteSignerStore, useSignerConfig } from '@/store/remoteSignerStore';
+import {
+  useRemoteSignerStore,
+  useSignerConfig,
+} from '@/store/remoteSignerStore';
 import { useWalletStore } from '@/store/walletStore';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { isRemoteSignerRequest } from '@/types/remoteSigner';
@@ -43,7 +46,8 @@ const showAlert = (
     if (buttons && buttons.length > 1) {
       const confirmed = window.confirm(`${title}\n\n${message}`);
       if (confirmed) {
-        const confirmButton = buttons.find((b) => b.style !== 'cancel') || buttons[0];
+        const confirmButton =
+          buttons.find((b) => b.style !== 'cancel') || buttons[0];
         confirmButton?.onPress?.();
       } else {
         const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -66,8 +70,12 @@ export default function SignRequestScannerScreen() {
 
   const signerConfig = useSignerConfig();
   const accounts = useWalletStore((state) => state.wallet?.accounts ?? []);
-  const validateRequest = useRemoteSignerStore((state) => state.validateRequest);
-  const setPendingRequest = useRemoteSignerStore((state) => state.setPendingRequest);
+  const validateRequest = useRemoteSignerStore(
+    (state) => state.validateRequest
+  );
+  const setPendingRequest = useRemoteSignerStore(
+    (state) => state.setPendingRequest
+  );
 
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
@@ -124,7 +132,10 @@ export default function SignRequestScannerScreen() {
         // Validate the request (timestamp, duplicate check, etc.)
         const validation = validateRequest(payload);
         if (!validation.valid) {
-          showAlert('Invalid Request', validation.error || 'Request validation failed');
+          showAlert(
+            'Invalid Request',
+            validation.error || 'Request validation failed'
+          );
           setScanned(false);
           setIsProcessing(false);
           return;
@@ -151,7 +162,9 @@ export default function SignRequestScannerScreen() {
 
         // All validations passed - set as pending and navigate to review
         setPendingRequest(payload);
-        navigation.navigate('RemoteSignerTransactionReview', { request: payload });
+        navigation.navigate('RemoteSignerTransactionReview', {
+          request: payload,
+        });
       } catch (error) {
         console.error('Failed to process QR data:', error);
         showAlert(
@@ -163,7 +176,13 @@ export default function SignRequestScannerScreen() {
         setIsProcessing(false);
       }
     },
-    [isProcessing, validateRequest, signableAddresses, setPendingRequest, navigation]
+    [
+      isProcessing,
+      validateRequest,
+      signableAddresses,
+      setPendingRequest,
+      navigation,
+    ]
   );
 
   const handleBarCodeScanned = useCallback(
@@ -187,7 +206,9 @@ export default function SignRequestScannerScreen() {
   };
 
   // Web file input handler
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -212,7 +233,10 @@ export default function SignRequestScannerScreen() {
           if (code?.data) {
             processQRData(code.data);
           } else {
-            showAlert('No QR Code Found', 'Could not find a QR code in the selected image.');
+            showAlert(
+              'No QR Code Found',
+              'Could not find a QR code in the selected image.'
+            );
           }
         };
         image.src = e.target?.result as string;
@@ -238,7 +262,11 @@ export default function SignRequestScannerScreen() {
           style={styles.webButton}
           onPress={() => fileInputRef.current?.click()}
         >
-          <Ionicons name="image-outline" size={20} color={theme.colors.buttonText} />
+          <Ionicons
+            name="image-outline"
+            size={20}
+            color={theme.colors.buttonText}
+          />
           <Text style={styles.webButtonText}>Upload QR Image</Text>
         </TouchableOpacity>
 
@@ -246,7 +274,11 @@ export default function SignRequestScannerScreen() {
           style={[styles.webButton, styles.webButtonSecondary]}
           onPress={handlePasteFromClipboard}
         >
-          <Ionicons name="clipboard-outline" size={20} color={theme.colors.primary} />
+          <Ionicons
+            name="clipboard-outline"
+            size={20}
+            color={theme.colors.primary}
+          />
           <Text style={[styles.webButtonText, styles.webButtonTextSecondary]}>
             Paste from Clipboard
           </Text>
@@ -274,12 +306,9 @@ export default function SignRequestScannerScreen() {
     [isProcessing, processQRData]
   );
 
-  const handleScanError = useCallback(
-    (error: string) => {
-      showAlert('Scan Error', error);
-    },
-    []
-  );
+  const handleScanError = useCallback((error: string) => {
+    showAlert('Scan Error', error);
+  }, []);
 
   // Render camera UI using AnimatedQRScanner
   const renderCameraUI = () => {
@@ -299,7 +328,10 @@ export default function SignRequestScannerScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
         <Text style={styles.title}>Scan Request</Text>

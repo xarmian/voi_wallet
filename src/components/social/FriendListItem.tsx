@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Friend } from '@/types/social';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -64,10 +58,7 @@ export default function FriendListItem({
       >
         <View style={styles.avatarContainer}>
           {friend.avatar ? (
-            <Image
-              source={{ uri: friend.avatar }}
-              style={styles.avatar}
-            />
+            <Image source={{ uri: friend.avatar }} style={styles.avatar} />
           ) : (
             <AccountAvatar
               address={friend.address}
@@ -111,7 +102,11 @@ export default function FriendListItem({
           )}
         </View>
 
-        <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color={theme.colors.textMuted}
+        />
       </TouchableOpacity>
     </BlurredContainer>
   );

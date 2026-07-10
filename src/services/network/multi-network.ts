@@ -51,7 +51,11 @@ export class MultiNetworkBalanceService {
       }> = [];
 
       for (const result of results) {
-        if (result.status === 'fulfilled' && result.value.success && result.value.balance) {
+        if (
+          result.status === 'fulfilled' &&
+          result.value.success &&
+          result.value.balance
+        ) {
           networkBalances.push({
             networkId: result.value.networkId,
             balance: result.value.balance,
@@ -94,10 +98,8 @@ export class MultiNetworkBalanceService {
       NetworkId,
       bigint
     >;
-    const perNetworkPrices: Record<NetworkId, number | undefined> = {} as Record<
-      NetworkId,
-      number | undefined
-    >;
+    const perNetworkPrices: Record<NetworkId, number | undefined> =
+      {} as Record<NetworkId, number | undefined>;
 
     const sourceNetworks: NetworkId[] = [];
 
@@ -328,9 +330,7 @@ export class MultiNetworkBalanceService {
   /**
    * Get all mapped assets for an account (excluding non-mapped assets)
    */
-  static async getMappedAssetsOnly(
-    address: string
-  ): Promise<MappedAsset[]> {
+  static async getMappedAssetsOnly(address: string): Promise<MappedAsset[]> {
     try {
       const aggregatedBalance = await this.getAggregatedBalance(address);
       return aggregatedBalance.assets.filter((asset) => asset.isMapped);

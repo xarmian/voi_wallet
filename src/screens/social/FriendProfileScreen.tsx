@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Alert,
   Linking,
@@ -11,11 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  RouteProp,
-  useNavigation,
-  useRoute,
-} from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -60,7 +62,10 @@ const formatDate = (timestamp?: number): string => {
   return new Date(timestamp).toLocaleString();
 };
 
-export type FriendProfileRouteProp = RouteProp<FriendsStackParamList, 'FriendProfile'>;
+export type FriendProfileRouteProp = RouteProp<
+  FriendsStackParamList,
+  'FriendProfile'
+>;
 
 export default function FriendProfileScreen() {
   const styles = useThemedStyles(createStyles);
@@ -79,7 +84,9 @@ export default function FriendProfileScreen() {
       ) || null
   );
 
-  const refreshFriendProfile = useFriendsStore((state) => state.refreshFriendProfile);
+  const refreshFriendProfile = useFriendsStore(
+    (state) => state.refreshFriendProfile
+  );
   const toggleFavorite = useFriendsStore((state) => state.toggleFavorite);
   const removeFriend = useFriendsStore((state) => state.removeFriend);
   const updateFriendNotes = useFriendsStore((state) => state.updateFriendNotes);
@@ -235,7 +242,6 @@ export default function FriendProfileScreen() {
     });
   }, [friend, navigation]);
 
-
   if (!friend) {
     return (
       <NFTBackground>
@@ -249,7 +255,11 @@ export default function FriendProfileScreen() {
           />
 
           <View style={styles.emptyState}>
-            <Ionicons name="alert-circle" size={48} color={theme.colors.textMuted} />
+            <Ionicons
+              name="alert-circle"
+              size={48}
+              color={theme.colors.textMuted}
+            />
             <Text style={styles.emptyTitle}>Friend not found</Text>
             <Text style={styles.emptySubtitle}>
               This friend may have been removed or is unavailable.
@@ -287,7 +297,10 @@ export default function FriendProfileScreen() {
           style={styles.scrollView}
           contentContainerStyle={styles.content}
           refreshControl={
-            <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+            />
           }
         >
           <EnvoiProfileCard
@@ -374,7 +387,9 @@ export default function FriendProfileScreen() {
             <Text style={styles.cardTitle}>Activity</Text>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Added</Text>
-              <Text style={styles.detailValue}>{formatDate(friend.addedAt)}</Text>
+              <Text style={styles.detailValue}>
+                {formatDate(friend.addedAt)}
+              </Text>
             </View>
           </BlurredContainer>
 

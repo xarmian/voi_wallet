@@ -14,10 +14,7 @@ import {
   SwapCachedData,
   SwapServiceError,
 } from '../swap/types';
-import {
-  TinymanAsaList,
-  TinymanAsaToken,
-} from './types';
+import { TinymanAsaList, TinymanAsaToken } from './types';
 import { getNetworkConfig } from '../network/config';
 import { NetworkId } from '@/types/network';
 
@@ -36,7 +33,10 @@ export class DeflexApiError extends SwapServiceError {
  * Fake signer that does nothing - we just need it to satisfy the SDK
  * We'll extract unsigned transactions from buildGroup() instead
  */
-const fakeSigner = async (txnGroup: algosdk.Transaction[], indexesToSign: number[]) => {
+const fakeSigner = async (
+  txnGroup: algosdk.Transaction[],
+  indexesToSign: number[]
+) => {
   // Return empty array - we won't actually use signed transactions
   return txnGroup.map(() => new Uint8Array());
 };
@@ -63,7 +63,9 @@ export class DeflexSwapService implements SwapProvider {
     if (!this.client) {
       const apiKey = process.env.EXPO_PUBLIC_DEFLEX_API_KEY;
       if (!apiKey) {
-        throw new DeflexApiError('Deflex API key not configured. Set EXPO_PUBLIC_DEFLEX_API_KEY environment variable.');
+        throw new DeflexApiError(
+          'Deflex API key not configured. Set EXPO_PUBLIC_DEFLEX_API_KEY environment variable.'
+        );
       }
 
       const networkConfig = getNetworkConfig(NetworkId.ALGORAND_MAINNET);
@@ -71,7 +73,8 @@ export class DeflexSwapService implements SwapProvider {
       this.client = new DeflexClient({
         apiKey,
         algodUri: networkConfig.algodUrl,
-        referrerAddress: 'BUYVOIJ7RNU7O4Z2F4A5T555FKSR2AMYHL5ZNF65Z5ZDEPSMVMEWXCNTV4',
+        referrerAddress:
+          'BUYVOIJ7RNU7O4Z2F4A5T555FKSR2AMYHL5ZNF65Z5ZDEPSMVMEWXCNTV4',
         feeBps: 50,
         autoOptIn: true,
       });
@@ -135,7 +138,7 @@ export class DeflexSwapService implements SwapProvider {
 
       // Build ID lookup cache
       this.tokensByIdCache.clear();
-      tokens.forEach(token => {
+      tokens.forEach((token) => {
         this.tokensByIdCache.set(token.id, token);
       });
 
@@ -150,7 +153,9 @@ export class DeflexSwapService implements SwapProvider {
   /**
    * Get swap quote from Deflex SDK
    */
-  public async getQuote(request: UnifiedQuoteRequest): Promise<UnifiedSwapQuote> {
+  public async getQuote(
+    request: UnifiedQuoteRequest
+  ): Promise<UnifiedSwapQuote> {
     const client = this.getClient();
 
     if (!request.userAddress) {
@@ -201,7 +206,9 @@ export class DeflexSwapService implements SwapProvider {
             signedTxnBytes = new Uint8Array(deflexTxn.logicSigBlob);
           } else if (typeof deflexTxn.logicSigBlob === 'object') {
             // Object with numeric keys - find the max key to get the correct size
-            const keys = Object.keys(deflexTxn.logicSigBlob).filter(k => !isNaN(Number(k)));
+            const keys = Object.keys(deflexTxn.logicSigBlob).filter(
+              (k) => !isNaN(Number(k))
+            );
             if (keys.length > 0) {
               const maxKey = Math.max(...keys.map(Number));
               signedTxnBytes = new Uint8Array(maxKey + 1);
@@ -210,18 +217,26 @@ export class DeflexSwapService implements SwapProvider {
               }
             } else {
               // Fallback: encode the transaction as unsigned
-              const txnBytes = algosdk.encodeUnsignedTransaction(txnWithSigner.txn);
-              unsignedTransactions.push(Buffer.from(txnBytes).toString('base64'));
+              const txnBytes = algosdk.encodeUnsignedTransaction(
+                txnWithSigner.txn
+              );
+              unsignedTransactions.push(
+                Buffer.from(txnBytes).toString('base64')
+              );
               continue;
             }
           } else {
             // Fallback: encode the transaction as unsigned
-            const txnBytes = algosdk.encodeUnsignedTransaction(txnWithSigner.txn);
+            const txnBytes = algosdk.encodeUnsignedTransaction(
+              txnWithSigner.txn
+            );
             unsignedTransactions.push(Buffer.from(txnBytes).toString('base64'));
             continue;
           }
 
-          unsignedTransactions.push(Buffer.from(signedTxnBytes).toString('base64'));
+          unsignedTransactions.push(
+            Buffer.from(signedTxnBytes).toString('base64')
+          );
         } else {
           // This is a user transaction - encode as unsigned for user to sign
           const txnBytes = algosdk.encodeUnsignedTransaction(txnWithSigner.txn);
@@ -235,14 +250,18 @@ export class DeflexSwapService implements SwapProvider {
 
       // Calculate minimum output with slippage
       const slippageMultiplier = (100 - slippage) / 100;
-      const minimumOutput = BigInt(Math.floor(Number(quote.quote) * slippageMultiplier));
+      const minimumOutput = BigInt(
+        Math.floor(Number(quote.quote) * slippageMultiplier)
+      );
 
       // Build unified route from Deflex route structure
       const route = this.buildUnifiedRoute(quote);
 
       // Calculate rate (output per input)
-      const inputDecimals = (await this.getTokenById(request.inputTokenId))?.decimals || 6;
-      const outputDecimals = (await this.getTokenById(request.outputTokenId))?.decimals || 6;
+      const inputDecimals =
+        (await this.getTokenById(request.inputTokenId))?.decimals || 6;
+      const outputDecimals =
+        (await this.getTokenById(request.outputTokenId))?.decimals || 6;
       const inputValue = Number(inputAmount) / Math.pow(10, inputDecimals);
       const outputValue = Number(outputAmount) / Math.pow(10, outputDecimals);
       const rate = inputValue > 0 ? outputValue / inputValue : 0;
@@ -257,7 +276,11 @@ export class DeflexSwapService implements SwapProvider {
         route,
         unsignedTransactions,
         provider: 'deflex',
-        tokenValues: this.buildTokenValues(quote, request.inputTokenId, request.outputTokenId),
+        tokenValues: this.buildTokenValues(
+          quote,
+          request.inputTokenId,
+          request.outputTokenId
+        ),
         usdIn: quote.usdIn,
         usdOut: quote.usdOut,
         expiresAt: Date.now() + 60000, // Quotes typically valid for ~1 minute
@@ -267,7 +290,9 @@ export class DeflexSwapService implements SwapProvider {
         throw error;
       }
       throw new DeflexApiError(
-        error instanceof Error ? error.message : 'Failed to get quote from Deflex'
+        error instanceof Error
+          ? error.message
+          : 'Failed to get quote from Deflex'
       );
     }
   }
@@ -295,12 +320,14 @@ export class DeflexSwapService implements SwapProvider {
           outputToken: null,
           inputAmount: '0',
           outputAmount: '0',
-          pools: [{
-            poolId: pool.name || 'unknown',
-            dex: pool.name?.split(':')[0] || 'unknown',
-            inputAmount: '0',
-            outputAmount: '0',
-          }],
+          pools: [
+            {
+              poolId: pool.name || 'unknown',
+              dex: pool.name?.split(':')[0] || 'unknown',
+              inputAmount: '0',
+              outputAmount: '0',
+            },
+          ],
         }))
       );
 
@@ -354,7 +381,7 @@ export class DeflexSwapService implements SwapProvider {
     // For Deflex/Algorand, assume all tokens in the Tinyman list are swappable
     try {
       const tokens = await this.getTokens();
-      return tokens.some(token => token.id === tokenId);
+      return tokens.some((token) => token.id === tokenId);
     } catch (error) {
       console.error('Error checking token swappability:', error);
       return false;
@@ -388,7 +415,7 @@ export class DeflexSwapService implements SwapProvider {
       const tokens = await this.getTokens();
       const lowerQuery = query.toLowerCase();
       return tokens.filter(
-        token =>
+        (token) =>
           token.symbol.toLowerCase().includes(lowerQuery) ||
           token.name.toLowerCase().includes(lowerQuery) ||
           token.id.toString() === query

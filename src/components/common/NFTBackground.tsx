@@ -78,7 +78,9 @@ export const NFTBackground: React.FC<NFTBackgroundProps> = ({
   }, [isDark]);
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <View
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+    >
       {/* NFT Background Image - only render if enabled and available */}
       {hasNFTBackground && (
         <>
@@ -90,10 +92,7 @@ export const NFTBackground: React.FC<NFTBackgroundProps> = ({
 
           {/* Color overlay for better readability */}
           <View
-            style={[
-              styles.colorOverlay,
-              { backgroundColor: overlayColor },
-            ]}
+            style={[styles.colorOverlay, { backgroundColor: overlayColor }]}
             pointerEvents="none"
           />
 
@@ -174,9 +173,7 @@ export const NFTBackground: React.FC<NFTBackgroundProps> = ({
       )}
 
       {/* Content */}
-      <View style={styles.content}>
-        {children}
-      </View>
+      <View style={styles.content}>{children}</View>
     </View>
   );
 };

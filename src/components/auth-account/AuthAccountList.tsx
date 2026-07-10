@@ -65,19 +65,13 @@ const AuthAccountList: React.FC<AuthAccountListProps> = ({
 
     return (
       <TouchableOpacity
-        style={[
-          styles.accountRow,
-          isSelected && styles.accountRowSelected,
-        ]}
+        style={[styles.accountRow, isSelected && styles.accountRowSelected]}
         onPress={() => onPreviewAccount?.(item)}
         activeOpacity={0.8}
       >
         <View style={styles.accountRowLeft}>
           <TouchableOpacity
-            style={[
-              styles.checkbox,
-              isSelected && styles.checkboxChecked,
-            ]}
+            style={[styles.checkbox, isSelected && styles.checkboxChecked]}
             onPress={(e) => {
               e.stopPropagation(); // Prevent row tap
               onToggleSelect(item);
@@ -98,7 +92,8 @@ const AuthAccountList: React.FC<AuthAccountListProps> = ({
 
             <View style={styles.accountDetails}>
               <Text style={styles.accountBalance}>
-                {formatBalance(item.balance)} {item.networkName === 'Voi Network' ? 'VOI' : 'ALGO'}
+                {formatBalance(item.balance)}{' '}
+                {item.networkName === 'Voi Network' ? 'VOI' : 'ALGO'}
               </Text>
               {item.assetCount !== undefined && item.assetCount > 0 && (
                 <Text style={styles.assetCount}>
@@ -114,11 +109,7 @@ const AuthAccountList: React.FC<AuthAccountListProps> = ({
         </View>
 
         <View style={styles.accountRowRight}>
-          <Ionicons
-            name="chevron-forward"
-            size={18}
-            color={colors.textMuted}
-          />
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
         </View>
       </TouchableOpacity>
     );

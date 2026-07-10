@@ -110,8 +110,7 @@ export const useClaimableStore = create<ClaimableState>()(
       if (currentAccountAddress !== accountAddress) {
         const hiddenStorageKey = getHiddenStorageKey(accountAddress);
         try {
-          const storedHiddenJson =
-            await AsyncStorage.getItem(hiddenStorageKey);
+          const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
           const storedHidden = storedHiddenJson
             ? new Set<string>(JSON.parse(storedHiddenJson))
             : new Set<string>();
@@ -168,7 +167,13 @@ export const useClaimableStore = create<ClaimableState>()(
         // Fetch token metadata
         let tokenMetadata: Map<
           number,
-          { name: string; symbol: string; decimals: number; imageUrl?: string; verified: boolean }
+          {
+            name: string;
+            symbol: string;
+            decimals: number;
+            imageUrl?: string;
+            verified: boolean;
+          }
         > = new Map();
 
         if (contractIds.length > 0) {

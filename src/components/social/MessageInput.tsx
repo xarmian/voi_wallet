@@ -13,34 +13,206 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
-import { MAX_MESSAGE_LENGTH, MESSAGE_FEE_DISPLAY } from '@/services/messaging/types';
+import {
+  MAX_MESSAGE_LENGTH,
+  MESSAGE_FEE_DISPLAY,
+} from '@/services/messaging/types';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 
 // Common emojis organized by category
 const EMOJI_CATEGORIES = [
   {
     name: 'Smileys',
-    emojis: ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '😉', '😌', '😍', '🥰', '😘', '😋', '😜', '🤪', '😎', '🤩', '🥳', '😏', '😒', '🙄', '😬', '😮', '😯', '😲', '😳', '🥺', '😢', '😭', '😤', '😡', '🤯', '😱', '🤗', '🤔', '🤫', '🤭'],
+    emojis: [
+      '😀',
+      '😃',
+      '😄',
+      '😁',
+      '😅',
+      '😂',
+      '🤣',
+      '😊',
+      '😇',
+      '🙂',
+      '😉',
+      '😌',
+      '😍',
+      '🥰',
+      '😘',
+      '😋',
+      '😜',
+      '🤪',
+      '😎',
+      '🤩',
+      '🥳',
+      '😏',
+      '😒',
+      '🙄',
+      '😬',
+      '😮',
+      '😯',
+      '😲',
+      '😳',
+      '🥺',
+      '😢',
+      '😭',
+      '😤',
+      '😡',
+      '🤯',
+      '😱',
+      '🤗',
+      '🤔',
+      '🤫',
+      '🤭',
+    ],
   },
   {
     name: 'Gestures',
-    emojis: ['👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '👋', '🤚', '🖐️', '✋', '🖖', '👏', '🙌', '🤲', '🤝', '🙏', '💪', '🦾', '🖕'],
+    emojis: [
+      '👍',
+      '👎',
+      '👌',
+      '✌️',
+      '🤞',
+      '🤟',
+      '🤘',
+      '🤙',
+      '👈',
+      '👉',
+      '👆',
+      '👇',
+      '☝️',
+      '👋',
+      '🤚',
+      '🖐️',
+      '✋',
+      '🖖',
+      '👏',
+      '🙌',
+      '🤲',
+      '🤝',
+      '🙏',
+      '💪',
+      '🦾',
+      '🖕',
+    ],
   },
   {
     name: 'Hearts',
-    emojis: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟'],
+    emojis: [
+      '❤️',
+      '🧡',
+      '💛',
+      '💚',
+      '💙',
+      '💜',
+      '🖤',
+      '🤍',
+      '🤎',
+      '💔',
+      '❣️',
+      '💕',
+      '💞',
+      '💓',
+      '💗',
+      '💖',
+      '💘',
+      '💝',
+      '💟',
+    ],
   },
   {
     name: 'Objects',
-    emojis: ['🎉', '🎊', '🎁', '🎈', '✨', '🌟', '⭐', '💫', '🔥', '💯', '💰', '💎', '🏆', '🎯', '🚀', '💡', '📱', '💻', '🎮', '🎵', '🎶', '📸', '🎬', '📚', '✈️', '🌍'],
+    emojis: [
+      '🎉',
+      '🎊',
+      '🎁',
+      '🎈',
+      '✨',
+      '🌟',
+      '⭐',
+      '💫',
+      '🔥',
+      '💯',
+      '💰',
+      '💎',
+      '🏆',
+      '🎯',
+      '🚀',
+      '💡',
+      '📱',
+      '💻',
+      '🎮',
+      '🎵',
+      '🎶',
+      '📸',
+      '🎬',
+      '📚',
+      '✈️',
+      '🌍',
+    ],
   },
   {
     name: 'Food',
-    emojis: ['🍕', '🍔', '🍟', '🌭', '🍿', '🧀', '🥚', '🍳', '🥓', '🥐', '🍞', '🥖', '🥨', '🥯', '🥞', '🧇', '🧁', '🍰', '🎂', '🍩', '🍪', '🍫', '🍬', '☕', '🍺', '🍷'],
+    emojis: [
+      '🍕',
+      '🍔',
+      '🍟',
+      '🌭',
+      '🍿',
+      '🧀',
+      '🥚',
+      '🍳',
+      '🥓',
+      '🥐',
+      '🍞',
+      '🥖',
+      '🥨',
+      '🥯',
+      '🥞',
+      '🧇',
+      '🧁',
+      '🍰',
+      '🎂',
+      '🍩',
+      '🍪',
+      '🍫',
+      '🍬',
+      '☕',
+      '🍺',
+      '🍷',
+    ],
   },
   {
     name: 'Animals',
-    emojis: ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🐦', '🐤', '🦄', '🐝', '🦋', '🐌', '🐙', '🦀', '🐠'],
+    emojis: [
+      '🐶',
+      '🐱',
+      '🐭',
+      '🐹',
+      '🐰',
+      '🦊',
+      '🐻',
+      '🐼',
+      '🐨',
+      '🐯',
+      '🦁',
+      '🐮',
+      '🐷',
+      '🐸',
+      '🐵',
+      '🐔',
+      '🐧',
+      '🐦',
+      '🐤',
+      '🦄',
+      '🐝',
+      '🦋',
+      '🐌',
+      '🐙',
+      '🦀',
+      '🐠',
+    ],
   },
 ];
 
@@ -103,8 +275,13 @@ export default function MessageInput({
     <BlurredContainer style={styles.container} borderRadius={0}>
       {/* Fee notice */}
       <View style={styles.feeNotice}>
-        <Text style={styles.feeText}>Each message costs {MESSAGE_FEE_DISPLAY}</Text>
-        <TouchableOpacity onPress={onInfoPress} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <Text style={styles.feeText}>
+          Each message costs {MESSAGE_FEE_DISPLAY}
+        </Text>
+        <TouchableOpacity
+          onPress={onInfoPress}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Ionicons
             name="information-circle-outline"
             size={16}
@@ -124,15 +301,22 @@ export default function MessageInput({
           <Ionicons
             name={showEmojiPicker ? 'keypad' : 'happy-outline'}
             size={24}
-            color={showEmojiPicker ? theme.colors.primary : theme.colors.textMuted}
+            color={
+              showEmojiPicker ? theme.colors.primary : theme.colors.textMuted
+            }
           />
         </TouchableOpacity>
 
-        <View style={[styles.inputContainer, isOverLimit && styles.inputContainerError]}>
+        <View
+          style={[
+            styles.inputContainer,
+            isOverLimit && styles.inputContainerError,
+          ]}
+        >
           <TextInput
             ref={inputRef}
             style={styles.input}
-            placeholder={placeholder || "Type a message..."}
+            placeholder={placeholder || 'Type a message...'}
             placeholderTextColor={theme.colors.textMuted}
             value={message}
             onChangeText={setMessage}
@@ -156,7 +340,12 @@ export default function MessageInput({
         <TouchableOpacity
           style={[
             styles.sendButton,
-            { backgroundColor: canSend && !isOverLimit ? theme.colors.primary : theme.colors.surface },
+            {
+              backgroundColor:
+                canSend && !isOverLimit
+                  ? theme.colors.primary
+                  : theme.colors.surface,
+            },
           ]}
           onPress={handleSend}
           disabled={!canSend || isOverLimit}
@@ -176,7 +365,12 @@ export default function MessageInput({
 
       {/* Emoji Picker */}
       {showEmojiPicker && (
-        <View style={[styles.emojiPicker, { backgroundColor: theme.colors.surface }]}>
+        <View
+          style={[
+            styles.emojiPicker,
+            { backgroundColor: theme.colors.surface },
+          ]}
+        >
           {/* Category tabs */}
           <ScrollView
             horizontal
@@ -196,10 +390,17 @@ export default function MessageInput({
                 ]}
                 onPress={() => setSelectedCategory(index)}
               >
-                <Text style={[
-                  styles.categoryTabText,
-                  { color: selectedCategory === index ? theme.colors.primary : theme.colors.textMuted }
-                ]}>
+                <Text
+                  style={[
+                    styles.categoryTabText,
+                    {
+                      color:
+                        selectedCategory === index
+                          ? theme.colors.primary
+                          : theme.colors.textMuted,
+                    },
+                  ]}
+                >
                   {category.name}
                 </Text>
               </TouchableOpacity>

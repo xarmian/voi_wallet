@@ -81,7 +81,8 @@ export class WalletConnectService extends EventEmitter {
     try {
       // Skip v1 session restoration in extension mode - WebSocket connections can be problematic
       // and old sessions shouldn't persist across extension reloads
-      const isExtension = Platform.OS === 'web' && detectPlatform() === 'extension';
+      const isExtension =
+        Platform.OS === 'web' && detectPlatform() === 'extension';
       if (isExtension) {
         console.log('Skipping v1 session restoration in extension mode');
         // Clean up any stale v1 sessions in extension mode
@@ -125,7 +126,10 @@ export class WalletConnectService extends EventEmitter {
             }
           })
         )
-      ).filter(Boolean) as Array<{ key: string; session: WalletConnectV1StoredSession }>;
+      ).filter(Boolean) as Array<{
+        key: string;
+        session: WalletConnectV1StoredSession;
+      }>;
 
       if (sessions.length === 0) {
         return;
@@ -164,9 +168,11 @@ export class WalletConnectService extends EventEmitter {
 
       const { session } = latestEntry;
 
-
       // Extract topic from storage key
-      const topic = latestEntry.key.replace(`${WC_V1_SESSION_STORAGE_KEY}:`, '');
+      const topic = latestEntry.key.replace(
+        `${WC_V1_SESSION_STORAGE_KEY}:`,
+        ''
+      );
 
       await v1Client.connect({
         topic,
@@ -208,7 +214,6 @@ export class WalletConnectService extends EventEmitter {
           },
         });
       });
-
     } catch (error) {
       console.error('Failed to load v1 sessions:', error);
       // Don't throw - v1 session restoration failure shouldn't block app startup
@@ -281,9 +286,10 @@ export class WalletConnectService extends EventEmitter {
       }
 
       // If no chains specified, use our defaults
-      const chainsToInclude = allRequestedChains.size > 0
-        ? Array.from(allRequestedChains)
-        : [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
+      const chainsToInclude =
+        allRequestedChains.size > 0
+          ? Array.from(allRequestedChains)
+          : [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
 
       // Format accounts for ALL requested chains (even ones we don't recognize)
       // The dApp will only actually use the chains it needs
@@ -311,7 +317,10 @@ export class WalletConnectService extends EventEmitter {
         required: proposal.requiredNamespaces,
         optional: proposal.optionalNamespaces,
       });
-      console.log('[WalletConnect] Our supported namespaces:', supportedNamespaces);
+      console.log(
+        '[WalletConnect] Our supported namespaces:',
+        supportedNamespaces
+      );
 
       // Use WalletConnect's buildApprovedNamespaces utility
       // This handles all the complex validation logic for us
@@ -320,7 +329,10 @@ export class WalletConnectService extends EventEmitter {
         supportedNamespaces,
       });
 
-      console.log('[WalletConnect] Approved namespaces built:', approvedNamespaces);
+      console.log(
+        '[WalletConnect] Approved namespaces built:',
+        approvedNamespaces
+      );
 
       const session = await signClient.approve({
         id: proposal.id,
@@ -427,13 +439,15 @@ export class WalletConnectService extends EventEmitter {
         },
         namespaces: {
           algorand: {
-            accounts: v1SessionData.accounts.map(addr => `algorand:${v1SessionData.chainId}:${addr}`),
+            accounts: v1SessionData.accounts.map(
+              (addr) => `algorand:${v1SessionData.chainId}:${addr}`
+            ),
             methods: ['algo_signTxn'],
             events: [],
             chains: [`algorand:${v1SessionData.chainId}`],
           },
         },
-        expiry: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60), // 7 days from now
+        expiry: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days from now
         acknowledged: true,
         controller: v1SessionData.clientId,
         self: {
@@ -442,7 +456,10 @@ export class WalletConnectService extends EventEmitter {
             name: 'Voi Wallet',
             description: 'Mobile wallet for Voi Network',
             url: 'https://getvoi.app',
-            icons: ['https://getvoi.app/android-chrome-192x192.png', 'https://getvoi.app/android-chrome-512x512.png'],
+            icons: [
+              'https://getvoi.app/android-chrome-192x192.png',
+              'https://getvoi.app/android-chrome-512x512.png',
+            ],
           },
         },
         peer: {

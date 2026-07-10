@@ -35,10 +35,9 @@ export default function MyProfileScreen() {
   const activeAccount = useActiveAccount();
   const networkConfig = useCurrentNetworkConfig();
 
-  const {
-    nameInfo,
-    reload: reloadEnvoiName,
-  } = useAccountEnvoiName(activeAccount?.id || '');
+  const { nameInfo, reload: reloadEnvoiName } = useAccountEnvoiName(
+    activeAccount?.id || ''
+  );
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -127,7 +126,11 @@ export default function MyProfileScreen() {
           />
 
           <View style={styles.emptyState}>
-            <Ionicons name="wallet-outline" size={48} color={theme.colors.textMuted} />
+            <Ionicons
+              name="wallet-outline"
+              size={48}
+              color={theme.colors.textMuted}
+            />
             <Text style={styles.emptyTitle}>No active account</Text>
             <Text style={styles.emptySubtitle}>
               Add or select an account to view your profile.
@@ -165,7 +168,11 @@ export default function MyProfileScreen() {
           <EnvoiProfileCard
             address={activeAccount.address}
             envoiProfile={hasEnvoiName ? nameInfo : null}
-            name={hasEnvoiName ? undefined : activeAccount.label || activeAccount.address}
+            name={
+              hasEnvoiName
+                ? undefined
+                : activeAccount.label || activeAccount.address
+            }
             isLoading={false}
             title="My Profile"
             showVerifiedBadge={false}
