@@ -11,7 +11,7 @@ const RATE_LIMIT_KEY = 'voi_rate_limits';
 interface TransactionRecord {
   txHash: string;
   timestamp: number;
-  amount: number;
+  amount: string;
   from: string;
   to: string;
 }
@@ -71,7 +71,7 @@ export class TransactionTracker {
   static async validateNewTransaction(
     from: string,
     to: string,
-    amount: number,
+    amount: string,
     txHash?: string
   ): Promise<string[]> {
     const errors: string[] = [];
@@ -106,7 +106,7 @@ export class TransactionTracker {
     txHash: string,
     from: string,
     to: string,
-    amount: number
+    amount: string
   ): Promise<void> {
     try {
       // Add to transaction cache
@@ -193,7 +193,7 @@ export class TransactionTracker {
   private static async checkTransactionPattern(
     from: string,
     to: string,
-    amount: number,
+    amount: string,
     errors: string[]
   ): Promise<void> {
     try {
@@ -208,7 +208,9 @@ export class TransactionTracker {
 
       // Check for rapid identical transactions (potential replay pattern)
       const identicalTransactions = recentTransactions.filter(
-        (tx) => tx.to === to && tx.amount === amount
+        // Coerce with String() so records persisted before the amount field
+        // migrated from number -> string still match after an app upgrade.
+        (tx) => tx.to === to && String(tx.amount) === amount
       );
 
       if (identicalTransactions.length >= 3) {

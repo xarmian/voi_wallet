@@ -11,6 +11,7 @@ import {
 import {
   toBigIntSafeNumber,
   compareBigIntSafe,
+  compareBigInt,
   addBigIntSafe,
   subtractBigIntSafe,
 } from '@/utils/bigint';
@@ -30,7 +31,7 @@ import { useWalletStore } from '@/store/walletStore';
 export interface TransactionParams {
   from: string;
   to: string;
-  amount: number;
+  amount: number | bigint;
   assetId?: number;
   assetType?: 'voi' | 'asa' | 'arc200' | 'arc72';
   contractId?: number;
@@ -73,7 +74,9 @@ export class TransactionService {
     const normalized = {
       from: params.from,
       to: params.to,
-      amount: params.amount,
+      // JSON.stringify throws on bigint; serialize to string so the cache key
+      // stays stable and serializable for both number and bigint amounts.
+      amount: params.amount?.toString() ?? null,
       assetId: params.assetId ?? null,
       assetType: params.assetType ?? null,
       contractId: params.contractId ?? null,
@@ -289,7 +292,7 @@ export class TransactionService {
         throw new Error('Invalid recipient address');
       }
 
-      if (params.amount < 0) {
+      if (BigInt(params.amount) < 0n) {
         throw new Error('Amount cannot be negative');
       }
 
@@ -335,7 +338,7 @@ export class TransactionService {
         throw new Error('Invalid recipient address');
       }
 
-      if (params.amount <= 0) {
+      if (BigInt(params.amount) <= 0n) {
         throw new Error('Amount must be greater than 0');
       }
 
@@ -679,12 +682,14 @@ export class TransactionService {
       const txId = await TransactionService.submitWithRetries(signedTxnBlob, params.networkId);
       callbacks?.onNetworkConfirmed?.(txId);
 
-      // Record successful transaction for replay protection
+      // Record successful transaction for replay protection.
+      // Pass the exact amount as a string so the tracker's identical-transaction
+      // dedup stays precise for high-decimal amounts above Number.MAX_SAFE_INTEGER.
       await TransactionTracker.recordTransaction(
         txId,
         params.from,
         params.to,
-        params.amount
+        params.amount.toString()
       );
 
       // Trigger balance refresh for affected accounts after successful transaction
@@ -728,7 +733,7 @@ export class TransactionService {
     const securityErrors = await TransactionTracker.validateNewTransaction(
       params.from,
       params.to,
-      params.amount
+      params.amount.toString()
     );
     errors.push(...securityErrors);
 
@@ -742,23 +747,29 @@ export class TransactionService {
     }
 
     // Skip amount validation for ARC-72 NFT transfers and allow 0-amount VOI transactions
-    if (params.assetType !== 'arc72' && params.assetType !== 'voi' && params.amount <= 0) {
+    if (
+      params.assetType !== 'arc72' &&
+      params.assetType !== 'voi' &&
+      BigInt(params.amount) <= 0n
+    ) {
       errors.push('Amount must be greater than 0');
     }
 
-    if (params.amount < 0) {
+    if (BigInt(params.amount) < 0n) {
       errors.push('Amount cannot be negative');
     }
 
     // Dust attack protection
     if (params.assetId) {
-      if (params.amount < SECURITY_CONFIG.MIN_ASSET_TRANSACTION) {
+      if (
+        BigInt(params.amount) < BigInt(SECURITY_CONFIG.MIN_ASSET_TRANSACTION)
+      ) {
         errors.push(
           `Minimum asset transaction amount is ${SECURITY_CONFIG.MIN_ASSET_TRANSACTION} units`
         );
       }
     } else if (params.assetType !== 'arc72') {
-      if (params.amount < SECURITY_CONFIG.MIN_VOI_TRANSACTION) {
+      if (BigInt(params.amount) < BigInt(SECURITY_CONFIG.MIN_VOI_TRANSACTION)) {
         errors.push(SECURITY_MESSAGES.DUST_ATTACK);
       }
     }
@@ -798,7 +809,7 @@ export class TransactionService {
           );
           if (!arc200Asset) {
             errors.push('ARC-200 token not found in account');
-          } else if (compareBigIntSafe(arc200Asset.amount, params.amount) < 0) {
+          } else if (compareBigInt(arc200Asset.amount, params.amount) < 0) {
             errors.push('Insufficient ARC-200 token balance');
           }
         }
@@ -869,7 +880,7 @@ export class TransactionService {
         );
         if (!asset) {
           errors.push('ASA not found in account');
-        } else if (compareBigIntSafe(asset.amount, params.amount) < 0) {
+        } else if (compareBigInt(asset.amount, params.amount) < 0) {
           errors.push('Insufficient ASA balance');
         }
 
@@ -904,24 +915,21 @@ export class TransactionService {
         }
 
         // Check if account has enough VOI for fees
-        if (compareBigIntSafe(accountBalance.amount, estimatedFee) < 0) {
+        if (compareBigInt(accountBalance.amount, estimatedFee) < 0) {
           errors.push('Insufficient VOI balance for transaction fee');
         }
       } else {
-        // VOI payment validation
-        const totalRequired = params.amount + estimatedFee;
-        if (compareBigIntSafe(accountBalance.amount, totalRequired) < 0) {
+        // VOI payment validation — keep the entire balance check in bigint so
+        // large balances/amounts are never downcast to Number.
+        const totalRequired =
+          BigInt(params.amount) + BigInt(Math.trunc(estimatedFee));
+        if (compareBigInt(accountBalance.amount, totalRequired) < 0) {
           errors.push('Insufficient VOI balance');
         }
 
         // Check minimum balance requirement
-        const remainingBalance = subtractBigIntSafe(
-          accountBalance.amount,
-          totalRequired
-        );
-        if (
-          compareBigIntSafe(remainingBalance, accountBalance.minBalance) < 0
-        ) {
+        const remainingBalance = BigInt(accountBalance.amount) - totalRequired;
+        if (compareBigInt(remainingBalance, accountBalance.minBalance) < 0) {
           errors.push('Transaction would violate minimum balance requirement');
         }
       }
@@ -937,7 +945,7 @@ export class TransactionService {
 
   static async estimateTransactionCost(params: TransactionParams): Promise<{
     fee: number;
-    total: number;
+    total: number | bigint;
   }> {
     try {
       const assetType = TransactionService.determineAssetType(params);
@@ -989,7 +997,9 @@ export class TransactionService {
         : VoiNetworkService;
 
       const fee = await networkService.estimateTransactionFee();
-      const total = params.assetId ? fee : params.amount + fee;
+      const total: number | bigint = params.assetId
+        ? fee
+        : BigInt(params.amount) + BigInt(Math.trunc(fee));
 
       return {
         fee,
@@ -1439,7 +1449,7 @@ export class TransactionService {
         txId,
         params.fromAddress,
         params.fromAddress, // Rekey transactions are to self
-        0 // Zero amount
+        '0' // Zero amount
       );
 
       // Trigger balance refresh
@@ -1583,7 +1593,7 @@ export class TransactionService {
         txId,
         params.fromAddress,
         params.fromAddress, // Reverse rekey transactions are to self
-        0 // Zero amount
+        '0' // Zero amount
       );
 
       // Trigger balance refresh

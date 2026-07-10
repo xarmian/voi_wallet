@@ -30,6 +30,7 @@ import { NFTToken } from '@/types/nft';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
+import { parseAmountToBaseUnits } from '@/utils/bigint';
 // Removed TransactionConfirmationCard in favor of unified TransactionVerification
 import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -199,7 +200,21 @@ export default function TransactionConfirmationScreen() {
 
   const handleConfirm = () => {
     // Create unified transaction request
-    const amountInBaseUnits = params.assetType === 'arc72' ? 0 : convertAmountToBaseUnits(params.amount);
+    const decimals =
+      params.assetDecimals || (params.assetId === 0 || !params.assetId ? 6 : 0);
+    let amountInBaseUnits: number | bigint;
+    try {
+      amountInBaseUnits =
+        params.assetType === 'arc72'
+          ? 0
+          : parseAmountToBaseUnits(params.amount, decimals);
+    } catch (error) {
+      Alert.alert(
+        'Invalid amount',
+        error instanceof Error ? error.message : 'Please re-enter the amount.'
+      );
+      return;
+    }
 
     const request: UnifiedTransactionRequest = {
       type: params.assetType === 'arc200'
@@ -230,14 +245,6 @@ export default function TransactionConfirmationScreen() {
   const handleCancel = () => {
     navigation.goBack();
   };
-
-  const convertAmountToBaseUnits = (amount: string): number => {
-    const decimals =
-      params.assetDecimals || (params.assetId === 0 || !params.assetId ? 6 : 0);
-    const multiplier = Math.pow(10, decimals);
-    return Math.floor(parseFloat(amount) * multiplier);
-  };
-
 
   const handleAuthComplete = (success: boolean, result?: any) => {
     setShowAuthModal(false);

@@ -44,6 +44,7 @@ import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
+import { parseAmountToBaseUnits } from '@/utils/bigint';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
@@ -269,9 +270,10 @@ export default function SwapScreen() {
     try {
       const provider = SwapService.getProvider(selectedNetwork);
 
-      // Convert amount to base units
-      const amountInBaseUnits = BigInt(
-        Math.floor(amountValue * Math.pow(10, inputToken.decimals))
+      // Convert amount to base units (exact string parse, no float precision loss)
+      const amountInBaseUnits = parseAmountToBaseUnits(
+        inputAmount,
+        inputToken.decimals
       ).toString();
 
       const quoteResponse = await provider.getQuote({

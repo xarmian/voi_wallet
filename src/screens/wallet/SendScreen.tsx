@@ -38,6 +38,7 @@ import {
   formatNativeBalance,
   formatAssetBalance,
   subtractBigIntSafe,
+  parseAmountToBaseUnits,
 } from '@/utils/bigint';
 import { AccountType, type WalletAccount } from '@/types/wallet';
 import { useCurrentNetwork, useCurrentNetworkConfig } from '@/store/networkStore';
@@ -690,10 +691,9 @@ export default function SendScreen() {
     );
   };
 
-  const convertAmountToBaseUnits = (amount: string): number => {
-    const decimals = getAssetDecimals();
-    const multiplier = Math.pow(10, decimals);
-    return Math.floor(parseFloat(amount) * multiplier);
+  const convertAmountToBaseUnits = (amount: string): bigint => {
+    // Exact string -> base-units conversion (no float precision loss).
+    return parseAmountToBaseUnits(amount, getAssetDecimals());
   };
 
   // Removed problematic useEffect that was causing infinite balance reloading
