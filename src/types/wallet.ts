@@ -153,6 +153,16 @@ export interface AssetBalance {
   contractId?: number;
 }
 
+/**
+ * Immutable on-chain parameters for an ASA, used to resolve display decimals
+ * for assets that aren't in the active account's holdings (e.g. in tx history).
+ */
+export interface AssetParams {
+  decimals: number;
+  name?: string;
+  unitName?: string;
+}
+
 export interface TransactionInfo {
   id: string;
   from: string;

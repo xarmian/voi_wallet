@@ -27,12 +27,14 @@ import { serializeTransactionForNavigation } from '@/utils/navigationParams';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useCurrentNetwork } from '@/store/networkStore';
 
 export default function TransactionHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation<StackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
+  const currentNetwork = useCurrentNetwork();
 
   const { updateActivity } = useAuth();
   const activeAccount = useActiveAccount();
@@ -45,6 +47,11 @@ export default function TransactionHistoryScreen() {
   );
   const loadTokenMetadata = useWalletStore((state) => state.loadTokenMetadata);
   const getTokenMetadata = useWalletStore((state) => state.getTokenMetadata);
+  const loadAssetMetadata = useWalletStore((state) => state.loadAssetMetadata);
+  const getAssetMetadata = useWalletStore((state) => state.getAssetMetadata);
+  // Subscribe to the cache itself so rows re-render when ASA params resolve
+  // (getAssetMetadata is a stable selector and wouldn't trigger a re-render).
+  const assetMetadataCache = useWalletStore((state) => state.assetMetadataCache);
 
   useEffect(() => {
     if (activeAccount) {
@@ -65,6 +72,22 @@ export default function TransactionHistoryScreen() {
       loadTokenMetadata(arc200ContractIds);
     }
   }, [accountState.recentTransactions, loadTokenMetadata]);
+
+  // Resolve ASA params for transactions whose asset isn't in current holdings,
+  // so amounts render with correct decimals instead of a 0-decimals fallback.
+  useEffect(() => {
+    const transactions = accountState.recentTransactions || [];
+    const asaAssetIds = transactions
+      .filter((tx) => !tx.isArc200 && tx.assetId && tx.assetId !== 0)
+      .map((tx) => tx.assetId!)
+      .filter((id, index, arr) => arr.indexOf(id) === index); // Remove duplicates
+
+    if (asaAssetIds.length > 0) {
+      loadAssetMetadata(asaAssetIds);
+    }
+    // currentNetwork: re-resolve for the new network after a switch even if the
+    // transaction list reference hasn't changed (cache is network-scoped).
+  }, [accountState.recentTransactions, loadAssetMetadata, currentNetwork]);
 
   const loadTransactions = async () => {
     if (!activeAccount) return;
@@ -111,7 +134,9 @@ export default function TransactionHistoryScreen() {
         // Get the asset symbol and ID for the transaction
         let assetName = 'VOI';
         let assetId = 0;
-        let assetDecimals = 0;
+        // Undefined = decimals unresolved; the detail screen shows a placeholder
+        // rather than scaling by 0 (which renders the wrong magnitude).
+        let assetDecimals: number | undefined = 0;
 
         if (transaction.isArc200 && transaction.contractId) {
           // For ARC-200 tokens, use contractId and find the asset symbol
@@ -121,7 +146,7 @@ export default function TransactionHistoryScreen() {
           const tokenMetadata = getTokenMetadata(transaction.contractId);
           if (tokenMetadata) {
             assetName = tokenMetadata.symbol || 'TOKEN';
-            assetDecimals = tokenMetadata.decimals ?? 0;
+            assetDecimals = tokenMetadata.decimals;
           } else {
             const asset = accountState.balance?.assets?.find(
               (a) =>
@@ -129,16 +154,17 @@ export default function TransactionHistoryScreen() {
                 a.contractId === transaction.contractId
             );
             assetName = asset?.symbol || 'TOKEN';
-            assetDecimals = asset?.decimals || 0;
+            assetDecimals = asset?.decimals;
           }
         } else if (transaction.assetId && transaction.assetId !== 0) {
-          // For ASA tokens
+          // For ASA tokens: prefer holdings, fall back to resolved asset params
           assetId = transaction.assetId;
           const asset = accountState.balance?.assets?.find(
             (a) => a.assetType === 'asa' && a.assetId === transaction.assetId
           );
-          assetName = asset?.symbol || 'TOKEN';
-          assetDecimals = asset?.decimals || 0;
+          const resolved = getAssetMetadata(transaction.assetId);
+          assetName = asset?.symbol || resolved?.unitName || 'TOKEN';
+          assetDecimals = asset?.decimals ?? resolved?.decimals;
         }
 
         navigation.navigate('TransactionDetail', {
@@ -152,7 +178,13 @@ export default function TransactionHistoryScreen() {
         console.error('Failed to navigate to transaction detail:', error);
       }
     },
-    [activeAccount, accountState.balance?.assets, getTokenMetadata, navigation]
+    [
+      activeAccount,
+      accountState.balance?.assets,
+      getTokenMetadata,
+      getAssetMetadata,
+      navigation,
+    ]
   );
 
   const renderTransaction: ListRenderItem<TransactionInfo> = useCallback(
@@ -162,6 +194,11 @@ export default function TransactionHistoryScreen() {
         item.isArc200 && item.contractId
           ? getTokenMetadata(item.contractId)
           : null;
+      // Get resolved ASA params for non-ARC-200 asset transfers
+      const assetMetadata =
+        !item.isArc200 && item.assetId && item.assetId !== 0
+          ? getAssetMetadata(item.assetId)
+          : null;
 
       return (
         <TransactionListItem
@@ -169,6 +206,7 @@ export default function TransactionHistoryScreen() {
           activeAccountAddress={activeAccount?.address || ''}
           assets={accountState.balance?.assets}
           tokenMetadata={tokenMetadata}
+          assetMetadata={assetMetadata}
           onPress={handleTransactionPress}
         />
       );
@@ -178,6 +216,9 @@ export default function TransactionHistoryScreen() {
       accountState.balance?.assets,
       handleTransactionPress,
       getTokenMetadata,
+      getAssetMetadata,
+      // Recompute rows when resolved ASA params land in the cache
+      assetMetadataCache,
     ]
   );
 

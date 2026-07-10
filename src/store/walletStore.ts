@@ -17,6 +17,7 @@ import {
   DetectRekeyedAccountRequest,
   ImportRemoteSignerAccountRequest,
   AccountBalance,
+  AssetParams,
   TransactionInfo,
   AccountNotFoundError,
   AccountExistsError,
@@ -91,6 +92,11 @@ interface WalletState {
   tokenMetadataCache: Record<number, Arc200TokenMetadata>;
   pendingTokenRequests: Set<number>;
 
+  // ASA params cache keyed by `${networkId}:${assetId}` — asset IDs are per
+  // network, so the same numeric ID can be a different asset on Voi vs Algorand.
+  assetMetadataCache: Record<string, AssetParams>;
+  pendingAssetRequests: Set<string>;
+
   // Multi-network view mode
   viewMode: 'single-network' | 'multi-network';
   assetNetworkFilter: 'all' | 'voi' | 'algorand';
@@ -162,6 +168,10 @@ interface WalletState {
   // Token metadata cache management
   loadTokenMetadata: (contractIds: number[]) => Promise<void>;
   getTokenMetadata: (contractId: number) => Arc200TokenMetadata | null;
+
+  // ASA params cache management
+  loadAssetMetadata: (assetIds: number[]) => Promise<void>;
+  getAssetMetadata: (assetId: number) => AssetParams | null;
 
   // Multi-network view mode management
   setViewMode: (mode: 'single-network' | 'multi-network') => Promise<void>;
@@ -376,6 +386,8 @@ export const useWalletStore = create<WalletState>()(
     accountStates: {},
     tokenMetadataCache: {},
     pendingTokenRequests: new Set(),
+    assetMetadataCache: {},
+    pendingAssetRequests: new Set(),
     viewMode: 'multi-network', // Default to multi-network view
     assetNetworkFilter: 'all', // Default to showing all networks
     tokenMappings: [],
@@ -1887,6 +1899,78 @@ export const useWalletStore = create<WalletState>()(
     getTokenMetadata: (contractId: number) => {
       const { tokenMetadataCache } = get();
       return tokenMetadataCache[contractId] || null;
+    },
+
+    loadAssetMetadata: async (assetIds: number[]) => {
+      const networkService = NetworkService.getInstance();
+      const networkId = networkService.getCurrentNetworkId();
+      const keyFor = (id: number) => `${networkId}:${id}`;
+
+      try {
+        const { assetMetadataCache, pendingAssetRequests } = get();
+
+        // Filter out invalid, already-cached, or in-flight asset IDs (scoped to
+        // the current network so a switch can't reuse another network's params)
+        const uncachedAssetIds = assetIds.filter(
+          (id) =>
+            id > 0 &&
+            !assetMetadataCache[keyFor(id)] &&
+            !pendingAssetRequests.has(keyFor(id))
+        );
+
+        if (uncachedAssetIds.length === 0) {
+          return;
+        }
+
+        // Mark as pending
+        const newPendingRequests = new Set(pendingAssetRequests);
+        uncachedAssetIds.forEach((id) => newPendingRequests.add(keyFor(id)));
+        set({ pendingAssetRequests: newPendingRequests });
+
+        // Resolve params (NetworkService prefers its immutable-params cache)
+        const resolved = await Promise.all(
+          uncachedAssetIds.map(async (id) => ({
+            id,
+            params: await networkService.getCachedAssetParams(id),
+          }))
+        );
+
+        // Discard results if the network switched mid-flight —
+        // getCachedAssetParams resolves against the now-current network, so the
+        // params wouldn't belong to the network we started for.
+        const stillCurrent =
+          networkService.getCurrentNetworkId() === networkId;
+
+        // Re-read state after the await so we don't clobber concurrent updates
+        const current = get();
+        const updatedCache = { ...current.assetMetadataCache };
+        const updatedPendingRequests = new Set(current.pendingAssetRequests);
+        resolved.forEach(({ id, params }) => {
+          if (params && stillCurrent) {
+            updatedCache[keyFor(id)] = params;
+          }
+          updatedPendingRequests.delete(keyFor(id));
+        });
+
+        set({
+          assetMetadataCache: updatedCache,
+          pendingAssetRequests: updatedPendingRequests,
+        });
+      } catch (error) {
+        console.error('Failed to load asset metadata:', error);
+
+        // Clear pending on error so a later call can retry
+        const { pendingAssetRequests } = get();
+        const updatedPendingRequests = new Set(pendingAssetRequests);
+        assetIds.forEach((id) => updatedPendingRequests.delete(keyFor(id)));
+        set({ pendingAssetRequests: updatedPendingRequests });
+      }
+    },
+
+    getAssetMetadata: (assetId: number) => {
+      const networkId = NetworkService.getInstance().getCurrentNetworkId();
+      const { assetMetadataCache } = get();
+      return assetMetadataCache[`${networkId}:${assetId}`] || null;
     },
 
     // Multi-network view mode management
