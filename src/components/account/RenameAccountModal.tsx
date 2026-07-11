@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 
@@ -30,6 +31,8 @@ export default function RenameAccountModal({
   accountDisplayName,
 }: RenameAccountModalProps) {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
+  const colors = createColors(theme);
   const [name, setName] = useState(initialName);
   const [hasEdited, setHasEdited] = useState(false);
 
@@ -91,7 +94,7 @@ export default function RenameAccountModal({
                 }
               }}
               placeholder="Account name"
-              placeholderTextColor={styles.placeholderColor}
+              placeholderTextColor={colors.placeholderColor}
               autoFocus
               editable={!isSubmitting}
               maxLength={40}
@@ -229,5 +232,10 @@ const createStyles = (theme: Theme) =>
     buttonDisabled: {
       opacity: 0.6,
     },
-    placeholderColor: theme.colors.placeholder,
   });
+
+// Raw color string kept out of StyleSheet.create (RN NamedStyles rejects
+// string values); referenced directly as a color prop.
+const createColors = (theme: Theme) => ({
+  placeholderColor: theme.colors.placeholder,
+});

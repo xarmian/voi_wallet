@@ -254,7 +254,7 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
 
   // Container styles
   const containerStyles = useMemo(
-    (): ViewStyle[] =>
+    (): StyleProp<ViewStyle> =>
       [
         styles.container,
         {
@@ -273,13 +273,13 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
 
   // Text styles
   const textStyles = useMemo(
-    (): TextStyle[] =>
+    (): StyleProp<TextStyle> =>
       [
         styles.label,
         {
           fontSize: sizeConfig.fontSize,
           color: variantConfig.textColor,
-          fontWeight: '600',
+          fontWeight: '600' as const,
           letterSpacing: 0.3,
         },
         labelStyle as TextStyle,
