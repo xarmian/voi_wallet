@@ -393,7 +393,7 @@ const createStyles = (theme: Theme, insets: EdgeInsets) =>
       padding: 24,
       alignItems: 'center',
       minWidth: 160,
-      ...theme.shadows.small,
+      ...theme.shadows.sm,
     },
     switchingText: {
       fontSize: 16,

@@ -70,6 +70,16 @@ export interface Theme {
     // Surface variations for depth
     surfaceElevated: string;
     surfacePressed: string;
+    surfaceAlt: string;
+    surfaceVariant: string;
+    // Tinted variants of semantic colors (compose over any surface)
+    primaryLight: string;
+    infoLight: string;
+    successLight: string;
+    warningLight: string;
+    errorLight: string;
+    // Disabled/inert control state (neutral, theme-independent)
+    disabled: string;
   };
   spacing: {
     xs: number;
@@ -182,6 +192,16 @@ export const lightTheme: Theme = {
     // Surface variations
     surfaceElevated: '#FFFFFF',
     surfacePressed: 'rgba(0, 0, 0, 0.04)',
+    surfaceAlt: '#FAFAFB',
+    surfaceVariant: '#F2F2F5',
+    // Tinted variants of semantic colors
+    primaryLight: 'rgba(0, 122, 255, 0.14)',
+    infoLight: 'rgba(0, 122, 255, 0.14)',
+    successLight: 'rgba(48, 209, 88, 0.14)',
+    warningLight: 'rgba(255, 159, 10, 0.14)',
+    errorLight: 'rgba(255, 69, 58, 0.14)',
+    // Disabled/inert control state
+    disabled: 'rgba(0, 0, 0, 0.10)',
   },
   spacing: {
     xs: 4,
@@ -392,6 +412,16 @@ export const darkTheme: Theme = {
     // Surface variations
     surfaceElevated: '#1E1E26',
     surfacePressed: 'rgba(255, 255, 255, 0.08)',
+    surfaceAlt: '#191920',
+    surfaceVariant: '#1D1D24',
+    // Tinted variants of semantic colors
+    primaryLight: 'rgba(10, 132, 255, 0.22)',
+    infoLight: 'rgba(10, 132, 255, 0.22)',
+    successLight: 'rgba(48, 209, 88, 0.22)',
+    warningLight: 'rgba(255, 159, 10, 0.22)',
+    errorLight: 'rgba(255, 69, 58, 0.22)',
+    // Disabled/inert control state
+    disabled: 'rgba(255, 255, 255, 0.12)',
   },
   spacing: {
     xs: 4,
