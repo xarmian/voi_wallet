@@ -66,8 +66,7 @@ export default function MultiNetworkAssetScreen() {
     route.params as MultiNetworkAssetRouteParams;
 
   const { updateActivity } = useAuth();
-  const { balance: multiNetworkBalance, reload: reloadMultiNetworkBalance } =
-    useMultiNetworkBalance(accountId);
+  const { balance: multiNetworkBalance } = useMultiNetworkBalance(accountId);
   const loadMultiNetworkBalance = useWalletStore(
     (state) => state.loadMultiNetworkBalance
   );

@@ -54,7 +54,7 @@ export default function NFTThemeSelector({
     useState(false);
   const [ownershipMap, setOwnershipMap] = useState<Set<string>>(new Set());
   const [loadingMore, setLoadingMore] = useState(false);
-  const [nextToken, setNextToken] = useState<number | undefined>();
+  const [nextToken, setNextToken] = useState<string | undefined>();
   const [hasMore, setHasMore] = useState(false);
 
   // Load my NFTs when visible and active account changes

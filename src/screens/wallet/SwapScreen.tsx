@@ -471,7 +471,7 @@ export default function SwapScreen() {
       if (!newNetworkBalance) return BigInt(0);
       if (assetId === 0) return BigInt(newNetworkBalance.amount || 0);
       const asset = newNetworkBalance.assets?.find((a) => {
-        const id = a.assetId ?? a['asset-id'] ?? a.contractId;
+        const id = a.assetId ?? a.contractId;
         return id === assetId;
       });
       return BigInt(asset?.amount || 0);
@@ -844,7 +844,7 @@ export default function SwapScreen() {
 
       // Find asset by ID - check multiple possible field names
       const asset = accountBalance.assets?.find((a) => {
-        const assetId = a.assetId ?? a['asset-id'] ?? a.contractId;
+        const assetId = a.assetId ?? a.contractId;
         return assetId === tokenId;
       });
 

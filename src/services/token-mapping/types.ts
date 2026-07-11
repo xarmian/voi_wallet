@@ -53,9 +53,7 @@ export interface MappedAsset extends AssetBalance {
   sourceBalances: NetworkBalanceSource[];
   /** Whether this asset is part of a multi-network mapping */
   isMapped: boolean;
-  /** Whether the mapping is verified */
-  verified?: boolean;
-  /** Primary network for this asset (for UI display) */
+  /** Primary network for this asset (for UI display); `verified` is inherited from AssetBalance as a number (1 = verified). */
   primaryNetwork: NetworkId;
 }
 

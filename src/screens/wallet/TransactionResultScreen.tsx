@@ -17,6 +17,7 @@ import UniversalHeader from '@/components/common/UniversalHeader';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getTransactionUrl } from '@/utils/blockExplorer';
+import { NetworkId } from '@/types/network';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -61,7 +62,10 @@ export default function TransactionResultScreen() {
   const handleViewInExplorer = async () => {
     if (!params.transactionId) return;
 
-    const url = getTransactionUrl(params.transactionId, params.networkId);
+    const url = getTransactionUrl(
+      params.transactionId,
+      params.networkId as NetworkId | undefined
+    );
     const supported = await Linking.canOpenURL(url);
 
     if (supported) {

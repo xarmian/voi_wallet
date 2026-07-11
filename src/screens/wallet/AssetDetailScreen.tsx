@@ -16,7 +16,8 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { TransactionInfo, AccountBalance } from '@/types/wallet';
+import { TransactionInfo, AccountBalance, AssetBalance } from '@/types/wallet';
+import { MappedAsset } from '@/services/token-mapping/types';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useWalletStore,
@@ -39,7 +40,7 @@ import {
   validateAsaOptOut,
 } from '@/services/transactions/asa';
 import { MultiAccountWalletService } from '@/services/wallet';
-import NetworkServiceInstance, { NetworkService } from '@/services/network';
+import { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -570,7 +571,7 @@ export default function AssetDetailScreen() {
     return formatNativeBalance(amount, specificNetworkConfig.nativeToken);
   };
 
-  const getAsset = () => {
+  const getAsset = (): AssetBalance | MappedAsset | null => {
     if (assetId === 0) {
       return null; // VOI doesn't have enhanced asset data
     }
@@ -618,10 +619,15 @@ export default function AssetDetailScreen() {
     if (!asset?.amount) return formatCurrency(0);
 
     // For mapped assets, calculate USD value across all source networks
-    if (asset.isMapped && asset.sourceBalances && multiNetworkBalance) {
+    const mappedAsset = asset as MappedAsset;
+    if (
+      mappedAsset.isMapped &&
+      mappedAsset.sourceBalances &&
+      multiNetworkBalance
+    ) {
       let totalValue = 0;
 
-      for (const source of asset.sourceBalances) {
+      for (const source of mappedAsset.sourceBalances) {
         const sourceAsset = source.balance;
 
         // Check if this is a native asset on this network
@@ -700,7 +706,11 @@ export default function AssetDetailScreen() {
       return;
     }
 
-    const validation = await validateAsaOptOut(currentAccount.address, assetId);
+    const validation = await validateAsaOptOut(
+      currentAccount.address,
+      assetId,
+      specificNetworkConfig.id
+    );
     if (!validation.valid) {
       Alert.alert(
         'Cannot Opt Out',
@@ -740,14 +750,29 @@ export default function AssetDetailScreen() {
         throw new Error('No active account');
       }
 
-      const txId = await submitAsaOptOut(assetId, currentAccount.address, pin);
+      const txId = await submitAsaOptOut(
+        assetId,
+        currentAccount.address,
+        specificNetworkConfig.id,
+        pin
+      );
 
-      // Wait for confirmation
-      await NetworkServiceInstance.waitForConfirmation(txId, 4);
+      // Wait for confirmation on the same network the opt-out was submitted to
+      // (not the globally active network) so we don't poll the wrong chain.
+      await NetworkService.getInstance(
+        specificNetworkConfig.id
+      ).waitForConfirmation(txId, 4);
 
-      // Refresh balances
+      // Refresh balances. refreshAllBalances only refreshes the globally active
+      // network, so also reload the context balance for the opted-out network
+      // (which may differ from the active one) — mirrors onRefresh.
       const { refreshAllBalances } = useWalletStore.getState();
-      await refreshAllBalances();
+      await Promise.all([
+        refreshAllBalances(),
+        networkId
+          ? loadMultiNetworkBalance(accountId, true)
+          : accountBalance.reload(),
+      ]);
 
       Alert.alert(
         'Success',

@@ -41,7 +41,11 @@ import {
   formatBaseUnitsToAmount,
   sanitizeAmountInput,
 } from '@/utils/bigint';
-import { AccountType, type WalletAccount } from '@/types/wallet';
+import {
+  AccountType,
+  type WalletAccount,
+  type AssetBalance,
+} from '@/types/wallet';
 import {
   useCurrentNetwork,
   useCurrentNetworkConfig,
@@ -374,7 +378,7 @@ export default function SendScreen() {
                 options.push({
                   networkId: source.networkId,
                   assetId: source.balance.assetId,
-                  balance: source.balance.amount,
+                  balance: BigInt(source.balance.amount),
                   decimals: source.balance.decimals,
                   symbol: source.balance.symbol || '',
                   name: source.balance.name || '',
@@ -408,7 +412,7 @@ export default function SendScreen() {
                 options.push({
                   networkId: source.networkId,
                   assetId: source.balance.assetId,
-                  balance: source.balance.amount,
+                  balance: BigInt(source.balance.amount),
                   decimals: source.balance.decimals,
                   symbol: source.balance.symbol || contextAssetName || '',
                   name: source.balance.name || contextAssetName || '',
@@ -484,10 +488,10 @@ export default function SendScreen() {
               options.push({
                 networkId,
                 assetId:
-                  asset.assetType === 'arc200'
+                  (asset.assetType === 'arc200'
                     ? asset.contractId
-                    : asset.assetId,
-                balance: asset.amount,
+                    : asset.assetId) ?? 0,
+                balance: BigInt(asset.amount),
                 decimals: asset.decimals,
                 symbol: asset.symbol || contextAssetName || '',
                 name: asset.name || contextAssetName || '',
@@ -502,7 +506,7 @@ export default function SendScreen() {
               options.push({
                 networkId,
                 assetId: 0,
-                balance: balance.amount,
+                balance: BigInt(balance.amount),
                 decimals: 6,
                 symbol: networkConfig.nativeToken,
                 name: networkConfig.nativeToken,
@@ -709,7 +713,7 @@ export default function SendScreen() {
       return null; // Native token doesn't have enhanced asset data
     }
     return accountBalance?.assets?.find(
-      (a) =>
+      (a: AssetBalance) =>
         a.assetId === effectiveAssetId ||
         (a.assetType === 'arc200' && a.contractId === effectiveAssetId)
     );
@@ -1336,13 +1340,20 @@ export default function SendScreen() {
         return;
       }
 
-      // Get mapping ID if this asset is part of a multi-network mapping
+      // Get mapping ID if this asset is part of a multi-network mapping.
+      // Match against the mapped asset's source balances (the aggregate's
+      // top-level assetId/primaryNetwork only describe the first source, so a
+      // non-primary selected version would otherwise never match).
       const mappingId =
         contextMappingId ||
         multiNetworkBalance?.assets.find(
           (a) =>
-            a.assetId === assetOption.assetId &&
-            a.networkId === selectedAsset.networkId
+            a.isMapped &&
+            a.sourceBalances.some(
+              (s) =>
+                s.networkId === selectedAsset.networkId &&
+                s.balance.assetId === assetOption.assetId
+            )
         )?.mappingId;
 
       // Navigate to transaction confirmation screen
@@ -1426,7 +1437,7 @@ export default function SendScreen() {
         selectedNetworkConfig.nativeToken
       ),
     };
-    const otherAssets = accountBalance.assets.map((asset) => ({
+    const otherAssets = accountBalance.assets.map((asset: AssetBalance) => ({
       id: asset.assetType === 'arc200' ? asset.contractId : asset.assetId,
       name: asset.name || asset.symbol || `Asset ${asset.assetId}`,
       symbol: asset.symbol || 'TOKEN',

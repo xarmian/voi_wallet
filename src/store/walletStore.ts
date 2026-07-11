@@ -1341,6 +1341,10 @@ export const useWalletStore = create<WalletState>()(
                   ...accountStates[accountId]?.assetTransactionsPagination?.[
                     assetKey
                   ],
+                  hasMore:
+                    accountStates[accountId]?.assetTransactionsPagination?.[
+                      assetKey
+                    ]?.hasMore ?? false,
                   isLoadingMore: false,
                 },
               },
@@ -1550,7 +1554,7 @@ export const useWalletStore = create<WalletState>()(
         ...accountStates,
       };
       const rekeyUpdates: { account: AccountMetadata; balance: any }[] = [];
-      let updatedWallet = get().wallet;
+      let updatedWallet: Wallet | null = get().wallet;
 
       // Process all results
       for (const result of results) {
@@ -1634,9 +1638,11 @@ export const useWalletStore = create<WalletState>()(
             }
           }
 
-          // Update wallet with rekey metadata
-          const updatedAccounts = updatedWallet.accounts.map((acc) =>
-            acc.id === account.id ? updatedAccount : acc
+          // Update wallet with rekey metadata. Annotate explicitly: the
+          // in-loop reassignment of `updatedWallet` below would otherwise make
+          // this initializer self-referential (TS7022).
+          const updatedAccounts: AccountMetadata[] = updatedWallet.accounts.map(
+            (acc) => (acc.id === account.id ? updatedAccount : acc)
           );
           updatedWallet = { ...updatedWallet, accounts: updatedAccounts };
         }
