@@ -4,6 +4,7 @@ import {
   StackActions,
   useFocusEffect,
   useNavigation,
+  NavigatorScreenParams,
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -96,7 +97,7 @@ import { realtimeService } from '@/services/realtime';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
-import { NFTToken } from '@/types/nft';
+import { NFTToken, ARC72Collection } from '@/types/nft';
 import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
@@ -117,7 +118,7 @@ import NewMessageScreen from '@/screens/social/NewMessageScreen';
 import ChatScreen from '@/screens/social/ChatScreen';
 
 export type RootStackParamList = {
-  Main: undefined;
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   Onboarding: undefined;
   CreateWallet: undefined;
   SecuritySetup: {
@@ -126,11 +127,15 @@ export type RootStackParamList = {
     source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger';
     accountLabel?: string;
   };
-  MnemonicImport: { isOnboarding?: boolean };
+  MnemonicImport: { isOnboarding?: boolean } | undefined;
   AddWatchAccount: { isOnboarding?: boolean };
-  WalletConnectSessionProposal: { proposal: any };
+  WalletConnectSessionProposal: {
+    proposal: any;
+    version?: number;
+    sessionRequest?: any;
+  };
   WalletConnectSessions: undefined;
-  WalletConnectTransactionRequest: { requestEvent: any };
+  WalletConnectTransactionRequest: { requestEvent: any; version?: number };
   WalletConnectPairing: { uri: string };
   WalletConnectError: { error: string; uri?: string };
   UniversalTransactionSigning: {
@@ -167,7 +172,7 @@ export type RootStackParamList = {
   SignatureDisplay: {
     request: RemoteSignerRequest;
   };
-  RestoreWallet: { isOnboarding?: boolean };
+  RestoreWallet: { isOnboarding?: boolean } | undefined;
   // ARC-0090 deep link screens
   KeyregConfirm: {
     address: string;
@@ -209,11 +214,17 @@ export type RootStackParamList = {
 };
 
 export type MainTabParamList = {
-  Home: undefined;
-  Friends: undefined;
-  NFTs: undefined;
+  // In normal mode Home mounts the WalletStack; in signer/airgap mode it
+  // mounts the AirgapStack (see MainTabNavigator). Accept both param shapes
+  // (plus undefined so `navigate('Main', { screen: 'Home' })` stays valid).
+  Home:
+    | NavigatorScreenParams<WalletStackParamList>
+    | NavigatorScreenParams<AirgapStackParamList>
+    | undefined;
+  Friends: NavigatorScreenParams<FriendsStackParamList> | undefined;
+  NFTs: NavigatorScreenParams<NFTStackParamList> | undefined;
   Discover: { reload?: number } | undefined;
-  Settings: undefined;
+  Settings: NavigatorScreenParams<SettingsStackParamList> | undefined;
 };
 
 export type WalletStackParamList = {
@@ -242,20 +253,22 @@ export type WalletStackParamList = {
     url: string;
     title: string;
   };
-  Send: {
-    assetName?: string;
-    assetId?: number;
-    accountId?: string;
-    networkId?: NetworkId;
-    // Payment request parameters from ARC-0090 URIs
-    recipient?: string;
-    amount?: string;
-    note?: string;
-    label?: string;
-    asset?: string;
-    fee?: string; // Transaction fee in microunits
-    isXnote?: boolean; // Whether the note is non-modifiable
-  };
+  Send:
+    | {
+        assetName?: string;
+        assetId?: number;
+        accountId?: string;
+        networkId?: NetworkId;
+        // Payment request parameters from ARC-0090 URIs
+        recipient?: string;
+        amount?: string;
+        note?: string;
+        label?: string;
+        asset?: string;
+        fee?: string; // Transaction fee in microunits
+        isXnote?: boolean; // Whether the note is non-modifiable
+      }
+    | undefined;
   Swap: {
     assetName?: string;
     assetId?: number;
@@ -285,6 +298,8 @@ export type WalletStackParamList = {
     outputTokenId?: number;
     outputTokenSymbol?: string;
     swapProvider?: 'deflex' | 'snowball';
+    /** ID to retrieve callbacks from registry (avoids serialization warnings) */
+    callbackId?: string;
   };
   TransactionResult: {
     transactionId?: string;
@@ -299,11 +314,13 @@ export type WalletStackParamList = {
     errorMessage?: string;
     networkId?: NetworkId;
   };
-  Receive: {
-    assetName?: string;
-    assetId?: number;
-    accountId?: string;
-  };
+  Receive:
+    | {
+        assetName?: string;
+        assetId?: number;
+        accountId?: string;
+      }
+    | undefined;
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
   ClaimableTokens:
@@ -320,6 +337,9 @@ export type WalletStackParamList = {
 
 export type NFTStackParamList = {
   NFTMain: undefined;
+  CollectionDetail: {
+    collection: ARC72Collection;
+  };
   NFTDetail: {
     nft: NFTToken;
   };
@@ -382,7 +402,7 @@ export type SettingsStackParamList = {
   WalletConnectSessions: undefined;
   AddWatchAccount: undefined;
   CreateAccount: undefined;
-  MnemonicImport: undefined;
+  MnemonicImport: { isOnboarding?: boolean } | undefined;
   RekeyAccount: {
     accountId: string;
   };
@@ -390,7 +410,7 @@ export type SettingsStackParamList = {
   NotificationSettings: undefined;
   ExperimentalFeatures: undefined;
   BackupWallet: undefined;
-  RestoreWallet: { isOnboarding?: boolean };
+  RestoreWallet: { isOnboarding?: boolean } | undefined;
   WebView: {
     url: string;
     title: string;
@@ -427,7 +447,7 @@ export type AirgapStackParamList = {
   // Account management screens (accessible in airgap mode)
   // These use RootStackParamList types internally
   CreateAccount: undefined;
-  MnemonicImport: { isOnboarding?: boolean };
+  MnemonicImport: { isOnboarding?: boolean } | undefined;
   QRAccountImport: undefined;
   AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
   LedgerAccountImport:
@@ -963,7 +983,8 @@ function MainTabNavigator() {
 }
 
 function AppStack() {
-  const [initialRoute, setInitialRoute] = useState<string>('Onboarding');
+  const [initialRoute, setInitialRoute] =
+    useState<keyof RootStackParamList>('Onboarding');
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {

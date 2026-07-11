@@ -26,10 +26,12 @@ import {
   useNavigation,
   CommonActions,
 } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useActiveAccount, useWalletStore } from '@/store/walletStore';
-import { AccountBalance } from '@/types/wallet';
+import { AccountBalance, WalletAccount } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { TokenSelector } from '@/components/swap/TokenSelector';
@@ -71,7 +73,8 @@ const NATIVE_TOKEN_ID = 0; // Native token ID for both VOI and ALGO
 export default function SwapScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const navigation = useNavigation();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<WalletStackParamList, 'Swap'>>();
   const route = useRoute();
   const routeParams = route.params as SwapScreenRouteParams | undefined;
   const delayedRefreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(
@@ -685,7 +688,9 @@ export default function SwapScreen() {
     // Navigate to UniversalTransactionSigning screen with swap transactions
     navigation.navigate('UniversalTransactionSigning', {
       transactions: quote.unsignedTransactions,
-      account: activeAccount,
+      // AccountMetadata → WalletAccount bridge (matches SendScreen /
+      // KeyregConfirmScreen convention); full reconciliation is a later phase.
+      account: activeAccount as unknown as WalletAccount,
       title: 'Confirm Swap',
       networkId: selectedNetwork,
       callbackId,

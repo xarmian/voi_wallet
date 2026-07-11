@@ -12,6 +12,7 @@ import {
   Linking,
 } from 'react-native';
 import { useNavigation, RouteProp, useRoute } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -71,7 +72,8 @@ export default function AccountInfoScreen() {
   const [isLoadingAccountInfo, setIsLoadingAccountInfo] = useState(true);
   const [accountAge, setAccountAge] = useState<string>('Loading...');
   const route = useRoute<AccountInfoScreenRouteProp>();
-  const navigation = useNavigation();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<WalletStackParamList>>();
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
 
@@ -452,7 +454,7 @@ export default function AccountInfoScreen() {
   };
 
   const navigateToMyAccount = () => {
-    navigation.navigate('AccountInfo' as any, {});
+    navigation.navigate('AccountInfo', {});
   };
 
   const getConsensusStatus = (accountInfo: any) => {

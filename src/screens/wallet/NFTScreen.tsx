@@ -9,8 +9,18 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, CommonActions } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import {
+  useNavigation,
+  CommonActions,
+  CompositeNavigationProp,
+} from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type {
+  NFTStackParamList,
+  MainTabParamList,
+  RootStackParamList,
+} from '@/navigation/AppNavigator';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -38,8 +48,18 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 type TabType = 'my-nfts' | 'browse-collections';
 type ViewMode = 'my-nfts' | 'browse-collections' | 'collection-tokens';
 
+// NFTScreen lives in the NFT stack but can also navigate up to the Settings
+// tab (account management) and to root-level import screens.
+type NFTScreenNavigationProp = CompositeNavigationProp<
+  NativeStackNavigationProp<NFTStackParamList>,
+  CompositeNavigationProp<
+    BottomTabNavigationProp<MainTabParamList>,
+    NativeStackNavigationProp<RootStackParamList>
+  >
+>;
+
 export default function NFTScreen() {
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NFTScreenNavigationProp>();
   const activeAccount = useActiveAccount();
   const { theme, setNFTTheme } = useTheme();
 
@@ -517,18 +537,15 @@ export default function NFTScreen() {
           }}
           onImportLedgerAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('LedgerAccountImport' as never);
+            navigation.navigate('LedgerAccountImport');
           }}
           onImportQRAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('QRAccountImport' as never);
+            navigation.navigate('QRAccountImport');
           }}
           onAddWatchAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate(
-              'Settings' as never,
-              { screen: 'AddWatchAccount' } as never
-            );
+            navigation.navigate('Settings', { screen: 'AddWatchAccount' });
           }}
         />
       </SafeAreaView>

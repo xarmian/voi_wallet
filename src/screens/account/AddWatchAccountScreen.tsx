@@ -15,6 +15,7 @@ import {
   useRoute,
   useNavigation,
   useFocusEffect,
+  CommonActions,
 } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as algosdk from 'algosdk';
@@ -90,13 +91,20 @@ export default function AddWatchAccountScreen() {
       ) {
         const currentParams = state.routes[0]?.params;
 
-        navigation.reset({
-          index: 1,
-          routes: [
-            { name: 'SettingsMain' as never },
-            { name: 'AddWatchAccount' as never, params: currentParams },
-          ],
-        });
+        // Cross-navigator reset (SettingsMain lives in the parent Settings
+        // stack); CommonActions.reset accepts dynamic route names without casts.
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 1,
+            routes: [
+              { name: 'SettingsMain' },
+              {
+                name: 'AddWatchAccount',
+                params: currentParams as { isOnboarding?: boolean } | undefined,
+              },
+            ],
+          })
+        );
       }
 
       return undefined;

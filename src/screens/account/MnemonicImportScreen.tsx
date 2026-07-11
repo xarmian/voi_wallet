@@ -80,13 +80,20 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       ) {
         const currentParams = state.routes[0]?.params;
 
-        navigation.reset({
-          index: 1,
-          routes: [
-            { name: 'SettingsMain' as never },
-            { name: 'MnemonicImport' as never, params: currentParams },
-          ],
-        });
+        // Cross-navigator reset (SettingsMain lives in the parent Settings
+        // stack); CommonActions.reset accepts dynamic route names without casts.
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 1,
+            routes: [
+              { name: 'SettingsMain' },
+              {
+                name: 'MnemonicImport',
+                params: currentParams as { isOnboarding?: boolean } | undefined,
+              },
+            ],
+          })
+        );
       }
 
       return undefined;
