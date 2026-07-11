@@ -255,7 +255,7 @@ describe('algorandUri', () => {
     // with a literal '%', the second decode throws URIError on the leftover '%'
     // and the whole parse returns null, rejecting a valid payment URI.
     // it.failing asserts the CORRECT behavior (passes while buggy; flips when fixed).
-    it.failing('preserves a note containing a literal percent sign', () => {
+    it('preserves a note containing a literal percent sign', () => {
       const uri = buildUri('voi', VALID_ADDRESS, { note: '100%' });
       expect(uri).toContain('note=100%25'); // encoded exactly once
       const parsed = parseAlgorandUri(uri);
@@ -266,15 +266,12 @@ describe('algorandUri', () => {
     // KNOWN BUG (tracked, same double-decode): a label whose literal text is the
     // 3 chars "%41" is correctly encoded "%2541"; one decode restores "%41", but
     // the second decode corrupts it to "A".
-    it.failing(
-      'does not corrupt a label that is literally a percent escape',
-      () => {
-        const uri = buildUri('voi', VALID_ADDRESS, { label: '%41' });
-        expect(uri).toContain('label=%2541');
-        const parsed = parseAlgorandUri(uri);
-        expect(parsed!.params.label).toBe('%41');
-      }
-    );
+    it('does not corrupt a label that is literally a percent escape', () => {
+      const uri = buildUri('voi', VALID_ADDRESS, { label: '%41' });
+      expect(uri).toContain('label=%2541');
+      const parsed = parseAlgorandUri(uri);
+      expect(parsed!.params.label).toBe('%41');
+    });
   });
 
   describe('convertAmountToDisplay', () => {

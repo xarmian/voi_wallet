@@ -92,15 +92,15 @@ export function parseAlgorandUri(uri: string): ParsedAlgorandUri | null {
       }
 
       if (searchParams.has('label')) {
-        params.label = decodeURIComponent(searchParams.get('label')!);
+        params.label = searchParams.get('label')!;
       }
 
       if (searchParams.has('note')) {
-        params.note = decodeURIComponent(searchParams.get('note')!);
+        params.note = searchParams.get('note')!;
       }
 
       if (searchParams.has('xnote')) {
-        params.xnote = decodeURIComponent(searchParams.get('xnote')!);
+        params.xnote = searchParams.get('xnote')!;
       }
     }
 
