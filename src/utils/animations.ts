@@ -248,64 +248,6 @@ export function useShimmer(duration: number = 1500) {
 }
 
 /**
- * Hook for staggered list entrance animations
- * Returns a function that creates delayed entrance for each item
- */
-export function useStaggeredEntrance(
-  itemCount: number,
-  baseDelay: number = 50
-) {
-  const opacities = Array.from({ length: itemCount }, () => useSharedValue(0));
-  const translations = Array.from({ length: itemCount }, () =>
-    useSharedValue(20)
-  );
-
-  const animateIn = useCallback(() => {
-    opacities.forEach((opacity, index) => {
-      const delay = index * baseDelay;
-      opacity.value = withTiming(1, {
-        ...timingConfigs.normal,
-        duration: timingConfigs.normal.duration + delay,
-      });
-    });
-    translations.forEach((translation, index) => {
-      const delay = index * baseDelay;
-      setTimeout(() => {
-        translation.value = withSpring(0, springConfigs.smooth);
-      }, delay);
-    });
-  }, [opacities, translations, baseDelay]);
-
-  const reset = useCallback(() => {
-    opacities.forEach((opacity) => {
-      opacity.value = 0;
-    });
-    translations.forEach((translation) => {
-      translation.value = 20;
-    });
-  }, [opacities, translations]);
-
-  const getItemStyle = useCallback(
-    (index: number) => {
-      const opacity = opacities[index];
-      const translateY = translations[index];
-
-      return useAnimatedStyle(() => ({
-        opacity: opacity?.value ?? 1,
-        transform: [{ translateY: translateY?.value ?? 0 }],
-      }));
-    },
-    [opacities, translations]
-  );
-
-  return {
-    animateIn,
-    reset,
-    getItemStyle,
-  };
-}
-
-/**
  * Interpolation helpers for common animation patterns
  */
 export const interpolations = {

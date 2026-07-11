@@ -194,27 +194,6 @@ export default function MultiNetworkAssetScreen() {
     return [...balanceRows, ...algorandOptInRows, ...voiOptInRows];
   }, [mappedAsset, missingAlgorandOptIns, missingVoiOptIns]);
 
-  if (!mappedAsset) {
-    return (
-      <NFTBackground>
-        <SafeAreaView style={styles.container} edges={['top']}>
-          <UniversalHeader
-            title="Asset Not Found"
-            showBackButton
-            onBackPress={() => navigation.goBack()}
-            showAccountSelector={false}
-            onAccountSelectorPress={() => {}}
-          />
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              This asset could not be found in your balance.
-            </Text>
-          </View>
-        </SafeAreaView>
-      </NFTBackground>
-    );
-  }
-
   const calculateTotalUsdValue = useMemo(() => {
     if (!mappedAsset) return formatCurrency(0);
 
@@ -468,6 +447,27 @@ export default function MultiNetworkAssetScreen() {
       )
       .join(' + ');
   }, [mappedAsset]);
+
+  if (!mappedAsset) {
+    return (
+      <NFTBackground>
+        <SafeAreaView style={styles.container} edges={['top']}>
+          <UniversalHeader
+            title="Asset Not Found"
+            showBackButton
+            onBackPress={() => navigation.goBack()}
+            showAccountSelector={false}
+            onAccountSelectorPress={() => {}}
+          />
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>
+              This asset could not be found in your balance.
+            </Text>
+          </View>
+        </SafeAreaView>
+      </NFTBackground>
+    );
+  }
 
   return (
     <NFTBackground>

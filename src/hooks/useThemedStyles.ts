@@ -21,53 +21,11 @@ export const useThemedStyles = <T extends StyleSheet.NamedStyles<T>>(
 };
 
 export const useThemeColors = () => {
-  try {
-    const { theme } = useTheme();
-    return theme.colors;
-  } catch (error) {
-    console.warn(
-      'useThemeColors: Theme context not available, using default theme'
-    );
-    // Return a default theme to prevent crashes
-    return {
-      primary: '#007AFF',
-      primaryDark: '#0051D8',
-      secondary: '#5856D6',
-      background: '#FFFFFF',
-      surface: '#F8F9FA',
-      card: '#FFFFFF',
-      text: '#000000',
-      textSecondary: '#3C3C43',
-      textMuted: '#8E8E93',
-      placeholder: '#8E8E93',
-      border: '#C6C6C8',
-      borderLight: '#E5E5EA',
-      success: '#34C759',
-      warning: '#FF9500',
-      error: '#FF3B30',
-      info: '#007AFF',
-      statusBar: 'dark-content' as const,
-      tabIconActive: '#007AFF',
-      tabIconInactive: '#8E8E93',
-      tabBackground: '#FFFFFF',
-      inputBackground: '#FFFFFF',
-      inputBorder: '#C6C6C8',
-      buttonBackground: '#007AFF',
-      buttonText: '#FFFFFF',
-      modalBackground: '#FFFFFF',
-      overlay: 'rgba(0, 0, 0, 0.4)',
-      shadow: '#000000',
-      glassBackground: 'rgba(255, 255, 255, 0.72)',
-      glassBorder: 'rgba(255, 255, 255, 0.5)',
-      glassHighlight: 'rgba(255, 255, 255, 0.9)',
-      glassShadow: 'rgba(0, 0, 0, 0.08)',
-      glowPrimary: 'rgba(0, 122, 255, 0.35)',
-      glowSuccess: 'rgba(48, 209, 88, 0.35)',
-      glowError: 'rgba(255, 69, 58, 0.35)',
-      surfaceElevated: '#FFFFFF',
-      surfacePressed: 'rgba(0, 0, 0, 0.04)',
-    };
-  }
+  // useTheme() never throws — it already falls back to lightTheme when the
+  // ThemeProvider is absent (see ThemeContext) — so the previous try/catch was
+  // unreachable and violated rules-of-hooks (hook called inside a try block).
+  const { theme } = useTheme();
+  return theme.colors;
 };
 
 export const useThemeSpacing = () => {

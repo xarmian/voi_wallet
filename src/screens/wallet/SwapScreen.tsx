@@ -28,7 +28,6 @@ import {
 } from '@react-navigation/native';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useTheme } from '@/contexts/ThemeContext';
 import { useActiveAccount, useWalletStore } from '@/store/walletStore';
 import { AccountBalance } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
@@ -1028,8 +1027,6 @@ export default function SwapScreen() {
       </SafeAreaView>
     );
   }
-
-  const { theme } = useTheme();
 
   return (
     <NFTBackground>

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
-  Modal,
   Pressable,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
@@ -884,61 +883,13 @@ function SafeNetworkSwitcher({
   onClose: () => void;
   theme: Theme;
 }) {
-  try {
-    return (
-      <NetworkSwitcher visible={visible} onClose={onClose} theme={theme} />
-    );
-  } catch (error) {
-    console.error('NetworkSwitcher theme context error:', error);
-    // Return a simple modal with error message
-    return (
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        onRequestClose={onClose}
-      >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: 'white',
-              padding: 20,
-              borderRadius: 10,
-              margin: 20,
-              minWidth: 250,
-            }}
-          >
-            <Text
-              style={{ fontSize: 16, marginBottom: 10, fontWeight: 'bold' }}
-            >
-              Network Switcher Error
-            </Text>
-            <Text style={{ marginBottom: 20, color: '#666' }}>
-              Theme context not available. Please try again.
-            </Text>
-            <Pressable
-              style={{
-                backgroundColor: '#007AFF',
-                padding: 12,
-                borderRadius: 8,
-                alignItems: 'center',
-              }}
-              onPress={onClose}
-            >
-              <Text style={{ color: 'white', fontWeight: '600' }}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-    );
-  }
+  // NetworkSwitcher receives `theme` as a prop and useTheme() no longer throws
+  // (ThemeContext falls back to lightTheme), so this render can't throw. The
+  // previous try/catch could not have caught a child render error anyway — a
+  // try/catch only wraps React element creation, not the later reconciliation
+  // where children actually render — so the catch was dead code (flagged by
+  // react-hooks/error-boundaries). Render directly.
+  return <NetworkSwitcher visible={visible} onClose={onClose} theme={theme} />;
 }
 
 const createStyles = (theme: Theme) =>
