@@ -214,6 +214,12 @@ export class RekeyManager {
               importedAt: account.importedAt,
               lastUsed: account.lastUsed,
               type: AccountType.STANDARD,
+              // Sanitized-storage convention: the real mnemonic lives only in
+              // secure storage and is stripped on persist, so keep it empty here.
+              mnemonic: '',
+              // Backup is unverified; the private key is confirmed present in
+              // secure storage (checked above) but that is not a mnemonic backup.
+              hasBackup: false,
             };
             return standardAccount;
           } else {

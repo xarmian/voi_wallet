@@ -13,6 +13,7 @@ import {
   RemoteSignerAccountMetadata,
   CreateAccountRequest,
   ImportAccountRequest,
+  ImportAuthAccountRequest,
   ImportLedgerAccountRequest,
   DetectLedgerAccountsRequest,
   LedgerAccountDiscoveryResult,
@@ -50,7 +51,9 @@ export class MultiAccountWalletService {
 
       const accountMetadata: StandardAccountMetadata = {
         id: this.generateAccountId(),
-        address: account.addr,
+        // algosdk 3 returns an `Address` object; persist the 58-char base32
+        // string so the stored value stays Pera/Algorand-wallet compatible.
+        address: account.addr.toString(),
         publicKey: Buffer.from(account.sk.slice(32)).toString('hex'),
         type: AccountType.STANDARD,
         label: request.label || `Account ${(await this.getAccountCount()) + 1}`,
@@ -83,7 +86,14 @@ export class MultiAccountWalletService {
     request: ImportAccountRequest
   ): Promise<StandardAccountMetadata> {
     try {
-      let account: algosdk.Account;
+      // The mnemonic path yields an algosdk 3 `Account` (addr is an `Address`
+      // object); the private-key path builds an object whose addr is already a
+      // base32 string. Allow both so `account.addr.toString()` normalizes them.
+      let account: {
+        sk: Uint8Array;
+        addr: algosdk.Address | string;
+        publicKey?: Uint8Array;
+      };
 
       if (request.mnemonic) {
         const cleanMnemonic = this.cleanMnemonic(request.mnemonic);
@@ -104,7 +114,9 @@ export class MultiAccountWalletService {
       }
 
       // Check if account already exists
-      const existingAccount = await this.findAccountByAddress(account.addr);
+      const existingAccount = await this.findAccountByAddress(
+        account.addr.toString()
+      );
       if (existingAccount) {
         throw new AccountExistsError('Account already exists in wallet');
       }
@@ -115,7 +127,8 @@ export class MultiAccountWalletService {
 
       const accountMetadata: StandardAccountMetadata = {
         id: this.generateAccountId(),
-        address: account.addr,
+        // Persist the 58-char base32 string, never the algosdk `Address` object.
+        address: account.addr.toString(),
         publicKey: Buffer.from(
           (account as any).publicKey ?? account.sk.slice(32)
         ).toString('hex'),
@@ -503,7 +516,7 @@ export class MultiAccountWalletService {
       const authAccount = await this.findAccountByAddress(request.authAddress);
       const canSign =
         request.canSign ??
-        (authAccount && authAccount.type === AccountType.STANDARD);
+        (!!authAccount && authAccount.type === AccountType.STANDARD);
 
       const publicKey = algosdk.decodeAddress(
         request.originalAddress
@@ -704,18 +717,31 @@ export class MultiAccountWalletService {
             : defaultSettings.numberLocale,
       };
 
-      // Repair invalid or missing addresses from public keys if needed
+      // Heal-on-read: repair invalid, missing, or non-base32 (e.g. a persisted
+      // algosdk `Address` object serialized to `{"publicKey":{...}}`) addresses
+      // by re-deriving them from the stored hex public key. This only ever
+      // rewrites to a freshly derived, checksum-valid base32 address obtained
+      // from an exactly-32-byte public key; it never weakens validation.
       let modified = false;
       wallet.accounts = wallet.accounts.map((acc) => {
-        if (!acc.address || !algosdk.isValidAddress(acc.address)) {
+        const rawAddress = acc.address as unknown;
+        const currentAddress = typeof rawAddress === 'string' ? rawAddress : '';
+        if (!currentAddress || !algosdk.isValidAddress(currentAddress)) {
           try {
-            if (acc.publicKey && /^[0-9a-fA-F]+$/.test(acc.publicKey)) {
+            const rawPublicKey = acc.publicKey as unknown;
+            const hexPublicKey =
+              typeof rawPublicKey === 'string' ? rawPublicKey : '';
+            if (hexPublicKey && /^[0-9a-fA-F]+$/.test(hexPublicKey)) {
               const pubBytes = new Uint8Array(
-                acc.publicKey.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))
+                hexPublicKey.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))
               );
-              const address = algosdk.encodeAddress(pubBytes);
-              modified = true;
-              return { ...acc, address } as AccountMetadata;
+              if (pubBytes.length === 32) {
+                const derived = algosdk.encodeAddress(pubBytes);
+                if (algosdk.isValidAddress(derived)) {
+                  modified = true;
+                  return { ...acc, address: derived } as AccountMetadata;
+                }
+              }
             }
           } catch {}
         }
@@ -885,12 +911,14 @@ export class MultiAccountWalletService {
 
   static async clearAllWallets(): Promise<void> {
     try {
-      // Delete wallet metadata
-      await AsyncStorage.removeItem(this.WALLET_KEY);
+      // Clears wallet METADATA only (the account list / active-account record).
+      // Private keys in secure storage are NOT touched here; callers that need a
+      // full reset must also call AccountSecureStorage.clearAll() — as
+      // LockScreen.performReset() does immediately before invoking this method.
+      await storage.removeItem(this.WALLET_KEY);
       await this.clearLegacyValue(this.WALLET_KEY);
 
-      // The secure storage will be cleared by AccountSecureStorage.clearAll()
-      console.log('All wallet data cleared');
+      console.log('All wallet metadata cleared');
     } catch (error) {
       console.error('Failed to clear wallet data:', error);
       throw new Error(
@@ -1159,7 +1187,8 @@ export class MultiAccountWalletService {
     );
   }
 
-  private static async findAccountByAddress(
+  // Public so auth-account-discovery can reuse the same lookup/dedup logic.
+  static async findAccountByAddress(
     address: string
   ): Promise<AccountMetadata | null> {
     const wallet = await this.getCurrentWallet();
@@ -1295,7 +1324,7 @@ export class MultiAccountWalletService {
         await this.createWallet(accountMetadata as StandardAccountMetadata);
       } else if (
         accountMetadata.type === AccountType.REMOTE_SIGNER ||
-        accountMetadata.type === AccountType.WATCH_ONLY
+        accountMetadata.type === AccountType.WATCH
       ) {
         // Create wallet with non-standard account (no mnemonic required)
         await this.createWalletWithAccount(accountMetadata);
