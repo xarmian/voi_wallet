@@ -5,7 +5,7 @@
  * call-to-action button to scan signing requests.
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -19,7 +19,6 @@ import Animated, {
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
-import { useEffect } from 'react';
 
 interface SignerModeBannerProps {
   /** Called when scan button is pressed */

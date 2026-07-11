@@ -114,9 +114,8 @@ export interface TransactionAuthState_Interface {
  */
 export class TransactionAuthController {
   private unifiedSigner = UnifiedTransactionSigner.getInstance();
-  private stateListeners: Array<
-    (state: TransactionAuthState_Interface) => void
-  > = [];
+  private stateListeners: ((state: TransactionAuthState_Interface) => void)[] =
+    [];
   private currentState: TransactionAuthState_Interface;
   private currentRequest: UnifiedTransactionRequest | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;

@@ -255,7 +255,7 @@ export class Arc72TransactionService {
         fixSigners: true,
       });
 
-      let boxes: Array<{ appIndex: number; name: Uint8Array }> = [];
+      let boxes: { appIndex: number; name: Uint8Array }[] = [];
 
       try {
         const simulateResponse = await algodClient

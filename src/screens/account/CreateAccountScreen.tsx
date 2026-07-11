@@ -34,7 +34,7 @@ export default function CreateAccountScreen() {
         | {
             type?: string;
             index?: number;
-            routes?: Array<{ name: string; params?: unknown }>;
+            routes?: { name: string; params?: unknown }[];
           }
         | undefined;
 

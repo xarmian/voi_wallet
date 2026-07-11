@@ -45,8 +45,7 @@ export interface SimpleLedgerAuthStateData {
  * Replaces the complex TransactionAuthController with a much simpler implementation
  */
 export class SimpleLedgerAuthController {
-  private stateListeners: Array<(state: SimpleLedgerAuthStateData) => void> =
-    [];
+  private stateListeners: ((state: SimpleLedgerAuthStateData) => void)[] = [];
   private currentState: SimpleLedgerAuthStateData = {
     state: 'idle',
     deviceConnected: false,

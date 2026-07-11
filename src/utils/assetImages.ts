@@ -109,7 +109,7 @@ export const normalizeAssetImageUrl = (
  * Prefers direct HTTPS URLs, then HTTP, then IPFS gateways.
  */
 export const selectBestAssetImageUrl = (
-  urls: Array<string | undefined | null>
+  urls: (string | undefined | null)[]
 ): string | undefined => {
   let bestUrl: string | undefined;
   let bestPriority = -1;

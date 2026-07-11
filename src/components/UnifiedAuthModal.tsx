@@ -20,7 +20,7 @@ import { LedgerDeviceInfo } from '@/services/ledger/transport';
 const showAlert = (
   title: string,
   message: string,
-  buttons?: Array<{ text: string; onPress?: () => void }>
+  buttons?: { text: string; onPress?: () => void }[]
 ) => {
   if (Platform.OS === 'web') {
     window.alert(`${title}\n\n${message}`);

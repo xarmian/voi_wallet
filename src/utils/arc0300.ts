@@ -12,11 +12,11 @@ export interface Arc0300Pagination {
 
 export interface Arc0300AccountImportResult {
   kind: 'standard' | 'watch';
-  entries: Array<{
+  entries: {
     privateKeyBase64?: string;
     name?: string;
     address?: string;
-  }>;
+  }[];
   pagination?: Arc0300Pagination;
   checksum?: string;
   scheme: string;
@@ -131,14 +131,12 @@ export function normalizeBase64ToHex(base64: string): string {
   );
 }
 
-export function collectArc0300Entries(
-  order: Arc0300AccountImportResult[]
-): Array<{
+export function collectArc0300Entries(order: Arc0300AccountImportResult[]): {
   name?: string;
   privateKeyBase64?: string;
   address?: string;
   kind: 'standard' | 'watch';
-}> {
+}[] {
   return order.flatMap((result) =>
     result.entries.map((entry) => ({
       kind: result.kind,

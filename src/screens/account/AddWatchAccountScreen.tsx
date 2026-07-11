@@ -59,7 +59,7 @@ export default function AddWatchAccountScreen() {
   const showAlert = (
     title: string,
     message: string,
-    buttons?: Array<{ text: string; onPress?: () => void }>
+    buttons?: { text: string; onPress?: () => void }[]
   ) => {
     if (Platform.OS === 'web') {
       window.alert(`${title}\n\n${message}`);
@@ -79,7 +79,7 @@ export default function AddWatchAccountScreen() {
       const state = navigation.getState() as
         | {
             type?: string;
-            routes?: Array<{ name: string; params?: unknown }>;
+            routes?: { name: string; params?: unknown }[];
           }
         | undefined;
 

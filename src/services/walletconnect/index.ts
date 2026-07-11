@@ -126,10 +126,10 @@ export class WalletConnectService extends EventEmitter {
             }
           })
         )
-      ).filter(Boolean) as Array<{
+      ).filter(Boolean) as {
         key: string;
         session: WalletConnectV1StoredSession;
-      }>;
+      }[];
 
       if (sessions.length === 0) {
         return;

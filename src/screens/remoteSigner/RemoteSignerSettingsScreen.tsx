@@ -48,7 +48,7 @@ import { TransferToAirgapFlow } from '@/components/remoteSigner/TransferToAirgap
 const showAlert = (
   title: string,
   message: string,
-  buttons?: Array<{ text: string; onPress?: () => void; style?: string }>
+  buttons?: { text: string; onPress?: () => void; style?: string }[]
 ) => {
   if (Platform.OS === 'web') {
     if (buttons && buttons.length > 1) {

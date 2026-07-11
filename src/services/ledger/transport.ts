@@ -1025,7 +1025,7 @@ export class LedgerTransportService {
       });
 
       return await new Promise<LedgerDeviceInfo | null>((resolve) => {
-        const cleanupCallbacks: Array<() => void> = [];
+        const cleanupCallbacks: (() => void)[] = [];
         const cleanup = () => {
           while (cleanupCallbacks.length) {
             const fn = cleanupCallbacks.pop();
@@ -1159,11 +1159,11 @@ export class LedgerTransportService {
    * Remove all listeners registered on this service.
    */
   removeAllListeners(): void {
-    (
-      Object.keys(this.listeners) as Array<keyof LedgerTransportEventMap>
-    ).forEach((event) => {
-      this.listeners[event].clear();
-    });
+    (Object.keys(this.listeners) as (keyof LedgerTransportEventMap)[]).forEach(
+      (event) => {
+        this.listeners[event].clear();
+      }
+    );
   }
 
   /**

@@ -206,7 +206,7 @@ class RemoteSignerServiceClass {
   createPairingPayload(
     deviceId: string,
     deviceName: string | undefined,
-    accounts: Array<{ address: string; publicKey: string; label?: string }>
+    accounts: { address: string; publicKey: string; label?: string }[]
   ): RemoteSignerPairing {
     return {
       v: REMOTE_SIGNER_CONSTANTS.PROTOCOL_VERSION,

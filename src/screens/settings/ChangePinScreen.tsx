@@ -14,8 +14,7 @@ import { AccountSecureStorage } from '@/services/secure';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useThemeColors } from '@/hooks/useThemedStyles';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemeColors, useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 

@@ -789,7 +789,7 @@ export default function SwapScreen() {
       const assetDetailParams = resolveAssetDetailParams();
 
       navigation.dispatch((state) => {
-        const routes: Array<{ name: string; params?: Record<string, any> }> = [
+        const routes: { name: string; params?: Record<string, any> }[] = [
           { name: 'HomeMain' },
         ];
 

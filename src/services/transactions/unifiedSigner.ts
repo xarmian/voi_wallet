@@ -141,7 +141,7 @@ export interface UnifiedTransactionRequest {
     foreignApps?: number[];
     foreignAssets?: number[];
     accounts?: string[];
-    boxes?: Array<{ appIndex: number; name: Uint8Array }>;
+    boxes?: { appIndex: number; name: Uint8Array }[];
     fee?: number;
     note?: string;
     networkId?: NetworkId;

@@ -18,9 +18,8 @@ import { AppStorage } from '@/utils/storage';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 
 type SecuritySettingsScreenNavigationProp =

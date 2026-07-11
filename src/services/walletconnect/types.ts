@@ -25,9 +25,9 @@ export interface WalletTransaction {
   signers?: string[];
   authAddr?: string;
   msig?: {
-    subsig: Array<{
+    subsig: {
       pk: string;
-    }>;
+    }[];
     thr: number;
     v: number;
   };

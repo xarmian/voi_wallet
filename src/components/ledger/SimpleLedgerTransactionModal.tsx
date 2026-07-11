@@ -9,9 +9,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useThemeColors } from '@/hooks/useThemedStyles';
 import {
   SimpleLedgerAuthController,
   SimpleLedgerAuthStateData,

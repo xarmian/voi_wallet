@@ -122,10 +122,10 @@ export interface QuoteRequest {
  */
 export interface UnwrapRequest {
   address: string;
-  items: Array<{
+  items: {
     wrappedTokenId: number;
     amount: string;
-  }>;
+  }[];
 }
 
 /**
