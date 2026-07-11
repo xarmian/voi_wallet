@@ -81,12 +81,11 @@ describe('getSignificantDecimals (magnitude -> decimal-place count)', () => {
     expect(getSignificantDecimals(0.0000012345, 6, 2)).toBe(6);
   });
 
-  // KNOWN BUG (tracked): maxDecimals is documented "Maximum decimals to show",
-  // but the fixed magnitude bands (>=1000 -> 2, [1,1000) -> 4, [0.01,1) -> 6)
-  // never clamp to it — only the small-value branch does. So a maxDecimals below
-  // a band default is ignored. Not triggered in-app today (callers pass
-  // maxDecimals >= the band defaults). it.failing asserts the correct clamp.
-  it.failing('clamps the fixed magnitude bands to maxDecimals', () => {
+  // Regression guard (TASK-106): maxDecimals is documented "Maximum decimals to
+  // show", and every fixed magnitude band (>=1000 -> 2, [1,1000) -> 4,
+  // [0.01,1) -> 6) now clamps to it via min(max, max(min, band)), matching the
+  // small-value branch. A maxDecimals below a band default is honored.
+  it('clamps the fixed magnitude bands to maxDecimals', () => {
     expect(getSignificantDecimals(0.123456789, 4, 2)).toBe(4); // min(4, band 6)
     expect(getSignificantDecimals(5, 3, 2)).toBe(3); // min(3, band 4)
   });
@@ -165,16 +164,12 @@ describe('formatNumber (locale-aware, intelligent truncation)', () => {
     expect(formatNumber(Infinity, EN)).toBe('∞');
   });
 
-  // KNOWN BUG (same maxDecimals gap, tracked): downstream, formatNumber does not
-  // cap a medium value to maxDecimals=4. Correct output is "0.1235".
-  it.failing(
-    'caps formatNumber output to maxDecimals for medium magnitudes',
-    () => {
-      expect(formatNumber(0.123456789, { ...EN, maxDecimals: 4 })).toBe(
-        '0.1235'
-      );
-    }
-  );
+  // Regression guard (TASK-106): downstream, formatNumber passes maxDecimals
+  // through to getSignificantDecimals, so a medium value caps to maxDecimals=4.
+  // Correct output is "0.1235".
+  it('caps formatNumber output to maxDecimals for medium magnitudes', () => {
+    expect(formatNumber(0.123456789, { ...EN, maxDecimals: 4 })).toBe('0.1235');
+  });
 });
 
 describe('formatTokenBalance (base units -> display units)', () => {

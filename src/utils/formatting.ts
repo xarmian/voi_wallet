@@ -93,16 +93,16 @@ export const getSignificantDecimals = (
 
   // Large values: use fewer decimals
   if (absValue >= 1000) {
-    return Math.max(minDecimals, 2);
+    return Math.min(maxDecimals, Math.max(minDecimals, 2));
   }
 
   if (absValue >= 1) {
-    return Math.max(minDecimals, 4);
+    return Math.min(maxDecimals, Math.max(minDecimals, 4));
   }
 
   // Medium values: moderate decimals
   if (absValue >= 0.01) {
-    return Math.max(minDecimals, 6);
+    return Math.min(maxDecimals, Math.max(minDecimals, 6));
   }
 
   // Small values: preserve significant digits
