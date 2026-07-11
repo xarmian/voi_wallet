@@ -22,6 +22,7 @@ import {
 } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '@/navigation/AppNavigator';
+import { AccountType } from '@/types/wallet';
 import { useWalletStore } from '@/store/walletStore';
 import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
@@ -270,6 +271,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       } else {
         // For adding additional accounts, import directly
         await importAccount({
+          type: AccountType.STANDARD,
           mnemonic,
           label:
             normalizedLabel ||

@@ -11,6 +11,7 @@ import {
 } from '@/services/walletconnect';
 import {
   WalletAccount,
+  AccountMetadata,
   AccountType,
   LedgerAccountError,
   LedgerDeviceNotConnectedError,
@@ -96,7 +97,14 @@ export type UnifiedTransactionType =
  */
 export interface UnifiedTransactionRequest {
   type: UnifiedTransactionType;
-  account: WalletAccount;
+  /**
+   * Signing account. Accepts the full `AccountMetadata` (the real runtime shape
+   * passed by the in-app confirmation screens, which carries `type`/`authAddress`
+   * for correct signer selection) as well as the legacy `WalletAccount` still
+   * supplied by a couple of callers (AppCall/Keyreg confirm screens). The union
+   * is behavior-preserving and keeps every existing caller type-safe.
+   */
+  account: AccountMetadata | WalletAccount;
   pin?: string;
 
   // For standard transfers (VOI/ASA/ARC200)

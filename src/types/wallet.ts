@@ -241,6 +241,13 @@ export interface LedgerSigningInfo {
   requiresConnection: boolean;
   transportType?: LedgerTransportMedium;
   lastDeviceConnection?: string;
+  /**
+   * Address whose signature is attached to the on-device signing request. Equals
+   * the Ledger account's own address; only affects the post-device `sgnr`
+   * attachment used for rekeyed accounts. Optional because not every
+   * `getLedgerSigningInfo` producer populates it (behavior-preserving default).
+   */
+  signerAddress?: string;
 }
 
 export interface AddWatchAccountRequest {

@@ -67,8 +67,9 @@ export default function RekeyAccountScreen() {
   const loadAccountBalance = useWalletStore(
     (state) => state.loadAccountBalance
   );
-  const [selectedNetworkId, setSelectedNetworkId] =
-    useState<NetworkId>('voi-mainnet');
+  const [selectedNetworkId, setSelectedNetworkId] = useState<NetworkId>(
+    NetworkId.VOI_MAINNET
+  );
   const [rekeyFlow, setRekeyFlow] = useState<RekeyFlow>('standard');
   const [selectedStandardAccount, setSelectedStandardAccount] =
     useState<StandardAccountMetadata | null>(null);
