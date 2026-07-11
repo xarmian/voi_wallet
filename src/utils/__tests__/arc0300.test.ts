@@ -223,15 +223,43 @@ describe('arc0300', () => {
       });
     });
 
-    // KNOWN BUG (tracked): `privatekey=` carries no key material, so the URI is
-    // malformed and the correct result is null. The parser only checks
-    // privateKeys.length > 0, so an empty string yields a 'standard' entry with
-    // an empty key. it.failing asserts the CORRECT behavior — it passes while
-    // the bug exists and flips to failing (remove `.failing`) once it's fixed.
-    it.failing('rejects an empty private-key value', () => {
+    // FIXED (TASK-104): `privatekey=` carries no key material, so the URI is
+    // malformed and the correct result is null. The parser now filters out
+    // empty/whitespace private-key values before the length check, so an empty
+    // string no longer yields a bogus 'standard' entry — it falls through to
+    // the watch/null path.
+    it('rejects an empty private-key value', () => {
       expect(
         parseArc0300AccountImportUri('avm://account/import?privatekey=')
       ).toBeNull();
+    });
+
+    it('rejects a whitespace-only private-key value', () => {
+      expect(
+        parseArc0300AccountImportUri('avm://account/import?privatekey=%20')
+      ).toBeNull();
+    });
+
+    it('drops a blank key without misaligning the remaining key/name pairs', () => {
+      // A blank first key must not shift the valid second key onto the wrong
+      // label: it should be dropped, and the valid key keeps its own name.
+      const parsed = parseArc0300AccountImportUri(
+        'avm://account/import?privatekey=%20&name=Decoy&privatekey=K2&name=Actual'
+      );
+      expect(parsed).not.toBeNull();
+      expect(parsed!.kind).toBe('standard');
+      expect(parsed!.entries).toEqual([
+        { privateKeyBase64: 'K2', name: 'Actual' },
+      ]);
+    });
+
+    it('falls through to a watch import when the only key is blank but an address is present', () => {
+      const parsed = parseArc0300AccountImportUri(
+        'avm://account/import?privatekey=%20&address=ADDR'
+      );
+      expect(parsed).not.toBeNull();
+      expect(parsed!.kind).toBe('watch');
+      expect(parsed!.entries).toEqual([{ address: 'ADDR' }]);
     });
   });
 
