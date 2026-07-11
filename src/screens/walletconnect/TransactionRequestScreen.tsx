@@ -26,6 +26,7 @@ import {
   AccountMetadata,
   AccountType,
   LedgerAccountMetadata,
+  WalletAccount,
 } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
@@ -271,7 +272,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
 
           navigation.replace('UniversalTransactionSigning', {
             transactions: txns.map((wtxn) => wtxn.txn),
-            account: signingAccount,
+            // Nav param is typed WalletAccount (legacy); the screen coerces it back
+            // to AccountMetadata at runtime. Matches the existing cast pattern used
+            // by the other callers of this route (e.g. SwapScreen).
+            account: signingAccount as unknown as WalletAccount,
             chainId: effectiveChainId,
             title: 'WalletConnect Request',
             callbackId,

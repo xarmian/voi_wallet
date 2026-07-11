@@ -677,7 +677,7 @@ export class TransactionService {
 
   static async sendTransaction(
     params: TransactionParams,
-    account: WalletAccount,
+    account: Pick<WalletAccount, 'address' | 'type'>,
     pin?: string,
     callbacks?: SignProgressCallbacks
   ): Promise<{ txId: string; confirmed: boolean }> {
@@ -750,7 +750,7 @@ export class TransactionService {
 
   static async validateTransaction(
     params: TransactionParams,
-    account: WalletAccount
+    account: Pick<WalletAccount, 'address' | 'type'>
   ): Promise<string[]> {
     const errors: string[] = [];
 
@@ -1065,7 +1065,7 @@ export class TransactionService {
 
   private static async appendSigningValidation(
     errors: string[],
-    account: WalletAccount,
+    account: Pick<WalletAccount, 'address' | 'type'>,
     networkId?: NetworkId
   ): Promise<void> {
     try {

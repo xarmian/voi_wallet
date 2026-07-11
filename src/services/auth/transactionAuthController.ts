@@ -119,6 +119,9 @@ export class TransactionAuthController {
   private currentState: TransactionAuthState_Interface;
   private currentRequest: UnifiedTransactionRequest | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;
+  // Tracks the device currently being connected during a Ledger flow; cleared on
+  // reset(). Declared so the reset assignment type-checks.
+  private connectingDeviceId: string | null = null;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private ledgerCancelRequested: boolean = false;
   private cancelledFlowGeneration: number = 0;
@@ -530,7 +533,7 @@ export class TransactionAuthController {
    * Determine what type of authentication is required
    */
   private async determineAuthRequirements(
-    account: WalletAccount
+    account: Pick<WalletAccount, 'address' | 'type'>
   ): Promise<void> {
     try {
       // Check if biometric authentication is available and enabled

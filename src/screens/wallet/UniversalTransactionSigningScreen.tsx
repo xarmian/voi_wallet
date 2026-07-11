@@ -71,7 +71,6 @@ export default function UniversalTransactionSigningScreen({
 }: Props) {
   const {
     transactions,
-    account,
     onSuccess: directOnSuccess,
     onReject: directOnReject,
     callbackId,
@@ -79,6 +78,12 @@ export default function UniversalTransactionSigningScreen({
     networkId,
     chainId,
   } = route.params;
+  // The route param is typed `WalletAccount` (legacy), but callers always pass a
+  // full `AccountMetadata` at runtime (see SwapScreen/Claim screens which cast the
+  // other direction). Coerce to the real shape so display fields (color/label) and
+  // the unified request account (which needs `type`/`authAddress` for signer
+  // selection) are correctly typed. Behavior-preserving: same runtime object.
+  const account = route.params.account as unknown as AccountMetadata;
 
   // Get callbacks from registry if callbackId provided, otherwise use direct callbacks
   const registryCallbacks = getNavigationCallbacks(callbackId);
@@ -119,10 +124,14 @@ export default function UniversalTransactionSigningScreen({
         networkCurrency: getNetworkCurrencyByChainId(chainId),
       };
     }
-    if (networkId === 'algorand-mainnet' || networkId === 'algorand-testnet') {
+    // Compare against the raw network id string. NetworkId currently only defines
+    // the *-mainnet members, so the testnet arms are inert today; the string
+    // widening keeps them without a "no overlap" type error and is future-proof.
+    const netId = networkId as string | undefined;
+    if (netId === 'algorand-mainnet' || netId === 'algorand-testnet') {
       return { networkName: 'Algorand', networkCurrency: 'ALGO' };
     }
-    if (networkId === 'voi-mainnet' || networkId === 'voi-testnet') {
+    if (netId === 'voi-mainnet' || netId === 'voi-testnet') {
       return { networkName: 'Voi Network', networkCurrency: 'VOI' };
     }
     return { networkName: 'Unknown Network', networkCurrency: 'VOI' };

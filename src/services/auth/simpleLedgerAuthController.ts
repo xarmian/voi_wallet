@@ -5,6 +5,7 @@ import {
 } from '@/services/transactions/unifiedSigner';
 import {
   simpleLedgerSigner,
+  SimpleLedgerSigner,
   SimpleLedgerSigningCallbacks,
 } from '@/services/ledger/simpleLedgerSigner';
 import {
@@ -235,7 +236,7 @@ export class SimpleLedgerAuthController {
           );
 
           requests.push(
-            simpleLedgerSigner.constructor.createSigningRequest(
+            SimpleLedgerSigner.createSigningRequest(
               txn,
               this.ledgerSigningInfo.derivationIndex,
               this.ledgerSigningInfo.signerAddress
@@ -253,7 +254,7 @@ export class SimpleLedgerAuthController {
           );
 
           requests.push(
-            simpleLedgerSigner.constructor.createSigningRequest(
+            SimpleLedgerSigner.createSigningRequest(
               rekeyTxn,
               this.ledgerSigningInfo.derivationIndex,
               this.ledgerSigningInfo.signerAddress
@@ -270,7 +271,7 @@ export class SimpleLedgerAuthController {
             const txnBytes = Buffer.from(wtxn.txn, 'base64');
 
             requests.push(
-              simpleLedgerSigner.constructor.createSigningRequest(
+              SimpleLedgerSigner.createSigningRequest(
                 txnBytes,
                 this.ledgerSigningInfo.derivationIndex,
                 this.ledgerSigningInfo.signerAddress

@@ -25,7 +25,7 @@ import {
 } from '@/services/transactions/unifiedSigner';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
-import { WalletAccount } from '@/types/wallet';
+import { AccountMetadata } from '@/types/wallet';
 import { NFTToken } from '@/types/nft';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
@@ -60,7 +60,7 @@ interface TransactionConfirmationParams {
   assetDecimals?: number;
   note?: string;
   estimatedFee: number;
-  fromAccount: WalletAccount;
+  fromAccount: AccountMetadata;
   nftToken?: NFTToken;
   networkId?: string;
   assetImageUrl?: string;
@@ -71,7 +71,10 @@ export default function TransactionConfirmationScreen() {
   const route = useRoute<TransactionConfirmationScreenRouteProp>();
   const navigation =
     useNavigation<TransactionConfirmationScreenNavigationProp>();
-  const params = route.params as TransactionConfirmationParams;
+  // The local param shape intentionally diverges from the registered route type
+  // (extra display fields, and `fromAccount` typed as the real `AccountMetadata`
+  // rather than the legacy `WalletAccount`), so assert through `unknown`.
+  const params = route.params as unknown as TransactionConfirmationParams;
   const styles = useThemedStyles(createStyles);
   const currentNetwork = useCurrentNetwork();
 
@@ -176,7 +179,7 @@ export default function TransactionConfirmationScreen() {
           // Check if this asset is in the same mapping
           if (asset.mappingId === params.mappingId && asset.imageUrl) {
             console.log(
-              `[TransactionConfirmation] Using fallback image from ${asset.symbol} on ${asset.networkId}`
+              `[TransactionConfirmation] Using fallback image from ${asset.symbol} on ${asset.primaryNetwork}`
             );
             setFallbackImageUrl(asset.imageUrl);
             return;
@@ -283,8 +286,12 @@ export default function TransactionConfirmationScreen() {
     setCurrentRequest(null);
 
     if (success && result?.transactionId) {
-      // Replace this screen with result to keep stack cleaner
-      navigation.replace('TransactionResult', {
+      // Replace this screen with result to keep stack cleaner.
+      // Built as an intermediate object so the extra display fields carried for
+      // the result screen (assetType/contractId/tokenId/homeRoute, which the
+      // registered route type omits) are structurally assignable rather than
+      // tripping the fresh-literal excess-property check.
+      const successParams = {
         transactionId: result.transactionId,
         recipient: params.recipient,
         recipientName: getDisplayName(),
@@ -301,14 +308,15 @@ export default function TransactionConfirmationScreen() {
         // result screen treats as confirmed success (backward-compatible).
         confirmed: result?.confirmed,
         homeRoute: params.assetType === 'arc72' ? 'NFTMain' : 'HomeMain',
-        networkId: params.networkId,
-      });
+        networkId: params.networkId as NetworkId | undefined,
+      };
+      navigation.replace('TransactionResult', successParams);
     } else {
       // Replace this screen with error result
       const errorMessage =
         result instanceof Error ? result.message : 'Transaction failed';
 
-      navigation.replace('TransactionResult', {
+      const errorParams = {
         recipient: params.recipient,
         recipientName: getDisplayName(),
         amount: params.amount,
@@ -321,8 +329,9 @@ export default function TransactionConfirmationScreen() {
         isSuccess: false,
         errorMessage,
         homeRoute: params.assetType === 'arc72' ? 'NFTMain' : 'HomeMain',
-        networkId: params.networkId,
-      });
+        networkId: params.networkId as NetworkId | undefined,
+      };
+      navigation.replace('TransactionResult', errorParams);
     }
   };
 
