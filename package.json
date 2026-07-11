@@ -14,7 +14,9 @@
     "eas-build-pre-install": "node scripts/eas-build-pre-install.js",
     "build:android:dev": "GOOGLE_SERVICES_DEV_JSON_BASE64=$(base64 -i ./google-services-dev.json) eas build --platform android --profile development --local",
     "build:android:preview": "GOOGLE_SERVICES_JSON_BASE64=$(base64 -i ./google-services.json) eas build --platform android --profile preview --local",
-    "build:android:production": "GOOGLE_SERVICES_JSON_BASE64=$(base64 -i ./google-services.json) eas build --platform android --profile production --local"
+    "build:android:production": "GOOGLE_SERVICES_JSON_BASE64=$(base64 -i ./google-services.json) eas build --platform android --profile production --local",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@expo/cli": "^54.0.8",
@@ -88,6 +90,7 @@
   "devDependencies": {
     "@eslint/js": "^9.35.0",
     "@types/crypto-js": "^4.2.2",
+    "@types/jest": "29.5.14",
     "@types/react": "~19.1.0",
     "@typescript-eslint/eslint-plugin": "^8.43.0",
     "@typescript-eslint/parser": "^8.43.0",
@@ -98,6 +101,8 @@
     "eslint-plugin-prettier": "^5.5.4",
     "expo-build-properties": "~1.0.10",
     "globals": "17.7.0",
+    "jest": "~29.7.0",
+    "jest-expo": "~54.0.17",
     "prettier": "^3.6.2",
     "typescript": "~5.9.2"
   },

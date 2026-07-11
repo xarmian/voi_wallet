@@ -44,6 +44,29 @@ module.exports = [
     },
   },
   {
+    // Test files: jest globals, and allow jest.mock() calls above the imports
+    // they hoist over (which otherwise trips import/first).
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/__tests__/**'],
+    languageOptions: {
+      globals: {
+        describe: 'readonly',
+        it: 'readonly',
+        test: 'readonly',
+        expect: 'readonly',
+        beforeEach: 'readonly',
+        afterEach: 'readonly',
+        beforeAll: 'readonly',
+        afterAll: 'readonly',
+        jest: 'readonly',
+      },
+    },
+    rules: {
+      'import/first': 'off',
+      // Tests import default exports (services/stores) to jest.mock them.
+      'import/no-named-as-default': 'off',
+    },
+  },
+  {
     ignores: ['dist/**', 'node_modules/**', '.expo/**', 'android/**', 'ios/**'],
   },
 ];
