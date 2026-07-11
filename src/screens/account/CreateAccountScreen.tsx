@@ -183,7 +183,8 @@ export default function CreateAccountScreen() {
             <View style={styles.infoTextContainer}>
               <Text style={styles.infoTitle}>Unique Recovery Phrase</Text>
               <Text style={styles.infoText}>
-                You'll receive a unique 25-word recovery phrase for this account
+                You&apos;ll receive a unique 25-word recovery phrase for this
+                account
               </Text>
             </View>
           </View>

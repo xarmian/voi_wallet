@@ -121,7 +121,7 @@ export default function OnboardingOptionsModal({
             <Text
               style={[styles.subtitle, { color: theme.colors.textSecondary }]}
             >
-              Choose how you'd like to set up your Voi Wallet
+              Choose how you&apos;d like to set up your Voi Wallet
             </Text>
           </View>
 

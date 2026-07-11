@@ -368,7 +368,7 @@ export default function ChatScreen() {
         <View style={styles.warningBanner}>
           <Ionicons name="warning" size={16} color="white" />
           <Text style={styles.warningText}>
-            {displayName} hasn't enabled encrypted messaging yet
+            {displayName} hasn&apos;t enabled encrypted messaging yet
           </Text>
         </View>
       )}

@@ -628,7 +628,9 @@ export default function UnifiedTransactionAuthModal({
             <View style={styles.stepNumber}>
               <Text style={styles.stepNumberText}>3</Text>
             </View>
-            <Text style={styles.stepText}>Tap "Scan Response" below</Text>
+            <Text style={styles.stepText}>
+              Tap &quot;Scan Response&quot; below
+            </Text>
           </View>
         </View>
       </View>

@@ -524,7 +524,7 @@ export default function MessagesInboxScreen() {
         <Text style={styles.emptyTitle}>Ledger Not Supported</Text>
         <Text style={styles.emptyText}>
           Encrypted messaging requires signing a challenge message, which the
-          Ledger Algorand app doesn't support. Please switch to a standard
+          Ledger Algorand app doesn&apos;t support. Please switch to a standard
           account to use messaging.
         </Text>
       </View>

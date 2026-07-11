@@ -344,8 +344,8 @@ export default function SecuritySettingsScreen() {
         <View style={styles.noticeContainer}>
           <Text style={styles.noticeTitle}>Security Notice</Text>
           <Text style={styles.noticeText}>
-            Auto-lock helps protect your wallet when you're not actively using
-            the app. The timeout is based on user activity - navigation,
+            Auto-lock helps protect your wallet when you&apos;re not actively
+            using the app. The timeout is based on user activity - navigation,
             scrolling, and tapping will reset the timer.
           </Text>
           {currentTimeout === 'never' && (

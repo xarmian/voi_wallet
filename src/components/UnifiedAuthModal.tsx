@@ -476,7 +476,7 @@ export default function UnifiedAuthModal({
                 Authentication Successful
               </Text>
               <Text style={styles.confirmationMessage}>
-                Tap "Confirm" to proceed with the transaction
+                Tap &quot;Confirm&quot; to proceed with the transaction
               </Text>
             </View>
           ) : (

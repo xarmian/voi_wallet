@@ -287,8 +287,8 @@ export function TransferToAirgapFlow({
                   style={[styles.warningText, { color: theme.colors.warning }]}
                 >
                   For maximum security, we recommend creating a new account on
-                  your airgap device while it's in airplane mode. This feature
-                  is provided for convenience only.
+                  your airgap device while it&apos;s in airplane mode. This
+                  feature is provided for convenience only.
                 </Text>
               </View>
 
@@ -457,7 +457,7 @@ export function TransferToAirgapFlow({
               <Text
                 style={[styles.instructionStep, { color: theme.colors.text }]}
               >
-                2. Tap "Import from Online Wallet"
+                2. Tap &quot;Import from Online Wallet&quot;
               </Text>
               <Text
                 style={[styles.instructionStep, { color: theme.colors.text }]}

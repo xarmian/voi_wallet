@@ -110,5 +110,6 @@ declare namespace chrome {
   }
 }
 
-// Make chrome available globally
+// Make chrome available globally.
+// eslint-disable-next-line no-var -- ambient global: `declare var` is the correct idiom for a runtime-provided global (as in lib.dom.d.ts); let/const would change the declaration semantics.
 declare var chrome: typeof chrome;
