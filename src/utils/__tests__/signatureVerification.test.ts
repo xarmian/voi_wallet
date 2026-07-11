@@ -237,15 +237,12 @@ describe('verifySignedTransaction', () => {
     expect(result.error).toBeDefined();
   });
 
-  // KNOWN GAP (flagged for human security review — signing path): the function's
-  // inline docs say this verification flow expects a SELF-payment (sender ===
-  // receiver === expectedSignerAddress) to prove the airgap device controls the
-  // address, but the code only checks the sender. A payment A->B signed by A
-  // (expected signer A) is currently ACCEPTED. it.failing asserts the CORRECT
-  // per-doc behavior (reject non-self-payments) — it passes while the gap exists
-  // and flips red once a receiver===sender check is added. Whether to enforce
-  // the stricter invariant is a human security decision.
-  it.failing('rejects a non-self-payment (self-payment invariant)', () => {
+  // ENFORCED (HT-101 Option A): the verification flow expects a SELF-payment
+  // (sender === receiver === expectedSignerAddress) to prove the airgap device
+  // controls the address. A payment A->B signed by A (expected signer A) must be
+  // rejected because it is not the self-payment we asked for. This asserts the
+  // per-doc behavior now that verifySignedTransaction enforces receiver===sender.
+  it('rejects a non-self-payment (self-payment invariant)', () => {
     const a = algosdk.generateAccount();
     const b = algosdk.generateAccount();
     const senderAddr = addrOf(a);
