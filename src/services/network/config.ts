@@ -30,6 +30,10 @@ export const NETWORK_CONFIGURATIONS: Record<NetworkId, NetworkConfiguration> = {
     // WalletConnect configuration
     chainId: 'algorand:r20fSQI8gWe_kFZziNonSPCXLwcQmH_n',
 
+    // Chain identity (verified against live nodes)
+    genesisId: 'voimain-v1.0',
+    genesisHash: 'r20fSQI8gWe/kFZziNonSPCXLwcQmH/nxROvnnueWOk=',
+
     // Available features
     features: {
       mimir: true,
@@ -66,6 +70,10 @@ export const NETWORK_CONFIGURATIONS: Record<NetworkId, NetworkConfiguration> = {
 
     // WalletConnect configuration
     chainId: 'algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k',
+
+    // Chain identity (verified against live nodes)
+    genesisId: 'mainnet-v1.0',
+    genesisHash: 'wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=',
 
     // Limited features compared to Voi
     features: {
