@@ -928,7 +928,7 @@ export class TransactionService {
                   .do();
                 const assetName =
                   assetInfo.params.name ||
-                  assetInfo.params['unit-name'] ||
+                  assetInfo.params.unitName ||
                   `Asset ${params.assetId}`;
                 errors.push(
                   `Recipient must opt-in to receive ${assetName} (Asset ID: ${params.assetId}). ` +
