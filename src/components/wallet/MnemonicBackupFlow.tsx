@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -41,6 +41,16 @@ export default function MnemonicBackupFlow({
   const { theme } = useTheme();
 
   const mnemonicWords = mnemonic.split(' ');
+
+  // Shuffle the verification word bank ONCE per mnemonic. The shuffle uses
+  // Math.random() (impure), so it must be explicitly stabilized — otherwise it
+  // re-runs on every render and the word buttons jump around each time the user
+  // taps one (setSelectedWords triggers a re-render). Keyed on the stable
+  // `mnemonic` string, not the per-render mnemonicWords array.
+  const shuffledWords = useMemo(
+    () => mnemonic.split(' ').sort(() => Math.random() - 0.5),
+    [mnemonic]
+  );
 
   const handleCopy = async () => {
     try {
@@ -114,9 +124,8 @@ export default function MnemonicBackupFlow({
   };
 
   if (isVerificationStep) {
-    // Verification step UI
-    const shuffledWords = [...mnemonicWords].sort(() => Math.random() - 0.5);
-
+    // Verification step UI (shuffledWords is memoized above so it stays stable
+    // as the user taps words)
     return (
       <SafeAreaView
         style={[styles.container, { backgroundColor: theme.colors.background }]}

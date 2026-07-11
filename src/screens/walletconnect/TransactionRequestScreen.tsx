@@ -212,7 +212,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         if (effectiveChainId) {
           setNetworkName(getNetworkNameByChainId(effectiveChainId));
           setNetworkCurrency(getNetworkCurrencyByChainId(effectiveChainId));
-          eventParams.chainId = effectiveChainId;
+          // effectiveChainId is passed explicitly to UniversalTransactionSigning
+          // below (navigation param); do NOT mutate the incoming WalletConnect
+          // request's params object in place (Rules of React + shared-object safety).
         }
 
         // Navigate to UniversalTransactionSigning screen
