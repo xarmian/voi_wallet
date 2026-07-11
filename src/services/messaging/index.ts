@@ -167,7 +167,7 @@ export class MessagingService {
       // unconfirmed message shows as pending instead of a premature "confirmed".
       const { txId, confirmed } = await TransactionService.sendTransaction(
         params,
-        account as WalletAccount,
+        account as unknown as WalletAccount,
         pin
       );
 
@@ -384,22 +384,19 @@ export class MessagingService {
     const response = await query.do();
 
     // Filter for transactions between user and friend
-    const allTxns = (response.transactions || []).filter(
-      (txn: Record<string, unknown>) => {
-        const receiver =
-          (txn['payment-transaction'] as Record<string, unknown>)?.receiver ||
-          (txn.paymentTransaction as Record<string, unknown>)?.receiver;
-        return (
-          (txn.sender === userAddress && receiver === friendAddress) ||
-          (txn.sender === friendAddress && receiver === userAddress)
-        );
-      }
-    );
+    const allTxns = (response.transactions || []).filter((txn) => {
+      const receiver = txn.paymentTransaction?.receiver;
+      return (
+        (txn.sender === userAddress && receiver === friendAddress) ||
+        (txn.sender === friendAddress && receiver === userAddress)
+      );
+    });
 
     const messages: Message[] = [];
 
     for (const txn of allTxns) {
       if (!txn.note) continue;
+      if (!txn.id) continue;
 
       const noteBase64 =
         typeof txn.note === 'string'
@@ -628,6 +625,7 @@ export class MessagingService {
 
     for (const txn of response.transactions || []) {
       if (!txn.note) continue;
+      if (!txn.id) continue;
 
       const noteBase64 =
         typeof txn.note === 'string'
@@ -641,12 +639,9 @@ export class MessagingService {
       const direction: MessageDirection =
         txn.sender === userAddress ? 'sent' : 'received';
 
-      let friendAddress: string;
+      let friendAddress: string | undefined;
       if (direction === 'sent') {
-        friendAddress =
-          txn['payment-transaction']?.receiver ||
-          txn.paymentTransaction?.receiver ||
-          txn.receiver;
+        friendAddress = txn.paymentTransaction?.receiver;
       } else {
         friendAddress = txn.sender;
       }
@@ -792,7 +787,7 @@ export class MessagingService {
     // Register on-chain
     return registerMessagingKey(
       messagingKeyPair.publicKey,
-      account as WalletAccount,
+      account as unknown as WalletAccount,
       pin
     );
   }

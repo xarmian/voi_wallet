@@ -226,13 +226,12 @@ async function lookupMessagingKeyViaIndexer(
       if (txn.sender !== address) continue;
 
       // Get receiver from payment transaction
-      const receiver =
-        txn['payment-transaction']?.receiver ||
-        txn.paymentTransaction?.receiver;
+      const receiver = txn.paymentTransaction?.receiver;
       if (receiver !== address) continue;
 
       // Skip transactions without notes
       if (!txn.note) continue;
+      if (!txn.id) continue;
 
       // Get note as base64 string
       const noteBase64 =

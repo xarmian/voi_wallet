@@ -72,26 +72,17 @@ export default function NewMessageScreen() {
     if (!activeAccount) return false;
 
     // Direct Ledger account
-    if (
-      activeAccount.type === AccountType.LEDGER ||
-      activeAccount.type === 'ledger'
-    ) {
+    if (activeAccount.type === AccountType.LEDGER) {
       return true;
     }
 
     // Rekeyed account - check if auth address belongs to a Ledger account
-    if (
-      activeAccount.type === AccountType.REKEYED ||
-      activeAccount.type === 'rekeyed'
-    ) {
+    if (activeAccount.type === AccountType.REKEYED) {
       const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
       const authAccount = allAccounts.find(
         (acc) => acc.address === rekeyedAccount.authAddress
       );
-      if (
-        authAccount?.type === AccountType.LEDGER ||
-        authAccount?.type === 'ledger'
-      ) {
+      if (authAccount?.type === AccountType.LEDGER) {
         return true;
       }
     }
@@ -254,7 +245,7 @@ export default function NewMessageScreen() {
           }));
 
           // Deduplicate
-          const allResults = [...friendResults];
+          const allResults: RecipientOption[] = [...friendResults];
           for (const result of envoiResults) {
             if (!allResults.some((r) => r.address === result.address)) {
               allResults.push(result);
