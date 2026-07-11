@@ -32,7 +32,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 interface AccountListModalProps {
   isVisible: boolean;
   onClose: () => void;
-  onAddAccount: () => void;
+  onAddAccount?: () => void;
   onEditAccount?: (accountId: string) => void;
   onAccountSelect?: (accountId: string) => void;
   /** Only show accounts that can sign (STANDARD, LEDGER) - used in airgap mode */
@@ -188,20 +188,22 @@ export default function AccountListModal({
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
             <Text style={styles.title}>Select Account</Text>
-            <TouchableOpacity
-              style={styles.compactAddButton}
-              onPress={onAddAccount}
-              accessibilityLabel="Add account"
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons
-                name="add"
-                size={18}
-                color={colors.buttonText}
-                style={styles.compactAddIcon}
-              />
-              <Text style={styles.compactAddText}>Add</Text>
-            </TouchableOpacity>
+            {onAddAccount && (
+              <TouchableOpacity
+                style={styles.compactAddButton}
+                onPress={onAddAccount}
+                accessibilityLabel="Add account"
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons
+                  name="add"
+                  size={18}
+                  color={colors.buttonText}
+                  style={styles.compactAddIcon}
+                />
+                <Text style={styles.compactAddText}>Add</Text>
+              </TouchableOpacity>
+            )}
           </View>
           <TouchableOpacity onPress={onClose} style={styles.closeButton}>
             <Ionicons name="close" size={24} color={colors.textMuted} />

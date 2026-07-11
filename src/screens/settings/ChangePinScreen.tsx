@@ -247,8 +247,8 @@ export default function ChangePinScreen() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <UniversalHeader
           title="PIN"
-          showBack
-          onBack={() => navigation.goBack()}
+          showBackButton
+          onBackPress={() => navigation.goBack()}
         />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -261,8 +261,8 @@ export default function ChangePinScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <UniversalHeader
         title={isInitialSetup ? 'Set PIN' : 'Change PIN'}
-        showBack
-        onBack={handleBack}
+        showBackButton
+        onBackPress={handleBack}
       />
 
       <KeyboardAwareScrollView

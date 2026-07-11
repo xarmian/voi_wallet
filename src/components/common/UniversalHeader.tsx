@@ -18,7 +18,7 @@ import { springConfigs, timingConfigs } from '@/utils/animations';
 interface UniversalHeaderProps {
   title: string;
   subtitle?: string;
-  onAccountSelectorPress: () => void;
+  onAccountSelectorPress?: () => void;
   showAccountSelector?: boolean;
   showBackButton?: boolean;
   onBackPress?: () => void;
@@ -133,7 +133,7 @@ export default function UniversalHeader({
         {showAccountSelector && (
           <View style={styles.accountSelectorContainer}>
             <AccountSelector
-              onPress={onAccountSelectorPress}
+              onPress={onAccountSelectorPress ?? (() => {})}
               compact={true}
               showBalance={false}
             />
