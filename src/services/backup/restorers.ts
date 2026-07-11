@@ -201,7 +201,11 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             importedAt: backupAccount.importedAt,
             lastUsed: new Date().toISOString(),
             avatarUrl: backupAccount.avatarUrl,
-            mnemonic: backupAccount.mnemonic,
+            // TASK-111: Never persist the 25-word mnemonic to general storage.
+            // The secret key is passed separately to storeAccount() below
+            // (expo-secure-store); getMnemonic() re-derives the phrase from the
+            // sk on demand, so Show-Recovery-Phrase still works.
+            mnemonic: '',
             derivationPath: backupAccount.derivationPath,
             hasBackup: backupAccount.hasBackup || true, // Restored = backed up
           };
@@ -367,8 +371,11 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
         },
       };
 
-      // Store wallet metadata
-      await storage.setItem(STORAGE_KEYS.WALLET_KEY, JSON.stringify(wallet));
+      // Store wallet metadata.
+      // TASK-111: route through the sanitizing wrapper instead of a raw
+      // storage.setItem so any per-account mnemonic is stripped before
+      // persistence and legacy secure-store copies are cleared.
+      await MultiAccountWalletService.persistRestoredWallet(wallet);
     }
 
     return counts;

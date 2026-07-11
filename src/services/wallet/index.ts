@@ -1358,6 +1358,18 @@ export class MultiAccountWalletService {
     await this.storeValue(this.WALLET_KEY, JSON.stringify(persistencePayload));
   }
 
+  /**
+   * TASK-111: Public wrapper used by the backup/restore flow to persist a
+   * restored wallet through the same sanitizing path as every other write.
+   * Delegates to the private storeWallet(), which strips per-account mnemonics
+   * via sanitizeWalletForPersistence() and clears any legacy secure-store copy.
+   * Restore code MUST use this instead of a raw storage.setItem so a restored
+   * wallet can never leak a mnemonic into general storage.
+   */
+  static async persistRestoredWallet(wallet: Wallet): Promise<void> {
+    await this.storeWallet(wallet);
+  }
+
   private static getDefaultWalletSettings(): WalletSettings {
     return {
       theme: 'system',
