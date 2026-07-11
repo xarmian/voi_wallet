@@ -86,7 +86,7 @@ export interface SessionProposal {
     metadata: WalletConnectMetadata;
   };
   requiredNamespaces: Record<string, ProposalTypes.RequiredNamespace>;
-  optionalNamespaces?: Record<string, ProposalTypes.OptionalNamespace>;
+  optionalNamespaces?: Record<string, ProposalTypes.RequiredNamespace>;
   sessionProperties?: Record<string, string>;
   expiryTimestamp: number;
 }

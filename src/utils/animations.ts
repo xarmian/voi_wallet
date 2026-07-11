@@ -165,7 +165,7 @@ export function useEntranceAnimation(
   const enter = useCallback(() => {
     opacity.value = withTiming(1, {
       ...timingConfigs.normal,
-      duration: timingConfigs.normal.duration + delay,
+      duration: (timingConfigs.normal.duration ?? 0) + delay,
     });
     translateYValue.value = withSpring(0, springConfigs.smooth);
   }, [opacity, translateYValue, delay]);

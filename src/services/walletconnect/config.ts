@@ -11,7 +11,6 @@ const resolveWalletConnectProjectId = (): string => {
 
   const extra = (Constants?.expoConfig?.extra ??
     (Constants as any)?.manifest2?.extra ??
-    Constants?.manifest?.extra ??
     {}) as Record<string, unknown>;
 
   const fromExtra = extra['walletConnectProjectId'];

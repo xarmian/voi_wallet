@@ -26,6 +26,7 @@ import Animated, {
   withDelay,
   interpolate,
   runOnJS,
+  type SharedValue,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -98,7 +99,7 @@ interface FABMenuItemProps {
   item: MenuItem;
   index: number;
   totalItems: number;
-  menuProgress: Animated.SharedValue<number>;
+  menuProgress: SharedValue<number>;
   onPress: () => void;
 }
 

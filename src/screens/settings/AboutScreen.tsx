@@ -97,10 +97,7 @@ export default function AboutScreen() {
         <View style={styles.appInfoSection}>
           <Text style={styles.appName}>Voi Wallet</Text>
           <Text style={styles.version}>
-            Version{' '}
-            {Constants.expoConfig?.version ||
-              Constants.manifest?.version ||
-              '1.0.0'}
+            Version {Constants.expoConfig?.version || '1.0.0'}
           </Text>
           <Text style={styles.buildInfo}>
             {updateInfo.type === 'ota'

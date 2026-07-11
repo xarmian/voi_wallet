@@ -336,7 +336,7 @@ const UnifiedLedgerSigningModal: React.FC<UnifiedLedgerSigningModalProps> = ({
   };
 
   const renderActionButtons = () => {
-    const buttons: JSX.Element[] = [];
+    const buttons: React.JSX.Element[] = [];
 
     // Always show cancel button
     buttons.push(

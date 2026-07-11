@@ -231,7 +231,10 @@ export function parseSessionRequest(request: WalletConnectV1SessionRequest): {
 export function validateAlgoSignTxnRequest(
   request: AlgoSignTxnRequest
 ): boolean {
-  if (!Array.isArray(request.params) || request.params.length === 0) {
+  if (
+    !Array.isArray(request.params) ||
+    (request.params as unknown[]).length === 0
+  ) {
     return false;
   }
 

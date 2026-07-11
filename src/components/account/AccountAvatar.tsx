@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Text, Image } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  Text,
+  Image,
+  StyleProp,
+  ViewStyle,
+} from 'react-native';
 import Svg, { Circle, Rect, Polygon } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import EnvoiService from '@/services/envoi';
@@ -26,6 +33,7 @@ interface AccountAvatarProps {
   fallbackToGenerated?: boolean;
   account?: AccountMetadata; // Optional account metadata for rekey indicators
   showRekeyIndicator?: boolean;
+  style?: StyleProp<ViewStyle>; // Optional style applied to the root container
 }
 
 // Generate deterministic colors from address
@@ -139,6 +147,7 @@ export default function AccountAvatar({
   fallbackToGenerated = true,
   account,
   showRekeyIndicator = true,
+  style,
 }: AccountAvatarProps) {
   const styles = useThemedStyles(createStyles);
   const [envoiAvatarUrl, setEnvoiAvatarUrl] = useState<string | null>(null);
@@ -313,7 +322,7 @@ export default function AccountAvatar({
   const rekeyIndicator = getRekeyIndicator();
 
   return (
-    <View style={[styles.container, { width: size, height: size }]}>
+    <View style={[styles.container, { width: size, height: size }, style]}>
       <View
         style={[
           styles.avatar,
