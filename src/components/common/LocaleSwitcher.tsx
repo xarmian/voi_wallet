@@ -29,11 +29,11 @@ interface LocaleItemProps {
   styles: ReturnType<typeof createStyles>;
 }
 
-const LOCALE_OPTIONS: ReadonlyArray<{
+const LOCALE_OPTIONS: readonly {
   label: string;
   value: string | null;
   example: string;
-}> = [
+}[] = [
   { label: 'System Default', value: null, example: '1,234.56' },
   { label: 'English (United States)', value: 'en-US', example: '1,234.56' },
   { label: 'English (United Kingdom)', value: 'en-GB', example: '1,234.56' },

@@ -43,7 +43,7 @@ export const clearAccountSecret = (id: string | undefined): void => {
   accountSecretStore.delete(id);
 };
 
-export const clearAccountSecrets = (ids: Array<string | undefined>): void => {
+export const clearAccountSecrets = (ids: (string | undefined)[]): void => {
   ids.forEach((entry) => clearAccountSecret(entry));
 };
 
@@ -72,12 +72,12 @@ export interface QRAccountData {
     | 'single-mnemonic'
     | 'single-private-key'
     | 'address-list';
-  accounts?: Array<{
+  accounts?: {
     address?: string;
     name?: string;
     mnemonic?: string;
     privateKey?: string;
-  }>;
+  }[];
   mnemonic?: string;
   privateKey?: string;
   addresses?: string[];

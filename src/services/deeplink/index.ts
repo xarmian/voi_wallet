@@ -48,7 +48,7 @@ export interface DeepLinkRoute {
 const showAlert = (
   title: string,
   message: string,
-  buttons?: Array<{ text: string; onPress?: () => void; style?: string }>
+  buttons?: { text: string; onPress?: () => void; style?: string }[]
 ): Promise<boolean> => {
   return new Promise((resolve) => {
     if (Platform.OS === 'web') {

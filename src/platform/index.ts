@@ -14,9 +14,6 @@
  * ```
  */
 
-export * from './types';
-export * from './detection';
-
 import { isMobile, isExtension, getCachedPlatform } from './detection';
 import type {
   CryptoAdapter,
@@ -27,6 +24,9 @@ import type {
   ClipboardAdapter,
   AlertAdapter,
 } from './types';
+
+export * from './types';
+export * from './detection';
 
 // Lazy-loaded adapters to avoid importing platform-specific code on wrong platform
 let _crypto: CryptoAdapter | null = null;

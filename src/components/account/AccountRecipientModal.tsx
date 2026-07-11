@@ -224,9 +224,10 @@ export default function AccountRecipientModal({
   }, [isVisible]);
 
   const isAccountsTab = activeTab === 'accounts';
-  const listData = (
-    isAccountsTab ? filteredAccounts : filteredFriends
-  ) as Array<AccountMetadata | Friend>;
+  const listData = (isAccountsTab ? filteredAccounts : filteredFriends) as (
+    | AccountMetadata
+    | Friend
+  )[];
 
   const renderListItem = useCallback<ListRenderItem<AccountMetadata | Friend>>(
     ({ item }) =>

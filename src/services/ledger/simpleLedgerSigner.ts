@@ -130,7 +130,7 @@ export class SimpleLedgerSigner {
     count: number = 5,
     displayFirst: boolean = false
   ): Promise<
-    Array<{ address: string; publicKey: string; derivationIndex: number }>
+    { address: string; publicKey: string; derivationIndex: number }[]
   > {
     try {
       // Ensure device is connected and ready

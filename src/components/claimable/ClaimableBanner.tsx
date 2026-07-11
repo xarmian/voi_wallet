@@ -2,7 +2,7 @@
  * ClaimableBanner - Banner shown on HomeScreen when claimable tokens are available
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -16,7 +16,6 @@ import Animated, {
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
-import { useEffect } from 'react';
 
 interface ClaimableBannerProps {
   /** Number of claimable tokens */

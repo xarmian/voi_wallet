@@ -34,7 +34,7 @@ export default function CreateAccountScreen() {
         | {
             type?: string;
             index?: number;
-            routes?: Array<{ name: string; params?: unknown }>;
+            routes?: { name: string; params?: unknown }[];
           }
         | undefined;
 
@@ -183,7 +183,8 @@ export default function CreateAccountScreen() {
             <View style={styles.infoTextContainer}>
               <Text style={styles.infoTitle}>Unique Recovery Phrase</Text>
               <Text style={styles.infoText}>
-                You'll receive a unique 25-word recovery phrase for this account
+                You&apos;ll receive a unique 25-word recovery phrase for this
+                account
               </Text>
             </View>
           </View>

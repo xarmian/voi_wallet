@@ -1549,8 +1549,7 @@ export const useWalletStore = create<WalletState>()(
       const updatedAccountStates: Record<string, AccountUIState> = {
         ...accountStates,
       };
-      const rekeyUpdates: Array<{ account: AccountMetadata; balance: any }> =
-        [];
+      const rekeyUpdates: { account: AccountMetadata; balance: any }[] = [];
       let updatedWallet = get().wallet;
 
       // Process all results
@@ -1812,11 +1811,11 @@ export const useWalletStore = create<WalletState>()(
         });
 
         const finalStates = { ...get().accountStates };
-        const metadataUpdates: Array<{
+        const metadataUpdates: {
           accountId: string;
           nextAvatarUrl: string | undefined;
           avatarUpdatedAt?: string;
-        }> = [];
+        }[] = [];
         const accountMetadataMap: Record<string, AccountMetadata> = {};
 
         for (const { id, address } of accountsToLoad) {

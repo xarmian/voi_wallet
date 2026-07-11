@@ -47,7 +47,7 @@ interface ImportResult {
   success: number;
   failed: number;
   skipped: number;
-  errors: Array<{ account: string; error: string }>;
+  errors: { account: string; error: string }[];
 }
 
 export default function AccountImportPreviewScreen({

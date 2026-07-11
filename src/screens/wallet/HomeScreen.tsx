@@ -21,7 +21,7 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import { TransactionInfo } from '@/types/wallet';
+import { TransactionInfo, AssetBalance } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
@@ -56,7 +56,6 @@ import { Theme } from '@/constants/themes';
 import AssetOptInModal from '@/components/assets/AssetOptInModal';
 import AssetFilterModal from '@/components/assets/AssetFilterModal';
 import type { AssetFilterSettings } from '@/components/assets/AssetFilterModal';
-import { AssetBalance } from '@/types/wallet';
 import { MappedAsset } from '@/services/token-mapping/types';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';

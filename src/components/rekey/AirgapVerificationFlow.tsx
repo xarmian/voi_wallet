@@ -315,7 +315,7 @@ export function AirgapVerificationFlow({
               <Text
                 style={[styles.instructionStep, { color: theme.colors.text }]}
               >
-                4. Tap "Scan Signed Response" below
+                4. Tap &quot;Scan Signed Response&quot; below
               </Text>
             </View>
 

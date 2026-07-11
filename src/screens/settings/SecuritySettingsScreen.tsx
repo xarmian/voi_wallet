@@ -18,9 +18,8 @@ import { AppStorage } from '@/utils/storage';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 
 type SecuritySettingsScreenNavigationProp =
@@ -345,8 +344,8 @@ export default function SecuritySettingsScreen() {
         <View style={styles.noticeContainer}>
           <Text style={styles.noticeTitle}>Security Notice</Text>
           <Text style={styles.noticeText}>
-            Auto-lock helps protect your wallet when you're not actively using
-            the app. The timeout is based on user activity - navigation,
+            Auto-lock helps protect your wallet when you&apos;re not actively
+            using the app. The timeout is based on user activity - navigation,
             scrolling, and tapping will reset the timer.
           </Text>
           {currentTimeout === 'never' && (

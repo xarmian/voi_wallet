@@ -45,10 +45,10 @@ export class MultiNetworkBalanceService {
       const results = await Promise.allSettled(balancePromises);
 
       // Extract successful balances
-      const networkBalances: Array<{
+      const networkBalances: {
         networkId: NetworkId;
         balance: AccountBalance;
-      }> = [];
+      }[] = [];
 
       for (const result of results) {
         if (
@@ -88,7 +88,7 @@ export class MultiNetworkBalanceService {
    * Combine balances from multiple networks into a single view
    */
   private static combineBalances(
-    networkBalances: Array<{ networkId: NetworkId; balance: AccountBalance }>,
+    networkBalances: { networkId: NetworkId; balance: AccountBalance }[],
     tokenMappings: TokenMapping[],
     address: string
   ): MultiNetworkBalance {
@@ -147,7 +147,7 @@ export class MultiNetworkBalanceService {
    * into a single display item
    */
   private static combineAssets(
-    networkBalances: Array<{ networkId: NetworkId; balance: AccountBalance }>,
+    networkBalances: { networkId: NetworkId; balance: AccountBalance }[],
     tokenMappings: TokenMapping[]
   ): MappedAsset[] {
     const mappedAssets = new Map<string, MappedAsset>();

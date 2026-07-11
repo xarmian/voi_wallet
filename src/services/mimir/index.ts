@@ -46,10 +46,10 @@ export interface Arc200TokenMetadata {
   verified: number;
   mintRound: number;
   contractId: number;
-  globalState: Array<{
+  globalState: {
     key: string;
     value: any;
-  }>;
+  }[];
   totalSupply: string;
 }
 
@@ -78,11 +78,11 @@ export interface Arc200ApprovalsResponse {
 }
 
 export interface Arc200BalanceResponse {
-  balances: Array<{
+  balances: {
     accountId: string;
     contractId: number;
     balance: string;
-  }>;
+  }[];
   'current-round': number;
 }
 
@@ -531,7 +531,7 @@ export class MimirApiService {
    * More efficient than individual calls when validating multiple approvals
    */
   async batchGetArc200Balances(
-    pairs: Array<{ owner: string; contractId: number }>
+    pairs: { owner: string; contractId: number }[]
   ): Promise<Map<string, string>> {
     const balanceMap = new Map<string, string>();
 

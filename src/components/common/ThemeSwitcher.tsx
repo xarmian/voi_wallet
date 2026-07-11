@@ -32,10 +32,10 @@ interface ThemeItemProps {
   styles: ReturnType<typeof createStyles>;
 }
 
-const THEME_OPTIONS: ReadonlyArray<{
+const THEME_OPTIONS: readonly {
   label: string;
   value: ThemeMode;
-}> = [
+}[] = [
   { label: 'Light', value: 'light' },
   { label: 'Dark', value: 'dark' },
   { label: 'System Default', value: 'system' },

@@ -13,14 +13,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
-
-// Cross-platform vibration helper
-const vibrate = (duration: number) => {
-  if (Platform.OS !== 'web') {
-    const { Vibration } = require('react-native');
-    Vibration.vibrate(duration);
-  }
-};
 import {
   TransactionAuthController,
   TransactionAuthState_Interface,
@@ -34,6 +26,14 @@ import {
   isRemoteSignerResponse,
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
+
+// Cross-platform vibration helper
+const vibrate = (duration: number) => {
+  if (Platform.OS !== 'web') {
+    const { Vibration } = require('react-native');
+    Vibration.vibrate(duration);
+  }
+};
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -628,7 +628,9 @@ export default function UnifiedTransactionAuthModal({
             <View style={styles.stepNumber}>
               <Text style={styles.stepNumberText}>3</Text>
             </View>
-            <Text style={styles.stepText}>Tap "Scan Response" below</Text>
+            <Text style={styles.stepText}>
+              Tap &quot;Scan Response&quot; below
+            </Text>
           </View>
         </View>
       </View>

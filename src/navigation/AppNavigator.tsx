@@ -3,6 +3,7 @@ import {
   NavigationContainer,
   StackActions,
   useFocusEffect,
+  useNavigation,
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -11,7 +12,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { detectPlatform } from '@/platform/detection';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
-import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
@@ -103,6 +103,18 @@ import { TransactionRequestQueue } from '@/services/walletconnect/TransactionReq
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
 import { useUpdates } from 'expo-updates';
 import { useUpdateStore } from '@/store/updateStore';
+
+// Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
+import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
+import AccountInfoScreen from '@/screens/wallet/AccountInfoScreen';
+import AccountSearchScreen from '@/screens/wallet/AccountSearchScreen';
+import FriendsScreen from '@/screens/social/FriendsScreen';
+import AddFriendScreen from '@/screens/social/AddFriendScreen';
+import FriendProfileScreen from '@/screens/social/FriendProfileScreen';
+import MyProfileScreen from '@/screens/social/MyProfileScreen';
+import MessagesInboxScreen from '@/screens/social/MessagesInboxScreen';
+import NewMessageScreen from '@/screens/social/NewMessageScreen';
+import ChatScreen from '@/screens/social/ChatScreen';
 
 export type RootStackParamList = {
   Main: undefined;
@@ -422,18 +434,6 @@ export type AirgapStackParamList = {
     | { deviceId?: string; isOnboarding?: boolean }
     | undefined;
 };
-
-// Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
-import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
-import AccountInfoScreen from '@/screens/wallet/AccountInfoScreen';
-import AccountSearchScreen from '@/screens/wallet/AccountSearchScreen';
-import FriendsScreen from '@/screens/social/FriendsScreen';
-import AddFriendScreen from '@/screens/social/AddFriendScreen';
-import FriendProfileScreen from '@/screens/social/FriendProfileScreen';
-import MyProfileScreen from '@/screens/social/MyProfileScreen';
-import MessagesInboxScreen from '@/screens/social/MessagesInboxScreen';
-import NewMessageScreen from '@/screens/social/NewMessageScreen';
-import ChatScreen from '@/screens/social/ChatScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const WalletStack = createNativeStackNavigator<WalletStackParamList>();

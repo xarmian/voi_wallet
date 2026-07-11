@@ -305,7 +305,7 @@ export default function AccountSearchScreen() {
           />
           <Text style={styles.emptyTitle}>No Results Found</Text>
           <Text style={styles.emptyText}>
-            We couldn't find any accounts matching your search
+            We couldn&apos;t find any accounts matching your search
           </Text>
         </View>
       );

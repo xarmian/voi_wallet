@@ -109,7 +109,7 @@ export default function SignRequestDisplayScreen() {
               <Text style={styles.stepNumberText}>2</Text>
             </View>
             <Text style={styles.stepText}>
-              Tap "Scan Request" and scan this QR code
+              Tap &quot;Scan Request&quot; and scan this QR code
             </Text>
           </View>
           <View style={styles.stepRow}>
@@ -125,7 +125,7 @@ export default function SignRequestDisplayScreen() {
               <Text style={styles.stepNumberText}>4</Text>
             </View>
             <Text style={styles.stepText}>
-              Tap "Scan Response" below to complete
+              Tap &quot;Scan Response&quot; below to complete
             </Text>
           </View>
         </View>

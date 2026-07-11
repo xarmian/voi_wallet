@@ -27,22 +27,6 @@ import {
   EncryptedMessagePayloadV2,
   MessagingKeyPair,
 } from './types';
-
-/**
- * MIMIR messages table row structure
- */
-interface MimirMessage {
-  id: number;
-  sender: string;
-  receiver: string;
-  txid: string;
-  round: number;
-  intra: number;
-  timestamp: number;
-  version: number;
-  note: string;
-  created_at: string;
-}
 import {
   encryptMessageV2,
   decryptMessageV2,
@@ -63,6 +47,22 @@ import {
   isMessagingKeyRegistered,
   getMessagingPublicKey,
 } from './keyRegistry';
+
+/**
+ * MIMIR messages table row structure
+ */
+interface MimirMessage {
+  id: number;
+  sender: string;
+  receiver: string;
+  txid: string;
+  round: number;
+  intra: number;
+  timestamp: number;
+  version: number;
+  note: string;
+  created_at: string;
+}
 
 /**
  * MessagingService handles all messaging operations.

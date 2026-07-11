@@ -114,7 +114,7 @@ export default function AppCallConfirmScreen() {
     }
 
     // Build box references
-    let boxes: Array<{ appIndex: number; name: Uint8Array }> | undefined;
+    let boxes: { appIndex: number; name: Uint8Array }[] | undefined;
     if (params.boxes && params.boxes.length > 0) {
       try {
         boxes = params.boxes.map((box) => ({

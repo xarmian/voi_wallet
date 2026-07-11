@@ -218,9 +218,7 @@ export class NFTService {
   /**
    * Format properties for display
    */
-  static formatProperties(
-    nft: NFTToken
-  ): Array<{ key: string; value: string }> {
+  static formatProperties(nft: NFTToken): { key: string; value: string }[] {
     if (!nft.metadata.properties) {
       return [];
     }

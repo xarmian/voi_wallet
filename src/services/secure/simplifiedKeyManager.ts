@@ -323,13 +323,13 @@ export class SimplifiedKeyManager {
    * Get list of signing accounts (accounts that can sign transactions)
    */
   static async getSigningAccounts(): Promise<
-    Array<{
+    {
       id: string;
       address: string;
       type: AccountType;
       canSign: boolean;
       requiresLedger: boolean;
-    }>
+    }[]
   > {
     try {
       const wallet = await MultiAccountWalletService.getCurrentWallet();

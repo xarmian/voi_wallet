@@ -11,7 +11,7 @@ export default function NetworkFilterToggle() {
   );
   const styles = useThemedStyles(createStyles);
 
-  const filters: Array<{ key: 'all' | 'voi' | 'algorand'; label: string }> = [
+  const filters: { key: 'all' | 'voi' | 'algorand'; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'voi', label: 'Voi' },
     { key: 'algorand', label: 'Algo' },

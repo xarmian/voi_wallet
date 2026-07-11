@@ -310,7 +310,7 @@ export default function SendScreen() {
 
   // State for all available versions of this asset across networks
   const [assetOptions, setAssetOptions] = useState<
-    Array<{
+    {
       networkId: NetworkId;
       assetId: number;
       balance: bigint;
@@ -320,7 +320,7 @@ export default function SendScreen() {
       assetType?: 'asa' | 'arc200' | 'arc72';
       contractId?: number;
       imageUrl?: string;
-    }>
+    }[]
   >([]);
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
 

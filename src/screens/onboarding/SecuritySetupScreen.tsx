@@ -28,8 +28,7 @@ import {
   clearAccountSecrets,
 } from '@/utils/accountQRParser';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useThemeColors } from '@/hooks/useThemedStyles';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemeColors, useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import UniversalHeader from '@/components/common/UniversalHeader';

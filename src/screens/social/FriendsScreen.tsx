@@ -186,7 +186,7 @@ export default function FriendsScreen() {
                 color={theme.colors.primary}
               />
               <Text style={styles.searchExpandText}>
-                Search Envoi for "{searchQuery.trim()}"
+                Search Envoi for &quot;{searchQuery.trim()}&quot;
               </Text>
             </TouchableOpacity>
           )}

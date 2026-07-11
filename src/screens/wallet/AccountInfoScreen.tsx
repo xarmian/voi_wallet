@@ -11,10 +11,9 @@ import {
   Alert,
   Linking,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, RouteProp, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { RouteProp, useRoute } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { PieChart } from 'react-native-chart-kit';
 import { WalletStackParamList } from '@/navigation/AppNavigator';

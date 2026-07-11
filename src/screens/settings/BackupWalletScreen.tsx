@@ -376,7 +376,7 @@ export default function BackupWalletScreen() {
         </GlassCard>
 
         {/* What's Included */}
-        <Text style={styles.sectionTitle}>What's Included</Text>
+        <Text style={styles.sectionTitle}>What&apos;s Included</Text>
         <GlassCard variant="light" style={styles.card}>
           <View style={styles.includeRow}>
             <Ionicons name="wallet" size={20} color={colors.primary} />

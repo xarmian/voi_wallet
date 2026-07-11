@@ -308,7 +308,7 @@ export class Arc200TransactionService {
         fixSigners: true, // Automatically resolve signers for rekeyed accounts
       });
 
-      let boxes: Array<{ appIndex: number; name: Uint8Array }> = [];
+      let boxes: { appIndex: number; name: Uint8Array }[] = [];
 
       try {
         const simulateResponse = await algodClient
@@ -567,7 +567,7 @@ export class Arc200TransactionService {
         fixSigners: true, // Automatically resolve signers for rekeyed accounts
       });
 
-      let boxes: Array<{ appIndex: number; name: Uint8Array }> = [];
+      let boxes: { appIndex: number; name: Uint8Array }[] = [];
 
       try {
         const simulateResponse = await algodClient

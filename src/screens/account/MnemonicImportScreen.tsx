@@ -69,7 +69,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       const state = navigation.getState() as
         | {
             type?: string;
-            routes?: Array<{ name: string; params?: unknown }>;
+            routes?: { name: string; params?: unknown }[];
           }
         | undefined;
 

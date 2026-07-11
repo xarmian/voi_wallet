@@ -131,7 +131,7 @@ const TransactionVerification: React.FC<TransactionVerificationProps> = ({
 
       {/* Prominent amount section */}
       <View style={styles.amountSection}>
-        <Text style={styles.amountLabel}>You're sending</Text>
+        <Text style={styles.amountLabel}>You&apos;re sending</Text>
 
         {renderAssetImage()}
 
