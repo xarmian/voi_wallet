@@ -38,8 +38,8 @@ export class NetworkService {
   private static instances: Map<NetworkId, NetworkService> = new Map();
   private static activeNetworkId: NetworkId = DEFAULT_NETWORK_ID;
   private currentNetworkId: NetworkId;
-  private algodClient: algosdk.Algodv2;
-  private indexerClient: algosdk.Indexer;
+  private algodClient!: algosdk.Algodv2;
+  private indexerClient!: algosdk.Indexer;
   private config: NetworkConfiguration;
   private networkStatus: NetworkStatus;
   private mimirService?: MimirApiService;
@@ -575,7 +575,7 @@ export class NetworkService {
             amount = txn.assetTransferTransaction.amount ?? 0;
             recipient = txn.assetTransferTransaction.receiver ?? sender;
           } else if (txn.txType === 'appl' && txn.applicationTransaction) {
-            applicationId = txn.applicationTransaction.applicationId;
+            applicationId = Number(txn.applicationTransaction.applicationId);
             recipient = applicationId ? `App ${applicationId}` : 'App Call';
           }
 
@@ -1423,7 +1423,7 @@ export class NetworkService {
       const txId =
         (response as { txId?: string }).txId ??
         (response as { txid?: string }).txid ??
-        (response as Record<string, unknown>).txID;
+        (response as unknown as Record<string, unknown>).txID;
 
       if (!txId || typeof txId !== 'string') {
         throw new Error(
@@ -1464,13 +1464,12 @@ export class NetworkService {
           .pendingTransactionInformation(txId)
           .do();
 
-        const confirmedRound =
-          pendingInfo['confirmed-round'] ?? pendingInfo['confirmedRound'];
+        const confirmedRound = pendingInfo.confirmedRound;
         if (confirmedRound && Number(confirmedRound) > 0) {
           return pendingInfo;
         }
 
-        const poolError = pendingInfo['pool-error'] ?? pendingInfo['poolError'];
+        const poolError = pendingInfo.poolError;
         if (typeof poolError === 'string' && poolError.length > 0) {
           throw new Error(`Transaction rejected: ${poolError}`);
         }

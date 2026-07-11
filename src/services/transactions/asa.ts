@@ -29,7 +29,7 @@ export async function buildAsaOptInTransaction(
 
   const networkService = networkId
     ? NetworkService.getInstance(networkId)
-    : NetworkService.getInstance('voi-mainnet');
+    : NetworkService.getInstance(NetworkId.VOI_MAINNET);
 
   const suggestedParams =
     params.suggestedParams || (await networkService.getSuggestedParams());
@@ -56,7 +56,7 @@ export async function buildAsaOptOutTransaction(
 
   const networkService = networkId
     ? NetworkService.getInstance(networkId)
-    : NetworkService.getInstance('voi-mainnet');
+    : NetworkService.getInstance(NetworkId.VOI_MAINNET);
 
   const suggestedParams =
     params.suggestedParams || (await networkService.getSuggestedParams());
@@ -80,7 +80,7 @@ export async function buildAsaOptOutTransaction(
     .accountInformation(from)
     .do();
   const assetHolding = accountInfo.assets?.find((asset) => {
-    const holdingId = Number((asset as any).assetId ?? asset['asset-id']);
+    const holdingId = Number(asset.assetId);
     return holdingId === assetId;
   });
 
@@ -114,7 +114,7 @@ export async function validateAsaOptIn(
   try {
     const networkService = networkId
       ? NetworkService.getInstance(networkId)
-      : NetworkService.getInstance('voi-mainnet');
+      : NetworkService.getInstance(NetworkId.VOI_MAINNET);
 
     // Check if already opted in
     const accountInfo = await networkService
@@ -130,7 +130,7 @@ export async function validateAsaOptIn(
     }
 
     const alreadyOptedIn = accountInfo.assets?.some((asset) => {
-      const holdingId = Number((asset as any).assetId ?? asset['asset-id']);
+      const holdingId = Number(asset.assetId);
       return holdingId === assetId;
     });
 
@@ -163,9 +163,7 @@ export async function validateAsaOptIn(
     };
 
     const currentBalance = normalizeBalanceValue(accountInfo.amount);
-    const minBalance = normalizeBalanceValue(
-      accountInfo['min-balance'] ?? accountInfo.minBalance
-    );
+    const minBalance = normalizeBalanceValue(accountInfo.minBalance);
 
     if (currentBalance === null || minBalance === null) {
       return {
@@ -191,7 +189,7 @@ export async function validateAsaOptIn(
   } catch (error) {
     return {
       valid: false,
-      error: `Failed to validate opt-in: ${error.message}`,
+      error: `Failed to validate opt-in: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
@@ -208,14 +206,14 @@ export async function validateAsaOptOut(
   try {
     const networkService = networkId
       ? NetworkService.getInstance(networkId)
-      : NetworkService.getInstance('voi-mainnet');
+      : NetworkService.getInstance(NetworkId.VOI_MAINNET);
 
     const accountInfo = await networkService
       .getAlgodClient()
       .accountInformation(address)
       .do();
     const assetHolding = accountInfo.assets?.find((asset) => {
-      const holdingId = Number((asset as any).assetId ?? asset['asset-id']);
+      const holdingId = Number(asset.assetId);
       return holdingId === assetId;
     });
 
@@ -239,7 +237,7 @@ export async function validateAsaOptOut(
   } catch (error) {
     return {
       valid: false,
-      error: `Failed to validate opt-out: ${error.message}`,
+      error: `Failed to validate opt-out: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
