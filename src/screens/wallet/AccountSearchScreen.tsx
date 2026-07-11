@@ -15,7 +15,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import algosdk from 'algosdk';
+import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { EnvoiService, EnvoiNameInfo } from '@/services/envoi';
@@ -32,7 +34,8 @@ interface SearchResult {
 
 export default function AccountSearchScreen() {
   const styles = useThemedStyles(createStyles);
-  const navigation = useNavigation();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<WalletStackParamList>>();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -153,7 +156,7 @@ export default function AccountSearchScreen() {
   const handleResultPress = useCallback(
     (result: SearchResult) => {
       // Navigate to the account profile with the selected address
-      navigation.navigate('AccountInfo' as any, { address: result.address });
+      navigation.navigate('AccountInfo', { address: result.address });
     },
     [navigation]
   );

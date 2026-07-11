@@ -15,8 +15,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import {
+  useNavigation,
+  CompositeNavigationProp,
+} from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type {
+  AirgapStackParamList,
+  MainTabParamList,
+} from '@/navigation/AppNavigator';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -42,14 +50,12 @@ import {
 } from '@/store/walletStore';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 
-type AirgapStackParamList = {
-  AirgapHome: undefined;
-  ExportAccounts: undefined;
-  SignRequestScanner: undefined;
-  SettingsMain: undefined;
-};
-
-type NavigationProp = NativeStackNavigationProp<AirgapStackParamList>;
+// AirgapHomeScreen is the AirgapHome route of the Airgap stack, and can also
+// navigate up to the parent tab navigator (e.g. the Settings tab).
+type NavigationProp = CompositeNavigationProp<
+  NativeStackNavigationProp<AirgapStackParamList>,
+  BottomTabNavigationProp<MainTabParamList>
+>;
 
 export default function AirgapHomeScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -103,11 +109,11 @@ export default function AirgapHomeScreen() {
 
   const handleOpenSettings = useCallback(() => {
     // Navigate to settings tab
-    (navigation as any).navigate('Settings', { screen: 'SettingsMain' });
+    navigation.navigate('Settings', { screen: 'SettingsMain' });
   }, [navigation]);
 
   const handleImportFromWallet = useCallback(() => {
-    navigation.navigate('ImportFromOnlineWallet' as any);
+    navigation.navigate('ImportFromOnlineWallet');
   }, [navigation]);
 
   const handleEditAccount = useCallback((accountId: string) => {
@@ -121,16 +127,16 @@ export default function AirgapHomeScreen() {
       // Navigate to appropriate screen based on type
       switch (type) {
         case 'create':
-          (navigation as any).navigate('CreateAccount');
+          navigation.navigate('CreateAccount');
           break;
         case 'import':
-          (navigation as any).navigate('ImportAccount');
+          navigation.navigate('MnemonicImport');
           break;
         case 'ledger':
-          (navigation as any).navigate('LedgerAccountImport');
+          navigation.navigate('LedgerAccountImport');
           break;
         case 'qr':
-          (navigation as any).navigate('QRImportScanner');
+          navigation.navigate('QRAccountImport');
           break;
       }
     },

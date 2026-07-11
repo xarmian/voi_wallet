@@ -15,7 +15,15 @@ import {
   useRoute,
   useNavigation,
   CommonActions,
+  CompositeNavigationProp,
 } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type {
+  WalletStackParamList,
+  MainTabParamList,
+  RootStackParamList,
+} from '@/navigation/AppNavigator';
 import QRCode from 'react-native-qrcode-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
@@ -37,10 +45,20 @@ interface ReceiveScreenRouteParams {
   accountId?: string;
 }
 
+// ReceiveScreen lives in the wallet stack but can also navigate up to the
+// Settings tab (account management) and to root-level import screens.
+type ReceiveScreenNavigationProp = CompositeNavigationProp<
+  NativeStackNavigationProp<WalletStackParamList>,
+  CompositeNavigationProp<
+    BottomTabNavigationProp<MainTabParamList>,
+    NativeStackNavigationProp<RootStackParamList>
+  >
+>;
+
 export default function ReceiveScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const navigation = useNavigation();
+  const navigation = useNavigation<ReceiveScreenNavigationProp>();
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
   const [isAddAccountModalVisible, setIsAddAccountModalVisible] =
     useState(false);
@@ -249,18 +267,15 @@ export default function ReceiveScreen() {
           }}
           onImportLedgerAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('LedgerAccountImport' as never);
+            navigation.navigate('LedgerAccountImport');
           }}
           onImportQRAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('QRAccountImport' as never);
+            navigation.navigate('QRAccountImport');
           }}
           onAddWatchAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate(
-              'Settings' as never,
-              { screen: 'AddWatchAccount' } as never
-            );
+            navigation.navigate('Settings', { screen: 'AddWatchAccount' });
           }}
         />
       </SafeAreaView>

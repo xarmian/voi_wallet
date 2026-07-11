@@ -12,8 +12,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, CommonActions } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import {
+  useNavigation,
+  CommonActions,
+  CompositeNavigationProp,
+} from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type {
+  WalletStackParamList,
+  RootStackParamList,
+} from '@/navigation/AppNavigator';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -93,7 +101,13 @@ export default function HomeScreen() {
   const [isOnboardingModalVisible, setIsOnboardingModalVisible] =
     useState(false);
 
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation =
+    useNavigation<
+      CompositeNavigationProp<
+        NativeStackNavigationProp<WalletStackParamList>,
+        NativeStackNavigationProp<RootStackParamList>
+      >
+    >();
   const { updateActivity } = useAuth();
   const activeAccount = useActiveAccount();
   const currentNetworkConfig = useCurrentNetworkConfig();
@@ -907,7 +921,7 @@ export default function HomeScreen() {
 
   // Navigate to sign request scanner (signer mode)
   const handleScanSigningRequest = useCallback(() => {
-    navigation.navigate('SignRequestScanner' as never);
+    navigation.navigate('SignRequestScanner');
   }, [navigation]);
 
   const handleAccountSelectorPress = () => {
@@ -924,19 +938,19 @@ export default function HomeScreen() {
   };
 
   const handleQRScan = () => {
-    navigation.navigate('QRScanner' as never);
+    navigation.navigate('QRScanner');
   };
 
   const handleSend = () => {
-    navigation.navigate('Send' as never);
+    navigation.navigate('Send');
   };
 
   const handleReceive = () => {
-    navigation.navigate('Receive' as never);
+    navigation.navigate('Receive');
   };
 
   const handleHistory = () => {
-    navigation.navigate('TransactionHistory' as never);
+    navigation.navigate('TransactionHistory');
   };
 
   const handleAddAsset = () => {
@@ -949,7 +963,7 @@ export default function HomeScreen() {
   };
 
   const handleAccountInfo = () => {
-    navigation.navigate('AccountInfo' as never);
+    navigation.navigate('AccountInfo');
   };
 
   const handleOpenAssetFilter = () => {
@@ -1590,11 +1604,11 @@ export default function HomeScreen() {
           }}
           onImportQRAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('QRAccountImport' as never);
+            navigation.navigate('QRAccountImport');
           }}
           onImportLedgerAccount={() => {
             setIsAddAccountModalVisible(false);
-            navigation.navigate('LedgerAccountImport' as never);
+            navigation.navigate('LedgerAccountImport');
           }}
           onAddWatchAccount={() => {
             setIsAddAccountModalVisible(false);
@@ -1630,18 +1644,18 @@ export default function HomeScreen() {
           isVisible={isOnboardingModalVisible}
           onClose={() => setIsOnboardingModalVisible(false)}
           onCreateAccount={() => {
-            navigation.navigate('CreateWallet' as never);
+            navigation.navigate('CreateWallet');
           }}
           onImportAccount={() => {
-            navigation.navigate('MnemonicImport' as never, {
+            navigation.navigate('MnemonicImport', {
               isOnboarding: true,
             });
           }}
           onImportQRAccount={() => {
-            navigation.navigate('QRAccountImport' as never);
+            navigation.navigate('QRAccountImport');
           }}
           onAddWatchAccount={() => {
-            navigation.navigate('AddWatchAccount' as never, {
+            navigation.navigate('AddWatchAccount', {
               isOnboarding: true,
             });
           }}

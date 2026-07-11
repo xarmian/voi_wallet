@@ -14,9 +14,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { NFTToken } from '@/types/nft';
+import { NetworkId } from '@/types/network';
+import { NFTStackParamList } from '@/navigation/AppNavigator';
 import { NFTService } from '@/services/nft';
 import { useTheme } from '@/contexts/ThemeContext';
 
@@ -31,7 +33,8 @@ export default function NFTDetailScreen() {
   const [imageError, setImageError] = useState(false);
   const [isSettingTheme, setIsSettingTheme] = useState(false);
   const route = useRoute();
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<NFTStackParamList>>();
   const { nft } = route.params as NFTDetailRouteParams;
   const { theme, setNFTTheme } = useTheme();
 
@@ -72,13 +75,11 @@ export default function NFTDetailScreen() {
   };
 
   const handleSend = () => {
-    navigation.navigate(
-      'Send' as never,
-      {
-        nftToken: nft,
-        networkId: nft.networkId, // Pass the network ID from the NFT
-      } as never
-    );
+    navigation.navigate('Send', {
+      nftToken: nft,
+      // NFTToken.networkId is a plain string id; the route expects NetworkId.
+      networkId: nft.networkId as NetworkId | undefined,
+    });
   };
 
   const handleSetAsTheme = async () => {
