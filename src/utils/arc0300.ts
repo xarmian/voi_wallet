@@ -79,13 +79,22 @@ export function parseArc0300AccountImportUri(
     }
   }
 
-  if (privateKeys.length > 0) {
+  // Match names to keys by their original query index, then drop entries whose
+  // private key is empty/whitespace-only. Filtering after the index mapping (not
+  // before) preserves key/name alignment for multi-account URIs, so a blank key
+  // cannot shift a later key onto the wrong label. A URI with no usable key
+  // material falls through to the watch/null path below.
+  const standardEntries = privateKeys
+    .map((value, idx) => ({
+      privateKeyBase64: value.trim(),
+      name: names[idx],
+    }))
+    .filter((entry) => entry.privateKeyBase64.length > 0);
+
+  if (standardEntries.length > 0) {
     return {
       kind: 'standard',
-      entries: privateKeys.map((value, idx) => ({
-        privateKeyBase64: value.trim(),
-        name: names[idx],
-      })),
+      entries: standardEntries,
       pagination,
       checksum,
       scheme,
