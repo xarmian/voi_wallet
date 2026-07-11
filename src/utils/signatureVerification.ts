@@ -80,6 +80,29 @@ export function verifySignedTransaction(
       };
     }
 
+    // SECURITY: Enforce the self-payment invariant (receiver === sender).
+    // The verification flow proves the airgap device controls the expected
+    // address by round-tripping a zero-amount SELF-payment. A missing receiver
+    // (i.e. a non-payment transaction) or any receiver other than the sender
+    // means the signed blob is NOT the self-payment we asked for, so we must
+    // reject it even though the sender and signature already checked out.
+    const receiverField = txnAny.to || txnAny.rcv || txnAny.payment?.receiver;
+    const receiverAddress = receiverField?.publicKey
+      ? algosdk.encodeAddress(receiverField.publicKey)
+      : String(receiverField || '');
+
+    if (
+      !receiverAddress ||
+      receiverAddress.toUpperCase() !== senderAddress.toUpperCase()
+    ) {
+      return {
+        valid: false,
+        error: `Transaction is not a self-payment: receiver ${
+          receiverAddress || '(missing)'
+        } does not match sender ${senderAddress}`,
+      };
+    }
+
     // Get the bytes that were signed (TX prefix + encoded transaction)
     const txnBytesToSign = txn.bytesToSign();
 
