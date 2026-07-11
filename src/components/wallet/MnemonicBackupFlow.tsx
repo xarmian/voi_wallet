@@ -65,7 +65,7 @@ export default function MnemonicBackupFlow({
 
   const startVerification = () => {
     // Select 3 random word positions for verification
-    const positions = [];
+    const positions: number[] = [];
     while (positions.length < 3) {
       const randomPos = Math.floor(Math.random() * mnemonicWords.length);
       if (!positions.includes(randomPos)) {
