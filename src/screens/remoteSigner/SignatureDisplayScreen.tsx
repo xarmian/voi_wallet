@@ -148,12 +148,15 @@ export default function SignatureDisplayScreen() {
             );
           }
 
-          // Sign the transaction
-          const signedTxn = txn.signTxn(privateKey);
-          signedTxns.push(signedTxn);
-
-          // Clear private key from memory
-          privateKey.fill(0);
+          try {
+            // Sign the transaction
+            const signedTxn = txn.signTxn(privateKey);
+            signedTxns.push(signedTxn);
+          } finally {
+            // Zero the raw secret key on EVERY path (success OR a signing
+            // error), so it is never left lingering in memory.
+            privateKey.fill(0);
+          }
         }
 
         // Create success response
