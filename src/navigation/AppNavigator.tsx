@@ -10,7 +10,13 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import {
+  View,
+  TouchableOpacity,
+  TouchableOpacityProps,
+  StyleSheet,
+  Platform,
+} from 'react-native';
 import { detectPlatform } from '@/platform/detection';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -795,7 +801,12 @@ function MainTabNavigator() {
                     props.onPress(e);
                   }
                 };
-                return <TouchableOpacity {...props} onPress={handlePress} />;
+                return (
+                  <TouchableOpacity
+                    {...(props as TouchableOpacityProps)}
+                    onPress={handlePress}
+                  />
+                );
               },
               tabBarActiveTintColor: tabIconActive,
               tabBarInactiveTintColor: tabIconInactive,
@@ -899,7 +910,12 @@ function MainTabNavigator() {
                 // Invisible placeholder to reserve space for FABRadialMenu
                 return <View style={styles.centerButtonPlaceholder} />;
               }
-              return <TouchableOpacity {...props} onPress={handlePress} />;
+              return (
+                <TouchableOpacity
+                  {...(props as TouchableOpacityProps)}
+                  onPress={handlePress}
+                />
+              );
             },
             tabBarActiveTintColor: tabIconActive,
             tabBarInactiveTintColor: tabIconInactive,

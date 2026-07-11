@@ -116,7 +116,7 @@ class NotificationService {
       // Only process if we haven't already handled this notification
       if (notificationId !== lastHandledId) {
         const data = lastResponse.notification.request.content
-          .data as NotificationData;
+          .data as unknown as NotificationData;
         if (data && data.type) {
           console.log(
             '[Notifications] Cold start from notification:',
@@ -616,7 +616,7 @@ class NotificationService {
               // Trigger the same navigation as tapping the system notification
               Toast.hide();
               if (this.onNotificationTap && data) {
-                this.onNotificationTap(data as NotificationData);
+                this.onNotificationTap(data as unknown as NotificationData);
               }
             },
           });
@@ -628,7 +628,7 @@ class NotificationService {
     this.responseListener =
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content
-          .data as NotificationData;
+          .data as unknown as NotificationData;
         console.log('Notification tapped:', data);
 
         if (this.onNotificationTap) {

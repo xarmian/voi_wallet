@@ -325,6 +325,3 @@ class RealtimeService {
 
 // Export singleton getter
 export const realtimeService = RealtimeService.getInstance();
-
-// Export types
-export type { RealtimeEventHandlers };

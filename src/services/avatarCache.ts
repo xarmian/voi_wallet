@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import { Directory, File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 
 interface CachedAvatar {
@@ -32,8 +32,12 @@ class AvatarCacheService {
 
     try {
       // Create cache directory
-      this.cacheDirectory = new Directory(Directory.cacheDirectory, 'avatars');
-      await this.cacheDirectory.create();
+      this.cacheDirectory = new Directory(Paths.cache, 'avatars');
+      // SDK 54's Directory.create() throws if the directory already exists
+      // unless `idempotent` is set. Without this, every relaunch after the
+      // first (when the avatars dir already exists) would throw here, skip
+      // loading the persisted cache index, and lose all prior cache hits.
+      this.cacheDirectory.create({ idempotent: true });
 
       // Load cache index from storage
       await this.loadCacheIndex();
@@ -88,7 +92,7 @@ class AvatarCacheService {
           const filename = entry.localUri.split('/').pop();
           if (filename) {
             const file = new File(this.cacheDirectory, filename);
-            if (await file.exists()) {
+            if (file.exists) {
               await file.delete();
             }
           }
@@ -113,7 +117,7 @@ class AvatarCacheService {
     }
   }
 
-  private generateCacheKey(url: string): string {
+  private generateCacheKey(url: string): Promise<string> {
     // Create a hash of the URL for the cache key
     return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, url);
   }
@@ -143,7 +147,7 @@ class AvatarCacheService {
       const filename = cached.localUri.split('/').pop();
       if (filename) {
         const file = new File(this.cacheDirectory, filename);
-        if (!(await file.exists())) {
+        if (!file.exists) {
           await this.removeCachedAvatar(url);
           return null;
         }
@@ -194,7 +198,7 @@ class AvatarCacheService {
       }
 
       const arrayBuffer = await response.arrayBuffer();
-      await file.write(arrayBuffer);
+      await file.write(new Uint8Array(arrayBuffer));
 
       // Store in cache
       const now = Date.now();
@@ -232,7 +236,7 @@ class AvatarCacheService {
           const filename = cached.localUri.split('/').pop();
           if (filename) {
             const file = new File(this.cacheDirectory, filename);
-            if (await file.exists()) {
+            if (file.exists) {
               await file.delete();
             }
           }
@@ -256,7 +260,7 @@ class AvatarCacheService {
   async clearCache(): Promise<void> {
     try {
       // Delete all cached files
-      if (this.cacheDirectory && (await this.cacheDirectory.exists())) {
+      if (this.cacheDirectory && this.cacheDirectory.exists) {
         await this.cacheDirectory.delete();
         await this.cacheDirectory.create();
       }

@@ -395,10 +395,11 @@ export class WalletConnectService extends EventEmitter {
 
       // Otherwise, disconnect v2 session
       const provider = this.client.getProvider();
-      await provider.disconnect({
-        topic,
-        reason: getSdkError('USER_DISCONNECTED'),
-      });
+      // UniversalProvider.disconnect() takes no arguments in this SDK version;
+      // the topic/reason were already ignored at runtime. Disconnecting closes
+      // the provider's active session, and we still remove `topic` from our
+      // local bookkeeping below.
+      await provider.disconnect();
 
       this.activeSessions.delete(topic);
       this.emit('session_disconnected', topic);
@@ -440,7 +441,7 @@ export class WalletConnectService extends EventEmitter {
         namespaces: {
           algorand: {
             accounts: v1SessionData.accounts.map(
-              (addr) => `algorand:${v1SessionData.chainId}:${addr}`
+              (addr: string) => `algorand:${v1SessionData.chainId}:${addr}`
             ),
             methods: ['algo_signTxn'],
             events: [],
@@ -605,8 +606,10 @@ export class WalletConnectService extends EventEmitter {
       const sessions = signClient.session.getAll();
 
       for (const session of sessions) {
-        if (!isSessionExpired(session as WalletConnectSession)) {
-          this.sanitizeAndCacheSession(session as WalletConnectSession);
+        if (!isSessionExpired(session as unknown as WalletConnectSession)) {
+          this.sanitizeAndCacheSession(
+            session as unknown as WalletConnectSession
+          );
         } else {
           // Clean up expired session
           await this.disconnectSession(session.topic).catch(() => {

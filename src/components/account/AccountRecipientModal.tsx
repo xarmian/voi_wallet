@@ -255,7 +255,7 @@ export default function AccountRecipientModal({
       <BottomSheetFlatList<AccountMetadata | Friend>
         data={listData}
         renderItem={renderListItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item: AccountMetadata | Friend) => item.id}
         contentContainerStyle={listContentStyle}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"

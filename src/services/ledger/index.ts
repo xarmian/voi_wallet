@@ -26,7 +26,6 @@ export { SimpleLedgerAuthController } from '../auth/simpleLedgerAuthController';
 // UI Components
 export { default as UnifiedLedgerSigningModal } from '../../components/ledger/UnifiedLedgerSigningModal';
 export { default as SimpleLedgerTransactionModal } from '../../components/ledger/SimpleLedgerTransactionModal';
-export { default as LedgerTestComponent } from '../../components/ledger/LedgerTestComponent';
 
 // Key Management
 export { SimplifiedKeyManager } from '../secure/simplifiedKeyManager';

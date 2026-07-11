@@ -57,8 +57,18 @@ interface ThemedWebViewProps {
     bottom?: number;
   };
   contentInsetAdjustmentBehavior?: string;
-  // Additional props passed to native WebView
-  [key: string]: any;
+  // Additional props passed through to the native WebView.
+  // Declared explicitly (rather than via a `[key: string]: any` index
+  // signature) so that the typed callback props above — notably
+  // `onLoadError` — keep their parameter types at call sites. A string
+  // index signature would widen every attribute's contextual type to
+  // `any`, silently dropping `errorDescription`'s `string` type.
+  setSupportMultipleWindows?: boolean;
+  refreshControl?: React.ReactElement;
+  javaScriptEnabled?: boolean;
+  domStorageEnabled?: boolean;
+  allowsInlineMediaPlayback?: boolean;
+  mediaPlaybackRequiresUserAction?: boolean;
 }
 
 const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(
@@ -177,7 +187,7 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(
       injectJavaScript: (script: string) => {
         if (Platform.OS === 'web') {
           try {
-            iframeRef.current?.contentWindow?.eval(script);
+            (iframeRef.current?.contentWindow as any)?.eval(script);
           } catch (e) {
             // Cross-origin restrictions may prevent this
             console.warn(

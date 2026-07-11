@@ -257,7 +257,7 @@ export default function AccountListModal({
     >
       <BottomSheetFlatList
         data={filteredAccounts}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item: AccountMetadata) => item.id}
         renderItem={renderAccountItem}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={styles.separator} />}

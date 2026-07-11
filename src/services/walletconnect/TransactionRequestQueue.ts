@@ -334,7 +334,7 @@ class TransactionRequestQueueService {
     try {
       const state = await AsyncStorage.getItem(PROCESSING_STATE_KEY);
       this.processingStateCache = state ? JSON.parse(state) : false;
-      return this.processingStateCache;
+      return this.processingStateCache ?? false;
     } catch (error) {
       console.error(
         '[TransactionRequestQueue] Failed to get processing state:',
