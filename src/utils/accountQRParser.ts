@@ -16,29 +16,64 @@ const accountSecretStore = new Map<string, AccountSecret>();
 const generateSecretId = (): string =>
   `account_secret_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
+/**
+ * Stores an account secret in the in-memory map and returns an opaque id.
+ *
+ * Intentionally stores a shallow COPY (`{ ...secret }`) so the caller's object
+ * and the stored object are independent references. These copy semantics are
+ * part of the module contract and are deliberately left unchanged.
+ */
 const storeAccountSecret = (secret: AccountSecret): string => {
   const id = generateSecretId();
   accountSecretStore.set(id, { ...secret });
   return id;
 };
 
-const scrubString = (value?: string): string | undefined => {
-  if (!value) return undefined;
-  return ''.padEnd(value.length, '0');
-};
-
+/**
+ * Returns a stored account secret by id, or `undefined` if none exists.
+ *
+ * IMPORTANT: this returns a shallow COPY (`{ ...secret }`), so mutating or
+ * clearing the returned object does NOT affect the stored entry. Callers MUST
+ * NOT retain the returned object longer than necessary — it holds live secret
+ * strings that {@link clearAccountSecret} cannot reach (it can only drop the
+ * store's own references; see the JS-string-immutability note there). Read it,
+ * use the secret, then drop the reference and call {@link clearAccountSecret}.
+ */
 export const getAccountSecret = (id: string): AccountSecret | undefined => {
   const secret = accountSecretStore.get(id);
   if (!secret) return undefined;
   return { ...secret };
 };
 
+/**
+ * Removes a stored account secret and best-effort releases its in-memory secret
+ * strings so they become garbage-collector-eligible, then deletes the entry.
+ *
+ * SECURITY LIMITATION — READ BEFORE CHANGING: JavaScript strings are IMMUTABLE.
+ * Their backing memory CANNOT be overwritten or zeroed in place, so there is no
+ * portable way to actually wipe a secret's bytes from RAM. (A previous version
+ * assigned an all-'0' string of equal length via a `scrubString` helper; that
+ * only allocated a NEW string and never touched the original secret's memory —
+ * pure theater, so it was removed.) The best achievable mitigation is to DROP
+ * our references (assign `undefined`) so the strings become unreachable and
+ * eligible for garbage collection; the runtime then reclaims them on its own
+ * schedule. This is a GC hint, NOT a guaranteed in-memory wipe.
+ *
+ * Note we operate on the LIVE stored object via `Map.get` (which returns the
+ * stored reference), unlike {@link getAccountSecret} which hands out a COPY.
+ * This can therefore only drop references the store itself holds — any copy a
+ * caller obtained from {@link getAccountSecret} is beyond our reach, so callers
+ * MUST NOT retain that copy and SHOULD call this as soon as the secret has been
+ * consumed. Minimizing secret lifetime is the real defense.
+ */
 export const clearAccountSecret = (id: string | undefined): void => {
   if (!id) return;
   const secret = accountSecretStore.get(id);
   if (secret) {
-    secret.mnemonic = scrubString(secret.mnemonic);
-    secret.privateKey = scrubString(secret.privateKey);
+    // Drop references so the secret strings become GC-eligible. This cannot
+    // zero their memory (JS strings are immutable) — it only releases our hold.
+    secret.mnemonic = undefined;
+    secret.privateKey = undefined;
   }
   accountSecretStore.delete(id);
 };
