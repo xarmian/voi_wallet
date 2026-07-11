@@ -51,7 +51,6 @@ export default function NewMessageScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<RecipientOption[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isValidAddress, setIsValidAddress] = useState(false);
 
   // Experimental feature guard - redirect if messaging is not enabled
   const isMessagingEnabled = useIsMessagingEnabled();
@@ -151,11 +150,9 @@ export default function NewMessageScreen() {
     }
   }, [friendsIsInitialized, friendsInitialize]);
 
-  // Check if input is a valid address
-  useEffect(() => {
-    const trimmedQuery = searchQuery.trim();
-    setIsValidAddress(algosdk.isValidAddress(trimmedQuery));
-  }, [searchQuery]);
+  // Whether the current input is a valid address — derived during render, no
+  // effect/state needed (the compiler flagged the old setState-in-effect).
+  const isValidAddress = algosdk.isValidAddress(searchQuery.trim());
 
   // Auto-search as user types (debounced)
   useEffect(() => {

@@ -18,6 +18,9 @@ export default {
     "icon": "./assets/voi_wallet_logo.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "experiments": {
+      "reactCompiler": true
+    },
     "scheme": "voi",
     "platforms": ["ios", "android"],
     "updates": {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -94,8 +94,6 @@ export default function UniversalTransactionSigningScreen({
   const [decodedTransactions, setDecodedTransactions] = useState<
     algosdk.Transaction[]
   >([]);
-  const [networkName, setNetworkName] = useState<string>('Unknown Network');
-  const [networkCurrency, setNetworkCurrency] = useState<string>('VOI');
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
 
   const { theme } = useTheme();
@@ -111,24 +109,23 @@ export default function UniversalTransactionSigningScreen({
     };
   }, []);
 
-  useEffect(() => {
-    // Set network information from chainId or networkId
+  // Network display info, derived from the (stable) route params. Previously a
+  // setState-in-effect; derived during render so it's correct on first paint
+  // and free of the cascading-render the compiler flagged.
+  const { networkName, networkCurrency } = useMemo(() => {
     if (chainId) {
-      setNetworkName(getNetworkNameByChainId(chainId));
-      setNetworkCurrency(getNetworkCurrencyByChainId(chainId));
-    } else if (networkId) {
-      // Handle networkId (e.g., from SwapScreen)
-      if (
-        networkId === 'algorand-mainnet' ||
-        networkId === 'algorand-testnet'
-      ) {
-        setNetworkName('Algorand');
-        setNetworkCurrency('ALGO');
-      } else if (networkId === 'voi-mainnet' || networkId === 'voi-testnet') {
-        setNetworkName('Voi Network');
-        setNetworkCurrency('VOI');
-      }
+      return {
+        networkName: getNetworkNameByChainId(chainId),
+        networkCurrency: getNetworkCurrencyByChainId(chainId),
+      };
     }
+    if (networkId === 'algorand-mainnet' || networkId === 'algorand-testnet') {
+      return { networkName: 'Algorand', networkCurrency: 'ALGO' };
+    }
+    if (networkId === 'voi-mainnet' || networkId === 'voi-testnet') {
+      return { networkName: 'Voi Network', networkCurrency: 'VOI' };
+    }
+    return { networkName: 'Unknown Network', networkCurrency: 'VOI' };
   }, [chainId, networkId]);
 
   const parseTransactions = () => {

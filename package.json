@@ -91,6 +91,7 @@
     "@types/react": "~19.1.0",
     "@typescript-eslint/eslint-plugin": "^8.43.0",
     "@typescript-eslint/parser": "^8.43.0",
+    "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9.35.0",
     "eslint-config-expo": "57.0.0",
     "eslint-config-prettier": "^10.1.8",
