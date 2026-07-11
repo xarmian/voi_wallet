@@ -38,6 +38,7 @@ import {
 } from '@/utils/arc0300';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { RemoteSignerService } from '@/services/remoteSigner';
+import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { useWalletStore } from '@/store/walletStore';
 import { StandardAccountMetadata, AccountType } from '@/types/wallet';
@@ -51,6 +52,17 @@ type ImportState =
   | 'complete'
   | 'error';
 
+/**
+ * Non-secret projection of the imported account, used purely for display.
+ * Deliberately excludes the 25-word `mnemonic` (and any other secret material)
+ * carried by StandardAccountMetadata so no secret is ever held in React state,
+ * dev tools, or a memory snapshot.
+ */
+type ImportedAccountSummary = {
+  label?: string;
+  address: string;
+};
+
 export default function ImportFromOnlineWalletScreen() {
   const navigation = useNavigation<any>();
   const { theme } = useTheme();
@@ -61,7 +73,7 @@ export default function ImportFromOnlineWalletScreen() {
   const [state, setState] = useState<ImportState>('disclaimer');
   const [error, setError] = useState<string | null>(null);
   const [importedAccount, setImportedAccount] =
-    useState<StandardAccountMetadata | null>(null);
+    useState<ImportedAccountSummary | null>(null);
   const [confirmationQrData, setConfirmationQrData] = useState<string | null>(
     null
   );
@@ -92,6 +104,10 @@ export default function ImportFromOnlineWalletScreen() {
     async (data: string) => {
       setState('importing');
 
+      // Hoisted so the finally block can zero the raw secret key on EVERY
+      // path (success, error, and early throw/abort), not just success.
+      let privateKeyBytes: Uint8Array | null = null;
+
       try {
         // Parse the ARC-300 URI
         const parsed = parseArc0300AccountImportUri(data);
@@ -120,19 +136,16 @@ export default function ImportFromOnlineWalletScreen() {
           throw new Error('No private key found in QR code.');
         }
 
-        // Convert base64 private key to bytes
-        // The private key is URL-safe base64, need to convert back
-        const base64Standard = entry.privateKeyBase64
-          .replace(/-/g, '+')
-          .replace(/_/g, '/');
-        // Add padding if needed
-        const paddedBase64 =
-          base64Standard + '='.repeat((4 - (base64Standard.length % 4)) % 4);
-        const privateKeyBytes = new Uint8Array(
-          Buffer.from(paddedBase64, 'base64')
-        );
+        // Normalize the scanned key to a full 64-byte Ed25519 secret key using
+        // the SAME expansion the import branch uses (normalizeBase64ToHex):
+        // 64-byte secret keys pass through as-is, 32-byte seeds are expanded to
+        // the full secret key, and any other length throws a clear error BEFORE
+        // we slice(32)/encodeAddress/signTxn. This keeps the signing path and
+        // the import path behaviorally identical.
+        const privateKeyHex = normalizeBase64ToHex(entry.privateKeyBase64);
+        privateKeyBytes = new Uint8Array(Buffer.from(privateKeyHex, 'hex'));
 
-        // Derive the address from the private key
+        // Derive the address from the private key (bytes 32..64 are the pubkey)
         const publicKeyBytes = privateKeyBytes.slice(32);
         const address = algosdk.encodeAddress(publicKeyBytes);
 
@@ -147,10 +160,8 @@ export default function ImportFromOnlineWalletScreen() {
           // Account already exists - use it instead of re-importing
           account = existingAccount as StandardAccountMetadata;
         } else {
-          // Convert base64 private key to hex for import
-          const privateKeyHex = normalizeBase64ToHex(entry.privateKeyBase64);
-
-          // Import the account
+          // Import the account (reuse the hex normalized above so the import
+          // and signing paths derive from the exact same key material)
           account = await MultiAccountWalletService.importStandardAccount({
             type: AccountType.STANDARD,
             privateKey: privateKeyHex,
@@ -161,18 +172,22 @@ export default function ImportFromOnlineWalletScreen() {
           await refresh();
         }
 
-        setImportedAccount(account);
+        // Store ONLY a non-secret projection (label + address). The full
+        // StandardAccountMetadata carries the 25-word mnemonic, which must
+        // never linger in component state / React devtools / memory snapshots.
+        setImportedAccount({ label: account.label, address: account.address });
         setState('signing');
 
-        // Build a simple verification transaction
-        // We're in airgap mode so use default/hardcoded params
-        // Using Voi mainnet genesis hash as default
-        const genesisHashBase64 =
-          'IXnoWtviVVJW5LGivNFc0Dq14V3kqaXuK2u5OQrdVZo=';
+        // Build a verification transaction using the ACTIVE network's genesis
+        // so the airgap device signs a payload for the correct chain (a stale
+        // hardcoded genesis was a wrong-chain bug). firstValid/lastValid stay
+        // 1/1000 below so this self-payment is already-expired and cannot be
+        // broadcast.
+        const netConfig = getNetworkConfig(networkId);
         const genesisHashBytes = new Uint8Array(
-          Buffer.from(genesisHashBase64, 'base64')
+          Buffer.from(netConfig.genesisHash, 'base64')
         );
-        const genesisId = 'voi-mainnet';
+        const genesisId = netConfig.genesisId;
 
         // Create a minimal verification transaction (zero-amount self-payment)
         const suggestedParams: algosdk.SuggestedParams = {
@@ -209,14 +224,15 @@ export default function ImportFromOnlineWalletScreen() {
         const payload = RemoteSignerService.encodePayload(response);
         setConfirmationQrData(payload);
         setState('displaying_confirmation');
-
-        // Zero out the private key from memory
-        privateKeyBytes.fill(0);
       } catch (err) {
         const message =
           err instanceof Error ? err.message : 'Failed to import account';
         setError(message);
         setState('error');
+      } finally {
+        // Zero the raw secret key on EVERY path (success, error, early throw)
+        // so it never lingers in memory after this handler returns.
+        privateKeyBytes?.fill(0);
       }
     },
     [networkId]

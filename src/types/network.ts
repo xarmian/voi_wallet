@@ -62,6 +62,12 @@ export interface NetworkConfiguration {
   /** WalletConnect chain identifier */
   chainId: string;
 
+  // Chain identity (used for airgap/offline transaction construction)
+  /** Genesis ID of the network (e.g., 'voimain-v1.0') */
+  genesisId: string;
+  /** Base64-encoded genesis hash of the network */
+  genesisHash: string;
+
   // Feature flags
   /** Available features on this network */
   features: NetworkFeatures;
