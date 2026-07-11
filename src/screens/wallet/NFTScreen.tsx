@@ -82,7 +82,7 @@ export default function NFTScreen() {
     useState(false);
   const [ownershipMap, setOwnershipMap] = useState<Set<string>>(new Set());
   const [loadingMoreTokens, setLoadingMoreTokens] = useState(false);
-  const [nextTokensToken, setNextTokensToken] = useState<number | undefined>();
+  const [nextTokensToken, setNextTokensToken] = useState<string | undefined>();
   const [hasMoreTokens, setHasMoreTokens] = useState(false);
 
   // Modals

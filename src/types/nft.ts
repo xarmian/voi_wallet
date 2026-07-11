@@ -35,13 +35,13 @@ export interface NFTToken {
 export interface NFTIndexerResponse {
   currentRound: number;
   tokens: ARC72Token[];
-  'next-token'?: number;
+  'next-token'?: string;
 }
 
 export interface NFTCollectionResponse {
   currentRound: number;
   tokens: NFTToken[];
-  nextToken?: number;
+  nextToken?: string;
 }
 
 export interface ARC72Collection {

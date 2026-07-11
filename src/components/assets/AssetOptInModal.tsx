@@ -65,8 +65,9 @@ export default function AssetOptInModal({
   const themeColors = useThemeColors();
   const insets = useSafeAreaInsets();
   const activeAccount = useActiveAccount();
-  const [selectedNetworkId, setSelectedNetworkId] =
-    useState<NetworkId>('voi-mainnet');
+  const [selectedNetworkId, setSelectedNetworkId] = useState<NetworkId>(
+    NetworkId.VOI_MAINNET
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -149,7 +150,9 @@ export default function AssetOptInModal({
         loadMore,
       });
     } catch (err) {
-      setError(`Error searching for assets: ${err.message}`);
+      setError(
+        `Error searching for assets: ${err instanceof Error ? err.message : String(err)}`
+      );
     } finally {
       if (loadMore) {
         setLoadingMore(false);
@@ -210,7 +213,9 @@ export default function AssetOptInModal({
         setMbrCost(validation.mbrCost || 100000);
       }
     } catch (err) {
-      setError(`Error validating asset: ${err.message}`);
+      setError(
+        `Error validating asset: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   };
 
@@ -255,7 +260,9 @@ export default function AssetOptInModal({
         },
       ]);
     } catch (err) {
-      setError(`Failed to opt-in: ${err.message}`);
+      setError(
+        `Failed to opt-in: ${err instanceof Error ? err.message : String(err)}`
+      );
       setShowAuthModal(false);
     } finally {
       setIsProcessing(false);
@@ -365,7 +372,7 @@ export default function AssetOptInModal({
                 returnKeyType="search"
               />
               <TouchableOpacity
-                onPress={searchAssets}
+                onPress={() => searchAssets()}
                 disabled={searching || isProcessing}
                 style={styles.searchButton}
               >

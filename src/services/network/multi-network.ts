@@ -221,7 +221,8 @@ export class MultiNetworkBalanceService {
               mappingId: mapping.mappingId,
               sourceBalances: [{ networkId, balance: asset }],
               isMapped: true,
-              verified: mapping.verified,
+              // AssetBalance.verified is a number (1 = verified); coerce the boolean mapping flag.
+              verified: mapping.verified ? 1 : 0,
               primaryNetwork: networkId, // First network encountered is primary
             };
             mappedAssets.set(mappingId, mappedAsset);
