@@ -64,31 +64,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   // Determine which version we're handling
   const isV1 = version === 1 || v1SessionRequest;
 
-  if (!proposal && !v1SessionRequest) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <UniversalHeader
-          title="WalletConnect"
-          showBackButton
-          onBackPress={() => navigation.goBack()}
-        />
-        <View style={[styles.scrollView, { justifyContent: 'center' }]}>
-          <View style={{ alignItems: 'center' }}>
-            <Ionicons name="warning" size={32} color={theme.colors.error} />
-            <Text style={[styles.sectionTitle, { marginTop: 12 }]}>
-              No proposal data
-            </Text>
-            <Text
-              style={{ color: theme.colors.textMuted, textAlign: 'center' }}
-            >
-              Waiting for a WalletConnect session proposal...
-            </Text>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   const [isLoading, setIsLoading] = useState(false);
   const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(
@@ -96,7 +71,13 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   );
 
   useEffect(() => {
+    // Only load accounts when there's actually a proposal to act on. The
+    // no-proposal early return now sits below the hooks (to keep hook order
+    // unconditional), so without this guard loadAccounts() — and its error
+    // Alerts — would fire on the "No proposal data" screen too.
+    if (!proposal && !v1SessionRequest) return;
     loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; proposal/v1SessionRequest are stable route params
   }, []);
 
   const loadAccounts = async () => {
@@ -389,6 +370,31 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       ))}
     </View>
   );
+
+  if (!proposal && !v1SessionRequest) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <UniversalHeader
+          title="WalletConnect"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+        />
+        <View style={[styles.scrollView, { justifyContent: 'center' }]}>
+          <View style={{ alignItems: 'center' }}>
+            <Ionicons name="warning" size={32} color={theme.colors.error} />
+            <Text style={[styles.sectionTitle, { marginTop: 12 }]}>
+              No proposal data
+            </Text>
+            <Text
+              style={{ color: theme.colors.textMuted, textAlign: 'center' }}
+            >
+              Waiting for a WalletConnect session proposal...
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>

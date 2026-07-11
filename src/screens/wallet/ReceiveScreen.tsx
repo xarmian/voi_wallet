@@ -90,6 +90,8 @@ export default function ReceiveScreen() {
     return formatVoiBalance(amount);
   };
 
+  const { theme } = useTheme();
+
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -113,8 +115,6 @@ export default function ReceiveScreen() {
     setIsAccountModalVisible(false);
     setIsAddAccountModalVisible(true);
   };
-
-  const { theme } = useTheme();
 
   return (
     <NFTBackground>
