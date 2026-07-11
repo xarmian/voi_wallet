@@ -29,6 +29,7 @@ export default function AccountImportItem({
 }: AccountImportItemProps) {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
+  const colors = createColors(theme);
   const [name, setName] = useState(account.name || '');
 
   const handleNameChange = (newName: string) => {
@@ -42,10 +43,10 @@ export default function AccountImportItem({
   };
 
   const getStatusColor = () => {
-    if (!account.isValid) return styles.errorColor;
-    if (account.isDuplicate) return styles.warningColor;
-    if (account.isUpgrade) return styles.infoColor;
-    return styles.successColor;
+    if (!account.isValid) return colors.errorColor;
+    if (account.isDuplicate) return colors.warningColor;
+    if (account.isUpgrade) return colors.infoColor;
+    return colors.successColor;
   };
 
   const getStatusIcon = () => {
@@ -163,7 +164,7 @@ export default function AccountImportItem({
             value={name}
             onChangeText={handleNameChange}
             placeholder="Enter account name"
-            placeholderTextColor={styles.placeholderColor}
+            placeholderTextColor={colors.placeholderColor}
             maxLength={50}
           />
         </View>
@@ -262,9 +263,14 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.text,
       backgroundColor: theme.colors.inputBackground,
     },
-    placeholderColor: theme.colors.placeholder,
-    errorColor: theme.colors.error,
-    warningColor: theme.colors.warning,
-    successColor: theme.colors.success,
-    infoColor: theme.colors.info,
   });
+
+// Raw color strings kept out of StyleSheet.create (RN NamedStyles rejects
+// string values); referenced directly as color props by consumers.
+const createColors = (theme: Theme) => ({
+  placeholderColor: theme.colors.placeholder,
+  errorColor: theme.colors.error,
+  warningColor: theme.colors.warning,
+  successColor: theme.colors.success,
+  infoColor: theme.colors.info,
+});

@@ -366,7 +366,9 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
             {index + 1}
           </Text>
           <TextInput
-            ref={(ref) => (inputRefs.current[index] = ref)}
+            ref={(ref) => {
+              inputRefs.current[index] = ref;
+            }}
             style={[
               styles.wordInput,
               {

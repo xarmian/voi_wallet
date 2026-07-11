@@ -2,6 +2,7 @@ import React from 'react';
 import { ActivityIndicator, Modal, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 
 interface WaitingForConfirmationModalProps {
@@ -22,6 +23,8 @@ export default function WaitingForConfirmationModal({
   subMessage = 'This may take a few seconds.',
 }: WaitingForConfirmationModalProps) {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
+  const colors = createColors(theme);
 
   return (
     <Modal
@@ -35,7 +38,7 @@ export default function WaitingForConfirmationModal({
           <Ionicons
             name="time-outline"
             size={48}
-            color={styles.iconColor}
+            color={colors.iconColor}
             style={styles.icon}
           />
           <Text style={styles.title}>{title}</Text>
@@ -43,7 +46,7 @@ export default function WaitingForConfirmationModal({
           <Text style={styles.subMessage}>{subMessage}</Text>
           <ActivityIndicator
             size="large"
-            color={styles.spinnerColor as any}
+            color={colors.spinnerColor}
             style={styles.spinner}
           />
         </View>
@@ -71,7 +74,6 @@ const createStyles = (theme: Theme) =>
     icon: {
       marginBottom: theme.spacing.md,
     },
-    iconColor: theme.colors.primary,
     title: {
       fontSize: 20,
       fontWeight: '700',
@@ -94,5 +96,11 @@ const createStyles = (theme: Theme) =>
     spinner: {
       marginTop: theme.spacing.lg,
     },
-    spinnerColor: theme.colors.primary,
   });
+
+// Raw color strings kept out of StyleSheet.create (RN NamedStyles rejects
+// string values); referenced directly as color props.
+const createColors = (theme: Theme) => ({
+  iconColor: theme.colors.primary,
+  spinnerColor: theme.colors.primary,
+});

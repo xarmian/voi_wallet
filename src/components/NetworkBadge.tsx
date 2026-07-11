@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, StyleProp, Text, TextStyle, View } from 'react-native';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { Theme } from '@/constants/themes';
@@ -31,7 +31,7 @@ const NetworkBadge: React.FC<NetworkBadgeProps> = ({
     minimal: styles.variantMinimal,
   };
 
-  const textStyles = {
+  const textStyles: Record<string, StyleProp<TextStyle>> = {
     filled: styles.textFilled,
     outlined: { color: networkConfig.color, fontWeight: '600' },
     minimal: { color: networkConfig.color, fontWeight: '600' },

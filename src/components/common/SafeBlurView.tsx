@@ -27,7 +27,9 @@ export const SafeBlurView = forwardRef<View, SafeBlurViewProps>(
   ({ intensity = 10, tint = 'light', children, style, ...viewProps }, ref) => {
     return (
       <BlurView
-        ref={ref}
+        // forwardRef exposes a View ref for callers, but the underlying element
+        // is a BlurView instance; bridge the two ref types here.
+        ref={ref as React.Ref<BlurView>}
         intensity={intensity}
         tint={tint}
         experimentalBlurMethod={

@@ -433,7 +433,10 @@ const styles = StyleSheet.create({
     margin: 0,
     ...Platform.select({
       web: {
-        outlineStyle: 'none',
+        // `outlineStyle` is a valid react-native-web property, but it is absent
+        // from React Native core's TextStyle type. Cast the value so the style
+        // object stays assignable to TextStyle at consumer style-arrays.
+        outlineStyle: 'none' as any,
       },
     }),
   },

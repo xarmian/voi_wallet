@@ -14,6 +14,7 @@ import {
   getCurrencySymbol,
 } from '@/utils/bigint';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 
 // Constants for address formatting
@@ -34,6 +35,8 @@ export default function AccountSelector({
   compact = false,
 }: AccountSelectorProps) {
   const styles = useThemedStyles(createStyles);
+  const { theme } = useTheme();
+  const colors = createColors(theme);
   const activeAccount = useActiveAccount();
   const allAccounts = useAccounts();
   const { balance: centralizedBalance, isLoading: isBalanceLoading } =
@@ -53,7 +56,7 @@ export default function AccountSelector({
       <TouchableOpacity style={styles.container} onPress={onPress}>
         <View style={styles.content}>
           <Text style={styles.noAccountText}>No Account</Text>
-          <Ionicons name="chevron-down" size={20} color={styles.chevronColor} />
+          <Ionicons name="chevron-down" size={20} color={colors.chevronColor} />
         </View>
       </TouchableOpacity>
     );
@@ -124,7 +127,7 @@ export default function AccountSelector({
         <Ionicons
           name="chevron-down"
           size={compact ? 14 : 16}
-          color={styles.chevronColor}
+          color={colors.chevronColor}
         />
       </View>
     </TouchableOpacity>
@@ -187,5 +190,10 @@ const createStyles = (theme: Theme) =>
     compactAccountAddress: {
       fontSize: 11,
     },
-    chevronColor: theme.colors.textSecondary,
   });
+
+// Raw color string kept out of StyleSheet.create (RN NamedStyles rejects
+// string values); referenced directly as a color prop.
+const createColors = (theme: Theme) => ({
+  chevronColor: theme.colors.textSecondary,
+});
