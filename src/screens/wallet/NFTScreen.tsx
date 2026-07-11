@@ -258,7 +258,10 @@ export default function NFTScreen() {
       if (newSet.size > NFT_CONSTANTS.MAX_IMAGE_CACHE_SIZE) {
         const iterator = newSet.values();
         iterator.next();
-        newSet.delete(iterator.next().value);
+        const oldestKey = iterator.next().value;
+        if (oldestKey !== undefined) {
+          newSet.delete(oldestKey);
+        }
       }
       return newSet;
     });

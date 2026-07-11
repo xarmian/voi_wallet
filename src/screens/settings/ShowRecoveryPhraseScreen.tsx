@@ -39,7 +39,7 @@ export default function ShowRecoveryPhraseScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [isBlurred, setIsBlurred] = useState(true);
   const [hasCopied, setHasCopied] = useState(false);
-  const timeoutRef = useRef<NodeJS.Timeout>();
+  const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const loadMnemonic = useCallback(async () => {
     if (!targetAddress) {

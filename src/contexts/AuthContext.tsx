@@ -5,7 +5,7 @@ import React, {
   useEffect,
   useRef,
 } from 'react';
-import { AppState, Platform } from 'react-native';
+import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import { SecurityUtils } from '@/utils/security';
@@ -90,9 +90,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     hasPin: false,
   });
 
-  const activityTimer = useRef<NodeJS.Timeout>();
-  const sessionTimer = useRef<NodeJS.Timeout>();
-  const backgroundTimer = useRef<NodeJS.Timeout>();
+  const activityTimer = useRef<NodeJS.Timeout | undefined>(undefined);
+  const sessionTimer = useRef<NodeJS.Timeout | undefined>(undefined);
+  const backgroundTimer = useRef<NodeJS.Timeout | undefined>(undefined);
 
   useEffect(() => {
     checkInitialAuthState();
@@ -215,7 +215,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     let previousAppState = AppState.currentState;
 
-    const handleAppStateChange = (nextAppState: string) => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
       const now = Date.now();
 
       if (nextAppState === 'background') {

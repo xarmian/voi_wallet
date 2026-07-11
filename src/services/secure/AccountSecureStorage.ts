@@ -261,7 +261,7 @@ export class AccountSecureStorage {
       await this.storeAccountMetadata(metadata);
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to store account: ${error.message}`
+        `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -327,7 +327,7 @@ export class AccountSecureStorage {
         throw error;
       }
       throw new AccountRetrievalError(
-        `Failed to retrieve account: ${error.message}`
+        `Failed to retrieve account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -477,7 +477,7 @@ export class AccountSecureStorage {
           throw error;
         }
         throw new AccountRetrievalError(
-          `Failed to retrieve private key: ${error.message}`
+          `Failed to retrieve private key: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
       }
     })();
@@ -810,7 +810,7 @@ export class AccountSecureStorage {
       await this.addToAccountList(metadata.accountId);
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to store account metadata: ${error.message}`
+        `Failed to store account metadata: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -859,7 +859,9 @@ export class AccountSecureStorage {
       await this.saveMetadata(accountId, updated);
     } catch (error) {
       // Don't throw error for last accessed update failure - it's not critical
-      console.warn(`Failed to update last accessed time: ${error.message}`);
+      console.warn(
+        `Failed to update last accessed time: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -923,7 +925,9 @@ export class AccountSecureStorage {
       await this.persistPinHash(hashedPin, salt);
       this.legacyCheckRequired = false;
     } catch (error) {
-      throw new AccountStorageError(`Failed to store PIN: ${error.message}`);
+      throw new AccountStorageError(
+        `Failed to store PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1028,7 +1032,9 @@ export class AccountSecureStorage {
       await this.persistPinHash(hashedNewPin, salt);
       this.legacyCheckRequired = false;
     } catch (error) {
-      throw new AccountStorageError(`Failed to change PIN: ${error.message}`);
+      throw new AccountStorageError(
+        `Failed to change PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 

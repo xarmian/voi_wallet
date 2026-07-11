@@ -81,7 +81,7 @@ export class ExtensionSecureStorageAdapter implements SecureStorageAdapter {
     const iv = await extensionCrypto.getRandomBytes(12);
 
     const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', iv: iv as BufferSource },
       key,
       data
     );
