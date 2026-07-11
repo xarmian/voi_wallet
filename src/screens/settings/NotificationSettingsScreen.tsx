@@ -790,7 +790,7 @@ const createStyles = (theme: Theme) =>
     },
     unavailableTitle: {
       marginTop: theme.spacing.lg,
-      fontSize: theme.typography.h3.fontSize,
+      fontSize: theme.typography.heading3.fontSize,
       fontWeight: '600',
       color: theme.colors.text,
       textAlign: 'center',

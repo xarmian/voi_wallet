@@ -464,7 +464,7 @@ const createStyles = (theme: Theme) =>
       padding: 20,
       marginBottom: 16,
       alignItems: 'center',
-      ...theme.shadows.small,
+      ...theme.shadows.sm,
     },
     dappIcon: {
       width: 64,

@@ -9,6 +9,8 @@ export interface ExtractedColors {
   dominant: string;
   vibrant: string;
   isDark: boolean;
+  // Optional foreground text color hint (falls back to dominant when absent)
+  text?: string;
   // Additional colors for palette generation
   muted?: string;
   darkVibrant?: string;
@@ -108,7 +110,7 @@ function processColors(colors: ImageColorsResult): ExtractedColors {
     primary = colors.vibrant || colors.dominant || '#000000';
     secondary = colors.muted || colors.dominant || '#000000';
     accent = colors.darkVibrant || colors.vibrant || '#000000';
-    background = colors.average || colors.dominant || '#000000';
+    background = colors.dominant || '#000000';
     muted = colors.muted;
     darkVibrant = colors.darkVibrant;
     lightVibrant = colors.lightVibrant;

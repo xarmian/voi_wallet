@@ -356,7 +356,7 @@ const createStyles = (theme: Theme) =>
     loadingText: {
       fontSize: 16,
       color: theme.colors.textSecondary,
-      marginTop: theme.spacing.small,
+      marginTop: theme.spacing.sm,
     },
     emptyContainer: {
       flex: 1,
@@ -385,7 +385,7 @@ const createStyles = (theme: Theme) =>
       paddingBottom: theme.spacing.xxl,
     },
     loadingFooter: {
-      paddingVertical: theme.spacing.large,
+      paddingVertical: theme.spacing.lg,
       alignItems: 'center',
     },
     loadingFooterText: {

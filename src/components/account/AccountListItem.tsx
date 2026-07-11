@@ -316,7 +316,7 @@ const createStyles = (theme: Theme) =>
       backgroundColor: theme.colors.surface,
       paddingHorizontal: 6,
       paddingVertical: 2,
-      borderRadius: theme.borderRadius.xs,
+      borderRadius: theme.borderRadius.sm,
       marginLeft: theme.spacing.sm,
     },
     rekeyIconContainer: {

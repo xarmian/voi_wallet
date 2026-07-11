@@ -126,6 +126,22 @@ export function generateThemeFromColors(
   const surfacePressed = isDark
     ? 'rgba(255, 255, 255, 0.08)'
     : 'rgba(0, 0, 0, 0.04)';
+  const surfaceAlt = isDark
+    ? lightenColor(surface, 0.04)
+    : darkenColor(surface, 0.02);
+  const surfaceVariant = isDark
+    ? lightenColor(surface, 0.08)
+    : darkenColor(surface, 0.05);
+
+  // Tinted variants of semantic colors (compose over any surface)
+  const primaryLight = hexToRgba(primary, isDark ? 0.22 : 0.14);
+  const infoLight = hexToRgba(info, isDark ? 0.22 : 0.14);
+  const successLight = hexToRgba(success, isDark ? 0.22 : 0.14);
+  const warningLight = hexToRgba(warning, isDark ? 0.22 : 0.14);
+  const errorLight = hexToRgba(error, isDark ? 0.22 : 0.14);
+
+  // Disabled/inert control state (neutral, theme-independent)
+  const disabled = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.10)';
 
   // Glass effect presets
   const glass: Theme['glass'] = {
@@ -330,6 +346,16 @@ export function generateThemeFromColors(
       // Surface variations
       surfaceElevated,
       surfacePressed,
+      surfaceAlt,
+      surfaceVariant,
+      // Tinted variants of semantic colors
+      primaryLight,
+      infoLight,
+      successLight,
+      warningLight,
+      errorLight,
+      // Disabled/inert control state
+      disabled,
     },
     spacing: {
       xs: 4,

@@ -240,7 +240,7 @@ const createStyles = (theme: Theme) =>
       borderRadius: 12,
       padding: 16,
       marginBottom: 12,
-      ...theme.shadows.small,
+      ...theme.shadows.sm,
     },
     sessionHeader: {
       flexDirection: 'row',
