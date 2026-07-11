@@ -71,10 +71,15 @@ export class Arc72TransactionService {
       const assets =
         await MimirApiService.getAllAccountAssets(recipientAddress);
 
-      // Find any ARC-72 token for this contract
+      // Find any ARC-72 token for this contract.
+      // Note: MimirAsset.assetType is statically typed as 'arc200' | 'asa',
+      // but this legacy backwards-compat fallback also handles older Mimir
+      // responses that tagged ARC-72 holdings; widen the compare so the
+      // intended 'arc72' branch is reachable without altering runtime behavior.
       const arc72Asset = assets.find(
         (asset) =>
-          asset.assetType === 'arc72' && asset.contractId === contractId
+          (asset.assetType as string) === 'arc72' &&
+          asset.contractId === contractId
       );
 
       // If any ARC-72 token exists for this contract, recipient is already opted in
@@ -215,8 +220,6 @@ export class Arc72TransactionService {
       const simulationParams = {
         ...suggestedParams,
         fee: Number(suggestedParams.fee),
-        firstRound: Number(suggestedParams.firstRound),
-        lastRound: Number(suggestedParams.lastRound),
         minFee: Number(suggestedParams.minFee),
       };
 

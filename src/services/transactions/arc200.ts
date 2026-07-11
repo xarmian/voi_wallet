@@ -131,7 +131,7 @@ export class Arc200TransactionService {
       );
 
       // If asset exists and has balance > 0, recipient is already opted in
-      return hasBalance;
+      return !!hasBalance;
     } catch (error) {
       // Silently assume MBR payment is needed if we can't check
       console.log('[ARC200] checkRecipientBalance error:', error);
@@ -271,8 +271,6 @@ export class Arc200TransactionService {
       const simulationParams = {
         ...suggestedParams,
         fee: Number(suggestedParams.fee),
-        firstRound: Number(suggestedParams.firstRound),
-        lastRound: Number(suggestedParams.lastRound),
         minFee: Number(suggestedParams.minFee),
       };
 
@@ -530,8 +528,6 @@ export class Arc200TransactionService {
       const simulationParams = {
         ...suggestedParams,
         fee: Number(suggestedParams.fee),
-        firstRound: Number(suggestedParams.firstRound),
-        lastRound: Number(suggestedParams.lastRound),
         minFee: Number(suggestedParams.minFee),
       };
 
