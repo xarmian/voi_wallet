@@ -1009,41 +1009,19 @@ export class MultiAccountWalletService {
   }
 
   static importFromPrivateKey(privateKeyHex: string): WalletAccount {
-    if (!privateKeyHex || typeof privateKeyHex !== 'string') {
-      throw new Error('Private key must be a non-empty string');
-    }
+    // TASK-124: Share the same validate-and-parse helper as the real import
+    // path (parsePrivateKey) so the QR preview address and the account that is
+    // actually imported stay in sync, and a pubkey-mismatched key is rejected
+    // identically in both places.
+    const privateKey = this.validateAndParseSecretKey(privateKeyHex);
+    const publicKey = privateKey.slice(32);
+    const address = algosdk.encodeAddress(publicKey);
 
-    const cleanHex = privateKeyHex.trim().replace(/^0x/i, '');
-
-    if (!/^[0-9a-fA-F]+$/.test(cleanHex)) {
-      throw new Error('Invalid private key: must be hexadecimal format');
-    }
-
-    if (cleanHex.length !== 128) {
-      throw new Error(
-        'Invalid private key: must be 64 bytes (128 hex characters)'
-      );
-    }
-
-    try {
-      const privateKey = new Uint8Array(
-        cleanHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
-      );
-
-      const publicKey = privateKey.slice(32);
-      const address = algosdk.encodeAddress(publicKey);
-
-      return {
-        address,
-        publicKey,
-        // privateKey removed - will be handled by SecureKeyManager
-      };
-    } catch (error) {
-      throw new Error(
-        'Failed to parse private key: ' +
-          (error instanceof Error ? error.message : 'Unknown error')
-      );
-    }
+    return {
+      address,
+      publicKey,
+      // privateKey removed - will be handled by SecureKeyManager
+    };
   }
 
   static validateAddress(address: string): boolean {
@@ -1169,7 +1147,28 @@ export class MultiAccountWalletService {
       .join(' ');
   }
 
-  private static parsePrivateKey(privateKeyHex: string): Uint8Array {
+  /**
+   * TASK-124: Parse a hex-encoded 64-byte Algorand secret key and verify that
+   * its appended public key actually matches the seed.
+   *
+   * An Algorand `sk` is `seed(32) || publicKey(32)`. A corrupted or hand-edited
+   * key whose trailing 32 bytes no longer correspond to the seed would be
+   * imported at one address (derived from the appended pubkey) yet sign for a
+   * different address (derived from the seed), silently producing an
+   * unrecoverable account. We reject on mismatch instead.
+   *
+   * The check uses the algosdk round-trip `sk -> mnemonic -> sk`, which rebuilds
+   * the sk from the seed alone, then compares the seed-derived address to the
+   * address encoded from the appended pubkey. Public keys are not secret, so a
+   * plain string comparison is fine (no constant-time compare needed). Every
+   * legitimately generated key (algosdk / Pera / mnemonic export) round-trips
+   * unchanged; only mismatched keys are rejected.
+   */
+  private static validateAndParseSecretKey(privateKeyHex: string): Uint8Array {
+    if (!privateKeyHex || typeof privateKeyHex !== 'string') {
+      throw new Error('Private key must be a non-empty string');
+    }
+
     const cleanHex = privateKeyHex.trim().replace(/^0x/i, '');
 
     if (!/^[0-9a-fA-F]+$/.test(cleanHex)) {
@@ -1182,9 +1181,26 @@ export class MultiAccountWalletService {
       );
     }
 
-    return new Uint8Array(
+    const sk = new Uint8Array(
       cleanHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
     );
+
+    // Reject keys whose appended public key does not match the seed.
+    const seedAddr = algosdk
+      .mnemonicToSecretKey(algosdk.secretKeyToMnemonic(sk))
+      .addr.toString();
+    const appendedAddr = algosdk.encodeAddress(sk.slice(32));
+    if (seedAddr !== appendedAddr) {
+      throw new Error(
+        'Invalid private key: public key does not match the seed'
+      );
+    }
+
+    return sk;
+  }
+
+  private static parsePrivateKey(privateKeyHex: string): Uint8Array {
+    return this.validateAndParseSecretKey(privateKeyHex);
   }
 
   // Public so auth-account-discovery can reuse the same lookup/dedup logic.
@@ -1356,6 +1372,18 @@ export class MultiAccountWalletService {
   private static async storeWallet(wallet: Wallet): Promise<void> {
     const persistencePayload = this.sanitizeWalletForPersistence(wallet);
     await this.storeValue(this.WALLET_KEY, JSON.stringify(persistencePayload));
+  }
+
+  /**
+   * TASK-111: Public wrapper used by the backup/restore flow to persist a
+   * restored wallet through the same sanitizing path as every other write.
+   * Delegates to the private storeWallet(), which strips per-account mnemonics
+   * via sanitizeWalletForPersistence() and clears any legacy secure-store copy.
+   * Restore code MUST use this instead of a raw storage.setItem so a restored
+   * wallet can never leak a mnemonic into general storage.
+   */
+  static async persistRestoredWallet(wallet: Wallet): Promise<void> {
+    await this.storeWallet(wallet);
   }
 
   private static getDefaultWalletSettings(): WalletSettings {

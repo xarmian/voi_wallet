@@ -607,7 +607,7 @@ export class AccountSecureStorage {
       return `${saltHex}:${ivHex}:${encrypted.toString()}:${hmac}`;
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to encrypt private key: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to encrypt private key: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     } finally {
       // Clear sensitive data from memory
@@ -671,7 +671,7 @@ export class AccountSecureStorage {
       return new Uint8Array(Buffer.from(privateKeyHex, 'hex'));
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to decrypt private key: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to decrypt private key: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     } finally {
       // Clear sensitive data from memory
@@ -734,7 +734,7 @@ export class AccountSecureStorage {
       return new Uint8Array(Buffer.from(privateKeyHex, 'hex'));
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to decrypt private key: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to decrypt private key: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     } finally {
       if (keyMaterial) {
@@ -767,7 +767,7 @@ export class AccountSecureStorage {
       return key;
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to derive encryption key: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to derive encryption key: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -792,7 +792,7 @@ export class AccountSecureStorage {
       return key;
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to derive encryption key: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to derive encryption key: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
