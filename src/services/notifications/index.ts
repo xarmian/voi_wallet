@@ -138,7 +138,9 @@ class NotificationService {
       }
     }
 
-    // Set up app state listener to update last_active_at
+    // Set up app state listener to update last_active_at (idempotent: drop any
+    // prior subscription so a repeated initialize() can't leak it).
+    this.appStateSubscription?.remove();
     this.appStateSubscription = AppState.addEventListener(
       'change',
       this.handleAppStateChange
@@ -150,11 +152,11 @@ class NotificationService {
    */
   cleanup(): void {
     if (this.notificationListener) {
-      Notifications.removeNotificationSubscription(this.notificationListener);
+      this.notificationListener.remove();
       this.notificationListener = null;
     }
     if (this.responseListener) {
-      Notifications.removeNotificationSubscription(this.responseListener);
+      this.responseListener.remove();
       this.responseListener = null;
     }
     if (this.appStateSubscription) {
@@ -590,6 +592,12 @@ class NotificationService {
   }
 
   private setupListeners(): void {
+    // Idempotent: drop any existing subscriptions before re-subscribing so a
+    // repeated initialize() (without an intervening cleanup()) can't leak the
+    // previous listeners.
+    this.notificationListener?.remove();
+    this.responseListener?.remove();
+
     // Handle notifications received while app is foregrounded
     this.notificationListener = Notifications.addNotificationReceivedListener(
       (notification) => {
