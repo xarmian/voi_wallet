@@ -52,6 +52,22 @@ const redactUri = (url: string): string => {
   return `${scheme}://[redacted]`;
 };
 
+// Summarize a notification for logs: keep non-sensitive routing fields but
+// truncate the sender/receiver addresses and redact the amount.
+const redactNotificationData = (
+  data: NotificationData
+): Record<string, unknown> => ({
+  type: data.type,
+  eventType: data.eventType,
+  sender: data.sender ? redactAddress(data.sender) : undefined,
+  receiver: data.receiver ? redactAddress(data.receiver) : undefined,
+  amount: data.amount !== undefined ? '[redacted]' : undefined,
+  hasTxId: !!data.txId,
+  contractId: data.contractId,
+  tokenId: data.tokenId,
+  round: data.round,
+});
+
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
 
 export interface DeepLinkRoute {
@@ -139,7 +155,7 @@ export class DeepLinkService {
     if (isUnlocked && !wasUnlocked && this.pendingNotification) {
       console.log(
         '[DeepLink] App unlocked, processing pending notification:',
-        this.pendingNotification
+        redactNotificationData(this.pendingNotification)
       );
       const pendingData = this.pendingNotification;
       this.pendingNotification = null;
@@ -159,13 +175,13 @@ export class DeepLinkService {
       // Handle initial URL if app was opened via deep link
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
-        console.log('Handling initial deep link:', initialUrl);
+        console.log('Handling initial deep link:', redactUri(initialUrl));
         await this.handleUrl(initialUrl);
       }
 
       // Listen for incoming deep links
       this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
-        console.log('Received deep link:', url);
+        console.log('Received deep link:', redactUri(url));
         this.handleUrl(url).catch((error) => {
           console.error('Failed to handle deep link:', error);
         });
@@ -189,7 +205,7 @@ export class DeepLinkService {
           '[DeepLink] Notification tap handler called, isAppUnlocked:',
           this.isAppUnlocked,
           'data:',
-          data
+          redactNotificationData(data)
         );
 
         // If app is locked, store the notification for later processing after unlock
@@ -213,7 +229,10 @@ export class DeepLinkService {
   private async handleNotificationNavigation(
     data: NotificationData
   ): Promise<void> {
-    console.log('Processing notification navigation:', data);
+    console.log(
+      'Processing notification navigation:',
+      redactNotificationData(data)
+    );
 
     switch (data.type) {
       case 'message':
@@ -231,7 +250,7 @@ export class DeepLinkService {
             ) {
               console.log(
                 'Switching to receiver account:',
-                receiverAccount.address
+                redactAddress(receiverAccount.address)
               );
               await walletStore.setActiveAccount(receiverAccount.id);
             }
@@ -342,7 +361,7 @@ export class DeepLinkService {
     try {
       const scheme = this.extractScheme(url);
       if (!scheme) {
-        console.warn('No scheme found in URL:', url);
+        console.warn('No scheme found in URL:', redactUri(url));
         return false;
       }
 
@@ -748,10 +767,19 @@ export class DeepLinkService {
    */
   private async handleKeyregUri(parsed: Arc0090KeyregUri): Promise<boolean> {
     try {
-      console.log(
-        '[DeepLink] handleKeyregUri - parsed:',
-        JSON.stringify(parsed, null, 2)
-      );
+      // Redacted summary only: parsed carries the address plus participation/
+      // vote/selection keys, fee and note, none of which belong in logs.
+      console.log('[DeepLink] handleKeyregUri - parsed:', {
+        type: parsed.type,
+        network: parsed.network,
+        scheme: parsed.scheme,
+        address: redactAddress(parsed.address),
+        isOnline: parsed.isOnline,
+        participationKeys: '[redacted]',
+        fee: parsed.params.fee !== undefined ? '[redacted]' : undefined,
+        note:
+          parsed.params.xnote || parsed.params.note ? '[redacted]' : undefined,
+      });
 
       // Validate keyreg URI
       const validation = validateKeyregUri(parsed);
@@ -790,9 +818,21 @@ export class DeepLinkService {
         isOnline: parsed.isOnline,
         networkId: currentNetwork,
       };
+      // Redacted: navParams carries the address, participation keys, fee and
+      // note. Log only the non-sensitive routing/round fields.
       console.log(
         '[DeepLink] handleKeyregUri - navigating to KeyregConfirm with params:',
-        navParams
+        {
+          address: redactAddress(navParams.address),
+          isOnline: navParams.isOnline,
+          networkId: navParams.networkId,
+          votefst: navParams.votefst,
+          votelst: navParams.votelst,
+          votekd: navParams.votekd,
+          participationKeys: '[redacted]',
+          fee: navParams.fee !== undefined ? '[redacted]' : undefined,
+          note: navParams.note ? '[redacted]' : undefined,
+        }
       );
 
       // Use replace to dismiss the QRScanner and show KeyregConfirm in its place
@@ -976,7 +1016,7 @@ export class DeepLinkService {
       const urlObj = new URL(url);
 
       if (urlObj.hostname !== 'www.getvoi.app') {
-        console.warn('Universal link not for www.getvoi.app:', url);
+        console.warn('Universal link not for www.getvoi.app:', redactUri(url));
         return false;
       }
 
@@ -991,11 +1031,14 @@ export class DeepLinkService {
           const decodedUri = decodeURIComponent(wcUri);
           console.log(
             'Handling WalletConnect URI from universal link:',
-            decodedUri
+            redactUri(decodedUri)
           );
           return await this.handleWalletConnectUri(decodedUri);
         } else {
-          console.warn('No WalletConnect URI found in universal link:', url);
+          console.warn(
+            'No WalletConnect URI found in universal link:',
+            redactUri(url)
+          );
           return false;
         }
       }
@@ -1036,11 +1079,13 @@ export class DeepLinkService {
     route: DeepLinkRoute,
     options?: { replace?: boolean }
   ): Promise<void> {
+    // Log route name + param keys only; param values can carry
+    // recipient addresses, amounts, notes and keyreg key material.
     console.log(
       '[DeepLink] navigateToRoute - route:',
       route.screen,
-      'params:',
-      JSON.stringify(route.params),
+      'paramKeys:',
+      route.params ? Object.keys(route.params) : [],
       'replace:',
       options?.replace
     );
@@ -1082,7 +1127,8 @@ export class DeepLinkService {
     } catch (error) {
       console.error(
         '[DeepLink] navigateToRoute - Failed to navigate:',
-        route,
+        route.screen,
+        route.params ? Object.keys(route.params) : [],
         error
       );
       throw error;
