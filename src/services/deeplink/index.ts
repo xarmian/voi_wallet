@@ -52,6 +52,22 @@ const redactUri = (url: string): string => {
   return `${scheme}://[redacted]`;
 };
 
+// Strip sensitive values from an arbitrary log string (e.g. a caught error
+// message). Caught errors from the WalletConnect SDK can embed the full `wc:`
+// pairing URI whose query string carries the session symKey, and other errors
+// can embed a scheme://… URL or a full account address. Redact all three; the
+// whole URI (including query) is replaced so no symKey survives.
+const redactSensitiveForLog = (message: string): string =>
+  message
+    .replace(/wc:\S+/gi, 'wc:[redacted]')
+    .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
+    .replace(/[A-Z2-7]{58}/g, (addr) => redactAddress(addr));
+
+// Convenience wrapper for the common `catch (error) { console.error(msg, error) }`
+// pattern: derive the message string and redact it before logging.
+const redactError = (error: unknown): string =>
+  redactSensitiveForLog(error instanceof Error ? error.message : String(error));
+
 // Summarize a notification for logs: keep non-sensitive routing fields but
 // truncate the sender/receiver addresses and redact the amount.
 const redactNotificationData = (
@@ -183,14 +199,17 @@ export class DeepLinkService {
       this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
         console.log('Received deep link:', redactUri(url));
         this.handleUrl(url).catch((error) => {
-          console.error('Failed to handle deep link:', error);
+          console.error('Failed to handle deep link:', redactError(error));
         });
       });
 
       // Set up notification tap handler for navigation
       this.setupNotificationHandler();
     } catch (error) {
-      console.error('Failed to initialize deep link service:', error);
+      console.error(
+        'Failed to initialize deep link service:',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -373,7 +392,7 @@ export class DeepLinkService {
       console.warn(`No handler registered for scheme: ${scheme}`);
       return false;
     } catch (error) {
-      console.error('Error handling deep link:', error);
+      console.error('Error handling deep link:', redactError(error));
       return false;
     }
   }
@@ -480,7 +499,10 @@ export class DeepLinkService {
       });
 
       v1Client.once('error', (error) => {
-        console.error('DeepLinkService: v1 connection error', error);
+        console.error(
+          'DeepLinkService: v1 connection error',
+          redactError(error)
+        );
         this.navigateToRoute({
           screen: 'WalletConnectError',
           params: {
@@ -500,7 +522,10 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle WalletConnect v1 URI:', error);
+      console.error(
+        'Failed to handle WalletConnect v1 URI:',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -538,7 +563,10 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle WalletConnect v2 URI:', error);
+      console.error(
+        'Failed to handle WalletConnect v2 URI:',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -633,7 +661,7 @@ export class DeepLinkService {
           return false;
       }
     } catch (error) {
-      console.error('[DeepLink] handleArc0090Uri - error:', error);
+      console.error('[DeepLink] handleArc0090Uri - error:', redactError(error));
       await showAlert(
         'Invalid Deep Link',
         error instanceof Error ? error.message : 'Failed to process URI'
@@ -683,7 +711,7 @@ export class DeepLinkService {
       await networkStore.switchNetwork(targetNetwork);
       return true;
     } catch (error) {
-      console.error('Failed to switch network:', error);
+      console.error('Failed to switch network:', redactError(error));
       await showAlert(
         'Network Switch Failed',
         `Failed to switch to ${targetConfig.name}. Please try again.`
@@ -757,7 +785,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle payment URI:', error);
+      console.error('Failed to handle payment URI:', redactError(error));
       return false;
     }
   }
@@ -847,7 +875,7 @@ export class DeepLinkService {
       console.log('[DeepLink] handleKeyregUri - navigation complete');
       return true;
     } catch (error) {
-      console.error('[DeepLink] handleKeyregUri - error:', error);
+      console.error('[DeepLink] handleKeyregUri - error:', redactError(error));
       return false;
     }
   }
@@ -893,7 +921,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle appl URI:', error);
+      console.error('Failed to handle appl URI:', redactError(error));
       return false;
     }
   }
@@ -922,7 +950,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle app query URI:', error);
+      console.error('Failed to handle app query URI:', redactError(error));
       return false;
     }
   }
@@ -954,7 +982,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
-      console.error('Failed to handle asset query URI:', error);
+      console.error('Failed to handle asset query URI:', redactError(error));
       return false;
     }
   }
@@ -1005,7 +1033,7 @@ export class DeepLinkService {
           return false;
       }
     } catch (error) {
-      console.error('Failed to handle legacy Voi URI:', error);
+      console.error('Failed to handle legacy Voi URI:', redactError(error));
       return false;
     }
   }
@@ -1046,7 +1074,7 @@ export class DeepLinkService {
       console.warn('Unknown universal link path:', urlObj.pathname);
       return false;
     } catch (error) {
-      console.error('Failed to handle universal link:', error);
+      console.error('Failed to handle universal link:', redactError(error));
       return false;
     }
   }
@@ -1129,7 +1157,7 @@ export class DeepLinkService {
         '[DeepLink] navigateToRoute - Failed to navigate:',
         route.screen,
         route.params ? Object.keys(route.params) : [],
-        error
+        redactError(error)
       );
       throw error;
     }
