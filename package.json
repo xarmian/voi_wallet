@@ -47,7 +47,7 @@
     "expo": "~54.0.30",
     "expo-application": "~7.0.8",
     "expo-blur": "~15.0.8",
-    "expo-camera": "~17.0.10",
+    "expo-camera": "~57.0.1",
     "expo-clipboard": "~8.0.8",
     "expo-crypto": "~15.0.8",
     "expo-dev-client": "~6.0.20",
