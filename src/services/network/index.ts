@@ -28,6 +28,20 @@ export interface RekeyInfo {
   rekeyedAt?: number;
 }
 
+// Resolved shape of `algodClient.accountInformation(address).do()`. Used to pass
+// the balance load's already-fetched account response into getPricingData so
+// Algorand pricing (which only needs the asset IDs) doesn't re-fetch the same
+// address. NOTE: it is deliberately NOT passed to getAccountRekeyInfo, which
+// keeps its own independent request for the signing-authority read (DR-1).
+type AlgodAccountInfo = Awaited<
+  ReturnType<ReturnType<algosdk.Algodv2['accountInformation']>['do']>
+>;
+
+// Max concurrent algod getAssetByID lookups when resolving ASA metadata for a
+// balance load. Bounded (not unbounded Promise.all) so an account holding many
+// ASAs can't fan out and rate-limit the node.
+const ASSET_METADATA_CONCURRENCY = 8;
+
 // Re-export types for backwards compatibility
 export type {
   NetworkConfiguration as NetworkConfig,
@@ -280,15 +294,25 @@ export class NetworkService {
         throw new Error('Invalid Algorand address');
       }
 
-      // Fetch basic account info, Mimir assets, pricing, and rekey info in parallel
+      // Fetch the account info once and share the single in-flight promise with
+      // the PRICING path only — it needs just the asset IDs, so reusing this
+      // snapshot removes the redundant accountInformation round-trip it did on
+      // Algorand. getAccountRekeyInfo deliberately keeps its OWN independent
+      // request (not deduped against this snapshot): its authAddr read feeds
+      // canSign/authAddress persisted to wallet metadata and consumed by signing
+      // (DR-1), so it must observe the account's authority on its own fetch,
+      // byte-identical to pre-refactor behavior. All four still start
+      // concurrently, exactly as before.
+      const accountInfoPromise = this.withTimeout(
+        this.algodClient.accountInformation(address).do(),
+        'account info'
+      );
+
       const [accountInfo, mimirAssets, priceData, rekeyInfo] =
         await Promise.allSettled([
-          this.withTimeout(
-            this.algodClient.accountInformation(address).do(),
-            'account info'
-          ),
+          accountInfoPromise,
           this.getMimirAssets(address),
-          this.getPricingData(address),
+          this.getPricingData(address, accountInfoPromise),
           this.getAccountRekeyInfo(address),
         ]);
 
@@ -296,62 +320,110 @@ export class NetworkService {
         throw new Error(`Failed to fetch account info: ${accountInfo.reason}`);
       }
 
-      const algodAssets: AssetBalance[] = [];
       // Guard the cache writes below against a network switch during this
       // refresh: switchNetwork clears assetParamsCache and bumps the
       // generation, so a stale response can't repopulate the cleared cache
       // (holds even across a switch-and-back within the loop).
       const requestGeneration = this.assetCacheGeneration;
-      if (accountInfo.value.assets) {
-        for (const asset of accountInfo.value.assets) {
-          const assetId = Number(asset.assetId);
-          const assetKey = String(asset.assetId);
+      const accountAssets = accountInfo.value.assets ?? [];
 
-          // Asset params are immutable: reuse the cached entry and skip the
-          // network call entirely once we've seen this asset before.
-          const cachedParams = this.assetParamsCache.get(assetKey);
-          if (cachedParams) {
-            algodAssets.push({
-              assetId,
-              amount: asset.amount,
-              decimals: cachedParams.decimals,
-              name: cachedParams.name,
-              unitName: cachedParams.unitName,
-              assetType: 'asa',
-            });
-            continue;
-          }
+      // Resolve a single ASA holding to an AssetBalance, or null to omit it.
+      // Cache hits skip the network entirely; misses fetch the immutable params
+      // and populate the cache (guarded against a mid-refresh network switch).
+      const resolveAssetBalance = async (
+        asset: (typeof accountAssets)[number]
+      ): Promise<AssetBalance | null> => {
+        const assetId = Number(asset.assetId);
+        const assetKey = String(asset.assetId);
 
-          try {
-            const assetInfo = await this.withTimeout(
-              this.algodClient.getAssetByID(assetId).do(),
-              `asset ${assetId}`
-            );
-            const params = {
-              decimals: Number(assetInfo.params.decimals ?? 0),
-              name: assetInfo.params.name,
-              unitName: assetInfo.params.unitName,
-            };
-            if (this.assetCacheGeneration === requestGeneration) {
-              this.assetParamsCache.set(assetKey, params);
-            }
-            algodAssets.push({
-              assetId,
-              amount: asset.amount,
-              decimals: params.decimals,
-              name: params.name,
-              unitName: params.unitName,
-              assetType: 'asa',
-            });
-          } catch (assetError) {
+        // Asset params are immutable: reuse the cached entry and skip the
+        // network call entirely once we've seen this asset before.
+        const cachedParams = this.assetParamsCache.get(assetKey);
+        if (cachedParams) {
+          return {
+            assetId,
+            amount: asset.amount,
+            decimals: cachedParams.decimals,
+            name: cachedParams.name,
+            unitName: cachedParams.unitName,
+            assetType: 'asa',
+          };
+        }
+
+        try {
+          const assetInfo = await this.withTimeout(
+            this.algodClient.getAssetByID(assetId).do(),
+            `asset ${assetId}`
+          );
+          // Only trust a genuine finite non-negative integer decimals. A real
+          // 0-decimals ASA returns a DEFINED 0 (preserved), but a fulfilled-yet-
+          // malformed response with undefined/invalid decimals must be treated
+          // as unresolved — omit the asset and do NOT cache a fabricated 0,
+          // which would inflate the displayed balance by 10^N (same
+          // financial-correctness class as TASK-52). This mirrors the rejection
+          // branch below: an unusable response resolves to null.
+          const decimals = this.normalizeDecimals(assetInfo.params.decimals);
+          if (decimals === null) {
             console.warn(
-              `Failed to fetch asset info for ${asset.assetId}:`,
-              assetError
+              `Omitting asset ${asset.assetId}: algod returned no usable decimals`,
+              assetInfo.params.decimals
             );
-            // Never fall back to decimals: 0 for an unknown asset — that would
-            // display a 10^N x inflated balance. Omit the asset until a later
-            // refresh can resolve its real params.
-            continue;
+            return null;
+          }
+          const params = {
+            decimals,
+            name: assetInfo.params.name,
+            unitName: assetInfo.params.unitName,
+          };
+          if (this.assetCacheGeneration === requestGeneration) {
+            this.assetParamsCache.set(assetKey, params);
+          }
+          return {
+            assetId,
+            amount: asset.amount,
+            decimals: params.decimals,
+            name: params.name,
+            unitName: params.unitName,
+            assetType: 'asa',
+          };
+        } catch (assetError) {
+          console.warn(
+            `Failed to fetch asset info for ${asset.assetId}:`,
+            assetError
+          );
+          // Never fall back to decimals: 0 for an unknown asset — that would
+          // display a 10^N x inflated balance. Omit the asset until a later
+          // refresh can resolve its real params.
+          return null;
+        }
+      };
+
+      // Resolve holdings in concurrency-capped batches so cache-miss lookups run
+      // in parallel instead of one-at-a-time, without fanning out to all N at
+      // once (which could rate-limit the node). Each holding is isolated — a
+      // rejected lookup resolves to null and only omits that one asset — and
+      // output order matches the holdings order.
+      //
+      // NOTE: this caps how many lookups are DISPATCHED per batch, not the total
+      // live requests. withTimeout (shared, unchanged here) is a non-aborting
+      // Promise.race, so on a hung node a batch can all time out while their
+      // underlying requests stay live, and the next batch dispatches on top —
+      // in-flight can exceed the cap (more aggressively than the old serial
+      // loop, which added one per timeout). It never drops or fabricates assets,
+      // so this is an acceptable resource residual on a degraded-node path; a
+      // true hard cap on live requests would require an AbortController on the
+      // shared withTimeout (out of scope here).
+      const algodAssets: AssetBalance[] = [];
+      for (
+        let i = 0;
+        i < accountAssets.length;
+        i += ASSET_METADATA_CONCURRENCY
+      ) {
+        const batch = accountAssets.slice(i, i + ASSET_METADATA_CONCURRENCY);
+        const resolved = await Promise.all(batch.map(resolveAssetBalance));
+        for (const assetBalance of resolved) {
+          if (assetBalance) {
+            algodAssets.push(assetBalance);
           }
         }
       }
@@ -563,7 +635,8 @@ export class NetworkService {
   }
 
   private async getPricingData(
-    address: string
+    address: string,
+    prefetchedAccountInfo?: Promise<AlgodAccountInfo>
   ): Promise<{ nativePrice?: number; assetPrices?: Map<number, number> }> {
     if (!this.isFeatureAvailable('pricing')) {
       return {};
@@ -575,10 +648,12 @@ export class NetworkService {
         const voiPrice = await VoiPriceService.getVoiPrice();
         return { nativePrice: voiPrice };
       } else if (this.currentNetworkId === NetworkId.ALGORAND_MAINNET) {
-        // For Algorand, get prices for ALGO and all user's assets
-        const accountInfo = await this.algodClient
-          .accountInformation(address)
-          .do();
+        // For Algorand, get prices for ALGO and all user's assets. Reuse the
+        // caller's in-flight account request when provided so this path doesn't
+        // issue a duplicate accountInformation call for the same address; fall
+        // back to fetching when called standalone.
+        const accountInfo = await (prefetchedAccountInfo ??
+          this.algodClient.accountInformation(address).do());
         const assetIds: number[] = [0]; // Always include ALGO (asset ID 0)
 
         // Collect all asset IDs from user's assets
@@ -1219,6 +1294,14 @@ export class NetworkService {
         return cached.info;
       }
 
+      // Deliberately issue an INDEPENDENT accountInformation request here rather
+      // than reusing a snapshot fetched elsewhere (e.g. getAccountBalance's).
+      // The authAddr read below feeds canSign / authAddress that get persisted
+      // to wallet metadata (DR-1) and consumed by signing, so this must observe
+      // the account's authority on its own request — byte-identical to prior
+      // behavior. Reusing a shared snapshot would change which round-consistent
+      // view the rekey state is read from (e.g. across a rekey confirmation),
+      // so the rekey fetch is intentionally NOT deduped against the balance load.
       const accountInfo = await this.algodClient
         .accountInformation(address)
         .do();
