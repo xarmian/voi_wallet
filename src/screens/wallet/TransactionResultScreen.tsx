@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import UniversalHeader from '@/components/common/UniversalHeader';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getTransactionUrl } from '@/utils/blockExplorer';
+import { hapticNotify } from '@/utils/haptics';
 import { NetworkId } from '@/types/network';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
@@ -58,6 +59,14 @@ export default function TransactionResultScreen() {
   const params = route.params as TransactionResultParams;
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
+
+  // One-time outcome haptic on mount, matching the screen's success/failure UI
+  // (params.isSuccess drives the icon/title/color below). Fire-and-forget.
+  useEffect(() => {
+    hapticNotify(params.isSuccess ? 'success' : 'error');
+    // Result params are fixed for a given screen instance; fire once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleViewInExplorer = async () => {
     if (!params.transactionId) return;

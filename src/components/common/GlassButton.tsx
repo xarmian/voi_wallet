@@ -29,6 +29,7 @@ import Animated, {
 import { useTheme } from '@/contexts/ThemeContext';
 import { SafeBlurView } from './SafeBlurView';
 import { springConfigs, timingConfigs } from '@/utils/animations';
+import { hapticImpact } from '@/utils/haptics';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -239,6 +240,9 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
 
   const handlePress = useCallback(() => {
     if (disabled || loading) return;
+    // Light tactile confirmation on every primary/secondary/ghost/danger press;
+    // wiring it here propagates haptics to buttons app-wide. Fire-and-forget.
+    hapticImpact('light');
     onPress();
   }, [disabled, loading, onPress]);
 
