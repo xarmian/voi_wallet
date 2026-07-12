@@ -49,7 +49,7 @@
     "expo-blur": "~15.0.8",
     "expo-camera": "~17.0.10",
     "expo-clipboard": "~8.0.8",
-    "expo-crypto": "~15.0.8",
+    "expo-crypto": "~57.0.0",
     "expo-dev-client": "~6.0.20",
     "expo-device": "~8.0.10",
     "expo-document-picker": "~14.0.8",
