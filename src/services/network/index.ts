@@ -397,15 +397,24 @@ export class NetworkService {
   /**
    * Coerce a decimals value read from an external source (algod/Mimir) into a
    * trustworthy integer. Returns null for anything that isn't a genuine,
-   * finite, non-negative integer (missing, null, NaN, negative, fractional) so
-   * callers can omit the asset instead of guessing — a fabricated 0 would
-   * inflate a displayed balance by 10^N. A real `decimals: 0` is preserved.
+   * finite, non-negative integer so callers can omit the asset instead of
+   * guessing — a fabricated 0 would inflate a displayed balance by 10^N. A
+   * real `decimals: 0` is preserved.
+   *
+   * Decimals legitimately only ever arrives as a `number` (Mimir) or
+   * `number | bigint` (algosdk), so only those types are accepted. Strings,
+   * booleans, and empty/whitespace values are rejected — `Number('')`,
+   * `Number('  ')`, `Number(false)`, `Number([])` all coerce to a deceptive 0.
    */
   private normalizeDecimals(value: unknown): number | null {
-    if (value === undefined || value === null) {
+    let n: number;
+    if (typeof value === 'number') {
+      n = value;
+    } else if (typeof value === 'bigint') {
+      n = Number(value);
+    } else {
       return null;
     }
-    const n = Number(value);
     if (!Number.isInteger(n) || n < 0) {
       return null;
     }
@@ -482,15 +491,26 @@ export class NetworkService {
       return null;
     }
 
-    // getAssetInfo returns null on a 404 but throws on timeout/other errors;
-    // tolerate that so we can still fall back to Mimir instead of rejecting the
-    // whole lookup.
+    // getAssetInfo returns null on a 404 (asset genuinely doesn't exist) but
+    // THROWS on timeout/other transient errors. Distinguish them: a transient
+    // failure should tolerate a Mimir fallback, but a genuine not-found must
+    // NOT be papered over with stale Mimir ASA metadata.
     let assetInfo: any = null;
+    let assetInfoThrew = false;
     try {
       assetInfo = await this.getAssetInfo(assetId);
     } catch (error) {
       console.warn(`Failed to fetch asset info for ${assetId}:`, error);
+      assetInfoThrew = true;
     }
+
+    // Genuine null (not a thrown error) = algod says this ASA doesn't exist.
+    // Report not-found rather than substituting Mimir data for a nonexistent
+    // asset. (ARC-200 discovery above is Mimir-first and unaffected.)
+    if (!assetInfoThrew && assetInfo === null) {
+      return null;
+    }
+
     const mimirMeta = mimirAssets.find(
       (m) => m.assetType === 'asa' && m.contractId === assetId
     );
@@ -498,12 +518,15 @@ export class NetworkService {
     // `decimals` is a REQUIRED ASA param, so treat "genuinely present" and
     // "absent" differently: 0 is a legitimate value, but getCachedAssetParams'
     // `?? 0` would fabricate a 0 for a missing/failed response and silently
-    // inflate the displayed balance by 10^N. Trust only a genuine decimals from
-    // algod (preferred), else Mimir; `??` keeps a real 0 while falling through
-    // on an unresolved (null) value. If neither resolves it, return null.
+    // inflate the displayed balance by 10^N. algod is authoritative when it's
+    // reachable — trust its decimals (0 included). Only when the algod lookup
+    // THREW (transient/unreachable) do we fall back to Mimir; a reachable algod
+    // that returned unusable params must NOT be papered over with (possibly
+    // stale) Mimir decimals. If neither resolves it, return null.
+    const algodDecimals = this.normalizeDecimals(assetInfo?.params?.decimals);
     const decimals =
-      this.normalizeDecimals(assetInfo?.params?.decimals) ??
-      this.normalizeDecimals(mimirMeta?.decimals);
+      algodDecimals ??
+      (assetInfoThrew ? this.normalizeDecimals(mimirMeta?.decimals) : null);
     if (decimals === null) {
       // Never guess decimals: 0 — that would show a 10^N-inflated balance.
       // Omit the asset until a later refresh can resolve its real params.

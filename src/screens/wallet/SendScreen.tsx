@@ -469,7 +469,14 @@ export default function SendScreen() {
     let cancelled = false;
 
     const fetchAssetOptions = async () => {
-      if (!activeAccount) return;
+      if (!activeAccount) {
+        // Clear the spinner even though we build no options: a superseded
+        // (now-cancelled) earlier run may have left it on, and its guarded
+        // finally won't clear it. Clearing is always safe — only *overwriting
+        // options* must stay behind the cancelled guard.
+        setIsLoadingOptions(false);
+        return;
+      }
 
       setIsLoadingOptions(true);
       try {
