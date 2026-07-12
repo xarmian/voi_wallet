@@ -21,18 +21,34 @@ import {
   MessagingKeyPair,
 } from '@/services/messaging/types';
 import MessagingService from '@/services/messaging';
+import { computeSyncCursor } from '@/services/messaging/syncCursor';
 import { useFriendsStore } from './friendsStore';
 
 const STORAGE_KEY_PREFIX = '@messages/';
 const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
+// Durable committed sync cursor (MIMIR ingestion id), persisted separately from
+// message rows so it is NEVER recomputed forward from persisted data.
+const COMMITTED_ID_STORAGE_KEY_PREFIX = '@messages/committedid/';
 
 const POLLING_INTERVAL_MS = 30000; // 30 seconds (used when chat is open)
+
+// Page size for conversation fetches. A full sync pulls the newest window of
+// this many messages; incremental polls drain every page in the new range.
+const CONVERSATION_FETCH_LIMIT = 100;
+
+// Addresses with a fetchAllThreads currently in flight. Concurrent fetches for
+// the SAME account (e.g. a focus fetch overlapping a poll or pull-to-refresh)
+// are coalesced so two bootstraps can't each commit a different newest window
+// and skip the gap between them.
+const inFlightThreadFetches = new Set<string>();
 
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) =>
   `${STORAGE_KEY_PREFIX}${userAddress}`;
 const getHiddenStorageKey = (userAddress: string) =>
   `${HIDDEN_THREADS_STORAGE_KEY_PREFIX}${userAddress}`;
+const getCommittedIdStorageKey = (userAddress: string) =>
+  `${COMMITTED_ID_STORAGE_KEY_PREFIX}${userAddress}`;
 
 interface MessagesState {
   // State
@@ -43,7 +59,11 @@ interface MessagesState {
   isKeyRegistered: boolean; // Whether current user has registered messaging key
   lastError: string | null;
   pollingInterval: NodeJS.Timeout | null;
-  lastSyncRound: number | null;
+  // MIMIR ingestion id through which we have provably fetched everything.
+  // Advances only when a fetch fully drains its range; persisted separately (see
+  // computeSyncCursor) so it is never recomputed forward from held rows. Used as
+  // the incremental `afterId` (query `id > committedId`).
+  committedId: number | null;
   hiddenThreads: Set<string>; // Set of hidden friend addresses
   showHiddenThreads: boolean; // Toggle to show hidden threads in the list
 
@@ -103,7 +123,7 @@ export const useMessagesStore = create<MessagesState>()(
     isKeyRegistered: false,
     lastError: null,
     pollingInterval: null,
-    lastSyncRound: null,
+    committedId: null,
     hiddenThreads: new Set<string>(),
     showHiddenThreads: false,
 
@@ -409,14 +429,20 @@ export const useMessagesStore = create<MessagesState>()(
         ? new Set<string>(JSON.parse(storedHiddenJson))
         : new Set<string>();
 
-      // Deduplicate messages and calculate lastSyncRound
-      const { threads: storedThreads, maxRound } =
-        deduplicateThreads(rawStoredThreads);
+      // Deduplicate messages for display. The durable sync cursor is loaded
+      // from its own key (falling back to the greatest held ingestion id) — NOT
+      // recomputed forward from these rows — so a persisted partial drain can't
+      // advance it past rows we never fetched.
+      const { threads: storedThreads } = deduplicateThreads(rawStoredThreads);
+      const committedId = await resolveCommittedCursor(
+        userAddress,
+        storedThreads
+      );
 
       set({
         threads: storedThreads,
         currentUserAddress: userAddress,
-        lastSyncRound: maxRound || null,
+        committedId,
         hiddenThreads: storedHidden,
         showHiddenThreads: false,
       });
@@ -573,6 +599,12 @@ export const useMessagesStore = create<MessagesState>()(
      * Fetch all conversations from the blockchain
      */
     fetchAllThreads: async (userAddress, pin) => {
+      // Coalesce concurrent fetches for the same account so overlapping
+      // bootstraps can't each commit a different window and skip the gap.
+      if (inFlightThreadFetches.has(userAddress)) {
+        return;
+      }
+      inFlightThreadFetches.add(userAddress);
       try {
         set({ isLoading: true, lastError: null });
 
@@ -593,14 +625,21 @@ export const useMessagesStore = create<MessagesState>()(
             ? new Set<string>(JSON.parse(storedHiddenJson))
             : new Set<string>();
 
-          // Deduplicate messages and calculate lastSyncRound from cached messages
-          const { threads: storedThreads, maxRound: cachedMaxRound } =
+          // Deduplicate messages for display. The durable sync cursor is
+          // loaded from its own key (falling back to the greatest held
+          // ingestion id) — NOT recomputed forward from these rows — so a
+          // persisted partial drain can't advance it past unfetched rows.
+          const { threads: storedThreads } =
             deduplicateThreads(rawStoredThreads);
+          const committedId = await resolveCommittedCursor(
+            userAddress,
+            storedThreads
+          );
 
           set({
             threads: storedThreads,
             currentUserAddress: userAddress,
-            lastSyncRound: cachedMaxRound || null,
+            committedId,
             isKeyRegistered: false, // Will be checked below
             hiddenThreads: storedHidden,
             showHiddenThreads: false, // Reset to default when switching accounts
@@ -631,16 +670,41 @@ export const useMessagesStore = create<MessagesState>()(
           pin
         );
 
-        const conversationMap = await MessagingService.fetchAllConversations(
-          userAddress,
-          messagingKeyPair,
-          100
-        );
+        // Sync from the committed ingestion-id cursor. Once we have committed a
+        // cursor for this account, EVERY fetch (poll, focus, pull-to-refresh,
+        // post-restart recovery) drains incrementally from it (`id > committedId`)
+        // — never a bare newest-window fetch — so any gap between the cursor and
+        // the newest window is recovered rather than skipped. An ingestion id is
+        // exact/unique, so no boundary overlap is needed. When there is no
+        // committed cursor yet (first sync for this account), afterId is
+        // undefined and the service bootstraps from the newest window. The
+        // service drains the range so a burst of more than the page limit can't
+        // be truncated, and returns `complete` + `maxId` so we advance the
+        // durable cursor only through a fully-drained range.
+        const committed = get().committedId;
+        const afterId = committed != null ? committed : undefined;
+
+        const { conversations, complete, maxId } =
+          await MessagingService.fetchAllConversations(
+            userAddress,
+            messagingKeyPair,
+            CONVERSATION_FETCH_LIMIT,
+            afterId
+          );
+
+        // The active account may have changed while this request was in flight
+        // (account switch). Abandon the stale result rather than merge it into,
+        // or persist its cursor over, another account's state. Everything from
+        // here to the set() below runs without awaiting, so the account can't
+        // change mid-writeback.
+        if (get().currentUserAddress !== userAddress) {
+          return;
+        }
 
         const { threads: existingThreads } = get();
         const newThreads: Record<string, MessageThread> = {};
 
-        for (const [friendAddress, messages] of conversationMap) {
+        for (const [friendAddress, messages] of conversations) {
           const existing = existingThreads[friendAddress];
           const friend = useFriendsStore
             .getState()
@@ -680,29 +744,39 @@ export const useMessagesStore = create<MessagesState>()(
           }
         }
 
-        // Update last sync round from the most recent message
-        let maxRound = get().lastSyncRound || 0;
-        for (const thread of Object.values(newThreads)) {
-          for (const msg of thread.messages) {
-            if (msg.confirmedRound && msg.confirmedRound > maxRound) {
-              maxRound = msg.confirmedRound;
-            }
-          }
-        }
+        // Advance the durable committed cursor ONLY through a fully-drained
+        // range, to the greatest ingestion id fetched (see computeSyncCursor).
+        // A truncated drain, or the indexer fallback (maxId null), leaves the
+        // cursor untouched so nothing below it is skipped.
+        const previousCommitted = get().committedId;
+        const nextCommitted = computeSyncCursor({
+          previous: previousCommitted,
+          complete,
+          maxId,
+        });
 
         set({
           threads: newThreads,
           currentUserAddress: userAddress,
-          lastSyncRound: maxRound || null,
+          committedId: nextCommitted,
           isLoading: false,
         });
 
-        // Persist to per-account storage
-        await persistThreads(userAddress, newThreads);
+        // Persist the message rows BEFORE the cursor, and only advance the
+        // durable cursor if the rows actually persisted. The cursor must never
+        // be durably ahead of the rows it represents: a stale (lower) cursor
+        // just re-fetches on the next sync (dedup-safe), whereas the reverse
+        // would skip the just-fetched rows below the advanced cursor.
+        const rowsPersisted = await persistThreads(userAddress, newThreads);
+        if (rowsPersisted && nextCommitted !== previousCommitted) {
+          await persistCommittedId(userAddress, nextCommitted);
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'Unknown error';
         set({ lastError: message, isLoading: false });
+      } finally {
+        inFlightThreadFetches.delete(userAddress);
       }
     },
 
@@ -713,7 +787,9 @@ export const useMessagesStore = create<MessagesState>()(
       // Stop any existing polling
       get().stopPolling();
 
-      // Start new polling interval
+      // Start new polling interval. fetchAllThreads drains from the committed
+      // sync cursor, so once the initial sync commits a cursor, steady-state
+      // polls only fetch/decrypt new messages.
       const interval = setInterval(() => {
         get().fetchAllThreads(userAddress);
       }, intervalMs);
@@ -754,13 +830,16 @@ export const useMessagesStore = create<MessagesState>()(
         currentUserAddress: null,
         isInitialized: false,
         isKeyRegistered: false,
-        lastSyncRound: null,
+        committedId: null,
         hiddenThreads: new Set<string>(),
         showHiddenThreads: false,
       });
       if (currentUserAddress) {
         await AsyncStorage.removeItem(getStorageKey(currentUserAddress));
         await AsyncStorage.removeItem(getHiddenStorageKey(currentUserAddress));
+        await AsyncStorage.removeItem(
+          getCommittedIdStorageKey(currentUserAddress)
+        );
       }
     },
   }))
@@ -814,14 +893,13 @@ function createEmptyThread(friendAddress: string): MessageThread {
 }
 
 /**
- * Deduplicate messages in threads loaded from storage
- * Returns the deduplicated threads and the max round for lastSyncRound
+ * Deduplicate messages (by ID) in threads loaded from storage, for display.
+ * Note: this intentionally does NOT derive the durable sync cursor — that is
+ * persisted separately so a partial persisted drain can't advance it forward.
  */
 function deduplicateThreads(threads: Record<string, MessageThread>): {
   threads: Record<string, MessageThread>;
-  maxRound: number;
 } {
-  let maxRound = 0;
   const deduped: Record<string, MessageThread> = {};
 
   for (const [friendAddress, thread] of Object.entries(threads)) {
@@ -832,9 +910,6 @@ function deduplicateThreads(threads: Record<string, MessageThread>): {
       if (!seen.has(msg.id)) {
         seen.add(msg.id);
         uniqueMessages.push(msg);
-        if (msg.confirmedRound && msg.confirmedRound > maxRound) {
-          maxRound = msg.confirmedRound;
-        }
       }
     }
 
@@ -850,17 +925,19 @@ function deduplicateThreads(threads: Record<string, MessageThread>): {
     };
   }
 
-  return { threads: deduped, maxRound };
+  return { threads: deduped };
 }
 
 /**
- * Persist threads to AsyncStorage for a specific account
- * Filters out empty threads (threads with no messages) to prevent clutter
+ * Persist threads to AsyncStorage for a specific account.
+ * Filters out empty threads (threads with no messages) to prevent clutter.
+ * Returns whether the write succeeded — the caller uses this to avoid advancing
+ * the durable cursor ahead of rows that failed to persist.
  */
 async function persistThreads(
   userAddress: string,
   threads: Record<string, MessageThread>
-): Promise<void> {
+): Promise<boolean> {
   try {
     const storageKey = getStorageKey(userAddress);
     // Only persist threads that have actual messages
@@ -868,9 +945,88 @@ async function persistThreads(
       Object.entries(threads).filter(([, thread]) => thread.messages.length > 0)
     );
     await AsyncStorage.setItem(storageKey, JSON.stringify(threadsToSave));
+    return true;
   } catch (error) {
     console.error('Failed to persist messages:', error);
+    return false;
   }
+}
+
+/**
+ * Resolve the durable committed sync cursor (MIMIR ingestion id) at load time.
+ *
+ * Prefers the explicitly-persisted cursor. If it is absent — a fresh account, a
+ * crash between the row write and the (later) cursor write, or a legacy blob —
+ * it falls back to the GREATEST held ingestion id rather than null. Because
+ * ingestion id is monotonic, that is a safe watermark: everything with a higher
+ * id (including anything that arrived during the gap) is still fetched by the
+ * next `id > cursor` drain, so no message is skipped. Held rows without a
+ * `sourceId` (indexer-sourced / pending) are ignored; if none have one, we fall
+ * through to a bootstrap.
+ */
+async function resolveCommittedCursor(
+  userAddress: string,
+  threads: Record<string, MessageThread>
+): Promise<number | null> {
+  const explicit = await loadCommittedId(userAddress);
+  if (explicit != null) return explicit;
+  return maxSourceIdOfThreads(threads);
+}
+
+/**
+ * Load the explicitly-persisted committed ingestion-id cursor, or null. Kept
+ * separate from message rows so it is never recomputed forward from a persisted
+ * partial drain.
+ */
+async function loadCommittedId(userAddress: string): Promise<number | null> {
+  try {
+    const raw = await AsyncStorage.getItem(
+      getCommittedIdStorageKey(userAddress)
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'number' ? parsed : null;
+  } catch (error) {
+    console.error('Failed to load committed id:', error);
+    return null;
+  }
+}
+
+/**
+ * Persist the durable committed ingestion-id cursor for an account (or clear).
+ */
+async function persistCommittedId(
+  userAddress: string,
+  id: number | null
+): Promise<void> {
+  try {
+    const storageKey = getCommittedIdStorageKey(userAddress);
+    if (id == null) {
+      await AsyncStorage.removeItem(storageKey);
+    } else {
+      await AsyncStorage.setItem(storageKey, JSON.stringify(id));
+    }
+  } catch (error) {
+    console.error('Failed to persist committed id:', error);
+  }
+}
+
+/**
+ * Greatest MIMIR ingestion id (`sourceId`) across all held threads, or null.
+ * Used as the safe cursor watermark when an explicit cursor is missing on load.
+ */
+function maxSourceIdOfThreads(
+  threads: Record<string, MessageThread>
+): number | null {
+  let max: number | null = null;
+  for (const thread of Object.values(threads)) {
+    for (const msg of thread.messages) {
+      if (msg.sourceId != null && (max === null || msg.sourceId > max)) {
+        max = msg.sourceId;
+      }
+    }
+  }
+  return max;
 }
 
 /**
