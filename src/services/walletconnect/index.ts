@@ -25,6 +25,7 @@ import {
   isSessionExpired,
   detectRequestedChains,
   areRequiredChainsSupported,
+  truncateAddress,
 } from './utils';
 import {
   DEFAULT_NAMESPACES,
@@ -34,6 +35,30 @@ import {
 import type { WalletConnectV1StoredSession } from '@/services/walletconnect/v1/types';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { WC_V1_SESSION_STORAGE_KEY } from '@/services/walletconnect/v1/config';
+
+// Strip sensitive values from a string before logging (a caught error message
+// or any untrusted value). Redacts, in order:
+//  - raw and percent-encoded WalletConnect URIs (`wc:` / `wc%3A`), whose query
+//    string carries the session symKey;
+//  - any stray `symKey=` / `symKey%3D` token (raw or encoded), belt-and-braces
+//    so a symKey can never survive regardless of surrounding format;
+//  - any scheme://… URL (whole URI including the query string);
+//  - full 58-char Algorand addresses, run LAST on the whole string so an
+//    address used as a pseudo-scheme (ADDR://…) is still truncated.
+// Used only for LOGGED output — thrown errors keep the full value so
+// user-facing messages are unchanged (TASK-33).
+const redactSensitiveForLog = (message: string): string =>
+  message
+    .replace(/wc:\S+/gi, 'wc:[redacted]')
+    .replace(/wc%3[Aa]\S*/g, 'wc:[redacted]')
+    .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
+    .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
+    .replace(/[A-Z2-7]{58}/g, (addr) => truncateAddress(addr));
+
+// Convenience wrapper for the common `catch (error) { console.error(msg, error) }`
+// pattern: derive the message string and redact it before logging.
+const redactError = (error: unknown): string =>
+  redactSensitiveForLog(error instanceof Error ? error.message : String(error));
 
 export class WalletConnectService extends EventEmitter {
   private static instance: WalletConnectService;
@@ -72,7 +97,10 @@ export class WalletConnectService extends EventEmitter {
       this.initialized = true;
       console.log('WalletConnect service initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize WalletConnect service:', error);
+      console.error(
+        'Failed to initialize WalletConnect service:',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -121,7 +149,11 @@ export class WalletConnectService extends EventEmitter {
               const parsed = JSON.parse(raw) as WalletConnectV1StoredSession;
               return { key, session: parsed };
             } catch (error) {
-              console.warn('Skipping malformed v1 session entry', key, error);
+              console.warn(
+                'Skipping malformed v1 session entry',
+                redactSensitiveForLog(key),
+                redactError(error)
+              );
               return null;
             }
           })
@@ -215,7 +247,7 @@ export class WalletConnectService extends EventEmitter {
         });
       });
     } catch (error) {
-      console.error('Failed to load v1 sessions:', error);
+      console.error('Failed to load v1 sessions:', redactError(error));
       // Don't throw - v1 session restoration failure shouldn't block app startup
     }
   }
@@ -313,14 +345,20 @@ export class WalletConnectService extends EventEmitter {
         },
       };
 
+      // Redacted (TASK-33): log chain ids + counts, not full account addresses.
       console.log('[WalletConnect] Proposal namespaces:', {
-        required: proposal.requiredNamespaces,
-        optional: proposal.optionalNamespaces,
+        requiredChains: proposal.requiredNamespaces?.algorand?.chains ?? [],
+        optionalChains: proposal.optionalNamespaces?.algorand?.chains ?? [],
+        requiredMethods:
+          proposal.requiredNamespaces?.algorand?.methods?.length ?? 0,
+        optionalMethods:
+          proposal.optionalNamespaces?.algorand?.methods?.length ?? 0,
       });
-      console.log(
-        '[WalletConnect] Our supported namespaces:',
-        supportedNamespaces
-      );
+      console.log('[WalletConnect] Our supported namespaces:', {
+        chains: supportedNamespaces.algorand.chains,
+        methods: supportedNamespaces.algorand.methods.length,
+        accounts: supportedNamespaces.algorand.accounts.length,
+      });
 
       // Use WalletConnect's buildApprovedNamespaces utility
       // This handles all the complex validation logic for us
@@ -329,10 +367,11 @@ export class WalletConnectService extends EventEmitter {
         supportedNamespaces,
       });
 
-      console.log(
-        '[WalletConnect] Approved namespaces built:',
-        approvedNamespaces
-      );
+      console.log('[WalletConnect] Approved namespaces built:', {
+        chains: approvedNamespaces.algorand?.chains ?? [],
+        accounts: approvedNamespaces.algorand?.accounts?.length ?? 0,
+        methods: approvedNamespaces.algorand?.methods?.length ?? 0,
+      });
 
       const session = await signClient.approve({
         id: proposal.id,
@@ -354,7 +393,7 @@ export class WalletConnectService extends EventEmitter {
       this.emit('session_approved', sessionWithMetadata);
       this.emit('sessions_changed');
     } catch (error) {
-      console.error('Failed to approve session:', error);
+      console.error('Failed to approve session:', redactError(error));
       throw new Error(
         `Session approval failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -372,7 +411,7 @@ export class WalletConnectService extends EventEmitter {
 
       this.emit('session_rejected', proposal);
     } catch (error) {
-      console.error('Failed to reject session:', error);
+      console.error('Failed to reject session:', redactError(error));
       throw new Error(
         `Session rejection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -405,7 +444,7 @@ export class WalletConnectService extends EventEmitter {
       this.emit('session_disconnected', topic);
       this.emit('sessions_changed');
     } catch (error) {
-      console.error('Failed to disconnect session:', error);
+      console.error('Failed to disconnect session:', redactError(error));
       throw new Error(
         `Session disconnect failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -476,7 +515,7 @@ export class WalletConnectService extends EventEmitter {
 
       return [v1Session];
     } catch (error) {
-      console.error('Failed to get v1 sessions:', error);
+      console.error('Failed to get v1 sessions:', redactError(error));
       return [];
     }
   }
@@ -534,7 +573,9 @@ export class WalletConnectService extends EventEmitter {
 
       return signedTxns;
     } catch (error) {
-      console.error('Failed to sign transactions:', error);
+      // Redact any full address (e.g. the rekey auth-address) from the log; the
+      // re-thrown error below preserves the full message for the caller/UX.
+      console.error('Failed to sign transactions:', redactError(error));
       throw new Error(
         `Transaction signing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -559,7 +600,7 @@ export class WalletConnectService extends EventEmitter {
         },
       });
     } catch (error) {
-      console.error('Failed to respond to request:', error);
+      console.error('Failed to respond to request:', redactError(error));
       throw new Error(
         `Request response failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -583,7 +624,7 @@ export class WalletConnectService extends EventEmitter {
         },
       });
     } catch (err) {
-      console.error('Failed to reject request:', err);
+      console.error('Failed to reject request:', redactError(err));
       throw new Error(
         `Request rejection failed: ${err instanceof Error ? err.message : 'Unknown error'}`
       );
@@ -618,7 +659,7 @@ export class WalletConnectService extends EventEmitter {
         }
       }
     } catch (error) {
-      console.error('Failed to load existing sessions:', error);
+      console.error('Failed to load existing sessions:', redactError(error));
     }
   }
 
@@ -687,7 +728,7 @@ export class WalletConnectService extends EventEmitter {
         this.emit('sessions_changed');
       }
     } catch (e) {
-      console.warn('Failed to handle session_update:', e);
+      console.warn('Failed to handle session_update:', redactError(e));
     }
   }
 
