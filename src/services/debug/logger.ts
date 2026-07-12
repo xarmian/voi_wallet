@@ -19,7 +19,14 @@ class DebugLogger {
   }
 
   private constructor() {
-    this.setupConsoleInterception();
+    // Only monkey-patch global console (and retain raw error args, which may
+    // include objects carrying addresses/amounts) in development. In production
+    // this interception + in-memory retention is not installed (TASK-33). The
+    // deliberate consumers (ledger ConnectionModal, DebugLogsModal) call
+    // addDebugEntry/getLogs directly and continue to work without it.
+    if (__DEV__) {
+      this.setupConsoleInterception();
+    }
   }
 
   private setupConsoleInterception() {

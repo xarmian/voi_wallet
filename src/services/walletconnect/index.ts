@@ -313,14 +313,20 @@ export class WalletConnectService extends EventEmitter {
         },
       };
 
+      // Redacted (TASK-33): log chain ids + counts, not full account addresses.
       console.log('[WalletConnect] Proposal namespaces:', {
-        required: proposal.requiredNamespaces,
-        optional: proposal.optionalNamespaces,
+        requiredChains: proposal.requiredNamespaces?.algorand?.chains ?? [],
+        optionalChains: proposal.optionalNamespaces?.algorand?.chains ?? [],
+        requiredMethods:
+          proposal.requiredNamespaces?.algorand?.methods?.length ?? 0,
+        optionalMethods:
+          proposal.optionalNamespaces?.algorand?.methods?.length ?? 0,
       });
-      console.log(
-        '[WalletConnect] Our supported namespaces:',
-        supportedNamespaces
-      );
+      console.log('[WalletConnect] Our supported namespaces:', {
+        chains: supportedNamespaces.algorand.chains,
+        methods: supportedNamespaces.algorand.methods.length,
+        accounts: supportedNamespaces.algorand.accounts.length,
+      });
 
       // Use WalletConnect's buildApprovedNamespaces utility
       // This handles all the complex validation logic for us
@@ -329,10 +335,11 @@ export class WalletConnectService extends EventEmitter {
         supportedNamespaces,
       });
 
-      console.log(
-        '[WalletConnect] Approved namespaces built:',
-        approvedNamespaces
-      );
+      console.log('[WalletConnect] Approved namespaces built:', {
+        chains: approvedNamespaces.algorand?.chains ?? [],
+        accounts: approvedNamespaces.algorand?.accounts?.length ?? 0,
+        methods: approvedNamespaces.algorand?.methods?.length ?? 0,
+      });
 
       const session = await signClient.approve({
         id: proposal.id,

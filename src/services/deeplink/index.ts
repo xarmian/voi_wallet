@@ -37,6 +37,21 @@ import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 
+// Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
+// embed full addresses, amounts, notes and other PII. These keep debug logs
+// useful (request type, network, truncated address) without emitting the
+// sensitive payload. Used for the console.* sites in handleArc0090Uri.
+const redactAddress = (address?: string): string =>
+  address && address.length > 6
+    ? `${address.slice(0, 6)}…[redacted]`
+    : '[redacted]';
+
+const redactUri = (url: string): string => {
+  const schemeEnd = url.indexOf('://');
+  const scheme = schemeEnd > 0 ? url.slice(0, schemeEnd) : 'uri';
+  return `${scheme}://[redacted]`;
+};
+
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
 
 export interface DeepLinkRoute {
@@ -515,7 +530,10 @@ export class DeepLinkService {
    */
   private async handleArc0090Uri(url: string): Promise<boolean> {
     try {
-      console.log('[DeepLink] handleArc0090Uri - url:', url);
+      console.log(
+        '[DeepLink] handleArc0090Uri - received URI:',
+        redactUri(url)
+      );
 
       // Check for legacy voi:// format first (voi://send?to=...)
       if (isLegacyVoiUri(url)) {
@@ -534,17 +552,27 @@ export class DeepLinkService {
       const uriType = getArc0090UriType(url);
       console.log('[DeepLink] handleArc0090Uri - uriType:', uriType);
       if (!uriType) {
-        console.warn('Unknown ARC-0090 URI type:', url);
+        console.warn('[DeepLink] Unknown ARC-0090 URI type:', redactUri(url));
         return false;
       }
 
       const parsed = parseArc0090Uri(url);
-      console.log(
-        '[DeepLink] handleArc0090Uri - parsed:',
-        JSON.stringify(parsed, null, 2)
-      );
+      // Redacted summary only: parsed contains full address + amount/note params.
+      console.log('[DeepLink] handleArc0090Uri - parsed:', {
+        type: parsed?.type,
+        network: parsed?.network,
+        scheme: parsed?.scheme,
+        address:
+          parsed && 'address' in parsed
+            ? redactAddress(parsed.address)
+            : undefined,
+        params: '[redacted]',
+      });
       if (!parsed) {
-        console.error('Failed to parse ARC-0090 URI:', url);
+        console.error(
+          '[DeepLink] Failed to parse ARC-0090 URI:',
+          redactUri(url)
+        );
         return false;
       }
 
