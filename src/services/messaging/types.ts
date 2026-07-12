@@ -44,6 +44,12 @@ export interface Message {
   status: MessageStatus;
   /** Blockchain round when confirmed (if available) */
   confirmedRound?: number;
+  /**
+   * MIMIR ingestion id (voiwallet.messages BIGSERIAL PK) when the message came
+   * from MIMIR. Monotonic in ingestion order, so it is the durable incremental
+   * sync cursor. Undefined for indexer-sourced or locally-pending messages.
+   */
+  sourceId?: number;
   /** Transaction fee paid in microVOI */
   fee: number;
 }

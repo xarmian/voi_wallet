@@ -9,19 +9,18 @@
  * comes back full (== limit) — before the durable sync cursor is allowed to
  * advance.
  *
- * Both helpers are pure (no network / crypto): they take a `fetchPage`
- * callback and orchestrate the drain, so they can be unit-tested in isolation.
+ * `drainByCursor` is pure (no network / crypto): it takes a `fetchPage`
+ * callback and orchestrates the drain, so it can be unit-tested in isolation.
  */
 
 /**
  * Last-resort backstop against a source that never terminates (e.g. a
  * misbehaving pager). Real termination is structural — a short page for
- * `drainByCursor`, an absent/repeated token for `drainByToken` — and, for a
- * finite backend, always happens before this regardless of backlog size. The
- * value is only a runaway ceiling, not a functional page limit: it is set far
- * beyond any realistic backlog (here, up to ~100k rows) so that even a long
- * offline period drains to completion in a single sync and its gap is fully
- * recovered rather than deferred.
+ * `drainByCursor` — and, for a finite backend, always happens before this
+ * regardless of backlog size. The value is only a runaway ceiling, not a
+ * functional page limit: it is set far beyond any realistic backlog (here, up
+ * to ~100k rows) so that even a long offline period drains to completion in a
+ * single sync and its gap is fully recovered rather than deferred.
  */
 export const MAX_DRAIN_PAGES = 1000;
 
@@ -80,44 +79,4 @@ export async function drainByCursor<T>(
   }
 
   return { rows, complete: false };
-}
-
-/**
- * Drain a token-paginated source (e.g. the Algorand indexer) into a single
- * list. Keeps fetching pages while the source returns a fresh continuation
- * token, so the range is drained to completion — bounded only by the number of
- * rows actually in the incremental window.
- *
- * Termination is structural: a well-behaved source omits the token on the last
- * page, and a repeated token (a misbehaving pager) is treated as the end so the
- * loop can never spin.
- *
- * Returns `complete: true` only when the source signalled the end by omitting
- * the token. Stopping on a repeated token or the `maxPages` backstop returns
- * `complete: false` so the caller does not advance a durable cursor past rows
- * it may not have fetched.
- *
- * @param fetchPage - fetches one page for the given continuation token
- * @param maxPages - runaway backstop (see MAX_DRAIN_PAGES)
- */
-export async function drainByToken<T>(
-  fetchPage: (
-    token: string | undefined
-  ) => Promise<{ items: T[]; nextToken?: string }>,
-  maxPages: number = MAX_DRAIN_PAGES
-): Promise<{ items: T[]; complete: boolean }> {
-  const items: T[] = [];
-  const seenTokens = new Set<string>();
-  let token: string | undefined;
-
-  for (let page = 0; page < maxPages; page++) {
-    const { items: batch, nextToken } = await fetchPage(token);
-    items.push(...batch);
-    if (!nextToken) return { items, complete: true };
-    if (seenTokens.has(nextToken)) return { items, complete: false };
-    seenTokens.add(nextToken);
-    token = nextToken;
-  }
-
-  return { items, complete: false };
 }

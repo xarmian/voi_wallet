@@ -1,121 +1,63 @@
 import { computeSyncCursor } from '../syncCursor';
 
 describe('computeSyncCursor', () => {
-  describe('advance only on a complete drain', () => {
-    it('leaves the cursor untouched when an incremental drain is truncated', () => {
+  describe('advance only on a complete drain from an ingestion-ordered source', () => {
+    it('leaves the cursor untouched when a drain is truncated', () => {
       // The core message-loss guard: a capped/partial drain must NOT advance
-      // the durable cursor past rows it never fetched.
+      // the durable cursor past ingestion ids it never fetched.
       expect(
-        computeSyncCursor({
-          previous: 1000,
-          complete: false,
-          isBootstrap: false,
-          minFetchedRound: null,
-          maxHeldRound: 1200, // held rows jumped ahead, but drain was partial
-        })
+        computeSyncCursor({ previous: 1000, complete: false, maxId: 5000 })
       ).toBe(1000);
     });
 
-    it('leaves the cursor untouched when a bootstrap is truncated', () => {
+    it('leaves the cursor untouched for a source with no ingestion id (indexer fallback)', () => {
       expect(
-        computeSyncCursor({
-          previous: null,
-          complete: false,
-          isBootstrap: true,
-          minFetchedRound: 900,
-          maxHeldRound: 1000,
-        })
+        computeSyncCursor({ previous: 1000, complete: true, maxId: null })
+      ).toBe(1000);
+    });
+
+    it('keeps a null cursor when nothing advanceable is available', () => {
+      expect(
+        computeSyncCursor({ previous: null, complete: true, maxId: null })
       ).toBe(null);
     });
   });
 
-  describe('bootstrap (newest-window) fetch', () => {
-    it('commits to the oldest round fetched', () => {
-      // Everything with round > minFetchedRound is provably in hand.
+  describe('complete drain from MIMIR', () => {
+    it('advances to the greatest ingestion id fetched', () => {
       expect(
-        computeSyncCursor({
-          previous: null,
-          complete: true,
-          isBootstrap: true,
-          minFetchedRound: 950,
-          maxHeldRound: 1000,
-        })
-      ).toBe(950);
-    });
-
-    it('keeps the previous cursor if nothing was fetched', () => {
-      expect(
-        computeSyncCursor({
-          previous: 500,
-          complete: true,
-          isBootstrap: true,
-          minFetchedRound: null,
-          maxHeldRound: null,
-        })
-      ).toBe(500);
-    });
-
-    it('never moves the cursor backwards', () => {
-      expect(
-        computeSyncCursor({
-          previous: 1000,
-          complete: true,
-          isBootstrap: true,
-          minFetchedRound: 950, // older than the existing cursor
-          maxHeldRound: 1000,
-        })
-      ).toBe(1000);
-    });
-  });
-
-  describe('complete incremental drain', () => {
-    it('commits to the newest round held (reached the tip)', () => {
-      expect(
-        computeSyncCursor({
-          previous: 1000,
-          complete: true,
-          isBootstrap: false,
-          minFetchedRound: null,
-          maxHeldRound: 1300,
-        })
+        computeSyncCursor({ previous: 1000, complete: true, maxId: 1300 })
       ).toBe(1300);
     });
 
     it('sets the first cursor when none existed', () => {
       expect(
-        computeSyncCursor({
-          previous: null,
-          complete: true,
-          isBootstrap: false,
-          minFetchedRound: null,
-          maxHeldRound: 1300,
-        })
+        computeSyncCursor({ previous: null, complete: true, maxId: 1300 })
       ).toBe(1300);
     });
 
-    it('never moves backwards and holds steady when nothing new arrived', () => {
-      // Steady-state poll: boundary-overlap re-fetch yields no newer rounds.
+    it('never moves backwards', () => {
       expect(
-        computeSyncCursor({
-          previous: 1300,
-          complete: true,
-          isBootstrap: false,
-          minFetchedRound: null,
-          maxHeldRound: 1300,
-        })
+        computeSyncCursor({ previous: 1300, complete: true, maxId: 1200 })
       ).toBe(1300);
     });
 
-    it('keeps the previous cursor when no rounds are held', () => {
+    it('holds steady when a steady-state poll fetched nothing newer', () => {
+      // maxId falls back to the caller's cursor when no rows were drained.
       expect(
-        computeSyncCursor({
-          previous: 1300,
-          complete: true,
-          isBootstrap: false,
-          minFetchedRound: null,
-          maxHeldRound: null,
-        })
+        computeSyncCursor({ previous: 1300, complete: true, maxId: 1300 })
       ).toBe(1300);
+    });
+  });
+
+  describe('late-indexed row with a lower round but higher id (watermark race)', () => {
+    it('advances the cursor to the late row’s higher id so it is not skipped', () => {
+      // Cursor had advanced to id 2000 (round 200). A row is then indexed at an
+      // earlier round (150) but a higher id (3000); the next drain fetches it
+      // and the cursor advances past it.
+      expect(
+        computeSyncCursor({ previous: 2000, complete: true, maxId: 3000 })
+      ).toBe(3000);
     });
   });
 });

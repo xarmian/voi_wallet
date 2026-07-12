@@ -1,4 +1,4 @@
-import { drainByCursor, drainByToken, MAX_DRAIN_PAGES } from '../pagination';
+import { drainByCursor, MAX_DRAIN_PAGES } from '../pagination';
 
 interface Row {
   id: number;
@@ -119,69 +119,27 @@ describe('drainByCursor', () => {
   it('defaults its safety cap to MAX_DRAIN_PAGES', () => {
     expect(MAX_DRAIN_PAGES).toBeGreaterThan(0);
   });
-});
 
-describe('drainByToken', () => {
-  it('returns a single page when there is no continuation token', async () => {
-    const fetchPage = jest.fn(async () => ({
-      items: [1, 2, 3],
-      nextToken: undefined,
-    }));
+  it('fetches a late-indexed row with a LOWER round but HIGHER id (watermark race)', async () => {
+    // The exact bug the ingestion-id cursor fixes: after the cursor advanced
+    // past round 200, a row is indexed at an EARLIER round (150) but — because
+    // ingestion id is monotonic — a HIGHER id (3000). Paging by id (not round)
+    // still picks it up on the next drain.
+    const allRows: Row[] = [
+      { id: 1000, round: 100 },
+      { id: 2000, round: 200 },
+      { id: 3000, round: 150 }, // indexed later, earlier round, higher id
+    ];
+    const committedId = 2000; // advanced past the round-200 row
 
-    const result = await drainByToken(fetchPage);
+    const { fetchPage } = makeCursorSource(allRows, 10);
+    // Model the store's incremental query: first page starts at `committedId`.
+    const drainFrom = async (cursor: number | undefined) =>
+      fetchPage(cursor ?? committedId);
 
-    expect(result.items).toEqual([1, 2, 3]);
+    const result = await drainByCursor(10, drainFrom, (r) => r.id);
+
+    expect(result.rows.map((r) => r.id)).toEqual([3000]);
     expect(result.complete).toBe(true);
-    expect(fetchPage).toHaveBeenCalledTimes(1);
-    expect(fetchPage).toHaveBeenCalledWith(undefined);
-  });
-
-  it('follows continuation tokens to completion', async () => {
-    const pages: Record<string, { items: number[]; nextToken?: string }> = {
-      __start__: { items: [1, 2], nextToken: 'a' },
-      a: { items: [3, 4], nextToken: 'b' },
-      b: { items: [5], nextToken: undefined },
-    };
-    const seen: (string | undefined)[] = [];
-    const fetchPage = async (token: string | undefined) => {
-      seen.push(token);
-      return pages[token ?? '__start__'];
-    };
-
-    const result = await drainByToken(fetchPage);
-
-    expect(result.items).toEqual([1, 2, 3, 4, 5]);
-    expect(result.complete).toBe(true);
-    expect(seen).toEqual([undefined, 'a', 'b']);
-  });
-
-  it('reports incomplete if the source repeats a token (does not spin)', async () => {
-    let pageCount = 0;
-    const fetchPage = async () => {
-      pageCount++;
-      return { items: [pageCount], nextToken: 'stuck' };
-    };
-
-    const result = await drainByToken(fetchPage);
-
-    // First page consumed, second page sees the already-seen token and stops.
-    expect(pageCount).toBe(2);
-    expect(result.items).toEqual([1, 2]);
-    expect(result.complete).toBe(false);
-  });
-
-  it('reports incomplete when it hits the maxPages safety cap', async () => {
-    let pageCount = 0;
-    // Fresh token every page => would loop forever without the cap.
-    const fetchPage = async () => {
-      pageCount++;
-      return { items: [pageCount], nextToken: `t${pageCount}` };
-    };
-
-    const result = await drainByToken(fetchPage, 4);
-
-    expect(pageCount).toBe(4);
-    expect(result.items).toEqual([1, 2, 3, 4]);
-    expect(result.complete).toBe(false);
   });
 });
