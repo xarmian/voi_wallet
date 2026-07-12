@@ -47,6 +47,7 @@ import {
   isMessagingKeyRegistered,
   getMessagingPublicKey,
 } from './keyRegistry';
+import { drainByCursor, drainByToken } from './pagination';
 
 /**
  * MIMIR messages table row structure
@@ -462,30 +463,36 @@ export class MessagingService {
    * @param messagingKeyPair - User's derived messaging keypair
    * @param limit - Maximum number of messages to fetch
    * @param afterRound - Only fetch messages after this round (for incremental sync)
-   * @returns Map of friend address to array of messages
+   * @returns `conversations` (friend address -> messages) and `complete`, which
+   *   is false when an incremental drain was truncated (safety cap reached) so
+   *   the caller must not advance its durable sync cursor past the fetched rows.
    */
   async fetchAllConversations(
     userAddress: string,
     messagingKeyPair: MessagingKeyPair,
     limit = 100,
     afterRound?: number
-  ): Promise<Map<string, Message[]>> {
+  ): Promise<{ conversations: Map<string, Message[]>; complete: boolean }> {
     const supabase = getSupabaseClient();
 
     // Try MIMIR first if Supabase is configured
     if (supabase) {
       try {
-        const mimirMessages = await this.fetchAllConversationsFromMimir(
-          userAddress,
-          limit,
-          afterRound
-        );
+        const { messages, complete } =
+          await this.fetchAllConversationsFromMimir(
+            userAddress,
+            limit,
+            afterRound
+          );
 
-        return this.groupAndDecryptMimirMessages(
-          mimirMessages,
-          userAddress,
-          messagingKeyPair
-        );
+        return {
+          conversations: this.groupAndDecryptMimirMessages(
+            messages,
+            userAddress,
+            messagingKeyPair
+          ),
+          complete,
+        };
       } catch (error) {
         console.warn('MIMIR fetch failed, falling back to indexer:', error);
       }
@@ -507,32 +514,64 @@ export class MessagingService {
     userAddress: string,
     limit: number,
     afterRound?: number
-  ): Promise<MimirMessage[]> {
+  ): Promise<{ messages: MimirMessage[]; complete: boolean }> {
     const supabase = getSupabaseClient();
     if (!supabase) {
       throw new Error('Supabase not configured');
     }
 
-    // Query all messages where user is sender or receiver from voiwallet schema
-    let query = supabase
-      .schema('voiwallet')
-      .from('messages')
-      .select('*')
-      .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
-      .order('round', { ascending: false })
-      .limit(limit);
-
-    if (afterRound) {
-      query = query.gt('round', afterRound);
+    // Full sync (afterRound undefined): the newest `limit` messages, ordered by
+    // round descending — as before. `undefined` (not a falsy 0) is the signal,
+    // so round 0 remains a valid incremental cursor.
+    if (afterRound === undefined) {
+      const { data, error } = await supabase
+        .schema('voiwallet')
+        .from('messages')
+        .select('*')
+        .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+        .order('round', { ascending: false })
+        .limit(limit);
+      if (error) {
+        throw new Error(`MIMIR query failed: ${error.message}`);
+      }
+      return { messages: (data as MimirMessage[]) || [], complete: true };
     }
 
-    const { data, error } = await query;
+    // Incremental sync: drain EVERY message with round > afterRound so a burst
+    // of more than `limit` between polls can't be truncated (message-loss
+    // guard). Page forward by the unique, monotonic primary key `id` (oldest
+    // first): no rows sharing a round can be split across a page boundary, and
+    // because we drain oldest-first, stopping short only defers the newest rows
+    // to the next poll instead of dropping older ones.
+    const fetchPage = async (
+      afterId: number | undefined
+    ): Promise<MimirMessage[]> => {
+      let query = supabase
+        .schema('voiwallet')
+        .from('messages')
+        .select('*')
+        .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+        .gt('round', afterRound)
+        .order('id', { ascending: true })
+        .limit(limit);
 
-    if (error) {
-      throw new Error(`MIMIR query failed: ${error.message}`);
-    }
+      if (afterId !== undefined) {
+        query = query.gt('id', afterId);
+      }
 
-    return (data as MimirMessage[]) || [];
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`MIMIR query failed: ${error.message}`);
+      }
+      return (data as MimirMessage[]) || [];
+    };
+
+    const { rows, complete } = await drainByCursor(
+      limit,
+      fetchPage,
+      (row) => row.id
+    );
+    return { messages: rows, complete };
   }
 
   /**
@@ -606,24 +645,52 @@ export class MessagingService {
     messagingKeyPair: MessagingKeyPair,
     limit: number,
     afterRound?: number
-  ): Promise<Map<string, Message[]>> {
+  ): Promise<{ conversations: Map<string, Message[]>; complete: boolean }> {
     const networkService = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     const indexer = networkService.getIndexerClient();
 
-    let query = indexer
-      .lookupAccountTransactions(userAddress)
-      .txType('pay')
-      .limit(limit);
+    // Fetch a single page of pay transactions, optionally continuing from a
+    // pagination token. `afterRound === undefined` (not a falsy 0) marks a full
+    // sync, so round 0 remains a valid incremental cursor.
+    const fetchPage = async (token: string | undefined) => {
+      let query = indexer
+        .lookupAccountTransactions(userAddress)
+        .txType('pay')
+        .limit(limit);
 
-    if (afterRound) {
-      query = query.minRound(afterRound);
+      if (afterRound !== undefined) {
+        query = query.minRound(afterRound);
+      }
+      if (token) {
+        query = query.nextToken(token);
+      }
+
+      const response = await query.do();
+      return {
+        items: response.transactions || [],
+        nextToken: response.nextToken,
+      };
+    };
+
+    // Full sync (no cursor): a single newest-`limit` page, as before.
+    // Incremental sync drains the range to completion (every page in
+    // (afterRound, latest]) so a burst of more than `limit` messages can't be
+    // truncated (message-loss guard). `complete` is false only if the drain was
+    // cut short by its safety cap.
+    let txns;
+    let complete: boolean;
+    if (afterRound !== undefined) {
+      const drained = await drainByToken(fetchPage);
+      txns = drained.items;
+      complete = drained.complete;
+    } else {
+      txns = (await fetchPage(undefined)).items;
+      complete = true;
     }
-
-    const response = await query.do();
 
     const conversationMap = new Map<string, Message[]>();
 
-    for (const txn of response.transactions || []) {
+    for (const txn of txns) {
       if (!txn.note) continue;
       if (!txn.id) continue;
 
@@ -690,7 +757,7 @@ export class MessagingService {
       );
     }
 
-    return conversationMap;
+    return { conversations: conversationMap, complete };
   }
 
   /**
