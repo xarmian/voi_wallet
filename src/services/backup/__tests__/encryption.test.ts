@@ -205,7 +205,7 @@ describe('bounded validation before scrypt (DoS guard)', () => {
       salt: randomHex(32),
       iv: randomHex(16),
       ciphertext: 'AAAA',
-      hmac: 'bb',
+      hmac: 'ab'.repeat(32), // 64 lowercase hex chars (shape-valid placeholder)
     };
   }
 
@@ -254,6 +254,25 @@ describe('bounded validation before scrypt (DoS guard)', () => {
   it('rejects a malformed salt length', () => {
     const bad = { ...baseV2(), salt: 'deadbeef' };
     expect(() => validateEncryptedBackupFile(bad)).toThrow(BackupError);
+  });
+
+  it('rejects a v2 hmac that is not exactly 64 lowercase hex chars', () => {
+    // Too short
+    expect(() =>
+      validateEncryptedBackupFile({ ...baseV2(), hmac: 'abcd' })
+    ).toThrow(BackupError);
+    // Non-hex
+    expect(() =>
+      validateEncryptedBackupFile({ ...baseV2(), hmac: 'z'.repeat(64) })
+    ).toThrow(BackupError);
+    // Uppercase (writer emits lowercase)
+    expect(() =>
+      validateEncryptedBackupFile({ ...baseV2(), hmac: 'A'.repeat(64) })
+    ).toThrow(BackupError);
+    // Correct length + lowercase hex passes shape validation
+    expect(() =>
+      validateEncryptedBackupFile({ ...baseV2(), hmac: 'a'.repeat(64) })
+    ).not.toThrow();
   });
 
   it('rejects an unknown version with a clear error', () => {

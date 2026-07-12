@@ -21,6 +21,7 @@ import {
   encryptBackup,
   decryptBackup,
   validateEncryptedBackupFile,
+  validatePasswordStrength,
 } from './encryption';
 import {
   collectAccounts,
@@ -106,6 +107,21 @@ export class BackupService {
     pin?: string
   ): Promise<BackupResult> {
     try {
+      // Step 0: Enforce the passphrase policy at the service boundary. The UI
+      // modal already gates on this, but a direct caller must not be able to
+      // create a backup protecting mnemonics under a weak password.
+      // NOTE: this gate applies to CREATION only — restore/import intentionally
+      // never validates against this policy, so any older/any backup still
+      // imports.
+      const strength = validatePasswordStrength(password);
+      if (!strength.isValid) {
+        throw new BackupError(
+          strength.feedback[0] ||
+            'Password does not meet the minimum strength requirements',
+          'WEAK_PASSWORD'
+        );
+      }
+
       // Step 1: Collect accounts
       this.reportProgress({
         step: 'collecting',

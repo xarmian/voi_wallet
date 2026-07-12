@@ -81,16 +81,39 @@ function deriveKeyPbkdf2(password: string, saltHex: string): string {
 }
 
 /**
- * scrypt key derivation (v2). Returns the derived key as a hex string.
+ * Best-effort scrub of a CryptoJS WordArray's backing words.
+ *
+ * SECURITY / defense-in-depth only: JS/Hermes strings are immutable and cannot
+ * be reliably zeroed, so this reduces (does not eliminate) copies of key
+ * material left in memory. WordArrays store their bytes in a plain number[],
+ * which we CAN overwrite.
+ */
+function wipeWordArray(wa: CryptoJS.lib.WordArray | null | undefined): void {
+  if (wa && Array.isArray(wa.words)) {
+    wa.words.fill(0);
+    wa.sigBytes = 0;
+  }
+}
+
+/**
+ * scrypt key derivation (v2). Returns the AES key and HMAC key as CryptoJS
+ * WordArrays (which can be scrubbed) derived directly from the scrypt output,
+ * avoiding an unnecessary hex-string copy of the key material.
  *
  * Uses the ASYNC variant which yields to the event loop during the multi-second
  * derivation so it doesn't freeze the RN UI thread.
+ *
+ * The caller MUST wipe both returned WordArrays in a `finally` (see
+ * wipeWordArray for the defense-in-depth caveat).
  */
-async function deriveKeyScryptHex(
+async function deriveV2KeyMaterial(
   password: string,
   saltHex: string,
   params: ScryptKdfParams
-): Promise<string> {
+): Promise<{
+  keyWordArray: CryptoJS.lib.WordArray;
+  hmacKeyWordArray: CryptoJS.lib.WordArray;
+}> {
   const saltBytes = Uint8Array.from(Buffer.from(saltHex, 'hex'));
   const derived = await scryptAsync(password, saltBytes, {
     N: params.N,
@@ -98,10 +121,17 @@ async function deriveKeyScryptHex(
     p: params.p,
     dkLen: params.dkLen,
   });
-  const hex = Buffer.from(derived).toString('hex');
-  // Scrub the raw derived-key bytes; the hex copy is scrubbed by the caller.
-  derived.fill(0);
-  return hex;
+  const keyWordArray = CryptoJS.lib.WordArray.create(derived);
+  derived.fill(0); // scrub the raw scrypt bytes immediately
+
+  // HMAC key = SHA256(key || tweak). `concat` mutates the receiver, so clone the
+  // key first and wipe the throwaway input afterwards.
+  const tweakWordArray = CryptoJS.enc.Utf8.parse(HMAC_KEY_TWEAK);
+  const hmacKeyInput = keyWordArray.clone().concat(tweakWordArray);
+  const hmacKeyWordArray = CryptoJS.SHA256(hmacKeyInput);
+  wipeWordArray(hmacKeyInput);
+
+  return { keyWordArray, hmacKeyWordArray };
 }
 
 /**
@@ -228,6 +258,15 @@ export function validateEncryptedBackupFile(
     if (obj.kdf !== 'scrypt') {
       throw new BackupError('Unsupported backup KDF', 'VERSION_MISMATCH');
     }
+    // v2 writes the HMAC as exactly 32 bytes of lowercase hex. Reject a
+    // malformed/short hmac up front so it never reaches the length-dependent
+    // constant-time compare. (v1 hmac format is intentionally left unchecked.)
+    if (!/^[0-9a-f]{64}$/.test(obj.hmac)) {
+      throw new BackupError(
+        'Invalid backup file format',
+        'INVALID_FILE_FORMAT'
+      );
+    }
     const rawParams = obj.kdfParams;
     if (typeof rawParams !== 'object' || rawParams === null) {
       throw new BackupError(
@@ -312,7 +351,8 @@ export async function encryptBackup(
   data: string,
   password: string
 ): Promise<EncryptedBackupFile> {
-  let keyHex: string | null = null;
+  let keyWordArray: CryptoJS.lib.WordArray | null = null;
+  let hmacKeyWordArray: CryptoJS.lib.WordArray | null = null;
 
   try {
     // Generate random salt and IV
@@ -326,11 +366,13 @@ export async function encryptBackup(
       dkLen: KEY_LENGTH,
     };
 
-    // Derive encryption key from password (memory-hard scrypt)
-    keyHex = await deriveKeyScryptHex(password, salt, kdfParams);
+    // Derive encryption + MAC keys from password (memory-hard scrypt)
+    ({ keyWordArray, hmacKeyWordArray } = await deriveV2KeyMaterial(
+      password,
+      salt,
+      kdfParams
+    ));
 
-    // Prepare key and IV as WordArrays for CryptoJS
-    const keyWordArray = CryptoJS.enc.Hex.parse(keyHex);
     const ivWordArray = CryptoJS.enc.Hex.parse(iv);
 
     // Encrypt with AES-256-CTR (matches the existing cipher; the change is the
@@ -346,7 +388,6 @@ export async function encryptBackup(
 
     // Encrypt-then-MAC. The MAC covers the canonical envelope params (AAD) plus
     // the ciphertext, binding N/r/p/dkLen/salt/iv/version to the ciphertext.
-    const hmacKey = CryptoJS.SHA256(keyHex + HMAC_KEY_TWEAK).toString();
     const aad = canonicalV2Aad({
       version: 2,
       kdf: 'scrypt',
@@ -354,7 +395,10 @@ export async function encryptBackup(
       salt,
       iv,
     });
-    const hmac = CryptoJS.HmacSHA256(aad + ciphertext, hmacKey).toString();
+    const hmac = CryptoJS.HmacSHA256(
+      aad + ciphertext,
+      hmacKeyWordArray
+    ).toString();
 
     return {
       format: 'voibackup',
@@ -372,10 +416,9 @@ export async function encryptBackup(
       'ENCRYPTION_FAILED'
     );
   } finally {
-    // Scrub derived key material from memory
-    if (keyHex) {
-      keyHex = '0'.repeat(keyHex.length);
-    }
+    // Scrub derived key material from memory (defense-in-depth)
+    wipeWordArray(keyWordArray);
+    wipeWordArray(hmacKeyWordArray);
   }
 }
 
@@ -443,24 +486,24 @@ async function decryptBackupV2(
   encrypted: EncryptedBackupFileV2,
   password: string
 ): Promise<string> {
-  let keyHex: string | null = null;
+  let keyWordArray: CryptoJS.lib.WordArray | null = null;
+  let hmacKeyWordArray: CryptoJS.lib.WordArray | null = null;
 
   try {
-    // Derive encryption key from password (memory-hard scrypt)
-    keyHex = await deriveKeyScryptHex(
+    // Derive encryption + MAC keys from password (memory-hard scrypt)
+    ({ keyWordArray, hmacKeyWordArray } = await deriveV2KeyMaterial(
       password,
       encrypted.salt,
       encrypted.kdfParams
-    );
+    ));
 
     // Verify the MAC over the canonical envelope params + ciphertext. Any
     // tampering with version/kdf/N/r/p/dkLen/salt/iv changes the recomputed AAD
     // and fails this check (in addition to salt/N/r/p already feeding scrypt).
-    const hmacKey = CryptoJS.SHA256(keyHex + HMAC_KEY_TWEAK).toString();
     const aad = canonicalV2Aad(encrypted);
     const computedHmac = CryptoJS.HmacSHA256(
       aad + encrypted.ciphertext,
-      hmacKey
+      hmacKeyWordArray
     ).toString();
 
     if (!constantTimeEqualHex(computedHmac, encrypted.hmac)) {
@@ -470,8 +513,7 @@ async function decryptBackupV2(
       );
     }
 
-    // Prepare key and IV as WordArrays
-    const keyWordArray = CryptoJS.enc.Hex.parse(keyHex);
+    // Prepare IV as WordArray
     const ivWordArray = CryptoJS.enc.Hex.parse(encrypted.iv);
 
     // Decrypt
@@ -492,9 +534,9 @@ async function decryptBackupV2(
 
     return plaintext;
   } finally {
-    if (keyHex) {
-      keyHex = '0'.repeat(keyHex.length);
-    }
+    // Scrub derived key material from memory (defense-in-depth)
+    wipeWordArray(keyWordArray);
+    wipeWordArray(hmacKeyWordArray);
   }
 }
 

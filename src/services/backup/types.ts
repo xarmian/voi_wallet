@@ -404,6 +404,7 @@ export class BackupError extends Error {
 
 export type BackupErrorCode =
   | 'INVALID_PASSWORD'
+  | 'WEAK_PASSWORD'
   | 'INVALID_FILE_FORMAT'
   | 'DECRYPTION_FAILED'
   | 'INTEGRITY_CHECK_FAILED'
