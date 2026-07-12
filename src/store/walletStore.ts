@@ -404,6 +404,14 @@ const persistMultiNetworkBalanceToStorage = async (
   }
 };
 
+// Coalescer for the wallet-store initialize(): a single shared in-flight promise
+// so duplicate/concurrent initialize() calls (e.g. HomeScreen's mount effect
+// firing a second time when the remote-signer store finishes initializing) dedupe
+// into one init pass instead of rebuilding accountStates and refetching balances
+// twice on cold start. It is reset on settle, so a later explicit
+// initialize()/refresh()/account-switch still re-runs initialization normally.
+let walletInitializationPromise: Promise<void> | null = null;
+
 export const useWalletStore = create<WalletState>()(
   subscribeWithSelector((set, get) => ({
     // Initial state
@@ -433,6 +441,19 @@ export const useWalletStore = create<WalletState>()(
 
     // Initialization
     initialize: async () => {
+      // If an initialize() is already in flight, share it instead of starting a
+      // second full init pass (this dedupes the double mount-effect fire). The
+      // promise is cleared in the finally below, so later explicit
+      // initialize()/refresh()/account-switch calls still re-initialize.
+      if (walletInitializationPromise) {
+        return walletInitializationPromise;
+      }
+
+      let resolveInitialization: () => void = () => {};
+      walletInitializationPromise = new Promise<void>((resolve) => {
+        resolveInitialization = resolve;
+      });
+
       try {
         set({ isLoading: true, lastError: null });
 
@@ -545,12 +566,21 @@ export const useWalletStore = create<WalletState>()(
         });
       } finally {
         set({ isLoading: false });
+        walletInitializationPromise = null;
+        resolveInitialization();
       }
     },
 
     refresh: async () => {
-      const { initialize } = get();
-      await initialize();
+      // Explicit refreshes (pull-to-refresh, post-import/switch, error recovery)
+      // must reflect the latest persisted state, so they must never coalesce onto
+      // an init that is already in flight and may predate the caller's storage
+      // mutation. Wait for any in-flight pass to settle (the coalescer clears the
+      // promise in its finally), then run a guaranteed-fresh initialize().
+      if (walletInitializationPromise) {
+        await walletInitializationPromise;
+      }
+      await get().initialize();
     },
 
     // Account management
