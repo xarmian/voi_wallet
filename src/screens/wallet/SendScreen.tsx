@@ -1883,6 +1883,7 @@ export default function SendScreen() {
                 <TouchableOpacity
                   onPress={() => setShowAssetSelector(false)}
                   style={styles.modalCloseButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
                   <Ionicons
                     name="close"
@@ -2073,7 +2074,8 @@ const createStyles = (theme: Theme) =>
           : 'rgba(255, 255, 255, 0.3)',
       borderRadius: theme.borderRadius.sm,
       padding: theme.spacing.md,
-      paddingRight: 100, // Make room for both buttons
+      // Room for the absolute button cluster: right:16 + (44 + 4)*2 = 112.
+      paddingRight: 112,
       fontSize: 16,
       borderWidth: 1,
       borderColor:
@@ -2090,6 +2092,10 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
     },
     inputButton: {
+      // 44x44 minimum touch target (contacts + QR buttons sit side by side, so
+      // a real min-size beats hitSlop, which would overlap across the 4pt gap).
+      minWidth: 44,
+      minHeight: 44,
       padding: theme.spacing.xs,
       marginLeft: theme.spacing.xs,
       justifyContent: 'center',
