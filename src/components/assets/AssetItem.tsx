@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { AssetBalance } from '@/types/wallet';
 import { formatAssetBalance, formatNativeBalance } from '@/utils/bigint';
@@ -100,6 +101,9 @@ export default function AssetItem({
       <Image
         source={{ uri: normalizedImageUrl }}
         style={styles.assetImage}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        recyclingKey={normalizedImageUrl}
         onError={() => setImageError(true)}
       />
     );

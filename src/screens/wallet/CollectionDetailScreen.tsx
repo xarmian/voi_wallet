@@ -7,10 +7,10 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
-  Image,
   Dimensions,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -258,6 +258,9 @@ export default function CollectionDetailScreen() {
             <Image
               source={{ uri: item.imageUrl! }}
               style={styles.nftImage}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={item.imageUrl}
               onError={() => handleImageError(item.contractId, item.tokenId)}
             />
           ) : (
@@ -447,7 +450,6 @@ const styles = StyleSheet.create({
   nftImage: {
     width: '100%',
     height: '100%',
-    resizeMode: 'cover',
   },
   placeholderImage: {
     width: '100%',

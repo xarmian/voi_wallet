@@ -10,10 +10,10 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
-  Image,
   Modal,
   BackHandler,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -1615,6 +1615,9 @@ export default function SendScreen() {
                     <Image
                       source={{ uri: contextNftToken.imageUrl }}
                       style={styles.nftTokenImage}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                      recyclingKey={contextNftToken.imageUrl}
                     />
                   )}
                   <View style={styles.nftTokenInfo}>
@@ -1756,6 +1759,9 @@ export default function SendScreen() {
                         <Image
                           source={{ uri: result.avatar }}
                           style={styles.searchResultAvatar}
+                          contentFit="cover"
+                          cachePolicy="memory-disk"
+                          recyclingKey={result.avatar}
                         />
                       ) : (
                         <View style={styles.searchResultFallbackAvatar}>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, Image } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Theme } from '@/constants/themes';
@@ -87,6 +88,9 @@ const TransactionVerification: React.FC<TransactionVerificationProps> = ({
         <Image
           source={{ uri: normalizedNftImageUrl }}
           style={styles.nftImage}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={normalizedNftImageUrl}
           onError={() => setImageError(true)}
         />
       );
@@ -110,6 +114,9 @@ const TransactionVerification: React.FC<TransactionVerificationProps> = ({
       <Image
         source={{ uri: normalizedImageUrl }}
         style={styles.assetIcon}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        recyclingKey={normalizedImageUrl}
         onError={() => setImageError(true)}
       />
     );

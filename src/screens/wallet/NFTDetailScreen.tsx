@@ -5,12 +5,12 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
   Dimensions,
   Alert,
   Share,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -226,6 +226,9 @@ export default function NFTDetailScreen() {
             <Image
               source={{ uri: nft.imageUrl! }}
               style={styles.nftImage}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={nft.imageUrl}
               onError={() => setImageError(true)}
             />
           ) : (
@@ -411,7 +414,6 @@ const styles = StyleSheet.create({
   nftImage: {
     width: imageSize,
     height: imageSize,
-    resizeMode: 'cover',
   },
   placeholderImage: {
     width: imageSize,

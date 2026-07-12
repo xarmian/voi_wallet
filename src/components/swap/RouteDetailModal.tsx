@@ -15,8 +15,8 @@ import {
   ActivityIndicator,
   Dimensions,
   Pressable,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme } from '../../constants/themes';
 import {
@@ -265,7 +265,10 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
           <Image
             source={{ uri: imageSource.uri }}
             style={styles.tokenIcon}
-            defaultSource={require('../../../assets/icon.png')}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={imageSource.uri}
+            placeholder={require('../../../assets/icon.png')}
           />
         );
       } else {

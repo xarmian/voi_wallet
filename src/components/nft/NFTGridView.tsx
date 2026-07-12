@@ -4,12 +4,12 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  Image,
   ActivityIndicator,
   StyleSheet,
   Dimensions,
   RefreshControl,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { NFTToken } from '@/types/nft';
 import { NFTService } from '@/services/nft';
@@ -85,6 +85,9 @@ export default function NFTGridView({
             <Image
               source={{ uri: item.imageUrl! }}
               style={styles.nftImage}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={item.imageUrl}
               onError={() => onImageError?.(item.contractId, item.tokenId)}
             />
           ) : (
@@ -195,7 +198,6 @@ const styles = StyleSheet.create({
   nftImage: {
     width: '100%',
     height: '100%',
-    resizeMode: 'cover',
   },
   placeholderImage: {
     width: '100%',

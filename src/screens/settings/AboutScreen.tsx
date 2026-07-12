@@ -4,12 +4,12 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
   ScrollView,
   Linking,
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -90,7 +90,7 @@ export default function AboutScreen() {
           <Image
             source={require('../../../assets/voi_wallet_logo.png')}
             style={styles.logo}
-            resizeMode="contain"
+            contentFit="contain"
           />
         </View>
 
