@@ -17,32 +17,51 @@ const isSupported = Platform.OS === 'ios' || Platform.OS === 'android';
 export type HapticImpactStyle = 'light' | 'medium' | 'heavy';
 export type HapticNotifyType = 'success' | 'warning' | 'error';
 
+// Fully exception-proof: guard the whole body in try/catch, not just the
+// promise. These are called from control-flow-sensitive paths (e.g. the
+// LockScreen wrong-PIN / lockout branch), and a cosmetic haptic must NEVER be
+// able to throw synchronously (e.g. if the native module were unlinked) and
+// perturb a caller. The .catch handles async rejection; the try/catch handles a
+// synchronous throw. Net guarantee: these functions never throw.
+
 /** Light/medium/heavy tap — use for button presses and discrete selections. */
 export function hapticImpact(style: HapticImpactStyle = 'light'): void {
   if (!isSupported) return;
-  const impactStyle =
-    style === 'heavy'
-      ? Haptics.ImpactFeedbackStyle.Heavy
-      : style === 'medium'
-        ? Haptics.ImpactFeedbackStyle.Medium
-        : Haptics.ImpactFeedbackStyle.Light;
-  Haptics.impactAsync(impactStyle).catch(() => {});
+  try {
+    const impactStyle =
+      style === 'heavy'
+        ? Haptics.ImpactFeedbackStyle.Heavy
+        : style === 'medium'
+          ? Haptics.ImpactFeedbackStyle.Medium
+          : Haptics.ImpactFeedbackStyle.Light;
+    Haptics.impactAsync(impactStyle).catch(() => {});
+  } catch {
+    // ignore — haptics are best-effort feedback
+  }
 }
 
 /** Success/warning/error notification — use for operation outcomes. */
 export function hapticNotify(type: HapticNotifyType): void {
   if (!isSupported) return;
-  const notifyType =
-    type === 'success'
-      ? Haptics.NotificationFeedbackType.Success
-      : type === 'warning'
-        ? Haptics.NotificationFeedbackType.Warning
-        : Haptics.NotificationFeedbackType.Error;
-  Haptics.notificationAsync(notifyType).catch(() => {});
+  try {
+    const notifyType =
+      type === 'success'
+        ? Haptics.NotificationFeedbackType.Success
+        : type === 'warning'
+          ? Haptics.NotificationFeedbackType.Warning
+          : Haptics.NotificationFeedbackType.Error;
+    Haptics.notificationAsync(notifyType).catch(() => {});
+  } catch {
+    // ignore — haptics are best-effort feedback
+  }
 }
 
 /** Selection tick — use for pickers / segmented controls. */
 export function hapticSelection(): void {
   if (!isSupported) return;
-  Haptics.selectionAsync().catch(() => {});
+  try {
+    Haptics.selectionAsync().catch(() => {});
+  } catch {
+    // ignore — haptics are best-effort feedback
+  }
 }

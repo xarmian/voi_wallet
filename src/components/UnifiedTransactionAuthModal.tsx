@@ -26,14 +26,7 @@ import {
   isRemoteSignerResponse,
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
-
-// Cross-platform vibration helper
-const vibrate = (duration: number) => {
-  if (Platform.OS !== 'web') {
-    const { Vibration } = require('react-native');
-    Vibration.vibrate(duration);
-  }
-};
+import { hapticNotify } from '@/utils/haptics';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -186,7 +179,7 @@ export default function UnifiedTransactionAuthModal({
       const success = await controller.authenticateWithPin(enteredPin);
       if (!success) {
         setPin('');
-        vibrate(500);
+        hapticNotify('error');
       }
     } catch (error) {
       console.error('PIN authentication error:', error);
