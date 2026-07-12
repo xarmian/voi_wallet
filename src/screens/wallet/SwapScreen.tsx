@@ -13,11 +13,11 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
-  Image,
   Linking,
   BackHandler,
   Animated,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { Ionicons } from '@expo/vector-icons';
@@ -913,7 +913,10 @@ export default function SwapScreen() {
           <Image
             source={{ uri: imageSource.uri }}
             style={styles.tokenIcon}
-            defaultSource={require('../../../assets/icon.png')}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={imageSource.uri}
+            placeholder={require('../../../assets/icon.png')}
           />
         );
       } else {
@@ -1237,7 +1240,7 @@ export default function SwapScreen() {
               <Image
                 source={require('../../../assets/snowballSwap.png')}
                 style={styles.poweredByLogo}
-                resizeMode="contain"
+                contentFit="contain"
               />
             )}
             <TouchableOpacity onPress={handleProviderPress}>

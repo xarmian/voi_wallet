@@ -14,9 +14,9 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
-  Image,
   Switch,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -605,6 +605,9 @@ export default function ClaimAllConfirmationScreen() {
                           <Image
                             source={{ uri: result.avatar }}
                             style={styles.searchResultAvatar}
+                            contentFit="cover"
+                            cachePolicy="memory-disk"
+                            recyclingKey={result.avatar}
                           />
                         ) : (
                           <View style={styles.searchResultFallbackAvatar}>
@@ -703,6 +706,9 @@ function TokenImage({
     <Image
       source={{ uri: normalizedUrl }}
       style={styles.tokenImage}
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      recyclingKey={normalizedUrl}
       onError={() => setError(true)}
     />
   );

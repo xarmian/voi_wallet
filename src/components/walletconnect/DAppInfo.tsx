@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, Image, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { Image } from 'expo-image';
 import { WalletConnectMetadata } from '@/services/walletconnect/types';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -27,7 +28,10 @@ export default function DAppInfo({
         <Image
           source={{ uri: metadata.icons[0] }}
           style={[styles.icon, { width: iconSize, height: iconSize }]}
-          defaultSource={require('../../../assets/icon.png')}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={metadata.icons[0]}
+          placeholder={require('../../../assets/icon.png')}
         />
       )}
       <View style={styles.info}>

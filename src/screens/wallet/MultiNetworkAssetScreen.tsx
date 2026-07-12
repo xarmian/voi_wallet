@@ -6,9 +6,9 @@ import {
   RefreshControl,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -401,6 +401,9 @@ export default function MultiNetworkAssetScreen() {
         <Image
           source={{ uri: assetImageSource.uri }}
           style={styles.assetImage}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={assetImageSource.uri}
           onError={() => setImageError(true)}
         />
       );

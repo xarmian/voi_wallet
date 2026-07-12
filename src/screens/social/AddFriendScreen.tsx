@@ -10,8 +10,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -182,7 +182,13 @@ export default function AddFriendScreen() {
     >
       <View style={styles.resultContent}>
         {item.avatar ? (
-          <Image source={{ uri: item.avatar }} style={styles.avatar} />
+          <Image
+            source={{ uri: item.avatar }}
+            style={styles.avatar}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={item.avatar}
+          />
         ) : (
           <AccountAvatar
             address={item.address}

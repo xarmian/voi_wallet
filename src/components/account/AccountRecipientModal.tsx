@@ -5,9 +5,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  Image,
   ListRenderItem,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import {
   useThemedStyles,
@@ -185,7 +185,13 @@ export default function AccountRecipientModal({
         activeOpacity={0.7}
       >
         {item.avatar ? (
-          <Image source={{ uri: item.avatar }} style={styles.friendAvatar} />
+          <Image
+            source={{ uri: item.avatar }}
+            style={styles.friendAvatar}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={item.avatar}
+          />
         ) : (
           <View style={styles.friendAvatarFallback}>
             <Text style={styles.friendAvatarText}>

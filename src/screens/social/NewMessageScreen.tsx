@@ -9,9 +9,9 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Image,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -300,7 +300,13 @@ export default function NewMessageScreen() {
       >
         <View style={styles.avatarContainer}>
           {recipient.avatar ? (
-            <Image source={{ uri: recipient.avatar }} style={styles.avatar} />
+            <Image
+              source={{ uri: recipient.avatar }}
+              style={styles.avatar}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={recipient.avatar}
+            />
           ) : (
             <AccountAvatar
               address={recipient.address}

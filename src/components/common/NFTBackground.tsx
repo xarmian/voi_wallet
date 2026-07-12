@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { View, StyleSheet, Image, Dimensions, Platform } from 'react-native';
+import { View, StyleSheet, Dimensions, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '@/contexts/ThemeContext';
 
@@ -87,7 +88,9 @@ export const NFTBackground: React.FC<NFTBackgroundProps> = ({
           <Image
             source={{ uri: theme.backgroundImageUrl }}
             style={styles.backgroundImage}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={theme.backgroundImageUrl}
           />
 
           {/* Color overlay for better readability */}

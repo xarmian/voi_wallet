@@ -5,8 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
@@ -82,6 +82,9 @@ export default function NetworkAssetSelector({
       <Image
         source={{ uri: normalizedImageUrl }}
         style={styles.singleOptionImage}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        recyclingKey={normalizedImageUrl}
         onError={() => setImageError(true)}
       />
     );

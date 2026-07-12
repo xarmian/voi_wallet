@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { TransactionInfo, AssetBalance, AssetParams } from '@/types/wallet';
 import { Arc200TokenMetadata } from '@/services/mimir';
@@ -218,6 +219,9 @@ const TransactionListItem = React.memo(
           <Image
             source={{ uri: imageUrl }}
             style={styles.assetIcon}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={imageUrl}
             onError={() => setImageError(true)}
           />
         );

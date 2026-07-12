@@ -4,9 +4,9 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { ARC72Collection } from '@/types/nft';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -61,6 +61,9 @@ export default function CollectionListItem({
             <Image
               source={{ uri: imageUrl }}
               style={styles.image}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={imageUrl}
               onError={() => {
                 setImageError(true);
                 setImageLoading(false);

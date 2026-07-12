@@ -1,16 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  StyleSheet,
-  Text,
-  Image,
-  StyleProp,
-  ViewStyle,
-} from 'react-native';
+import { View, StyleSheet, Text, StyleProp, ViewStyle } from 'react-native';
+import { Image } from 'expo-image';
 import Svg, { Circle, Rect, Polygon } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import EnvoiService from '@/services/envoi';
-import AvatarCacheService from '@/services/avatarCache';
 import {
   AccountMetadata,
   AccountType,
@@ -243,23 +236,10 @@ export default function AccountAvatar({
         const envoiService = EnvoiService.getInstance();
         const avatarUrl = await envoiService.getAvatarUrl(address, size > 64);
 
-        let finalUrl: string | null = null;
-
-        if (avatarUrl) {
-          // Check cache first
-          const avatarCache = AvatarCacheService.getInstance();
-          let cachedUrl = await avatarCache.getCachedAvatar(avatarUrl);
-
-          if (!cachedUrl) {
-            // Cache the avatar in background, but use original URL immediately
-            avatarCache.cacheAvatar(avatarUrl).catch((error) => {
-              console.warn('[AccountAvatar] Failed to cache avatar:', error);
-            });
-            cachedUrl = avatarUrl;
-          }
-
-          finalUrl = cachedUrl;
-        }
+        // expo-image handles memory + disk caching of the avatar URL directly
+        // (via cachePolicy="memory-disk" on the <Image> below), so we no longer
+        // pre-download/index avatars ourselves — just hand off the raw URL.
+        const finalUrl: string | null = avatarUrl || null;
 
         // Update shared cache
         avatarUrlCache.set(address, finalUrl);
@@ -337,7 +317,9 @@ export default function AccountAvatar({
               { width: size, height: size, borderRadius: size / 2 },
             ]}
             onError={handleAvatarError}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={envoiAvatarUrl}
           />
         ) : shouldShowGenerated ? (
           <>
