@@ -7,9 +7,9 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
-  Image,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -974,6 +974,9 @@ export default function AssetDetailScreen() {
                   <Image
                     source={{ uri: asset!.imageUrl }}
                     style={styles.assetImage}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    recyclingKey={asset!.imageUrl}
                     onError={() => setImageError(true)}
                   />
                 ) : (

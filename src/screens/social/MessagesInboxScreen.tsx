@@ -7,13 +7,13 @@ import {
   TextInput,
   TouchableOpacity,
   RefreshControl,
-  Image,
   BackHandler,
   ActivityIndicator,
   ActionSheetIOS,
   Platform,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -405,6 +405,9 @@ export default function MessagesInboxScreen() {
                 <Image
                   source={{ uri: friendInfo.avatar }}
                   style={styles.avatar}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  recyclingKey={friendInfo.avatar}
                 />
               ) : (
                 <AccountAvatar

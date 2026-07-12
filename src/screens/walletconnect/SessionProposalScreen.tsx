@@ -5,10 +5,10 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
@@ -180,7 +180,9 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
           <Image
             source={{ uri: metadata.icons[0] }}
             style={styles.dappIcon}
-            defaultSource={require('../../../assets/icon.png')}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            placeholder={require('../../../assets/icon.png')}
           />
         )}
         <Text style={styles.dappName}>{metadata.name}</Text>

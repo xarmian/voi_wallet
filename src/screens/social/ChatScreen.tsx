@@ -7,10 +7,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  ImageBackground,
   ActivityIndicator,
   TouchableOpacity,
 } from 'react-native';
+import { ImageBackground } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -477,7 +477,8 @@ export default function ChatScreen() {
       <ImageBackground
         source={{ uri: friendAvatar }}
         style={styles.backgroundImage}
-        resizeMode="cover"
+        contentFit="cover"
+        cachePolicy="memory-disk"
       >
         <BlurView
           intensity={80}

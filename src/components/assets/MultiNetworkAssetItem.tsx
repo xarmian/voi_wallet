@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { MappedAsset } from '@/services/token-mapping/types';
 import { formatAssetBalance, formatNativeBalance } from '@/utils/bigint';
@@ -122,6 +123,9 @@ export default function MultiNetworkAssetItem({
         <Image
           source={{ uri: normalizedPrimaryImageUrl }}
           style={styles.assetImage}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={normalizedPrimaryImageUrl}
           onError={() => setImageError(true)}
         />
       );
@@ -140,6 +144,9 @@ export default function MultiNetworkAssetItem({
           <Image
             source={{ uri: fallbackImageUrl }}
             style={styles.assetImage}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={fallbackImageUrl}
             onError={() => setImageError(true)}
           />
         );

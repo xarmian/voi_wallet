@@ -15,11 +15,11 @@ import {
   TouchableWithoutFeedback,
   Animated,
   ActivityIndicator,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Keyboard,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../contexts/ThemeContext';
 import { Theme } from '../../constants/themes';
@@ -354,7 +354,10 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
               <Image
                 source={{ uri: imageSource.uri }}
                 style={styles.tokenIcon}
-                defaultSource={require('../../../assets/icon.png')}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                recyclingKey={imageSource.uri}
+                placeholder={require('../../../assets/icon.png')}
               />
             ) : (
               <Image source={imageSource.source} style={styles.tokenIcon} />

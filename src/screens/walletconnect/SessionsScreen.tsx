@@ -5,10 +5,10 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert,
   RefreshControl,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -111,7 +111,10 @@ export default function SessionsScreen({ navigation }: Props) {
             <Image
               source={{ uri: peerIcons[0] }}
               style={styles.dappIcon}
-              defaultSource={require('../../../assets/icon.png')}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={peerIcons[0]}
+              placeholder={require('../../../assets/icon.png')}
             />
           )}
           <View style={styles.sessionInfo}>

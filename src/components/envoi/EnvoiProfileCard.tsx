@@ -6,8 +6,8 @@ import {
   TouchableOpacity,
   Linking,
   Alert,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { formatAddress } from '@/utils/address';
@@ -293,6 +293,9 @@ export default function EnvoiProfileCard({
             <Image
               source={{ uri: envoiProfile.avatar }}
               style={styles.avatarImage}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={envoiProfile.avatar}
             />
           ) : (
             <AccountAvatar

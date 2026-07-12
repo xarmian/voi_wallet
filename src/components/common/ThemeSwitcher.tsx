@@ -5,10 +5,10 @@ import {
   TouchableOpacity,
   StyleSheet,
   Modal,
-  Image,
   Switch,
   ScrollView,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Theme, ThemeMode } from '@/constants/themes';
 import { EdgeInsets, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -192,7 +192,9 @@ export default function ThemeSwitcher({
                     <Image
                       source={{ uri: nftThemeData.imageUrl }}
                       style={styles.nftPreview}
-                      resizeMode="cover"
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
+                      recyclingKey={nftThemeData.imageUrl}
                     />
                   )}
                   <View style={styles.nftToggleInfo}>

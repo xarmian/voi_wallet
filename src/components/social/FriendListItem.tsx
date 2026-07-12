@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Friend } from '@/types/social';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -58,7 +59,13 @@ export default function FriendListItem({
       >
         <View style={styles.avatarContainer}>
           {friend.avatar ? (
-            <Image source={{ uri: friend.avatar }} style={styles.avatar} />
+            <Image
+              source={{ uri: friend.avatar }}
+              style={styles.avatar}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={friend.avatar}
+            />
           ) : (
             <AccountAvatar
               address={friend.address}

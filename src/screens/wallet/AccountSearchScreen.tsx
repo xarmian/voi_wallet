@@ -9,9 +9,9 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Image,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -199,7 +199,15 @@ export default function AccountSearchScreen() {
 
   const renderAvatar = (item: SearchResult) => {
     if (item.avatar) {
-      return <Image source={{ uri: item.avatar }} style={styles.avatar} />;
+      return (
+        <Image
+          source={{ uri: item.avatar }}
+          style={styles.avatar}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          recyclingKey={item.avatar}
+        />
+      );
     }
 
     // Fallback to AccountAvatar for generated avatars
