@@ -226,9 +226,30 @@ export interface BackupExperimentalFlags {
 }
 
 /**
- * Encrypted backup file structure (written to .voibackup file)
+ * scrypt KDF parameters (v2 envelope).
+ *
+ * Memory footprint of scrypt is ~128 * N * r bytes. These are validated and
+ * capped before the KDF runs (see encryption.ts) so a tampered/oversized
+ * backup can never force a huge allocation.
  */
-export interface EncryptedBackupFile {
+export interface ScryptKdfParams {
+  /** CPU/memory cost — must be a power of two */
+  N: number;
+  /** Block size */
+  r: number;
+  /** Parallelization */
+  p: number;
+  /** Derived key length in bytes (32 for AES-256) */
+  dkLen: number;
+}
+
+/**
+ * v1 encrypted backup envelope (PBKDF2-SHA256 + AES-256-CTR + HMAC).
+ *
+ * LEGACY / read-only: new backups are written as v2, but existing v1 files MUST
+ * still decrypt. Do not change this shape or the v1 decrypt path.
+ */
+export interface EncryptedBackupFileV1 {
   /** File format identifier */
   format: 'voibackup';
   /** Encryption format version */
@@ -242,6 +263,39 @@ export interface EncryptedBackupFile {
   /** HMAC for authentication (hex) */
   hmac: string;
 }
+
+/**
+ * v2 encrypted backup envelope (scrypt + AES-256-CTR + encrypt-then-MAC).
+ *
+ * The HMAC binds the envelope parameters (version/kdf/kdfParams/salt/iv), not
+ * just the ciphertext, so none of them can be tampered without failing the
+ * integrity check (see canonicalV2Aad in encryption.ts).
+ */
+export interface EncryptedBackupFileV2 {
+  /** File format identifier */
+  format: 'voibackup';
+  /** Encryption format version */
+  version: 2;
+  /** Key derivation function identifier */
+  kdf: 'scrypt';
+  /** scrypt parameters (validated + capped before use) */
+  kdfParams: ScryptKdfParams;
+  /** Salt for scrypt key derivation (hex) */
+  salt: string;
+  /** Initialization vector for AES (hex) */
+  iv: string;
+  /** Encrypted backup data (base64) */
+  ciphertext: string;
+  /** HMAC over canonical(envelope params) + ciphertext (hex) */
+  hmac: string;
+}
+
+/**
+ * Encrypted backup file structure (written to .voibackup file).
+ *
+ * Discriminated union on `version`: v1 = legacy PBKDF2, v2 = scrypt.
+ */
+export type EncryptedBackupFile = EncryptedBackupFileV1 | EncryptedBackupFileV2;
 
 /**
  * Result of creating a backup

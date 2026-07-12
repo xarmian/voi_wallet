@@ -17,7 +17,11 @@ import {
   RestoreProgress,
   BackupError,
 } from './types';
-import { encryptBackup, decryptBackup } from './encryption';
+import {
+  encryptBackup,
+  decryptBackup,
+  validateEncryptedBackupFile,
+} from './encryption';
 import {
   collectAccounts,
   collectSettings,
@@ -219,26 +223,23 @@ export class BackupService {
       const sourceFile = new File(fileUri);
       const fileContent = await sourceFile.text();
 
-      let encrypted: EncryptedBackupFile;
-      try {
-        encrypted = JSON.parse(fileContent) as EncryptedBackupFile;
-      } catch {
-        throw new BackupError(
-          'Invalid backup file format',
-          'INVALID_FILE_FORMAT'
-        );
-      }
-
-      // Step 2: Validate format
+      // Step 2: Validate format + envelope shape (and cap v2 KDF params before
+      // any scrypt work — this parses untrusted JSON).
       this.reportProgress({
         step: 'validating',
         progress: 20,
         message: 'Validating backup...',
       });
 
-      if (encrypted.format !== 'voibackup') {
+      let encrypted: EncryptedBackupFile;
+      try {
+        encrypted = validateEncryptedBackupFile(JSON.parse(fileContent));
+      } catch (parseError) {
+        if (parseError instanceof BackupError) {
+          throw parseError;
+        }
         throw new BackupError(
-          'Not a valid Voi Wallet backup file',
+          'Invalid backup file format',
           'INVALID_FILE_FORMAT'
         );
       }
@@ -322,20 +323,17 @@ export class BackupService {
       const sourceFile = new File(fileUri);
       const fileContent = await sourceFile.text();
 
+      // Validate format + envelope shape (and cap v2 KDF params before any
+      // scrypt work — this parses untrusted JSON).
       let encrypted: EncryptedBackupFile;
       try {
-        encrypted = JSON.parse(fileContent) as EncryptedBackupFile;
-      } catch {
+        encrypted = validateEncryptedBackupFile(JSON.parse(fileContent));
+      } catch (parseError) {
+        if (parseError instanceof BackupError) {
+          throw parseError;
+        }
         throw new BackupError(
           'Invalid backup file format',
-          'INVALID_FILE_FORMAT'
-        );
-      }
-
-      // Validate format
-      if (encrypted.format !== 'voibackup') {
-        throw new BackupError(
-          'Not a valid Voi Wallet backup file',
           'INVALID_FILE_FORMAT'
         );
       }
