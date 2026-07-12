@@ -48,7 +48,7 @@ describe('haptics', () => {
     });
   });
 
-  it('swallows rejections (fire-and-forget, never throws)', async () => {
+  it('swallows async rejections (fire-and-forget, never throws)', async () => {
     (Haptics.impactAsync as jest.Mock).mockRejectedValueOnce(
       new Error('no haptic engine')
     );
@@ -66,5 +66,24 @@ describe('haptics', () => {
     // Let the rejected promises settle to prove the .catch() handles them
     // (an unhandled rejection would fail the test run).
     await new Promise((resolve) => setImmediate(resolve));
+  });
+
+  it('swallows SYNCHRONOUS throws so it can never perturb a caller', () => {
+    // e.g. native module unlinked → the *Async fn itself throws before .catch.
+    // Auth/lockout code calls these, so a sync throw must never escape.
+    (Haptics.impactAsync as jest.Mock).mockImplementationOnce(() => {
+      throw new Error('native module unavailable');
+    });
+    (Haptics.notificationAsync as jest.Mock).mockImplementationOnce(() => {
+      throw new Error('native module unavailable');
+    });
+    (Haptics.selectionAsync as jest.Mock).mockImplementationOnce(() => {
+      throw new Error('native module unavailable');
+    });
+    expect(() => {
+      hapticImpact();
+      hapticNotify('error');
+      hapticSelection();
+    }).not.toThrow();
   });
 });

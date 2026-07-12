@@ -14,6 +14,7 @@ import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { hapticNotify } from '@/utils/haptics';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -40,14 +41,6 @@ const showAlert = (
   }
 };
 
-// Cross-platform vibration helper
-const vibrate = (duration: number) => {
-  if (Platform.OS !== 'web') {
-    const { Vibration } = require('react-native');
-    Vibration.vibrate(duration);
-  }
-};
-
 export default function LockScreen() {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -69,9 +62,11 @@ export default function LockScreen() {
   const promptBiometric = async () => {
     try {
       const success = await unlockWithBiometrics();
-      if (!success) {
-        // Biometric failed, user will need to use PIN
+      if (success) {
+        hapticNotify('success');
       }
+      // On !success the user cancelled or biometrics failed; no error haptic —
+      // a cancel is a normal path to the PIN pad and shouldn't buzz.
     } catch (error) {
       console.error('Biometric authentication error:', error);
     }
@@ -100,11 +95,12 @@ export default function LockScreen() {
       if (success) {
         setPin('');
         setAttempts(0);
+        hapticNotify('success');
       } else {
         const newAttempts = attempts + 1;
         setAttempts(newAttempts);
         setPin('');
-        vibrate(500);
+        hapticNotify('error');
 
         if (newAttempts >= MAX_ATTEMPTS) {
           setIsLocked(true);
@@ -126,6 +122,7 @@ export default function LockScreen() {
       }
     } catch (error) {
       console.error('PIN verification error:', error);
+      hapticNotify('error');
       showAlert('Error', 'Failed to verify PIN');
     }
   };

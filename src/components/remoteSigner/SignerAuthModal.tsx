@@ -22,14 +22,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { AccountSecureStorage } from '@/services/secure';
-
-// Cross-platform vibration helper
-const vibrate = (duration: number) => {
-  if (Platform.OS !== 'web') {
-    const { Vibration } = require('react-native');
-    Vibration.vibrate(duration);
-  }
-};
+import { hapticNotify } from '@/utils/haptics';
 
 interface SignerAuthModalProps {
   visible: boolean;
@@ -142,7 +135,7 @@ export default function SignerAuthModal({
         const attempts = pinAttempts + 1;
         setPinAttempts(attempts);
         setPin('');
-        vibrate(500);
+        hapticNotify('error');
 
         if (attempts >= MAX_ATTEMPTS) {
           setIsLocked(true);

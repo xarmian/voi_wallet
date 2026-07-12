@@ -15,6 +15,7 @@ import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import { LedgerDeviceInfo } from '@/services/ledger/transport';
+import { hapticNotify } from '@/utils/haptics';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -28,14 +29,6 @@ const showAlert = (
   } else {
     const { Alert } = require('react-native');
     Alert.alert(title, message, buttons);
-  }
-};
-
-// Cross-platform vibration helper
-const vibrate = (duration: number) => {
-  if (Platform.OS !== 'web') {
-    const { Vibration } = require('react-native');
-    Vibration.vibrate(duration);
   }
 };
 
@@ -255,7 +248,7 @@ export default function UnifiedAuthModal({
         const newAttempts = attempts + 1;
         setAttempts(newAttempts);
         setPin('');
-        vibrate(500);
+        hapticNotify('error');
 
         if (newAttempts >= MAX_ATTEMPTS) {
           setIsLocked(true);
