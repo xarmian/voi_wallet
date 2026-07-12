@@ -46,7 +46,7 @@
     "ed2curve": "^0.3.0",
     "expo": "~54.0.30",
     "expo-application": "~7.0.8",
-    "expo-blur": "~15.0.8",
+    "expo-blur": "~57.0.0",
     "expo-camera": "~17.0.10",
     "expo-clipboard": "~8.0.8",
     "expo-crypto": "~15.0.8",
