@@ -36,16 +36,22 @@ import type { WalletConnectV1StoredSession } from '@/services/walletconnect/v1/t
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { WC_V1_SESSION_STORAGE_KEY } from '@/services/walletconnect/v1/config';
 
-// Strip sensitive values from a string before logging (e.g. a caught error
-// message). WalletConnect SDK errors can embed the full `wc:` pairing URI whose
-// query string carries the session symKey, and signing errors can embed a full
-// account address (the rekey auth-address). Redact wc:/scheme:// URIs (whole
-// URI incl. query, so no symKey survives) and full 58-char addresses. Used only
-// for LOGGED output — thrown errors keep the full value so user-facing messages
-// are unchanged (TASK-33).
+// Strip sensitive values from a string before logging (a caught error message
+// or any untrusted value). Redacts, in order:
+//  - raw and percent-encoded WalletConnect URIs (`wc:` / `wc%3A`), whose query
+//    string carries the session symKey;
+//  - any stray `symKey=` / `symKey%3D` token (raw or encoded), belt-and-braces
+//    so a symKey can never survive regardless of surrounding format;
+//  - any scheme://… URL (whole URI including the query string);
+//  - full 58-char Algorand addresses, run LAST on the whole string so an
+//    address used as a pseudo-scheme (ADDR://…) is still truncated.
+// Used only for LOGGED output — thrown errors keep the full value so
+// user-facing messages are unchanged (TASK-33).
 const redactSensitiveForLog = (message: string): string =>
   message
     .replace(/wc:\S+/gi, 'wc:[redacted]')
+    .replace(/wc%3[Aa]\S*/g, 'wc:[redacted]')
+    .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
     .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
     .replace(/[A-Z2-7]{58}/g, (addr) => truncateAddress(addr));
 
@@ -145,7 +151,7 @@ export class WalletConnectService extends EventEmitter {
             } catch (error) {
               console.warn(
                 'Skipping malformed v1 session entry',
-                key,
+                redactSensitiveForLog(key),
                 redactError(error)
               );
               return null;

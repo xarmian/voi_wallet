@@ -46,20 +46,24 @@ const redactAddress = (address?: string): string =>
     ? `${address.slice(0, 6)}…[redacted]`
     : '[redacted]';
 
-const redactUri = (url: string): string => {
-  const schemeEnd = url.indexOf('://');
-  const scheme = schemeEnd > 0 ? url.slice(0, schemeEnd) : 'uri';
-  return `${scheme}://[redacted]`;
-};
-
-// Strip sensitive values from an arbitrary log string (e.g. a caught error
-// message). Caught errors from the WalletConnect SDK can embed the full `wc:`
-// pairing URI whose query string carries the session symKey, and other errors
-// can embed a scheme://… URL or a full account address. Redact all three; the
-// whole URI (including query) is replaced so no symKey survives.
+// Strip sensitive values from an arbitrary log string — a caught error message
+// OR untrusted deep-link input (scheme/host/path/query/params). Redacts, in
+// order:
+//  - raw and percent-encoded WalletConnect URIs (`wc:` / `wc%3A`), whose query
+//    string carries the session symKey;
+//  - any stray `symKey=` / `symKey%3D` token (raw or encoded), belt-and-braces
+//    so a symKey can never survive regardless of surrounding format;
+//  - any scheme://… URL (voi://, https://, universal links, …) — whole URI
+//    including the query string;
+//  - full 58-char Algorand addresses, run LAST on the whole string so an
+//    address used as a pseudo-scheme (ADDR://…) is still truncated.
+// Used only for LOGGED output — thrown/surfaced errors keep the full value so
+// user-facing messages are unchanged (TASK-33).
 const redactSensitiveForLog = (message: string): string =>
   message
     .replace(/wc:\S+/gi, 'wc:[redacted]')
+    .replace(/wc%3[Aa]\S*/g, 'wc:[redacted]')
+    .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
     .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
     .replace(/[A-Z2-7]{58}/g, (addr) => redactAddress(addr));
 
@@ -191,13 +195,16 @@ export class DeepLinkService {
       // Handle initial URL if app was opened via deep link
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
-        console.log('Handling initial deep link:', redactUri(initialUrl));
+        console.log(
+          'Handling initial deep link:',
+          redactSensitiveForLog(initialUrl)
+        );
         await this.handleUrl(initialUrl);
       }
 
       // Listen for incoming deep links
       this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
-        console.log('Received deep link:', redactUri(url));
+        console.log('Received deep link:', redactSensitiveForLog(url));
         this.handleUrl(url).catch((error) => {
           console.error('Failed to handle deep link:', redactError(error));
         });
@@ -380,7 +387,7 @@ export class DeepLinkService {
     try {
       const scheme = this.extractScheme(url);
       if (!scheme) {
-        console.warn('No scheme found in URL:', redactUri(url));
+        console.warn('No scheme found in URL:', redactSensitiveForLog(url));
         return false;
       }
 
@@ -389,7 +396,10 @@ export class DeepLinkService {
         return await handler(url);
       }
 
-      console.warn(`No handler registered for scheme: ${scheme}`);
+      console.warn(
+        'No handler registered for scheme:',
+        redactSensitiveForLog(scheme)
+      );
       return false;
     } catch (error) {
       console.error('Error handling deep link:', redactError(error));
@@ -579,7 +589,7 @@ export class DeepLinkService {
     try {
       console.log(
         '[DeepLink] handleArc0090Uri - received URI:',
-        redactUri(url)
+        redactSensitiveForLog(url)
       );
 
       // Check for legacy voi:// format first (voi://send?to=...)
@@ -599,7 +609,10 @@ export class DeepLinkService {
       const uriType = getArc0090UriType(url);
       console.log('[DeepLink] handleArc0090Uri - uriType:', uriType);
       if (!uriType) {
-        console.warn('[DeepLink] Unknown ARC-0090 URI type:', redactUri(url));
+        console.warn(
+          '[DeepLink] Unknown ARC-0090 URI type:',
+          redactSensitiveForLog(url)
+        );
         return false;
       }
 
@@ -618,7 +631,7 @@ export class DeepLinkService {
       if (!parsed) {
         console.error(
           '[DeepLink] Failed to parse ARC-0090 URI:',
-          redactUri(url)
+          redactSensitiveForLog(url)
         );
         return false;
       }
@@ -657,7 +670,10 @@ export class DeepLinkService {
         case 'asset-query':
           return await this.handleAssetQueryUri(parsed as Arc0090AssetQueryUri);
         default:
-          console.warn('Unhandled ARC-0090 URI type:', uriType);
+          console.warn(
+            'Unhandled ARC-0090 URI type:',
+            redactSensitiveForLog(uriType)
+          );
           return false;
       }
     } catch (error) {
@@ -728,7 +744,10 @@ export class DeepLinkService {
       // Validate payment URI
       const validation = validatePaymentUri(parsed);
       if (!validation.valid) {
-        console.error('Invalid payment URI:', validation.errors);
+        console.error(
+          'Invalid payment URI:',
+          redactSensitiveForLog(validation.errors.join('; '))
+        );
         await showAlert(
           'Invalid Payment Request',
           validation.errors.join('\n')
@@ -813,7 +832,10 @@ export class DeepLinkService {
       const validation = validateKeyregUri(parsed);
       console.log('[DeepLink] handleKeyregUri - validation:', validation);
       if (!validation.valid) {
-        console.error('Invalid keyreg URI:', validation.errors);
+        console.error(
+          'Invalid keyreg URI:',
+          redactSensitiveForLog(validation.errors.join('; '))
+        );
         await showAlert(
           'Invalid Key Registration Request',
           validation.errors.join('\n')
@@ -888,7 +910,10 @@ export class DeepLinkService {
       // Validate appl URI
       const validation = validateApplUri(parsed);
       if (!validation.valid) {
-        console.error('Invalid appl URI:', validation.errors);
+        console.error(
+          'Invalid appl URI:',
+          redactSensitiveForLog(validation.errors.join('; '))
+        );
         await showAlert(
           'Invalid Application Call Request',
           validation.errors.join('\n')
@@ -1029,7 +1054,10 @@ export class DeepLinkService {
           return await this.handleWalletConnectUri(parsed.params.wc_uri || '');
 
         default:
-          console.warn('Unknown Voi URI action:', parsed.action);
+          console.warn(
+            'Unknown Voi URI action:',
+            redactSensitiveForLog(parsed.action)
+          );
           return false;
       }
     } catch (error) {
@@ -1044,7 +1072,10 @@ export class DeepLinkService {
       const urlObj = new URL(url);
 
       if (urlObj.hostname !== 'www.getvoi.app') {
-        console.warn('Universal link not for www.getvoi.app:', redactUri(url));
+        console.warn(
+          'Universal link not for www.getvoi.app:',
+          redactSensitiveForLog(url)
+        );
         return false;
       }
 
@@ -1059,19 +1090,22 @@ export class DeepLinkService {
           const decodedUri = decodeURIComponent(wcUri);
           console.log(
             'Handling WalletConnect URI from universal link:',
-            redactUri(decodedUri)
+            redactSensitiveForLog(decodedUri)
           );
           return await this.handleWalletConnectUri(decodedUri);
         } else {
           console.warn(
             'No WalletConnect URI found in universal link:',
-            redactUri(url)
+            redactSensitiveForLog(url)
           );
           return false;
         }
       }
 
-      console.warn('Unknown universal link path:', urlObj.pathname);
+      console.warn(
+        'Unknown universal link path:',
+        redactSensitiveForLog(urlObj.pathname)
+      );
       return false;
     } catch (error) {
       console.error('Failed to handle universal link:', redactError(error));
