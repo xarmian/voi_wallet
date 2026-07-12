@@ -268,6 +268,7 @@ export default function TransactionHistoryScreen() {
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons
               name="arrow-back"
