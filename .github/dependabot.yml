@@ -15,6 +15,24 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # The Expo SDK packages are version-locked to the installed SDK and must be
+      # upgraded together via `expo install` / an SDK bump — NEVER piecemeal, or
+      # Dependabot proposes e.g. `expo-crypto` at a future-SDK version on SDK 54
+      # and breaks the native build. Do these as a deliberate SDK-upgrade task.
+      - dependency-name: "expo"
+      - dependency-name: "expo-*"
+      # React / React Native core are pinned by the Expo SDK.
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-native"
+      - dependency-name: "@react-native/*"
+      - dependency-name: "@react-native-async-storage/*"
+      - dependency-name: "@react-native-community/*"
+      # Expo-pinned native community libs (bundledNativeModules) — their MAJORS
+      # must ride an SDK upgrade; minor/patch may still surface for review.
+      - dependency-name: "react-native-*"
+        update-types: ["version-update:semver-major"]
 
   # Keep the GitHub Actions used by ci.yml current.
   - package-ecosystem: github-actions
