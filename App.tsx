@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, Platform, StatusBar } from 'react-native';
 import Toast from 'react-native-toast-message';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -6,10 +6,14 @@ import { testCryptoPolyfills } from './src/utils/cryptoTest';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import { ThemeProvider, useTheme } from './src/contexts/ThemeContext';
 import { debugLogger } from './src/services/debug/logger';
-import { toastConfig } from './src/config/toastConfig';
+import { createToastConfig } from './src/config/toastConfig';
 
 function AppContent() {
   const { theme, themeMode, isDark } = useTheme();
+
+  // Toasts read their config when shown; rebuild it on theme change so they
+  // render with the active (light/dark/NFT) palette instead of hardcoded white.
+  const toastConfig = useMemo(() => createToastConfig(theme), [theme]);
 
   useEffect(() => {
     // Initialize debug logger first
