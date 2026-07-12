@@ -460,6 +460,14 @@ export default function SendScreen() {
 
   // Fetch all available versions of this asset across networks
   useEffect(() => {
+    // Guard against a stale async run overwriting fresher state. This effect
+    // can start a new run (mappings loading, balance changing) before an
+    // earlier run's awaited lookups resolve; without this, an older
+    // (e.g. direct/unmapped) result could land after a newer one and clobber
+    // good options — even replacing them with []. Cleanup flips this flag, so
+    // the superseded run bails before any setState.
+    let cancelled = false;
+
     const fetchAssetOptions = async () => {
       if (!activeAccount) return;
 
@@ -619,6 +627,9 @@ export default function SendScreen() {
           }
         }
 
+        // A newer run has superseded this one — don't clobber its state.
+        if (cancelled) return;
+
         setAssetOptions(options);
 
         // Auto-select based on route params or default to current network's native token
@@ -668,11 +679,17 @@ export default function SendScreen() {
       } catch (error) {
         console.error('Failed to fetch asset options:', error);
       } finally {
-        setIsLoadingOptions(false);
+        // Only the current run should clear the spinner; a superseded run
+        // clearing it would race the fresher run that's still loading.
+        if (!cancelled) setIsLoadingOptions(false);
       }
     };
 
     fetchAssetOptions();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeAccount?.address,
     initialAssetId,

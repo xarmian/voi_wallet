@@ -395,6 +395,24 @@ export class NetworkService {
   }
 
   /**
+   * Coerce a decimals value read from an external source (algod/Mimir) into a
+   * trustworthy integer. Returns null for anything that isn't a genuine,
+   * finite, non-negative integer (missing, null, NaN, negative, fractional) so
+   * callers can omit the asset instead of guessing — a fabricated 0 would
+   * inflate a displayed balance by 10^N. A real `decimals: 0` is preserved.
+   */
+  private normalizeDecimals(value: unknown): number | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0) {
+      return null;
+    }
+    return n;
+  }
+
+  /**
    * Targeted balance lookup for a single asset (used by the send flow's asset
    * picker). Unlike getAccountBalance, this resolves only the requested asset
    * and skips the heavy parts of that pipeline — pricing, rekey info, and the
@@ -428,10 +446,16 @@ export class NetworkService {
       (m) => m.assetType === 'arc200' && m.contractId === assetId
     );
     if (arc200Match) {
+      const decimals = this.normalizeDecimals(arc200Match.decimals);
+      if (decimals === null) {
+        // Can't trust the magnitude without real decimals — omit rather than
+        // risk showing an inflated balance.
+        return null;
+      }
       return {
         assetId: arc200Match.contractId,
         amount: arc200Match.balance ? BigInt(arc200Match.balance) : 0n,
-        decimals: arc200Match.decimals,
+        decimals,
         name: arc200Match.name,
         symbol: arc200Match.symbol,
         imageUrl: arc200Match.imageUrl,
@@ -458,13 +482,29 @@ export class NetworkService {
       return null;
     }
 
-    const params = await this.getCachedAssetParams(assetId);
+    // getAssetInfo returns null on a 404 but throws on timeout/other errors;
+    // tolerate that so we can still fall back to Mimir instead of rejecting the
+    // whole lookup.
+    let assetInfo: any = null;
+    try {
+      assetInfo = await this.getAssetInfo(assetId);
+    } catch (error) {
+      console.warn(`Failed to fetch asset info for ${assetId}:`, error);
+    }
     const mimirMeta = mimirAssets.find(
       (m) => m.assetType === 'asa' && m.contractId === assetId
     );
 
-    const decimals = params?.decimals ?? mimirMeta?.decimals;
-    if (decimals === undefined) {
+    // `decimals` is a REQUIRED ASA param, so treat "genuinely present" and
+    // "absent" differently: 0 is a legitimate value, but getCachedAssetParams'
+    // `?? 0` would fabricate a 0 for a missing/failed response and silently
+    // inflate the displayed balance by 10^N. Trust only a genuine decimals from
+    // algod (preferred), else Mimir; `??` keeps a real 0 while falling through
+    // on an unresolved (null) value. If neither resolves it, return null.
+    const decimals =
+      this.normalizeDecimals(assetInfo?.params?.decimals) ??
+      this.normalizeDecimals(mimirMeta?.decimals);
+    if (decimals === null) {
       // Never guess decimals: 0 — that would show a 10^N-inflated balance.
       // Omit the asset until a later refresh can resolve its real params.
       return null;
@@ -474,8 +514,8 @@ export class NetworkService {
       assetId,
       amount: holding.amount,
       decimals,
-      name: params?.name ?? mimirMeta?.name,
-      unitName: params?.unitName,
+      name: assetInfo?.params?.name ?? mimirMeta?.name,
+      unitName: assetInfo?.params?.unitName,
       symbol: mimirMeta?.symbol,
       imageUrl: mimirMeta?.imageUrl,
       usdValue: mimirMeta?.usdValue,
