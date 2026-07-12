@@ -25,6 +25,7 @@ import {
   isSessionExpired,
   detectRequestedChains,
   areRequiredChainsSupported,
+  truncateAddress,
 } from './utils';
 import {
   DEFAULT_NAMESPACES,
@@ -34,6 +35,13 @@ import {
 import type { WalletConnectV1StoredSession } from '@/services/walletconnect/v1/types';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { WC_V1_SESSION_STORAGE_KEY } from '@/services/walletconnect/v1/config';
+
+// Redact full 58-char Algorand addresses from a string before logging (e.g.
+// the rekey/auth-address error message at signTransactions), replacing each
+// with its truncated form. Used only for LOGGED output — thrown errors keep the
+// full address so user-facing messages are unchanged (TASK-33).
+const redactAddressesForLog = (message: string): string =>
+  message.replace(/[A-Z2-7]{58}/g, (addr) => truncateAddress(addr));
 
 export class WalletConnectService extends EventEmitter {
   private static instance: WalletConnectService;
@@ -541,7 +549,13 @@ export class WalletConnectService extends EventEmitter {
 
       return signedTxns;
     } catch (error) {
-      console.error('Failed to sign transactions:', error);
+      // Redact any full address (e.g. the rekey auth-address) from the log; the
+      // re-thrown error below preserves the full message for the caller/UX.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        'Failed to sign transactions:',
+        redactAddressesForLog(message)
+      );
       throw new Error(
         `Transaction signing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
