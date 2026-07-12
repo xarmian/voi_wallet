@@ -293,10 +293,19 @@ export default function HomeScreen() {
     ]
   );
 
+  // Load wallet data and mark activity once when Home mounts. Kept separate from
+  // the remote-signer effect below so that the remote-signer store flipping
+  // isInitialized false→true does not re-trigger walletStore.initialize() (a
+  // redundant accountStates rebuild + balance refetch/flicker on cold start).
+  // The store's initialize() coalescer dedupes any residual concurrent calls.
   useEffect(() => {
     initializeWallet();
     updateActivity();
-    // Initialize remote signer store to get app mode
+  }, []);
+
+  // Initialize the remote-signer store (used to resolve app mode) once it is not
+  // yet initialized. This runs independently of the wallet init above.
+  useEffect(() => {
     if (!isRemoteSignerInitialized) {
       initializeRemoteSigner();
     }
