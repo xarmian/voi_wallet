@@ -412,6 +412,18 @@ const persistMultiNetworkBalanceToStorage = async (
 // initialize()/refresh()/account-switch still re-runs initialization normally.
 let walletInitializationPromise: Promise<void> | null = null;
 
+// In-flight balance-load dedup. Keyed by `${accountId}:${networkId}` (NOT
+// accountId alone): loadAccountBalance captures the network before its await and
+// persists a network-scoped cache, so a network switch mid-load must NOT let a
+// caller on the new network join (and receive/persist) the previous network's
+// result. Concurrent callers for the same account+network (HomeScreen mount,
+// pull-to-refresh, SendScreen, the transactionSuccess force-refresh) share one
+// promise, so the expensive fetch chain and the rekeyInfo→canSign persist run
+// exactly once. Module-level (not a store field) so it survives initialize()'s
+// accountStates reset. Entries are always removed in a `finally`, so a failed
+// load can never wedge future loads.
+const balanceLoadsInFlight = new Map<string, Promise<void>>();
+
 export const useWalletStore = create<WalletState>()(
   subscribeWithSelector((set, get) => ({
     // Initial state
@@ -980,150 +992,202 @@ export const useWalletStore = create<WalletState>()(
 
     // Balance and transaction management
     loadAccountBalance: async (accountId: string, forceRefresh = false) => {
-      try {
-        const { accountStates } = get();
-        const accountState =
-          accountStates[accountId] || createInitialAccountState();
+      const { accountStates } = get();
+      const accountState =
+        accountStates[accountId] || createInitialAccountState();
 
-        // Define cache expiry time (30 seconds for background refresh logic)
-        const CACHE_EXPIRY_MS = 30 * 1000;
-        const now = Date.now();
-        const isCacheExpired =
-          now - accountState.balanceLastUpdated > CACHE_EXPIRY_MS;
-        const hasExistingBalance = !!accountState.balance;
+      // Define cache expiry time (30 seconds for background refresh logic)
+      const CACHE_EXPIRY_MS = 30 * 1000;
+      const now = Date.now();
+      const isCacheExpired =
+        now - accountState.balanceLastUpdated > CACHE_EXPIRY_MS;
+      const hasExistingBalance = !!accountState.balance;
 
-        // If we have cached data and not forcing refresh, check if we need background update
-        if (!forceRefresh && hasExistingBalance) {
-          // If cache is fresh, don't refresh at all
-          if (!isCacheExpired) {
-            return;
-          }
-          // If cache is stale, do background refresh (don't show loading state)
-          // This allows cached data to stay visible while refreshing
+      // If we have cached data and not forcing refresh, check if we need background update
+      if (!forceRefresh && hasExistingBalance) {
+        // If cache is fresh, don't refresh at all
+        if (!isCacheExpired) {
+          return;
         }
+        // If cache is stale, do background refresh (don't show loading state)
+        // This allows cached data to stay visible while refreshing
+      }
 
-        // Resolve account fresh from service (repairs missing addresses if needed)
-        const account = await MultiAccountWalletService.getAccount(accountId);
+      // Key the in-flight entry by the network at call time so a caller that
+      // arrives after a network switch gets a different key and starts its own
+      // load instead of joining — and inheriting — the previous network's request.
+      // (The network the balance is actually fetched/persisted on is re-read
+      // inside the load below, right before the fetch, so persistence always
+      // matches the fetched network exactly as it did before this change.)
+      const networkService = NetworkService.getInstance();
+      const keyNetworkId = networkService.getCurrentNetworkId();
+      const inFlightKey = `${accountId}:${keyNetworkId}`;
 
-        // Determine loading state based on cache availability
-        const shouldShowLoading = !hasExistingBalance || forceRefresh;
-        const shouldShowBackgroundRefresh = hasExistingBalance && !forceRefresh;
+      // In-flight dedup: concurrent callers (HomeScreen mount, pull-to-refresh,
+      // SendScreen, the transactionSuccess force-refresh) for the same
+      // account+network share this one promise, so the expensive fetch chain and
+      // the rekeyInfo→canSign persist below run exactly once and every caller sees
+      // the same result. forceRefresh joins an active load rather than launching a
+      // duplicate; when nothing is in flight it still starts a fresh load (the
+      // cache-freshness early-return above already honored forceRefresh's
+      // "ignore fresh cache" semantics).
+      const existingLoad = balanceLoadsInFlight.get(inFlightKey);
+      if (existingLoad) {
+        return existingLoad;
+      }
 
-        set({
-          accountStates: {
-            ...accountStates,
-            [accountId]: {
-              ...accountState,
-              isBalanceLoading: shouldShowLoading,
-              isBackgroundRefreshing: shouldShowBackgroundRefresh,
-              lastError: null,
+      const loadPromise = (async () => {
+        try {
+          // Resolve account fresh from service (repairs missing addresses if needed)
+          const account = await MultiAccountWalletService.getAccount(accountId);
+
+          // Determine loading state based on cache availability
+          const shouldShowLoading = !hasExistingBalance || forceRefresh;
+          const shouldShowBackgroundRefresh =
+            hasExistingBalance && !forceRefresh;
+
+          set({
+            accountStates: {
+              ...accountStates,
+              [accountId]: {
+                ...accountState,
+                isBalanceLoading: shouldShowLoading,
+                isBackgroundRefreshing: shouldShowBackgroundRefresh,
+                lastError: null,
+              },
             },
-          },
-        });
+          });
 
-        const networkService = NetworkService.getInstance();
-        const currentNetworkId = networkService.getCurrentNetworkId();
-        const balance = await networkService.getAccountBalance(account.address);
-
-        // Process rekey information if available (both rekeyed and non-rekeyed states)
-        let updatedWallet = get().wallet;
-        if (balance.rekeyInfo && updatedWallet) {
-          // Update the account with rekey information
-          const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
-            account,
-            balance.rekeyInfo,
-            updatedWallet
+          // Re-read the network right before the fetch so the balance is
+          // persisted under the network it was actually fetched on (a switch
+          // during the getAccount await above must not persist under the stale
+          // key-network). The dedup key already isolated cross-network callers.
+          const currentNetworkId = networkService.getCurrentNetworkId();
+          const balance = await networkService.getAccountBalance(
+            account.address
           );
 
-          let shouldPersistMetadata = account.type !== updatedAccount.type;
-
-          if (
-            !shouldPersistMetadata &&
-            updatedAccount.type === AccountType.REKEYED &&
-            account.type === AccountType.REKEYED
-          ) {
-            const existingRekeyed = account as RekeyedAccountMetadata;
-            const newRekeyed = updatedAccount as RekeyedAccountMetadata;
-
-            shouldPersistMetadata =
-              existingRekeyed.authAddress !== newRekeyed.authAddress ||
-              existingRekeyed.canSign !== newRekeyed.canSign ||
-              existingRekeyed.rekeyedAt !== newRekeyed.rekeyedAt;
-          }
-
-          if (shouldPersistMetadata) {
-            try {
-              await MultiAccountWalletService.updateAccountMetadata(
-                updatedAccount
+          // Process rekey information if available (both rekeyed and non-rekeyed states)
+          let updatedWallet = get().wallet;
+          if (balance.rekeyInfo && updatedWallet) {
+            // Update the account with rekey information
+            const updatedAccount =
+              await rekeyManager.updateAccountWithRekeyInfo(
+                account,
+                balance.rekeyInfo,
+                updatedWallet
               );
-            } catch (persistError) {
-              console.warn(
-                'Failed to persist rekey metadata update:',
-                persistError
-              );
+
+            let shouldPersistMetadata = account.type !== updatedAccount.type;
+
+            if (
+              !shouldPersistMetadata &&
+              updatedAccount.type === AccountType.REKEYED &&
+              account.type === AccountType.REKEYED
+            ) {
+              const existingRekeyed = account as RekeyedAccountMetadata;
+              const newRekeyed = updatedAccount as RekeyedAccountMetadata;
+
+              shouldPersistMetadata =
+                existingRekeyed.authAddress !== newRekeyed.authAddress ||
+                existingRekeyed.canSign !== newRekeyed.canSign ||
+                existingRekeyed.rekeyedAt !== newRekeyed.rekeyedAt;
             }
+
+            if (shouldPersistMetadata) {
+              try {
+                await MultiAccountWalletService.updateAccountMetadata(
+                  updatedAccount
+                );
+              } catch (persistError) {
+                console.warn(
+                  'Failed to persist rekey metadata update:',
+                  persistError
+                );
+              }
+            }
+
+            // Update the wallet with the new account metadata
+            const updatedAccounts = updatedWallet.accounts.map((acc) =>
+              acc.id === accountId ? updatedAccount : acc
+            );
+
+            updatedWallet = { ...updatedWallet, accounts: updatedAccounts };
+
+            set({
+              wallet: updatedWallet,
+              accountStates: {
+                ...get().accountStates,
+                [accountId]: {
+                  ...get().accountStates[accountId],
+                  balance,
+                  isBalanceLoading: false,
+                  isBackgroundRefreshing: false,
+                  balanceLastUpdated: now,
+                },
+              },
+            });
+
+            // Persist the updated balance cache with network ID
+            setTimeout(() => {
+              persistBalanceToStorage(
+                accountId,
+                balance,
+                now,
+                currentNetworkId
+              );
+            }, 0);
+          } else {
+            set({
+              accountStates: {
+                ...get().accountStates,
+                [accountId]: {
+                  ...get().accountStates[accountId],
+                  balance,
+                  isBalanceLoading: false,
+                  isBackgroundRefreshing: false,
+                  balanceLastUpdated: now,
+                },
+              },
+            });
+
+            // Persist the updated balance cache with network ID
+            setTimeout(() => {
+              persistBalanceToStorage(
+                accountId,
+                balance,
+                now,
+                currentNetworkId
+              );
+            }, 0);
           }
-
-          // Update the wallet with the new account metadata
-          const updatedAccounts = updatedWallet.accounts.map((acc) =>
-            acc.id === accountId ? updatedAccount : acc
-          );
-
-          updatedWallet = { ...updatedWallet, accounts: updatedAccounts };
-
+        } catch (error) {
+          const { accountStates: latestAccountStates } = get();
           set({
-            wallet: updatedWallet,
             accountStates: {
-              ...get().accountStates,
+              ...latestAccountStates,
               [accountId]: {
-                ...get().accountStates[accountId],
-                balance,
+                ...latestAccountStates[accountId],
+                lastError:
+                  error instanceof Error
+                    ? error.message
+                    : 'Failed to load balance',
                 isBalanceLoading: false,
                 isBackgroundRefreshing: false,
-                balanceLastUpdated: now,
               },
             },
           });
-
-          // Persist the updated balance cache with network ID
-          setTimeout(() => {
-            persistBalanceToStorage(accountId, balance, now, currentNetworkId);
-          }, 0);
-        } else {
-          set({
-            accountStates: {
-              ...get().accountStates,
-              [accountId]: {
-                ...get().accountStates[accountId],
-                balance,
-                isBalanceLoading: false,
-                isBackgroundRefreshing: false,
-                balanceLastUpdated: now,
-              },
-            },
-          });
-
-          // Persist the updated balance cache with network ID
-          setTimeout(() => {
-            persistBalanceToStorage(accountId, balance, now, currentNetworkId);
-          }, 0);
         }
-      } catch (error) {
-        const { accountStates } = get();
-        set({
-          accountStates: {
-            ...accountStates,
-            [accountId]: {
-              ...accountStates[accountId],
-              lastError:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to load balance',
-              isBalanceLoading: false,
-              isBackgroundRefreshing: false,
-            },
-          },
-        });
+      })();
+
+      // Register before the first await inside the promise has a chance to settle
+      // so overlapping callers observe and join it, and always clear it in
+      // `finally` — even on throw — so a failed load can never wedge future loads.
+      balanceLoadsInFlight.set(inFlightKey, loadPromise);
+      try {
+        await loadPromise;
+      } finally {
+        balanceLoadsInFlight.delete(inFlightKey);
       }
     },
 
