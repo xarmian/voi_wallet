@@ -17,7 +17,12 @@ import {
   RestoreProgress,
   BackupError,
 } from './types';
-import { encryptBackup, decryptBackup } from './encryption';
+import {
+  encryptBackup,
+  decryptBackup,
+  validateEncryptedBackupFile,
+  validatePasswordStrength,
+} from './encryption';
 import {
   collectAccounts,
   collectSettings,
@@ -102,6 +107,21 @@ export class BackupService {
     pin?: string
   ): Promise<BackupResult> {
     try {
+      // Step 0: Enforce the passphrase policy at the service boundary. The UI
+      // modal already gates on this, but a direct caller must not be able to
+      // create a backup protecting mnemonics under a weak password.
+      // NOTE: this gate applies to CREATION only — restore/import intentionally
+      // never validates against this policy, so any older/any backup still
+      // imports.
+      const strength = validatePasswordStrength(password);
+      if (!strength.isValid) {
+        throw new BackupError(
+          strength.feedback[0] ||
+            'Password does not meet the minimum strength requirements',
+          'WEAK_PASSWORD'
+        );
+      }
+
       // Step 1: Collect accounts
       this.reportProgress({
         step: 'collecting',
@@ -219,26 +239,23 @@ export class BackupService {
       const sourceFile = new File(fileUri);
       const fileContent = await sourceFile.text();
 
-      let encrypted: EncryptedBackupFile;
-      try {
-        encrypted = JSON.parse(fileContent) as EncryptedBackupFile;
-      } catch {
-        throw new BackupError(
-          'Invalid backup file format',
-          'INVALID_FILE_FORMAT'
-        );
-      }
-
-      // Step 2: Validate format
+      // Step 2: Validate format + envelope shape (and cap v2 KDF params before
+      // any scrypt work — this parses untrusted JSON).
       this.reportProgress({
         step: 'validating',
         progress: 20,
         message: 'Validating backup...',
       });
 
-      if (encrypted.format !== 'voibackup') {
+      let encrypted: EncryptedBackupFile;
+      try {
+        encrypted = validateEncryptedBackupFile(JSON.parse(fileContent));
+      } catch (parseError) {
+        if (parseError instanceof BackupError) {
+          throw parseError;
+        }
         throw new BackupError(
-          'Not a valid Voi Wallet backup file',
+          'Invalid backup file format',
           'INVALID_FILE_FORMAT'
         );
       }
@@ -322,20 +339,17 @@ export class BackupService {
       const sourceFile = new File(fileUri);
       const fileContent = await sourceFile.text();
 
+      // Validate format + envelope shape (and cap v2 KDF params before any
+      // scrypt work — this parses untrusted JSON).
       let encrypted: EncryptedBackupFile;
       try {
-        encrypted = JSON.parse(fileContent) as EncryptedBackupFile;
-      } catch {
+        encrypted = validateEncryptedBackupFile(JSON.parse(fileContent));
+      } catch (parseError) {
+        if (parseError instanceof BackupError) {
+          throw parseError;
+        }
         throw new BackupError(
           'Invalid backup file format',
-          'INVALID_FILE_FORMAT'
-        );
-      }
-
-      // Validate format
-      if (encrypted.format !== 'voibackup') {
-        throw new BackupError(
-          'Not a valid Voi Wallet backup file',
           'INVALID_FILE_FORMAT'
         );
       }
