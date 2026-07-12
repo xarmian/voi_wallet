@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import algosdk from 'algosdk';
 import {
   View,
@@ -28,6 +28,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { TransactionService } from '@/services/transactions';
 import VoiNetworkService, { NetworkService } from '@/services/network';
 import tokenMappingService from '@/services/token-mapping';
+import type { TokenMapping } from '@/services/token-mapping/types';
 import {
   useActiveAccount,
   useActiveAccountBalance,
@@ -342,49 +343,163 @@ export default function SendScreen() {
     activeAccount?.id || ''
   );
 
+  // The asset the send flow is scoped to (parsed from the route). Depended on
+  // by the option builder below, so keep it memoized (and reactive to BOTH
+  // `asset` and `assetId` route params).
+  const initialAssetId = useMemo(() => {
+    return routeParams?.asset
+      ? isNaN(parseInt(routeParams.asset, 10))
+        ? undefined
+        : parseInt(routeParams.asset, 10)
+      : routeParams?.assetId;
+  }, [routeParams?.asset, routeParams?.assetId]);
+
+  // Token mappings, held in state so the option builder (both the narrowing
+  // memo below and the effect) reacts to them loading. Seed synchronously from
+  // the cache (bundled defaults at worst — never empty) so there's no empty
+  // window, then refresh from the (possibly newer) fetched mappings. Using one
+  // state value for both keeps the memo and the effect from diverging.
+  const [tokenMappings, setTokenMappings] = useState<TokenMapping[]>(() =>
+    tokenMappingService.getCachedMappings()
+  );
+  useEffect(() => {
+    let cancelled = false;
+    tokenMappingService
+      .getTokenMappings()
+      .then((mappings) => {
+        if (!cancelled) setTokenMappings(mappings);
+      })
+      .catch(() => {
+        // Keep the seeded cache/defaults on failure.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Narrow the multi-network balance down to only the mapped asset(s) the
+  // option builder needs, serialized to a stable string. multiNetworkBalance
+  // gets a fresh object reference on every balance refresh (screen focus,
+  // pull-to-refresh, post-transaction), so depending the effect directly on it
+  // re-runs the whole builder — and re-fetches — while the user is composing.
+  // Keying off the serialized relevant slice instead means the effect only
+  // re-runs when the data it actually consumes changes.
+  const relevantBalanceKey = useMemo(() => {
+    const assets = multiNetworkBalance?.assets;
+    if (!assets || assets.length === 0) return '[]';
+
+    const mappings = tokenMappings;
+
+    const relevant =
+      initialAssetId === undefined
+        ? // No asset context: every native-token mapping (native = assetId 0).
+          (() => {
+            const nativeMappingIds = new Set(
+              mappings
+                .filter((m) => m.tokens.some((t) => t.assetId === 0))
+                .map((m) => m.mappingId)
+            );
+            return assets.filter(
+              (a) =>
+                a.isMapped && !!a.mappingId && nativeMappingIds.has(a.mappingId)
+            );
+          })()
+        : // Scoped to one asset: just its mapping's balance entry.
+          (() => {
+            const mapping = contextMappingId
+              ? mappings.find((m) => m.mappingId === contextMappingId)
+              : mappings.find((m) =>
+                  m.tokens.some((t) => t.assetId === initialAssetId)
+                );
+            return mapping
+              ? assets.filter(
+                  (a) => a.isMapped && a.mappingId === mapping.mappingId
+                )
+              : [];
+          })();
+
+    const slim = relevant.map((a) => ({
+      mappingId: a.mappingId,
+      sourceBalances: (a.sourceBalances ?? []).map((s) => ({
+        networkId: s.networkId,
+        assetId: s.balance.assetId,
+        // bigint amounts don't survive JSON; keep as string and BigInt() later.
+        amount: s.balance.amount.toString(),
+        decimals: s.balance.decimals,
+        symbol: s.balance.symbol ?? '',
+        name: s.balance.name ?? '',
+        imageUrl: s.balance.imageUrl,
+      })),
+    }));
+    return JSON.stringify(slim);
+  }, [
+    multiNetworkBalance?.assets,
+    initialAssetId,
+    contextMappingId,
+    tokenMappings,
+  ]);
+
+  // Parsed form of the narrowed slice. Derived solely from the string key, so
+  // its reference stays stable across balance refreshes with identical data.
+  const relevantMappedAssets = useMemo(
+    () =>
+      JSON.parse(relevantBalanceKey) as {
+        mappingId?: string;
+        sourceBalances: {
+          networkId: NetworkId;
+          assetId: number;
+          amount: string;
+          decimals: number;
+          symbol: string;
+          name: string;
+          imageUrl?: string;
+        }[];
+      }[],
+    [relevantBalanceKey]
+  );
+
   // Fetch all available versions of this asset across networks
   useEffect(() => {
-    const fetchAssetOptions = async () => {
-      if (!activeAccount) return;
+    // Guard against a stale async run overwriting fresher state. This effect
+    // can start a new run (mappings loading, balance changing) before an
+    // earlier run's awaited lookups resolve; without this, an older
+    // (e.g. direct/unmapped) result could land after a newer one and clobber
+    // good options — even replacing them with []. Cleanup flips this flag, so
+    // the superseded run bails before any setState.
+    let cancelled = false;
 
-      const initialAssetId = routeParams?.asset
-        ? isNaN(parseInt(routeParams.asset, 10))
-          ? undefined
-          : parseInt(routeParams.asset, 10)
-        : routeParams?.assetId;
+    const fetchAssetOptions = async () => {
+      if (!activeAccount) {
+        // Clear the spinner even though we build no options: a superseded
+        // (now-cancelled) earlier run may have left it on, and its guarded
+        // finally won't clear it. Clearing is always safe — only *overwriting
+        // options* must stay behind the cancelled guard.
+        setIsLoadingOptions(false);
+        return;
+      }
 
       setIsLoadingOptions(true);
       try {
-        // Get mappings to find all versions of this asset
-        const mappings = await tokenMappingService.getTokenMappings();
+        // Same mappings the narrowing memo used (see relevantMappedAssets), so
+        // the mapping lookup below stays consistent with the pre-narrowed slice.
+        const mappings = tokenMappings;
         const options = [];
 
         // When no asset context is provided, show all network tokens (native + bridged)
         if (initialAssetId === undefined) {
-          // Find all mappings that contain native tokens (assetId: 0)
-          const nativeTokenMappings = mappings.filter((m) =>
-            m.tokens.some((t) => t.assetId === 0)
-          );
-
-          // For each native token mapping, get balances from multi-network balance
-          for (const mapping of nativeTokenMappings) {
-            const mappedAsset = multiNetworkBalance?.assets.find(
-              (a) => a.mappingId === mapping.mappingId && a.isMapped
-            );
-
-            if (mappedAsset && mappedAsset.sourceBalances) {
-              // Add all tokens in this mapping (native + bridged versions)
-              for (const source of mappedAsset.sourceBalances) {
-                options.push({
-                  networkId: source.networkId,
-                  assetId: source.balance.assetId,
-                  balance: BigInt(source.balance.amount),
-                  decimals: source.balance.decimals,
-                  symbol: source.balance.symbol || '',
-                  name: source.balance.name || '',
-                  imageUrl: source.balance.imageUrl,
-                });
-              }
+          // Build from the narrowed native-token mapped assets.
+          for (const mappedAsset of relevantMappedAssets) {
+            // Add all tokens in this mapping (native + bridged versions)
+            for (const source of mappedAsset.sourceBalances) {
+              options.push({
+                networkId: source.networkId,
+                assetId: source.assetId,
+                balance: BigInt(source.amount),
+                decimals: source.decimals,
+                symbol: source.symbol,
+                name: source.name,
+                imageUrl: source.imageUrl,
+              });
             }
           }
         } else {
@@ -397,26 +512,22 @@ export default function SendScreen() {
               );
 
           if (mapping) {
-            // Find the mapped asset in multi-network balance
-            const mappedAsset = multiNetworkBalance?.assets.find(
-              (a) => a.mappingId === mapping.mappingId && a.isMapped
+            // Find the mapped asset in the narrowed multi-network balance
+            const mappedAsset = relevantMappedAssets.find(
+              (a) => a.mappingId === mapping.mappingId
             );
 
-            if (
-              mappedAsset &&
-              mappedAsset.sourceBalances &&
-              mappedAsset.sourceBalances.length > 0
-            ) {
+            if (mappedAsset && mappedAsset.sourceBalances.length > 0) {
               // Build options from sourceBalances (includes native tokens with assetId 0)
               for (const source of mappedAsset.sourceBalances) {
                 options.push({
                   networkId: source.networkId,
-                  assetId: source.balance.assetId,
-                  balance: BigInt(source.balance.amount),
-                  decimals: source.balance.decimals,
-                  symbol: source.balance.symbol || contextAssetName || '',
-                  name: source.balance.name || contextAssetName || '',
-                  imageUrl: source.balance.imageUrl,
+                  assetId: source.assetId,
+                  balance: BigInt(source.amount),
+                  decimals: source.decimals,
+                  symbol: source.symbol || contextAssetName || '',
+                  name: source.name || contextAssetName || '',
+                  imageUrl: source.imageUrl,
                 });
               }
             } else {
@@ -469,22 +580,24 @@ export default function SendScreen() {
               }
             }
           } else {
-            // Not in a mapping, just show this one asset
+            // Not in a mapping, just show this one asset. Use a targeted lookup
+            // instead of the full getAccountBalance pipeline (pricing, rekey
+            // info, and a per-holding metadata loop) just to locate one asset.
+            // getSingleAssetBalance still discovers unmapped ARC-200 assets via
+            // Mimir, so this doesn't regress ARC-200 support.
             const networkId =
               (routeParams?.networkId as NetworkId) || currentNetwork;
+            const networkService = NetworkService.getInstance(networkId);
 
-            // First check if we have this asset in accountBalance (includes ARC-200)
-            const balance = await NetworkService.getInstance(
-              networkId
-            ).getAccountBalance(activeAccount.address);
-            const asset = balance.assets?.find(
-              (a) =>
-                a.assetId === initialAssetId ||
-                (a.assetType === 'arc200' && a.contractId === initialAssetId)
-            );
+            const asset = initialAssetId
+              ? await networkService.getSingleAssetBalance(
+                  activeAccount.address,
+                  initialAssetId
+                )
+              : null;
 
             if (asset) {
-              // Found in accountBalance (ASA or ARC-200)
+              // Found (ASA or ARC-200)
               options.push({
                 networkId,
                 assetId:
@@ -501,12 +614,17 @@ export default function SendScreen() {
                 imageUrl: asset.imageUrl,
               });
             } else if (initialAssetId === 0) {
-              // Native token
+              // Native token — resolve the native balance directly
+              // (getSingleAssetBalance intentionally doesn't handle assetId 0).
               const networkConfig = getNetworkConfig(networkId);
+              const accountInfo = await networkService
+                .getAlgodClient()
+                .accountInformation(activeAccount.address)
+                .do();
               options.push({
                 networkId,
                 assetId: 0,
-                balance: BigInt(balance.amount),
+                balance: BigInt(accountInfo.amount || 0),
                 decimals: 6,
                 symbol: networkConfig.nativeToken,
                 name: networkConfig.nativeToken,
@@ -515,6 +633,9 @@ export default function SendScreen() {
             }
           }
         }
+
+        // A newer run has superseded this one — don't clobber its state.
+        if (cancelled) return;
 
         setAssetOptions(options);
 
@@ -565,18 +686,29 @@ export default function SendScreen() {
       } catch (error) {
         console.error('Failed to fetch asset options:', error);
       } finally {
-        setIsLoadingOptions(false);
+        // Only the current run should clear the spinner; a superseded run
+        // clearing it would race the fresher run that's still loading.
+        if (!cancelled) setIsLoadingOptions(false);
       }
     };
 
     fetchAssetOptions();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeAccount?.address,
-    routeParams?.assetId,
+    initialAssetId,
     routeParams?.networkId,
     contextMappingId,
-    multiNetworkBalance?.assets,
+    contextAssetName,
     currentNetwork,
+    tokenMappings,
+    // Content-stable slice of the balance (see relevantBalanceKey) — replaces
+    // the whole multiNetworkBalance.assets array so the builder doesn't re-run
+    // on every balance refresh.
+    relevantMappedAssets,
   ]);
 
   // Balance is already in assetOptions - no need to fetch separately

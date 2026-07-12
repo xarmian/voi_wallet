@@ -394,6 +394,160 @@ export class NetworkService {
     }
   }
 
+  /**
+   * Coerce a decimals value read from an external source (algod/Mimir) into a
+   * trustworthy integer. Returns null for anything that isn't a genuine,
+   * finite, non-negative integer so callers can omit the asset instead of
+   * guessing — a fabricated 0 would inflate a displayed balance by 10^N. A
+   * real `decimals: 0` is preserved.
+   *
+   * Decimals legitimately only ever arrives as a `number` (Mimir) or
+   * `number | bigint` (algosdk), so only those types are accepted. Strings,
+   * booleans, and empty/whitespace values are rejected — `Number('')`,
+   * `Number('  ')`, `Number(false)`, `Number([])` all coerce to a deceptive 0.
+   */
+  private normalizeDecimals(value: unknown): number | null {
+    let n: number;
+    if (typeof value === 'number') {
+      n = value;
+    } else if (typeof value === 'bigint') {
+      n = Number(value);
+    } else {
+      return null;
+    }
+    if (!Number.isInteger(n) || n < 0) {
+      return null;
+    }
+    return n;
+  }
+
+  /**
+   * Targeted balance lookup for a single asset (used by the send flow's asset
+   * picker). Unlike getAccountBalance, this resolves only the requested asset
+   * and skips the heavy parts of that pipeline — pricing, rekey info, and the
+   * sequential per-holding metadata loop.
+   *
+   * ARC-200 discovery is retained via Mimir (checked first), so unmapped
+   * ARC-200 assets still resolve; an ASA fallback uses algod holdings as the
+   * source of truth. `assetId` is an ASA asset ID or an ARC-200 contract ID.
+   * The native token (assetId 0) is intentionally not handled here — callers
+   * resolve it separately. Returns null when the account doesn't hold it (or
+   * when its decimals can't be resolved, to avoid displaying an inflated
+   * balance).
+   */
+  async getSingleAssetBalance(
+    address: string,
+    assetId: number
+  ): Promise<AssetBalance | null> {
+    if (!algosdk.isValidAddress(address)) {
+      throw new Error('Invalid Algorand address');
+    }
+    if (!assetId) {
+      return null;
+    }
+
+    // ARC-200 tokens live only in Mimir, so check there first — this is what
+    // keeps unmapped ARC-200 assets discoverable (parity with
+    // getAccountBalance -> mergeAssetsWithMimirData). getMimirAssets returns []
+    // when Mimir is unavailable on this network, so ASAs still resolve below.
+    const mimirAssets = await this.getMimirAssets(address);
+    const arc200Match = mimirAssets.find(
+      (m) => m.assetType === 'arc200' && m.contractId === assetId
+    );
+    if (arc200Match) {
+      const decimals = this.normalizeDecimals(arc200Match.decimals);
+      if (decimals === null) {
+        // Can't trust the magnitude without real decimals — omit rather than
+        // risk showing an inflated balance.
+        return null;
+      }
+      return {
+        assetId: arc200Match.contractId,
+        amount: arc200Match.balance ? BigInt(arc200Match.balance) : 0n,
+        decimals,
+        name: arc200Match.name,
+        symbol: arc200Match.symbol,
+        imageUrl: arc200Match.imageUrl,
+        usdValue: arc200Match.usdValue,
+        verified: arc200Match.verified,
+        assetType: 'arc200',
+        contractId: arc200Match.contractId,
+      };
+    }
+
+    // Otherwise treat it as an ASA: algod holdings are the source of truth for
+    // whether the account actually holds it (mirrors mergeAssetsWithMimirData,
+    // which only surfaces ASAs present in the algod holdings).
+    const accountInfo = await this.withTimeout(
+      this.algodClient.accountInformation(address).do(),
+      'account info'
+    );
+    // algosdk v3 exposes `assetId` (a uint64 bigint); compare as strings so
+    // large IDs aren't collapsed by a lossy Number() cast.
+    const holding = accountInfo.assets?.find(
+      (a: any) => String(a.assetId) === String(assetId)
+    );
+    if (!holding) {
+      return null;
+    }
+
+    // getAssetInfo returns null on a 404 (asset genuinely doesn't exist) but
+    // THROWS on timeout/other transient errors. Distinguish them: a transient
+    // failure should tolerate a Mimir fallback, but a genuine not-found must
+    // NOT be papered over with stale Mimir ASA metadata.
+    let assetInfo: any = null;
+    let assetInfoThrew = false;
+    try {
+      assetInfo = await this.getAssetInfo(assetId);
+    } catch (error) {
+      console.warn(`Failed to fetch asset info for ${assetId}:`, error);
+      assetInfoThrew = true;
+    }
+
+    // Genuine null (not a thrown error) = algod says this ASA doesn't exist.
+    // Report not-found rather than substituting Mimir data for a nonexistent
+    // asset. (ARC-200 discovery above is Mimir-first and unaffected.)
+    if (!assetInfoThrew && assetInfo === null) {
+      return null;
+    }
+
+    const mimirMeta = mimirAssets.find(
+      (m) => m.assetType === 'asa' && m.contractId === assetId
+    );
+
+    // `decimals` is a REQUIRED ASA param, so treat "genuinely present" and
+    // "absent" differently: 0 is a legitimate value, but getCachedAssetParams'
+    // `?? 0` would fabricate a 0 for a missing/failed response and silently
+    // inflate the displayed balance by 10^N. algod is authoritative when it's
+    // reachable — trust its decimals (0 included). Only when the algod lookup
+    // THREW (transient/unreachable) do we fall back to Mimir; a reachable algod
+    // that returned unusable params must NOT be papered over with (possibly
+    // stale) Mimir decimals. If neither resolves it, return null.
+    const algodDecimals = this.normalizeDecimals(assetInfo?.params?.decimals);
+    const decimals =
+      algodDecimals ??
+      (assetInfoThrew ? this.normalizeDecimals(mimirMeta?.decimals) : null);
+    if (decimals === null) {
+      // Never guess decimals: 0 — that would show a 10^N-inflated balance.
+      // Omit the asset until a later refresh can resolve its real params.
+      return null;
+    }
+
+    return {
+      assetId,
+      amount: holding.amount,
+      decimals,
+      name: assetInfo?.params?.name ?? mimirMeta?.name,
+      unitName: assetInfo?.params?.unitName,
+      symbol: mimirMeta?.symbol,
+      imageUrl: mimirMeta?.imageUrl,
+      usdValue: mimirMeta?.usdValue,
+      verified: mimirMeta?.verified,
+      assetType: 'asa',
+      contractId: mimirMeta?.contractId,
+    };
+  }
+
   private async getMimirAssets(address: string): Promise<MimirAsset[]> {
     // Return empty array if Mimir is not available on this network
     if (!this.mimirService) {
