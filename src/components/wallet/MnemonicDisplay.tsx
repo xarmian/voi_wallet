@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 
 interface MnemonicDisplayProps {
@@ -28,6 +29,12 @@ export default function MnemonicDisplay({
 }: MnemonicDisplayProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+
+  // Component-level guard: this is the leaf that actually renders the mnemonic
+  // words, so guarding here blocks screenshots/recordings on ANY host screen.
+  // Idempotent with a host-level guard (each uses a unique key).
+  useSecureScreen();
+
   const mnemonicWords = mnemonic.split(' ');
 
   return (

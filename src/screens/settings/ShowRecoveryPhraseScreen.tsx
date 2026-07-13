@@ -18,6 +18,11 @@ import { useActiveAccount } from '@/store/walletStore';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
+import {
+  scheduleClipboardClear,
+  ClipboardClearHandle,
+} from '@/utils/clipboardAutoClear';
 import { Theme } from '@/constants/themes';
 
 interface RouteParams {
@@ -31,6 +36,10 @@ export default function ShowRecoveryPhraseScreen() {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
 
+  // Block OS screenshots / screen recordings while the recovery phrase is on
+  // screen (Android FLAG_SECURE; iOS 13+ screenshots / iOS 11+ recordings).
+  useSecureScreen();
+
   const activeAccount = useActiveAccount();
   const targetAddress = accountAddress ?? activeAccount?.address;
 
@@ -40,6 +49,7 @@ export default function ShowRecoveryPhraseScreen() {
   const [isBlurred, setIsBlurred] = useState(true);
   const [hasCopied, setHasCopied] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
 
   const loadMnemonic = useCallback(async () => {
     if (!targetAddress) {
@@ -94,6 +104,12 @@ export default function ShowRecoveryPhraseScreen() {
       setHasCopied(true);
       Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
 
+      // Auto-clear the recovery phrase from the OS clipboard after 60s, but only
+      // if the user hasn't copied something else in the meantime. Re-copying
+      // reschedules from scratch.
+      clipboardClearRef.current?.cancel();
+      clipboardClearRef.current = scheduleClipboardClear(mnemonic);
+
       // Reset the copied state after 3 seconds
       timeoutRef.current = setTimeout(() => setHasCopied(false), 3000);
     } catch (error) {
@@ -137,6 +153,11 @@ export default function ShowRecoveryPhraseScreen() {
       // Clear sensitive data when component unmounts
       setMnemonic('');
       setMnemonicWords([]);
+
+      // If the recovery phrase is still sitting in the clipboard, wipe it now
+      // rather than waiting out the 60s timer (and cancel that timer).
+      clipboardClearRef.current?.clearNow();
+      clipboardClearRef.current = null;
 
       // Clear any pending timeouts
       if (timeoutRef.current) {

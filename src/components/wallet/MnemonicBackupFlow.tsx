@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,11 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import MnemonicDisplay from './MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
+import {
+  scheduleClipboardClear,
+  ClipboardClearHandle,
+} from '@/utils/clipboardAutoClear';
 
 interface MnemonicBackupFlowProps {
   mnemonic: string;
@@ -39,6 +44,22 @@ export default function MnemonicBackupFlow({
     {}
   );
   const { theme } = useTheme();
+  const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
+
+  // Block OS screenshots / screen recordings for as long as the recovery phrase
+  // is displayed. This component-level guard covers every host screen that
+  // renders the backup flow; it is idempotent with any guard the host also
+  // applies (each guard uses a unique key — see useSecureScreen).
+  useSecureScreen();
+
+  // On unmount, wipe the recovery phrase from the clipboard if it's still there
+  // (and cancel the pending auto-clear timer).
+  useEffect(() => {
+    return () => {
+      clipboardClearRef.current?.clearNow();
+      clipboardClearRef.current = null;
+    };
+  }, []);
 
   const mnemonicWords = mnemonic.split(' ');
 
@@ -57,6 +78,12 @@ export default function MnemonicBackupFlow({
       await Clipboard.setStringAsync(mnemonic);
       setHasCopied(true);
       Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
+
+      // Auto-clear the recovery phrase from the OS clipboard after 60s unless
+      // the user copied something else in the meantime. Re-copying reschedules.
+      clipboardClearRef.current?.cancel();
+      clipboardClearRef.current = scheduleClipboardClear(mnemonic);
+
       setTimeout(() => setHasCopied(false), 3000);
     } catch (error) {
       Alert.alert('Error', 'Failed to copy to clipboard');

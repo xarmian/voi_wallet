@@ -15,6 +15,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { AccountType } from '@/types/wallet';
 import MnemonicBackupFlow from '@/components/wallet/MnemonicBackupFlow';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 
@@ -22,6 +23,11 @@ export default function CreateAccountScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
   const navigation = useNavigation();
+
+  // Block OS screenshots / screen recordings while creating a new account (the
+  // backup step displays the recovery phrase). No-op on web/extension.
+  useSecureScreen();
+
   const [step, setStep] = useState<'generate' | 'backup'>('generate');
   const [mnemonic, setMnemonic] = useState<string>('');
   const [accountLabel, setAccountLabel] = useState('');
