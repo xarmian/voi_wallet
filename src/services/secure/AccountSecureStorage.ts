@@ -38,6 +38,7 @@ import {
   decryptKeyEnvelopeV2,
   MAX_KEY_BLOBS,
 } from './envelopeV2';
+import { SessionKeyVault } from './SessionKeyVault';
 import { SECURITY_CONFIG } from '../../config/security';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -537,13 +538,49 @@ export class AccountSecureStorage {
 
         let privateKey: Uint8Array | undefined;
 
-        // Candidate 1 (v2 blobs) — tried FIRST when a verified user secret is
-        // available. INERT today: no production writer emits blobs yet, so every
-        // existing payload (no `blobs`) skips this and behaves exactly as before.
-        // Security anchor: every accepted result MUST pass the envelope MAC — a
-        // wrong secret cannot forge it, so the ladder simply falls through.
-        if (pin && Array.isArray(parsed.blobs) && parsed.blobs.length > 0) {
-          privateKey = await this.tryDecryptV2Blobs(parsed.blobs, pin);
+        // Vault-aware secret selection (DOC-137 §6.4, PR3). An explicit `pin` is
+        // a step-up re-auth (already verified above). When no pin is supplied
+        // but the session vault is unlocked, the vault secret drives the v2-blob
+        // path — this is what lets the ~14 `pin=undefined` callers keep working
+        // once keys become v2 (PR4/PR5). RETAINED device-key fallback: keys are
+        // still Format A in PR3, so `parsed.blobs` is empty, this branch is
+        // inert, and decryption falls through to the Format A / C candidates
+        // below EXACTLY as today. The device-key path is NOT removed and a
+        // locked vault does NOT throw here (Format A never needs the secret).
+        const vaultSecret =
+          !pin && SessionKeyVault.isUnlocked()
+            ? (SessionKeyVault.getSecret() ?? undefined)
+            : undefined;
+        const v2Secret = pin ?? vaultSecret;
+
+        // Candidate 1 (v2 blobs) — tried FIRST when a verified user secret (or
+        // the unlocked-vault secret) is available. INERT today: no production
+        // writer emits blobs yet, so every existing payload (no `blobs`) skips
+        // this and behaves exactly as before. Security anchor: every accepted
+        // result MUST pass the envelope MAC — a wrong secret cannot forge it, so
+        // the ladder simply falls through.
+        if (
+          v2Secret &&
+          Array.isArray(parsed.blobs) &&
+          parsed.blobs.length > 0
+        ) {
+          // Epoch guard (Codex P1-D): when the vault (not an explicit pin)
+          // supplied the secret, capture the vault epoch before the async
+          // scrypt/decrypt. If a lock (clear) or rotate bumps the epoch mid-
+          // flight, discard the derived material — do not use it and do not let
+          // it reach the 60 s cache — and fall through to the vault-independent
+          // device-key path (unchanged for Format A).
+          const usedVault = !pin;
+          const startEpoch = usedVault ? SessionKeyVault.currentEpoch() : -1;
+          const candidate = await this.tryDecryptV2Blobs(
+            parsed.blobs,
+            v2Secret
+          );
+          if (usedVault && SessionKeyVault.currentEpoch() !== startEpoch) {
+            candidate?.fill(0);
+          } else {
+            privateKey = candidate;
+          }
         }
 
         // Candidates 2 & 3 (unchanged) — Format A (device key), then Format C

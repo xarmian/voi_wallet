@@ -229,6 +229,17 @@ export function clearAllCachedKeys(): void {
 }
 
 /**
+ * Clear the derived messaging key cache on session lock (DOC-137 §6.5 / Codex
+ * P1-E). Named entry point invoked by AuthContext.lock() (via
+ * `clearSessionSecurity`) so a locked device stops holding — and stops being
+ * able to decrypt with — the ~30 min-cached X25519 secret key. Zeroes every
+ * cached secret key. Idempotent.
+ */
+export function clearMessagingKeyCache(): void {
+  clearAllCachedKeys();
+}
+
+/**
  * Get the base64-encoded messaging public key for an account.
  * Useful for key registration.
  *

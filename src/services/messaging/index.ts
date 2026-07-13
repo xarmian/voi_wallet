@@ -907,6 +907,7 @@ export {
   getCachedKeyPair,
   clearCachedKey,
   clearAllCachedKeys,
+  clearMessagingKeyCache,
 } from './keyDerivation';
 export {
   lookupMessagingKey,
