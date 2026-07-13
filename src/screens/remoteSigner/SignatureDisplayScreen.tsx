@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useRemoteSignerStore } from '@/store/remoteSignerStore';
@@ -75,6 +76,10 @@ export default function SignatureDisplayScreen() {
   const styles = useThemedStyles(createStyles);
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<RouteParams, 'SignatureDisplay'>>();
+
+  // Block OS screenshots / screen recordings while the signed-transaction QR is
+  // on screen (no-op on web/extension).
+  useSecureScreen();
 
   const { request, pin } = route.params;
 

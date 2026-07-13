@@ -28,6 +28,7 @@ import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
@@ -67,6 +68,11 @@ export default function ImportFromOnlineWalletScreen() {
   const navigation = useNavigation<any>();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+
+  // Block OS screenshots / screen recordings: this airgap screen scans a QR
+  // containing a PRIVATE KEY and then displays a signed-confirmation QR. No-op
+  // on web/extension.
+  useSecureScreen();
   const networkId = useCurrentNetwork();
   const refresh = useWalletStore((state) => state.refresh);
 

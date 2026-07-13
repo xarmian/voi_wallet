@@ -39,6 +39,7 @@ import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
 import { verifySignedTransaction } from '@/utils/signatureVerification';
 import { generateArc0300AccountExportUri } from '@/utils/arc0300';
 import { useCurrentNetwork } from '@/store/networkStore';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 
 type TransferState =
   | 'disclaimer'
@@ -67,6 +68,10 @@ export function TransferToAirgapFlow({
 }: TransferToAirgapFlowProps) {
   const { theme } = useTheme();
   const networkId = useCurrentNetwork();
+
+  // Block OS screenshots / screen recordings: this flow displays an ARC-0300 QR
+  // code that encodes the account's PRIVATE KEY. No-op on web/extension.
+  useSecureScreen();
 
   const [state, setState] = useState<TransferState>('disclaimer');
   const [error, setError] = useState<string | null>(null);

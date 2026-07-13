@@ -28,6 +28,7 @@ import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 
 type MnemonicImportScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -53,6 +54,10 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
   const [accountLabel, setAccountLabel] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const { theme } = useTheme();
+
+  // Block OS screenshots / screen recordings: each entered recovery-phrase word
+  // is rendered in clear text here. No-op on web/extension.
+  useSecureScreen();
   const themeColors = useThemeColors();
   const insets = useSafeAreaInsets();
 

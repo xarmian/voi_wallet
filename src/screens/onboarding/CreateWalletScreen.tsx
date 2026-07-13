@@ -10,6 +10,7 @@ import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -27,6 +28,11 @@ interface Props {
 export default function CreateWalletScreen({ navigation }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+
+  // Block OS screenshots / screen recordings while the new wallet's recovery
+  // phrase is displayed (no-op on the web/extension target).
+  useSecureScreen();
+
   const [mnemonic, setMnemonic] = useState<string>('');
 
   // Cross-platform alert helper

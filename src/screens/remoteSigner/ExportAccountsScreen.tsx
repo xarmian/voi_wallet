@@ -20,6 +20,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
@@ -35,6 +36,10 @@ export default function ExportAccountsScreen() {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const navigation = useNavigation();
+
+  // Block OS screenshots / screen recordings while an account-pairing QR is on
+  // screen (no-op on web/extension).
+  useSecureScreen();
 
   const accounts = useWalletStore((state) => state.wallet?.accounts ?? []);
   const signerConfig = useSignerConfig();
