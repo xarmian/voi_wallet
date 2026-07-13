@@ -33,6 +33,11 @@ import {
   AccountNotFoundError,
   AuthenticationRequiredError,
 } from '../../types/wallet';
+import {
+  KeyEnvelopeV2,
+  decryptKeyEnvelopeV2,
+  MAX_KEY_BLOBS,
+} from './envelopeV2';
 
 type PersistedAccountMetadata = Omit<
   SecureAccountStorage,
@@ -41,8 +46,23 @@ type PersistedAccountMetadata = Omit<
 
 interface AccountSecretPayload {
   accountId: string;
+  /**
+   * Legacy 4-colon (Format A/B/C) ciphertext, OR '' once fully migrated to v2.
+   * Retained for back-compat reads.
+   */
   encryptedPrivateKey: string;
+  /** Unlock-convenience hint — NO LONGER authoritative for decryption (R3). */
   authMethod: 'biometric' | 'pin';
+  /**
+   * Ordering hint only, MAC-anchored + untrusted (DOC-137 R3): 2 = v2 blobs
+   * present. Absent on all pre-Wave-2 payloads.
+   */
+  version?: 1 | 2;
+  /**
+   * v2 key envelopes (DOC-137 §2.3/§2.4). Normally 1; transiently 2 during a
+   * dual-slot re-wrap. HARD-CAPPED at MAX_KEY_BLOBS. Absent on legacy payloads.
+   */
+  blobs?: KeyEnvelopeV2[];
 }
 
 // PBKDF2 using CryptoJS with SHA256; returns hex string of keyLength bytes
@@ -437,24 +457,40 @@ export class AccountSecureStorage {
         }
 
         const parsed: AccountSecretPayload = JSON.parse(secretPayloadRaw);
-        if (!parsed.encryptedPrivateKey) {
-          throw new AccountStorageError(
-            'Private key not available for this account'
-          );
+
+        let privateKey: Uint8Array | undefined;
+
+        // Candidate 1 (v2 blobs) — tried FIRST when a verified user secret is
+        // available. INERT today: no production writer emits blobs yet, so every
+        // existing payload (no `blobs`) skips this and behaves exactly as before.
+        // Security anchor: every accepted result MUST pass the envelope MAC — a
+        // wrong secret cannot forge it, so the ladder simply falls through.
+        if (pin && Array.isArray(parsed.blobs) && parsed.blobs.length > 0) {
+          privateKey = await this.tryDecryptV2Blobs(parsed.blobs, pin);
         }
 
-        let privateKey: Uint8Array;
-
-        try {
-          privateKey = await this.decryptPrivateKey(parsed.encryptedPrivateKey);
-        } catch (error) {
-          if (unlockMethod === 'pin' && pin) {
-            privateKey = await this.decryptPrivateKeyWithPin(
-              parsed.encryptedPrivateKey,
-              pin
+        // Candidates 2 & 3 (unchanged) — Format A (device key), then Format C
+        // (legacy PIN-mixed). Reached whenever no v2 blob verified.
+        if (!privateKey) {
+          if (!parsed.encryptedPrivateKey) {
+            throw new AccountStorageError(
+              'Private key not available for this account'
             );
-          } else {
-            throw error;
+          }
+
+          try {
+            privateKey = await this.decryptPrivateKey(
+              parsed.encryptedPrivateKey
+            );
+          } catch (error) {
+            if (unlockMethod === 'pin' && pin) {
+              privateKey = await this.decryptPrivateKeyWithPin(
+                parsed.encryptedPrivateKey,
+                pin
+              );
+            } else {
+              throw error;
+            }
           }
         }
 
@@ -493,6 +529,38 @@ export class AccountSecureStorage {
       // Always remove from in-flight requests when done (success or failure)
       this.inFlightRequests.delete(cacheKey);
     }
+  }
+
+  /**
+   * Trial-decrypt the v2 blob candidates under a verified user secret
+   * (DOC-137 §4.3, candidate 1). Returns the first blob whose envelope MAC
+   * verifies, or `undefined` to fall through to the legacy formats.
+   *
+   * Only up to MAX_KEY_BLOBS blobs are attempted — each attempt runs a memory-
+   * hard scrypt, so capping the attempt count is itself a DoS guard. A wrong
+   * secret cannot forge the MAC, so a non-matching blob returns null and the
+   * ladder continues.
+   */
+  private static async tryDecryptV2Blobs(
+    blobs: KeyEnvelopeV2[],
+    secret: string
+  ): Promise<Uint8Array | undefined> {
+    const deviceSecret = await this.getStableDeviceId();
+    for (const blob of blobs.slice(0, MAX_KEY_BLOBS)) {
+      try {
+        const privateKey = await decryptKeyEnvelopeV2(
+          blob,
+          secret,
+          deviceSecret
+        );
+        if (privateKey) {
+          return privateKey;
+        }
+      } catch {
+        // Structurally invalid / out-of-cap blob — try the next candidate.
+      }
+    }
+    return undefined;
   }
 
   /**
