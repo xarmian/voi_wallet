@@ -82,4 +82,44 @@ describe('scheduleClipboardClear', () => {
 
     expect(mockSet).not.toHaveBeenCalled();
   });
+
+  it('does NOT clear if cancelled after the timer fired but before the read resolves (TOCTOU guard)', async () => {
+    // Model the real-world race: the timer fires and starts reading the
+    // clipboard, then a concurrent re-copy cancels this (now stale) handle, and
+    // only afterwards does the in-flight read resolve with the old secret.
+    let resolveGet!: (value: string) => void;
+    mockGet.mockReturnValue(
+      new Promise<string>((resolve) => {
+        resolveGet = resolve;
+      })
+    );
+
+    const handle = scheduleClipboardClear(SECRET, 60_000);
+
+    // Timer fires; the clear callback begins and awaits getStringAsync().
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockSet).not.toHaveBeenCalled();
+
+    // A re-copy cancels the stale handle...
+    handle.cancel();
+    // ...then the parked read resolves with the value that was there at read time.
+    resolveGet(SECRET);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The cancelled-flag guard must stop the write.
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  it('clearNow() after cancel() is a no-op (never reads or wipes)', async () => {
+    mockGet.mockResolvedValue(SECRET);
+
+    const handle = scheduleClipboardClear(SECRET, 60_000);
+    handle.cancel();
+    await handle.clearNow();
+
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockSet).not.toHaveBeenCalled();
+  });
 });

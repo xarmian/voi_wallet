@@ -50,6 +50,7 @@ export default function ShowRecoveryPhraseScreen() {
   const [hasCopied, setHasCopied] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
+  const mountedRef = useRef(true);
 
   const loadMnemonic = useCallback(async () => {
     if (!targetAddress) {
@@ -99,15 +100,27 @@ export default function ShowRecoveryPhraseScreen() {
   const handleCopy = useCallback(async () => {
     if (!mnemonic) return;
 
+    // Cancel any previously scheduled clear before we overwrite the clipboard,
+    // so a stale handle can never wipe the freshly copied content.
+    clipboardClearRef.current?.cancel();
+    clipboardClearRef.current = null;
+
     try {
       await Clipboard.setStringAsync(mnemonic);
+
+      if (!mountedRef.current) {
+        // Unmounted mid-copy: the phrase is now on the clipboard but our unmount
+        // cleanup has already run. Wipe it now (check-then-clear) and don't
+        // schedule a timer that would outlive this component.
+        void scheduleClipboardClear(mnemonic, 0).clearNow();
+        return;
+      }
+
       setHasCopied(true);
       Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
 
       // Auto-clear the recovery phrase from the OS clipboard after 60s, but only
-      // if the user hasn't copied something else in the meantime. Re-copying
-      // reschedules from scratch.
-      clipboardClearRef.current?.cancel();
+      // if the user hasn't copied something else in the meantime.
       clipboardClearRef.current = scheduleClipboardClear(mnemonic);
 
       // Reset the copied state after 3 seconds
@@ -150,6 +163,10 @@ export default function ShowRecoveryPhraseScreen() {
   // Cleanup sensitive data and timeouts when component unmounts
   useEffect(() => {
     return () => {
+      // Mark unmounted so an in-flight handleCopy wipes the clipboard itself
+      // instead of scheduling a timer that would outlive this component.
+      mountedRef.current = false;
+
       // Clear sensitive data when component unmounts
       setMnemonic('');
       setMnemonicWords([]);

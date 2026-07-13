@@ -36,11 +36,18 @@ export function scheduleClipboardClear(
   secret: string,
   ms = 60_000
 ): ClipboardClearHandle {
-  let cleared = false;
+  // Set once this handle is retired (via cancel() or clearNow()). It is checked
+  // AFTER the async clipboard read so a concurrent retirement — e.g. a re-copy
+  // that cancels this handle — always wins, and a stale in-flight read can never
+  // wipe content written since (TOCTOU guard).
+  let cancelled = false;
 
   const clearIfStillSecret = async (): Promise<void> => {
     try {
       const current = await Clipboard.getStringAsync();
+      // Re-check after the await: the handle may have been cancelled while the
+      // read was in flight.
+      if (cancelled) return;
       // Only clear when the clipboard hasn't changed since we copied the secret.
       if (current === secret) {
         await Clipboard.setStringAsync('');
@@ -51,22 +58,23 @@ export function scheduleClipboardClear(
   };
 
   const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-    if (cleared) return;
-    cleared = true;
-    // Fire-and-forget: the timer callback itself can't be async.
+    // Fire-and-forget: the timer callback itself can't be async. The cancelled
+    // check lives inside clearIfStillSecret (after the read) to close the race.
     void clearIfStillSecret();
   }, ms);
 
   return {
     cancel: () => {
-      cleared = true;
+      cancelled = true;
       clearTimeout(timer);
     },
     clearNow: async () => {
-      if (cleared) return;
-      cleared = true;
+      if (cancelled) return;
       clearTimeout(timer);
+      // Run the check-then-clear now, THEN mark retired (so this in-flight clear
+      // isn't aborted by its own flag, but any later call is a no-op).
       await clearIfStillSecret();
+      cancelled = true;
     },
   };
 }

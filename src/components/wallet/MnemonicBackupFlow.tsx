@@ -45,6 +45,7 @@ export default function MnemonicBackupFlow({
   );
   const { theme } = useTheme();
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
+  const mountedRef = useRef(true);
 
   // Block OS screenshots / screen recordings for as long as the recovery phrase
   // is displayed. This component-level guard covers every host screen that
@@ -56,6 +57,9 @@ export default function MnemonicBackupFlow({
   // (and cancel the pending auto-clear timer).
   useEffect(() => {
     return () => {
+      // Mark unmounted so an in-flight handleCopy wipes the clipboard itself
+      // instead of scheduling a timer that would outlive this component.
+      mountedRef.current = false;
       clipboardClearRef.current?.clearNow();
       clipboardClearRef.current = null;
     };
@@ -74,14 +78,27 @@ export default function MnemonicBackupFlow({
   );
 
   const handleCopy = async () => {
+    // Cancel any previously scheduled clear before we overwrite the clipboard,
+    // so a stale handle can never wipe the freshly copied content.
+    clipboardClearRef.current?.cancel();
+    clipboardClearRef.current = null;
+
     try {
       await Clipboard.setStringAsync(mnemonic);
+
+      if (!mountedRef.current) {
+        // Unmounted mid-copy: the phrase is now on the clipboard but our unmount
+        // cleanup has already run. Wipe it now (check-then-clear) and don't
+        // schedule a timer that would outlive this component.
+        void scheduleClipboardClear(mnemonic, 0).clearNow();
+        return;
+      }
+
       setHasCopied(true);
       Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
 
       // Auto-clear the recovery phrase from the OS clipboard after 60s unless
-      // the user copied something else in the meantime. Re-copying reschedules.
-      clipboardClearRef.current?.cancel();
+      // the user copied something else in the meantime.
       clipboardClearRef.current = scheduleClipboardClear(mnemonic);
 
       setTimeout(() => setHasCopied(false), 3000);
