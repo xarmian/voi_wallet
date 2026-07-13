@@ -317,6 +317,22 @@ describe('verifyPin throttle behavior', () => {
       attemptsRemaining: PIN_ATTEMPT_LIMIT,
     });
   });
+
+  it('serializes the throttle wipe with an in-flight verifyPin (no phantom lockout)', async () => {
+    // Race an in-flight wrong-PIN increment against a wallet reset. Because
+    // clearAll wipes the throttle through the SAME mutex, the increment is
+    // serialized ahead of the wipe and persists FIRST, then the wipe removes it —
+    // it can never land after the wipe and leave a stale lockout behind.
+    const verify = AccountSecureStorage.verifyPin(WRONG_PIN);
+    const reset = AccountSecureStorage.clearAll();
+    await Promise.all([verify, reset]);
+
+    // No stale increment survives the reset.
+    expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(false);
+    const state = await getState();
+    expect(state.attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT);
+    expect(state.lockedUntil).toBeNull();
+  });
 });
 
 // Codex P1: the throttle must fail CLOSED. A corrupt record, a read/IO error,

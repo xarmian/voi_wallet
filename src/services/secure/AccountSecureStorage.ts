@@ -1682,7 +1682,6 @@ export class AccountSecureStorage {
         this.BIOMETRIC_ENABLED_KEY,
         this.METADATA_LIST_KEY,
         this.PIN_TIMEOUT_KEY,
-        this.PIN_THROTTLE_KEY,
       ]);
       // Clear from secure storage
       await Promise.all([
@@ -1691,12 +1690,16 @@ export class AccountSecureStorage {
         secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
         secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
         secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
-        // Reset the persistent PIN throttle so a fresh wallet starts unlocked.
-        secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {}),
       ]);
-      // Also clear the in-memory throttle mirror so the fresh wallet isn't
-      // held under a prior session's lockout.
-      this.throttleMirror = null;
+      // Wipe the persistent PIN throttle THROUGH the same serialization mutex
+      // verifyPin uses, as the FINAL throttle mutation. Any in-flight verifyPin
+      // increment is serialized ahead of this block, so it persists FIRST and is
+      // then wiped here — it can never land AFTER the wipe and leave a stale
+      // lockout (which would phantom-lock the freshly reset/restored wallet).
+      await this.runThrottleExclusive(async () => {
+        await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+        this.throttleMirror = null;
+      });
     } catch (error) {
       throw new AccountStorageError('Failed to clear all secure storage');
     }
