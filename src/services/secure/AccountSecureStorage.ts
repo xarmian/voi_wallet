@@ -38,6 +38,69 @@ import {
   decryptKeyEnvelopeV2,
   MAX_KEY_BLOBS,
 } from './envelopeV2';
+import { SECURITY_CONFIG } from '../../config/security';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
+//
+// WHAT THIS DEFENDS: ONLINE, on-device PIN guessing against the RUNNING app on a
+// NON-rooted / non-jailbroken device. The counter is persisted (survives force-
+// kill/relaunch) and mirrored in memory (survives a swallowed write), so a user
+// or thief holding an unrooted phone cannot brute-force the 6-digit PIN by
+// guessing-and-relaunching.
+//
+// WHAT THIS DELIBERATELY DOES NOT DEFEND: an attacker with ROOT / direct write
+// access to SecureStore. Such an attacker can reset or overwrite this record
+// (even with a validly-shaped one) to bypass the throttle — but that same
+// attacker can also read the encrypted key blob straight out of SecureStore and
+// mount an OFFLINE attack the throttle never sees. A client-side throttle (or a
+// MAC / hardware counter on this record — intentionally NOT added, since the
+// attacker reads that key/counter too) cannot close this hole. The rooted /
+// offline threat is instead mitigated by the memory-hard KDF wrap + optional
+// user passphrase (Wave-2 later PRs) and optional root/jailbreak detection
+// (deferred). Do NOT extend this throttle to claim it defends rooted devices.
+//
+// ORDERING / CONCURRENCY: throttle persist writes (both the wrong-PIN increment
+// and the correct-PIN reset) are plain awaits INSIDE the serialization mutex,
+// like every other awaited secure write in the app (unlock already awaits the
+// PIN hash); a hung keychain hanging verifyPin is the same accepted device-
+// broken condition (do NOT add a timeout — timeouts caused out-of-order bugs).
+// Reset requires the correct PIN, so reset/increment interleavings are not
+// attacker-reachable; any such race is a benign self-race that fails safe
+// (under-counts, never bypasses).
+//
+// PIN_ATTEMPT_LIMIT = fails per window before a lockout; PIN_LOCKOUT_DURATION =
+// base lockout, doubled each window (see pinLockoutBackoff). Wired from the
+// previously-dead security config.
+// ─────────────────────────────────────────────────────────────────────────────
+const { PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_DURATION } = SECURITY_CONFIG;
+const THROTTLE_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000; // hard cap: 24h
+
+/**
+ * Persisted PIN-throttle record. Lives in SecureStore under
+ * `voi_pin_throttle` so the lockout SURVIVES an app relaunch (killing the app
+ * no longer resets the guess counter).
+ */
+interface PinThrottleRecord {
+  /** Consecutive failed PIN attempts since the last success. */
+  failCount: number;
+  /** Epoch ms until which PIN entry is refused, or null when not locked. */
+  lockoutUntil: number | null;
+  /** Epoch ms of the most recent failure (diagnostics / future windowing). */
+  lastFailAt: number;
+}
+
+/**
+ * Lockout state surfaced to the UI (LockScreen) via `getPinThrottleState`. This
+ * is intentionally a SEPARATE read from `verifyPin` — `verifyPin` keeps its
+ * `boolean` return so no caller can mistake a truthy result object for success.
+ */
+export interface PinThrottleState {
+  /** Epoch ms the lockout ends, or null when the PIN can be entered now. */
+  lockedUntil: number | null;
+  /** Attempts left before the next lockout: max(0, LIMIT - failCount). */
+  attemptsRemaining: number;
+}
 
 type PersistedAccountMetadata = Omit<
   SecureAccountStorage,
@@ -99,6 +162,20 @@ export class AccountSecureStorage {
   private static readonly BIOMETRIC_ENABLED_KEY = 'voi_biometric_enabled';
   private static readonly DEVICE_ID_KEY = 'voi_device_installation_id';
   private static readonly PIN_TIMEOUT_KEY = 'voi_pin_timeout_setting';
+  private static readonly PIN_THROTTLE_KEY = 'voi_pin_throttle';
+
+  // In-memory promise-chain mutex serializing the throttle read-modify-write so
+  // concurrent verifyPin calls (e.g. batch signing) can never lose an
+  // increment. Modeled on the inFlightRequests dedup below.
+  private static throttleChain: Promise<unknown> = Promise.resolve();
+
+  // In-memory mirror of the throttle state (DOC-137 §8 / TASK-26, Codex P1).
+  // The EFFECTIVE throttle enforced by verifyPin is the MORE RESTRICTIVE of the
+  // persisted record and this mirror, so a swallowed write failure or a
+  // mid-session tamper of the persisted record can't grant free guesses within
+  // the session. null = nothing observed yet this process. Cleared on success
+  // (resetThrottle) and on clearAll.
+  private static throttleMirror: PinThrottleRecord | null = null;
 
   // Private key cache for batch signing performance (keeps keys secure within this module)
   private static privateKeyCache: Map<
@@ -999,66 +1076,330 @@ export class AccountSecureStorage {
     }
   }
 
+  /**
+   * Verify a PIN, enforcing the PERSISTENT throttle (DOC-137 §8 / TASK-26).
+   *
+   * IMPORTANT — return type stays `boolean` by design. DOC-137 §8.4 originally
+   * proposed returning a result object; Codex flagged that as dangerous because
+   * `if (result)` on a truthy object reads a WRONG pin as success at every
+   * un-converted caller (AuthContext, UnifiedAuthModal, SignerAuthModal,
+   * ChangePinScreen, transactionAuthController, getPrivateKey, changePin). So
+   * the throttle is enforced INTERNALLY here and lockout details are exposed to
+   * the UI through the separate `getPinThrottleState()` read — no caller changes.
+   *
+   * The whole load-check-hash-update-save sequence runs under an in-memory
+   * mutex so concurrent calls (batch signing) cannot lose an increment.
+   */
   static async verifyPin(pin: string): Promise<boolean> {
-    try {
-      if (!pin || pin.length !== 6 || !/^\d{6}$/.test(pin)) {
-        return false;
-      }
-
-      const storedData = await this.getStoredPinData();
-      if (!storedData) {
-        return false;
-      }
-
-      const salt = await this.getOrCreateSalt();
-
-      if (storedData.format === 'json') {
-        this.legacyCheckRequired = false;
-        const candidateHash = this.hashPin(pin, salt, storedData.iterations);
-        if (storedData.hash === candidateHash) {
-          if (storedData.iterations !== this.PIN_ITERATIONS) {
-            try {
-              const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
-              await this.persistPinHash(upgradedHash, salt);
-            } catch (error) {
-              console.warn('Failed to upgrade stored PIN metadata', error);
-            }
-          }
-          return true;
-        }
-        return false;
-      }
-
-      const iterationCandidates = this.getIterationCandidates();
-
-      for (const iterations of iterationCandidates) {
-        const candidateHash = this.hashPin(pin, salt, iterations);
-        if (storedData.hash === candidateHash) {
-          if (iterations !== this.PIN_ITERATIONS) {
-            try {
-              const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
-              await this.persistPinHash(upgradedHash, salt);
-              this.legacyCheckRequired = false;
-            } catch (error) {
-              console.warn(
-                'Failed to upgrade PIN hash to latest iteration count',
-                error
-              );
-            }
-          }
-          return true;
-        }
-      }
-
-      if (this.legacyCheckRequired === undefined) {
-        this.legacyCheckRequired = true;
-      }
-
-      return false;
-    } catch (error) {
-      console.warn('PIN verification failed');
+    // Malformed input never reaches the throttle: it can't unlock the wallet and
+    // is not produced by the UI (which only submits 6 digits), so it is not
+    // counted as an attempt.
+    if (!pin || pin.length !== 6 || !/^\d{6}$/.test(pin)) {
       return false;
     }
+
+    return this.runThrottleExclusive(async () => {
+      try {
+        const now = Date.now();
+        // Effective = MORE RESTRICTIVE of the (fail-closed) persisted record and
+        // the in-memory mirror. This also raises the mirror to the persisted
+        // level so the session never forgets a lockout.
+        const throttle = await this.loadEffectiveThrottle(now);
+
+        // Already locked out: refuse WITHOUT running the hash (saves the PBKDF2
+        // work, no timing leak) and WITHOUT incrementing (already penalized).
+        if (throttle.lockoutUntil !== null && now < throttle.lockoutUntil) {
+          return false;
+        }
+
+        const matched = await this.checkPinHash(pin);
+
+        if (matched) {
+          // Success — clear the throttle, AWAITING the persisted delete inside
+          // the mutex, exactly like the wrong-PIN path awaits saveThrottle. Both
+          // writes are serialized by the mutex, so ordering is trivially correct.
+          await this.resetThrottle();
+          return true;
+        }
+
+        // Failure — increment and, at the limit, arm an escalating lockout.
+        const failCount = throttle.failCount + 1;
+        let lockoutUntil = throttle.lockoutUntil;
+        if (failCount >= PIN_ATTEMPT_LIMIT) {
+          lockoutUntil = now + this.pinLockoutBackoff(failCount);
+        }
+
+        // TODO(wave2): opt-in wipe-after-N — when the user enables the
+        // "erase wallet after N failed attempts" setting (deferred to a later
+        // PR with its own settings toggle), hook the destructive wipe here,
+        // e.g. `if (wipeAfterNEnabled && failCount >= wipeAfterN) await this.clearAll();`.
+
+        const updated: PinThrottleRecord = {
+          failCount,
+          lockoutUntil,
+          lastFailAt: now,
+        };
+        // Update the mirror FIRST so the session keeps enforcing the increment
+        // even if the persisted write below fails (write fails CLOSED).
+        this.throttleMirror = updated;
+        // Durably persist the increment BEFORE resolving, inside the mutex, so a
+        // force-kill immediately after a failed guess can't race the write on a
+        // non-rooted device (the counter is on disk when the attacker sees the
+        // rejection), and the mutex guarantees writes land in order. This is a
+        // plain unbounded await like every other SecureStore write in the app —
+        // a genuine keychain hang is a device-broken condition, not the
+        // throttle's job to special-case.
+        await this.saveThrottle(updated);
+        return false;
+      } catch (error) {
+        console.warn('PIN verification failed');
+        return false;
+      }
+    });
+  }
+
+  /**
+   * Lockout state for the UI. SEPARATE from `verifyPin` so the boolean contract
+   * of `verifyPin` is preserved (see the note on `verifyPin`). Runs under the
+   * throttle mutex and reports the same fail-closed effective state verifyPin
+   * enforces (persisted ⊔ mirror), so the UI can't show "unlocked" while the
+   * session is actually locked out from a corrupt/tampered persisted record.
+   */
+  static async getPinThrottleState(): Promise<PinThrottleState> {
+    return this.runThrottleExclusive(async () => {
+      const now = Date.now();
+      const throttle = await this.loadEffectiveThrottle(now);
+      const lockedUntil =
+        throttle.lockoutUntil !== null && now < throttle.lockoutUntil
+          ? throttle.lockoutUntil
+          : null;
+      return {
+        lockedUntil,
+        attemptsRemaining: Math.max(0, PIN_ATTEMPT_LIMIT - throttle.failCount),
+      };
+    });
+  }
+
+  /**
+   * Escalating lockout duration. Doubles every `PIN_ATTEMPT_LIMIT` failures,
+   * capped at 24h: 5 fails -> 5m, 10 -> 10m, 15 -> 20m, ... cap 24h.
+   */
+  private static pinLockoutBackoff(failCount: number): number {
+    const step = Math.floor(failCount / PIN_ATTEMPT_LIMIT) - 1;
+    const duration = PIN_LOCKOUT_DURATION * Math.pow(2, step);
+    return Math.min(duration, THROTTLE_BACKOFF_CAP_MS);
+  }
+
+  /**
+   * Serialize a throttle read-modify-write. The chain never rejects (outcomes
+   * are swallowed) so one failing task can't poison later ones.
+   */
+  private static runThrottleExclusive<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.throttleChain.then(task, task);
+    this.throttleChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  /**
+   * A bounded fail-closed lockout used when the persisted throttle can't be
+   * trusted (corrupt value or read error). One lockout window, NOT permanent —
+   * a rare genuine corruption costs the user a single wait, never a wipe.
+   */
+  private static failClosedRecord(now: number): PinThrottleRecord {
+    return {
+      failCount: PIN_ATTEMPT_LIMIT,
+      lockoutUntil: now + PIN_LOCKOUT_DURATION,
+      lastFailAt: now,
+    };
+  }
+
+  private static isValidThrottleRecord(
+    value: unknown
+  ): value is PinThrottleRecord {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+    const v = value as Record<string, unknown>;
+    const failOk =
+      typeof v.failCount === 'number' &&
+      Number.isFinite(v.failCount) &&
+      v.failCount >= 0;
+    const lockOk =
+      v.lockoutUntil === null ||
+      (typeof v.lockoutUntil === 'number' && Number.isFinite(v.lockoutUntil));
+    const lastOk =
+      typeof v.lastFailAt === 'number' && Number.isFinite(v.lastFailAt);
+    return failOk && lockOk && lastOk;
+  }
+
+  /**
+   * Load the PERSISTED throttle record, failing CLOSED on anything untrusted
+   * (Codex P1). ONLY a genuinely-absent key (fresh install / post-reset /
+   * post-success) yields a clean record:
+   *   - getItem throws (read/IO error, e.g. tampered device)  -> fail closed
+   *   - value present but unparseable / wrong shape (corrupt) -> fail closed
+   *     (+ best-effort overwrite so it re-persists as a valid record)
+   *   - getItem returns null (absent)                          -> clean
+   */
+  private static async loadPersistedThrottle(
+    now: number
+  ): Promise<PinThrottleRecord> {
+    let raw: string | null;
+    try {
+      raw = await secureStorage.getItem(this.PIN_THROTTLE_KEY);
+    } catch {
+      // Read/IO error — do NOT assume clean. Enforce a bounded lockout.
+      console.warn('PIN throttle read failed; enforcing lockout');
+      return this.failClosedRecord(now);
+    }
+
+    if (raw === null) {
+      // Key genuinely absent — clean slate.
+      return { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = undefined;
+    }
+
+    if (this.isValidThrottleRecord(parsed)) {
+      return {
+        failCount: parsed.failCount,
+        lockoutUntil: parsed.lockoutUntil,
+        lastFailAt: parsed.lastFailAt,
+      };
+    }
+
+    // Present but corrupt (bad JSON or wrong shape) — fail closed, and
+    // best-effort re-persist a valid fail-closed record over the garbage.
+    console.warn('PIN throttle record corrupt; enforcing lockout');
+    const failClosed = this.failClosedRecord(now);
+    await this.saveThrottle(failClosed);
+    return failClosed;
+  }
+
+  /** Return the more-restrictive of two throttle records. */
+  private static combineThrottle(
+    a: PinThrottleRecord,
+    b: PinThrottleRecord
+  ): PinThrottleRecord {
+    const lock = Math.max(a.lockoutUntil ?? 0, b.lockoutUntil ?? 0);
+    return {
+      failCount: Math.max(a.failCount, b.failCount),
+      lockoutUntil: lock > 0 ? lock : null,
+      lastFailAt: Math.max(a.lastFailAt, b.lastFailAt),
+    };
+  }
+
+  /**
+   * Effective throttle = MORE RESTRICTIVE of the (fail-closed) persisted record
+   * and the in-memory mirror. Raises the mirror to the combined value so the
+   * session never forgets a lockout. MUST be called under the throttle mutex.
+   */
+  private static async loadEffectiveThrottle(
+    now: number
+  ): Promise<PinThrottleRecord> {
+    const persisted = await this.loadPersistedThrottle(now);
+    const effective = this.throttleMirror
+      ? this.combineThrottle(persisted, this.throttleMirror)
+      : persisted;
+    this.throttleMirror = effective;
+    return effective;
+  }
+
+  private static async saveThrottle(record: PinThrottleRecord): Promise<void> {
+    // Best-effort persist. A failure here does NOT reset the counter: the
+    // in-memory mirror (updated by the caller BEFORE this call) keeps enforcing
+    // for the session, and the persisted record — if it survives — remains at
+    // its prior (>=) value. We never write a weaker state on failure.
+    try {
+      await secureStorage.setItem(
+        this.PIN_THROTTLE_KEY,
+        JSON.stringify(record)
+      );
+    } catch {
+      console.warn('Failed to persist PIN throttle record');
+    }
+  }
+
+  /**
+   * Clear the throttle on a verified PIN. Clears the in-memory mirror, then
+   * AWAITS the persisted delete INSIDE the mutex — symmetric with the wrong-PIN
+   * path's awaited saveThrottle. Because both writes are plain awaits within the
+   * same serialization mutex, they can never interleave (no reset landing after
+   * a later increment), and each verifyPin awaits only its OWN write before
+   * releasing the mutex. Reset requires the correct PIN, so this path is never
+   * attacker-reachable; a genuinely hung keychain here is the same accepted
+   * device-broken condition as every other awaited secure write (see THREAT
+   * MODEL) — not special-cased.
+   */
+  private static async resetThrottle(): Promise<void> {
+    this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+    await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+  }
+
+  /**
+   * Extracted PIN-hash verification (formerly inline in verifyPin). Returns
+   * whether the supplied PIN matches the stored hash. Runs the PBKDF2 hash, so
+   * verifyPin skips it entirely while locked out.
+   */
+  private static async checkPinHash(pin: string): Promise<boolean> {
+    const storedData = await this.getStoredPinData();
+    if (!storedData) {
+      return false;
+    }
+
+    const salt = await this.getOrCreateSalt();
+
+    if (storedData.format === 'json') {
+      this.legacyCheckRequired = false;
+      const candidateHash = this.hashPin(pin, salt, storedData.iterations);
+      if (storedData.hash === candidateHash) {
+        if (storedData.iterations !== this.PIN_ITERATIONS) {
+          try {
+            const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
+            await this.persistPinHash(upgradedHash, salt);
+          } catch (error) {
+            console.warn('Failed to upgrade stored PIN metadata', error);
+          }
+        }
+        return true;
+      }
+      return false;
+    }
+
+    const iterationCandidates = this.getIterationCandidates();
+
+    for (const iterations of iterationCandidates) {
+      const candidateHash = this.hashPin(pin, salt, iterations);
+      if (storedData.hash === candidateHash) {
+        if (iterations !== this.PIN_ITERATIONS) {
+          try {
+            const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
+            await this.persistPinHash(upgradedHash, salt);
+            this.legacyCheckRequired = false;
+          } catch (error) {
+            console.warn(
+              'Failed to upgrade PIN hash to latest iteration count',
+              error
+            );
+          }
+        }
+        return true;
+      }
+    }
+
+    if (this.legacyCheckRequired === undefined) {
+      this.legacyCheckRequired = true;
+    }
+
+    return false;
   }
 
   static async hasPin(): Promise<boolean> {
@@ -1350,6 +1691,15 @@ export class AccountSecureStorage {
         secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
         secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
       ]);
+      // Wipe the persistent PIN throttle THROUGH the same serialization mutex
+      // verifyPin uses, as the FINAL throttle mutation. Any in-flight verifyPin
+      // increment is serialized ahead of this block, so it persists FIRST and is
+      // then wiped here — it can never land AFTER the wipe and leave a stale
+      // lockout (which would phantom-lock the freshly reset/restored wallet).
+      await this.runThrottleExclusive(async () => {
+        await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+        this.throttleMirror = null;
+      });
     } catch (error) {
       throw new AccountStorageError('Failed to clear all secure storage');
     }
