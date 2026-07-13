@@ -54,6 +54,9 @@ export default function ShowRecoveryPhraseScreen() {
   // Monotonic per-copy token: only the latest tap's continuation may install/keep
   // a clear handle, so a superseded copy can't leak a timer or wipe newer content.
   const copyGenRef = useRef(0);
+  // Serializes every clipboard read/write/clear for this screen so native ops
+  // can't complete out of order. Each copy chains onto the previous.
+  const clipboardOpLock = useRef<Promise<void>>(Promise.resolve());
 
   const loadMnemonic = useCallback(async () => {
     if (!targetAddress) {
@@ -103,45 +106,62 @@ export default function ShowRecoveryPhraseScreen() {
   const handleCopy = useCallback(async () => {
     if (!mnemonic) return;
 
-    // Serialize concurrent copies: this tap's generation token. Only the copy
-    // whose token is still current after the await may install a clear handle.
+    // Assign this tap's generation synchronously (before the serialized body
+    // runs) so rapid taps are ordered and a superseded tap bails without ever
+    // touching the clipboard or showing duplicate UI.
     const gen = ++copyGenRef.current;
 
-    // Cancel any previously scheduled clear before we overwrite the clipboard,
-    // so a stale handle can never wipe the freshly copied content.
-    clipboardClearRef.current?.cancel();
-    clipboardClearRef.current = null;
+    // Chain the whole copy onto the op-lock so clipboard writes for this screen
+    // are strictly serialized (no out-of-order native writes).
+    clipboardOpLock.current = clipboardOpLock.current
+      .catch(() => {}) // a prior op's failure must not break the chain
+      .then(async () => {
+        // Superseded by a newer tap before we got our turn → do nothing.
+        if (gen !== copyGenRef.current) return;
 
-    try {
-      await Clipboard.setStringAsync(mnemonic);
+        // Cancel any previously scheduled clear before we overwrite the
+        // clipboard, so a stale handle can never wipe the fresh content.
+        clipboardClearRef.current?.cancel();
+        clipboardClearRef.current = null;
 
-      // A newer copy superseded this one while we awaited → do nothing (the
-      // newer tap owns the clipboard + its clear handle; bailing here avoids a
-      // double-schedule / leaked timer).
-      if (gen !== copyGenRef.current) return;
+        try {
+          await Clipboard.setStringAsync(mnemonic);
 
-      if (!mountedRef.current) {
-        // Unmounted mid-copy: the phrase is now on the clipboard but our unmount
-        // cleanup has already run. Wipe it now (check-then-clear) and don't
-        // schedule a timer that would outlive this component.
-        void scheduleClipboardClear(mnemonic, 0).clearNow();
-        return;
-      }
+          // A newer copy superseded this one while we awaited → do nothing (the
+          // newer tap owns the clipboard + its clear handle; bailing avoids a
+          // double-schedule / leaked timer).
+          if (gen !== copyGenRef.current) return;
 
-      setHasCopied(true);
-      Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
+          if (!mountedRef.current) {
+            // Unmounted mid-copy: the phrase is on the clipboard but our unmount
+            // cleanup already ran. Wipe it now (check-then-clear) and don't
+            // schedule a timer that would outlive this component.
+            void scheduleClipboardClear(mnemonic, 0).clearNow();
+            return;
+          }
 
-      // Auto-clear the recovery phrase from the OS clipboard after 60s, but only
-      // if the user hasn't copied something else in the meantime. The generation
-      // token above guarantees no newer copy ran during our await, so this handle
-      // is the only live one.
-      clipboardClearRef.current = scheduleClipboardClear(mnemonic);
+          // Keep only ONE "Copied!" UI timer pending at a time.
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+          }
+          setHasCopied(true);
+          Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
 
-      // Reset the copied state after 3 seconds
-      timeoutRef.current = setTimeout(() => setHasCopied(false), 3000);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to copy to clipboard');
-    }
+          // Auto-clear from the OS clipboard after 60s unless the user copied
+          // something else. The generation token guarantees this is the only
+          // live handle.
+          clipboardClearRef.current = scheduleClipboardClear(mnemonic);
+
+          // Reset the copied state after 3 seconds
+          timeoutRef.current = setTimeout(() => setHasCopied(false), 3000);
+        } catch (error) {
+          Alert.alert('Error', 'Failed to copy to clipboard');
+        }
+      });
+
+    // Await this copy's turn (the body handles its own errors, so this never
+    // rejects).
+    await clipboardOpLock.current;
   }, [mnemonic]);
 
   const handleShare = useCallback(async () => {
