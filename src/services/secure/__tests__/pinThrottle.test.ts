@@ -86,6 +86,13 @@ let mockNow = 1_700_000_000_000;
 const getState = () => AccountSecureStorage.getPinThrottleState();
 const failOnce = () => AccountSecureStorage.verifyPin(WRONG_PIN);
 
+// Reset the private in-memory throttle mirror to simulate a fresh process.
+const resetThrottleMirror = () => {
+  (
+    AccountSecureStorage as unknown as { throttleMirror: unknown }
+  ).throttleMirror = null;
+};
+
 /** Fail once, first jumping the clock past any active lockout. */
 async function failPastLockout(): Promise<void> {
   const state = await getState();
@@ -97,6 +104,7 @@ async function failPastLockout(): Promise<void> {
 
 beforeEach(async () => {
   mockPlatform.__reset();
+  resetThrottleMirror();
   mockNow = 1_700_000_000_000;
   jest.spyOn(Date, 'now').mockImplementation(() => mockNow);
   await AccountSecureStorage.storePin(CORRECT_PIN);
@@ -225,10 +233,11 @@ describe('verifyPin throttle behavior', () => {
     const before = await getState();
     expect(before.lockedUntil).not.toBeNull();
 
-    // Simulate a relaunch: the ONLY app-level state that resets is in-memory
-    // (there is no in-memory throttle cache). The record lives in SecureStore,
-    // so a fresh read still reports the lockout.
+    // Simulate a relaunch: a fresh process starts with an EMPTY in-memory
+    // mirror; only the SecureStore record survives. Clearing the mirror proves
+    // the persisted record alone still enforces the lockout.
     AccountSecureStorage.clearPrivateKeyCache();
+    resetThrottleMirror();
     expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(true);
 
     const after = await getState();
@@ -268,5 +277,108 @@ describe('verifyPin throttle behavior', () => {
       lockedUntil: null,
       attemptsRemaining: PIN_ATTEMPT_LIMIT,
     });
+  });
+});
+
+// Codex P1: the throttle must fail CLOSED. A corrupt record, a read/IO error,
+// or a swallowed write failure must NOT reset the counter and let an attacker
+// keep guessing. Only a genuinely-absent record (fresh install) is clean.
+describe('PIN throttle fails closed (Codex P1)', () => {
+  it('treats a corrupt/unparseable stored record as locked, without hashing', async () => {
+    // A rooted/tampered device overwrites the record with garbage to reset it.
+    mockPlatform.__secure.set(THROTTLE_KEY, 'not-json-{{{');
+    resetThrottleMirror(); // fresh process re-reads the tampered persisted value
+
+    const hashSpy = jest.spyOn(
+      AccountSecureStorage as unknown as {
+        hashPin: (...a: unknown[]) => string;
+      },
+      'hashPin'
+    );
+
+    // Even the correct PIN is refused while fail-closed, and no hash is run.
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(false);
+    expect(hashSpy).not.toHaveBeenCalled();
+
+    const state = await getState();
+    expect(state.lockedUntil).toBe(mockNow + PIN_LOCKOUT_DURATION);
+    expect(state.attemptsRemaining).toBe(0);
+  });
+
+  it('best-effort repairs a corrupt record into a valid fail-closed record', async () => {
+    mockPlatform.__secure.set(THROTTLE_KEY, '{ broken');
+    resetThrottleMirror();
+
+    await getState(); // triggers the corrupt-detection + repair write
+
+    const repaired = mockPlatform.__secure.get(THROTTLE_KEY);
+    expect(repaired).toBeDefined();
+    const parsed = JSON.parse(repaired as string);
+    expect(parsed.failCount).toBe(PIN_ATTEMPT_LIMIT);
+    expect(parsed.lockoutUntil).toBe(mockNow + PIN_LOCKOUT_DURATION);
+  });
+
+  it('treats a read/IO error as locked, without hashing', async () => {
+    resetThrottleMirror();
+    jest
+      .spyOn(platform.secureStorage, 'getItem')
+      .mockImplementation(async (k: string) => {
+        if (k === THROTTLE_KEY) {
+          throw new Error('secure read failure');
+        }
+        return mockPlatform.__secure.has(k)
+          ? (mockPlatform.__secure.get(k) as string)
+          : null;
+      });
+
+    const hashSpy = jest.spyOn(
+      AccountSecureStorage as unknown as {
+        hashPin: (...a: unknown[]) => string;
+      },
+      'hashPin'
+    );
+
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(false);
+    expect(hashSpy).not.toHaveBeenCalled();
+
+    const state = await getState();
+    expect(state.lockedUntil).not.toBeNull();
+    expect(state.attemptsRemaining).toBe(0);
+  });
+
+  it('enforces via the in-memory mirror when the persisted write fails', async () => {
+    // SecureStore writes fail (e.g. disk/IO error): the persisted record never
+    // updates, but the mirror must still count the failures within the session.
+    jest
+      .spyOn(platform.secureStorage, 'setItem')
+      .mockRejectedValue(new Error('secure write failure'));
+
+    // Two wrong attempts: the mirror tracks them even though nothing persisted.
+    await failOnce();
+    await failOnce();
+    expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(false); // never written
+    expect((await getState()).attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT - 2);
+
+    // Continue to the limit: the mirror locks out even with no persistence.
+    for (let i = 2; i < PIN_ATTEMPT_LIMIT; i++) {
+      await failOnce();
+    }
+    const locked = await getState();
+    expect(locked.attemptsRemaining).toBe(0);
+    expect(locked.lockedUntil).not.toBeNull();
+    // A locked session refuses even the correct PIN — purely via the mirror.
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(false);
+  });
+
+  it('a genuinely-absent record stays clean (does not fail closed)', async () => {
+    // No throttle key present (fresh install) — must be unlocked, LIMIT attempts.
+    resetThrottleMirror();
+    expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(false);
+    expect(await getState()).toEqual({
+      lockedUntil: null,
+      attemptsRemaining: PIN_ATTEMPT_LIMIT,
+    });
+    // And a correct PIN still verifies normally.
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true);
   });
 });

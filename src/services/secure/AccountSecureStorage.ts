@@ -139,6 +139,14 @@ export class AccountSecureStorage {
   // increment. Modeled on the inFlightRequests dedup below.
   private static throttleChain: Promise<unknown> = Promise.resolve();
 
+  // In-memory mirror of the throttle state (DOC-137 §8 / TASK-26, Codex P1).
+  // The EFFECTIVE throttle enforced by verifyPin is the MORE RESTRICTIVE of the
+  // persisted record and this mirror, so a swallowed write failure or a
+  // mid-session tamper of the persisted record can't grant free guesses within
+  // the session. null = nothing observed yet this process. Cleared on success
+  // (resetThrottle) and on clearAll.
+  private static throttleMirror: PinThrottleRecord | null = null;
+
   // Private key cache for batch signing performance (keeps keys secure within this module)
   private static privateKeyCache: Map<
     string,
@@ -1063,7 +1071,10 @@ export class AccountSecureStorage {
     return this.runThrottleExclusive(async () => {
       try {
         const now = Date.now();
-        const throttle = await this.loadThrottle();
+        // Effective = MORE RESTRICTIVE of the (fail-closed) persisted record and
+        // the in-memory mirror. This also raises the mirror to the persisted
+        // level so the session never forgets a lockout.
+        const throttle = await this.loadEffectiveThrottle(now);
 
         // Already locked out: refuse WITHOUT running the hash (saves the PBKDF2
         // work, no timing leak) and WITHOUT incrementing (already penalized).
@@ -1075,9 +1086,7 @@ export class AccountSecureStorage {
 
         if (matched) {
           // Success — clear the throttle so the user starts from a clean slate.
-          if (throttle.failCount !== 0 || throttle.lockoutUntil !== null) {
-            await this.resetThrottle();
-          }
+          await this.resetThrottle();
           return true;
         }
 
@@ -1093,7 +1102,15 @@ export class AccountSecureStorage {
         // PR with its own settings toggle), hook the destructive wipe here,
         // e.g. `if (wipeAfterNEnabled && failCount >= wipeAfterN) await this.clearAll();`.
 
-        await this.saveThrottle({ failCount, lockoutUntil, lastFailAt: now });
+        const updated: PinThrottleRecord = {
+          failCount,
+          lockoutUntil,
+          lastFailAt: now,
+        };
+        // Update the mirror FIRST so the session keeps enforcing the increment
+        // even if the persisted write below fails (write fails CLOSED).
+        this.throttleMirror = updated;
+        await this.saveThrottle(updated);
         return false;
       } catch (error) {
         console.warn('PIN verification failed');
@@ -1104,19 +1121,24 @@ export class AccountSecureStorage {
 
   /**
    * Lockout state for the UI. SEPARATE from `verifyPin` so the boolean contract
-   * of `verifyPin` is preserved (see the note on `verifyPin`).
+   * of `verifyPin` is preserved (see the note on `verifyPin`). Runs under the
+   * throttle mutex and reports the same fail-closed effective state verifyPin
+   * enforces (persisted ⊔ mirror), so the UI can't show "unlocked" while the
+   * session is actually locked out from a corrupt/tampered persisted record.
    */
   static async getPinThrottleState(): Promise<PinThrottleState> {
-    const throttle = await this.loadThrottle();
-    const now = Date.now();
-    const lockedUntil =
-      throttle.lockoutUntil !== null && now < throttle.lockoutUntil
-        ? throttle.lockoutUntil
-        : null;
-    return {
-      lockedUntil,
-      attemptsRemaining: Math.max(0, PIN_ATTEMPT_LIMIT - throttle.failCount),
-    };
+    return this.runThrottleExclusive(async () => {
+      const now = Date.now();
+      const throttle = await this.loadEffectiveThrottle(now);
+      const lockedUntil =
+        throttle.lockoutUntil !== null && now < throttle.lockoutUntil
+          ? throttle.lockoutUntil
+          : null;
+      return {
+        lockedUntil,
+        attemptsRemaining: Math.max(0, PIN_ATTEMPT_LIMIT - throttle.failCount),
+      };
+    });
   }
 
   /**
@@ -1142,42 +1164,134 @@ export class AccountSecureStorage {
     return result;
   }
 
-  private static async loadThrottle(): Promise<PinThrottleRecord> {
-    try {
-      const raw = await secureStorage.getItem(this.PIN_THROTTLE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<PinThrottleRecord>;
-        return {
-          failCount:
-            typeof parsed.failCount === 'number' && parsed.failCount >= 0
-              ? parsed.failCount
-              : 0,
-          lockoutUntil:
-            typeof parsed.lockoutUntil === 'number'
-              ? parsed.lockoutUntil
-              : null,
-          lastFailAt:
-            typeof parsed.lastFailAt === 'number' ? parsed.lastFailAt : 0,
-        };
-      }
-    } catch (error) {
-      console.warn('Failed to load PIN throttle record', error);
+  /**
+   * A bounded fail-closed lockout used when the persisted throttle can't be
+   * trusted (corrupt value or read error). One lockout window, NOT permanent —
+   * a rare genuine corruption costs the user a single wait, never a wipe.
+   */
+  private static failClosedRecord(now: number): PinThrottleRecord {
+    return {
+      failCount: PIN_ATTEMPT_LIMIT,
+      lockoutUntil: now + PIN_LOCKOUT_DURATION,
+      lastFailAt: now,
+    };
+  }
+
+  private static isValidThrottleRecord(
+    value: unknown
+  ): value is PinThrottleRecord {
+    if (typeof value !== 'object' || value === null) {
+      return false;
     }
-    return { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+    const v = value as Record<string, unknown>;
+    const failOk =
+      typeof v.failCount === 'number' &&
+      Number.isFinite(v.failCount) &&
+      v.failCount >= 0;
+    const lockOk =
+      v.lockoutUntil === null ||
+      (typeof v.lockoutUntil === 'number' && Number.isFinite(v.lockoutUntil));
+    const lastOk =
+      typeof v.lastFailAt === 'number' && Number.isFinite(v.lastFailAt);
+    return failOk && lockOk && lastOk;
+  }
+
+  /**
+   * Load the PERSISTED throttle record, failing CLOSED on anything untrusted
+   * (Codex P1). ONLY a genuinely-absent key (fresh install / post-reset /
+   * post-success) yields a clean record:
+   *   - getItem throws (read/IO error, e.g. tampered device)  -> fail closed
+   *   - value present but unparseable / wrong shape (corrupt) -> fail closed
+   *     (+ best-effort overwrite so it re-persists as a valid record)
+   *   - getItem returns null (absent)                          -> clean
+   */
+  private static async loadPersistedThrottle(
+    now: number
+  ): Promise<PinThrottleRecord> {
+    let raw: string | null;
+    try {
+      raw = await secureStorage.getItem(this.PIN_THROTTLE_KEY);
+    } catch {
+      // Read/IO error — do NOT assume clean. Enforce a bounded lockout.
+      console.warn('PIN throttle read failed; enforcing lockout');
+      return this.failClosedRecord(now);
+    }
+
+    if (raw === null) {
+      // Key genuinely absent — clean slate.
+      return { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = undefined;
+    }
+
+    if (this.isValidThrottleRecord(parsed)) {
+      return {
+        failCount: parsed.failCount,
+        lockoutUntil: parsed.lockoutUntil,
+        lastFailAt: parsed.lastFailAt,
+      };
+    }
+
+    // Present but corrupt (bad JSON or wrong shape) — fail closed, and
+    // best-effort re-persist a valid fail-closed record over the garbage.
+    console.warn('PIN throttle record corrupt; enforcing lockout');
+    const failClosed = this.failClosedRecord(now);
+    await this.saveThrottle(failClosed);
+    return failClosed;
+  }
+
+  /** Return the more-restrictive of two throttle records. */
+  private static combineThrottle(
+    a: PinThrottleRecord,
+    b: PinThrottleRecord
+  ): PinThrottleRecord {
+    const lock = Math.max(a.lockoutUntil ?? 0, b.lockoutUntil ?? 0);
+    return {
+      failCount: Math.max(a.failCount, b.failCount),
+      lockoutUntil: lock > 0 ? lock : null,
+      lastFailAt: Math.max(a.lastFailAt, b.lastFailAt),
+    };
+  }
+
+  /**
+   * Effective throttle = MORE RESTRICTIVE of the (fail-closed) persisted record
+   * and the in-memory mirror. Raises the mirror to the combined value so the
+   * session never forgets a lockout. MUST be called under the throttle mutex.
+   */
+  private static async loadEffectiveThrottle(
+    now: number
+  ): Promise<PinThrottleRecord> {
+    const persisted = await this.loadPersistedThrottle(now);
+    const effective = this.throttleMirror
+      ? this.combineThrottle(persisted, this.throttleMirror)
+      : persisted;
+    this.throttleMirror = effective;
+    return effective;
   }
 
   private static async saveThrottle(record: PinThrottleRecord): Promise<void> {
+    // Best-effort persist. A failure here does NOT reset the counter: the
+    // in-memory mirror (updated by the caller BEFORE this call) keeps enforcing
+    // for the session, and the persisted record — if it survives — remains at
+    // its prior (>=) value. We never write a weaker state on failure.
     try {
       await secureStorage.setItem(
         this.PIN_THROTTLE_KEY,
         JSON.stringify(record)
       );
-    } catch (error) {
-      console.warn('Failed to persist PIN throttle record', error);
+    } catch {
+      console.warn('Failed to persist PIN throttle record');
     }
   }
 
   private static async resetThrottle(): Promise<void> {
+    // Clear BOTH the session mirror and the persisted record on a verified PIN.
+    this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
     await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
   }
 
@@ -1531,6 +1645,9 @@ export class AccountSecureStorage {
         // Reset the persistent PIN throttle so a fresh wallet starts unlocked.
         secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {}),
       ]);
+      // Also clear the in-memory throttle mirror so the fresh wallet isn't
+      // held under a prior session's lockout.
+      this.throttleMirror = null;
     } catch (error) {
       throw new AccountStorageError('Failed to clear all secure storage');
     }
