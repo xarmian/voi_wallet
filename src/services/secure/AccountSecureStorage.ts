@@ -1322,14 +1322,19 @@ export class AccountSecureStorage {
 
   /**
    * Clear the throttle on a verified PIN. Clears the in-memory mirror
-   * SYNCHRONOUSLY so the session resets immediately, then fires the persisted
-   * delete FIRE-AND-FORGET — a correct PIN must never hang on the delete. A
-   * slow/failed delete just leaves a stale persisted counter, which fails safe
-   * (worst case the user is nearer a lockout, never further from one).
+   * SYNCHRONOUSLY so the session resets immediately, then ENQUEUES the persisted
+   * delete onto the SAME serialization chain that increments use — so any later
+   * wrong-PIN increment queues AFTER this delete and cannot be clobbered by it
+   * (a fire-and-forget delete could otherwise complete late and erase a newer
+   * increment, leaving a stale counter after a force-kill). The delete is NOT
+   * awaited by verifyPin, so a correct PIN never hangs on it; a slow/failed
+   * delete just leaves a stale persisted counter, which fails safe.
    */
   private static resetThrottle(): void {
     this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
-    void secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+    this.throttleChain = this.throttleChain
+      .then(() => secureStorage.deleteItem(this.PIN_THROTTLE_KEY))
+      .catch(() => {});
   }
 
   /**

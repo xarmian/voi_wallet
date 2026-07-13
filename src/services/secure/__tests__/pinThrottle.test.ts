@@ -238,6 +238,34 @@ describe('verifyPin throttle behavior', () => {
     await pendingDelete;
   });
 
+  it('orders the reset-delete before a later increment (no clobber)', async () => {
+    // Defer the persisted delete so an UNORDERED delete would land AFTER the
+    // later increment and erase it. Because resetThrottle enqueues the delete on
+    // the same serialization chain as increments, the order is delete -> then
+    // increment, so the increment's record is the final on-disk state.
+    jest.spyOn(platform.secureStorage, 'deleteItem').mockImplementation(
+      (k: string) =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            mockPlatform.__secure.delete(k);
+            resolve();
+          }, 0);
+        })
+    );
+
+    // Correct PIN (triggers reset+delete) immediately followed by a wrong PIN.
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true);
+    expect(await AccountSecureStorage.verifyPin(WRONG_PIN)).toBe(false);
+
+    // Let any deferred delete settle (it must have run BEFORE the increment).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const raw = mockPlatform.__secure.get(THROTTLE_KEY);
+    expect(raw).toBeDefined(); // increment NOT erased by a late delete
+    expect(JSON.parse(raw as string).failCount).toBe(1);
+    expect((await getState()).attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT - 1);
+  });
+
   it('clears the lockout once the window elapses, then allows a retry', async () => {
     for (let i = 0; i < PIN_ATTEMPT_LIMIT; i++) {
       await failOnce();
