@@ -42,23 +42,42 @@ export function scheduleClipboardClear(
   // wipe content written since (TOCTOU guard).
   let cancelled = false;
 
-  // The check-then-clear below is best-effort and deliberately fails SAFE: if a
-  // clipboard write from elsewhere lands out-of-order between our read and our
-  // write, the worst case is that we clear the clipboard slightly early — the
-  // secret is only ever wiped, never leaked. We therefore don't try to make the
-  // read+write atomic against concurrent OS writes.
-  const clearIfStillSecret = async (): Promise<void> => {
+  // Best-effort wipe that never throws and never logs (logging could leak the
+  // secret).
+  const wipe = async (): Promise<void> => {
     try {
-      const current = await Clipboard.getStringAsync();
-      // Re-check after the await: the handle may have been cancelled while the
-      // read was in flight.
-      if (cancelled) return;
-      // Only clear when the clipboard hasn't changed since we copied the secret.
-      if (current === secret) {
-        await Clipboard.setStringAsync('');
-      }
+      await Clipboard.setStringAsync('');
     } catch {
-      // Never surface or log clipboard errors — doing so could leak the secret.
+      // Swallow — nothing more we can do, and we must not surface the secret.
+    }
+  };
+
+  // The check-then-clear below is best-effort and deliberately fails SAFE in
+  // both directions:
+  //  - Out-of-order OS write between our read and our write → worst case we
+  //    clear slightly early; the secret is only ever wiped, never leaked.
+  //  - Read failure (getStringAsync rejects) → we can't verify the clipboard's
+  //    contents, so rather than abandon the clear (which would let a copied
+  //    mnemonic linger indefinitely), we wipe unconditionally. Worst case we
+  //    clear unrelated content the user copied — annoying but no leak.
+  // Both branches respect the `cancelled` flag so a superseded/re-copied handle
+  // never wipes newer content.
+  const clearIfStillSecret = async (): Promise<void> => {
+    let current: string;
+    try {
+      current = await Clipboard.getStringAsync();
+    } catch {
+      // Read failed → fail safe: wipe (unless we've since been cancelled).
+      if (cancelled) return;
+      await wipe();
+      return;
+    }
+    // Re-check after the await: the handle may have been cancelled while the
+    // read was in flight.
+    if (cancelled) return;
+    // Only clear when the clipboard hasn't changed since we copied the secret.
+    if (current === secret) {
+      await wipe();
     }
   };
 

@@ -74,11 +74,48 @@ describe('scheduleClipboardClear', () => {
     expect(mockSet).not.toHaveBeenCalled();
   });
 
-  it('never throws if the clipboard API rejects (and does not wipe)', async () => {
+  it('fails SAFE: if the read rejects, it wipes the clipboard anyway (never throws)', async () => {
+    // Can't verify the clipboard contents → wipe rather than risk the secret
+    // lingering.
     mockGet.mockRejectedValue(new Error('clipboard unavailable'));
 
     scheduleClipboardClear(SECRET, 1_000);
     await expect(jest.advanceTimersByTimeAsync(1_000)).resolves.toBeUndefined();
+
+    expect(mockSet).toHaveBeenCalledWith('');
+  });
+
+  it('does NOT fail-safe wipe on read error if the handle was cancelled first', async () => {
+    mockGet.mockRejectedValue(new Error('clipboard unavailable'));
+
+    const handle = scheduleClipboardClear(SECRET, 1_000);
+    handle.cancel();
+    await jest.advanceTimersByTimeAsync(1_000);
+
+    // Cancelled before the timer fired → the (cleared) timer never runs, so no
+    // read and no wipe.
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fail-safe wipe if cancelled while the failing read is in flight', async () => {
+    // Timer fires and starts the read; a re-copy cancels this stale handle;
+    // only then does the read reject. The cancelled guard must suppress the wipe.
+    let rejectGet!: (err: Error) => void;
+    mockGet.mockReturnValue(
+      new Promise<string>((_resolve, reject) => {
+        rejectGet = reject;
+      })
+    );
+
+    const handle = scheduleClipboardClear(SECRET, 60_000);
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    handle.cancel();
+    rejectGet(new Error('clipboard unavailable'));
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(mockSet).not.toHaveBeenCalled();
   });
