@@ -108,7 +108,7 @@ function customPBKDF2(
   const derived = CryptoJS.PBKDF2(password, saltWA, {
     keySize: keyLength / 4,
     iterations,
-    hasher: (CryptoJS.algo as unknown as { SHA256: object }).SHA256,
+    hasher: CryptoJS.algo.SHA256,
   });
   return derived.toString(CryptoJS.enc.Hex);
 }
