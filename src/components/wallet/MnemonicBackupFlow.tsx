@@ -46,6 +46,13 @@ export default function MnemonicBackupFlow({
   const { theme } = useTheme();
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
   const mountedRef = useRef(true);
+  // Monotonic per-copy token: only the latest tap's continuation is allowed to
+  // install/keep a clear handle, so a superseded copy can't leak a timer.
+  const copyGenRef = useRef(0);
+  // Id of the ~3s "Copied!" UI reset timer, so we can clear it on unmount.
+  const hasCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
 
   // Block OS screenshots / screen recordings for as long as the recovery phrase
   // is displayed. This component-level guard covers every host screen that
@@ -62,6 +69,10 @@ export default function MnemonicBackupFlow({
       mountedRef.current = false;
       clipboardClearRef.current?.clearNow();
       clipboardClearRef.current = null;
+      // Clear the pending "Copied!" UI reset timer so it can't fire after unmount.
+      if (hasCopiedTimeoutRef.current) {
+        clearTimeout(hasCopiedTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -78,6 +89,10 @@ export default function MnemonicBackupFlow({
   );
 
   const handleCopy = async () => {
+    // Serialize concurrent copies: this tap's generation token. Only the copy
+    // whose token is still current after the await may install a clear handle.
+    const gen = ++copyGenRef.current;
+
     // Cancel any previously scheduled clear before we overwrite the clipboard,
     // so a stale handle can never wipe the freshly copied content.
     clipboardClearRef.current?.cancel();
@@ -85,6 +100,11 @@ export default function MnemonicBackupFlow({
 
     try {
       await Clipboard.setStringAsync(mnemonic);
+
+      // A newer copy superseded this one while we awaited → do nothing (the
+      // newer tap owns the clipboard + its clear handle; bailing here avoids a
+      // double-schedule / leaked timer).
+      if (gen !== copyGenRef.current) return;
 
       if (!mountedRef.current) {
         // Unmounted mid-copy: the phrase is now on the clipboard but our unmount
@@ -98,10 +118,12 @@ export default function MnemonicBackupFlow({
       Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
 
       // Auto-clear the recovery phrase from the OS clipboard after 60s unless
-      // the user copied something else in the meantime.
+      // the user copied something else in the meantime. The generation token
+      // above guarantees no newer copy ran during our await, so this handle is
+      // the only live one.
       clipboardClearRef.current = scheduleClipboardClear(mnemonic);
 
-      setTimeout(() => setHasCopied(false), 3000);
+      hasCopiedTimeoutRef.current = setTimeout(() => setHasCopied(false), 3000);
     } catch (error) {
       Alert.alert('Error', 'Failed to copy to clipboard');
     }

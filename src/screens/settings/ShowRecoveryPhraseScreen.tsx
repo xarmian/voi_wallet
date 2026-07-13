@@ -51,6 +51,9 @@ export default function ShowRecoveryPhraseScreen() {
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
   const mountedRef = useRef(true);
+  // Monotonic per-copy token: only the latest tap's continuation may install/keep
+  // a clear handle, so a superseded copy can't leak a timer or wipe newer content.
+  const copyGenRef = useRef(0);
 
   const loadMnemonic = useCallback(async () => {
     if (!targetAddress) {
@@ -100,6 +103,10 @@ export default function ShowRecoveryPhraseScreen() {
   const handleCopy = useCallback(async () => {
     if (!mnemonic) return;
 
+    // Serialize concurrent copies: this tap's generation token. Only the copy
+    // whose token is still current after the await may install a clear handle.
+    const gen = ++copyGenRef.current;
+
     // Cancel any previously scheduled clear before we overwrite the clipboard,
     // so a stale handle can never wipe the freshly copied content.
     clipboardClearRef.current?.cancel();
@@ -107,6 +114,11 @@ export default function ShowRecoveryPhraseScreen() {
 
     try {
       await Clipboard.setStringAsync(mnemonic);
+
+      // A newer copy superseded this one while we awaited → do nothing (the
+      // newer tap owns the clipboard + its clear handle; bailing here avoids a
+      // double-schedule / leaked timer).
+      if (gen !== copyGenRef.current) return;
 
       if (!mountedRef.current) {
         // Unmounted mid-copy: the phrase is now on the clipboard but our unmount
@@ -120,7 +132,9 @@ export default function ShowRecoveryPhraseScreen() {
       Alert.alert('Copied!', 'Recovery phrase copied to clipboard');
 
       // Auto-clear the recovery phrase from the OS clipboard after 60s, but only
-      // if the user hasn't copied something else in the meantime.
+      // if the user hasn't copied something else in the meantime. The generation
+      // token above guarantees no newer copy ran during our await, so this handle
+      // is the only live one.
       clipboardClearRef.current = scheduleClipboardClear(mnemonic);
 
       // Reset the copied state after 3 seconds

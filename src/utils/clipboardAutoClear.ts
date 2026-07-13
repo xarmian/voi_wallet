@@ -42,6 +42,11 @@ export function scheduleClipboardClear(
   // wipe content written since (TOCTOU guard).
   let cancelled = false;
 
+  // The check-then-clear below is best-effort and deliberately fails SAFE: if a
+  // clipboard write from elsewhere lands out-of-order between our read and our
+  // write, the worst case is that we clear the clipboard slightly early — the
+  // secret is only ever wiped, never leaked. We therefore don't try to make the
+  // read+write atomic against concurrent OS writes.
   const clearIfStillSecret = async (): Promise<void> => {
     try {
       const current = await Clipboard.getStringAsync();
