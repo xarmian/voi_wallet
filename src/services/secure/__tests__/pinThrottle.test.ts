@@ -210,6 +210,34 @@ describe('verifyPin throttle behavior', () => {
     expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(false);
   });
 
+  it('resolves a correct PIN without awaiting the persisted reset delete', async () => {
+    // Prime a non-clean throttle so the reset has something to delete.
+    await failOnce();
+    await failOnce();
+    expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(true);
+
+    // Make the persisted delete hang indefinitely — a correct PIN must NOT wait
+    // on it (the reset clears the mirror synchronously + fires the delete).
+    let releaseDelete: () => void = () => {};
+    const pendingDelete = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    jest
+      .spyOn(platform.secureStorage, 'deleteItem')
+      .mockReturnValue(pendingDelete);
+
+    // Resolves promptly (if it awaited the delete, this would time out)…
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true);
+    // …and the in-memory mirror is already clean, synchronously.
+    expect(
+      (AccountSecureStorage as unknown as { throttleMirror: unknown })
+        .throttleMirror
+    ).toEqual({ failCount: 0, lockoutUntil: null, lastFailAt: 0 });
+
+    releaseDelete(); // clean up the pending promise
+    await pendingDelete;
+  });
+
   it('clears the lockout once the window elapses, then allows a retry', async () => {
     for (let i = 0; i < PIN_ATTEMPT_LIMIT; i++) {
       await failOnce();
@@ -255,6 +283,20 @@ describe('verifyPin throttle behavior', () => {
 
     resetThrottleMirror();
     expect((await getState()).attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT - 1);
+  });
+
+  it('persists sequential increments in order (no out-of-order clobber)', async () => {
+    // Two awaited increments through the mutex land 1 then 2 in order — there is
+    // no timed-out write that could complete late and overwrite a newer counter.
+    await failOnce();
+    expect(
+      JSON.parse(mockPlatform.__secure.get(THROTTLE_KEY) as string).failCount
+    ).toBe(1);
+    await failOnce();
+    expect(
+      JSON.parse(mockPlatform.__secure.get(THROTTLE_KEY) as string).failCount
+    ).toBe(2);
+    expect((await getState()).attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT - 2);
   });
 
   it('does not lose increments under concurrent verifyPin (mutex)', async () => {

@@ -66,11 +66,6 @@ import { SECURITY_CONFIG } from '../../config/security';
 // ─────────────────────────────────────────────────────────────────────────────
 const { PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_DURATION } = SECURITY_CONFIG;
 const THROTTLE_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000; // hard cap: 24h
-// Upper bound on how long a wrong-PIN persist may block unlock. The normal path
-// awaits the write (so a force-kill can't race it on a non-rooted device); if
-// SecureStore hangs past this, we stop waiting — the in-memory mirror already
-// enforces the increment for the session.
-const THROTTLE_PERSIST_TIMEOUT_MS = 2000;
 
 /**
  * Persisted PIN-throttle record. Lives in SecureStore under
@@ -1111,8 +1106,11 @@ export class AccountSecureStorage {
         const matched = await this.checkPinHash(pin);
 
         if (matched) {
-          // Success — clear the throttle so the user starts from a clean slate.
-          await this.resetThrottle();
+          // Success — clear the throttle. resetThrottle clears the session
+          // mirror SYNCHRONOUSLY and fires the persisted delete WITHOUT waiting,
+          // so a correct PIN can never hang on a slow/failing delete (a stale
+          // persisted counter just fails safe — worst case nearer lockout).
+          this.resetThrottle();
           return true;
         }
 
@@ -1136,11 +1134,14 @@ export class AccountSecureStorage {
         // Update the mirror FIRST so the session keeps enforcing the increment
         // even if the persisted write below fails (write fails CLOSED).
         this.throttleMirror = updated;
-        // Durably persist the increment BEFORE resolving, so a force-kill
-        // immediately after a failed guess can't race the write on a non-rooted
-        // device — the counter is already on disk when the attacker sees the
-        // rejection. Bounded so a hung SecureStore write can't hang unlock.
-        await this.saveThrottleBounded(updated);
+        // Durably persist the increment BEFORE resolving, inside the mutex, so a
+        // force-kill immediately after a failed guess can't race the write on a
+        // non-rooted device (the counter is on disk when the attacker sees the
+        // rejection), and the mutex guarantees writes land in order. This is a
+        // plain unbounded await like every other SecureStore write in the app —
+        // a genuine keychain hang is a device-broken condition, not the
+        // throttle's job to special-case.
+        await this.saveThrottle(updated);
         return false;
       } catch (error) {
         console.warn('PIN verification failed');
@@ -1320,33 +1321,15 @@ export class AccountSecureStorage {
   }
 
   /**
-   * Persist the throttle, but never block unlock for longer than
-   * THROTTLE_PERSIST_TIMEOUT_MS. `saveThrottle` never rejects (it swallows write
-   * errors), so the normal path resolves as soon as the write completes — making
-   * the increment durable before verifyPin returns. If SecureStore hangs, the
-   * timeout wins and we proceed; the in-memory mirror still enforces the count.
+   * Clear the throttle on a verified PIN. Clears the in-memory mirror
+   * SYNCHRONOUSLY so the session resets immediately, then fires the persisted
+   * delete FIRE-AND-FORGET — a correct PIN must never hang on the delete. A
+   * slow/failed delete just leaves a stale persisted counter, which fails safe
+   * (worst case the user is nearer a lockout, never further from one).
    */
-  private static saveThrottleBounded(record: PinThrottleRecord): Promise<void> {
-    return new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (!settled) {
-          settled = true;
-          resolve();
-        }
-      };
-      const timer = setTimeout(finish, THROTTLE_PERSIST_TIMEOUT_MS);
-      void this.saveThrottle(record).finally(() => {
-        clearTimeout(timer);
-        finish();
-      });
-    });
-  }
-
-  private static async resetThrottle(): Promise<void> {
-    // Clear BOTH the session mirror and the persisted record on a verified PIN.
+  private static resetThrottle(): void {
     this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
-    await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+    void secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
   }
 
   /**

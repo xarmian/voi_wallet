@@ -99,6 +99,12 @@ export default function LockScreen() {
       await refreshThrottle();
     };
     loadThrottleState();
+    // Defensive: if the throttle read hangs, don't strand PIN input disabled
+    // forever. Flip hydrated after 3s regardless — the service is still the real
+    // gate (verifyPin rejects a locked PIN), so failing the UI toward "enabled"
+    // is safe.
+    const hydrationTimeout = setTimeout(() => setHydrated(true), 3000);
+    return () => clearTimeout(hydrationTimeout);
   }, [refreshThrottle]);
 
   // While locked, tick every second to drive the countdown and auto-unlock when
