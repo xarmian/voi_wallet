@@ -210,58 +210,16 @@ describe('verifyPin throttle behavior', () => {
     expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(false);
   });
 
-  it('resolves a correct PIN without awaiting the persisted reset delete', async () => {
-    // Prime a non-clean throttle so the reset has something to delete.
-    await failOnce();
-    await failOnce();
-    expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(true);
-
-    // Make the persisted delete hang indefinitely — a correct PIN must NOT wait
-    // on it (the reset clears the mirror synchronously + fires the delete).
-    let releaseDelete: () => void = () => {};
-    const pendingDelete = new Promise<void>((resolve) => {
-      releaseDelete = resolve;
-    });
-    jest
-      .spyOn(platform.secureStorage, 'deleteItem')
-      .mockReturnValue(pendingDelete);
-
-    // Resolves promptly (if it awaited the delete, this would time out)…
-    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true);
-    // …and the in-memory mirror is already clean, synchronously.
-    expect(
-      (AccountSecureStorage as unknown as { throttleMirror: unknown })
-        .throttleMirror
-    ).toEqual({ failCount: 0, lockoutUntil: null, lastFailAt: 0 });
-
-    releaseDelete(); // clean up the pending promise
-    await pendingDelete;
-  });
-
-  it('orders the reset-delete before a later increment (no clobber)', async () => {
-    // Defer the persisted delete so an UNORDERED delete would land AFTER the
-    // later increment and erase it. Because resetThrottle enqueues the delete on
-    // the same serialization chain as increments, the order is delete -> then
-    // increment, so the increment's record is the final on-disk state.
-    jest.spyOn(platform.secureStorage, 'deleteItem').mockImplementation(
-      (k: string) =>
-        new Promise<void>((resolve) => {
-          setTimeout(() => {
-            mockPlatform.__secure.delete(k);
-            resolve();
-          }, 0);
-        })
-    );
-
-    // Correct PIN (triggers reset+delete) immediately followed by a wrong PIN.
-    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true);
-    expect(await AccountSecureStorage.verifyPin(WRONG_PIN)).toBe(false);
-
-    // Let any deferred delete settle (it must have run BEFORE the increment).
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  it('a reset then a later increment persists the increment, ordered in-mutex', async () => {
+    // Both the reset (delete) and the increment (save) are plain awaited writes
+    // in the same mutex, so they serialize: reset clears the counter, then the
+    // later increment reads clean and persists 1 — never clobbered or doubled.
+    await failOnce(); // failCount 1
+    expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(true); // reset -> clean
+    expect(await AccountSecureStorage.verifyPin(WRONG_PIN)).toBe(false); // reads clean -> 1
 
     const raw = mockPlatform.__secure.get(THROTTLE_KEY);
-    expect(raw).toBeDefined(); // increment NOT erased by a late delete
+    expect(raw).toBeDefined(); // increment persisted, not erased by the reset
     expect(JSON.parse(raw as string).failCount).toBe(1);
     expect((await getState()).attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT - 1);
   });

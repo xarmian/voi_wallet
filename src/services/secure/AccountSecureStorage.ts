@@ -60,6 +60,15 @@ import { SECURITY_CONFIG } from '../../config/security';
 // user passphrase (Wave-2 later PRs) and optional root/jailbreak detection
 // (deferred). Do NOT extend this throttle to claim it defends rooted devices.
 //
+// ORDERING / CONCURRENCY: throttle persist writes (both the wrong-PIN increment
+// and the correct-PIN reset) are plain awaits INSIDE the serialization mutex,
+// like every other awaited secure write in the app (unlock already awaits the
+// PIN hash); a hung keychain hanging verifyPin is the same accepted device-
+// broken condition (do NOT add a timeout — timeouts caused out-of-order bugs).
+// Reset requires the correct PIN, so reset/increment interleavings are not
+// attacker-reachable; any such race is a benign self-race that fails safe
+// (under-counts, never bypasses).
+//
 // PIN_ATTEMPT_LIMIT = fails per window before a lockout; PIN_LOCKOUT_DURATION =
 // base lockout, doubled each window (see pinLockoutBackoff). Wired from the
 // previously-dead security config.
@@ -1106,11 +1115,10 @@ export class AccountSecureStorage {
         const matched = await this.checkPinHash(pin);
 
         if (matched) {
-          // Success — clear the throttle. resetThrottle clears the session
-          // mirror SYNCHRONOUSLY and fires the persisted delete WITHOUT waiting,
-          // so a correct PIN can never hang on a slow/failing delete (a stale
-          // persisted counter just fails safe — worst case nearer lockout).
-          this.resetThrottle();
+          // Success — clear the throttle, AWAITING the persisted delete inside
+          // the mutex, exactly like the wrong-PIN path awaits saveThrottle. Both
+          // writes are serialized by the mutex, so ordering is trivially correct.
+          await this.resetThrottle();
           return true;
         }
 
@@ -1321,20 +1329,19 @@ export class AccountSecureStorage {
   }
 
   /**
-   * Clear the throttle on a verified PIN. Clears the in-memory mirror
-   * SYNCHRONOUSLY so the session resets immediately, then ENQUEUES the persisted
-   * delete onto the SAME serialization chain that increments use — so any later
-   * wrong-PIN increment queues AFTER this delete and cannot be clobbered by it
-   * (a fire-and-forget delete could otherwise complete late and erase a newer
-   * increment, leaving a stale counter after a force-kill). The delete is NOT
-   * awaited by verifyPin, so a correct PIN never hangs on it; a slow/failed
-   * delete just leaves a stale persisted counter, which fails safe.
+   * Clear the throttle on a verified PIN. Clears the in-memory mirror, then
+   * AWAITS the persisted delete INSIDE the mutex — symmetric with the wrong-PIN
+   * path's awaited saveThrottle. Because both writes are plain awaits within the
+   * same serialization mutex, they can never interleave (no reset landing after
+   * a later increment), and each verifyPin awaits only its OWN write before
+   * releasing the mutex. Reset requires the correct PIN, so this path is never
+   * attacker-reachable; a genuinely hung keychain here is the same accepted
+   * device-broken condition as every other awaited secure write (see THREAT
+   * MODEL) — not special-cased.
    */
-  private static resetThrottle(): void {
+  private static async resetThrottle(): Promise<void> {
     this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
-    this.throttleChain = this.throttleChain
-      .then(() => secureStorage.deleteItem(this.PIN_THROTTLE_KEY))
-      .catch(() => {});
+    await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
   }
 
   /**
