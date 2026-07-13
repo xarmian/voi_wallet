@@ -66,12 +66,19 @@ export default function LockScreen() {
     attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
   });
   const [nowTick, setNowTick] = useState(() => Date.now());
+  // Until the FIRST persisted-throttle read resolves we don't know whether the
+  // wallet is locked out, so PIN entry stays disabled — the UI must never
+  // momentarily look unlocked while the persisted state is actually locked
+  // (Codex P2 hydration flicker).
+  const [hydrated, setHydrated] = useState(false);
 
   const isLocked =
     throttle.lockedUntil !== null && nowTick < throttle.lockedUntil;
   const lockRemainingMs = isLocked
     ? Math.max(0, (throttle.lockedUntil ?? 0) - nowTick)
     : 0;
+  // Gate all PIN input on both the lockout AND hydration.
+  const inputDisabled = isLocked || !hydrated;
 
   const refreshThrottle = useCallback(async () => {
     try {
@@ -79,6 +86,10 @@ export default function LockScreen() {
       setThrottle(state);
     } catch (error) {
       console.error('Failed to read PIN throttle state:', error);
+    } finally {
+      // Hydrated regardless of success — on a read error the service still
+      // fails closed, and we don't want to strand input disabled forever.
+      setHydrated(true);
     }
   }, []);
 
@@ -127,7 +138,7 @@ export default function LockScreen() {
   };
 
   const handleNumberPress = (number: string) => {
-    if (isLocked || pin.length >= 6) return;
+    if (inputDisabled || pin.length >= 6) return;
 
     const newPin = pin + number;
     setPin(newPin);
@@ -138,7 +149,7 @@ export default function LockScreen() {
   };
 
   const handleBackspace = () => {
-    if (isLocked) return;
+    if (inputDisabled) return;
     setPin(pin.slice(0, -1));
   };
 
@@ -292,7 +303,7 @@ export default function LockScreen() {
                     key={itemIndex}
                     style={styles.keypadButton}
                     onPress={handleBackspace}
-                    disabled={isLocked}
+                    disabled={inputDisabled}
                   >
                     <Ionicons
                       name="backspace-outline"
@@ -308,7 +319,7 @@ export default function LockScreen() {
                   key={itemIndex}
                   style={styles.keypadButton}
                   onPress={() => handleNumberPress(item)}
-                  disabled={isLocked}
+                  disabled={inputDisabled}
                 >
                   <Text style={styles.keypadButtonText}>{item}</Text>
                 </TouchableOpacity>
@@ -326,7 +337,9 @@ export default function LockScreen() {
         <View style={styles.header}>
           <Ionicons name="lock-closed" size={48} color={theme.colors.primary} />
           <Text style={styles.title}>Wallet Locked</Text>
-          <Text style={styles.subtitle}>Enter your PIN to unlock</Text>
+          <Text style={styles.subtitle}>
+            {hydrated ? 'Enter your PIN to unlock' : 'Checking status…'}
+          </Text>
         </View>
 
         {renderPinDots()}

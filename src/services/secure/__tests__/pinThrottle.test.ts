@@ -246,6 +246,17 @@ describe('verifyPin throttle behavior', () => {
     expect(await AccountSecureStorage.verifyPin(CORRECT_PIN)).toBe(false);
   });
 
+  it('durably persists a single increment before verifyPin resolves (force-kill race)', async () => {
+    // verifyPin awaits the persist, so once it resolves false the record is
+    // already on disk. Clearing the mirror (fresh process after a force-kill)
+    // must still show the increment purely from the persisted record.
+    expect(await failOnce()).toBe(false);
+    expect(mockPlatform.__secure.has(THROTTLE_KEY)).toBe(true); // persisted, not fire-and-forget
+
+    resetThrottleMirror();
+    expect((await getState()).attemptsRemaining).toBe(PIN_ATTEMPT_LIMIT - 1);
+  });
+
   it('does not lose increments under concurrent verifyPin (mutex)', async () => {
     // Fire (LIMIT - 1) wrong PINs in parallel — all should count (stays under
     // the lockout threshold). Without the mutex, concurrent read-modify-write

@@ -40,11 +40,37 @@ import {
 } from './envelopeV2';
 import { SECURITY_CONFIG } from '../../config/security';
 
-// Persistent PIN throttle (DOC-137 §8 / TASK-26). PIN_ATTEMPT_LIMIT = fails per
-// window before a lockout; PIN_LOCKOUT_DURATION = base lockout, doubled each
-// window (see pinLockoutBackoff). Wired from the previously-dead security config.
+// ─────────────────────────────────────────────────────────────────────────────
+// PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
+//
+// WHAT THIS DEFENDS: ONLINE, on-device PIN guessing against the RUNNING app on a
+// NON-rooted / non-jailbroken device. The counter is persisted (survives force-
+// kill/relaunch) and mirrored in memory (survives a swallowed write), so a user
+// or thief holding an unrooted phone cannot brute-force the 6-digit PIN by
+// guessing-and-relaunching.
+//
+// WHAT THIS DELIBERATELY DOES NOT DEFEND: an attacker with ROOT / direct write
+// access to SecureStore. Such an attacker can reset or overwrite this record
+// (even with a validly-shaped one) to bypass the throttle — but that same
+// attacker can also read the encrypted key blob straight out of SecureStore and
+// mount an OFFLINE attack the throttle never sees. A client-side throttle (or a
+// MAC / hardware counter on this record — intentionally NOT added, since the
+// attacker reads that key/counter too) cannot close this hole. The rooted /
+// offline threat is instead mitigated by the memory-hard KDF wrap + optional
+// user passphrase (Wave-2 later PRs) and optional root/jailbreak detection
+// (deferred). Do NOT extend this throttle to claim it defends rooted devices.
+//
+// PIN_ATTEMPT_LIMIT = fails per window before a lockout; PIN_LOCKOUT_DURATION =
+// base lockout, doubled each window (see pinLockoutBackoff). Wired from the
+// previously-dead security config.
+// ─────────────────────────────────────────────────────────────────────────────
 const { PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_DURATION } = SECURITY_CONFIG;
 const THROTTLE_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000; // hard cap: 24h
+// Upper bound on how long a wrong-PIN persist may block unlock. The normal path
+// awaits the write (so a force-kill can't race it on a non-rooted device); if
+// SecureStore hangs past this, we stop waiting — the in-memory mirror already
+// enforces the increment for the session.
+const THROTTLE_PERSIST_TIMEOUT_MS = 2000;
 
 /**
  * Persisted PIN-throttle record. Lives in SecureStore under
@@ -1110,7 +1136,11 @@ export class AccountSecureStorage {
         // Update the mirror FIRST so the session keeps enforcing the increment
         // even if the persisted write below fails (write fails CLOSED).
         this.throttleMirror = updated;
-        await this.saveThrottle(updated);
+        // Durably persist the increment BEFORE resolving, so a force-kill
+        // immediately after a failed guess can't race the write on a non-rooted
+        // device — the counter is already on disk when the attacker sees the
+        // rejection. Bounded so a hung SecureStore write can't hang unlock.
+        await this.saveThrottleBounded(updated);
         return false;
       } catch (error) {
         console.warn('PIN verification failed');
@@ -1287,6 +1317,30 @@ export class AccountSecureStorage {
     } catch {
       console.warn('Failed to persist PIN throttle record');
     }
+  }
+
+  /**
+   * Persist the throttle, but never block unlock for longer than
+   * THROTTLE_PERSIST_TIMEOUT_MS. `saveThrottle` never rejects (it swallows write
+   * errors), so the normal path resolves as soon as the write completes — making
+   * the increment durable before verifyPin returns. If SecureStore hangs, the
+   * timeout wins and we proceed; the in-memory mirror still enforces the count.
+   */
+  private static saveThrottleBounded(record: PinThrottleRecord): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+      const timer = setTimeout(finish, THROTTLE_PERSIST_TIMEOUT_MS);
+      void this.saveThrottle(record).finally(() => {
+        clearTimeout(timer);
+        finish();
+      });
+    });
   }
 
   private static async resetThrottle(): Promise<void> {
