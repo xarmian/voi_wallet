@@ -406,7 +406,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('PIN must be 6 digits');
     }
 
-    await AccountSecureStorage.storePin(pin);
+    // Use the atomic first-secret setup flow (DOC-137 §5.4), NOT a bare hash
+    // persist: it re-wraps any pre-existing device-key accounts under the new PIN
+    // (verify-before-delete) so first-time PIN setup can never strand keys.
+    await AccountSecureStorage.setupPin(pin, 'pin');
     setAuthState((prev) => ({
       ...prev,
       hasPin: true,

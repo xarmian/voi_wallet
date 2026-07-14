@@ -103,9 +103,11 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     try {
       setSubmitting(true);
 
-      // Store PIN first
+      // Store PIN first — atomic first-secret setup (DOC-137 §5.4). Re-wraps any
+      // pre-existing device-key accounts under the new PIN before committing the
+      // credential (verify-before-delete), so onboarding never strands keys.
       setSetupStep('Setting up PIN...');
-      await AccountSecureStorage.storePin(pin);
+      await AccountSecureStorage.setupPin(pin, 'pin');
 
       // Store biometric preference. When the user opts into biometrics at
       // onboarding, capture the just-set PIN behind the write-time auth gate

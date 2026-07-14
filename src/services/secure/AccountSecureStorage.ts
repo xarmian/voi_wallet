@@ -37,6 +37,9 @@ import {
   KeyEnvelopeV2,
   decryptKeyEnvelopeV2,
   decryptKeyEnvelopeV2WithWrapKey,
+  encryptKeyEnvelopeV2,
+  assertPayloadSizeWithinLimit,
+  AT_REST_KDF_PARAMS,
   MAX_KEY_BLOBS,
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
@@ -152,6 +155,19 @@ const customPBKDF2 = (
 interface StoredPinData {
   hash: string;
   iterations: number;
+  /**
+   * Per-credential verification salt, FOLDED into the PIN credential (DOC-137
+   * §5.2). Present on Wave-2 (folded) credentials; ABSENT on pre-Wave-2 shapes
+   * that kept the salt in the separate `SALT_KEY` item (back-compat: readers
+   * fall back to `getOrCreateSalt()` when this is undefined).
+   */
+  salt?: string;
+  /**
+   * Which kind of user secret this credential verifies (DOC-137 §5.2 / R3). UX
+   * hint only — never a decryption gate. Absent on pre-Wave-2 shapes (treated as
+   * 'pin').
+   */
+  secretSource?: SecretSource;
   format: 'json' | 'legacy';
 }
 
@@ -175,6 +191,37 @@ export class AccountSecureStorage {
   // concurrent verifyPin calls (e.g. batch signing) can never lose an
   // increment. Modeled on the inFlightRequests dedup below.
   private static throttleChain: Promise<unknown> = Promise.resolve();
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // GLOBAL KEY-MUTATION MUTEX (DOC-137 §0 P1-B). READ BEFORE CHANGING.
+  //
+  // A SINGLE process-wide exclusive lock that serializes EVERY writer of account
+  // key material against EVERY PIN-lifecycle credential change, so the two can
+  // never interleave:
+  //   - storeAccount (and import/restore, which funnel through it)
+  //   - setupPin / changePin (the atomic rewrap-all → verify-all → flip-credential
+  //     transaction of §5)
+  //
+  // WHY (the real lockout vector, P1-B): changePin/setupPin enumerate the account
+  // list, re-wrap every account under the NEW secret, then flip the PIN
+  // credential. If a NEW account were stored (under the OLD session secret, as a
+  // v2 blob) AFTER that enumeration snapshot but BEFORE the credential commit, it
+  // would be wrapped under the OLD secret and become unreadable once the new
+  // credential lands — a permanent strand recoverable only by the mnemonic. This
+  // mutex forces such a concurrent storeAccount to run EITHER fully before the
+  // enumeration (so it is included in the rewrap) OR fully after the commit + the
+  // vault rotate (so it wraps under the NEW secret). It is acquired BEFORE
+  // enumerating accounts and released only AFTER the credential commit and the
+  // SessionKeyVault rotation.
+  //
+  // NEVER roll a failed rewrap back by writing a stale full-payload snapshot (it
+  // could clobber a legitimate concurrent write) — roll back by dropping only the
+  // specific unproven blob (dropBlob). The chain never rejects (outcomes are
+  // swallowed) so one failing task cannot poison later ones. verifyPin is called
+  // BEFORE acquiring this lock (it takes the SEPARATE throttle mutex), so the two
+  // mutexes never nest and cannot deadlock.
+  // ───────────────────────────────────────────────────────────────────────────
+  private static keyMutationChain: Promise<unknown> = Promise.resolve();
 
   // In-memory mirror of the throttle state (DOC-137 §8 / TASK-26, Codex P1).
   // The EFFECTIVE throttle enforced by verifyPin is the MORE RESTRICTIVE of the
@@ -280,6 +327,244 @@ export class AccountSecureStorage {
     );
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // V2 AT-REST WRITER (DOC-137 §2, PR4). READ BEFORE CHANGING.
+  //
+  // Wraps the FULL stored key bytes (the 64-byte algosdk `sk`, or whatever length
+  // is stored — NEVER hardcode 32; §0 P1-A) under a USER-SECRET-derived scrypt
+  // envelope (KeyEnvelopeV2). Every persist of a v2 payload goes through
+  // saveSecretV2Checked, which enforces the multi-blob budget (≤2 blobs, <2048
+  // bytes serialized) BEFORE writing. NEVER logs the secret or key bytes.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Run a task under the GLOBAL key-mutation mutex (P1-B). Every account-secret
+   * writer and every PIN-lifecycle credential change acquires this before
+   * enumerating/mutating, so a store/import can never interleave with a
+   * setupPin/changePin rewrap. The chain never rejects (each outcome is
+   * swallowed onto the chain) so a failing task cannot poison later ones; the
+   * task's own result/rejection is still returned to its caller.
+   */
+  private static runKeyMutationExclusive<T>(
+    task: () => Promise<T>
+  ): Promise<T> {
+    const result = this.keyMutationChain.then(task, task);
+    this.keyMutationChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  /**
+   * Encrypt raw key bytes into a KeyEnvelopeV2 under a user secret (scrypt +
+   * AES-256-CTR + encrypt-then-MAC). Round-trips the EXACT input bytes (§0
+   * P1-A). When `deviceBound` is true the wrap key gets the device post-mix (a
+   * cheap HMAC over the device id — mild defense-in-depth, §2.2). Uses the at-rest
+   * unlock KDF params (2^14). The caller owns `keyBytes` and must scrub it.
+   */
+  private static async encryptPrivateKeyV2(
+    keyBytes: Uint8Array,
+    secret: string,
+    secretSource: SecretSource,
+    options: { deviceBound: boolean }
+  ): Promise<KeyEnvelopeV2> {
+    const deviceSecret = options.deviceBound
+      ? await this.getStableDeviceId()
+      : undefined;
+    return encryptKeyEnvelopeV2({
+      plaintext: keyBytes,
+      secret,
+      secretSource,
+      deviceSecret,
+      kdfParams: AT_REST_KDF_PARAMS,
+    });
+  }
+
+  /**
+   * Serialize + budget-check + persist a v2 payload in ONE atomic SecureStore
+   * write. Enforces the PR1 carry-forward (§2.4): hard-cap MAX_KEY_BLOBS blobs
+   * and the expo-secure-store 2048-byte value limit, BEFORE the write, so an
+   * over-budget payload throws instead of being persisted (or silently rejected
+   * by SecureStore). A single setItem is atomic per item on both platforms, which
+   * is what makes add-blob → verify → drop-old crash-safe.
+   */
+  private static async saveSecretV2Checked(
+    accountId: string,
+    payload: AccountSecretPayload
+  ): Promise<void> {
+    const serialized = JSON.stringify(payload);
+    assertPayloadSizeWithinLimit(serialized, payload.blobs?.length ?? 0);
+    await secureStorage.setItem(this.secretKey(accountId), serialized);
+  }
+
+  /**
+   * Append (or set) a KeyEnvelopeV2 blob in `AccountSecretPayload.blobs` and
+   * persist it budget-checked (DOC-137 §2, the writeSecretV2 primitive). Reads
+   * the current payload, appends the blob, and writes via saveSecretV2Checked so
+   * the 2-blob / 2048-byte cap is enforced. Legacy `encryptedPrivateKey` is
+   * retained (dual-readable) — cleanup happens in the atomic rewrap flow, never
+   * here. NOTE: general-purpose primitive; the changePin/setupPin rewrap uses the
+   * lower-level appendBlob + saveSecretV2Checked directly for keeper-blob control.
+   */
+  static async writeSecretV2(
+    accountId: string,
+    blob: KeyEnvelopeV2
+  ): Promise<void> {
+    const existing = await this.readSecret(accountId);
+    const base: AccountSecretPayload = existing ?? {
+      accountId,
+      encryptedPrivateKey: '',
+      authMethod: 'pin',
+    };
+    await this.saveSecretV2Checked(accountId, this.appendBlob(base, blob));
+  }
+
+  /**
+   * Pure helper: return a copy of `payload` with `blob` appended to `blobs` and
+   * version:2 set. Retains `encryptedPrivateKey` (dual-readable during a rewrap).
+   * The budget cap is enforced at persist time (saveSecretV2Checked).
+   */
+  private static appendBlob(
+    payload: AccountSecretPayload,
+    blob: KeyEnvelopeV2
+  ): AccountSecretPayload {
+    return {
+      accountId: payload.accountId,
+      encryptedPrivateKey: payload.encryptedPrivateKey,
+      authMethod: payload.authMethod,
+      version: 2,
+      blobs: [...(payload.blobs ?? []), blob],
+    };
+  }
+
+  /**
+   * Pure helper: return a copy of `payload` with the specific `blob` removed,
+   * matched by its unique MAC (identity match is unusable after a JSON round-trip
+   * on re-read; the HMAC binds the random salt/iv so it is a collision-free id).
+   * Used for verify-before-delete ROLLBACK — drop ONLY the specific unproven
+   * blob, NEVER write a stale full-payload snapshot (P1-B). If no blobs remain,
+   * the payload reverts to its legacy (Format-A) shape.
+   */
+  private static dropBlob(
+    payload: AccountSecretPayload,
+    blob: KeyEnvelopeV2
+  ): AccountSecretPayload {
+    const remaining = (payload.blobs ?? []).filter((b) => b.mac !== blob.mac);
+    if (remaining.length === 0) {
+      return {
+        accountId: payload.accountId,
+        encryptedPrivateKey: payload.encryptedPrivateKey,
+        authMethod: payload.authMethod,
+      };
+    }
+    return {
+      accountId: payload.accountId,
+      encryptedPrivateKey: payload.encryptedPrivateKey,
+      authMethod: payload.authMethod,
+      version: 2,
+      blobs: remaining,
+    };
+  }
+
+  /**
+   * Pure helper: the FINAL committed shape for an account — a single v2 blob,
+   * legacy `encryptedPrivateKey` cleared, so the ONLY at-rest copy is the
+   * user-secret-wrapped envelope (this is the whole point of DR-2: dropping the
+   * device-key copy that needed no user secret). Used in the post-commit cleanup.
+   */
+  private static finalizePayload(
+    payload: AccountSecretPayload,
+    keepBlob: KeyEnvelopeV2
+  ): AccountSecretPayload {
+    return {
+      accountId: payload.accountId,
+      encryptedPrivateKey: '',
+      authMethod: payload.authMethod,
+      version: 2,
+      blobs: [keepBlob],
+    };
+  }
+
+  /**
+   * Constant-time byte-equality (verify-before-delete byte-exact round-trip
+   * check). Length-independent early return is safe (length is not secret).
+   */
+  private static constantTimeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i];
+    }
+    return diff === 0;
+  }
+
+  /**
+   * Trial-decrypt an account's key material for a REWRAP (DOC-137 §4.3/§5.3),
+   * returning the in-memory key bytes plus the v2 blob that verified (the
+   * "keeper" to retain during the dual-blob transition), or null if nothing
+   * decrypts under `currentSecret`/the device key.
+   *
+   * Ladder (MAC-anchored — a wrong key can never forge the MAC, so a bad
+   * candidate simply falls through):
+   *   1. v2 blobs under `currentSecret` (if a secret is provided) → keeperBlob set;
+   *   2. Format A (device-key, PIN-independent) → keeperBlob undefined;
+   *   3. Format C (legacy PIN-mixed, needs `currentSecret`) → keeperBlob undefined.
+   *
+   * `currentSecret === undefined` is the setupPin (first-secret) case: only the
+   * device-key path (2) applies, migrating pre-existing Format-A accounts.
+   */
+  private static async unwrapKeyForRewrap(
+    payload: AccountSecretPayload,
+    currentSecret: string | undefined,
+    deviceSecret: string
+  ): Promise<{ plaintext: Uint8Array; keeperBlob?: KeyEnvelopeV2 } | null> {
+    // 1. Existing v2 blobs under the current secret.
+    if (currentSecret !== undefined && Array.isArray(payload.blobs)) {
+      for (const blob of payload.blobs.slice(0, MAX_KEY_BLOBS)) {
+        try {
+          const pt = await decryptKeyEnvelopeV2(
+            blob,
+            currentSecret,
+            deviceSecret
+          );
+          if (pt) {
+            return { plaintext: pt, keeperBlob: blob };
+          }
+        } catch {
+          // Structurally invalid/out-of-cap blob — try the next candidate.
+        }
+      }
+    }
+
+    // 2. Format A (device key — PIN-independent).
+    if (payload.encryptedPrivateKey) {
+      try {
+        const pt = await this.decryptPrivateKey(payload.encryptedPrivateKey);
+        return { plaintext: pt };
+      } catch {
+        // Not a device-key blob — fall through to Format C.
+      }
+
+      // 3. Format C (legacy PIN-mixed) — only when a PIN-shaped secret is present.
+      if (currentSecret !== undefined) {
+        try {
+          const pt = await this.decryptPrivateKeyWithPin(
+            payload.encryptedPrivateKey,
+            currentSecret
+          );
+          return { plaintext: pt };
+        } catch {
+          // Not Format C either.
+        }
+      }
+    }
+
+    return null;
+  }
+
   private static async migrateLegacyAccountData(
     accountId: string
   ): Promise<PersistedAccountMetadata | null> {
@@ -328,46 +613,97 @@ export class AccountSecureStorage {
     account: AccountMetadata,
     privateKey?: Uint8Array
   ): Promise<void> {
-    try {
-      const hasPin = await this.hasPin();
-      const lastAccessed = new Date().toISOString();
+    // Acquire the GLOBAL key-mutation mutex (P1-B) around the WHOLE write — the
+    // secret payload AND the account-list mutation — so a store can never
+    // interleave with a setupPin/changePin rewrap enumeration+commit. See the
+    // keyMutationChain comment above.
+    return this.runKeyMutationExclusive(async () => {
+      try {
+        const hasPin = await this.hasPin();
+        const lastAccessed = new Date().toISOString();
 
-      const metadata: PersistedAccountMetadata = {
-        accountId: account.id,
-        address: account.address,
-        type: account.type,
-        publicData: {
-          publicKey: account.publicKey,
-          label: account.label || '',
-          color: account.color || '#000000',
-          createdAt: account.createdAt,
-          importedAt: account.importedAt,
-          avatarUrl: account.avatarUrl,
-          avatarUpdatedAt: account.avatarUpdatedAt,
-        },
-        authMethod: hasPin ? 'pin' : 'biometric',
-        lastAccessed,
-      };
-
-      // Encrypt and store private key for Standard accounts
-      if (account.type === AccountType.STANDARD && privateKey) {
-        const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
-        await this.saveSecret(account.id, {
+        const metadata: PersistedAccountMetadata = {
           accountId: account.id,
-          encryptedPrivateKey,
-          authMethod: metadata.authMethod,
-        });
-      } else {
-        await this.saveSecret(account.id, null);
-      }
+          address: account.address,
+          type: account.type,
+          publicData: {
+            publicKey: account.publicKey,
+            label: account.label || '',
+            color: account.color || '#000000',
+            createdAt: account.createdAt,
+            importedAt: account.importedAt,
+            avatarUrl: account.avatarUrl,
+            avatarUpdatedAt: account.avatarUpdatedAt,
+          },
+          authMethod: hasPin ? 'pin' : 'biometric',
+          lastAccessed,
+        };
 
-      // Store metadata for quick access
-      await this.storeAccountMetadata(metadata);
-    } catch (error) {
-      throw new AccountStorageError(
-        `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+        // Encrypt and store private key for Standard accounts.
+        if (account.type === AccountType.STANDARD && privateKey) {
+          // WRITE V2 DIRECTLY when a durable user secret is available — i.e. a
+          // PIN credential EXISTS *and* the unlocked SessionKeyVault holds the
+          // verified session secret — so new accounts created during an active
+          // session are wrapped under the user secret from the start
+          // (DOC-137 §5.4). Because this runs under the global mutex, the vault
+          // secret it reads is guaranteed NOT to be mid-rotated by a concurrent
+          // changePin: the store is fully ordered before that change's
+          // enumeration or fully after its commit + vault rotate (P1-B).
+          //
+          // The `hasPin` gate is load-bearing safety: a v2 blob is re-derivable
+          // ONLY via a secret that a PIN credential can verify. Without a PIN
+          // credential the session secret is ephemeral (and cannot be verified
+          // after the vault clears), so wrapping under it could strand the key —
+          // AND setupPin's device-key unwrap could not later migrate it. So when
+          // no PIN exists we ALWAYS write the legacy device-key (Format A) blob;
+          // setupPin upgrades it to v2 on first-secret setup.
+          if (hasPin && SessionKeyVault.isUnlocked()) {
+            const secret = SessionKeyVault.getSecret();
+            const source = SessionKeyVault.getSecretSource();
+            if (secret !== null) {
+              const blob = await this.encryptPrivateKeyV2(
+                privateKey,
+                secret,
+                source,
+                { deviceBound: true }
+              );
+              await this.saveSecretV2Checked(account.id, {
+                accountId: account.id,
+                encryptedPrivateKey: '',
+                authMethod: metadata.authMethod,
+                version: 2,
+                blobs: [blob],
+              });
+            } else {
+              const encryptedPrivateKey =
+                await this.encryptPrivateKey(privateKey);
+              await this.saveSecret(account.id, {
+                accountId: account.id,
+                encryptedPrivateKey,
+                authMethod: metadata.authMethod,
+              });
+            }
+          } else {
+            const encryptedPrivateKey =
+              await this.encryptPrivateKey(privateKey);
+            await this.saveSecret(account.id, {
+              accountId: account.id,
+              encryptedPrivateKey,
+              authMethod: metadata.authMethod,
+            });
+          }
+        } else {
+          await this.saveSecret(account.id, null);
+        }
+
+        // Store metadata for quick access
+        await this.storeAccountMetadata(metadata);
+      } catch (error) {
+        throw new AccountStorageError(
+          `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    });
   }
 
   static async retrieveAccount(accountId: string): Promise<AccountMetadata> {
@@ -1162,20 +1498,63 @@ export class AccountSecureStorage {
   }
 
   // PIN Management Methods
-  static async storePin(pin: string): Promise<void> {
-    try {
-      if (!pin || pin.length !== 6 || !/^\d{6}$/.test(pin)) {
-        throw new Error('PIN must be 6 digits');
+
+  /**
+   * Validate a user secret for its kind. PIN is the enforced 6-digit default;
+   * passphrase policy (min length / entropy meter) is finalized in PR7 — here we
+   * only reject an empty passphrase so a blank secret can never commit.
+   */
+  private static validateSecret(
+    secret: string,
+    secretSource: SecretSource
+  ): void {
+    if (secretSource === 'passphrase') {
+      if (!secret || secret.length === 0) {
+        throw new Error('Passphrase must not be empty');
       }
+      return;
+    }
+    if (!secret || secret.length !== 6 || !/^\d{6}$/.test(secret)) {
+      throw new Error('PIN must be 6 digits');
+    }
+  }
 
-      const salt = await this.getOrCreateSalt(true);
-      const hashedPin = this.hashPin(pin, salt, this.PIN_ITERATIONS);
+  /**
+   * First-secret setup. Back-compat alias that DELEGATES to setupPin so the
+   * credential commit ALWAYS re-wraps any pre-existing device-key accounts under
+   * the new secret (DOC-137 §5.4). Persisting a bare hash without re-wrapping
+   * would brick v2 keys on the next unlock — never do that.
+   */
+  static async storePin(pin: string): Promise<void> {
+    await this.setupPin(pin, 'pin');
+  }
 
-      await this.persistPinHash(hashedPin, salt);
+  /**
+   * First-secret setup / device→v2 migration (DOC-137 §5.4).
+   *
+   * Establishes the FIRST PIN credential and atomically re-wraps every
+   * pre-existing (Format-A, device-key) standard account under the new secret,
+   * using the SAME dual-blob verify-before-delete transaction as changePin with
+   * `currentSecret` = the device key (Format A needs no user secret to unwrap).
+   * Fund-risking: verify-before-delete + crash-safety are enforced by
+   * rewrapAndCommitCredential (crash before commit → no credential, device-key
+   * copies intact; crash after commit → v2 copies valid, cleanup idempotent).
+   */
+  static async setupPin(
+    newSecret: string,
+    secretSource: SecretSource = 'pin'
+  ): Promise<void> {
+    try {
+      this.validateSecret(newSecret, secretSource);
+      await this.rewrapAndCommitCredential({
+        currentSecret: undefined,
+        newSecret,
+        newSource: secretSource,
+      });
       this.legacyCheckRequired = false;
     } catch (error) {
       throw new AccountStorageError(
-        `Failed to store PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Failed to set up PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -1459,16 +1838,27 @@ export class AccountSecureStorage {
       return false;
     }
 
-    const salt = await this.getOrCreateSalt();
+    // Prefer the salt FOLDED into the credential (§5.2); fall back to the
+    // standalone SALT_KEY only for pre-Wave-2 credentials that lack it.
+    const salt = storedData.salt ?? (await this.getOrCreateSalt());
+    const secretSource: SecretSource = storedData.secretSource ?? 'pin';
 
     if (storedData.format === 'json') {
       this.legacyCheckRequired = false;
       const candidateHash = this.hashPin(pin, salt, storedData.iterations);
       if (storedData.hash === candidateHash) {
-        if (storedData.iterations !== this.PIN_ITERATIONS) {
+        if (
+          storedData.iterations !== this.PIN_ITERATIONS ||
+          storedData.salt === undefined
+        ) {
           try {
             const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
-            await this.persistPinHash(upgradedHash, salt);
+            await this.persistPinCredential({
+              hash: upgradedHash,
+              iterations: this.PIN_ITERATIONS,
+              salt,
+              secretSource,
+            });
           } catch (error) {
             console.warn('Failed to upgrade stored PIN metadata', error);
           }
@@ -1483,17 +1873,20 @@ export class AccountSecureStorage {
     for (const iterations of iterationCandidates) {
       const candidateHash = this.hashPin(pin, salt, iterations);
       if (storedData.hash === candidateHash) {
-        if (iterations !== this.PIN_ITERATIONS) {
-          try {
-            const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
-            await this.persistPinHash(upgradedHash, salt);
-            this.legacyCheckRequired = false;
-          } catch (error) {
-            console.warn(
-              'Failed to upgrade PIN hash to latest iteration count',
-              error
-            );
-          }
+        try {
+          const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
+          await this.persistPinCredential({
+            hash: upgradedHash,
+            iterations: this.PIN_ITERATIONS,
+            salt,
+            secretSource,
+          });
+          this.legacyCheckRequired = false;
+        } catch (error) {
+          console.warn(
+            'Failed to upgrade PIN hash to latest iteration count',
+            error
+          );
         }
         return true;
       }
@@ -1532,41 +1925,247 @@ export class AccountSecureStorage {
         throw new Error('New PIN must be different from current PIN');
       }
 
-      // Verify current PIN first
+      // Verify current PIN FIRST (throttle-aware, §8) — OUTSIDE the global
+      // key-mutation mutex. verifyPin takes the SEPARATE throttle mutex; the two
+      // must never nest (would deadlock / serialize unnecessarily).
       const isCurrentValid = await this.verifyPin(currentPin);
       if (!isCurrentValid) {
         throw new Error('Current PIN is incorrect');
       }
 
-      // Generate a fresh salt for the new PIN
-      const salt = await this.getOrCreateSalt(true);
-      const hashedNewPin = this.hashPin(newPin, salt, this.PIN_ITERATIONS);
-
-      await this.persistPinHash(hashedNewPin, salt);
+      // Atomic rewrap-all → verify-all → flip-credential (DOC-137 §5.3), under
+      // the global key-mutation mutex. This re-wraps EVERY standard account from
+      // the OLD secret to the NEW one before the credential flips, so a bare hash
+      // rotation can never brick v2 keys. Preserves PR6's biometric-item refresh
+      // and the SessionKeyVault rotation (both done post-commit, inside the
+      // mutex).
+      await this.rewrapAndCommitCredential({
+        currentSecret: currentPin,
+        newSecret: newPin,
+        newSource: 'pin',
+      });
       this.legacyCheckRequired = false;
-
-      // COMMIT POINT passed — the new PIN hash is persisted. Keep the biometric-
-      // convenience item and the live session in sync with the NEW secret
-      // (DOC-137 §5.3 / Codex P2). Without this, a biometric unlock after a PIN
-      // change would load the OLD PIN into the vault — harmless for Format-A
-      // keys today, but a real break once PR4 wraps v2 keys under the new PIN.
-      // changePin here handles PINs only, so secretSource is 'pin'. This never
-      // throws (it disables biometrics on a failed refresh) so a post-commit
-      // failure can't misreport the (successful) PIN change.
-      await this.refreshBiometricSecretAfterSecretChange(newPin, 'pin');
-
-      // Rotate the live session so an unlocked session holds the new secret
-      // WITHOUT re-locking (SessionKeyVault.rotate, PR3). Only when currently
-      // unlocked — a locked session has nothing to rotate and will populate the
-      // vault fresh on its next unlock.
-      if (SessionKeyVault.isUnlocked()) {
-        SessionKeyVault.rotate(newPin, 'pin');
-      }
     } catch (error) {
       throw new AccountStorageError(
         `Failed to change PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * The shared atomic PIN-lifecycle rewrap+commit transaction (DOC-137 §5.3/§5.4)
+   * — the fund-risking core of both changePin and setupPin. READ CAREFULLY.
+   *
+   * Runs under the GLOBAL key-mutation mutex (P1-B), acquired BEFORE enumerating
+   * accounts, so no store/import can interleave and strand a new account under
+   * the old secret. Phases:
+   *
+   *   1. UNWRAP every key-bearing account under the OLD secret (or the device key
+   *      when `currentSecret` is undefined = first-secret setup) into an
+   *      in-memory buffer. ALL-OR-NOTHING: if any account cannot be unwrapped,
+   *      abort before touching storage (old credential + copies stay intact).
+   *   2. ADD a NEW-secret v2 blob to each account (dual-blob). The old readable
+   *      copy — the "keeper" v2 blob or the Format-A field — is preserved, so the
+   *      account decrypts under EITHER secret at every instant. Reduces to the
+   *      keeper first so the payload never exceeds 2 blobs.
+   *   3. VERIFY every new blob byte-exactly under the NEW secret via a FULL
+   *      independent decrypt (its own scrypt) — verify-before-delete. Any
+   *      mismatch → rollback.
+   *   4. COMMIT the PIN credential in ONE folded write (§5.2). POINT OF NO RETURN.
+   *   5. CLEANUP (best-effort, post-commit): keep ONLY the new blob and clear the
+   *      legacy device-key copy (the DR-2 goal — no copy readable without the
+   *      user secret). Then resync the biometric item + rotate the vault.
+   *
+   * CRASH SAFETY (commit = step 4's single atomic write):
+   *   - crash BEFORE 4 → credential still verifies the OLD secret; old copies
+   *     decrypt; the unproven new blobs are inert (wrong-secret trial-decrypt
+   *     MAC-fails); nothing stranded; retried on the next attempt.
+   *   - crash AFTER 4 → credential verifies the NEW secret; new blobs decrypt;
+   *     stale old copies are inert; cleanup is idempotent.
+   * At NO crash point does an account have zero readable copies.
+   *
+   * ROLLBACK on a pre-commit error drops ONLY the specific unproven new blob
+   * (by MAC), never a stale full-payload snapshot (P1-B). All plaintext buffers
+   * are scrubbed in `finally`. Never logs the secret or key bytes.
+   */
+  private static async rewrapAndCommitCredential(opts: {
+    /** OLD secret to unwrap under; undefined = first-secret setup (device key). */
+    currentSecret?: string;
+    /** NEW secret to wrap every account (and the new credential) under. */
+    newSecret: string;
+    /** Kind of the new secret (folded into the credential + each blob). */
+    newSource: SecretSource;
+  }): Promise<void> {
+    const { currentSecret, newSecret, newSource } = opts;
+
+    await this.runKeyMutationExclusive(async () => {
+      const deviceSecret = await this.getStableDeviceId();
+      const ids = await this.getAllAccountIds();
+
+      interface RewrapCtx {
+        payload: AccountSecretPayload; // as read in phase 1 (stable under mutex)
+        plaintext: Uint8Array;
+        keeperBlob?: KeyEnvelopeV2; // old v2 blob that verified under currentSecret
+        newBlob?: KeyEnvelopeV2; // the unproven new-secret blob (set in phase 2)
+        appended: boolean; // true once the new blob has been persisted
+      }
+      const ctxs = new Map<string, RewrapCtx>();
+      let committed = false;
+
+      try {
+        // PHASE 1 — UNWRAP every key-bearing account under the OLD secret.
+        for (const id of ids) {
+          const payload = await this.readSecret(id);
+          if (!payload) {
+            continue; // watch-only / already deleted — nothing to re-wrap
+          }
+          const hasKeyMaterial =
+            (Array.isArray(payload.blobs) && payload.blobs.length > 0) ||
+            !!payload.encryptedPrivateKey;
+          if (!hasKeyMaterial) {
+            continue; // watch-only payload
+          }
+          const unwrapped = await this.unwrapKeyForRewrap(
+            payload,
+            currentSecret,
+            deviceSecret
+          );
+          if (!unwrapped) {
+            // ALL-OR-NOTHING: an account unreadable under the current secret must
+            // NOT be left behind by a committed new credential. Abort BEFORE any
+            // write so the old credential + all copies stay intact.
+            throw new AccountStorageError(
+              `Cannot re-wrap account ${id}: no readable key copy under the current secret`
+            );
+          }
+          ctxs.set(id, {
+            payload,
+            plaintext: unwrapped.plaintext,
+            keeperBlob: unwrapped.keeperBlob,
+            appended: false,
+          });
+        }
+
+        // PHASE 2 — ADD a NEW-secret v2 blob to each account (dual-blob).
+        for (const [id, ctx] of ctxs) {
+          const newBlob = await this.encryptPrivateKeyV2(
+            ctx.plaintext,
+            newSecret,
+            newSource,
+            { deviceBound: true }
+          );
+          // Reduce to the keeper (drop any OTHER stale blobs) then append the new
+          // blob, so the payload holds at most 2 blobs (keeper + new). This
+          // self-heals a stray blob left by a previously-interrupted rewrap.
+          const base: AccountSecretPayload = ctx.keeperBlob
+            ? {
+                accountId: ctx.payload.accountId,
+                encryptedPrivateKey: ctx.payload.encryptedPrivateKey,
+                authMethod: ctx.payload.authMethod,
+                version: 2,
+                blobs: [ctx.keeperBlob],
+              }
+            : {
+                accountId: ctx.payload.accountId,
+                encryptedPrivateKey: ctx.payload.encryptedPrivateKey,
+                authMethod: ctx.payload.authMethod,
+              };
+          await this.saveSecretV2Checked(id, this.appendBlob(base, newBlob));
+          ctx.newBlob = newBlob;
+          ctx.appended = true;
+        }
+
+        // PHASE 3 — VERIFY every new blob byte-exactly under the NEW secret via a
+        // FULL independent decrypt, BEFORE any old copy is removed or the
+        // credential flips (verify-before-delete).
+        for (const [, ctx] of ctxs) {
+          const check = await decryptKeyEnvelopeV2(
+            ctx.newBlob!,
+            newSecret,
+            deviceSecret
+          );
+          try {
+            if (!check || !this.constantTimeEqualBytes(check, ctx.plaintext)) {
+              throw new AccountStorageError('Re-wrap verification failed');
+            }
+          } finally {
+            check?.fill(0);
+          }
+        }
+
+        // PHASE 4 — COMMIT: flip the PIN credential in ONE folded write (§5.2).
+        // POINT OF NO RETURN.
+        const newSalt = await this.generateRandomHex(32);
+        const hash = this.hashPin(newSecret, newSalt, this.PIN_ITERATIONS);
+        await this.persistPinCredential({
+          hash,
+          iterations: this.PIN_ITERATIONS,
+          salt: newSalt,
+          secretSource: newSource,
+        });
+        committed = true;
+        this.legacyCheckRequired = false;
+
+        // ── Everything below runs AFTER the commit and MUST NOT throw upward:
+        // the PIN change already succeeded. Stale old copies are inert (a
+        // wrong-secret trial-decrypt MAC-fails), so cleanup is best-effort.
+
+        // PHASE 5 — CLEANUP: keep ONLY the new blob; clear the legacy device-key
+        // copy so no at-rest copy is readable without the user secret.
+        for (const [id, ctx] of ctxs) {
+          try {
+            await this.saveSecretV2Checked(
+              id,
+              this.finalizePayload(ctx.payload, ctx.newBlob!)
+            );
+          } catch {
+            // Best-effort; a surviving old copy is inert under the new secret.
+          }
+        }
+
+        // Post-commit session sync (PR6): resync the biometric-convenience item
+        // to the NEW secret, then rotate the live vault so the session stays
+        // unlocked WITHOUT re-locking. Neither throws upward.
+        await this.refreshBiometricSecretAfterSecretChange(
+          newSecret,
+          newSource
+        );
+        if (SessionKeyVault.isUnlocked()) {
+          SessionKeyVault.rotate(newSecret, newSource);
+        }
+      } catch (error) {
+        // ROLLBACK — only reachable PRE-commit (post-commit code above swallows).
+        // Drop ONLY the specific unproven new blob (by MAC) from each account we
+        // appended to; never write a stale snapshot (P1-B). Old credential + old
+        // copies remain intact → nothing stranded → retried on the next attempt.
+        if (!committed) {
+          for (const [id, ctx] of ctxs) {
+            if (!ctx.appended || !ctx.newBlob) {
+              continue;
+            }
+            try {
+              const current = await this.readSecret(id);
+              if (!current) {
+                continue;
+              }
+              await this.saveSecretV2Checked(
+                id,
+                this.dropBlob(current, ctx.newBlob)
+              );
+            } catch {
+              // Best-effort; the unproven new blob is inert under the OLD secret.
+            }
+          }
+        }
+        throw error;
+      } finally {
+        // Scrub every in-memory plaintext buffer.
+        for (const ctx of ctxs.values()) {
+          ctx.plaintext.fill(0);
+        }
+        ctxs.clear();
+      }
+    });
   }
 
   /**
@@ -1651,16 +2250,49 @@ export class AccountSecureStorage {
     await this.clearBiometricSecret().catch(() => {});
   }
 
+  /**
+   * Remove the PIN — but ONLY when no wallet holds standard-account keys
+   * (DOC-137 §5.5 / Dave's decision: NO no-user-secret resting state for
+   * key-bearing wallets). Removing the PIN would leave only the device secret to
+   * wrap keys — the exact zero-offline-resistance state DR-2 eliminates — so on a
+   * key-bearing wallet this THROWS. The genuine "no PIN" escape hatch is the
+   * explicit, mnemonic-required destructive Reset Wallet, never a silent
+   * downgrade. Watch-only wallets (no key material) may still remove the PIN.
+   *
+   * The enumerate-then-delete runs under the global key-mutation mutex so a
+   * concurrent storeAccount can't add a key between the check and the delete
+   * (which would leave a key-bearing wallet with no PIN).
+   */
   static async deletePin(): Promise<void> {
-    try {
-      await storage.removeItem(this.PIN_KEY);
-      await secureStorage.deleteItem(this.PIN_KEY).catch(() => {});
-      await storage.removeItem(this.SALT_KEY).catch(() => {});
-      await secureStorage.deleteItem(this.SALT_KEY).catch(() => {});
-      this.legacyCheckRequired = undefined;
-    } catch (error) {
-      throw new AccountStorageError('Failed to delete PIN');
-    }
+    return this.runKeyMutationExclusive(async () => {
+      try {
+        const ids = await this.getAllAccountIds();
+        for (const id of ids) {
+          const payload = await this.readSecret(id);
+          const holdsKey =
+            !!payload &&
+            (!!payload.encryptedPrivateKey ||
+              (Array.isArray(payload.blobs) && payload.blobs.length > 0));
+          if (holdsKey) {
+            throw new AccountStorageError(
+              'Cannot remove PIN while accounts hold keys — use Change PIN or Reset Wallet'
+            );
+          }
+        }
+
+        // Watch-only (no key material) — safe to remove the credential.
+        await storage.removeItem(this.PIN_KEY);
+        await secureStorage.deleteItem(this.PIN_KEY).catch(() => {});
+        await storage.removeItem(this.SALT_KEY).catch(() => {});
+        await secureStorage.deleteItem(this.SALT_KEY).catch(() => {});
+        this.legacyCheckRequired = undefined;
+      } catch (error) {
+        if (error instanceof AccountStorageError) {
+          throw error;
+        }
+        throw new AccountStorageError('Failed to delete PIN');
+      }
+    });
   }
 
   // Biometric Settings
@@ -1924,11 +2556,25 @@ export class AccountSecureStorage {
         const parsed = JSON.parse(value) as {
           hash?: string;
           iterations?: number;
+          salt?: unknown;
+          secretSource?: unknown;
         };
         if (parsed.hash && typeof parsed.iterations === 'number') {
+          // Back-compat: the folded salt + secretSource (§5.2) are present on
+          // Wave-2 credentials and ABSENT on the older {hash, iterations} shape.
+          const salt =
+            typeof parsed.salt === 'string' ? parsed.salt : undefined;
+          const secretSource =
+            parsed.secretSource === 'passphrase'
+              ? 'passphrase'
+              : parsed.secretSource === 'pin'
+                ? 'pin'
+                : undefined;
           return {
             hash: parsed.hash,
             iterations: parsed.iterations,
+            salt,
+            secretSource,
             format: 'json',
           };
         }
@@ -1944,16 +2590,35 @@ export class AccountSecureStorage {
     };
   }
 
-  private static async persistPinHash(
-    hash: string,
-    salt: string,
-    iterations: number = this.PIN_ITERATIONS
-  ): Promise<void> {
-    const payload = JSON.stringify({ hash, iterations });
+  /**
+   * Commit the PIN credential in ONE atomic write (DOC-137 §5.2). Folds the
+   * verification salt (and the secretSource UX hint) INTO the PIN_KEY value —
+   * `{ hash, iterations, salt, secretSource }` — so the credential flip is a
+   * single JSON write, eliminating the former two-write micro-window where
+   * PIN_KEY and a separate SALT_KEY could momentarily disagree. The standalone
+   * SALT_KEY is dropped best-effort since the salt now lives in the credential;
+   * a later getOrCreateSalt() read is only reached by pre-Wave-2 credentials that
+   * never folded the salt. Never logs the hash or salt.
+   */
+  private static async persistPinCredential(data: {
+    hash: string;
+    iterations: number;
+    salt: string;
+    secretSource: SecretSource;
+  }): Promise<void> {
+    const payload = JSON.stringify({
+      hash: data.hash,
+      iterations: data.iterations,
+      salt: data.salt,
+      secretSource: data.secretSource,
+    });
 
+    // SINGLE atomic write of the whole credential.
     await secureStorage.setItem(this.PIN_KEY, payload);
-    await secureStorage.setItem(this.SALT_KEY, salt);
 
+    // The salt is now inside the credential — drop stale standalone copies so a
+    // fallback getOrCreateSalt() can never return a mismatched salt.
+    await secureStorage.deleteItem(this.SALT_KEY).catch(() => {});
     await storage.removeItem(this.PIN_KEY).catch(() => {});
     await storage.removeItem(this.SALT_KEY).catch(() => {});
   }
