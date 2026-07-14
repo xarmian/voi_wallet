@@ -141,7 +141,11 @@ class SessionKeyVaultImpl {
       throw new VaultLockedError();
     }
 
-    const memoized = this.wrapKeys.get(accountId);
+    // Memoize per (accountId, salt): a re-wrap transiently holds two blobs with
+    // DIFFERENT salts (the "dual slot"), so each blob must derive/cache its own
+    // wrap key rather than collide on accountId alone.
+    const cacheKey = this.wrapKeyCacheKey(accountId, saltHex);
+    const memoized = this.wrapKeys.get(cacheKey);
     if (memoized) {
       return memoized;
     }
@@ -163,16 +167,16 @@ class SessionKeyVaultImpl {
       );
     }
 
-    // A concurrent call for the same account may have populated the memo while
-    // we were deriving; prefer the existing entry and drop our duplicate so the
-    // cache holds exactly one buffer per account.
-    const raced = this.wrapKeys.get(accountId);
+    // A concurrent call for the same (account, salt) may have populated the memo
+    // while we were deriving; prefer the existing entry and drop our duplicate
+    // so the cache holds exactly one buffer per (account, salt).
+    const raced = this.wrapKeys.get(cacheKey);
     if (raced) {
       derived.fill(0);
       return raced;
     }
 
-    this.wrapKeys.set(accountId, derived);
+    this.wrapKeys.set(cacheKey, derived);
     return derived;
   }
 
@@ -184,6 +188,12 @@ class SessionKeyVaultImpl {
     this.zeroWrapKeys();
     this.secret = null;
     this.epoch++;
+  }
+
+  /** Composite memo key for the (accountId, salt) pair. The salt is a fixed-
+   *  length hex string, so joining with a separator is unambiguous. */
+  private wrapKeyCacheKey(accountId: string, saltHex: string): string {
+    return `${accountId}|${saltHex}`;
   }
 
   /** Zero and drop every memoized wrap key (defense-in-depth scrub). */

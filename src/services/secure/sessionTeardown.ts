@@ -20,6 +20,7 @@
 
 import { AccountSecureStorage } from './AccountSecureStorage';
 import { SessionKeyVault } from './SessionKeyVault';
+import { AppLockSignal } from './appLockState';
 import { clearMessagingKeyCache } from '../messaging/keyDerivation';
 
 /** Clear the session vault, the 60 s key cache, and the messaging key cache. */
@@ -27,4 +28,21 @@ export function clearSessionSecurity(): void {
   SessionKeyVault.clear();
   AccountSecureStorage.clearPrivateKeyCache();
   clearMessagingKeyCache();
+}
+
+/**
+ * Enter the locked state synchronously (Codex P1-E race fix). Order matters:
+ *   1. Flip AppLockSignal to LOCKED **first** — synchronously, before any
+ *      teardown — so non-React consumers (the messaging cache-write guard and
+ *      the poll) observe the lock immediately. A key derivation that started
+ *      before the lock and resolves during teardown then refuses to repopulate
+ *      the ~30 min messaging cache.
+ *   2. Run the cache teardown (vault + 60 s + messaging).
+ *
+ * AuthContext.lock() calls this on every real lock (i.e. only when a PIN is set;
+ * a no-PIN wallet never locks, so its always-unlocked signal is left untouched).
+ */
+export function enterLockedState(): void {
+  AppLockSignal.setUnlocked(false);
+  clearSessionSecurity();
 }

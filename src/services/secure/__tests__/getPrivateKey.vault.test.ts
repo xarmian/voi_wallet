@@ -68,10 +68,14 @@ import 'crypto-js/pbkdf2';
 import { createHash, randomBytes } from 'crypto';
 import * as platform from '@/platform';
 import { AccountSecureStorage } from '../AccountSecureStorage';
-import { SessionKeyVault } from '../SessionKeyVault';
+import { SessionKeyVault, VaultLockedError } from '../SessionKeyVault';
+import { encryptKeyEnvelopeV2 } from '../envelopeV2';
+import type { ScryptKdfParams } from '../../backup/types';
 
 const DEVICE_ID = 'vault-test-device-idfv';
 const PIN = '123456';
+// Small (power-of-two, within caps) scrypt params keep the suite fast.
+const FAST_PARAMS: ScryptKdfParams = { N: 2 ** 12, r: 8, p: 1, dkLen: 32 };
 
 const mockPlatform = platform as unknown as {
   __secure: Map<string, string>;
@@ -201,5 +205,114 @@ describe('getPrivateKey — Format A is unchanged with an UNLOCKED vault (v2 bra
 
     const out = await AccountSecureStorage.getPrivateKey(accountId);
     expect(hex(out)).toBe(hex(sk));
+  });
+});
+
+describe('getPrivateKey — v2 vault path derives via SessionKeyVault.getWrapKey (Codex P1-1)', () => {
+  it('decrypts a v2 blob via the memoized getWrapKey when pin=undefined + vault unlocked', async () => {
+    const sk = fakeKey(64);
+    const accountId = 'acct-v2-vaultpath';
+    const blob = await encryptKeyEnvelopeV2({
+      plaintext: sk,
+      secret: PIN,
+      secretSource: 'pin',
+      kdfParams: FAST_PARAMS, // non-device-bound
+    });
+    seedSecret(accountId, {
+      accountId,
+      encryptedPrivateKey: '',
+      authMethod: 'pin',
+      version: 2,
+      blobs: [blob],
+    });
+
+    SessionKeyVault.set(PIN, 'pin');
+    const getWrapKeySpy = jest.spyOn(SessionKeyVault, 'getWrapKey');
+
+    const out = await AccountSecureStorage.getPrivateKey(accountId);
+    expect(hex(out)).toBe(hex(sk));
+
+    // The derivation went through the vault (not decryptKeyEnvelopeV2's own
+    // scrypt): getWrapKey was the derivation path, keyed by (accountId, salt).
+    expect(getWrapKeySpy).toHaveBeenCalledWith(
+      accountId,
+      blob.salt,
+      expect.objectContaining({ deviceSecret: undefined })
+    );
+  });
+
+  it('passes the device id to getWrapKey for a device-bound v2 blob', async () => {
+    const sk = fakeKey(64);
+    const accountId = 'acct-v2-vaultpath-devicebound';
+    const blob = await encryptKeyEnvelopeV2({
+      plaintext: sk,
+      secret: PIN,
+      secretSource: 'pin',
+      deviceSecret: DEVICE_ID,
+      kdfParams: FAST_PARAMS,
+    });
+    expect(blob.deviceBound).toBe(true);
+    seedSecret(accountId, {
+      accountId,
+      encryptedPrivateKey: '',
+      authMethod: 'pin',
+      version: 2,
+      blobs: [blob],
+    });
+
+    SessionKeyVault.set(PIN, 'pin');
+    const getWrapKeySpy = jest.spyOn(SessionKeyVault, 'getWrapKey');
+
+    const out = await AccountSecureStorage.getPrivateKey(accountId);
+    expect(hex(out)).toBe(hex(sk));
+    expect(getWrapKeySpy).toHaveBeenCalledWith(
+      accountId,
+      blob.salt,
+      expect.objectContaining({ deviceSecret: DEVICE_ID })
+    );
+  });
+});
+
+describe('getPrivateKey — v2 vault path aborts on a mid-flight lock (Codex P1-D)', () => {
+  it('throws VaultLockedError (and caches nothing) when the vault epoch changes mid-decrypt', async () => {
+    const sk = fakeKey(64);
+    const accountId = 'acct-v2-abort';
+    const blob = await encryptKeyEnvelopeV2({
+      plaintext: sk,
+      secret: PIN,
+      secretSource: 'pin',
+      kdfParams: FAST_PARAMS,
+    });
+    seedSecret(accountId, {
+      accountId,
+      encryptedPrivateKey: '',
+      authMethod: 'pin',
+      version: 2,
+      blobs: [blob],
+    });
+
+    SessionKeyVault.set(PIN, 'pin');
+
+    // Simulate a lock landing DURING the first await inside tryDecryptV2Blobs
+    // (the device-id read): clearing the vault bumps the epoch, so the post-await
+    // re-check must abort before any key material is derived, returned, or cached.
+    jest
+      .spyOn(
+        AccountSecureStorage as unknown as {
+          getStableDeviceId: () => Promise<string>;
+        },
+        'getStableDeviceId'
+      )
+      .mockImplementation(async () => {
+        SessionKeyVault.clear();
+        return DEVICE_ID;
+      });
+
+    await expect(
+      AccountSecureStorage.getPrivateKey(accountId)
+    ).rejects.toBeInstanceOf(VaultLockedError);
+
+    // The lock took effect and nothing lingers unlocked.
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
   });
 });

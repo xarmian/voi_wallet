@@ -9,7 +9,7 @@ import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
-import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
+import { enterLockedState } from '@/services/secure/sessionTeardown';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
@@ -304,6 +304,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // for decryption (the device-key path handles it) — this establishes
         // the session secret the v2-blob path will use in PR4/PR5.
         SessionKeyVault.set(pin, 'pin');
+        // Flip the lock signal to UNLOCKED synchronously (mirrors lock()) so the
+        // messaging poll/cache-write guard resumes immediately, not only after
+        // the React effect below runs.
+        AppLockSignal.setUnlocked(true);
 
         const sessionId = SecurityUtils.generateSessionId();
         setAuthState((prev) => ({
@@ -340,6 +344,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // — the device-key path decrypts without one, so this is behavior-
         // preserving. When the convenience item ships, read the secret here and
         // call SessionKeyVault.set(secret, secretSource).
+        // Flip the lock signal to UNLOCKED synchronously (mirrors lock()).
+        AppLockSignal.setUnlocked(true);
+
         const sessionId = SecurityUtils.generateSessionId();
         setAuthState((prev) => ({
           ...prev,
@@ -360,6 +367,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const lock = () => {
+    // A no-PIN wallet cannot lock (the user could not unlock again), so it is
+    // left untouched — including its always-unlocked AppLockSignal.
+    if (authStateRef.current.hasPin) {
+      // FIRST action, synchronous, before the React state update: flip the lock
+      // signal to LOCKED and run the SINGLE session-security teardown for EVERY
+      // lock path (explicit, inactivity-timeout, background-grace all route
+      // here) — session vault (epoch bump, Codex P1-D), the legacy 60 s cache,
+      // and the ~30 min messaging cache (Codex P1-E). Doing this synchronously
+      // (not via the effect below) closes the post-lock re-cache race: an
+      // in-flight key derivation resolving during teardown sees the locked
+      // signal and refuses to repopulate the messaging cache.
+      enterLockedState();
+    }
+
     setAuthState((prev) => {
       // Don't lock if user hasn't set up a PIN - they won't be able to unlock
       if (!prev.hasPin) {
@@ -383,13 +404,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(backgroundTimer.current);
       backgroundTimer.current = undefined;
     }
-
-    // The SINGLE session-security teardown for EVERY lock path (explicit,
-    // inactivity-timeout, and background-grace all route through here): clear
-    // the session vault (bumping its epoch — Codex P1-D), the legacy 60 s
-    // plaintext-key cache, and the ~30 min messaging key cache (Codex P1-E).
-    // Idempotent; safe to run even when no PIN is set (all caches are empty).
-    clearSessionSecurity();
   };
 
   const setupPin = async (pin: string): Promise<void> => {

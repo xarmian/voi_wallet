@@ -21,9 +21,10 @@ jest.mock('../../messaging/keyDerivation', () => ({
   clearMessagingKeyCache: jest.fn(),
 }));
 
-import { clearSessionSecurity } from '../sessionTeardown';
+import { clearSessionSecurity, enterLockedState } from '../sessionTeardown';
 import { AccountSecureStorage } from '../AccountSecureStorage';
 import { SessionKeyVault } from '../SessionKeyVault';
+import { AppLockSignal } from '../appLockState';
 import { clearMessagingKeyCache } from '../../messaging/keyDerivation';
 
 describe('clearSessionSecurity', () => {
@@ -39,6 +40,35 @@ describe('clearSessionSecurity', () => {
     expect(cacheSpy).toHaveBeenCalledTimes(1);
     expect(clearMessagingKeyCache).toHaveBeenCalledTimes(1);
 
+    vaultSpy.mockRestore();
+    cacheSpy.mockRestore();
+  });
+});
+
+describe('enterLockedState (Codex P1-E: sync lock signal BEFORE teardown)', () => {
+  it('flips AppLockSignal to locked synchronously and BEFORE the cache teardown', () => {
+    AppLockSignal.setUnlocked(true);
+    const signalSpy = jest.spyOn(AppLockSignal, 'setUnlocked');
+    const vaultSpy = jest.spyOn(SessionKeyVault, 'clear');
+    const cacheSpy = jest
+      .spyOn(AccountSecureStorage, 'clearPrivateKeyCache')
+      .mockImplementation(() => {});
+
+    enterLockedState();
+
+    // The signal is now locked (set synchronously, not via a later effect)...
+    expect(AppLockSignal.isUnlocked()).toBe(false);
+    expect(signalSpy).toHaveBeenCalledWith(false);
+    // ...and it was flipped BEFORE the teardown ran (invocation order), so a
+    // racing derive that resolves during teardown already sees "locked".
+    expect(signalSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      vaultSpy.mock.invocationCallOrder[0]
+    );
+    expect(signalSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      (clearMessagingKeyCache as jest.Mock).mock.invocationCallOrder[0]
+    );
+
+    signalSpy.mockRestore();
     vaultSpy.mockRestore();
     cacheSpy.mockRestore();
   });

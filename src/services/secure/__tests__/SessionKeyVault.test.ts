@@ -53,7 +53,7 @@ describe('SessionKeyVault set / secret exposure', () => {
 });
 
 describe('SessionKeyVault getWrapKey (memoized scrypt)', () => {
-  it('runs scrypt at most ONCE per account and returns the memoized buffer', async () => {
+  it('runs scrypt at most ONCE per (account, salt) and returns the memoized buffer', async () => {
     SessionKeyVault.set('123456', 'pin');
 
     const k1 = await SessionKeyVault.getWrapKey('acct-1', SALT);
@@ -64,6 +64,20 @@ describe('SessionKeyVault getWrapKey (memoized scrypt)', () => {
 
     await SessionKeyVault.getWrapKey('acct-2', SALT);
     expect(mockDerive).toHaveBeenCalledTimes(2); // per-account derivation
+  });
+
+  it('memoizes per SALT too: the same account with a different salt derives again', async () => {
+    SessionKeyVault.set('123456', 'pin');
+    const otherSalt = 'cd'.repeat(32);
+
+    await SessionKeyVault.getWrapKey('acct-1', SALT);
+    await SessionKeyVault.getWrapKey('acct-1', SALT); // memoized
+    expect(mockDerive).toHaveBeenCalledTimes(1);
+
+    // A different blob salt for the SAME account (dual-slot) must derive its own
+    // wrap key, not collide on accountId.
+    await SessionKeyVault.getWrapKey('acct-1', otherSalt);
+    expect(mockDerive).toHaveBeenCalledTimes(2);
   });
 
   it('throws VaultLockedError (and never derives) when locked', async () => {
