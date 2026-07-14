@@ -554,11 +554,20 @@ export class AccountSecureStorage {
         // Format A because this branch is never entered). Security anchor: every
         // accepted result MUST pass the envelope MAC — a wrong key cannot forge
         // it, so the ladder simply falls through.
+        // When a vault-derived v2 unwrap SUCCEEDS, `v2VaultEpoch` is armed with
+        // the epoch captured at unwrap time so EVERY later await — including
+        // updateLastAccessed below — can re-check it. It stays -1 (guard is a
+        // no-op) for an explicit-pin read, when no v2 blob matched, or when the
+        // key came from the vault-independent device-key fallback (candidate 2),
+        // so Format-A behavior is unchanged.
+        let v2VaultEpoch = -1;
         if (
           Array.isArray(parsed.blobs) &&
           parsed.blobs.length > 0 &&
           (pin !== undefined || SessionKeyVault.isUnlocked())
         ) {
+          const usedVault = pin === undefined;
+          const unwrapEpoch = usedVault ? SessionKeyVault.currentEpoch() : -1;
           // A VaultLockedError propagating out of here means a lock
           // (clear/rotate) landed mid-derivation (Codex P1-D): ABORT the whole
           // read — do NOT fall through and cache a device key under a session
@@ -569,6 +578,11 @@ export class AccountSecureStorage {
             parsed.blobs,
             pin
           );
+          // Arm the final-await guard only if the key actually came from the
+          // vault v2 path (not a Format-A fallthrough below).
+          if (usedVault && privateKey) {
+            v2VaultEpoch = unwrapEpoch;
+          }
         }
 
         // Candidates 2 & 3 (unchanged) — Format A (device key), then Format C
@@ -597,6 +611,18 @@ export class AccountSecureStorage {
         }
 
         await this.updateLastAccessed(accountId);
+
+        // Epoch guard (Codex P1-D), final await: a lock during
+        // updateLastAccessed clears the caches, so re-check BEFORE re-populating
+        // the 60 s cache. If the vault-derived read straddled a lock, zero the
+        // key and abort rather than caching/returning post-lock material.
+        if (
+          v2VaultEpoch !== -1 &&
+          SessionKeyVault.currentEpoch() !== v2VaultEpoch
+        ) {
+          privateKey.fill(0);
+          throw new VaultLockedError();
+        }
 
         // Cache the key for subsequent calls (60-second TTL)
         this.privateKeyCache.set(cacheKey, {

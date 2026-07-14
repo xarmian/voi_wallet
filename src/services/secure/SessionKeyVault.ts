@@ -62,8 +62,13 @@ class SessionKeyVaultImpl {
   private secret: string | null = null;
   /** UX hint mirroring the unlocking secret's kind. */
   private secretSource: SecretSource = 'pin';
-  /** Memoized deriveWrapKey() outputs keyed by accountId (the R2 cache). */
+  /** Memoized deriveWrapKey() outputs keyed by (accountId, salt) — the R2
+   *  cache. */
   private readonly wrapKeys: Map<string, Uint8Array> = new Map();
+  /** In-flight scrypt derivations keyed by (accountId, salt), so concurrent
+   *  first calls coalesce onto ONE scrypt (single-flight). */
+  private readonly pendingWrapKeys: Map<string, Promise<Uint8Array>> =
+    new Map();
   /** Monotonic epoch; bumped on every set / rotate / clear (Codex P1-D). */
   private epoch = 0;
 
@@ -118,16 +123,19 @@ class SessionKeyVaultImpl {
   }
 
   /**
-   * Lazily derive (and memoize) the per-account at-rest wrap key via scrypt.
-   * scrypt runs at most once per account per session; subsequent calls return
-   * the memoized buffer. The returned buffer is OWNED by the vault — callers
-   * MUST treat it as read-only and MUST NOT zero it (the vault zeroes it on
-   * clear/rotate).
+   * Lazily derive (and memoize) the per-account/salt at-rest wrap key via
+   * scrypt. scrypt runs at most ONCE per (account, salt) per session — even
+   * under concurrency (single-flight): the in-flight derivation PROMISE is
+   * cached, so concurrent first callers (e.g. batch signing right after unlock)
+   * await the same scrypt. Subsequent calls return the memoized buffer. The
+   * returned buffer is OWNED by the vault — callers MUST treat it as read-only
+   * and MUST NOT zero it (the vault zeroes it on clear/rotate).
    *
    * Epoch guard (Codex P1-D): the epoch is captured before the scrypt await; if
    * it changes during derivation (a concurrent set/rotate/clear — e.g. a lock),
    * the fresh key is zeroed, nothing is cached, and VaultLockedError is thrown so
-   * no post-lock key material is ever returned.
+   * no post-lock key material is ever returned. On any error the in-flight entry
+   * is dropped so a later call can retry.
    *
    * @throws VaultLockedError if locked at call time or if the epoch changed mid-derivation.
    */
@@ -150,34 +158,45 @@ class SessionKeyVaultImpl {
       return memoized;
     }
 
+    // Single-flight: join an in-flight derivation for the same (account, salt).
+    const pending = this.pendingWrapKeys.get(cacheKey);
+    if (pending) {
+      return pending;
+    }
+
     const startEpoch = this.epoch;
     const kdfParams = options?.kdfParams ?? AT_REST_KDF_PARAMS;
-    const derived = await deriveWrapKey(
-      secret,
-      saltHex,
-      kdfParams,
-      options?.deviceSecret
-    );
-
-    // Epoch guard: the session that requested this key no longer exists.
-    if (this.epoch !== startEpoch) {
-      derived.fill(0);
-      throw new VaultLockedError(
-        'SessionKeyVault epoch changed during derivation'
+    const derivePromise = (async (): Promise<Uint8Array> => {
+      const derived = await deriveWrapKey(
+        secret,
+        saltHex,
+        kdfParams,
+        options?.deviceSecret
       );
-    }
 
-    // A concurrent call for the same (account, salt) may have populated the memo
-    // while we were deriving; prefer the existing entry and drop our duplicate
-    // so the cache holds exactly one buffer per (account, salt).
-    const raced = this.wrapKeys.get(cacheKey);
-    if (raced) {
-      derived.fill(0);
-      return raced;
-    }
+      // Epoch guard: the session that requested this key no longer exists.
+      if (this.epoch !== startEpoch) {
+        derived.fill(0);
+        throw new VaultLockedError(
+          'SessionKeyVault epoch changed during derivation'
+        );
+      }
 
-    this.wrapKeys.set(cacheKey, derived);
-    return derived;
+      this.wrapKeys.set(cacheKey, derived);
+      return derived;
+    })();
+
+    this.pendingWrapKeys.set(cacheKey, derivePromise);
+    try {
+      return await derivePromise;
+    } finally {
+      // Drop the in-flight entry (success OR error) so a failed derive can be
+      // retried and the map never holds a stale/rejected promise. Guard on
+      // identity so a clear()+set() that started a NEW derivation isn't evicted.
+      if (this.pendingWrapKeys.get(cacheKey) === derivePromise) {
+        this.pendingWrapKeys.delete(cacheKey);
+      }
+    }
   }
 
   /**
@@ -196,10 +215,14 @@ class SessionKeyVaultImpl {
     return `${accountId}|${saltHex}`;
   }
 
-  /** Zero and drop every memoized wrap key (defense-in-depth scrub). */
+  /** Zero and drop every memoized wrap key (defense-in-depth scrub), and drop
+   *  references to any in-flight derivations from the prior epoch — they still
+   *  self-abort via the epoch guard when they resolve, and dropping them here
+   *  prevents a post-clear caller from joining a now-stale derivation. */
   private zeroWrapKeys(): void {
     this.wrapKeys.forEach((key) => key.fill(0));
     this.wrapKeys.clear();
+    this.pendingWrapKeys.clear();
   }
 }
 

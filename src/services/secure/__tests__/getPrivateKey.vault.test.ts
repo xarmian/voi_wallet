@@ -315,4 +315,47 @@ describe('getPrivateKey — v2 vault path aborts on a mid-flight lock (Codex P1-
     // The lock took effect and nothing lingers unlocked.
     expect(SessionKeyVault.isUnlocked()).toBe(false);
   });
+
+  it('throws VaultLockedError when the lock lands during the updateLastAccessed await (final await guard)', async () => {
+    const sk = fakeKey(64);
+    const accountId = 'acct-v2-abort-lastaccessed';
+    const blob = await encryptKeyEnvelopeV2({
+      plaintext: sk,
+      secret: PIN,
+      secretSource: 'pin',
+      kdfParams: FAST_PARAMS,
+    });
+    seedSecret(accountId, {
+      accountId,
+      encryptedPrivateKey: '',
+      authMethod: 'pin',
+      version: 2,
+      blobs: [blob],
+    });
+
+    SessionKeyVault.set(PIN, 'pin');
+
+    // The v2 unwrap SUCCEEDS; the lock lands during the LAST await
+    // (updateLastAccessed), after which the key must NOT be cached or returned.
+    jest
+      .spyOn(
+        AccountSecureStorage as unknown as {
+          updateLastAccessed: (id: string) => Promise<void>;
+        },
+        'updateLastAccessed'
+      )
+      .mockImplementation(async () => {
+        SessionKeyVault.clear();
+      });
+
+    await expect(
+      AccountSecureStorage.getPrivateKey(accountId)
+    ).rejects.toBeInstanceOf(VaultLockedError);
+
+    // The read aborted before caching: re-reading (still locked) fails rather
+    // than returning a stale cached key.
+    await expect(
+      AccountSecureStorage.getPrivateKey(accountId)
+    ).rejects.toBeTruthy();
+  });
 });

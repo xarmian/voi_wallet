@@ -87,6 +87,35 @@ describe('SessionKeyVault getWrapKey (memoized scrypt)', () => {
     ).rejects.toBeInstanceOf(VaultLockedError);
     expect(mockDerive).not.toHaveBeenCalled();
   });
+
+  it('is single-flight: concurrent first calls for the same (account, salt) run scrypt ONCE', async () => {
+    SessionKeyVault.set('123456', 'pin');
+
+    // Hold the derivation open so BOTH calls are in-flight before it resolves.
+    const derived = nonZeroKey(5);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockDerive.mockImplementationOnce(async () => {
+      await gate;
+      return derived;
+    });
+
+    const p1 = SessionKeyVault.getWrapKey('acct', SALT);
+    const p2 = SessionKeyVault.getWrapKey('acct', SALT); // joins the in-flight derive
+    release();
+
+    const [k1, k2] = await Promise.all([p1, p2]);
+
+    expect(mockDerive).toHaveBeenCalledTimes(1); // scrypt ran once
+    expect(k1).toBe(k2); // both resolve to the same memoized buffer
+
+    // A later call hits the resolved memo (still one derivation).
+    const k3 = await SessionKeyVault.getWrapKey('acct', SALT);
+    expect(k3).toBe(k1);
+    expect(mockDerive).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('SessionKeyVault clear (zeroes buffers + bumps epoch)', () => {
