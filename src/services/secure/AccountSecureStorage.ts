@@ -1571,27 +1571,43 @@ export class AccountSecureStorage {
 
   /**
    * After a secret change commits, resync the biometric-convenience item with
-   * the NEW secret (DOC-137 §3 / §5.3). If biometrics is disabled, no-op. If the
-   * refresh WRITE fails or is cancelled (e.g. the Android write-time biometric
-   * prompt is declined), DISABLE biometrics — clear the item AND the flag — so a
-   * stale OLD-secret convenience item NEVER survives a PIN change; the user
-   * re-enables biometrics afterward. Swallows all errors so it can run safely
-   * AFTER the PIN-hash commit without misreporting the PIN change. Never logs
-   * the secret.
+   * the NEW secret (DOC-137 §3 / §5.3).
+   *
+   * GATE ON THE CONVENIENCE ITEM (the source of truth), NOT `isBiometricEnabled()`
+   * (Codex P2-followup): the enabled-flag read returns `false` on a transient
+   * storage-read failure, which would make this a NO-OP and let a STALE OLD-secret
+   * item survive (later readable => a biometric unlock loads the OLD PIN). So we
+   * probe the ITEM instead and FAIL SAFE on any read error:
+   *   - item present  -> refresh it with the new secret; on write failure, clear
+   *                      the item + disable biometrics (no stale secret survives);
+   *   - item null      -> nothing stale to handle (no-op);
+   *   - read THROWS / undeterminable -> FAIL SAFE: best-effort clear the item +
+   *                      disable biometrics, so a stale OLD-secret item can NEVER
+   *                      survive a PIN change even under flaky storage reads.
+   *
+   * Swallows all errors so it can run AFTER the PIN-hash commit without rolling
+   * back or misreporting the (successful) PIN change. Never logs the secret.
    */
   private static async refreshBiometricSecretAfterSecretChange(
     newSecret: string,
     secretSource: SecretSource
   ): Promise<void> {
-    let biometricEnabled = false;
+    let existing: { secret: string; secretSource: SecretSource } | null;
     try {
-      biometricEnabled = await this.isBiometricEnabled();
+      existing = await this.getBiometricSecret('Update biometric unlock');
     } catch {
+      // Read couldn't be determined (flaky storage / declined auth). FAIL SAFE:
+      // never let a possibly-stale old-secret item survive a PIN change.
+      await this.clearBiometricSecret();
+      await this.setBiometricEnabled(false).catch(() => {});
       return;
     }
-    if (!biometricEnabled) {
+
+    if (existing === null) {
+      // No convenience item — nothing stale to handle.
       return;
     }
+
     try {
       await this.setBiometricSecret(
         newSecret,

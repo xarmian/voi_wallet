@@ -327,11 +327,12 @@ describe('changePin resyncs the biometric-convenience item + vault (Codex P2)', 
     expect(await AccountSecureStorage.getBiometricSecret('x')).toBeNull();
   });
 
-  it('does NOT touch the convenience item when biometrics is disabled', async () => {
+  it('no-ops when there is NO convenience item (item read returns null)', async () => {
     jest
       .spyOn(AccountSecureStorage, 'verifyPin')
       .mockResolvedValue(true as unknown as boolean);
-    // Biometrics disabled (flag absent).
+    // Gate is the ITEM, not the flag: with no item present, getBiometricSecret
+    // returns null and the refresh is a no-op — nothing stale to handle.
     mockPlatform.secureStorage.setItemWithAuth.mockClear();
     mockPlatform.secureStorage.deleteItem.mockClear();
 
@@ -342,6 +343,34 @@ describe('changePin resyncs the biometric-convenience item + vault (Codex P2)', 
       BIOMETRIC_SECRET_KEY
     );
     expect(await AccountSecureStorage.getBiometricSecret('x')).toBeNull();
+  });
+
+  it('FAIL-SAFE: item-read failure during changePin clears the item + disables biometrics — no stale secret survives, changePin still resolves', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    mockPlatform.__kv.set(BIOMETRIC_ENABLED_KEY, 'true');
+    // A stale OLD-secret item is present...
+    await AccountSecureStorage.setBiometricSecret('111111', 'pin', 'x');
+
+    // ...but the item read (getItemWithAuth) throws during changePin — the gate
+    // cannot be determined. Fail-safe MUST clear it rather than skip.
+    mockPlatform.secureStorage.getItemWithAuth.mockImplementationOnce(
+      async () => {
+        throw new Error('flaky keychain read');
+      }
+    );
+
+    await expect(
+      AccountSecureStorage.changePin('111111', '222222')
+    ).resolves.toBeUndefined();
+
+    // No stale OLD-secret item survives even though the read failed.
+    expect(mockPlatform.secureStorage.deleteItem).toHaveBeenCalledWith(
+      BIOMETRIC_SECRET_KEY
+    );
+    expect(mockPlatform.__secure.has(BIOMETRIC_SECRET_KEY)).toBe(false);
+    expect(mockPlatform.__kv.get(BIOMETRIC_ENABLED_KEY)).toBe('false');
   });
 
   it('rotates the SessionKeyVault to the new secret when the session is unlocked', async () => {
