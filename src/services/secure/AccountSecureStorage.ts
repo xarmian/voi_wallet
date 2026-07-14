@@ -1544,10 +1544,66 @@ export class AccountSecureStorage {
 
       await this.persistPinHash(hashedNewPin, salt);
       this.legacyCheckRequired = false;
+
+      // COMMIT POINT passed — the new PIN hash is persisted. Keep the biometric-
+      // convenience item and the live session in sync with the NEW secret
+      // (DOC-137 §5.3 / Codex P2). Without this, a biometric unlock after a PIN
+      // change would load the OLD PIN into the vault — harmless for Format-A
+      // keys today, but a real break once PR4 wraps v2 keys under the new PIN.
+      // changePin here handles PINs only, so secretSource is 'pin'. This never
+      // throws (it disables biometrics on a failed refresh) so a post-commit
+      // failure can't misreport the (successful) PIN change.
+      await this.refreshBiometricSecretAfterSecretChange(newPin, 'pin');
+
+      // Rotate the live session so an unlocked session holds the new secret
+      // WITHOUT re-locking (SessionKeyVault.rotate, PR3). Only when currently
+      // unlocked — a locked session has nothing to rotate and will populate the
+      // vault fresh on its next unlock.
+      if (SessionKeyVault.isUnlocked()) {
+        SessionKeyVault.rotate(newPin, 'pin');
+      }
     } catch (error) {
       throw new AccountStorageError(
         `Failed to change PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
+    }
+  }
+
+  /**
+   * After a secret change commits, resync the biometric-convenience item with
+   * the NEW secret (DOC-137 §3 / §5.3). If biometrics is disabled, no-op. If the
+   * refresh WRITE fails or is cancelled (e.g. the Android write-time biometric
+   * prompt is declined), DISABLE biometrics — clear the item AND the flag — so a
+   * stale OLD-secret convenience item NEVER survives a PIN change; the user
+   * re-enables biometrics afterward. Swallows all errors so it can run safely
+   * AFTER the PIN-hash commit without misreporting the PIN change. Never logs
+   * the secret.
+   */
+  private static async refreshBiometricSecretAfterSecretChange(
+    newSecret: string,
+    secretSource: SecretSource
+  ): Promise<void> {
+    let biometricEnabled = false;
+    try {
+      biometricEnabled = await this.isBiometricEnabled();
+    } catch {
+      return;
+    }
+    if (!biometricEnabled) {
+      return;
+    }
+    try {
+      await this.setBiometricSecret(
+        newSecret,
+        secretSource,
+        'Update biometric unlock'
+      );
+    } catch {
+      // Refresh failed/cancelled — never leave the OLD secret behind. Disable
+      // biometrics (item + flag) so nothing stale survives; re-enable re-writes
+      // the item under the new secret.
+      await this.clearBiometricSecret();
+      await this.setBiometricEnabled(false).catch(() => {});
     }
   }
 

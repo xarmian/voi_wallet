@@ -83,6 +83,7 @@ import 'crypto-js/pbkdf2';
 import { createHash, randomBytes } from 'crypto';
 import * as platform from '@/platform';
 import { AccountSecureStorage } from '../AccountSecureStorage';
+import { SessionKeyVault } from '../SessionKeyVault';
 
 const DEVICE_ID = 'bio-conv-test-device-idfv';
 const BIOMETRIC_SECRET_KEY = 'voi_biometric_secret';
@@ -162,6 +163,12 @@ function seedSecret(accountId: string, payload: object): void {
 beforeEach(() => {
   mockPlatform.__reset();
   AccountSecureStorage.clearPrivateKeyCache();
+  SessionKeyVault.clear();
+});
+
+afterEach(() => {
+  SessionKeyVault.clear();
+  jest.restoreAllMocks();
 });
 
 describe('setBiometricSecret (DOC-137 §3.2/§3.3)', () => {
@@ -266,5 +273,103 @@ describe('clearAll drops the biometric-convenience item', () => {
       BIOMETRIC_SECRET_KEY
     );
     expect(mockPlatform.__secure.has(BIOMETRIC_SECRET_KEY)).toBe(false);
+  });
+});
+
+describe('changePin resyncs the biometric-convenience item + vault (Codex P2)', () => {
+  it('refreshes the convenience item to the NEW secret when biometrics enabled', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    mockPlatform.__kv.set(BIOMETRIC_ENABLED_KEY, 'true');
+    // Old convenience item wrapped the OLD PIN.
+    await AccountSecureStorage.setBiometricSecret('111111', 'pin', 'x');
+
+    await AccountSecureStorage.changePin('111111', '222222');
+
+    // The convenience item now yields the NEW secret — so a later biometric
+    // unlock loads the new PIN into the vault (required once PR4 v2 keys are
+    // wrapped under the new PIN).
+    const out = await AccountSecureStorage.getBiometricSecret('x');
+    expect(out).toEqual({ secret: '222222', secretSource: 'pin' });
+    // It went back through the write-time auth gate.
+    expect(mockPlatform.secureStorage.setItemWithAuth).toHaveBeenCalledWith(
+      BIOMETRIC_SECRET_KEY,
+      JSON.stringify({ secret: '222222', secretSource: 'pin' }),
+      { prompt: 'Update biometric unlock' }
+    );
+    // Biometrics stays enabled.
+    expect(mockPlatform.__kv.get(BIOMETRIC_ENABLED_KEY)).toBe('true');
+  });
+
+  it('DISABLES biometrics (clears item + flag) when the refresh write fails — no stale secret', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    mockPlatform.__kv.set(BIOMETRIC_ENABLED_KEY, 'true');
+    await AccountSecureStorage.setBiometricSecret('111111', 'pin', 'x');
+
+    // The changePin refresh write (the NEXT setItemWithAuth call) fails/cancels.
+    mockPlatform.secureStorage.setItemWithAuth.mockImplementationOnce(
+      async () => {
+        throw new Error('write-time biometric prompt cancelled');
+      }
+    );
+
+    // changePin itself still succeeds (the refresh never throws upward).
+    await expect(
+      AccountSecureStorage.changePin('111111', '222222')
+    ).resolves.toBeUndefined();
+
+    // No stale OLD-secret item survives, and biometrics is disabled.
+    expect(mockPlatform.__secure.has(BIOMETRIC_SECRET_KEY)).toBe(false);
+    expect(mockPlatform.__kv.get(BIOMETRIC_ENABLED_KEY)).toBe('false');
+    expect(await AccountSecureStorage.getBiometricSecret('x')).toBeNull();
+  });
+
+  it('does NOT touch the convenience item when biometrics is disabled', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    // Biometrics disabled (flag absent).
+    mockPlatform.secureStorage.setItemWithAuth.mockClear();
+    mockPlatform.secureStorage.deleteItem.mockClear();
+
+    await AccountSecureStorage.changePin('111111', '222222');
+
+    expect(mockPlatform.secureStorage.setItemWithAuth).not.toHaveBeenCalled();
+    expect(mockPlatform.secureStorage.deleteItem).not.toHaveBeenCalledWith(
+      BIOMETRIC_SECRET_KEY
+    );
+    expect(await AccountSecureStorage.getBiometricSecret('x')).toBeNull();
+  });
+
+  it('rotates the SessionKeyVault to the new secret when the session is unlocked', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    // Simulate a live, unlocked session holding the OLD secret.
+    SessionKeyVault.set('111111', 'pin');
+    const rotateSpy = jest.spyOn(SessionKeyVault, 'rotate');
+
+    await AccountSecureStorage.changePin('111111', '222222');
+
+    expect(rotateSpy).toHaveBeenCalledWith('222222', 'pin');
+    // The live session now holds the new secret WITHOUT re-locking.
+    expect(SessionKeyVault.isUnlocked()).toBe(true);
+    expect(SessionKeyVault.getSecret()).toBe('222222');
+  });
+
+  it('does NOT rotate the vault when the session is locked', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    const rotateSpy = jest.spyOn(SessionKeyVault, 'rotate');
+
+    await AccountSecureStorage.changePin('111111', '222222');
+
+    expect(rotateSpy).not.toHaveBeenCalled();
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
   });
 });
