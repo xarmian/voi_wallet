@@ -30,6 +30,21 @@ export interface SecureStorageAdapter {
     key: string,
     options: { prompt: string }
   ): Promise<string | null>;
+
+  /**
+   * Store a value behind a MANDATORY device-auth gate (biometric/passcode),
+   * provisioning the access-control flag AT WRITE time (DOC-137 §2.5). This is
+   * enclave-bound and OS-invalidated on biometric-enrollment change / lock
+   * removal, so it MUST be used ONLY for the biometric-convenience item (§3) —
+   * never for items that must survive enrollment changes (PIN hash, salt, key
+   * envelope, metadata). Fixes the write-time-ACL bug where auth was requested
+   * only on read of an item never provisioned auth-required.
+   */
+  setItemWithAuth?(
+    key: string,
+    value: string,
+    options: { prompt: string }
+  ): Promise<void>;
 }
 
 // General Storage Adapter Interface (AsyncStorage replacement)

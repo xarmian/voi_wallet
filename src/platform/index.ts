@@ -183,6 +183,21 @@ export const secureStorage = {
     }
     return adapter.getItem(key);
   },
+  // Write-time auth-gated store (DOC-137 §2.5). No safe fallback: a plain
+  // setItem would defeat the enclave gate, so platforms without support reject.
+  setItemWithAuth: (
+    key: string,
+    value: string,
+    options: { prompt: string }
+  ): Promise<void> => {
+    const adapter = getSecureStorage();
+    if (adapter.setItemWithAuth) {
+      return adapter.setItemWithAuth(key, value, options);
+    }
+    return Promise.reject(
+      new Error('setItemWithAuth is not supported on this platform')
+    );
+  },
 };
 
 /**

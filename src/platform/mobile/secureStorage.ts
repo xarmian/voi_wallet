@@ -36,6 +36,27 @@ export class MobileSecureStorageAdapter implements SecureStorageAdapter {
       authenticationPrompt: options.prompt,
     });
   }
+
+  /**
+   * Store a value behind a mandatory device-auth gate, provisioning the
+   * access-control flag AT WRITE time (DOC-137 §2.5). Requesting
+   * `requireAuthentication` on the WRITE is what actually enclave-binds the
+   * item (the prior code only requested auth on read, which enclave-bound
+   * nothing — the write-time-ACL bug). Reserved for the biometric-convenience
+   * item ONLY; the resulting item is intentionally OS-invalidated on
+   * enrollment change / lock removal.
+   */
+  async setItemWithAuth(
+    key: string,
+    value: string,
+    options: { prompt: string }
+  ): Promise<void> {
+    await SecureStore.setItemAsync(key, value, {
+      ...SECURE_STORE_OPTIONS,
+      requireAuthentication: true,
+      authenticationPrompt: options.prompt,
+    });
+  }
 }
 
 // Singleton instance

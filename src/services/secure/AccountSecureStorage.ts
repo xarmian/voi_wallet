@@ -40,6 +40,7 @@ import {
   MAX_KEY_BLOBS,
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
+import type { SecretSource } from './SessionKeyVault';
 import { SECURITY_CONFIG } from '../../config/security';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +163,10 @@ export class AccountSecureStorage {
   private static readonly PIN_KEY = 'voi_wallet_pin';
   private static readonly SALT_KEY = 'voi_wallet_salt';
   private static readonly BIOMETRIC_ENABLED_KEY = 'voi_biometric_enabled';
+  // The biometric-convenience item (DOC-137 §3.2). Written via setItemWithAuth
+  // (auth-gated, enclave-bound, OS-invalidated on enrollment change) — the ONLY
+  // item in the app that uses setItemWithAuth.
+  private static readonly BIOMETRIC_SECRET_KEY = 'voi_biometric_secret';
   private static readonly DEVICE_ID_KEY = 'voi_device_installation_id';
   private static readonly PIN_TIMEOUT_KEY = 'voi_pin_timeout_setting';
   private static readonly PIN_THROTTLE_KEY = 'voi_pin_throttle';
@@ -485,36 +490,34 @@ export class AccountSecureStorage {
             );
           }
         } else {
+          // BIOMETRIC / no-PIN read path (DOC-137 §3.3, PR6). The KEY ENVELOPE is
+          // read with PLAIN getItem — NEVER getItemWithAuth. The prior
+          // getItemWithAuth-on-the-envelope call was the write-time-ACL bug: the
+          // envelope is written with plain setItem, so requesting auth only at
+          // read enclave-bound NOTHING — it was a UI prompt, not a hardware gate.
+          // The biometric gate now lives on the biometric-convenience item, which
+          // AuthContext reads with getItemWithAuth at unlock to populate the
+          // SessionKeyVault. getPrivateKey is a pure reader: for Format-A payloads
+          // the device key decrypts regardless of vault state, so this is
+          // behavior-preserving. A no-biometric wallet that still has a PIN keeps
+          // requiring the PIN (the throw below) rather than reading ambiently.
           const biometricEnabled = await this.isBiometricEnabled();
 
-          if (biometricEnabled) {
-            try {
-              secretPayloadRaw = await secureStorage.getItemWithAuth(
-                this.secretKey(accountId),
-                { prompt: 'Authenticate to access private key' }
-              );
-            } catch (error) {
-              throw new AuthenticationRequiredError(
-                'Biometric authentication failed or was cancelled'
-              );
-            }
-          } else {
+          if (!biometricEnabled) {
             const hasPin = await this.hasPin();
             if (hasPin) {
               throw new AuthenticationRequiredError(
                 'PIN required to access private key'
               );
             }
+          }
 
-            try {
-              secretPayloadRaw = await secureStorage.getItem(
-                this.secretKey(accountId)
-              );
-            } catch (error) {
-              throw new AccountRetrievalError(
-                'Failed to retrieve account data'
-              );
-            }
+          try {
+            secretPayloadRaw = await secureStorage.getItem(
+              this.secretKey(accountId)
+            );
+          } catch (error) {
+            throw new AccountRetrievalError('Failed to retrieve account data');
           }
         }
 
@@ -1541,11 +1544,111 @@ export class AccountSecureStorage {
 
       await this.persistPinHash(hashedNewPin, salt);
       this.legacyCheckRequired = false;
+
+      // COMMIT POINT passed — the new PIN hash is persisted. Keep the biometric-
+      // convenience item and the live session in sync with the NEW secret
+      // (DOC-137 §5.3 / Codex P2). Without this, a biometric unlock after a PIN
+      // change would load the OLD PIN into the vault — harmless for Format-A
+      // keys today, but a real break once PR4 wraps v2 keys under the new PIN.
+      // changePin here handles PINs only, so secretSource is 'pin'. This never
+      // throws (it disables biometrics on a failed refresh) so a post-commit
+      // failure can't misreport the (successful) PIN change.
+      await this.refreshBiometricSecretAfterSecretChange(newPin, 'pin');
+
+      // Rotate the live session so an unlocked session holds the new secret
+      // WITHOUT re-locking (SessionKeyVault.rotate, PR3). Only when currently
+      // unlocked — a locked session has nothing to rotate and will populate the
+      // vault fresh on its next unlock.
+      if (SessionKeyVault.isUnlocked()) {
+        SessionKeyVault.rotate(newPin, 'pin');
+      }
     } catch (error) {
       throw new AccountStorageError(
         `Failed to change PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * After a secret change commits, resync the biometric-convenience item with
+   * the NEW secret (DOC-137 §3 / §5.3).
+   *
+   * GATE ON THE CONVENIENCE ITEM (the source of truth), NOT `isBiometricEnabled()`
+   * (Codex P2-followup): the enabled-flag read returns `false` on a transient
+   * storage-read failure, which would make this a NO-OP and let a STALE OLD-secret
+   * item survive (later readable => a biometric unlock loads the OLD PIN). So we
+   * probe the ITEM instead and FAIL SAFE on any read error:
+   *   - item present  -> refresh it with the new secret; on write failure, clear
+   *                      the item + disable biometrics (no stale secret survives);
+   *   - item null      -> nothing stale to handle (no-op);
+   *   - read THROWS / undeterminable -> FAIL SAFE: best-effort clear the item +
+   *                      disable biometrics, so a stale OLD-secret item can NEVER
+   *                      survive a PIN change even under flaky storage reads.
+   *
+   * Swallows all errors so it can run AFTER the PIN-hash commit without rolling
+   * back or misreporting the (successful) PIN change. Never logs the secret.
+   */
+  private static async refreshBiometricSecretAfterSecretChange(
+    newSecret: string,
+    secretSource: SecretSource
+  ): Promise<void> {
+    let existing: { secret: string; secretSource: SecretSource } | null;
+    try {
+      existing = await this.getBiometricSecret('Update biometric unlock');
+    } catch {
+      // Read couldn't be determined (flaky storage / declined auth). FAIL SAFE:
+      // never let a possibly-stale old-secret item survive a PIN change.
+      await this.failSafeDisableBiometrics();
+      return;
+    }
+
+    if (existing === null) {
+      // No convenience item — nothing stale to handle.
+      return;
+    }
+
+    try {
+      await this.setBiometricSecret(
+        newSecret,
+        secretSource,
+        'Update biometric unlock'
+      );
+    } catch {
+      // Refresh write failed/cancelled — never leave the OLD secret usable.
+      await this.failSafeDisableBiometrics();
+    }
+  }
+
+  /**
+   * Fail-safe teardown: make a surviving biometric-convenience item INERT.
+   *
+   * BOUNDARY (Codex P1): the enabled-FLAG is the READ GATE — a stale convenience
+   * item is only dangerous if it is READ, and it is read ONLY when biometrics is
+   * ENABLED (biometric unlock gates on the persisted flag via
+   * `unlockVaultWithBiometrics`). So flipping the flag to `false` is the PRIMARY,
+   * AWAITED protection; deleting the item is best-effort cleanup that may fail
+   * (a SecureStore op) WITHOUT weakening the guarantee. The enabled-flag is
+   * AsyncStorage-backed (separate from the failing SecureStore item), so this
+   * write typically succeeds even when the item op does not. We deliberately do
+   * NOT chase the delete — a cascade of storage failures is a device-broken
+   * condition out of scope.
+   *
+   * If even the flag write fails (total storage failure), the WORST case is a
+   * failed biometric unlock that falls back to PIN — the new PIN always works —
+   * NEVER a security bypass or mnemonic-recovery event. (Even if a stale
+   * old-PIN secret were somehow loaded, a v2 unwrap under it would MAC-fail → the
+   * op errors → PIN fallback.) Swallows all errors so it never rolls back the
+   * already-committed PIN change. Never logs the secret.
+   */
+  private static async failSafeDisableBiometrics(): Promise<void> {
+    try {
+      // PRIMARY (awaited): flip the read gate off. This is the reliable guard.
+      await this.setBiometricEnabled(false);
+    } catch {
+      // Total-storage-failure / device-broken — out of scope (see boundary note).
+    }
+    // Best-effort cleanup of the now-inert item; may fail without consequence.
+    await this.clearBiometricSecret().catch(() => {});
   }
 
   static async deletePin(): Promise<void> {
@@ -1589,6 +1692,114 @@ export class AccountSecureStorage {
     } catch (error) {
       return false;
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BIOMETRIC-CONVENIENCE ITEM (DOC-137 §3). READ BEFORE CHANGING.
+  //
+  // THREAT-MODEL TRADEOFF — this deliberately stores the RAW user secret (the
+  // PIN or passphrase) as `{ secret, secretSource }`. This is NOT an unencrypted
+  // write: the value is (a) platform-encrypted (Keychain / Keystore) and (b)
+  // written via `setItemWithAuth`, so it is enclave-bound behind a MANDATORY
+  // device-auth (biometric/passcode) gate — the OS refuses to return it without
+  // a fresh biometric prompt, and INVALIDATES it on any biometric-enrollment
+  // change / lock removal. We store the secret (not the derived wrap key) so the
+  // biometric path feeds the EXACT SAME scrypt-unwrap as manual entry (one code
+  // path to audit) and so a PIN/passphrase change re-writes only this one item.
+  // The residual exposure — a raw secret sits app-layer-plaintext inside that
+  // encrypted, auth-gated item, and JS strings cannot be reliably wiped — is an
+  // ACCEPTED, documented tradeoff (§0/§3.2, Q7), gated on the enclave.
+  //
+  // Because this item is OS-invalidated on enrollment change, it may NEVER be
+  // the sole custodian of key material: the key at rest stays wrapped by the
+  // user-secret scrypt envelope written with PLAIN setItem, which survives all
+  // enrollment events. Losing this item only forces PIN/passphrase re-entry —
+  // NEVER the mnemonic (THE INVARIANT, §3.4).
+  //
+  // NEVER log the secret or secretSource. This section, `setItemWithAuth`, and
+  // the mobile adapter are the entire blast radius of the auth-gated write.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Persist the biometric-convenience secret behind the write-time auth gate
+   * (DOC-137 §3.3, "Enable"). Provisions the enclave ACL AT WRITE via
+   * `setItemWithAuth`, so the item can only be read back after a fresh biometric
+   * prompt. Biometrics never captures a secret it was not explicitly given —
+   * the caller (AuthContext.enableBiometrics / onboarding) supplies it.
+   */
+  static async setBiometricSecret(
+    secret: string,
+    secretSource: SecretSource,
+    prompt: string
+  ): Promise<void> {
+    if (typeof secureStorage.setItemWithAuth !== 'function') {
+      throw new AccountStorageError(
+        'Auth-gated secure storage is not supported on this platform'
+      );
+    }
+    try {
+      const payload = JSON.stringify({ secret, secretSource });
+      await secureStorage.setItemWithAuth(this.BIOMETRIC_SECRET_KEY, payload, {
+        prompt,
+      });
+    } catch {
+      // Never surface the secret in the error.
+      throw new AccountStorageError('Failed to store biometric secret');
+    }
+  }
+
+  /**
+   * Read the biometric-convenience secret behind the OS biometric gate (DOC-137
+   * §3.3, "Biometric unlock"). The `getItemWithAuth` read IS the biometric
+   * prompt.
+   *
+   * Return contract mirrors expo-secure-store's documented `getItemAsync`:
+   *   - resolves the parsed `{ secret, secretSource }` on success;
+   *   - resolves `null` when the item is ABSENT or has been INVALIDATED
+   *     (biometric-enrollment change / lock removal) — the caller treats this as
+   *     the invalidation case (§3.4: clear the enabled flag, fall back to PIN,
+   *     NEVER the mnemonic), and a structurally corrupt item is coerced to null
+   *     for the same safe handling;
+   *   - THROWS only when the OS auth itself fails or the user cancels — the
+   *     caller must treat a throw as a cancel (keep biometrics enabled), NOT as
+   *     an invalidation.
+   */
+  static async getBiometricSecret(
+    prompt: string
+  ): Promise<{ secret: string; secretSource: SecretSource } | null> {
+    if (typeof secureStorage.getItemWithAuth !== 'function') {
+      return null;
+    }
+    // A throw here propagates to the caller (cancel / auth failure).
+    const raw = await secureStorage.getItemWithAuth(this.BIOMETRIC_SECRET_KEY, {
+      prompt,
+    });
+    if (raw === null) {
+      // Absent or invalidated by an enrollment change — NOT a throw.
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as {
+        secret?: unknown;
+        secretSource?: unknown;
+      };
+      if (
+        typeof parsed.secret === 'string' &&
+        (parsed.secretSource === 'pin' || parsed.secretSource === 'passphrase')
+      ) {
+        return { secret: parsed.secret, secretSource: parsed.secretSource };
+      }
+    } catch {
+      // Corrupt item — fall through to null (safe: treated as invalidation).
+    }
+    return null;
+  }
+
+  /**
+   * Delete the biometric-convenience secret (on disable / reset). Best-effort.
+   */
+  static async clearBiometricSecret(): Promise<void> {
+    await secureStorage.deleteItem(this.BIOMETRIC_SECRET_KEY).catch(() => {});
   }
 
   // PIN Timeout Settings
@@ -1789,6 +2000,8 @@ export class AccountSecureStorage {
         secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),
         secureStorage.deleteItem(this.SALT_KEY).catch(() => {}),
         secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
+        // Drop the auth-gated biometric-convenience secret on a full wipe.
+        secureStorage.deleteItem(this.BIOMETRIC_SECRET_KEY).catch(() => {}),
         secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
         secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
       ]);
