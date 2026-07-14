@@ -279,12 +279,49 @@ function useFastWriter(): void {
     );
 }
 
+/** Persist a folded PIN credential directly (skips the rewrap flow). */
+async function seedCredential(pin: string): Promise<void> {
+  const salt = 'a'.repeat(64);
+  await asPriv.persistPinCredential({
+    hash: asPriv.hashPin(pin, salt, PIN_ITERATIONS),
+    iterations: PIN_ITERATIONS,
+    salt,
+    secretSource: 'pin',
+  });
+}
+
+/** Minimal STANDARD account metadata for storeAccount. */
+function makeStandardMeta(
+  id: string,
+  k: ReturnType<typeof makeAlgoKey>
+): StandardAccountMetadata {
+  return {
+    id,
+    address: k.address,
+    publicKey: hex(k.pubkey),
+    type: AccountType.STANDARD,
+    label: '',
+    color: '#000000',
+    isHidden: false,
+    createdAt: new Date().toISOString(),
+    lastUsed: new Date().toISOString(),
+    mnemonic: '',
+    hasBackup: false,
+  };
+}
+
 beforeEach(() => {
   mockPlatform.__reset();
   AccountSecureStorage.clearPrivateKeyCache();
   SessionKeyVault.clear();
   asPriv.throttleMirror = null;
   asPriv.legacyCheckRequired = undefined;
+  // clearMocks clears CALLS but not IMPLEMENTATIONS, so restore the default
+  // passthrough for any test that overrode secureStorage.getItem (the clobber
+  // test) — otherwise the override would leak into later tests.
+  mockPlatform.secureStorage.getItem.mockImplementation(async (k: string) =>
+    mockPlatform.__secure.has(k) ? mockPlatform.__secure.get(k)! : null
+  );
 });
 
 afterEach(() => {
@@ -554,9 +591,24 @@ describe('changePin crash-injection — verify-before-delete, never strands (§4
     expect(await AccountSecureStorage.verifyPin('222222')).toBe(true);
     expect(await AccountSecureStorage.verifyPin('111111')).toBe(false);
     await assertReadable('222222', { 'acct-a': a, 'acct-b': b });
-    // Cleanup didn't run, so the account still carries the (now inert) old blob
-    // alongside the new one — but it remains readable under the new secret.
-    expect(readPayload('acct-a').blobs!.length).toBeGreaterThanOrEqual(1);
+
+    // Cleanup (phase 5) was skipped, so the account still carries BOTH copies:
+    // the OLD blob (kept through commit — Codex P2-5) and the proven NEW blob.
+    // This proves old readable copies survive until the post-commit cleanup.
+    const blobs = readPayload('acct-a').blobs!;
+    expect(blobs).toHaveLength(2);
+    const oldDecrypts = await decryptKeyEnvelopeV2(
+      blobs[0],
+      '111111',
+      DEVICE_ID
+    );
+    const newDecrypts = await decryptKeyEnvelopeV2(
+      blobs[1],
+      '222222',
+      DEVICE_ID
+    );
+    expect(oldDecrypts && hex(oldDecrypts)).toBe(hex(a.sk)); // OLD copy present
+    expect(newDecrypts && hex(newDecrypts)).toBe(hex(a.sk)); // NEW copy present
   }, 20000);
 });
 
@@ -602,61 +654,153 @@ describe('deletePin policy (§5.5)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('global key-mutation mutex (P1-B) — storeAccount vs changePin', () => {
-  it('serializes a concurrent store + change so the new account is never stranded', async () => {
+describe('storeAccount ALWAYS writes Format-A (Codex P1-2)', () => {
+  it('writes a device-key (Format A) blob, NEVER v2 — even with a PIN set + vault unlocked', async () => {
+    await seedCredential('111111');
+    SessionKeyVault.set('111111', 'pin'); // pre-Codex, this would trigger a v2 write
+    const k = makeAlgoKey();
+
+    await AccountSecureStorage.storeAccount(
+      makeStandardMeta('acct-fa', k),
+      k.sk
+    );
+
+    const p = readPayload('acct-fa');
+    expect(p.blobs).toBeUndefined(); // NO v2 blob without a changePin/setupPin
+    expect(p.version).toBeUndefined();
+    expect(p.encryptedPrivateKey.split(':')).toHaveLength(4); // 4-colon Format A
+    // Device-readable regardless of PIN/vault.
+    const out = await AccountSecureStorage.getPrivateKey('acct-fa', '111111');
+    expect(hex(out)).toBe(hex(k.sk));
+  }, 20000);
+});
+
+describe('global key-mutation mutex (P1-B / P1-1a) — writers serialize with rewrap', () => {
+  it('a Format-A account stored concurrently with changePin is NOT lost (device-readable, rewrapped on enumerate)', async () => {
     useFastWriter();
     const existing = makeAlgoKey();
     await seedV2('acct-existing', existing.sk, '111111');
-    await asPriv.persistPinCredential({
-      hash: asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
-      iterations: PIN_ITERATIONS,
-      salt: 'a'.repeat(64),
-      secretSource: 'pin',
-    });
-    // Unlocked session holding the OLD secret (so storeAccount writes v2).
+    await seedCredential('111111');
     SessionKeyVault.set('111111', 'pin');
 
     const fresh = makeAlgoKey();
-    const newAccount: StandardAccountMetadata = {
-      id: 'acct-new',
-      address: fresh.address,
-      publicKey: hex(fresh.pubkey),
-      type: AccountType.STANDARD,
-      label: '',
-      color: '#000000',
-      isHidden: false,
-      createdAt: new Date().toISOString(),
-      lastUsed: new Date().toISOString(),
-      mnemonic: '',
-      hasBackup: false,
-    };
-
-    // Fire BOTH concurrently. The global mutex must serialize them so the new
-    // account is either included in the change's enumeration (wrapped NEW) or
-    // stored after the vault rotates to NEW — never wrapped under OLD and left
-    // behind by the committed new credential.
+    // Fire BOTH concurrently. The global mutex serializes them: the store (now
+    // always Format-A) runs either fully before the change's enumeration (→ it
+    // is re-wrapped to v2 under NEW) or fully after the commit (→ it stays
+    // Format-A, device-readable). Either way the key is never lost.
     await Promise.all([
       AccountSecureStorage.changePin('111111', '222222'),
-      AccountSecureStorage.storeAccount(newAccount, fresh.sk),
+      AccountSecureStorage.storeAccount(
+        makeStandardMeta('acct-new', fresh),
+        fresh.sk
+      ),
     ]);
 
-    // Credential is NEW.
     expect(await AccountSecureStorage.verifyPin('222222')).toBe(true);
     expect(await AccountSecureStorage.verifyPin('111111')).toBe(false);
 
-    // BOTH accounts are readable under the NEW secret — the new one is NOT
-    // stranded under the old secret.
-    const existingOut = await AccountSecureStorage.getPrivateKey(
-      'acct-existing',
-      '222222'
-    );
-    expect(hex(existingOut)).toBe(hex(existing.sk));
-    const newOut = await AccountSecureStorage.getPrivateKey(
-      'acct-new',
-      '222222'
-    );
-    expect(hex(newOut)).toBe(hex(fresh.sk));
+    // Both accounts readable under the NEW secret (getPrivateKey falls back to
+    // the device key for a still-Format-A new account after verifying the PIN).
+    expect(
+      hex(await AccountSecureStorage.getPrivateKey('acct-existing', '222222'))
+    ).toBe(hex(existing.sk));
+    expect(
+      hex(await AccountSecureStorage.getPrivateKey('acct-new', '222222'))
+    ).toBe(hex(fresh.sk));
   }, 20000);
+
+  it('a concurrent deleteAccount + changePin serialize cleanly; remaining account intact', async () => {
+    useFastWriter();
+    const a = makeAlgoKey();
+    const b = makeAlgoKey();
+    await seedV2('acct-a', a.sk, '111111');
+    await seedV2('acct-b', b.sk, '111111');
+    await seedCredential('111111');
+
+    // deleteAccount (a secret writer) must go through the mutex, so it can't
+    // interleave with the rewrap enumeration+commit.
+    await Promise.all([
+      AccountSecureStorage.changePin('111111', '222222'),
+      AccountSecureStorage.deleteAccount('acct-b'),
+    ]);
+
+    expect(await AccountSecureStorage.verifyPin('222222')).toBe(true);
+    // acct-a survived and is readable under NEW; acct-b is gone.
+    expect(
+      hex(await AccountSecureStorage.getPrivateKey('acct-a', '222222'))
+    ).toBe(hex(a.sk));
+    expect(mockPlatform.__secure.has(secretKey('acct-b'))).toBe(false);
+  }, 20000);
+
+  it('two concurrent changePins do NOT clobber each other (verify-inside-mutex, Codex P1-3)', async () => {
+    useFastWriter();
+    const a = makeAlgoKey();
+    await seedV2('acct-a', a.sk, '111111');
+    await seedCredential('111111');
+
+    // Both verify OLD; without verify-inside-mutex both would pass and clobber.
+    // With it, the 2nd acquires the lock only AFTER the 1st commits, so its
+    // verifyPin against the now-NEW credential fails.
+    const [r1, r2] = await Promise.allSettled([
+      AccountSecureStorage.changePin('111111', '222222'),
+      AccountSecureStorage.changePin('111111', '333333'),
+    ]);
+    const fulfilled = [r1, r2].filter((r) => r.status === 'fulfilled');
+    const rejected = [r1, r2].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      message: expect.stringMatching(/Current PIN is incorrect/),
+    });
+
+    // The first changePin (acquires the lock first) wins → 222222.
+    expect(await AccountSecureStorage.verifyPin('222222')).toBe(true);
+    expect(
+      hex(await AccountSecureStorage.getPrivateKey('acct-a', '222222'))
+    ).toBe(hex(a.sk));
+  }, 20000);
+
+  it('re-read-before-commit catches a clobbered persisted new blob → aborts, no strand (Codex P1-1b)', async () => {
+    useFastWriter();
+    const a = makeAlgoKey();
+    await seedV2('acct-a', a.sk, '111111');
+    await seedCredential('111111');
+
+    // Simulate a clobber/torn write: during changePin, every read of the account
+    // secret returns the OLD (pre-append) payload, so phase-3's re-read never
+    // sees the new blob it just wrote → verification aborts BEFORE the commit.
+    const oldRaw = mockPlatform.__secure.get(secretKey('acct-a'))!;
+    mockPlatform.secureStorage.getItem.mockImplementation(async (k: string) => {
+      if (k === secretKey('acct-a')) return oldRaw;
+      return mockPlatform.__secure.has(k)
+        ? mockPlatform.__secure.get(k)!
+        : null;
+    });
+
+    await expect(
+      AccountSecureStorage.changePin('111111', '222222')
+    ).rejects.toThrow();
+
+    // Restore normal reads and confirm NO strand: OLD credential still verifies,
+    // account still readable under OLD.
+    mockPlatform.secureStorage.getItem.mockImplementation(async (k: string) =>
+      mockPlatform.__secure.has(k) ? mockPlatform.__secure.get(k)! : null
+    );
+    expect(await AccountSecureStorage.verifyPin('111111')).toBe(true);
+    expect(
+      hex(await AccountSecureStorage.getPrivateKey('acct-a', '111111'))
+    ).toBe(hex(a.sk));
+  }, 20000);
+});
+
+describe('passphrase credential rejected until PR7 (Codex P1-4)', () => {
+  it('setupPin with secretSource=passphrase throws (verifyPin cannot unlock it yet)', async () => {
+    await expect(
+      AccountSecureStorage.setupPin('correct horse battery', 'passphrase')
+    ).rejects.toThrow(/not supported yet|PR7/i);
+    // No credential was created.
+    expect(await AccountSecureStorage.hasPin()).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
