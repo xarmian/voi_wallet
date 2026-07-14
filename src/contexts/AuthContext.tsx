@@ -9,6 +9,8 @@ import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
+import type { SecretSource } from '@/services/secure/SessionKeyVault';
+import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 import { enterLockedState } from '@/services/secure/sessionTeardown';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
@@ -33,25 +35,6 @@ const checkBiometricAvailability = async (): Promise<{
   }
 };
 
-// Helper to authenticate with biometrics (web-safe)
-const authenticateWithBiometrics = async (
-  promptMessage: string
-): Promise<{ success: boolean }> => {
-  if (Platform.OS === 'web') {
-    return { success: false };
-  }
-  try {
-    const LocalAuthentication = require('expo-local-authentication');
-    return await LocalAuthentication.authenticateAsync({
-      promptMessage,
-      fallbackLabel: 'Use PIN',
-      cancelLabel: 'Cancel',
-    });
-  } catch {
-    return { success: false };
-  }
-};
-
 export interface AuthState {
   isLocked: boolean;
   isAuthenticated: boolean;
@@ -70,7 +53,7 @@ export interface AuthContextType {
   lock: () => void;
   updateActivity: () => void;
   setupPin: (pin: string) => Promise<void>;
-  enableBiometrics: (enabled: boolean) => Promise<void>;
+  enableBiometrics: (enabled: boolean, secret?: string) => Promise<void>;
   recheckAuthState: () => Promise<void>;
   updateTimeoutSetting: () => Promise<void>;
 }
@@ -334,17 +317,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
-      const result = await authenticateWithBiometrics('Unlock your wallet');
+      // Read the biometric-convenience secret behind the OS biometric gate and,
+      // on success, populate the SessionKeyVault (DOC-137 §3.3, PR6). The single
+      // getItemWithAuth inside is BOTH the biometric prompt AND the
+      // vault-populating read — no separate LocalAuthentication prompt (that
+      // would double-prompt). This is THE fix that makes a biometric-unlocked
+      // session hold the vault secret, so future v2 keys read under pin=undefined
+      // (prerequisite for PR4).
+      const outcome = await unlockVaultWithBiometrics('Unlock your wallet');
 
-      if (result.success) {
-        // NOTE (DOC-137 §3.3, PR3): the biometric-convenience secret item that
-        // yields the user secret on biometric unlock lands in a later PR (the
-        // writer/biometric milestone). Until then biometric unlock has no user
-        // secret to populate the vault with, and — since keys are still Format A
-        // — the device-key path decrypts without one, so this is behavior-
-        // preserving. When the convenience item ships, read the secret here and
-        // call SessionKeyVault.set(secret, secretSource).
-        // Flip the lock signal to UNLOCKED synchronously (mirrors lock()).
+      if (outcome.status === 'unlocked') {
+        // Flip the lock signal to UNLOCKED synchronously (mirrors the PIN path
+        // and lock()) so the messaging poll/cache-write guard resumes at once.
         AppLockSignal.setUnlocked(true);
 
         const sessionId = SecurityUtils.generateSessionId();
@@ -359,6 +343,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return true;
       }
 
+      if (outcome.status === 'invalidated') {
+        // THE INVARIANT (DOC-137 §3.4): a biometric / enrollment-change
+        // invalidation NEVER requires the mnemonic. The convenience item is gone
+        // and its enabled flag has already been cleared in storage; reflect that
+        // in React state so the LockScreen stops prompting biometrics and the
+        // user falls back to PIN/passphrase entry — never the mnemonic.
+        setAuthState((prev) => ({ ...prev, biometricEnabled: false }));
+      }
+
+      // 'cancelled' (user cancelled / OS auth failed) or 'invalidated': not
+      // unlocked. Biometrics stays enabled on a cancel so the user can retry.
       return false;
     } catch (error) {
       console.error('Failed to unlock with biometrics:', error);
@@ -418,7 +413,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
-  const enableBiometrics = async (enabled: boolean): Promise<void> => {
+  const enableBiometrics = async (
+    enabled: boolean,
+    secret?: string
+  ): Promise<void> => {
     if (enabled) {
       const { hasHardware, isEnrolled } = await checkBiometricAvailability();
 
@@ -427,9 +425,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'Biometric authentication not available or not enrolled'
         );
       }
+
+      // Enable flow (DOC-137 §3.3): capture the user secret behind the write-time
+      // auth gate, then set the enabled flag. Biometrics NEVER captures a secret
+      // it was not explicitly given: use an explicitly-supplied secret (verified
+      // here) or the secret the user already entered to unlock THIS session (the
+      // SessionKeyVault, populated + verified at unlock). A key-bearing wallet
+      // with no available secret refuses rather than storing nothing.
+      const hasPin = await AccountSecureStorage.hasPin();
+      if (hasPin) {
+        let secretToStore = secret;
+        let source: SecretSource = 'pin';
+
+        if (secretToStore != null) {
+          const ok = await AccountSecureStorage.verifyPin(secretToStore);
+          if (!ok) {
+            throw new Error('Incorrect PIN');
+          }
+        } else {
+          // The session secret is already verified (it unlocked this session).
+          secretToStore = SessionKeyVault.getSecret() ?? undefined;
+          source = SessionKeyVault.getSecretSource();
+          if (secretToStore == null) {
+            throw new Error(
+              'Unlock with your PIN before enabling biometric unlock'
+            );
+          }
+        }
+
+        await AccountSecureStorage.setBiometricSecret(
+          secretToStore,
+          source,
+          'Enable biometric unlock'
+        );
+      }
+
+      await AccountSecureStorage.setBiometricEnabled(true);
+    } else {
+      // Disable: drop the auth-gated convenience secret, then clear the flag.
+      await AccountSecureStorage.clearBiometricSecret();
+      await AccountSecureStorage.setBiometricEnabled(false);
     }
 
-    await AccountSecureStorage.setBiometricEnabled(enabled);
     setAuthState((prev) => ({
       ...prev,
       biometricEnabled: enabled,

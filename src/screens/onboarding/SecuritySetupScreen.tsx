@@ -107,9 +107,29 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       setSetupStep('Setting up PIN...');
       await AccountSecureStorage.storePin(pin);
 
-      // Store biometric preference
+      // Store biometric preference. When the user opts into biometrics at
+      // onboarding, capture the just-set PIN behind the write-time auth gate
+      // (DOC-137 §3.3) so the biometric-convenience item exists on first launch
+      // and biometric unlock can populate the session vault — otherwise the very
+      // first biometric unlock would find no item and fall back to PIN. The
+      // convenience write is best-effort: if it fails (e.g. the OS auth is
+      // cancelled at write), biometrics is left disabled and onboarding proceeds.
       setSetupStep('Configuring security...');
-      await AccountSecureStorage.setBiometricEnabled(biometricEnabled);
+      if (biometricEnabled) {
+        try {
+          await AccountSecureStorage.setBiometricSecret(
+            pin,
+            'pin',
+            'Enable biometric unlock'
+          );
+          await AccountSecureStorage.setBiometricEnabled(true);
+        } catch {
+          console.warn('Failed to enable biometric convenience during setup');
+          await AccountSecureStorage.setBiometricEnabled(false);
+        }
+      } else {
+        await AccountSecureStorage.setBiometricEnabled(false);
+      }
 
       // Handle different onboarding sources
       if ((source === 'create' || source === 'mnemonic') && mnemonic) {

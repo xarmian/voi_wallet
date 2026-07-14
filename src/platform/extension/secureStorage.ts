@@ -154,6 +154,22 @@ export class ExtensionSecureStorageAdapter implements SecureStorageAdapter {
     // WebAuthn would be handled at a higher level in the auth flow
     return this.getItem(key);
   }
+
+  /**
+   * Not supported on the extension: there is no hardware-backed auth-gated store
+   * to provision (DOC-137 §2.5). The interface member is optional, so callers
+   * that need a write-time auth gate must feature-detect and fall back. The
+   * biometric-convenience item (the sole consumer) is a mobile-only feature.
+   */
+  async setItemWithAuth(
+    _key: string,
+    _value: string,
+    _options: { prompt: string }
+  ): Promise<void> {
+    throw new Error(
+      'setItemWithAuth is not supported on the extension platform'
+    );
+  }
 }
 
 // Singleton instance
