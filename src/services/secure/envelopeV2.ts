@@ -552,3 +552,55 @@ export async function decryptKeyEnvelopeV2(
     wipeWordArray(decryptedWA);
   }
 }
+
+/**
+ * Trial-decrypt a KeyEnvelopeV2 using a PRE-DERIVED 32-byte wrap key — e.g. the
+ * SessionKeyVault's memoized `getWrapKey` output (DOC-137 §6.4). This is the
+ * scrypt-free half of the reader: the caller (the vault) already paid the
+ * memory-hard cost once per account/salt, so per-signature reads only run the
+ * cheap MAC-verify + AES-CTR unwrap.
+ *
+ * Returns the exact wrapped key bytes on success, or `null` when the MAC does
+ * not verify (wrong wrap key / tampered header). THROWS only on a structurally
+ * invalid envelope or out-of-cap KDF params.
+ *
+ * CRITICAL: does NOT zero `wrapKey` — that buffer is OWNED by the vault (memoized
+ * and reused across reads; the vault zeroes it on clear/rotate). Only the
+ * derived AES/HMAC WordArrays created here are scrubbed.
+ */
+export async function decryptKeyEnvelopeV2WithWrapKey(
+  envelope: KeyEnvelopeV2,
+  wrapKey: Uint8Array
+): Promise<Uint8Array | null> {
+  // Structural + param-cap validation BEFORE any crypto work.
+  assertValidKeyEnvelopeV2(envelope);
+
+  let aesKeyWA: CryptoJS.lib.WordArray | null = null;
+  let hmacKeyWA: CryptoJS.lib.WordArray | null = null;
+  let decryptedWA: CryptoJS.lib.WordArray | null = null;
+
+  try {
+    ({ aesKeyWA, hmacKeyWA } = keyMaterialFromWrapKey(wrapKey));
+
+    const aad = canonicalAtRestAad(envelope);
+    const computedMac = CryptoJS.HmacSHA256(
+      aad + envelope.ct,
+      hmacKeyWA
+    ).toString();
+    if (!constantTimeEqualHex(computedMac, envelope.mac)) {
+      return null; // wrong wrap key / tampered header -> fall through
+    }
+
+    decryptedWA = CryptoJS.AES.decrypt(envelope.ct, aesKeyWA, {
+      iv: CryptoJS.enc.Hex.parse(envelope.iv),
+      mode: CryptoJS.mode.CTR,
+      padding: CryptoJS.pad.NoPadding,
+    });
+    return wordArrayToUint8Array(decryptedWA);
+  } finally {
+    // NOTE: `wrapKey` is intentionally NOT zeroed (vault-owned).
+    wipeWordArray(aesKeyWA);
+    wipeWordArray(hmacKeyWA);
+    wipeWordArray(decryptedWA);
+  }
+}

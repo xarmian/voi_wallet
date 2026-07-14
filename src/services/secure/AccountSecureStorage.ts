@@ -36,8 +36,10 @@ import {
 import {
   KeyEnvelopeV2,
   decryptKeyEnvelopeV2,
+  decryptKeyEnvelopeV2WithWrapKey,
   MAX_KEY_BLOBS,
 } from './envelopeV2';
+import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import { SECURITY_CONFIG } from '../../config/security';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -537,13 +539,50 @@ export class AccountSecureStorage {
 
         let privateKey: Uint8Array | undefined;
 
-        // Candidate 1 (v2 blobs) — tried FIRST when a verified user secret is
-        // available. INERT today: no production writer emits blobs yet, so every
-        // existing payload (no `blobs`) skips this and behaves exactly as before.
-        // Security anchor: every accepted result MUST pass the envelope MAC — a
-        // wrong secret cannot forge it, so the ladder simply falls through.
-        if (pin && Array.isArray(parsed.blobs) && parsed.blobs.length > 0) {
-          privateKey = await this.tryDecryptV2Blobs(parsed.blobs, pin);
+        // Candidate 1 (v2 blobs) — tried FIRST when a user secret is available,
+        // in one of two modes (DOC-137 §6.4):
+        //   - explicit `pin` (step-up re-auth): decrypt directly under that
+        //     secret (its own scrypt), independent of the vault.
+        //   - no pin + unlocked vault: derive the per-blob wrap key via the
+        //     memoized, epoch-guarded SessionKeyVault.getWrapKey — the
+        //     load-bearing path that lets the ~14 `pin=undefined` callers keep
+        //     working once keys become v2 (PR4/PR5).
+        // INERT today: no production writer emits blobs yet, so every existing
+        // payload (no `blobs`) skips this and behaves exactly as before —
+        // decryption falls through to the Format A / C candidates below EXACTLY
+        // as today (device-key path retained; a locked vault does NOT throw for
+        // Format A because this branch is never entered). Security anchor: every
+        // accepted result MUST pass the envelope MAC — a wrong key cannot forge
+        // it, so the ladder simply falls through.
+        // When a vault-derived v2 unwrap SUCCEEDS, `v2VaultEpoch` is armed with
+        // the epoch captured at unwrap time so EVERY later await — including
+        // updateLastAccessed below — can re-check it. It stays -1 (guard is a
+        // no-op) for an explicit-pin read, when no v2 blob matched, or when the
+        // key came from the vault-independent device-key fallback (candidate 2),
+        // so Format-A behavior is unchanged.
+        let v2VaultEpoch = -1;
+        if (
+          Array.isArray(parsed.blobs) &&
+          parsed.blobs.length > 0 &&
+          (pin !== undefined || SessionKeyVault.isUnlocked())
+        ) {
+          const usedVault = pin === undefined;
+          const unwrapEpoch = usedVault ? SessionKeyVault.currentEpoch() : -1;
+          // A VaultLockedError propagating out of here means a lock
+          // (clear/rotate) landed mid-derivation (Codex P1-D): ABORT the whole
+          // read — do NOT fall through and cache a device key under a session
+          // that no longer exists. tryDecryptV2Blobs re-checks the vault epoch
+          // after every await.
+          privateKey = await this.tryDecryptV2Blobs(
+            accountId,
+            parsed.blobs,
+            pin
+          );
+          // Arm the final-await guard only if the key actually came from the
+          // vault v2 path (not a Format-A fallthrough below).
+          if (usedVault && privateKey) {
+            v2VaultEpoch = unwrapEpoch;
+          }
         }
 
         // Candidates 2 & 3 (unchanged) — Format A (device key), then Format C
@@ -573,6 +612,18 @@ export class AccountSecureStorage {
 
         await this.updateLastAccessed(accountId);
 
+        // Epoch guard (Codex P1-D), final await: a lock during
+        // updateLastAccessed clears the caches, so re-check BEFORE re-populating
+        // the 60 s cache. If the vault-derived read straddled a lock, zero the
+        // key and abort rather than caching/returning post-lock material.
+        if (
+          v2VaultEpoch !== -1 &&
+          SessionKeyVault.currentEpoch() !== v2VaultEpoch
+        ) {
+          privateKey.fill(0);
+          throw new VaultLockedError();
+        }
+
         // Cache the key for subsequent calls (60-second TTL)
         this.privateKeyCache.set(cacheKey, {
           key: new Uint8Array(privateKey), // Store a copy
@@ -585,7 +636,10 @@ export class AccountSecureStorage {
           error instanceof AccountNotFoundError ||
           error instanceof AccountStorageError ||
           error instanceof AuthenticationRequiredError ||
-          error instanceof AccountRetrievalError
+          error instanceof AccountRetrievalError ||
+          // Vault locked mid-derivation (Codex P1-D): surface as-is so the caller
+          // re-auths rather than treating it as a generic retrieval failure.
+          error instanceof VaultLockedError
         ) {
           throw error;
         }
@@ -609,31 +663,78 @@ export class AccountSecureStorage {
   }
 
   /**
-   * Trial-decrypt the v2 blob candidates under a verified user secret
-   * (DOC-137 §4.3, candidate 1). Returns the first blob whose envelope MAC
-   * verifies, or `undefined` to fall through to the legacy formats.
+   * Trial-decrypt the v2 blob candidates (DOC-137 §4.3/§6.4, candidate 1).
+   * Returns the first blob whose envelope MAC verifies, or `undefined` to fall
+   * through to the legacy formats.
    *
-   * Only up to MAX_KEY_BLOBS blobs are attempted — each attempt runs a memory-
-   * hard scrypt, so capping the attempt count is itself a DoS guard. A wrong
-   * secret cannot forge the MAC, so a non-matching blob returns null and the
-   * ladder continues.
+   * Two modes:
+   *  - `explicitSecret` defined (step-up re-auth): decrypt each blob directly
+   *    under that secret (`decryptKeyEnvelopeV2` runs its own scrypt).
+   *  - `explicitSecret` undefined (session-vault path): derive the per-blob wrap
+   *    key via the memoized, epoch-guarded `SessionKeyVault.getWrapKey` so the
+   *    memory-hard scrypt runs at most once per (account, salt) per session, and
+   *    the cheap MAC-verify + AES-unwrap runs per read.
+   *
+   * Only up to MAX_KEY_BLOBS blobs are attempted (a DoS guard). A wrong key
+   * cannot forge the MAC, so a non-matching blob returns null and the ladder
+   * continues.
+   *
+   * EPOCH GUARD (Codex P1-D): in the vault path the vault epoch is captured
+   * before any await and RE-CHECKED after EVERY await (the device-id read, each
+   * getWrapKey scrypt — guarded inside getWrapKey — and each blob decrypt). If a
+   * lock (clear/rotate) bumps the epoch mid-flight, the freshly derived material
+   * is zeroed and `VaultLockedError` is thrown so no post-lock key material is
+   * ever returned or cached. `VaultLockedError` propagates (it is NOT swallowed
+   * as a "try next blob" error).
    */
   private static async tryDecryptV2Blobs(
+    accountId: string,
     blobs: KeyEnvelopeV2[],
-    secret: string
+    explicitSecret?: string
   ): Promise<Uint8Array | undefined> {
+    const useVault = explicitSecret === undefined;
+    const startEpoch = useVault ? SessionKeyVault.currentEpoch() : -1;
+
     const deviceSecret = await this.getStableDeviceId();
+    if (useVault && SessionKeyVault.currentEpoch() !== startEpoch) {
+      throw new VaultLockedError();
+    }
+
     for (const blob of blobs.slice(0, MAX_KEY_BLOBS)) {
       try {
-        const privateKey = await decryptKeyEnvelopeV2(
-          blob,
-          secret,
-          deviceSecret
-        );
+        let privateKey: Uint8Array | null;
+        if (explicitSecret !== undefined) {
+          privateKey = await decryptKeyEnvelopeV2(
+            blob,
+            explicitSecret,
+            deviceSecret
+          );
+        } else {
+          // getWrapKey memoizes per (account, salt) and throws VaultLockedError
+          // if its own scrypt straddles a lock.
+          const wrapKey = await SessionKeyVault.getWrapKey(
+            accountId,
+            blob.salt,
+            {
+              kdfParams: blob.kdfParams,
+              deviceSecret: blob.deviceBound ? deviceSecret : undefined,
+            }
+          );
+          privateKey = await decryptKeyEnvelopeV2WithWrapKey(blob, wrapKey);
+          // Re-check AFTER the decrypt await: a lock may have landed between
+          // getWrapKey returning and the unwrap completing.
+          if (SessionKeyVault.currentEpoch() !== startEpoch) {
+            privateKey?.fill(0);
+            throw new VaultLockedError();
+          }
+        }
         if (privateKey) {
           return privateKey;
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof VaultLockedError) {
+          throw error; // abort: do NOT fall through / cache post-lock material
+        }
         // Structurally invalid / out-of-cap blob — try the next candidate.
       }
     }

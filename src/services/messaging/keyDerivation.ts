@@ -14,6 +14,7 @@
 
 import nacl from 'tweetnacl';
 import { encodeBase64 } from 'tweetnacl-util';
+import { AppLockSignal } from '@/services/secure/appLockState';
 import {
   createMessagingChallenge,
   KDF_DOMAIN_DECRYPTION_KEY,
@@ -27,6 +28,31 @@ import {
  * For Ledger wallets: calls the hardware wallet to sign
  */
 export type SignFunction = (message: Uint8Array) => Promise<Uint8Array>;
+
+/**
+ * Cache a freshly derived messaging keypair — UNLESS the app is locked (Codex
+ * P1-E race fix). A derivation can START while unlocked and RESOLVE after a lock
+ * (its `getPrivateKey` scrypt straddled the lock, or the poll raced the lock),
+ * and repopulating the ~30 min cache then would let a locked device keep
+ * decrypting messages. When locked, the freshly derived secret is zeroed and the
+ * cache is left untouched; the returned keypair carries a zeroed secret and is
+ * therefore unusable while locked. When unlocked, this replaces any stale entry
+ * and caches the new keypair. This guards ALL derive paths (poll and direct
+ * thread-fetch) at the single point where the cache is written.
+ */
+function cacheKeyPairUnlessLocked(
+  accountAddress: string,
+  keyPair: MessagingKeyPair
+): MessagingKeyPair {
+  if (!AppLockSignal.isUnlocked()) {
+    keyPair.secretKey.fill(0);
+    return keyPair;
+  }
+  // Clear old cache entry if exists, then cache the new keypair.
+  clearCachedKey(accountAddress);
+  keyCache.set(accountAddress, keyPair);
+  return keyPair;
+}
 
 /**
  * In-memory cache for derived messaging keypairs.
@@ -122,13 +148,8 @@ export function deriveMessagingKeyPairFromSecret(
     derivedAt: now,
   };
 
-  // Clear old cache entry if exists
-  clearCachedKey(accountAddress);
-
-  // Cache the new keypair
-  keyCache.set(accountAddress, keyPair);
-
-  return keyPair;
+  // Cache the new keypair — unless the app locked while we derived (P1-E).
+  return cacheKeyPairUnlessLocked(accountAddress, keyPair);
 }
 
 /**
@@ -173,13 +194,8 @@ export async function deriveMessagingKeyPairWithSign(
     derivedAt: now,
   };
 
-  // Clear old cache entry if exists
-  clearCachedKey(accountAddress);
-
-  // Cache the new keypair
-  keyCache.set(accountAddress, keyPair);
-
-  return keyPair;
+  // Cache the new keypair — unless the app locked while we derived (P1-E).
+  return cacheKeyPairUnlessLocked(accountAddress, keyPair);
 }
 
 /**
@@ -226,6 +242,17 @@ export function clearAllCachedKeys(): void {
   for (const [address] of keyCache) {
     clearCachedKey(address);
   }
+}
+
+/**
+ * Clear the derived messaging key cache on session lock (DOC-137 §6.5 / Codex
+ * P1-E). Named entry point invoked by AuthContext.lock() (via
+ * `clearSessionSecurity`) so a locked device stops holding — and stops being
+ * able to decrypt with — the ~30 min-cached X25519 secret key. Zeroes every
+ * cached secret key. Idempotent.
+ */
+export function clearMessagingKeyCache(): void {
+  clearAllCachedKeys();
 }
 
 /**

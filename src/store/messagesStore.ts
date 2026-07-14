@@ -22,6 +22,7 @@ import {
 } from '@/services/messaging/types';
 import MessagingService from '@/services/messaging';
 import { computeSyncCursor } from '@/services/messaging/syncCursor';
+import { AppLockSignal } from '@/services/secure/appLockState';
 import { useFriendsStore } from './friendsStore';
 
 const STORAGE_KEY_PREFIX = '@messages/';
@@ -599,6 +600,15 @@ export const useMessagesStore = create<MessagesState>()(
      * Fetch all conversations from the blockchain
      */
     fetchAllThreads: async (userAddress, pin) => {
+      // Defer while the app is locked (DOC-137 §6.5 / Codex P1-E). This is the
+      // background poll path that reaches getPrivateKey; deriving the messaging
+      // key while locked would keep a locked device decrypting messages (and
+      // could pop a biometric prompt from the background). The next unlock
+      // re-triggers the poll, and fetchAllThreads drains from the durable sync
+      // cursor, so nothing is skipped.
+      if (!AppLockSignal.isUnlocked()) {
+        return;
+      }
       // Coalesce concurrent fetches for the same account so overlapping
       // bootstraps can't each commit a different window and skip the gap.
       if (inFlightThreadFetches.has(userAddress)) {
