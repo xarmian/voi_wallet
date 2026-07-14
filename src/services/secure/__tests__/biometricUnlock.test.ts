@@ -105,6 +105,7 @@ describe('unlockVaultWithBiometrics — success populates the vault', () => {
   });
 
   it('preserves a passphrase secretSource into the vault', async () => {
+    mockPlatform.__kv.set(BIOMETRIC_ENABLED_KEY, 'true');
     mockPlatform.__secure.set(
       BIOMETRIC_SECRET_KEY,
       JSON.stringify({
@@ -115,6 +116,28 @@ describe('unlockVaultWithBiometrics — success populates the vault', () => {
     const outcome = await unlockVaultWithBiometrics('Unlock');
     expect(outcome.status).toBe('unlocked');
     expect(SessionKeyVault.getSecretSource()).toBe('passphrase');
+  });
+});
+
+describe('unlockVaultWithBiometrics — gates on the PERSISTED enabled-flag (Codex P1)', () => {
+  it('when the persisted flag is false, does NOT read the convenience item and routes to PIN', async () => {
+    // A stale item is present, but the persisted flag is false (e.g. a changePin
+    // fail-safe disabled biometrics without updating in-memory React state).
+    mockPlatform.__secure.set(
+      BIOMETRIC_SECRET_KEY,
+      JSON.stringify({ secret: '111111', secretSource: 'pin' })
+    );
+    // Flag absent/false.
+    expect(mockPlatform.__kv.get(BIOMETRIC_ENABLED_KEY)).toBeUndefined();
+
+    const outcome = await unlockVaultWithBiometrics('Unlock your wallet');
+
+    // Routed to PIN (invalidated) WITHOUT reading the stale item.
+    expect(outcome).toEqual({ status: 'invalidated' });
+    expect(mockPlatform.secureStorage.getItemWithAuth).not.toHaveBeenCalled();
+    // The vault was NOT populated with the stale secret.
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    expect(SessionKeyVault.getSecret()).toBeNull();
   });
 });
 

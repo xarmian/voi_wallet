@@ -1598,8 +1598,7 @@ export class AccountSecureStorage {
     } catch {
       // Read couldn't be determined (flaky storage / declined auth). FAIL SAFE:
       // never let a possibly-stale old-secret item survive a PIN change.
-      await this.clearBiometricSecret();
-      await this.setBiometricEnabled(false).catch(() => {});
+      await this.failSafeDisableBiometrics();
       return;
     }
 
@@ -1615,12 +1614,41 @@ export class AccountSecureStorage {
         'Update biometric unlock'
       );
     } catch {
-      // Refresh failed/cancelled — never leave the OLD secret behind. Disable
-      // biometrics (item + flag) so nothing stale survives; re-enable re-writes
-      // the item under the new secret.
-      await this.clearBiometricSecret();
-      await this.setBiometricEnabled(false).catch(() => {});
+      // Refresh write failed/cancelled — never leave the OLD secret usable.
+      await this.failSafeDisableBiometrics();
     }
+  }
+
+  /**
+   * Fail-safe teardown: make a surviving biometric-convenience item INERT.
+   *
+   * BOUNDARY (Codex P1): the enabled-FLAG is the READ GATE — a stale convenience
+   * item is only dangerous if it is READ, and it is read ONLY when biometrics is
+   * ENABLED (biometric unlock gates on the persisted flag via
+   * `unlockVaultWithBiometrics`). So flipping the flag to `false` is the PRIMARY,
+   * AWAITED protection; deleting the item is best-effort cleanup that may fail
+   * (a SecureStore op) WITHOUT weakening the guarantee. The enabled-flag is
+   * AsyncStorage-backed (separate from the failing SecureStore item), so this
+   * write typically succeeds even when the item op does not. We deliberately do
+   * NOT chase the delete — a cascade of storage failures is a device-broken
+   * condition out of scope.
+   *
+   * If even the flag write fails (total storage failure), the WORST case is a
+   * failed biometric unlock that falls back to PIN — the new PIN always works —
+   * NEVER a security bypass or mnemonic-recovery event. (Even if a stale
+   * old-PIN secret were somehow loaded, a v2 unwrap under it would MAC-fail → the
+   * op errors → PIN fallback.) Swallows all errors so it never rolls back the
+   * already-committed PIN change. Never logs the secret.
+   */
+  private static async failSafeDisableBiometrics(): Promise<void> {
+    try {
+      // PRIMARY (awaited): flip the read gate off. This is the reliable guard.
+      await this.setBiometricEnabled(false);
+    } catch {
+      // Total-storage-failure / device-broken — out of scope (see boundary note).
+    }
+    // Best-effort cleanup of the now-inert item; may fail without consequence.
+    await this.clearBiometricSecret().catch(() => {});
   }
 
   static async deletePin(): Promise<void> {

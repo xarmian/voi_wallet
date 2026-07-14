@@ -373,6 +373,39 @@ describe('changePin resyncs the biometric-convenience item + vault (Codex P2)', 
     expect(mockPlatform.__kv.get(BIOMETRIC_ENABLED_KEY)).toBe('false');
   });
 
+  it('flag is the reliable gate: setBiometricEnabled(false) is awaited even if the cleanup delete rejects', async () => {
+    jest
+      .spyOn(AccountSecureStorage, 'verifyPin')
+      .mockResolvedValue(true as unknown as boolean);
+    mockPlatform.__kv.set(BIOMETRIC_ENABLED_KEY, 'true');
+    await AccountSecureStorage.setBiometricSecret('111111', 'pin', 'x');
+
+    // The refresh write fails (triggers the fail-safe)...
+    mockPlatform.secureStorage.setItemWithAuth.mockImplementationOnce(
+      async () => {
+        throw new Error('refresh write failed');
+      }
+    );
+    // ...and the best-effort cleanup delete ALSO fails hard.
+    const setEnabledSpy = jest.spyOn(
+      AccountSecureStorage,
+      'setBiometricEnabled'
+    );
+    jest
+      .spyOn(AccountSecureStorage, 'clearBiometricSecret')
+      .mockRejectedValue(new Error('delete rejected'));
+
+    // changePin still resolves — the fail-safe never rolls back the PIN change.
+    await expect(
+      AccountSecureStorage.changePin('111111', '222222')
+    ).resolves.toBeUndefined();
+
+    // Disabling the flag is the PRIMARY protection and lands even though the
+    // delete rejected: a surviving stale item is inert once the flag is false.
+    expect(setEnabledSpy).toHaveBeenCalledWith(false);
+    expect(mockPlatform.__kv.get(BIOMETRIC_ENABLED_KEY)).toBe('false');
+  });
+
   it('rotates the SessionKeyVault to the new secret when the session is unlocked', async () => {
     jest
       .spyOn(AccountSecureStorage, 'verifyPin')

@@ -52,6 +52,26 @@ export type BiometricUnlockOutcome =
 export async function unlockVaultWithBiometrics(
   prompt: string
 ): Promise<BiometricUnlockOutcome> {
+  // GATE on the PERSISTED enabled-flag BEFORE reading the auth-gated convenience
+  // item (Codex P1). The enabled-flag is the read gate for a stale item: a
+  // changePin fail-safe disables the PERSISTED flag but does NOT touch
+  // AuthContext's in-memory React state, so a stale item behind a false flag
+  // must never be read here. AuthContext also guards on its in-memory flag; this
+  // persisted check is the authoritative, defense-in-depth gate. If disabled,
+  // route to PIN WITHOUT reading the item (no biometric prompt for the item).
+  let enabled = false;
+  try {
+    enabled = await AccountSecureStorage.isBiometricEnabled();
+  } catch {
+    enabled = false;
+  }
+  if (!enabled) {
+    // Biometrics not (or no longer) enabled — fall back to PIN. Reported as
+    // 'invalidated' so the caller reflects the disabled state and routes to PIN;
+    // never the mnemonic (THE INVARIANT). No convenience item was read.
+    return { status: 'invalidated' };
+  }
+
   let bio: { secret: string; secretSource: 'pin' | 'passphrase' } | null;
   try {
     bio = await AccountSecureStorage.getBiometricSecret(prompt);
