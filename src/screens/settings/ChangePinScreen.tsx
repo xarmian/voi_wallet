@@ -165,8 +165,10 @@ export default function ChangePinScreen() {
       setIsSubmitting(true);
       try {
         if (isInitialSetup) {
-          // Initial PIN setup - use storePin
-          await AccountSecureStorage.storePin(newPin);
+          // Initial PIN setup - atomic first-secret rewrap (DOC-137 §5.4), which
+          // migrates any pre-existing device-key accounts to the PIN-wrapped v2
+          // envelope before committing the credential.
+          await AccountSecureStorage.setupPin(newPin, 'pin');
         } else {
           // Changing existing PIN - use changePin
           await AccountSecureStorage.changePin(currentPin, newPin);
