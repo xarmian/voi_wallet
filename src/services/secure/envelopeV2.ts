@@ -45,7 +45,7 @@ import 'crypto-js/mode-ctr';
 import 'crypto-js/pad-nopadding';
 import 'crypto-js/enc-hex';
 import 'crypto-js/enc-utf8';
-import { scryptAsync } from '@noble/hashes/scrypt';
+import { scryptRaw } from './scryptKdf';
 import { Buffer } from 'buffer';
 import { crypto as platformCrypto } from '@/platform';
 import type { ScryptKdfParams } from '../backup/types';
@@ -361,7 +361,9 @@ export async function deriveWrapKey(
 ): Promise<Uint8Array> {
   assertScryptParamsWithinCaps(kdfParams);
   const saltBytes = Uint8Array.from(Buffer.from(saltHex, 'hex'));
-  const rawKey = await scryptAsync(secret, saltBytes, {
+  // Native-first scrypt (byte-identical to @noble; falls back to @noble in
+  // jest/non-native). See scryptKdf.ts — this is the ~16s→~tens-of-ms fix.
+  const rawKey = await scryptRaw(secret, saltBytes, {
     N: kdfParams.N,
     r: kdfParams.r,
     p: kdfParams.p,

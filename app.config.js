@@ -145,6 +145,10 @@ export default {
         }
       ],
       "expo-secure-store",
+      // Native scrypt KDF (HT-138 fix). react-native-quick-crypto ships an Expo
+      // config plugin; it autolinks via Nitro. If `expo prebuild` errors on this
+      // line, remove it — the Nitro module still autolinks without the plugin.
+      "react-native-quick-crypto",
       withAndroidJvmTarget,
       withExpoModulesProguard,
     ]

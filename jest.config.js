@@ -6,6 +6,10 @@ module.exports = {
   moduleNameMapper: {
     // Mirror the tsconfig `@/*` path alias.
     '^@/(.*)$': '<rootDir>/src/$1',
+    // Native Nitro module — can't load under jest; force the mock (→ @noble
+    // fallback in scryptKdf) so local and CI behave identically.
+    '^react-native-quick-crypto$':
+      '<rootDir>/__mocks__/react-native-quick-crypto.js',
   },
   // jest-expo's default only allow-transpiles RN/Expo packages; several deps
   // these utils import ship as untranspiled ESM and must also be transformed.
