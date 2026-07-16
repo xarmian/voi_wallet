@@ -301,6 +301,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           lastActivity: Date.now(),
         }));
         updateActivity();
+        // Fire-and-forget post-unlock migration sweep (DOC-137 §4.5 trigger 2,
+        // PR5): upgrade idle device-key (Format A) accounts to the user-secret
+        // v2 wrap under the just-verified secret. Sequential + vault-fresh per
+        // account; NEVER blocks the unlock, all failures swallowed internally.
+        void AccountSecureStorage.migrateAllAccountsToV2();
         return true;
       }
 
@@ -340,6 +345,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           lastActivity: Date.now(),
         }));
         updateActivity();
+        // Fire-and-forget post-unlock migration sweep (DOC-137 §4.5 trigger 2,
+        // PR5): the vault was just populated from the biometric-convenience
+        // secret, so idle Format-A accounts can be upgraded to v2 under it. NEVER
+        // blocks the unlock; failures swallowed internally.
+        void AccountSecureStorage.migrateAllAccountsToV2();
         return true;
       }
 
