@@ -8,6 +8,7 @@ import {
   LedgerUserRejectedError,
   AccountType,
 } from '@/types/wallet';
+import { isSoftwareAuthError } from '@/services/secure/authErrors';
 import {
   toBigIntSafeNumber,
   compareBigIntSafe,
@@ -635,6 +636,13 @@ export class TransactionService {
         );
       } catch (err) {
         lastError = err;
+        // Software-key auth failures (PIN required / invalid PIN) are NOT Ledger
+        // errors and are NOT recoverable by reconnecting/verifying hardware.
+        // Surface them immediately instead of running the Ledger retry loop and
+        // relabeling them "unlock your Ledger device (Attempt N)" (PR6.1).
+        if (isSoftwareAuthError(err)) {
+          throw err instanceof Error ? err : new Error(String(err));
+        }
         const friendly = toLedgerFriendlyError(err, { attemptCount: attempt });
         console.log('Ledger signing recovery friendly error', {
           attempt,

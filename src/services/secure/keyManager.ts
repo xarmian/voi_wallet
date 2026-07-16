@@ -7,6 +7,7 @@ import {
   LedgerSigningInfo,
   LedgerDeviceNotConnectedError,
   LedgerAccountError,
+  AuthenticationRequiredError,
 } from '@/types/wallet';
 import RekeyManager from '@/services/wallet/rekeyManager';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
@@ -52,6 +53,13 @@ export class SecureKeyManager {
       // Get private key using AccountSecureStorage (handles authentication and caching internally)
       return await AccountSecureStorage.getPrivateKey(account.id, pin);
     } catch (error) {
+      // Preserve auth-required failures (PIN required / invalid PIN) as-is so the
+      // upstream recovery wrapper and the auth controller can recognize them and
+      // route to PIN entry — NOT retry them as a "recoverable Ledger error" and
+      // mislabel a software wallet with "unlock your Ledger device" (PR6.1).
+      if (error instanceof AuthenticationRequiredError) {
+        throw error;
+      }
       throw new Error(
         `Failed to retrieve private key: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
