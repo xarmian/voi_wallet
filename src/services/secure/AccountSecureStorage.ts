@@ -629,14 +629,22 @@ export class AccountSecureStorage {
   // and the unproven new blob dropped, so the account stays usable and migration
   // retries on a later trigger.
   //
-  // PRECONDITION (caller-guaranteed): `secret` is the account's CURRENT
-  // credential secret — an explicitly verified step-up PIN, or the
-  // SessionKeyVault secret (set at unlock AFTER verifyPin). Finalizing to
-  // v2-under-secret is only safe because the user can reproduce that exact
-  // secret. A WRONG secret can never pass the phase-3 verify, so it can only ever
-  // yield NOT_MIGRATED (never a strand) — but callers must still pass a real,
-  // current secret. Serialized against every other key writer by the GLOBAL
-  // key-mutation mutex, and deduped per-account by migrationInFlight.
+  // SECRET SAFETY — the strand vector (Codex/adversarial-review PR5 P1): finalizing
+  // to v2-under-`secret` is only safe because the user can reproduce that exact
+  // secret. It is NOT enough to rely on the phase-3 round-trip verify: for a
+  // Format-A account, unwrapKeyForRewrap decrypts via the DEVICE key regardless of
+  // `secret`, so phase-3 (which re-encrypts under `secret` then decrypts under the
+  // SAME `secret`) is SELF-REFERENTIAL — it proves the new blob is well-formed, NOT
+  // that `secret` is the credential. A stale/wrong secret (e.g. a biometric-
+  // convenience item left stale by a crash between a changePin commit and its
+  // refresh, loaded into the vault on a biometric unlock) would pass phase-3 and
+  // strand the account. So the FIRST thing migrateAccountToV2Locked does is
+  // checkPinHash(secret): finalize ONLY if `secret` verifies against the CURRENT
+  // PIN credential. That gate — not a caller precondition — is what makes the drop
+  // safe. Serialized against every other key writer by the GLOBAL key-mutation
+  // mutex, deduped per-account by migrationInFlight, and best-effort epoch-guarded
+  // so a lock mid-migration aborts before writing at each guard point (P2; an
+  // irreducible check-to-write race remains, but is benign given the gate above).
   // ───────────────────────────────────────────────────────────────────────────
 
   /**
@@ -648,7 +656,8 @@ export class AccountSecureStorage {
   static async migrateAccountToV2(
     accountId: string,
     secret: string,
-    secretSource: SecretSource = 'pin'
+    secretSource: SecretSource = 'pin',
+    vaultEpoch?: number
   ): Promise<MigrationResult> {
     const existing = this.migrationInFlight.get(accountId);
     if (existing) {
@@ -658,7 +667,7 @@ export class AccountSecureStorage {
     // with a store/import/changePin/setupPin/delete. `.catch` makes the whole
     // call non-throwing even if an unexpected error escapes the locked body.
     const task = this.runKeyMutationExclusive(() =>
-      this.migrateAccountToV2Locked(accountId, secret, secretSource)
+      this.migrateAccountToV2Locked(accountId, secret, secretSource, vaultEpoch)
     ).catch((): MigrationResult => 'NOT_MIGRATED');
     this.migrationInFlight.set(accountId, task);
     try {
@@ -680,8 +689,28 @@ export class AccountSecureStorage {
   private static async migrateAccountToV2Locked(
     accountId: string,
     secret: string,
-    secretSource: SecretSource
+    secretSource: SecretSource,
+    vaultEpoch?: number
   ): Promise<MigrationResult> {
+    // SECRET-IS-CURRENT-CREDENTIAL GATE (Codex PR5 P1 — FUND-CRITICAL). This
+    // migrator DROPS the device-key copy and finalizes to v2-under-`secret`. For
+    // a Format-A account, unwrapKeyForRewrap decrypts via the DEVICE key
+    // REGARDLESS of `secret`, and phase-3 verify only proves the new blob decrypts
+    // under that SAME supplied secret — NEITHER proves `secret` is a secret the
+    // user can reproduce. A stale/wrong secret (e.g. a biometric-convenience item
+    // left stale by a crash between a changePin commit and its refresh, then
+    // loaded into the vault on a biometric unlock) would otherwise finalize an
+    // account under a secret the current PIN can't reproduce → PERMANENT STRAND.
+    // So REFUSE to migrate unless `secret` verifies against the CURRENT PIN
+    // credential. Pure hash compare — NO throttle side effect (background op with
+    // an already-unlocked session, not a guess) and deadlock-safe inside the key
+    // mutex (persistPinCredential does not acquire it; changePin already calls
+    // this exact path in-mutex). No current credential (or a non-matching
+    // passphrase pre-PR7) → false → NOT_MIGRATED (fail-safe: never finalize).
+    if (!(await this.checkPinHash(secret))) {
+      return 'NOT_MIGRATED';
+    }
+
     const deviceSecret = await this.getStableDeviceId();
     const payload = await this.readSecretLocked(accountId);
     if (!payload) {
@@ -733,7 +762,27 @@ export class AccountSecureStorage {
     let newBlob: KeyEnvelopeV2 | undefined;
     let appended = false;
     let finalized = false;
+    // EPOCH GUARD (Codex PR5 P2 / P1-D): true once the SessionKeyVault epoch
+    // captured at the caller's secret-read (`vaultEpoch`) has changed — i.e. the
+    // session locked (`clear()`) or rotated. Re-checked after each awaited prep
+    // step so a vault-secret migration does not keep processing/writing key
+    // material under a session that no longer exists. This is BEST-EFFORT: an
+    // irreducible sub-await race remains between the final check and the native
+    // write completing — but that residual is BENIGN, not a strand. The hard
+    // fund-safety invariant is the checkPinHash gate above: whatever the lock
+    // timing, `secret` is the current credential, so any write that does land
+    // (dual-blob mid-transition, or a finalized v2-only blob) is correct and
+    // readable on the next unlock. Explicit-PIN step-up migrations pass no epoch
+    // (undefined) and are not gated — they are not vault-session-dependent.
+    const sessionEnded = (): boolean =>
+      vaultEpoch !== undefined && SessionKeyVault.currentEpoch() !== vaultEpoch;
     try {
+      // Abort before starting any work if the session already ended while this
+      // account waited behind the mutex.
+      if (sessionEnded()) {
+        return 'NOT_MIGRATED';
+      }
+
       // PHASE 2 — ADD a fresh v2 blob under `secret` (dual-blob), keeping the old
       // readable copy through the point of no return. Respect the 2-blob cap the
       // same way the changePin rewrap does: if two old blobs already exist (only
@@ -761,6 +810,11 @@ export class AccountSecureStorage {
           ? { version: 2 as const, blobs: keptOldBlobs }
           : {}),
       };
+      // Re-check after the scrypt await (encryptPrivateKeyV2) and before the FIRST
+      // write (Codex PR5 P2): a lock during the derivation must not land a write.
+      if (sessionEnded()) {
+        return 'NOT_MIGRATED';
+      }
       await this.saveSecretV2Checked(accountId, this.appendBlob(base, newBlob));
       appended = true;
 
@@ -798,6 +852,18 @@ export class AccountSecureStorage {
         }
       } finally {
         check?.fill(0);
+      }
+
+      // Re-check before the POINT OF NO RETURN: if a lock landed after the
+      // verified dual-blob write, do NOT drop the device-key copy under a dead
+      // session — leave the dual-blob state (Format A + proven v2 blob), which is
+      // fully readable under BOTH copies and converges on the next unlock's sweep.
+      // (Only a lock/clear can bump the epoch mid-migration — a changePin rotate
+      // can't, it holds this same mutex.) A benign check-to-write race remains,
+      // but per the checkPinHash invariant a finalize that slips through is still
+      // v2-under-current-credential and safe.
+      if (sessionEnded()) {
+        return 'NOT_MIGRATED';
       }
 
       // PHASE 5 — FINALIZE (POINT OF NO RETURN): keep ONLY the new blob and clear
@@ -861,11 +927,16 @@ export class AccountSecureStorage {
       if (secret === null) {
         return; // vault locked mid-sweep — stop; resumes on next unlock
       }
+      // Capture the epoch WITH the secret (both sync, no await between → a lock
+      // cannot slip in), so migrateAccountToV2 aborts this account if the session
+      // locks while it waits behind the mutex (P2 epoch guard).
+      const vaultEpoch = SessionKeyVault.currentEpoch();
       try {
         await this.migrateAccountToV2(
           id,
           secret,
-          SessionKeyVault.getSecretSource()
+          SessionKeyVault.getSecretSource(),
+          vaultEpoch
         );
       } catch {
         // migrateAccountToV2 never throws; belt-and-suspenders so one account's
@@ -1283,10 +1354,16 @@ export class AccountSecureStorage {
             const migrationSource: SecretSource = pin
               ? 'pin'
               : SessionKeyVault.getSecretSource();
+            // Vault-secret path carries the epoch (aborts if the session locks
+            // before the migration runs); an explicit step-up PIN passes none.
+            const migrationEpoch = pin
+              ? undefined
+              : SessionKeyVault.currentEpoch();
             void this.migrateAccountToV2(
               accountId,
               migrationSecret,
-              migrationSource
+              migrationSource,
+              migrationEpoch
             ).catch(() => {});
           }
         }

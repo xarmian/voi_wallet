@@ -137,6 +137,11 @@ const asPriv = AccountSecureStorage as unknown as {
   }) => Promise<void>;
   constantTimeEqualBytes: (a: Uint8Array, b: Uint8Array) => boolean;
   hashPin: (pin: string, salt: string, iterations: number) => string;
+  unwrapKeyForRewrap: (
+    payload: unknown,
+    currentSecret: string | undefined,
+    deviceSecret: string
+  ) => Promise<{ plaintext: Uint8Array; keeperBlob?: KeyEnvelopeV2 } | null>;
   throttleMirror: unknown;
   legacyCheckRequired: boolean | undefined;
 };
@@ -460,6 +465,69 @@ describe('migrateAccountToV2 — safety / no-op paths', () => {
     );
     expect(hex(recovered!)).toBe(hex(k.sk));
   });
+
+  // Codex PR5 P1 regression: a Format-A account decrypts via the DEVICE key
+  // regardless of the supplied secret, so without the checkPinHash gate a
+  // stale/wrong secret (e.g. a stale biometric-convenience item after a crash)
+  // would finalize it under a secret the current PIN can't reproduce → STRAND.
+  it('REFUSES to migrate a Format-A account under a non-credential secret (no strand)', async () => {
+    const k = makeAlgoKey();
+    seedFormatA('acct-A', k.sk);
+    await seedCredential(PIN); // the CURRENT credential is PIN
+    useFastWriter();
+
+    const before = mockPlatform.__secure.get(secretKey('acct-A'));
+    const result = await AccountSecureStorage.migrateAccountToV2(
+      'acct-A',
+      '000000', // NOT the current credential — a stale/wrong secret
+      'pin'
+    );
+    expect(result).toBe('NOT_MIGRATED');
+    // The device-key copy is INTACT (never dropped); the account is unchanged.
+    expect(mockPlatform.__secure.get(secretKey('acct-A'))).toBe(before);
+    const payload = readPayload('acct-A');
+    expect(payload.encryptedPrivateKey).not.toBe('');
+    expect(payload.blobs ?? []).toHaveLength(0);
+    // Still fully readable under the correct PIN.
+    const recovered = await AccountSecureStorage.getPrivateKey('acct-A', PIN);
+    expect(hex(recovered)).toBe(hex(k.sk));
+  });
+});
+
+describe('migrateAccountToV2 — epoch guard (lock mid-migration)', () => {
+  // Codex PR5 P2: a lock landing mid-migration must not keep processing/writing
+  // key material under a dead session.
+  it('aborts (NOT_MIGRATED) and writes nothing if the vault locks mid-unwrap', async () => {
+    const k = makeAlgoKey();
+    seedFormatA('acct-A', k.sk);
+    await seedCredential(PIN);
+    useFastWriter();
+    SessionKeyVault.set(PIN, 'pin');
+    const epoch = SessionKeyVault.currentEpoch();
+
+    // Simulate a lock DURING the migration: clear the vault right after the
+    // unwrap resolves (bumps the epoch), so epoch-guard #1 aborts before any
+    // write. checkPinHash (credential-based, vault-independent) already passed.
+    const origUnwrap = asPriv.unwrapKeyForRewrap.bind(AccountSecureStorage);
+    jest
+      .spyOn(asPriv, 'unwrapKeyForRewrap')
+      .mockImplementation(async (payload, currentSecret, deviceSecret) => {
+        const r = await origUnwrap(payload, currentSecret, deviceSecret);
+        SessionKeyVault.clear(); // lock mid-migration → epoch bumps
+        return r;
+      });
+
+    const before = mockPlatform.__secure.get(secretKey('acct-A'));
+    const result = await AccountSecureStorage.migrateAccountToV2(
+      'acct-A',
+      PIN,
+      'pin',
+      epoch
+    );
+    expect(result).toBe('NOT_MIGRATED');
+    // Nothing written — the Format-A copy is intact and still readable.
+    expect(mockPlatform.__secure.get(secretKey('acct-A'))).toBe(before);
+  });
 });
 
 describe('migrateAccountToV2 — verify-before-delete rollback', () => {
@@ -621,7 +689,8 @@ describe('getPrivateKey — lazy migration trigger', () => {
 
     const recovered = await AccountSecureStorage.getPrivateKey('acct-A', PIN);
     expect(hex(recovered)).toBe(hex(k.sk)); // read still correct
-    expect(migSpy).toHaveBeenCalledWith('acct-A', PIN, 'pin');
+    // Explicit step-up PIN → no vault epoch (undefined).
+    expect(migSpy).toHaveBeenCalledWith('acct-A', PIN, 'pin', undefined);
   });
 
   it('fires under an unlocked vault (pin=undefined, biometric read) using the vault secret', async () => {
@@ -635,7 +704,13 @@ describe('getPrivateKey — lazy migration trigger', () => {
       .mockResolvedValue('MIGRATED');
 
     await AccountSecureStorage.getPrivateKey('acct-A');
-    expect(migSpy).toHaveBeenCalledWith('acct-A', PIN, 'pin');
+    // Vault-secret path → carries the current epoch.
+    expect(migSpy).toHaveBeenCalledWith(
+      'acct-A',
+      PIN,
+      'pin',
+      expect.any(Number)
+    );
   });
 
   it('does NOT fire when the vault is locked and no PIN is supplied (no secret)', async () => {
