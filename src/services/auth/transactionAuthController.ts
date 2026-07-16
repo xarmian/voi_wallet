@@ -8,6 +8,8 @@ import {
 } from '@/services/transactions/unifiedSigner';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
+import { isSoftwareAuthError } from '@/services/secure/authErrors';
 import {
   LedgerSigningInfo,
   WalletAccount,
@@ -627,10 +629,33 @@ export class TransactionAuthController {
       // Check if user has a PIN set - only require PIN if one exists
       const hasPin = await AccountSecureStorage.hasPin();
 
+      // Biometric-to-sign for a SOFTWARE key is only viable when the IN-APP
+      // biometric-unlock feature is enabled — that feature stores the convenience
+      // secret that unwraps the key without the PIN (DOC-137 §3.3). OS-level
+      // enrollment (`biometricAvailable`) is necessary but NOT sufficient: firing
+      // Face ID without that stored secret makes getPrivateKey(pin=undefined)
+      // throw "PIN required", which then fails 3× and mislabels a software wallet
+      // with "unlock your Ledger" (the PR6.1 regression). So a user with Face ID
+      // enrolled but the in-app feature OFF must go STRAIGHT to PIN.
+      //
+      // A LEDGER flow keeps OS-level biometric as a pure UI gate — the signing key
+      // lives on the device, so there is no in-app secret to require; leaving that
+      // path unchanged avoids any Ledger UX regression.
+      let biometricUnlockEnabled = false;
+      try {
+        biometricUnlockEnabled =
+          await AccountSecureStorage.isBiometricEnabled();
+      } catch {
+        biometricUnlockEnabled = false;
+      }
+      const canUseBiometric = isLedgerFlow
+        ? biometricAvailable
+        : biometricAvailable && biometricUnlockEnabled;
+
       this.updateState({
         requiresPin: hasPin,
-        requiresBiometric: biometricAvailable && hasPin, // Biometric is PIN fallback, only relevant if PIN exists
-        biometricAvailable,
+        requiresBiometric: canUseBiometric && hasPin, // convenience gate; PIN is always the fallback
+        biometricAvailable: canUseBiometric,
         isLedgerFlow,
         isRemoteSignerFlow: false,
         ledgerDevice: isLedgerFlow ? this.getCurrentLedgerDevice() : null,
@@ -1360,19 +1385,22 @@ export class TransactionAuthController {
     }
 
     try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Authenticate to sign transaction',
-        fallbackLabel: 'Use PIN',
-        cancelLabel: 'Cancel',
-        requireConfirmation: false,
-      });
+      // LEDGER: biometric is a pure UI gate — the signing key lives on the
+      // device, so a bare OS prompt is sufficient (no in-app secret / vault to
+      // unlock). Unchanged from prior behavior.
+      if (this.currentState.isLedgerFlow) {
+        const result = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Authenticate to sign transaction',
+          fallbackLabel: 'Use PIN',
+          cancelLabel: 'Cancel',
+          requireConfirmation: false,
+        });
 
-      if (result.success) {
-        // If ledger flow, wait until device is ready before starting
-        if (
-          this.currentState.isLedgerFlow &&
-          this.currentState.ledgerStatus !== 'ready'
-        ) {
+        if (!result.success) {
+          return false;
+        }
+
+        if (this.currentState.ledgerStatus !== 'ready') {
           this.pendingStartAfterReady = true;
           this.pendingPinForStart = undefined;
           await this.ensureLedgerDeviceReady();
@@ -1383,6 +1411,39 @@ export class TransactionAuthController {
         return true;
       }
 
+      // SOFTWARE key: the biometric prompt must UNWRAP the convenience secret and
+      // populate SessionKeyVault (DOC-137 §3.3), so the pin=undefined signing path
+      // can derive at-rest wrap keys for v2 keys (PR4/PR5). A bare OS prompt would
+      // authenticate but leave the vault empty, so a v2 key would fail to decrypt.
+      // unlockVaultWithBiometrics owns the OS prompt (the auth-gated read IS the
+      // prompt) AND the invariant that an enrollment-change invalidation falls
+      // back to PIN, NEVER the mnemonic (HT-133).
+      const outcome = await unlockVaultWithBiometrics(
+        'Authenticate to sign transaction'
+      );
+
+      if (outcome.status === 'unlocked') {
+        this.updateState({ state: 'signing' });
+        await this.startSigning();
+        return true;
+      }
+
+      if (outcome.status === 'invalidated') {
+        // Enrollment change / no longer enabled: unlockVaultWithBiometrics has
+        // cleared the persisted biometric flag. Reflect that in the modal so the
+        // fingerprint button disappears and only PIN entry remains (otherwise the
+        // button lingers and silently re-returns 'invalidated'). Fall back to PIN
+        // — NEVER the mnemonic (THE INVARIANT, HT-133).
+        this.updateState({
+          requiresBiometric: false,
+          biometricAvailable: false,
+        });
+        return false;
+      }
+
+      // 'cancelled' (declined / OS auth failure): biometrics stays enabled, so
+      // keep the fingerprint button for a retry and fall back to PIN this attempt.
+      // Stay in 'authenticating' so the PIN pad remains; never the mnemonic.
       return false;
     } catch (error) {
       this.updateState({
@@ -1570,6 +1631,26 @@ export class TransactionAuthController {
               state: 'error',
               error: error instanceof Error ? error : new Error(String(error)),
             });
+          } else if (!this.currentState.isLedgerFlow) {
+            // SOFTWARE (non-Ledger) signing error before submit — NEVER route
+            // through the Ledger "unlock your device" messaging (PR6.1); a
+            // software wallet has no Ledger. A software-auth failure returns the
+            // user to PIN entry; any other pre-submit error surfaces plainly.
+            if (isSoftwareAuthError(error)) {
+              this.updateState({
+                state: 'authenticating',
+                ledgerError: null,
+                error: new Error(
+                  'Enter your PIN to authorize this transaction.'
+                ),
+              });
+            } else {
+              this.updateState({
+                state: 'error',
+                error:
+                  error instanceof Error ? error : new Error(String(error)),
+              });
+            }
           } else {
             // Handle specific error types during signing
             if (
@@ -1623,6 +1704,23 @@ export class TransactionAuthController {
             });
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
+            if (!this.currentState.isLedgerFlow) {
+              // SOFTWARE flow: onError already routed to PIN entry; keep it
+              // PIN-shaped and NEVER Ledger-shape it here (PR6.1) — the signer
+              // always calls onComplete after onError, so this branch must not
+              // clobber the PIN prompt with a hidden `ledgerError`. A software-auth
+              // failure re-shows the PIN prompt; any other pre-submit failure
+              // surfaces as a plain error the PIN UI can render.
+              this.updateState({
+                state: 'authenticating',
+                ledgerStatus: 'idle',
+                ledgerError: null,
+                error: isSoftwareAuthError(result.error)
+                  ? new Error('Enter your PIN to authorize this transaction.')
+                  : (result.error ?? null),
+              });
+              return;
+            }
             this.updateState({
               state: 'authenticating',
               ledgerStatus: 'error',
@@ -1654,6 +1752,37 @@ export class TransactionAuthController {
       this.isSigningInProgress = false;
       const message = this.sanitizeLedgerError(error);
       const lower = message.toLowerCase();
+
+      // SOFTWARE (non-Ledger) flows must never enter the Ledger reconnect/retry
+      // path or show "unlock your Ledger" (PR6.1). Handle plainly: a software-auth
+      // failure returns to PIN entry, a user cancel returns to authenticating, and
+      // anything else is a real signing error.
+      if (!this.currentState.isLedgerFlow) {
+        if (isSoftwareAuthError(error)) {
+          this.updateState({
+            state: 'authenticating',
+            ledgerError: null,
+            error: new Error('Enter your PIN to authorize this transaction.'),
+          });
+        } else if (
+          lower.includes('cancel') ||
+          lower.includes('reject') ||
+          lower.includes('denied') ||
+          lower.includes('refused')
+        ) {
+          this.updateState({
+            state: 'authenticating',
+            ledgerStatus: 'idle',
+            ledgerError: null,
+          });
+        } else {
+          this.updateState({
+            state: 'error',
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        }
+        return;
+      }
 
       const prepareForRetry = async (
         status: LedgerSigningStatus,
