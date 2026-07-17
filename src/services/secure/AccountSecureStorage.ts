@@ -1177,6 +1177,15 @@ export class AccountSecureStorage {
     const fetchPromise = (async () => {
       try {
         let unlockMethod: 'pin' | 'biometric' = 'biometric';
+        // Vault epoch captured when a pin=undefined read is authorized BY THE
+        // VAULT (§6.4 gate). It scopes the WHOLE read to that unlocked session so
+        // the final guard aborts an in-flight read that straddles a lock — even a
+        // device-key (Format-A) decrypt, which arms no v2 epoch (Codex PR7 P1
+        // lock-race: otherwise such a read could resolve post-lock, return the
+        // key, and re-populate the 60 s cache that lock had just cleared). Stays
+        // -1 for an explicit-pin step-up read (authorized independently of the
+        // session) and for a no-credential ambient read.
+        let gatedVaultEpoch = -1;
 
         if (pin) {
           const isValidPin = await this.verifyPin(pin);
@@ -1233,6 +1242,11 @@ export class AccountSecureStorage {
                 'PIN or passphrase required to access private key'
               );
             }
+          } else {
+            // Authorized by the unlocked vault → scope the read to this session
+            // epoch so a lock mid-read aborts it (final guard below), closing the
+            // Format-A lock-race.
+            gatedVaultEpoch = SessionKeyVault.currentEpoch();
           }
 
           try {
@@ -1344,13 +1358,18 @@ export class AccountSecureStorage {
 
         await this.updateLastAccessed(accountId);
 
-        // Epoch guard (Codex P1-D), final await: a lock during
-        // updateLastAccessed clears the caches, so re-check BEFORE re-populating
-        // the 60 s cache. If the vault-derived read straddled a lock, zero the
-        // key and abort rather than caching/returning post-lock material.
+        // Epoch guard (Codex P1-D + PR7 P1 lock-race), final await: a lock during
+        // any await clears the caches and bumps the vault epoch, so re-check
+        // BEFORE returning/re-populating the 60 s cache. Abort (zero + throw) if
+        // EITHER (a) a vault-v2 unwrap straddled a lock (`v2VaultEpoch`), OR (b)
+        // this pin=undefined read was authorized by the vault gate and the session
+        // has since locked (`gatedVaultEpoch`) — the latter covers a device-key
+        // (Format-A) decrypt that arms no v2 epoch but must NOT return or re-cache
+        // key material under a session that no longer exists.
+        const currentEpoch = SessionKeyVault.currentEpoch();
         if (
-          v2VaultEpoch !== -1 &&
-          SessionKeyVault.currentEpoch() !== v2VaultEpoch
+          (v2VaultEpoch !== -1 && currentEpoch !== v2VaultEpoch) ||
+          (gatedVaultEpoch !== -1 && currentEpoch !== gatedVaultEpoch)
         ) {
           privateKey.fill(0);
           throw new VaultLockedError();

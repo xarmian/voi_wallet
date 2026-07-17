@@ -108,6 +108,7 @@ const asPriv = AccountSecureStorage as unknown as {
     options: { deviceBound: boolean }
   ) => Promise<KeyEnvelopeV2>;
   validateSecret: (secret: string, source: 'pin' | 'passphrase') => void;
+  updateLastAccessed: (accountId: string) => Promise<void>;
   throttleMirror: unknown;
   legacyCheckRequired: boolean | undefined;
 };
@@ -373,6 +374,32 @@ describe('§6.4 reader gate — pin=undefined works under an unlocked vault', ()
     enableBiometrics();
     SessionKeyVault.clear(); // LOCKED — the biometric flag alone must not bypass
 
+    await expect(AccountSecureStorage.getPrivateKey('acct')).rejects.toThrow(
+      /required to access private key/
+    );
+  });
+
+  // Codex PR7 P1 (lock-race) regression: a pin=undefined Format-A read authorized
+  // while UNLOCKED that straddles a lock must ABORT — not return the key post-lock
+  // and not re-populate the 60 s cache (which lock had just cleared). The Format-A
+  // path arms no v2 epoch, so the gated-vault epoch is what catches it.
+  it('aborts a pin=undefined Format-A read (and does not cache) if the vault locks mid-read', async () => {
+    const k = makeAlgoKey();
+    await AccountSecureStorage.setupPin(PIN, 'pin');
+    seedFormatA('acct', k.sk);
+    SessionKeyVault.set(PIN, 'pin'); // unlocked when the read STARTS
+
+    // Simulate a lock landing DURING the read: clear the vault (bumps the epoch)
+    // right after the device-key decrypt, at the updateLastAccessed await.
+    jest.spyOn(asPriv, 'updateLastAccessed').mockImplementation(async () => {
+      SessionKeyVault.clear();
+    });
+
+    await expect(AccountSecureStorage.getPrivateKey('acct')).rejects.toThrow();
+
+    // The read did NOT re-populate the cache: a subsequent read (vault still
+    // locked) throws the gate error rather than serving a cached key.
+    jest.restoreAllMocks();
     await expect(AccountSecureStorage.getPrivateKey('acct')).rejects.toThrow(
       /required to access private key/
     );
