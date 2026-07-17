@@ -45,7 +45,6 @@ export default function ChangePinScreen() {
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [attempts, setAttempts] = useState(0);
   const [isInitialSetup, setIsInitialSetup] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   // The EXISTING credential kind (drives the 'current' step input) and the kind
@@ -153,12 +152,17 @@ export default function ChangePinScreen() {
         const isValid = await AccountSecureStorage.verifyPin(value);
         if (isValid) {
           setCurrentStep('new');
-          setAttempts(0);
         } else {
-          const newAttempts = attempts + 1;
-          setAttempts(newAttempts);
           setCurrentPin('');
-          if (newAttempts >= 5) {
+          // verifyPin enforces the PERSISTENT throttle (TASK-26); read it so the
+          // lockout is real and survives reopening this screen (a local counter
+          // would reset and grant free guesses — Codex P2). The service is the
+          // source of truth for both the remaining-attempts copy and the lockout.
+          const throttle = await AccountSecureStorage.getPinThrottleState();
+          if (
+            throttle.lockedUntil !== null &&
+            Date.now() < throttle.lockedUntil
+          ) {
             Alert.alert(
               'Too Many Attempts',
               'Too many failed attempts. Please try again later.',
@@ -167,7 +171,9 @@ export default function ChangePinScreen() {
           } else {
             Alert.alert(
               `Incorrect ${noun(currentSource)}`,
-              `${5 - newAttempts} attempts remaining.`
+              `${throttle.attemptsRemaining} attempt${
+                throttle.attemptsRemaining === 1 ? '' : 's'
+              } remaining.`
             );
           }
         }
@@ -384,10 +390,6 @@ export default function ChangePinScreen() {
             </Text>
           )}
         </TouchableOpacity>
-
-        {attempts > 0 && currentStep === 'current' && (
-          <Text style={styles.attemptsText}>Failed attempts: {attempts}/5</Text>
-        )}
       </KeyboardAwareScrollView>
     </SafeAreaView>
   );
