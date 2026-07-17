@@ -253,7 +253,7 @@ export default function SecuritySettingsScreen() {
             style={styles.settingItem}
             onPress={handleChangePin}
           >
-            <Text style={styles.settingText}>Change PIN</Text>
+            <Text style={styles.settingText}>Change PIN or Passphrase</Text>
             <Text style={styles.arrow}>→</Text>
           </TouchableOpacity>
 
