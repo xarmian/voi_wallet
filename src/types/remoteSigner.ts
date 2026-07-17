@@ -340,6 +340,15 @@ export const REMOTE_SIGNER_CONSTANTS = {
   CLEANUP_AGE_MS: 10 * 60 * 1000,
   /** Maximum payload size for single QR (bytes) */
   SINGLE_QR_MAX_BYTES: 1000,
+  /**
+   * Upper bound on the base64 length of a single returned signed-transaction
+   * blob. This is a DoS guard enforced during strict envelope validation
+   * (before any blob is decoded); it is far larger than any legitimate signed
+   * transaction. Correctness never relies on it — the content-binding check
+   * requires each returned blob to byte-equal the exact transaction the wallet
+   * built, so an over-sized blob is rejected on content grounds regardless.
+   */
+  MAX_SIGNED_TXN_B64_LENGTH: 100000,
   /** Frame size for animated QR (bytes) */
   ANIMATED_QR_FRAME_BYTES: 800,
   /** Frame rate for animated QR (fps) */
