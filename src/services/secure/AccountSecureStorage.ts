@@ -1210,19 +1210,23 @@ export class AccountSecureStorage {
           // the device key decrypts regardless of vault state, so this is
           // behavior-preserving.
           //
-          // §6.4 READER GATE (PR7): the pin=undefined read is allowed when EITHER
-          // biometrics is enabled OR the SessionKeyVault is unlocked. The vault is
-          // populated at unlock from the just-verified PIN/passphrase, so once the
-          // user has unlocked, the ~14 background callers (WC auto-approve,
-          // messaging poll, send/sign) can read without re-entering the secret —
-          // for PIN-only AND passphrase-only wallets, not just biometric ones.
-          // This is what makes v2 keys usable when locked-then-unlocked without
-          // biometrics. A LOCKED vault with a PIN and no biometrics still throws
-          // (require an explicit unlock) rather than reading ambiently.
-          const biometricEnabled = await this.isBiometricEnabled();
+          // §6.4 READER GATE (PR7, tightened per Codex): the pin=undefined read of
+          // a credentialed wallet requires an UNLOCKED SessionKeyVault — full stop.
+          // The vault is populated at unlock from the just-verified PIN/passphrase
+          // (manual OR biometric — unlockWithBiometrics populates it too, PR6), so
+          // once the user has unlocked, the ~14 background callers can read without
+          // re-entering the secret, for PIN-only, passphrase-only, AND biometric
+          // wallets alike. We deliberately do NOT let the persisted
+          // `biometricEnabled` flag bypass this: that flag alone (with the vault
+          // LOCKED) would let a background caller device-decrypt a still-legacy
+          // Format-A key with no auth prompt while the app is locked — the exact
+          // ambient-read hole DR-2 closes. Biometric unlock is a convenience that
+          // goes THROUGH the vault, never around it. A locked vault on a
+          // key-bearing wallet throws (require an explicit unlock); a wallet with
+          // no credential (hasPin false) still reads ambiently as before.
           const vaultUnlocked = SessionKeyVault.isUnlocked();
 
-          if (!biometricEnabled && !vaultUnlocked) {
+          if (!vaultUnlocked) {
             const hasPin = await this.hasPin();
             if (hasPin) {
               throw new AuthenticationRequiredError(

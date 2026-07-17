@@ -136,6 +136,46 @@ function addToList(id: string): void {
   mockPlatform.__kv.set('voi_account_list', JSON.stringify(list));
 }
 
+/** Seed a legacy Format-A (device-key) account — a 4-colon blob wrapped by the
+ *  device key alone (no user secret needed to decrypt), as pre-Wave-2 wallets store. */
+function seedFormatA(id: string, sk: Uint8Array): void {
+  const CryptoJS = require('crypto-js');
+  const nodeCrypto = require('crypto');
+  const saltHex: string = nodeCrypto.randomBytes(32).toString('hex');
+  const ivHex: string = nodeCrypto.randomBytes(16).toString('hex');
+  const baseEntropy: string = nodeCrypto
+    .createHash('sha256')
+    .update(`voi_wallet_${DEVICE_ID}`)
+    .digest('hex');
+  const keyMaterial: string = CryptoJS.PBKDF2(
+    baseEntropy,
+    CryptoJS.enc.Hex.parse(saltHex),
+    { keySize: 8, iterations: 10000, hasher: CryptoJS.algo.SHA256 }
+  ).toString(CryptoJS.enc.Hex);
+  const ct: string = CryptoJS.AES.encrypt(
+    hex(sk),
+    CryptoJS.enc.Hex.parse(keyMaterial),
+    {
+      iv: CryptoJS.enc.Hex.parse(ivHex),
+      mode: CryptoJS.mode.CTR,
+      padding: CryptoJS.pad.NoPadding,
+    }
+  ).toString();
+  const hmac: string = CryptoJS.HmacSHA256(
+    ct,
+    CryptoJS.SHA256(keyMaterial + 'hmac_salt').toString()
+  ).toString();
+  mockPlatform.__secure.set(
+    `voi_account_secret_${id}`,
+    JSON.stringify({
+      accountId: id,
+      encryptedPrivateKey: `${saltHex}:${ivHex}:${ct}:${hmac}`,
+      authMethod: 'pin',
+    })
+  );
+  addToList(id);
+}
+
 async function seedV2(
   id: string,
   sk: Uint8Array,
@@ -310,14 +350,31 @@ describe('§6.4 reader gate — pin=undefined works under an unlocked vault', ()
     await expect(AccountSecureStorage.getPrivateKey('acct')).rejects.toThrow();
   });
 
-  it('still allows pin=undefined when biometrics is enabled (unchanged path)', async () => {
+  it('allows pin=undefined when biometrics is enabled AND the vault is unlocked', async () => {
     const k = makeAlgoKey();
     await AccountSecureStorage.setupPin(PIN, 'pin');
     await seedV2('acct', k.sk, PIN, 'pin');
     enableBiometrics();
-    SessionKeyVault.set(PIN, 'pin');
+    SessionKeyVault.set(PIN, 'pin'); // biometric unlock populates the vault
 
     const sk = await AccountSecureStorage.getPrivateKey('acct');
     expect(hex(sk)).toBe(hex(k.sk));
+  });
+
+  // Codex PR7 P1 regression: the persisted biometricEnabled flag ALONE must NOT
+  // open the gate while the vault is LOCKED — otherwise a background caller could
+  // device-decrypt a legacy Format-A key (which needs NO user secret) with no auth
+  // prompt on a locked wallet. Format A is used precisely because it WOULD decrypt
+  // absent the gate — so the throw proves the gate, not just a missing key.
+  it('THROWS with pin=undefined when biometrics is enabled but the vault is LOCKED (Format A)', async () => {
+    const k = makeAlgoKey();
+    await AccountSecureStorage.setupPin(PIN, 'pin');
+    seedFormatA('acct', k.sk); // device-key wrap — decryptable without a secret
+    enableBiometrics();
+    SessionKeyVault.clear(); // LOCKED — the biometric flag alone must not bypass
+
+    await expect(AccountSecureStorage.getPrivateKey('acct')).rejects.toThrow(
+      /required to access private key/
+    );
   });
 });
