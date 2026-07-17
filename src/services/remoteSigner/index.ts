@@ -32,6 +32,7 @@ import {
   verifyPairing,
   assertCanonicalAddressSet,
 } from './pairing';
+import { isPlainObject, validateResponseEnvelope } from './responseValidation';
 
 // ============================================================================
 // Authenticated pairing crypto core (v2) — signer-side (key-touching)
@@ -161,21 +162,28 @@ class RemoteSignerServiceClass {
    * Decode a JSON string from QR code to payload
    */
   decodePayload(data: string): RemoteSignerPayload {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(data);
-
-      // Validate it has the required fields
-      if (!parsed.v || !parsed.t) {
-        throw new Error('Invalid payload: missing version or type');
-      }
-
-      return parsed as RemoteSignerPayload;
+      parsed = JSON.parse(data);
     } catch (error) {
       if (error instanceof SyntaxError) {
         throw new Error('Invalid QR code: not valid JSON');
       }
       throw error;
     }
+
+    // Never trust the wire: the payload must be a plain object carrying a
+    // numeric version and a known type discriminator. Deeper, type-specific
+    // validation happens in validateRequest / validateResponse / verifyPairing.
+    if (!isPlainObject(parsed)) {
+      throw new Error('Invalid payload: not an object');
+    }
+    const { v, t } = parsed;
+    if (typeof v !== 'number' || (t !== 'req' && t !== 'res' && t !== 'pair')) {
+      throw new Error('Invalid payload: missing or invalid version/type');
+    }
+
+    return parsed as unknown as RemoteSignerPayload;
   }
 
   /**
@@ -502,36 +510,23 @@ class RemoteSignerServiceClass {
   }
 
   /**
-   * Validate that a response matches a request
+   * Strictly validate a response ENVELOPE against its request.
+   *
+   * This runs BEFORE any blob is mapped onto a request transaction or decoded
+   * (see {@link verifyRemoteSignerResponse} for the content/signature gate). It
+   * never trusts the wire: the response must be a plain `res` object stamped
+   * with the UNCHANGED protocol version, and — for a success response — its
+   * signatures must be an EXACT `0..n-1` permutation over the request
+   * transactions (integer indices, no dup/gap), each blob a bounded, canonical
+   * base64 string. Any deviation is rejected here, before mapping.
    */
   validateResponse(
     response: RemoteSignerResponse,
     request: RemoteSignerRequest
   ): { valid: boolean; error?: string } {
-    // Check request ID matches
-    if (response.id !== request.id) {
-      return { valid: false, error: 'Response ID does not match request' };
-    }
-
-    // Check protocol version
-    if (response.v !== REMOTE_SIGNER_CONSTANTS.PROTOCOL_VERSION) {
-      return { valid: false, error: 'Protocol version mismatch' };
-    }
-
-    // If error response, it's technically valid (just not successful)
-    if (!response.ok) {
-      return { valid: true };
-    }
-
-    // Check signature count matches transaction count
-    if (!response.sigs || response.sigs.length !== request.txns.length) {
-      return {
-        valid: false,
-        error: 'Signature count does not match transaction count',
-      };
-    }
-
-    return { valid: true };
+    // Delegate to the dependency-light, unit-tested pure core. Treat the
+    // response as untrusted runtime data (it came from a scanned QR).
+    return validateResponseEnvelope(response, request.id, request.txns.length);
   }
 
   // ============ Type Guards (re-exported for convenience) ============

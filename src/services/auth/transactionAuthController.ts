@@ -31,6 +31,8 @@ import {
 } from '@/types/remoteSigner';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { verifyRemoteSignerResponse } from '@/utils/signatureVerification';
+import { NetworkId } from '@/types/network';
 
 /**
  * Authentication states for transaction signing
@@ -2328,8 +2330,10 @@ export class TransactionAuthController {
     });
 
     try {
+      const request = this.currentState.remoteSignerRequest;
+
       // Validate the response matches our request
-      if (response.id !== this.currentState.remoteSignerRequest.id) {
+      if (response.id !== request.id) {
         throw new Error('Response does not match the pending request');
       }
 
@@ -2339,7 +2343,45 @@ export class TransactionAuthController {
         throw new Error(errorMessage);
       }
 
-      // Extract signed transactions
+      // Strict envelope validation BEFORE any blob is mapped to a request txn:
+      // plain `res` object, unchanged protocol version, and an exact 0..n-1
+      // permutation of bounded, canonical-base64 blobs over the request txns.
+      const envelope = RemoteSignerService.validateResponse(response, request);
+      if (!envelope.valid) {
+        throw new Error(
+          `Invalid signed response: ${envelope.error ?? 'envelope validation failed'}`
+        );
+      }
+
+      // Content-bind + network-correct signature verification (FAIL CLOSED):
+      // every returned txn must byte-equal the exact txn the wallet built AND be
+      // signed by the sender's network-correct auth key, which must be a paired
+      // remote signer. Auth addresses are resolved on the REQUEST's network
+      // (never the single global authAddress on wallet metadata, which is
+      // overwritten by whichever network's balance loaded last).
+      const { NetworkService } = await import('@/services/network');
+      const netService = NetworkService.getInstance(request.net as NetworkId);
+      const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      const pairedRemoteSigners = new Set(
+        allAccounts
+          .filter((acc) => acc.type === AccountType.REMOTE_SIGNER)
+          .map((acc) => acc.address)
+      );
+
+      const verification = await verifyRemoteSignerResponse(request, response, {
+        resolveExpectedSigner: async (sender) => {
+          const info = await netService.getAccountRekeyInfo(sender, true);
+          return info.isRekeyed && info.authAddress ? info.authAddress : sender;
+        },
+        isPairedRemoteSigner: (address) => pairedRemoteSigners.has(address),
+      });
+      if (!verification.valid) {
+        throw new Error(
+          `Signed response verification failed: ${verification.error ?? 'unknown reason'}`
+        );
+      }
+
+      // Extract signed transactions (envelope + signatures already verified).
       const signedTxns =
         RemoteSignerService.extractSignedTransactions(response);
 
@@ -2350,8 +2392,11 @@ export class TransactionAuthController {
       // Submit to network
       this.updateState({ state: 'processing' });
 
-      const { NetworkService } = await import('@/services/network');
-      const networkService = NetworkService.getInstance();
+      // Submit on the REQUEST's network (the same instance verification used),
+      // NOT the globally-active one — if the user switched networks during the
+      // QR exchange, the global instance would submit to the wrong chain a
+      // response we verified against request.net.
+      const networkService = netService;
 
       // Submit the signed transactions
       const { txId: transactionId, confirmed } =

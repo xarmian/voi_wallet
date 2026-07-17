@@ -8,9 +8,7 @@ import {
   SignerDeviceConfig,
   SignerDeviceInfo,
   RemoteSignerRequest,
-  RemoteSignerResponse,
   SigningProgress,
-  ProcessedRequestTracker,
   REMOTE_SIGNER_CONSTANTS,
 } from '../types/remoteSigner';
 
@@ -77,15 +75,6 @@ interface RemoteSignerState {
   // ============ Wallet Mode State ============
   /** Map of paired signer devices (deviceId -> info) */
   pairedSigners: Map<string, SignerDeviceInfo>;
-  /** Pending signature requests waiting for response */
-  pendingSignatureRequests: Map<
-    string,
-    {
-      request: RemoteSignerRequest;
-      createdAt: number;
-      onComplete?: (response: RemoteSignerResponse) => void;
-    }
-  >;
 
   // ============ Actions ============
   /** Initialize the store from persisted storage */
@@ -124,18 +113,6 @@ interface RemoteSignerState {
   updateSignerActivity: (deviceId: string) => Promise<void>;
   /** Get signer info by device ID */
   getSignerInfo: (deviceId: string) => SignerDeviceInfo | undefined;
-  /** Create a pending signature request */
-  createPendingSignatureRequest: (
-    request: RemoteSignerRequest,
-    onComplete?: (response: RemoteSignerResponse) => void
-  ) => void;
-  /** Complete a pending signature request */
-  completePendingSignatureRequest: (
-    requestId: string,
-    response: RemoteSignerResponse
-  ) => void;
-  /** Cancel a pending signature request */
-  cancelPendingSignatureRequest: (requestId: string) => void;
 }
 
 /**
@@ -162,7 +139,6 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
     signingProgress: createInitialSigningProgress(),
     processedRequestIds: new Set(),
     pairedSigners: new Map(),
-    pendingSignatureRequests: new Map(),
 
     // ============ Initialization ============
     initialize: async () => {
@@ -417,59 +393,6 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
     getSignerInfo: (deviceId: string) => {
       const { pairedSigners } = get();
       return pairedSigners.get(deviceId);
-    },
-
-    createPendingSignatureRequest: (request, onComplete) => {
-      const { pendingSignatureRequests } = get();
-      const updated = new Map(pendingSignatureRequests);
-      updated.set(request.id, {
-        request,
-        createdAt: Date.now(),
-        onComplete,
-      });
-      set({ pendingSignatureRequests: updated });
-    },
-
-    completePendingSignatureRequest: (
-      requestId: string,
-      response: RemoteSignerResponse
-    ) => {
-      const { pendingSignatureRequests, updateSignerActivity, pairedSigners } =
-        get();
-      const pending = pendingSignatureRequests.get(requestId);
-
-      if (pending) {
-        // Call the completion callback if provided
-        pending.onComplete?.(response);
-
-        // Update signer activity based on the transaction signer addresses
-        // Find which signer device handled this request
-        const entries = Array.from(pairedSigners.entries());
-        for (const [deviceId, signerInfo] of entries) {
-          const signerAddresses = new Set(signerInfo.addresses);
-          const requestAddresses = pending.request.txns.map((t) => t.s);
-          const hasMatch = requestAddresses.some((addr) =>
-            signerAddresses.has(addr)
-          );
-
-          if (hasMatch) {
-            updateSignerActivity(deviceId);
-            break;
-          }
-        }
-
-        // Remove from pending
-        const updated = new Map(pendingSignatureRequests);
-        updated.delete(requestId);
-        set({ pendingSignatureRequests: updated });
-      }
-    },
-
-    cancelPendingSignatureRequest: (requestId: string) => {
-      const { pendingSignatureRequests } = get();
-      const updated = new Map(pendingSignatureRequests);
-      updated.delete(requestId);
-      set({ pendingSignatureRequests: updated });
     },
   }))
 );

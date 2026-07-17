@@ -74,8 +74,6 @@ import {
   SignRequestScannerScreen,
   TransactionReviewScreen,
   SignatureDisplayScreen,
-  SignRequestDisplayScreen,
-  SignatureScannerScreen,
   ImportFromOnlineWalletScreen,
 } from '@/screens/remoteSigner';
 // ARC-0090 transaction screens
@@ -164,13 +162,6 @@ export type RootStackParamList = {
     | { deviceId?: string; isOnboarding?: boolean }
     | undefined;
   // Remote Signer signing flow screens
-  SignRequestDisplay: {
-    request: RemoteSignerRequest;
-    onComplete?: (signedTxns: Uint8Array[]) => void;
-  };
-  SignatureScanner: {
-    requestId: string;
-  };
   SignRequestScanner: undefined;
   RemoteSignerTransactionReview: {
     request: RemoteSignerRequest;
@@ -1108,30 +1099,8 @@ function AppStack() {
       />
       {/* Remote Signer signing flow screens */}
       <Stack.Screen
-        name="SignRequestDisplay"
-        component={SignRequestDisplayScreen}
-        options={{
-          headerShown: false,
-          presentation: 'modal',
-          animation: 'slide_from_bottom',
-          gestureEnabled: true,
-          gestureDirection: 'vertical',
-        }}
-      />
-      <Stack.Screen
         name="RestoreWallet"
         component={RestoreWalletScreen}
-        options={{
-          headerShown: false,
-          presentation: 'modal',
-          animation: 'slide_from_bottom',
-          gestureEnabled: true,
-          gestureDirection: 'vertical',
-        }}
-      />
-      <Stack.Screen
-        name="SignatureScanner"
-        component={SignatureScannerScreen}
         options={{
           headerShown: false,
           presentation: 'modal',
