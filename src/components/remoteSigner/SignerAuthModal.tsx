@@ -34,6 +34,17 @@ interface SignerAuthModalProps {
   onCancel: () => void;
   /** Number of transactions being signed */
   transactionCount?: number;
+  /**
+   * Optional override for the main prompt text. Defaults to the transaction
+   * signing wording ("Sign N transaction(s)"). Callers that unlock for a
+   * non-signing purpose (e.g. authorizing a pairing export) pass their own.
+   */
+  message?: string;
+  /**
+   * Optional override for the biometric system prompt. Defaults to
+   * "Authenticate to sign transactions".
+   */
+  biometricPromptMessage?: string;
 }
 
 export default function SignerAuthModal({
@@ -41,6 +52,8 @@ export default function SignerAuthModal({
   onSuccess,
   onCancel,
   transactionCount = 1,
+  message,
+  biometricPromptMessage,
 }: SignerAuthModalProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -196,7 +209,8 @@ export default function SignerAuthModal({
 
     try {
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Authenticate to sign transactions',
+        promptMessage:
+          biometricPromptMessage ?? 'Authenticate to sign transactions',
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
         requireConfirmation: false,
@@ -220,6 +234,9 @@ export default function SignerAuthModal({
   };
 
   const getMessage = () => {
+    if (message) {
+      return message;
+    }
     if (transactionCount === 1) {
       return 'Sign 1 transaction';
     }

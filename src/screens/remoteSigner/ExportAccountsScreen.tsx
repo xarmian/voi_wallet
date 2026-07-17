@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -24,13 +25,38 @@ import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
+import { useSignerConfig } from '@/store/remoteSignerStore';
 import {
-  useRemoteSignerStore,
-  useSignerConfig,
-} from '@/store/remoteSignerStore';
-import { RemoteSignerService } from '@/services/remoteSigner';
-import { AccountType, AccountMetadata } from '@/types/wallet';
+  RemoteSignerService,
+  shouldUseAnimatedQR,
+} from '@/services/remoteSigner';
+import { AnimatedQRCode } from '@/components/remoteSigner';
+import SignerAuthModal from '@/components/remoteSigner/SignerAuthModal';
+import {
+  AccountType,
+  AccountMetadata,
+  AuthenticationRequiredError,
+} from '@/types/wallet';
 import { formatAddress } from '@/utils/address';
+
+/**
+ * A frozen, signed pairing session ready to render as a QR.
+ *
+ * `key` binds the exact (device, selected address SET) the payload was signed
+ * for. Any change to the account selection produces a different `key`, which
+ * invalidates this session: each per-account signature binds the whole set + the
+ * single frozen `ts`, so a changed selection can NEVER reuse these signatures —
+ * the session must be regenerated and re-signed as a whole (DR-9, whole-session
+ * cache — NOT per-address).
+ */
+interface PairingSession {
+  /** `${deviceId}::${sortedSelectedAddrs.join(',')}` — the cache/invalidation key. */
+  key: string;
+  /** Encoded (raw-JSON) pairing payload for the QR. */
+  encoded: string;
+  /** Whether the payload exceeds one static frame and needs BC-UR animation. */
+  useAnimated: boolean;
+}
 
 export default function ExportAccountsScreen() {
   const { theme } = useTheme();
@@ -56,28 +82,34 @@ export default function ExportAccountsScreen() {
     () => new Set(signableAccounts.map((a: AccountMetadata) => a.id))
   );
 
-  // Generate QR code data
-  const qrData = useMemo(() => {
-    if (!signerConfig || selectedAccountIds.size === 0) return null;
+  // The frozen, signed pairing session (whole-session cache — see PairingSession).
+  const [session, setSession] = useState<PairingSession | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
-    const selectedAccounts = signableAccounts.filter((acc: AccountMetadata) =>
-      selectedAccountIds.has(acc.id)
-    );
+  const selectedAccounts = useMemo(
+    () =>
+      signableAccounts.filter((acc: AccountMetadata) =>
+        selectedAccountIds.has(acc.id)
+      ),
+    [signableAccounts, selectedAccountIds]
+  );
 
-    const accountsForPairing = selectedAccounts.map((acc: AccountMetadata) => ({
-      address: acc.address,
-      publicKey: acc.publicKey,
-      label: acc.label,
-    }));
+  // Canonical cache key for the current selection: device id + the sorted
+  // address SET. Recomputes on any selection change; when it diverges from the
+  // frozen session's key the displayed QR is stale and must be regenerated
+  // (re-signed as a whole — each signature binds the full set + ts).
+  const selectedKey = useMemo(() => {
+    if (!signerConfig || selectedAccounts.length === 0) return null;
+    const sortedAddrs = selectedAccounts
+      .map((acc: AccountMetadata) => acc.address)
+      .sort();
+    return `${signerConfig.deviceId}::${sortedAddrs.join(',')}`;
+  }, [signerConfig, selectedAccounts]);
 
-    const pairing = RemoteSignerService.createPairingPayload(
-      signerConfig.deviceId,
-      signerConfig.deviceName,
-      accountsForPairing
-    );
-
-    return RemoteSignerService.encodePayload(pairing);
-  }, [signerConfig, selectedAccountIds, signableAccounts]);
+  // The displayed QR is only valid while the frozen session matches the current
+  // selection. A selection change invalidates it (cache miss) → user regenerates.
+  const isSessionValid = session !== null && session.key === selectedKey;
 
   const toggleAccount = (accountId: string) => {
     setSelectedAccountIds((prev) => {
@@ -99,6 +131,68 @@ export default function ExportAccountsScreen() {
 
   const selectNone = () => {
     setSelectedAccountIds(new Set());
+  };
+
+  // Freeze + sign the current selection into a session (all accounts signed
+  // after a SINGLE unlock; the 60s key cache means one PIN entry covers them).
+  const generateSession = async (pin?: string) => {
+    if (
+      !signerConfig ||
+      selectedAccounts.length === 0 ||
+      selectedKey === null
+    ) {
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      const accountsForPairing = selectedAccounts.map(
+        (acc: AccountMetadata) => ({
+          address: acc.address,
+          publicKey: acc.publicKey,
+          label: acc.label,
+        })
+      );
+
+      const pairing = await RemoteSignerService.createSignedPairingPayload(
+        signerConfig.deviceId,
+        signerConfig.deviceName,
+        accountsForPairing,
+        pin
+      );
+      const encoded = RemoteSignerService.encodePayload(pairing);
+
+      setSession({
+        key: selectedKey,
+        encoded,
+        useAnimated: shouldUseAnimatedQR(encoded),
+      });
+    } catch (error) {
+      const messageText =
+        error instanceof AuthenticationRequiredError
+          ? 'Authentication failed. Please try again.'
+          : error instanceof Error
+            ? error.message
+            : 'Failed to generate the pairing QR code.';
+      showAlert('Could Not Generate QR', messageText);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Explicit "Generate pairing QR" action — gate behind unlock/PIN.
+  const handleGeneratePress = () => {
+    if (selectedAccounts.length === 0 || isGenerating) return;
+    setShowAuthModal(true);
+  };
+
+  const handleAuthSuccess = (pin?: string) => {
+    setShowAuthModal(false);
+    void generateSession(pin);
+  };
+
+  const handleAuthCancel = () => {
+    setShowAuthModal(false);
   };
 
   // Cross-platform alert helper
@@ -265,17 +359,62 @@ export default function ExportAccountsScreen() {
           ))}
         </View>
 
-        {/* QR Code Display */}
-        {qrData && selectedAccountIds.size > 0 && (
+        {/* Generate action — explicit, PIN-gated, async. Shown until a valid
+            (matching-selection) signed session exists. */}
+        {selectedAccountIds.size > 0 && !isSessionValid && (
+          <TouchableOpacity
+            style={[
+              styles.generateButton,
+              isGenerating && styles.generateButtonDisabled,
+            ]}
+            onPress={handleGeneratePress}
+            disabled={isGenerating}
+          >
+            {isGenerating ? (
+              <ActivityIndicator size="small" color={theme.colors.buttonText} />
+            ) : (
+              <Ionicons
+                name="qr-code-outline"
+                size={20}
+                color={theme.colors.buttonText}
+              />
+            )}
+            <Text style={styles.generateButtonText}>
+              {isGenerating ? 'Generating…' : 'Generate Pairing QR'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {selectedAccountIds.size > 0 && !isSessionValid && !isGenerating && (
+          <Text style={styles.generateHint}>
+            You&apos;ll be asked to authenticate. Each account is
+            cryptographically signed so the wallet can verify this device
+            controls it.
+          </Text>
+        )}
+
+        {/* QR Code Display — only while the frozen session matches the current
+            selection. Static payloads render RAW JSON via the plain QRCode; only
+            multi-frame payloads use the BC-UR animated transport. */}
+        {isSessionValid && session && (
           <View style={styles.qrSection}>
             <Text style={styles.sectionTitle}>Scan with Wallet Device</Text>
             <View style={styles.qrContainer}>
-              <QRCode
-                value={qrData}
-                size={220}
-                backgroundColor="white"
-                color="#000000"
-              />
+              {session.useAnimated ? (
+                <AnimatedQRCode
+                  data={session.encoded}
+                  size={220}
+                  showControls
+                  showFrameCounter
+                />
+              ) : (
+                <QRCode
+                  value={session.encoded}
+                  size={220}
+                  backgroundColor="white"
+                  color="#000000"
+                />
+              )}
             </View>
             <Text style={styles.qrHint}>
               Open the Voi Wallet app on your online device and scan this QR
@@ -297,6 +436,19 @@ export default function ExportAccountsScreen() {
           </View>
         )}
       </ScrollView>
+
+      <SignerAuthModal
+        visible={showAuthModal}
+        onSuccess={handleAuthSuccess}
+        onCancel={handleAuthCancel}
+        transactionCount={selectedAccounts.length}
+        message={
+          selectedAccounts.length === 1
+            ? 'Sign pairing for 1 account'
+            : `Sign pairing for ${selectedAccounts.length} accounts`
+        }
+        biometricPromptMessage="Authenticate to sign this pairing"
+      />
     </SafeAreaView>
   );
 }
@@ -457,6 +609,32 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.textSecondary,
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
       marginTop: 2,
+    },
+    generateButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: theme.spacing.sm,
+      backgroundColor: theme.colors.primary,
+      paddingVertical: theme.spacing.md,
+      borderRadius: theme.borderRadius.lg,
+      marginTop: theme.spacing.sm,
+    },
+    generateButtonDisabled: {
+      opacity: 0.6,
+    },
+    generateButtonText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: theme.colors.buttonText,
+    },
+    generateHint: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+      marginTop: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.md,
+      lineHeight: 18,
     },
     qrSection: {
       alignItems: 'center',

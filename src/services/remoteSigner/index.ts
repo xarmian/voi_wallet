@@ -563,3 +563,13 @@ export type {
   VerifiedPairingAccount,
   PairingVerificationResult,
 } from './pairing';
+
+// Pairing QR transport helpers (static-vs-animated threshold + UR detection).
+export {
+  encodedByteLength,
+  shouldUseAnimatedQR,
+  isUrEncodedFrame,
+} from './qrTransport';
+
+// Verify-result → wallet-import mapping (derived pubkey + authLevel wiring).
+export { mapVerifiedPairingToImportRequests } from './pairingImport';
