@@ -98,13 +98,69 @@ export interface RemoteSignerResponse {
 }
 
 /**
+ * Pairing protocol version.
+ *
+ * This is a SEPARATE axis from {@link REMOTE_SIGNER_CONSTANTS.PROTOCOL_VERSION}
+ * (which gates request/response signing and MUST stay at 1). Pairing payloads
+ * are versioned independently:
+ *   - `1` — legacy, UNSIGNED pairing (no per-account signatures).
+ *   - `2` — authenticated pairing: every account carries a set-bound
+ *     Ed25519 self-signature (proof-of-possession). See {@link PAIRING_VERSION}.
+ */
+export type PairingVersion = 1 | 2;
+
+/**
+ * Current authenticated pairing version (signed, set-bound).
+ *
+ * Kept deliberately separate from `REMOTE_SIGNER_CONSTANTS.PROTOCOL_VERSION`:
+ * bumping the shared protocol version would break cross-version request/response
+ * signing. Pairing versioning is an independent axis.
+ */
+export const PAIRING_VERSION = 2 as const;
+
+/**
+ * Hard input bounds for pairing validation (defence-in-depth against a hostile
+ * QR payload — see verifyPairing). Generous but finite.
+ */
+export const PAIRING_LIMITS = {
+  /** Maximum number of accounts in a single pairing payload */
+  MAX_ACCOUNTS: 100,
+  /** Maximum length of the device id string */
+  MAX_DEVICE_ID_LENGTH: 128,
+  /** Maximum length of the (cosmetic, unverified) device name */
+  MAX_NAME_LENGTH: 128,
+  /** Maximum length of a per-account (cosmetic, unverified) label */
+  MAX_LABEL_LENGTH: 128,
+  /** Exact byte length of an Ed25519 detached signature */
+  SIGNATURE_BYTES: 64,
+  /**
+   * Exact base64 length of a 64-byte signature (canonical, `==`-padded).
+   * Enforced BEFORE base64-decoding so a hostile QR cannot force an unbounded
+   * allocation ahead of the byte-length check.
+   */
+  SIGNATURE_B64_LENGTH: 88,
+} as const;
+
+/**
  * Account information in pairing data
  */
 export interface PairedAccount {
   /** Algorand address */
   addr: string;
-  /** Hex-encoded public key */
+  /**
+   * Hex-encoded public key.
+   *
+   * SECURITY: kept on the wire for backward compatibility only. It is NEVER
+   * trusted by the verifier — the verification public key is ALWAYS derived
+   * from `addr` (checksum-validated). See DR-2/DR-3 in the design.
+   */
   pk: string;
+  /**
+   * Base64-encoded 64-byte Ed25519 detached self-signature over the
+   * domain-separated, set-binding pairing message (v2 pairings only).
+   * Absent on legacy v1 (unsigned) pairings.
+   */
+  sig?: string;
   /** Optional label set by user on signer device */
   label?: string;
 }
@@ -115,8 +171,8 @@ export interface PairedAccount {
  * This is displayed by the signer to export accounts to the wallet.
  */
 export interface RemoteSignerPairing {
-  /** Version number for protocol compatibility */
-  v: 1;
+  /** Pairing protocol version (1 = legacy unsigned, 2 = authenticated/signed) */
+  v: PairingVersion;
   /** Type discriminator: 'pair' for pairing */
   t: 'pair';
   /** Unique identifier of the signer device */

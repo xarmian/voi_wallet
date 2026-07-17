@@ -6,6 +6,7 @@
  */
 
 import algosdk from 'algosdk';
+import nacl from 'tweetnacl';
 import { getCrypto } from '@/platform';
 import { NetworkService } from '../network';
 import { SecureKeyManager } from '../secure/keyManager';
@@ -14,6 +15,7 @@ import {
   RemoteSignerResponse,
   RemoteSignerPairing,
   RemoteSignerPayload,
+  PairedAccount,
   SignableTransaction,
   SignedTransaction,
   DecodedTransactionInfo,
@@ -23,7 +25,115 @@ import {
   isRemoteSignerResponse,
   isRemoteSignerPairing,
   REMOTE_SIGNER_CONSTANTS,
+  PAIRING_VERSION,
 } from '../../types/remoteSigner';
+import {
+  buildPairingMessage,
+  verifyPairing,
+  assertCanonicalAddressSet,
+} from './pairing';
+
+// ============================================================================
+// Authenticated pairing crypto core (v2) — signer-side (key-touching)
+// ============================================================================
+//
+// The pure serializer/verifier (`buildPairingMessage`, `verifyPairing`) live in
+// `./pairing` (dependency-light, unit-tested in isolation). The two functions
+// below load the private key and therefore stay here alongside the rest of the
+// secure-storage-dependent service surface.
+//
+// A v2 pairing proves the signer device controls each exported account by
+// attaching a per-account Ed25519 self-signature over a DOMAIN-SEPARATED,
+// SET-BINDING message. The wallet re-derives every verification key from the
+// address (never from the transmitted `pk`) and requires ALL accounts to
+// verify, or the whole pairing is rejected (all-or-nothing). See DR-1..DR-8.
+
+/**
+ * Sign a pairing message with the account's Ed25519 secret key.
+ *
+ * Loads the key the SAME way transaction signing does
+ * (`SecureKeyManager.getPrivateKey`) and produces a RAW `nacl.sign.detached`
+ * signature over `messageBytes`. It deliberately does NOT route through
+ * `signTransaction`/`algosdk.signTransaction` (those prepend "TX" + msgpack),
+ * which would break domain separation.
+ *
+ * The secret key is zero-filled in a `finally` (mirrors keyManager.ts). The
+ * returned 64-byte signature is an independent buffer allocated by tweetnacl.
+ *
+ * @returns the 64-byte detached signature
+ */
+export async function signPairingMessage(
+  address: string,
+  messageBytes: Uint8Array,
+  pin?: string
+): Promise<Uint8Array> {
+  let sk: Uint8Array | null = null;
+  try {
+    sk = await SecureKeyManager.getPrivateKey(
+      { address, purpose: 'verification' },
+      pin
+    );
+    return nacl.sign.detached(messageBytes, sk);
+  } finally {
+    if (sk) {
+      sk.fill(0);
+      sk = null;
+    }
+  }
+}
+
+/**
+ * Assemble an authenticated (v2) pairing payload.
+ *
+ * Stamps ONE `ts`, computes the canonical set once, then signs EACH selected
+ * account over the shared set-binding message. Keeps `pk` on the wire
+ * (additive; never trusted on verify).
+ *
+ * This is a NEW function — the legacy sync {@link RemoteSignerServiceClass.createPairingPayload}
+ * (v1, unsigned) is intentionally left unchanged so the current export screen
+ * keeps compiling until it is migrated (later task).
+ */
+export async function createSignedPairingPayload(
+  deviceId: string,
+  deviceName: string | undefined,
+  accounts: { address: string; publicKey: string; label?: string }[],
+  pin?: string
+): Promise<RemoteSignerPairing> {
+  // The signer must only sign a canonical, de-duplicated set — otherwise the
+  // ","-joined set-binding in buildPairingMessage would be ambiguous. Throws
+  // before any key access on a malformed set.
+  assertCanonicalAddressSet(accounts.map((a) => a.address));
+
+  const ts = Date.now();
+  // The full set every per-account signature binds to.
+  const setAccts = accounts.map((a) => ({ addr: a.address }));
+
+  const signedAccts: PairedAccount[] = [];
+  for (const acc of accounts) {
+    const messageBytes = buildPairingMessage({
+      dev: deviceId,
+      ts,
+      accts: setAccts,
+      addr: acc.address,
+    });
+    const sig = await signPairingMessage(acc.address, messageBytes, pin);
+    signedAccts.push({
+      addr: acc.address,
+      pk: acc.publicKey, // additive; ignored by the verifier
+      sig: Buffer.from(sig).toString('base64'),
+      label: acc.label,
+    });
+  }
+
+  return {
+    v: PAIRING_VERSION,
+    t: 'pair',
+    dev: deviceId,
+    name: deviceName,
+    accts: signedAccts,
+    ts,
+  };
+}
 
 /**
  * Remote Signer Service - singleton instance
@@ -221,6 +331,18 @@ class RemoteSignerServiceClass {
       ts: Date.now(),
     };
   }
+
+  /**
+   * Create an authenticated (v2) pairing payload. Delegates to the shared
+   * module-level {@link createSignedPairingPayload}.
+   */
+  createSignedPairingPayload = createSignedPairingPayload;
+
+  /**
+   * Verify a scanned pairing payload (all-or-nothing, set-bound). Delegates to
+   * the shared module-level {@link verifyPairing}.
+   */
+  verifyPairing = verifyPairing;
 
   // ============ Transaction Decoding ============
 
@@ -432,3 +554,17 @@ export type {
   AnimatedQREncodeResult,
   AnimatedQRDecodeState,
 } from './animatedQR';
+
+// Re-export the pure pairing crypto surface so consumers (and tests) can import
+// it from the service entry point as well as from './pairing'.
+export {
+  buildPairingMessage,
+  verifyPairing,
+  PAIRING_MESSAGE_DOMAIN,
+} from './pairing';
+export type {
+  BuildPairingMessageParams,
+  VerifiedPairing,
+  VerifiedPairingAccount,
+  PairingVerificationResult,
+} from './pairing';

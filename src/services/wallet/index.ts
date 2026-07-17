@@ -29,6 +29,7 @@ import {
   RekeyVerificationError,
   Wallet,
   WalletSettings,
+  withDefaultAuthLevel,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
 import { ledgerTransportService } from '@/services/ledger/transport';
@@ -586,6 +587,10 @@ export class MultiAccountWalletService {
         signerDeviceId: request.signerDeviceId,
         signerDeviceName: request.signerDeviceName,
         pairedAt: new Date().toISOString(),
+        // Persist the pairing authentication level. Defaults conservatively to
+        // 'v1-unsigned' until the import screen supplies a verified level
+        // (TASK-144).
+        authLevel: withDefaultAuthLevel(request.authLevel),
       };
 
       await this.addAccountToWallet(accountMetadata);
@@ -664,6 +669,9 @@ export class MultiAccountWalletService {
       signerDeviceId,
       signerDeviceName,
       pairedAt: new Date().toISOString(),
+      // Local conversion is not an authenticated (v2) pairing, so record the
+      // conservative default. Keeps the field present on all new records.
+      authLevel: 'v1-unsigned',
     };
 
     // Replace the account in the wallet

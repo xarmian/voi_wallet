@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCrypto } from '@/platform';
 import {
   AppMode,
   SignerDeviceConfig,
@@ -40,12 +41,17 @@ export async function getAppModeEarly(): Promise<AppMode> {
 }
 
 /**
- * Generate a unique device ID for this signer device
+ * Generate a unique device ID for this signer device.
+ *
+ * Uses a CSPRNG (`getCrypto().randomUUID()`) rather than `Math.random`, which
+ * is not cryptographically secure and could produce predictable/colliding ids
+ * (threat T2). The `dev` id is additionally authenticated inside each v2
+ * pairing signature. Existing persisted ids are NOT regenerated (that would
+ * break existing pairings) — this only runs when a fresh signer config is
+ * created (`initializeSignerConfig`).
  */
 function generateDeviceId(): string {
-  const timestamp = Date.now().toString(36);
-  const randomPart = Math.random().toString(36).substring(2, 10);
-  return `voi-signer-${timestamp}-${randomPart}`;
+  return `voi-signer-${getCrypto().randomUUID()}`;
 }
 
 /**

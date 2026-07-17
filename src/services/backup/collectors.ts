@@ -15,6 +15,7 @@ import {
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
+  withDefaultAuthLevel,
 } from '@/types/wallet';
 import { Friend } from '@/types/social';
 import { NetworkId } from '@/types/network';
@@ -164,6 +165,8 @@ export async function collectAccounts(
             signerDeviceName: remoteSignerAccount.signerDeviceName,
             pairedAt: remoteSignerAccount.pairedAt,
             lastSigningActivity: remoteSignerAccount.lastSigningActivity,
+            // Conservative default for legacy records with no persisted level.
+            authLevel: withDefaultAuthLevel(remoteSignerAccount.authLevel),
           });
           break;
         }
