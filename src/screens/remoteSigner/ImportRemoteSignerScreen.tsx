@@ -5,7 +5,7 @@
  * device to import accounts as REMOTE_SIGNER accounts.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,30 +13,31 @@ import {
   TouchableOpacity,
   ScrollView,
   Platform,
-  Dimensions,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraView, Camera } from 'expo-camera';
 import jsQR from 'jsqr';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
 import { useRemoteSignerStore } from '@/store/remoteSignerStore';
-import { RemoteSignerService } from '@/services/remoteSigner';
-import { AccountType, ImportRemoteSignerAccountRequest } from '@/types/wallet';
 import {
-  RemoteSignerPairing,
-  isRemoteSignerPairing,
-  SignerDeviceInfo,
-} from '@/types/remoteSigner';
+  RemoteSignerService,
+  AnimatedQRService,
+  isUrEncodedFrame,
+  mapVerifiedPairingToImportRequests,
+} from '@/services/remoteSigner';
+import type { VerifiedPairing } from '@/services/remoteSigner';
+import { AnimatedQRScanner } from '@/components/remoteSigner';
+import { SignerDeviceInfo } from '@/types/remoteSigner';
 import { formatAddress } from '@/utils/address';
 import { getFromClipboard } from '@/utils/clipboard';
 
-const { width } = Dimensions.get('window');
+/** Verification outcome that gates the preview UI. */
+type VerifiedStatus = 'v2-verified' | 'v1-unsigned';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -80,81 +81,109 @@ export default function ImportRemoteSignerScreen() {
   );
 
   const [screenState, setScreenState] = useState<ScreenState>('scanning');
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const [scanned, setScanned] = useState(false);
-  const [pairing, setPairing] = useState<RemoteSignerPairing | null>(null);
+  // The TRUSTED, sanitized pairing from verifyPairing (pubkeys DERIVED from
+  // addr; never the wire `pk`). `null` until a scan verifies.
+  const [verified, setVerified] = useState<VerifiedPairing | null>(null);
+  const [authStatus, setAuthStatus] = useState<VerifiedStatus | null>(null);
+  // ACTIVE confirmation gate for an unauthenticated (v1) pairing (DR-7). Must be
+  // explicitly toggled on before a v1 import is allowed; reset on every rescan.
+  const [confirmedUnverified, setConfirmedUnverified] = useState(false);
   const [selectedAccountAddresses, setSelectedAccountAddresses] = useState<
     Set<string>
   >(new Set());
   const [isImporting, setIsImporting] = useState(false);
+  // Bumped to force-remount the native scanner after a failed scan. A rejected
+  // or malformed QR leaves AnimatedQRScanner in a 'completed' state that ignores
+  // subsequent frames; remounting lets the user retry without leaving the screen.
+  const [scannerKey, setScannerKey] = useState(0);
+  const resetScanner = () => setScannerKey((k) => k + 1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  useEffect(() => {
-    if (Platform.OS !== 'web') {
-      requestCameraPermission();
-    } else {
-      setHasPermission(true);
-    }
-  }, []);
-
-  const requestCameraPermission = async () => {
+  /**
+   * Verify a fully-decoded pairing JSON string (raw JSON from a static frame, or
+   * the reassembled payload from a BC-UR multipart scan) and route on the result.
+   */
+  const verifyAndPreview = (json: string) => {
+    let parsed: unknown;
     try {
-      const { status } = await Camera.requestCameraPermissionsAsync();
-      setHasPermission(status === 'granted');
-    } catch (error) {
-      console.error('Camera permission error:', error);
-      setHasPermission(false);
-    }
-  };
-
-  const handleBarCodeScanned = useCallback(
-    ({ data }: { data: string }) => {
-      if (scanned) return;
-      setScanned(true);
-      processQRData(data);
-    },
-    [scanned]
-  );
-
-  const processQRData = (data: string) => {
-    try {
-      const payload = RemoteSignerService.decodePayload(data);
-
-      if (!isRemoteSignerPairing(payload)) {
-        showAlert(
-          'Invalid QR Code',
-          'This QR code is not an air-gapped signer pairing code.'
-        );
-        setScanned(false);
-        return;
-      }
-
-      // Validate pairing data
-      if (!payload.accts || payload.accts.length === 0) {
-        showAlert('Invalid Pairing', 'No accounts found in the pairing data.');
-        setScanned(false);
-        return;
-      }
-
-      setPairing(payload);
-      setSelectedAccountAddresses(new Set(payload.accts.map((a) => a.addr)));
-      setScreenState('preview');
-    } catch (error) {
-      console.error('Failed to parse QR data:', error);
+      parsed = JSON.parse(json);
+    } catch {
       showAlert(
         'Invalid QR Code',
         'Could not read the QR code. Make sure you are scanning an air-gapped signer pairing QR code.'
       );
-      setScanned(false);
+      resetScanner();
+      return;
     }
+
+    const result = RemoteSignerService.verifyPairing(parsed);
+
+    if (result.status === 'rejected') {
+      showAlert(
+        'Pairing Rejected',
+        `This pairing could not be verified and was blocked.\n\nReason: ${result.reason}`
+      );
+      resetScanner();
+      return;
+    }
+
+    setVerified(result.pairing);
+    setAuthStatus(result.status);
+    setConfirmedUnverified(false);
+    setSelectedAccountAddresses(
+      new Set(result.pairing.accounts.map((a) => a.addr))
+    );
+    setScreenState('preview');
+  };
+
+  /**
+   * Handle a scanned frame from the native BC-UR-aware scanner. The scanner has
+   * already reassembled multipart UR and passes the final decoded string here
+   * (or a raw non-UR QR verbatim), so this only needs to verify.
+   */
+  const handleScannerResult = (data: string) => {
+    verifyAndPreview(data);
+  };
+
+  const handleScannerError = (error: string) => {
+    showAlert('Scan Error', error || 'Failed to read the QR code.');
+    resetScanner();
+  };
+
+  /**
+   * Route a single scanned string that has NOT been through the reassembly path
+   * (web file/clipboard). A single static image can only carry a raw-JSON frame
+   * or a single-part UR; a MULTIPART (animated) pairing needs a camera.
+   */
+  const handleSingleFrame = (data: string) => {
+    if (isUrEncodedFrame(data)) {
+      if (AnimatedQRService.isMultipartURFrame(data)) {
+        showAlert(
+          'Animated QR Not Supported Here',
+          'This is a multi-frame (animated) pairing code. Import it using the camera scanner on a mobile device.'
+        );
+        return;
+      }
+      try {
+        verifyAndPreview(AnimatedQRService.decodeSinglePartUR(data));
+      } catch {
+        showAlert(
+          'Invalid QR Code',
+          'Could not decode the pairing QR code from this image.'
+        );
+      }
+      return;
+    }
+    // Raw-JSON static fast-path.
+    verifyAndPreview(data);
   };
 
   const handlePasteFromClipboard = async () => {
     try {
       const text = await getFromClipboard();
       if (text) {
-        processQRData(text.trim());
+        handleSingleFrame(text.trim());
       }
     } catch (error) {
       showAlert('Error', 'Failed to read from clipboard');
@@ -187,7 +216,7 @@ export default function ImportRemoteSignerScreen() {
 
           const code = jsQR(imageData.data, imageData.width, imageData.height);
           if (code?.data) {
-            processQRData(code.data);
+            handleSingleFrame(code.data);
           } else {
             showAlert(
               'No QR Code Found',
@@ -215,43 +244,43 @@ export default function ImportRemoteSignerScreen() {
     });
   };
 
+  // A v1 (unauthenticated) pairing must be actively confirmed before import.
+  const importBlockedForV1 =
+    authStatus === 'v1-unsigned' && !confirmedUnverified;
+  const canImport =
+    selectedAccountAddresses.size > 0 && !importBlockedForV1 && !isImporting;
+
   const handleImport = async () => {
-    if (!pairing || selectedAccountAddresses.size === 0) return;
+    if (!verified || !authStatus || !canImport) return;
 
     setIsImporting(true);
     setScreenState('importing');
 
     try {
-      // Import selected accounts
-      const selectedAccounts = pairing.accts.filter((a) =>
-        selectedAccountAddresses.has(a.addr)
+      // Map the VERIFIED pairing → import requests: each request carries the
+      // pubkey DERIVED from addr (never the wire `pk`) and the verified
+      // authLevel ('v2-signed' | 'v1-unsigned').
+      const requests = mapVerifiedPairingToImportRequests(
+        verified,
+        selectedAccountAddresses
       );
 
-      for (const account of selectedAccounts) {
-        const request: ImportRemoteSignerAccountRequest = {
-          type: AccountType.REMOTE_SIGNER,
-          address: account.addr,
-          publicKey: account.pk,
-          signerDeviceId: pairing.dev,
-          signerDeviceName: pairing.name,
-          label: account.label,
-        };
-
+      for (const request of requests) {
         await addRemoteSignerAccount(request);
       }
 
-      // Add/update paired signer info
+      // Add/update paired signer info.
       const signerInfo: SignerDeviceInfo = {
-        deviceId: pairing.dev,
-        deviceName: pairing.name,
+        deviceId: verified.dev,
+        deviceName: verified.name,
         pairedAt: Date.now(),
-        addresses: selectedAccounts.map((a) => a.addr),
+        addresses: requests.map((r) => r.address),
       };
       await addPairedSigner(signerInfo);
 
       showAlert(
         'Success',
-        `Successfully imported ${selectedAccounts.length} account${selectedAccounts.length > 1 ? 's' : ''} from the air-gapped signer.`,
+        `Successfully imported ${requests.length} account${requests.length > 1 ? 's' : ''} from the air-gapped signer.`,
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
     } catch (error) {
@@ -266,8 +295,9 @@ export default function ImportRemoteSignerScreen() {
   };
 
   const handleRescan = () => {
-    setScanned(false);
-    setPairing(null);
+    setVerified(null);
+    setAuthStatus(null);
+    setConfirmedUnverified(false);
     setSelectedAccountAddresses(new Set());
     setScreenState('scanning');
   };
@@ -330,72 +360,63 @@ export default function ImportRemoteSignerScreen() {
       );
     }
 
-    if (hasPermission === null) {
-      return (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text style={styles.statusText}>Requesting camera permission...</Text>
-        </View>
-      );
-    }
-
-    if (hasPermission === false) {
-      return (
-        <View style={styles.centerContainer}>
-          <Ionicons
-            name="camera-off-outline"
-            size={48}
-            color={theme.colors.error}
-          />
-          <Text style={styles.statusText}>Camera permission denied</Text>
-          <Text style={styles.statusSubtext}>
-            Please enable camera access in your device settings to scan QR
-            codes.
-          </Text>
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={requestCameraPermission}
-          >
-            <Text style={styles.retryButtonText}>Request Permission</Text>
-          </TouchableOpacity>
-        </View>
-      );
-    }
-
+    // Native: the BC-UR-aware scanner handles camera permission, raw-QR
+    // pass-through, AND multi-frame (animated) UR reassembly. It calls onScan
+    // with the final decoded payload string in every case.
     return (
       <View style={styles.cameraContainer}>
-        <CameraView
-          style={StyleSheet.absoluteFillObject}
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+        <AnimatedQRScanner
+          key={scannerKey}
+          onScan={handleScannerResult}
+          onError={handleScannerError}
+          instructionsText="Scan the pairing QR code displayed on your signer device"
         />
-        <View style={styles.overlay}>
-          <View style={styles.scanArea}>
-            <View style={[styles.corner, styles.topLeft]} />
-            <View style={[styles.corner, styles.topRight]} />
-            <View style={[styles.corner, styles.bottomLeft]} />
-            <View style={[styles.corner, styles.bottomRight]} />
-          </View>
-        </View>
-        <View style={styles.scanInstructions}>
-          <Text style={styles.scanText}>
-            Scan the QR code displayed on your signer device
-          </Text>
-        </View>
       </View>
     );
   };
 
   // Render preview state
   const renderPreview = () => {
-    if (!pairing) return null;
+    if (!verified || !authStatus) return null;
+
+    const isVerified = authStatus === 'v2-verified';
 
     return (
       <ScrollView
         style={styles.previewContainer}
         contentContainerStyle={styles.previewContent}
       >
-        {/* Signer Device Info */}
+        {/* Trust status banner — the cryptographic verdict of verifyPairing. */}
+        {isVerified ? (
+          <View style={styles.verifiedBanner}>
+            <Ionicons
+              name="shield-checkmark"
+              size={24}
+              color={theme.colors.success}
+            />
+            <View style={styles.bannerText}>
+              <Text style={styles.verifiedTitle}>Verified pairing</Text>
+              <Text style={styles.verifiedSubtitle}>
+                The signer cryptographically proved it controls every account
+                below.
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.warningBanner}>
+            <Ionicons name="warning" size={24} color={theme.colors.warning} />
+            <View style={styles.bannerText}>
+              <Text style={styles.warningTitle}>Unauthenticated pairing</Text>
+              <Text style={styles.warningSubtitle}>
+                This pairing is NOT cryptographically signed. The signer did not
+                prove it controls these accounts — only import it if you trust
+                the source.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Signer Device Info — Device ID is the trust-bearing identity. */}
         <View style={styles.deviceCard}>
           <View style={styles.deviceIconContainer}>
             <Ionicons
@@ -405,10 +426,16 @@ export default function ImportRemoteSignerScreen() {
             />
           </View>
           <View style={styles.deviceInfo}>
-            <Text style={styles.deviceName}>
-              {pairing.name || 'Unknown Signer'}
-            </Text>
-            <Text style={styles.deviceId}>Device ID: {pairing.dev}</Text>
+            <Text style={styles.deviceIdLabel}>Signer Device ID</Text>
+            <Text style={styles.deviceId}>{verified.dev}</Text>
+            <View style={styles.unverifiedRow}>
+              <Text style={styles.deviceNameUnverified} numberOfLines={1}>
+                {verified.name || 'Unnamed device'}
+              </Text>
+              <View style={styles.unverifiedTag}>
+                <Text style={styles.unverifiedTagText}>user-supplied</Text>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -417,11 +444,11 @@ export default function ImportRemoteSignerScreen() {
           <View style={styles.accountsHeader}>
             <Text style={styles.sectionTitle}>
               Select Accounts to Import ({selectedAccountAddresses.size}/
-              {pairing.accts.length})
+              {verified.accounts.length})
             </Text>
           </View>
 
-          {pairing.accts.map((account) => (
+          {verified.accounts.map((account) => (
             <TouchableOpacity
               key={account.addr}
               style={[
@@ -447,26 +474,60 @@ export default function ImportRemoteSignerScreen() {
                 )}
               </View>
               <View style={styles.accountDetails}>
-                {account.label && (
-                  <Text style={styles.accountLabel}>{account.label}</Text>
-                )}
+                {/* Address is cryptographically bound (pubkey derived from it). */}
                 <Text style={styles.accountAddress}>
                   {formatAddress(account.addr)}
                 </Text>
+                {account.label ? (
+                  <View style={styles.unverifiedRow}>
+                    <Text
+                      style={styles.accountLabelUnverified}
+                      numberOfLines={1}
+                    >
+                      {account.label}
+                    </Text>
+                    <View style={styles.unverifiedTag}>
+                      <Text style={styles.unverifiedTagText}>unverified</Text>
+                    </View>
+                  </View>
+                ) : null}
               </View>
             </TouchableOpacity>
           ))}
         </View>
 
+        {/* Active confirmation gate for an unauthenticated (v1) pairing. */}
+        {authStatus === 'v1-unsigned' && (
+          <TouchableOpacity
+            style={[
+              styles.confirmCard,
+              confirmedUnverified && styles.confirmCardChecked,
+            ]}
+            onPress={() => setConfirmedUnverified((prev) => !prev)}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={confirmedUnverified ? 'checkbox' : 'square-outline'}
+              size={24}
+              color={
+                confirmedUnverified
+                  ? theme.colors.warning
+                  : theme.colors.textSecondary
+              }
+            />
+            <Text style={styles.confirmText}>
+              This pairing is unauthenticated — the signer did not
+              cryptographically prove control of these accounts. I understand.
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Actions */}
         <View style={styles.previewActions}>
           <TouchableOpacity
-            style={[
-              styles.importButton,
-              selectedAccountAddresses.size === 0 && styles.buttonDisabled,
-            ]}
+            style={[styles.importButton, !canImport && styles.buttonDisabled]}
             onPress={handleImport}
-            disabled={selectedAccountAddresses.size === 0}
+            disabled={!canImport}
           >
             <Ionicons
               name="download-outline"
@@ -556,84 +617,114 @@ const createStyles = (theme: Theme) =>
       marginTop: theme.spacing.md,
       textAlign: 'center',
     },
-    statusSubtext: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
-      marginTop: theme.spacing.sm,
-      textAlign: 'center',
-    },
-    retryButton: {
-      marginTop: theme.spacing.lg,
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.md,
-      backgroundColor: theme.colors.primary,
-      borderRadius: theme.borderRadius.lg,
-    },
-    retryButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.buttonText,
-    },
-    // Camera styles
+    // Camera styles — the BC-UR scanner fills this and renders its own overlay.
     cameraContainer: {
       flex: 1,
     },
-    overlay: {
-      ...StyleSheet.absoluteFillObject,
-      justifyContent: 'center',
+    // Trust status banners
+    verifiedBanner: {
+      flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(0,0,0,0.5)',
-    },
-    scanArea: {
-      width: width * 0.7,
-      height: width * 0.7,
-      position: 'relative',
-    },
-    corner: {
-      position: 'absolute',
-      width: 30,
-      height: 30,
-      borderColor: theme.colors.primary,
-    },
-    topLeft: {
-      top: 0,
-      left: 0,
-      borderTopWidth: 3,
-      borderLeftWidth: 3,
-    },
-    topRight: {
-      top: 0,
-      right: 0,
-      borderTopWidth: 3,
-      borderRightWidth: 3,
-    },
-    bottomLeft: {
-      bottom: 0,
-      left: 0,
-      borderBottomWidth: 3,
-      borderLeftWidth: 3,
-    },
-    bottomRight: {
-      bottom: 0,
-      right: 0,
-      borderBottomWidth: 3,
-      borderRightWidth: 3,
-    },
-    scanInstructions: {
-      position: 'absolute',
-      bottom: 100,
-      left: 0,
-      right: 0,
-      alignItems: 'center',
-    },
-    scanText: {
-      fontSize: 16,
-      color: 'white',
-      textAlign: 'center',
-      backgroundColor: 'rgba(0,0,0,0.6)',
-      paddingHorizontal: theme.spacing.lg,
-      paddingVertical: theme.spacing.sm,
+      gap: theme.spacing.md,
+      backgroundColor: `${theme.colors.success}15`,
       borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.md,
+      marginBottom: theme.spacing.lg,
+      borderWidth: 1,
+      borderColor: `${theme.colors.success}40`,
+    },
+    warningBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.md,
+      backgroundColor: `${theme.colors.warning}15`,
+      borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.md,
+      marginBottom: theme.spacing.lg,
+      borderWidth: 1,
+      borderColor: `${theme.colors.warning}40`,
+    },
+    bannerText: {
+      flex: 1,
+    },
+    verifiedTitle: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: theme.colors.success,
+    },
+    verifiedSubtitle: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      marginTop: 2,
+      lineHeight: 18,
+    },
+    warningTitle: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: theme.colors.warning,
+    },
+    warningSubtitle: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      marginTop: 2,
+      lineHeight: 18,
+    },
+    // Unverified (user-supplied) markers
+    unverifiedRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: theme.spacing.xs,
+      marginTop: 4,
+    },
+    unverifiedTag: {
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: theme.borderRadius.sm,
+      backgroundColor: `${theme.colors.warning}20`,
+    },
+    unverifiedTagText: {
+      fontSize: 10,
+      fontWeight: '600',
+      color: theme.colors.warning,
+      textTransform: 'uppercase',
+      letterSpacing: 0.3,
+    },
+    deviceIdLabel: {
+      fontSize: 12,
+      color: theme.colors.textSecondary,
+      marginBottom: 2,
+    },
+    deviceNameUnverified: {
+      flexShrink: 1,
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+    },
+    accountLabelUnverified: {
+      flexShrink: 1,
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+    },
+    // v1 active-confirmation gate
+    confirmCard: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: theme.spacing.sm,
+      backgroundColor: theme.colors.card,
+      borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.md,
+      marginBottom: theme.spacing.lg,
+      borderWidth: 1,
+      borderColor: `${theme.colors.warning}40`,
+    },
+    confirmCardChecked: {
+      borderColor: theme.colors.warning,
+      backgroundColor: `${theme.colors.warning}12`,
+    },
+    confirmText: {
+      flex: 1,
+      fontSize: 13,
+      color: theme.colors.text,
+      lineHeight: 19,
     },
     // Web styles
     webContainer: {
@@ -714,15 +805,10 @@ const createStyles = (theme: Theme) =>
     deviceInfo: {
       flex: 1,
     },
-    deviceName: {
-      fontSize: 18,
+    deviceId: {
+      fontSize: 13,
       fontWeight: '600',
       color: theme.colors.text,
-    },
-    deviceId: {
-      fontSize: 12,
-      color: theme.colors.textSecondary,
-      marginTop: 4,
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     accountsSection: {
@@ -756,15 +842,10 @@ const createStyles = (theme: Theme) =>
     accountDetails: {
       flex: 1,
     },
-    accountLabel: {
-      fontSize: 16,
-      fontWeight: '500',
-      color: theme.colors.text,
-      marginBottom: 2,
-    },
     accountAddress: {
       fontSize: 14,
-      color: theme.colors.textSecondary,
+      fontWeight: '500',
+      color: theme.colors.text,
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     previewActions: {
