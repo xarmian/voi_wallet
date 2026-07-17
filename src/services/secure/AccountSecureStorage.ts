@@ -275,8 +275,9 @@ export class AccountSecureStorage {
   // passphrase is ~60+ bits, the real at-rest entropy lever, and composition
   // rules reject strong passphrases. The 6-digit PIN stays the default; the
   // passphrase is the opt-in strength lever. A live strength meter guides the UI
-  // but the ONLY hard gate is this length floor.
-  private static readonly PASSPHRASE_MIN_LENGTH = 12;
+  // but the ONLY hard gate is this length floor. Public so the setup/change UI
+  // can render the same floor it enforces.
+  static readonly PASSPHRASE_MIN_LENGTH = 12;
 
   private static legacyCheckRequired: boolean | undefined;
 

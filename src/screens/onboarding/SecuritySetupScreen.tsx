@@ -1,13 +1,5 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  Alert,
-  ActivityIndicator,
-  Switch,
-} from 'react-native';
+import { View, Text, StyleSheet, Pressable, Alert, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RouteProp } from '@react-navigation/native';
@@ -28,7 +20,7 @@ import {
   clearAccountSecrets,
 } from '@/utils/accountQRParser';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useThemeColors, useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import UniversalHeader from '@/components/common/UniversalHeader';
@@ -36,6 +28,10 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import { GlassInput } from '@/components/common/GlassInput';
+import { PassphraseStrengthMeter } from '@/components/common/PassphraseStrengthMeter';
+import type { SecretSource } from '@/services/secure/SessionKeyVault';
+
+const PASSPHRASE_MIN = AccountSecureStorage.PASSPHRASE_MIN_LENGTH;
 
 type SecuritySetupScreenNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -54,8 +50,8 @@ interface Props {
 
 export default function SecuritySetupScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
-  const themeColors = useThemeColors();
   const styles = useThemedStyles(createStyles);
+  const [mode, setMode] = useState<SecretSource>('pin');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [biometricAvailable, setBiometricAvailable] = useState(false);
@@ -88,26 +84,40 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     setBiometricAvailable(available && enrolled);
   };
 
+  const isPassphrase = mode === 'passphrase';
+  const secretLabel = isPassphrase ? 'passphrase' : 'PIN';
+
   const handleComplete = async () => {
     if (submitting) return;
-    if (!pin || pin.length !== 6) {
+    if (isPassphrase) {
+      if (pin.length < PASSPHRASE_MIN) {
+        Alert.alert(
+          'Error',
+          `Passphrase must be at least ${PASSPHRASE_MIN} characters`
+        );
+        return;
+      }
+    } else if (!pin || pin.length !== 6) {
       Alert.alert('Error', 'PIN must be 6 digits');
       return;
     }
 
     if (pin !== confirmPin) {
-      Alert.alert('Error', 'PINs do not match');
+      Alert.alert(
+        'Error',
+        isPassphrase ? 'Passphrases do not match' : 'PINs do not match'
+      );
       return;
     }
 
     try {
       setSubmitting(true);
 
-      // Store PIN first — atomic first-secret setup (DOC-137 §5.4). Re-wraps any
-      // pre-existing device-key accounts under the new PIN before committing the
-      // credential (verify-before-delete), so onboarding never strands keys.
-      setSetupStep('Setting up PIN...');
-      await AccountSecureStorage.setupPin(pin, 'pin');
+      // Store the secret first — atomic first-secret setup (DOC-137 §5.4). Re-wraps
+      // any pre-existing device-key accounts under the new secret before committing
+      // the credential (verify-before-delete), so onboarding never strands keys.
+      setSetupStep(`Setting up ${secretLabel}...`);
+      await AccountSecureStorage.setupPin(pin, mode);
 
       // Store biometric preference. When the user opts into biometrics at
       // onboarding, capture the just-set PIN behind the write-time auth gate
@@ -121,7 +131,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
         try {
           await AccountSecureStorage.setBiometricSecret(
             pin,
-            'pin',
+            mode,
             'Enable biometric unlock'
           );
           await AccountSecureStorage.setBiometricEnabled(true);
@@ -261,27 +271,95 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
               />
             )}
 
-            <GlassInput
-              label="Create 6-digit PIN"
-              placeholder="Enter PIN"
-              value={pin}
-              onChangeText={setPin}
-              keyboardType="numeric"
-              maxLength={6}
-              secureTextEntry
-              leftIcon="lock-closed-outline"
-            />
+            {/* PIN vs passphrase mode toggle. Switching clears the fields so a
+                half-typed PIN can't leak into a passphrase submit (or vice-versa). */}
+            <View style={styles.modeToggle}>
+              {(['pin', 'passphrase'] as const).map((m) => {
+                const active = mode === m;
+                return (
+                  <Pressable
+                    key={m}
+                    onPress={() => {
+                      if (mode === m) return;
+                      setMode(m);
+                      setPin('');
+                      setConfirmPin('');
+                    }}
+                    style={[
+                      styles.modeOption,
+                      active && {
+                        backgroundColor: theme.colors.primary,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.modeOptionText,
+                        {
+                          color: active
+                            ? theme.colors.buttonText
+                            : theme.colors.text,
+                        },
+                      ]}
+                    >
+                      {m === 'pin' ? '6-digit PIN' : 'Passphrase'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-            <GlassInput
-              label="Confirm PIN"
-              placeholder="Confirm PIN"
-              value={confirmPin}
-              onChangeText={setConfirmPin}
-              keyboardType="numeric"
-              maxLength={6}
-              secureTextEntry
-              leftIcon="lock-closed-outline"
-            />
+            {isPassphrase ? (
+              <>
+                <GlassInput
+                  label={`Create passphrase (min ${PASSPHRASE_MIN} chars)`}
+                  placeholder="Enter passphrase"
+                  value={pin}
+                  onChangeText={setPin}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                  leftIcon="key-outline"
+                />
+                <PassphraseStrengthMeter
+                  secret={pin}
+                  minLength={PASSPHRASE_MIN}
+                />
+                <GlassInput
+                  label="Confirm passphrase"
+                  placeholder="Confirm passphrase"
+                  value={confirmPin}
+                  onChangeText={setConfirmPin}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
+                  leftIcon="key-outline"
+                />
+              </>
+            ) : (
+              <>
+                <GlassInput
+                  label="Create 6-digit PIN"
+                  placeholder="Enter PIN"
+                  value={pin}
+                  onChangeText={setPin}
+                  keyboardType="numeric"
+                  maxLength={6}
+                  secureTextEntry
+                  leftIcon="lock-closed-outline"
+                />
+                <GlassInput
+                  label="Confirm PIN"
+                  placeholder="Confirm PIN"
+                  value={confirmPin}
+                  onChangeText={setConfirmPin}
+                  keyboardType="numeric"
+                  maxLength={6}
+                  secureTextEntry
+                  leftIcon="lock-closed-outline"
+                />
+              </>
+            )}
 
             {biometricAvailable && (
               <View style={styles.biometricContainer}>
@@ -360,6 +438,23 @@ const createStyles = (theme: Theme) =>
       borderRadius: theme.borderRadius.xxl,
       marginBottom: theme.spacing.xl,
       gap: theme.spacing.md,
+    },
+    modeToggle: {
+      flexDirection: 'row',
+      gap: theme.spacing.xs,
+      backgroundColor: theme.colors.glassBorder,
+      borderRadius: theme.borderRadius.lg,
+      padding: theme.spacing.xs,
+    },
+    modeOption: {
+      flex: 1,
+      paddingVertical: theme.spacing.sm,
+      borderRadius: theme.borderRadius.md,
+      alignItems: 'center',
+    },
+    modeOptionText: {
+      fontSize: theme.typography.body.fontSize,
+      fontWeight: '600',
     },
     biometricContainer: {
       flexDirection: 'row',

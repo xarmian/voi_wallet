@@ -6,13 +6,14 @@
  * The caller can then use this to retrieve private keys and sign transactions.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
+  TextInput,
   ActivityIndicator,
   Platform,
 } from 'react-native';
@@ -22,6 +23,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { AccountSecureStorage } from '@/services/secure';
+import type { SecretSource } from '@/services/secure/SessionKeyVault';
 import { hapticNotify } from '@/utils/haptics';
 
 interface SignerAuthModalProps {
@@ -44,6 +46,12 @@ export default function SignerAuthModal({
   const styles = useThemedStyles(createStyles);
 
   const [pin, setPin] = useState('');
+  // The stored credential kind decides the input: numeric keypad for a PIN, a
+  // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
+  // resolves so existing PIN wallets show the keypad immediately.
+  const [credentialSource, setCredentialSource] = useState<SecretSource>('pin');
+  const isPassphrase = credentialSource === 'passphrase';
+  const secretNoun = isPassphrase ? 'passphrase' : 'PIN';
   const [error, setError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
@@ -77,6 +85,24 @@ export default function SignerAuthModal({
       setLockUntil(null);
     }
   }, [visible]);
+
+  // Read the stored credential kind once on mount so the correct input renders.
+  useEffect(() => {
+    let cancelled = false;
+    AccountSecureStorage.getCredentialSource()
+      .then((source) => {
+        if (!cancelled && source) {
+          setCredentialSource(source);
+        }
+      })
+      .catch(() => {
+        // Keep the default ('pin') — the keypad still works for a PIN wallet, and
+        // a passphrase wallet's verifyPin rejects a wrong-format entry safely.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Auto-prompt for biometric auth when modal opens
   useEffect(() => {
@@ -143,17 +169,24 @@ export default function SignerAuthModal({
           setError('Too many attempts. Try again in 30 seconds.');
         } else {
           setError(
-            `Incorrect PIN. ${MAX_ATTEMPTS - attempts} attempts remaining.`
+            `Incorrect ${secretNoun}. ${MAX_ATTEMPTS - attempts} attempts remaining.`
           );
         }
       }
     } catch (error) {
-      console.error('PIN verification error:', error);
-      setError('Failed to verify PIN');
+      console.error('Secret verification error:', error);
+      setError(`Failed to verify ${secretNoun}`);
       setPin('');
     } finally {
       setIsVerifying(false);
     }
+  };
+
+  // Passphrase submit — reuses the same handlePinSubmit()/verify path as the
+  // keypad; it only differs in how the secret is entered (full string vs. digits).
+  const handlePassphraseSubmit = () => {
+    if (isLocked || isVerifying || pin.length === 0) return;
+    handlePinSubmit(pin);
   };
 
   const handleBiometricAuth = async () => {
@@ -210,6 +243,41 @@ export default function SignerAuthModal({
       ))}
     </View>
   );
+
+  const renderPassphraseInput = () => {
+    const submitDisabled = isLocked || isVerifying || pin.length === 0;
+    return (
+      <View style={styles.passphraseContainer}>
+        <TextInput
+          style={styles.passphraseInput}
+          value={pin}
+          onChangeText={(text) => {
+            setPin(text);
+            setError(null);
+          }}
+          placeholder="Enter your passphrase"
+          placeholderTextColor={theme.colors.textMuted}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!isLocked && !isVerifying}
+          onSubmitEditing={handlePassphraseSubmit}
+          returnKeyType="go"
+          autoFocus
+        />
+        <TouchableOpacity
+          style={[
+            styles.passphraseSubmit,
+            submitDisabled && styles.passphraseSubmitDisabled,
+          ]}
+          onPress={handlePassphraseSubmit}
+          disabled={submitDisabled}
+        >
+          <Text style={styles.passphraseSubmitText}>Unlock</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   const renderNumberPad = () => (
     <View style={styles.numberPad}>
@@ -323,11 +391,11 @@ export default function SignerAuthModal({
               />
             )}
 
-            {renderPinDots()}
+            {!isPassphrase && renderPinDots()}
 
             {error && <Text style={styles.error}>{error}</Text>}
 
-            {renderNumberPad()}
+            {isPassphrase ? renderPassphraseInput() : renderNumberPad()}
           </View>
         </View>
       </View>
@@ -410,6 +478,36 @@ const createStyles = (theme: Theme) =>
     },
     pinDotFilled: {
       borderWidth: 0,
+    },
+    passphraseContainer: {
+      width: '100%',
+      maxWidth: 300,
+      marginBottom: 24,
+      gap: theme.spacing.md,
+    },
+    passphraseInput: {
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.borderRadius.lg,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.md,
+      fontSize: 18,
+      color: theme.colors.text,
+      backgroundColor: theme.colors.card,
+    },
+    passphraseSubmit: {
+      backgroundColor: theme.colors.primary,
+      borderRadius: theme.borderRadius.lg,
+      paddingVertical: theme.spacing.md,
+      alignItems: 'center',
+    },
+    passphraseSubmitDisabled: {
+      opacity: 0.5,
+    },
+    passphraseSubmitText: {
+      color: theme.colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
     },
     error: {
       fontSize: 14,

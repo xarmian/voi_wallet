@@ -5,6 +5,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  TextInput,
   ActivityIndicator,
   Platform,
 } from 'react-native';
@@ -14,6 +15,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
+import type { SecretSource } from '@/services/secure/SessionKeyVault';
 import { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { hapticNotify } from '@/utils/haptics';
 
@@ -76,6 +78,12 @@ export default function UnifiedAuthModal({
   const styles = useThemedStyles(createStyles);
   const { authState } = useAuth();
   const [pin, setPin] = useState('');
+  // The stored credential kind decides the input: numeric keypad for a PIN, a
+  // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
+  // resolves so existing PIN wallets show the keypad immediately.
+  const [credentialSource, setCredentialSource] = useState<SecretSource>('pin');
+  const isPassphrase = credentialSource === 'passphrase';
+  const secretNoun = isPassphrase ? 'passphrase' : 'PIN';
   const [attempts, setAttempts] = useState(0);
   const [isLocked, setIsLocked] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -109,6 +117,24 @@ export default function UnifiedAuthModal({
       setBiometricAuthenticated(false);
     }
   }, [visible]);
+
+  // Read the stored credential kind once on mount so the correct input renders.
+  useEffect(() => {
+    let cancelled = false;
+    AccountSecureStorage.getCredentialSource()
+      .then((source) => {
+        if (!cancelled && source) {
+          setCredentialSource(source);
+        }
+      })
+      .catch(() => {
+        // Keep the default ('pin') — the keypad still works for a PIN wallet, and
+        // a passphrase wallet's verifyPin rejects a wrong-format entry safely.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const getAuthMessage = (authPurpose: string): string => {
     switch (authPurpose) {
@@ -263,17 +289,24 @@ export default function UnifiedAuthModal({
           }, LOCKOUT_TIME);
         } else {
           showAlert(
-            'Incorrect PIN',
+            `Incorrect ${secretNoun}`,
             `${MAX_ATTEMPTS - newAttempts} attempts remaining`
           );
         }
       }
     } catch (error) {
-      console.error('PIN verification error:', error);
-      showAlert('Error', 'Failed to verify PIN');
+      console.error('Secret verification error:', error);
+      showAlert('Error', `Failed to verify ${secretNoun}`);
     } finally {
       setIsAuthenticating(false);
     }
+  };
+
+  // Passphrase submit — reuses the same verifyPin()/verify path as the keypad;
+  // it only differs in how the secret is entered (full string vs. 6 digits).
+  const handlePassphraseSubmit = () => {
+    if (isLocked || isAuthenticating || pin.length === 0) return;
+    verifyPin(pin);
   };
 
   const handleBiometricConfirm = () => {
@@ -317,6 +350,38 @@ export default function UnifiedAuthModal({
             ]}
           />
         ))}
+      </View>
+    );
+  };
+
+  const renderPassphraseInput = () => {
+    const submitDisabled = isLocked || isAuthenticating || pin.length === 0;
+    return (
+      <View style={styles.passphraseContainer}>
+        <TextInput
+          style={styles.passphraseInput}
+          value={pin}
+          onChangeText={setPin}
+          placeholder="Enter your passphrase"
+          placeholderTextColor={theme.colors.textMuted}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!isLocked && !isAuthenticating}
+          onSubmitEditing={handlePassphraseSubmit}
+          returnKeyType="go"
+          autoFocus
+        />
+        <TouchableOpacity
+          style={[
+            styles.passphraseSubmit,
+            submitDisabled && styles.passphraseSubmitDisabled,
+          ]}
+          onPress={handlePassphraseSubmit}
+          disabled={submitDisabled}
+        >
+          <Text style={styles.passphraseSubmitText}>Unlock</Text>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -474,7 +539,7 @@ export default function UnifiedAuthModal({
             </View>
           ) : (
             <>
-              {renderPinDots()}
+              {!isPassphrase && renderPinDots()}
 
               {shouldUseBiometrics && !isLocked && (
                 <TouchableOpacity
@@ -491,7 +556,7 @@ export default function UnifiedAuthModal({
                 </TouchableOpacity>
               )}
 
-              {renderKeypad()}
+              {isPassphrase ? renderPassphraseInput() : renderKeypad()}
 
               {isLocked && (
                 <View style={styles.lockoutContainer}>
@@ -633,6 +698,34 @@ const createStyles = (theme: Theme) =>
     pinDotFilled: {
       backgroundColor: theme.colors.primary,
       borderColor: theme.colors.primary,
+    },
+    passphraseContainer: {
+      marginBottom: theme.spacing.lg,
+      gap: theme.spacing.md,
+    },
+    passphraseInput: {
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.borderRadius.lg,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.md,
+      fontSize: 18,
+      color: theme.colors.text,
+      backgroundColor: theme.colors.surface,
+    },
+    passphraseSubmit: {
+      backgroundColor: theme.colors.primary,
+      borderRadius: theme.borderRadius.lg,
+      paddingVertical: theme.spacing.md,
+      alignItems: 'center',
+    },
+    passphraseSubmitDisabled: {
+      opacity: 0.5,
+    },
+    passphraseSubmitText: {
+      color: theme.colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
     },
     biometricButton: {
       alignItems: 'center',

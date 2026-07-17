@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  TextInput,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +15,7 @@ import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import type { PinThrottleState } from '@/services/secure';
+import type { SecretSource } from '@/services/secure/SessionKeyVault';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { hapticNotify } from '@/utils/haptics';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
@@ -57,6 +59,12 @@ export default function LockScreen() {
   const { authState, unlock, unlockWithBiometrics, recheckAuthState } =
     useAuth();
   const [pin, setPin] = useState('');
+  // The stored credential kind decides the input: numeric keypad for a PIN, a
+  // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
+  // resolves so existing PIN wallets show the keypad immediately.
+  const [credentialSource, setCredentialSource] = useState<SecretSource>('pin');
+  const isPassphrase = credentialSource === 'passphrase';
+  const secretNoun = isPassphrase ? 'passphrase' : 'PIN';
 
   // Lockout state is now sourced from the PERSISTENT throttle in
   // AccountSecureStorage (DOC-137 §8 / TASK-26) instead of local React state, so
@@ -91,6 +99,24 @@ export default function LockScreen() {
       // fails closed, and we don't want to strand input disabled forever.
       setHydrated(true);
     }
+  }, []);
+
+  // Read the stored credential kind once on mount so the correct input renders.
+  useEffect(() => {
+    let cancelled = false;
+    AccountSecureStorage.getCredentialSource()
+      .then((source) => {
+        if (!cancelled && source) {
+          setCredentialSource(source);
+        }
+      })
+      .catch(() => {
+        // Keep the default ('pin') — the keypad still works for a PIN wallet, and
+        // a passphrase wallet's verifyPin rejects a wrong-format entry safely.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load persisted lockout on mount so a relaunch during a lockout stays locked.
@@ -186,19 +212,29 @@ export default function LockScreen() {
         showAlert('Too Many Attempts', SECURITY_MESSAGES.PIN_ATTEMPTS_EXCEEDED);
       } else if (state.attemptsRemaining > 0) {
         showAlert(
-          'Incorrect PIN',
+          `Incorrect ${secretNoun}`,
           `${state.attemptsRemaining} attempt${
             state.attemptsRemaining === 1 ? '' : 's'
           } remaining`
         );
       } else {
-        showAlert('Incorrect PIN', SECURITY_MESSAGES.PIN_ATTEMPTS_EXCEEDED);
+        showAlert(
+          `Incorrect ${secretNoun}`,
+          SECURITY_MESSAGES.PIN_ATTEMPTS_EXCEEDED
+        );
       }
     } catch (error) {
-      console.error('PIN verification error:', error);
+      console.error('Secret verification error:', error);
       hapticNotify('error');
-      showAlert('Error', 'Failed to verify PIN');
+      showAlert('Error', `Failed to verify ${secretNoun}`);
     }
+  };
+
+  // Passphrase submit — the local verifyPin() drives the same unlock/throttle path
+  // as the keypad; it only differs in how the secret is entered.
+  const handlePassphraseSubmit = () => {
+    if (inputDisabled || pin.length === 0) return;
+    verifyPin(pin);
   };
 
   const handleReset = () => {
@@ -286,6 +322,38 @@ export default function LockScreen() {
     );
   };
 
+  const renderPassphraseInput = () => {
+    return (
+      <View style={styles.passphraseContainer}>
+        <TextInput
+          style={styles.passphraseInput}
+          value={pin}
+          onChangeText={setPin}
+          placeholder="Enter your passphrase"
+          placeholderTextColor={theme.colors.textMuted}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!inputDisabled}
+          onSubmitEditing={handlePassphraseSubmit}
+          returnKeyType="go"
+          autoFocus
+        />
+        <TouchableOpacity
+          style={[
+            styles.passphraseSubmit,
+            (inputDisabled || pin.length === 0) &&
+              styles.passphraseSubmitDisabled,
+          ]}
+          onPress={handlePassphraseSubmit}
+          disabled={inputDisabled || pin.length === 0}
+        >
+          <Text style={styles.passphraseSubmitText}>Unlock</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   const renderKeypad = () => {
     const numbers = [
       ['1', '2', '3'],
@@ -344,11 +412,13 @@ export default function LockScreen() {
           <Ionicons name="lock-closed" size={48} color={theme.colors.primary} />
           <Text style={styles.title}>Wallet Locked</Text>
           <Text style={styles.subtitle}>
-            {hydrated ? 'Enter your PIN to unlock' : 'Checking status…'}
+            {hydrated
+              ? `Enter your ${secretNoun} to unlock`
+              : 'Checking status…'}
           </Text>
         </View>
 
-        {renderPinDots()}
+        {!isPassphrase && renderPinDots()}
 
         {authState.biometricEnabled && !isLocked && (
           <TouchableOpacity
@@ -364,7 +434,7 @@ export default function LockScreen() {
           </TouchableOpacity>
         )}
 
-        {renderKeypad()}
+        {isPassphrase ? renderPassphraseInput() : renderKeypad()}
 
         {isLocked ? (
           <View style={styles.lockoutContainer}>
@@ -453,6 +523,34 @@ const createStyles = (theme: Theme) =>
     pinDotFilled: {
       backgroundColor: theme.colors.primary,
       borderColor: theme.colors.primary,
+    },
+    passphraseContainer: {
+      marginBottom: theme.spacing.xxl,
+      gap: theme.spacing.md,
+    },
+    passphraseInput: {
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.borderRadius.lg,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.md,
+      fontSize: 18,
+      color: theme.colors.text,
+      backgroundColor: theme.colors.surface,
+    },
+    passphraseSubmit: {
+      backgroundColor: theme.colors.primary,
+      borderRadius: theme.borderRadius.lg,
+      paddingVertical: theme.spacing.md,
+      alignItems: 'center',
+    },
+    passphraseSubmitDisabled: {
+      opacity: 0.5,
+    },
+    passphraseSubmitText: {
+      color: theme.colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
     },
     biometricButton: {
       alignItems: 'center',
