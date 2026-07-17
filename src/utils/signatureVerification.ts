@@ -217,6 +217,115 @@ export function verifySignedTransactionBytes(
   return verifySignedTransaction(base64, expectedSignerAddress);
 }
 
+/**
+ * Upper bound on the base64 length of an airgap-transfer confirmation blob.
+ *
+ * The confirmation is a single zero-amount self-payment with a short fixed note
+ * (~350 bytes raw → ~470 base64 chars). 2 KB leaves generous headroom while
+ * rejecting an implausibly large scanned payload BEFORE it reaches the msgpack
+ * decoder (untrusted QR input).
+ */
+export const MAX_AIRGAP_CONFIRMATION_BASE64_LEN = 2048;
+
+/** Expectations the wallet imposes on an airgap-transfer confirmation. */
+export interface AirgapConfirmationExpectations {
+  /** The STANDARD account being transferred; the confirmation must self-sign for it. */
+  expectedSignerAddress: string;
+  /** Active-network genesis hash (base64); the confirmation must be for this chain. */
+  expectedGenesisHashBase64: string;
+}
+
+/**
+ * Verify the airgap device's transfer confirmation before the online wallet
+ * deletes its local key copy (TASK-146). This is a PRE-DELETION SAFETY CHECK,
+ * not a confidentiality boundary — the airgap already received the full key via
+ * the export QR; this only proves the airgap can produce a valid signature for
+ * the address on the expected chain, so the user does not delete their only key
+ * copy after a failed/partial transfer.
+ *
+ * Layered on {@link verifySignedTransaction} (which already enforces a single
+ * Ed25519 `sig`, no rekey, no msig/lsig, sender === {@link
+ * AirgapConfirmationExpectations.expectedSignerAddress}, and the self-payment
+ * invariant), this ADDS wallet-side, protocol-neutral checks:
+ *   1. bound the untrusted base64 length before decode;
+ *   2. amount === 0 (binds the confirmation to the expected zero-value shape);
+ *   3. genesisHash === the active network (rejects a cross-chain confirmation).
+ *
+ * DELIBERATELY NOT CHECKED: freshness/replay. The confirmation carries no
+ * wallet-chosen nonce, so a confirmation captured from a prior transfer of the
+ * SAME account still verifies. Closing that needs a two-sided nonce protocol
+ * (declined in TASK-146 for cross-version-compat reasons). The exact validity
+ * window / note text are also intentionally NOT asserted — they would couple the
+ * wallet to the airgap's exact constants (a cross-version foot-gun) for ~zero
+ * added value on a zero-amount self-payment.
+ */
+export function verifyAirgapTransferConfirmation(
+  signedTxnBase64: string,
+  expected: AirgapConfirmationExpectations
+): VerificationResult {
+  // Bound the untrusted scanned payload before it reaches the decoder.
+  if (
+    typeof signedTxnBase64 !== 'string' ||
+    signedTxnBase64.length === 0 ||
+    signedTxnBase64.length > MAX_AIRGAP_CONFIRMATION_BASE64_LEN
+  ) {
+    return {
+      valid: false,
+      error: 'Confirmation payload is missing or too large',
+    };
+  }
+
+  // Crypto + self-payment + no-rekey + no-msig/lsig + signer-identity core.
+  const base = verifySignedTransaction(
+    signedTxnBase64,
+    expected.expectedSignerAddress
+  );
+  if (!base.valid) {
+    return base;
+  }
+
+  // Additional shape/chain binding (defense-in-depth; NOT a freshness guard).
+  try {
+    const signedTxn = algosdk.decodeSignedTransaction(
+      Buffer.from(signedTxnBase64, 'base64')
+    );
+    const txnAny = signedTxn.txn as any;
+
+    // The verification self-payment must move zero value. algosdk omits a zero
+    // amount from the encoding, so `undefined` is treated as 0.
+    const rawAmount = txnAny.payment?.amount ?? txnAny.amt ?? 0;
+    if (BigInt(rawAmount ?? 0) !== 0n) {
+      return {
+        valid: false,
+        error: 'Verification transaction must be a zero-amount self-payment',
+      };
+    }
+
+    // Genesis hash must match the active network (reject cross-chain proofs).
+    const genesisHash: Uint8Array | undefined = txnAny.genesisHash ?? txnAny.gh;
+    const expectedGenesisHash = new Uint8Array(
+      Buffer.from(expected.expectedGenesisHashBase64, 'base64')
+    );
+    if (
+      !genesisHash ||
+      !bytesEqual(new Uint8Array(genesisHash), expectedGenesisHash)
+    ) {
+      return {
+        valid: false,
+        error: 'Verification transaction is for a different network',
+      };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return {
+      valid: false,
+      error: `Failed to verify confirmation: ${message}`,
+    };
+  }
+
+  return { valid: true };
+}
+
 // ============================================================================
 // Remote-signer signed-response verification (DR-6)
 // ============================================================================

@@ -82,6 +82,20 @@ describe('arc0300', () => {
         generateArc0300AccountExportUri({ privateKeyBytes: new Uint8Array(0) })
       ).toThrow('Invalid private key length: expected 64 bytes, got 0');
     });
+
+    // TASK-146 secret-hygiene contract: the function zeroes only its OWN
+    // transient Buffer copy of the secret and must NOT mutate the caller's
+    // array (the caller owns zeroing its own key). A regression that zeroed the
+    // input in place would corrupt the caller's key before it can be used/zeroed.
+    it('does not mutate the caller-supplied privateKeyBytes', () => {
+      const sk = makeSecretKey(9);
+      const before = Array.from(sk);
+      const uri = generateArc0300AccountExportUri({ privateKeyBytes: sk });
+      // The input array is unchanged...
+      expect(Array.from(sk)).toEqual(before);
+      // ...and the URI encodes the original (unzeroed) key.
+      expect(uri).toBe(`avm://account/import?privatekey=${toB64Url(sk)}`);
+    });
   });
 
   describe('parseArc0300AccountImportUri', () => {

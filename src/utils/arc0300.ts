@@ -164,6 +164,15 @@ export function isArc0300AccountImportUri(uri: string): boolean {
  * Generate an ARC-0300 account export URI containing a private key.
  * Used for transferring an account to an air-gapped device.
  *
+ * SECRET-HYGIENE CONTRACT (TASK-146): this function copies the secret bytes into
+ * a transient Buffer, zeroes THAT copy before returning, and does NOT mutate the
+ * caller's `privateKeyBytes` (the caller owns zeroing its own array). It CANNOT,
+ * however, make the returned value secret-free: the URI — and the intermediate
+ * base64 strings — are immutable JS strings that embed the raw private key and
+ * cannot be wiped; they persist in the heap until GC. This is irreducible for a
+ * "render the key as a QR" feature. Callers MUST minimize the returned string's
+ * lifetime (drop the reference the moment the QR is no longer displayed).
+ *
  * @param params.privateKeyBytes - The 64-byte Ed25519 secret key
  * @param params.name - Optional account name/label
  * @returns ARC-0300 URI string (e.g., avm://account/import?privatekey=<base64>&name=<name>)
@@ -181,13 +190,17 @@ export function generateArc0300AccountExportUri(params: {
     );
   }
 
-  // Convert to URL-safe base64 (RFC 4648 §5)
-  // Replace + with -, / with _, and remove padding =
-  const privateKeyBase64 = Buffer.from(privateKeyBytes)
+  // Convert to URL-safe base64 (RFC 4648 §5): replace + with -, / with _, and
+  // remove padding =. `Buffer.from(privateKeyBytes)` makes a fresh binary COPY
+  // of the secret; we zero that copy the instant base64 is derived so only the
+  // (unavoidable, immutable) base64 string form of the key survives this call.
+  const keyBuffer = Buffer.from(privateKeyBytes);
+  const privateKeyBase64 = keyBuffer
     .toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
+  keyBuffer.fill(0);
 
   // Build the URI
   let uri = `avm://account/import?privatekey=${privateKeyBase64}`;
