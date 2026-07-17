@@ -48,11 +48,11 @@ export interface AuthState {
 
 export interface AuthContextType {
   authState: AuthState;
-  unlock: (pin: string) => Promise<boolean>;
+  unlock: (secret: string) => Promise<boolean>;
   unlockWithBiometrics: () => Promise<boolean>;
   lock: () => void;
   updateActivity: () => void;
-  setupPin: (pin: string) => Promise<void>;
+  setupPin: (secret: string, source?: SecretSource) => Promise<void>;
   enableBiometrics: (enabled: boolean, secret?: string) => Promise<void>;
   recheckAuthState: () => Promise<void>;
   updateTimeoutSetting: () => Promise<void>;
@@ -273,20 +273,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, timeoutMs);
   };
 
-  const unlock = async (pin: string): Promise<boolean> => {
+  const unlock = async (secret: string): Promise<boolean> => {
     try {
-      if (!pin || pin.length !== 6) {
+      // PR7: accept a PIN or a passphrase — verifyPin validates the format
+      // against the STORED credential kind, so no 6-digit gate here (that would
+      // reject a passphrase). An empty secret can never be valid.
+      if (!secret) {
         return false;
       }
 
-      const isValid = await AccountSecureStorage.verifyPin(pin);
+      const isValid = await AccountSecureStorage.verifyPin(secret);
 
       if (isValid) {
-        // Populate the session vault with the verified secret (DOC-137 §6.3).
-        // In PR3 keys are still Format A, so the vault is not yet load-bearing
-        // for decryption (the device-key path handles it) — this establishes
-        // the session secret the v2-blob path will use in PR4/PR5.
-        SessionKeyVault.set(pin, 'pin');
+        // Populate the session vault with the verified secret AND its kind
+        // (DOC-137 §6.3), read from the stored credential so a passphrase session
+        // is tagged 'passphrase'. The vault is load-bearing for v2 reads.
+        const source =
+          (await AccountSecureStorage.getCredentialSource()) ?? 'pin';
+        SessionKeyVault.set(secret, source);
         // Flip the lock signal to UNLOCKED synchronously (mirrors lock()) so the
         // messaging poll/cache-write guard resumes immediately, not only after
         // the React effect below runs.
@@ -411,15 +415,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const setupPin = async (pin: string): Promise<void> => {
-    if (!pin || pin.length !== 6 || !/^\d{6}$/.test(pin)) {
-      throw new Error('PIN must be 6 digits');
+  const setupPin = async (
+    secret: string,
+    source: SecretSource = 'pin'
+  ): Promise<void> => {
+    // PR7: format is validated per-kind inside AccountSecureStorage.setupPin
+    // (validateSecret): PIN = 6 digits, passphrase = min length. Empty is never
+    // valid.
+    if (!secret) {
+      throw new Error('A PIN or passphrase is required');
     }
 
     // Use the atomic first-secret setup flow (DOC-137 §5.4), NOT a bare hash
-    // persist: it re-wraps any pre-existing device-key accounts under the new PIN
-    // (verify-before-delete) so first-time PIN setup can never strand keys.
-    await AccountSecureStorage.setupPin(pin, 'pin');
+    // persist: it re-wraps any pre-existing device-key accounts under the new
+    // secret (verify-before-delete) so first-time setup can never strand keys.
+    await AccountSecureStorage.setupPin(secret, source);
     setAuthState((prev) => ({
       ...prev,
       hasPin: true,

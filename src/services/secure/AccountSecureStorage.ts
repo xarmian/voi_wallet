@@ -270,6 +270,14 @@ export class AccountSecureStorage {
   private static readonly LEGACY_PIN_ITERATIONS = 1000;
   private static readonly PREVIOUS_PIN_ITERATIONS: number[] = [];
 
+  // Minimum length for an alphanumeric passphrase credential (DOC-137 §7/§12 Q6,
+  // PR7). LENGTH-ONLY policy (Dave 2026-07-16): no composition rules — a ~12-char
+  // passphrase is ~60+ bits, the real at-rest entropy lever, and composition
+  // rules reject strong passphrases. The 6-digit PIN stays the default; the
+  // passphrase is the opt-in strength lever. A live strength meter guides the UI
+  // but the ONLY hard gate is this length floor.
+  private static readonly PASSPHRASE_MIN_LENGTH = 12;
+
   private static legacyCheckRequired: boolean | undefined;
 
   private static secretKey(accountId: string): string {
@@ -1199,15 +1207,25 @@ export class AccountSecureStorage {
           // AuthContext reads with getItemWithAuth at unlock to populate the
           // SessionKeyVault. getPrivateKey is a pure reader: for Format-A payloads
           // the device key decrypts regardless of vault state, so this is
-          // behavior-preserving. A no-biometric wallet that still has a PIN keeps
-          // requiring the PIN (the throw below) rather than reading ambiently.
+          // behavior-preserving.
+          //
+          // §6.4 READER GATE (PR7): the pin=undefined read is allowed when EITHER
+          // biometrics is enabled OR the SessionKeyVault is unlocked. The vault is
+          // populated at unlock from the just-verified PIN/passphrase, so once the
+          // user has unlocked, the ~14 background callers (WC auto-approve,
+          // messaging poll, send/sign) can read without re-entering the secret —
+          // for PIN-only AND passphrase-only wallets, not just biometric ones.
+          // This is what makes v2 keys usable when locked-then-unlocked without
+          // biometrics. A LOCKED vault with a PIN and no biometrics still throws
+          // (require an explicit unlock) rather than reading ambiently.
           const biometricEnabled = await this.isBiometricEnabled();
+          const vaultUnlocked = SessionKeyVault.isUnlocked();
 
-          if (!biometricEnabled) {
+          if (!biometricEnabled && !vaultUnlocked) {
             const hasPin = await this.hasPin();
             if (hasPin) {
               throw new AuthenticationRequiredError(
-                'PIN required to access private key'
+                'PIN or passphrase required to access private key'
               );
             }
           }
@@ -1909,23 +1927,57 @@ export class AccountSecureStorage {
   // PIN Management Methods
 
   /**
-   * Validate a user secret for its kind. PIN is the enforced 6-digit default;
-   * passphrase policy (min length / entropy meter) is finalized in PR7 — here we
-   * only reject an empty passphrase so a blank secret can never commit.
+   * True iff `secret` is well-formed for its kind (DOC-137 §7, PR7): a PIN is
+   * exactly 6 digits; a passphrase is at least PASSPHRASE_MIN_LENGTH chars
+   * (length-only — no composition rules). Pure predicate, no throw — used by the
+   * verifyPin fast-reject (so a malformed entry is never counted as a throttle
+   * attempt) and as the basis for validateSecret.
+   */
+  static isSecretFormatValid(
+    secret: string,
+    secretSource: SecretSource
+  ): boolean {
+    if (!secret) {
+      return false;
+    }
+    if (secretSource === 'passphrase') {
+      return secret.length >= this.PASSPHRASE_MIN_LENGTH;
+    }
+    return secret.length === 6 && /^\d{6}$/.test(secret);
+  }
+
+  /**
+   * Validate a user secret for its kind, THROWING a user-facing message on
+   * failure (used at setup/change where we want to explain why). PIN = 6 digits;
+   * passphrase = min PASSPHRASE_MIN_LENGTH chars, length-only (DOC-137 §12 Q6).
    */
   private static validateSecret(
     secret: string,
     secretSource: SecretSource
   ): void {
-    if (secretSource === 'passphrase') {
-      if (!secret || secret.length === 0) {
-        throw new Error('Passphrase must not be empty');
-      }
+    if (this.isSecretFormatValid(secret, secretSource)) {
       return;
     }
-    if (!secret || secret.length !== 6 || !/^\d{6}$/.test(secret)) {
-      throw new Error('PIN must be 6 digits');
+    if (secretSource === 'passphrase') {
+      throw new Error(
+        `Passphrase must be at least ${this.PASSPHRASE_MIN_LENGTH} characters`
+      );
     }
+    throw new Error('PIN must be 6 digits');
+  }
+
+  /**
+   * The kind of the currently-stored credential (PIN vs passphrase), or null if
+   * no credential is set. Public so the UI (LockScreen / auth modals / settings)
+   * can render the numeric keypad vs a masked passphrase field. Never returns the
+   * secret itself — only its kind.
+   */
+  static async getCredentialSource(): Promise<SecretSource | null> {
+    const stored = await this.getStoredPinData();
+    if (!stored) {
+      return null;
+    }
+    return stored.secretSource ?? 'pin';
   }
 
   /**
@@ -1950,22 +2002,16 @@ export class AccountSecureStorage {
    * device-key copies intact; crash after commit → v2 copies valid, cleanup
    * idempotent).
    *
-   * TODO(PR7): allow `secretSource: 'passphrase'` once verifyPin supports a
-   * non-6-digit secret. Until then a passphrase credential would be
-   * UNRECOVERABLE — verifyPin rejects any non-6-digit input BEFORE the hash
-   * check — so passphrase is REFUSED here (Codex P1-4).
+   * PR7: `secretSource: 'passphrase'` is now supported — verifyPin validates and
+   * unlocks a passphrase credential by reading the stored kind, so a passphrase
+   * is recoverable. validateSecret enforces the per-kind format (PIN 6 digits,
+   * passphrase ≥ PASSPHRASE_MIN_LENGTH) before the credential commits.
    */
   static async setupPin(
     newSecret: string,
     secretSource: SecretSource = 'pin'
   ): Promise<void> {
     try {
-      if (secretSource !== 'pin') {
-        // TODO(PR7): remove once verifyPin can unlock a passphrase credential.
-        throw new Error(
-          'Passphrase credentials are not supported yet (PR7); only a 6-digit PIN can be set'
-        );
-      }
       this.validateSecret(newSecret, secretSource);
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
@@ -2001,9 +2047,15 @@ export class AccountSecureStorage {
    */
   static async verifyPin(pin: string): Promise<boolean> {
     // Malformed input never reaches the throttle: it can't unlock the wallet and
-    // is not produced by the UI (which only submits 6 digits), so it is not
-    // counted as an attempt.
-    if (!pin || pin.length !== 6 || !/^\d{6}$/.test(pin)) {
+    // is not counted as an attempt. Validate against the STORED credential's kind
+    // (PR7) so a passphrase credential accepts a ≥12-char passphrase while a PIN
+    // credential still rejects anything but 6 digits. No credential → reject.
+    const stored = await this.getStoredPinData();
+    if (!stored) {
+      return false;
+    }
+    const source: SecretSource = stored.secretSource ?? 'pin';
+    if (!this.isSecretFormatValid(pin, source)) {
       return false;
     }
 
@@ -2334,21 +2386,20 @@ export class AccountSecureStorage {
     }
   }
 
-  static async changePin(currentPin: string, newPin: string): Promise<void> {
+  static async changePin(
+    currentPin: string,
+    newPin: string,
+    newSource: SecretSource = 'pin'
+  ): Promise<void> {
     try {
-      // Validate inputs
-      if (
-        !currentPin ||
-        currentPin.length !== 6 ||
-        !/^\d{6}$/.test(currentPin)
-      ) {
-        throw new Error('Current PIN must be 6 digits');
-      }
-      if (!newPin || newPin.length !== 6 || !/^\d{6}$/.test(newPin)) {
-        throw new Error('New PIN must be 6 digits');
-      }
+      // Validate the NEW secret against its chosen kind (PR7: PIN=6 digits,
+      // passphrase=min length). The CURRENT secret's format is validated by
+      // verifyPin below (which reads the stored credential's kind), so a
+      // PIN→passphrase or passphrase→PIN switch is supported: `currentPin` is
+      // whatever the existing credential is, `newPin`/`newSource` is the target.
+      this.validateSecret(newPin, newSource);
       if (currentPin === newPin) {
-        throw new Error('New PIN must be different from current PIN');
+        throw new Error('New secret must be different from the current one');
       }
 
       // Acquire the GLOBAL key-mutation mutex FIRST, THEN verify the current PIN
@@ -2367,12 +2418,12 @@ export class AccountSecureStorage {
       await this.runKeyMutationExclusive(async () => {
         const isCurrentValid = await this.verifyPin(currentPin);
         if (!isCurrentValid) {
-          throw new Error('Current PIN is incorrect');
+          throw new Error('Current secret is incorrect');
         }
         await this.rewrapAndCommitCredentialLocked({
           currentSecret: currentPin,
           newSecret: newPin,
-          newSource: 'pin',
+          newSource,
         });
       });
       this.legacyCheckRequired = false;
@@ -2434,16 +2485,10 @@ export class AccountSecureStorage {
   }): Promise<void> {
     const { currentSecret, newSecret, newSource } = opts;
 
-    // TODO(PR7): a passphrase credential is UNRECOVERABLE today (verifyPin rejects
-    // any non-6-digit input before the hash check), so refuse to CREATE one until
-    // PR7 wires the passphrase verify/unlock path (Codex P1-4). Defense-in-depth:
-    // setupPin also rejects passphrase up front; changePin only ever passes 'pin'.
-    if (newSource !== 'pin') {
-      throw new AccountStorageError(
-        'Passphrase credentials are not supported yet (PR7)'
-      );
-    }
-
+    // PR7: both 'pin' and 'passphrase' new-credential kinds are supported here —
+    // verifyPin reads the stored `secretSource` and validates/unlocks accordingly,
+    // so a passphrase credential is fully recoverable. The new kind is folded into
+    // the credential (persistPinCredential) and each v2 blob (secretSource).
     const deviceSecret = await this.getStableDeviceId();
     const ids = await this.getAllAccountIds();
 

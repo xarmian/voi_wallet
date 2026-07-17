@@ -750,7 +750,7 @@ describe('global key-mutation mutex (P1-B / P1-1a) — writers serialize with re
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
-      message: expect.stringMatching(/Current PIN is incorrect/),
+      message: expect.stringMatching(/Current secret is incorrect/),
     });
 
     // The first changePin (acquires the lock first) wins → 222222.
@@ -793,15 +793,10 @@ describe('global key-mutation mutex (P1-B / P1-1a) — writers serialize with re
   }, 20000);
 });
 
-describe('passphrase credential rejected until PR7 (Codex P1-4)', () => {
-  it('setupPin with secretSource=passphrase throws (verifyPin cannot unlock it yet)', async () => {
-    await expect(
-      AccountSecureStorage.setupPin('correct horse battery', 'passphrase')
-    ).rejects.toThrow(/not supported yet|PR7/i);
-    // No credential was created.
-    expect(await AccountSecureStorage.hasPin()).toBe(false);
-  });
-});
+// NOTE: PR4's "passphrase credential rejected until PR7" guard was REMOVED in
+// PR7 — passphrase credentials are now supported end-to-end. That behavior is
+// covered by src/services/secure/__tests__/passphrase.test.ts (setupPin +
+// verifyPin + changePin PIN↔passphrase + the length-only policy).
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('payload budget enforced on write (§2.4 / PR1 carry-forward)', () => {
@@ -863,7 +858,7 @@ describe('changePin verify gate is throttle-aware (§8)', () => {
     // aborts BEFORE any re-wrap.
     await expect(
       AccountSecureStorage.changePin('999999', '222222')
-    ).rejects.toThrow(/Current PIN is incorrect/);
+    ).rejects.toThrow(/Current secret is incorrect/);
 
     // The secret payload is byte-for-byte unchanged; account still readable OLD.
     expect(mockPlatform.__secure.get(secretKey('acct-a'))).toBe(before);
