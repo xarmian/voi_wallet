@@ -4,7 +4,7 @@
  * Type definitions for the wallet backup and restore functionality.
  */
 
-import { AccountType } from '@/types/wallet';
+import { AccountType, RemoteSignerAuthLevel } from '@/types/wallet';
 import { Friend } from '@/types/social';
 import { NetworkId } from '@/types/network';
 
@@ -98,6 +98,8 @@ export interface BackupAccountData {
   pairedAt?: string;
   /** ISO timestamp of last signing activity */
   lastSigningActivity?: string;
+  /** Pairing authentication level (defaults to 'v1-unsigned' when absent) */
+  authLevel?: RemoteSignerAuthLevel;
 }
 
 /**

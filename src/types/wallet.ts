@@ -61,6 +61,29 @@ export interface LedgerAccountMetadata extends BaseAccountMetadata {
   lastDeviceConnection?: string; // Last successful device connection timestamp
 }
 
+/**
+ * Pairing authentication level for a remote signer account.
+ *
+ * - `'v2-signed'`   — the account was imported from an authenticated (v2)
+ *   pairing whose set-bound Ed25519 self-signature verified.
+ * - `'v1-unsigned'` — legacy / unauthenticated pairing (no verified signature).
+ *   This is ALSO the conservative default for any record where the field is
+ *   missing (legacy metadata) — always read it as `authLevel ?? 'v1-unsigned'`.
+ */
+export type RemoteSignerAuthLevel = 'v1-unsigned' | 'v2-signed';
+
+/**
+ * Resolve a possibly-missing pairing auth level to a concrete value, defaulting
+ * conservatively to 'v1-unsigned'. Use this at EVERY read of a persisted
+ * `authLevel` (legacy records predate the field). Centralised so the default is
+ * single-sourced and unit-testable.
+ */
+export function withDefaultAuthLevel(
+  level?: RemoteSignerAuthLevel
+): RemoteSignerAuthLevel {
+  return level ?? 'v1-unsigned';
+}
+
 // Remote Signer Account (air-gapped QR-based signing)
 export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
   type: AccountType.REMOTE_SIGNER;
@@ -68,6 +91,12 @@ export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
   signerDeviceName?: string; // User-friendly device name (e.g., "My Cold Storage Phone")
   pairedAt: string; // ISO timestamp when account was paired
   lastSigningActivity?: string; // Last time a transaction was signed
+  /**
+   * Pairing authentication level. Optional for backward compatibility with
+   * records written before this field existed; treat a missing value as
+   * 'v1-unsigned' at EVERY read site (`authLevel ?? 'v1-unsigned'`).
+   */
+  authLevel?: RemoteSignerAuthLevel;
 }
 
 // Union type for all account metadata types
@@ -275,6 +304,12 @@ export interface ImportRemoteSignerAccountRequest {
   signerDeviceName?: string; // User-friendly device name
   label?: string; // User-defined label for the account
   color?: string; // UI color identifier
+  /**
+   * Pairing authentication level (from verifyPairing). Optional: when omitted
+   * the account is persisted as the conservative 'v1-unsigned'. The import
+   * screen wires this in a later task (TASK-144).
+   */
+  authLevel?: RemoteSignerAuthLevel;
 }
 
 // Account Error Types

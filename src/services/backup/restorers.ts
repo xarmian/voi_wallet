@@ -19,6 +19,7 @@ import {
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
   Wallet,
+  withDefaultAuthLevel,
 } from '@/types/wallet';
 import { Friend } from '@/types/social';
 import {
@@ -334,6 +335,8 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             signerDeviceName: backupAccount.signerDeviceName,
             pairedAt: backupAccount.pairedAt,
             lastSigningActivity: backupAccount.lastSigningActivity,
+            // Conservative default for backups written before this field existed.
+            authLevel: withDefaultAuthLevel(backupAccount.authLevel),
           };
 
           await AccountSecureStorage.storeAccount(remoteSignerAccount);
