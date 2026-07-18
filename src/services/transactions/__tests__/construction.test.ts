@@ -118,6 +118,29 @@ function decodeBytes(bytes: Uint8Array): algosdk.Transaction {
   return algosdk.decodeUnsignedTransaction(bytes);
 }
 
+/**
+ * Assert every txn in an encoded group carries the CANONICAL algosdk group id
+ * (not merely the same arbitrary bytes). We decode the group, strip the group
+ * field, recompute `computeGroupID` over the group-less txns, and require the
+ * stored group to equal that canonical value on every member.
+ */
+function expectCanonicalGroup(txnBytes: Uint8Array[]): void {
+  const decoded = txnBytes.map(decodeBytes);
+  const stored = decoded.map((t) =>
+    t.group ? Buffer.from(t.group).toString('hex') : undefined
+  );
+  // computeGroupID hashes the group-less encoding, so clear group first.
+  decoded.forEach((t) => {
+    t.group = undefined;
+  });
+  const canonical = Buffer.from(algosdk.computeGroupID(decoded)).toString(
+    'hex'
+  );
+  for (const g of stored) {
+    expect(g).toBe(canonical);
+  }
+}
+
 beforeEach(() => {
   // Fresh suggested-params object per call: some builders spread/clone it, so we
   // never want two builds to share (and mutate) one instance.
@@ -408,12 +431,44 @@ describe('ARC-200 transfer construction', () => {
     expect(call.applicationCall?.appIndex).toBe(BigInt(FIXTURE_APP_ID));
     expect(call.rekeyTo).toBeUndefined();
 
-    // Atomic group: both txns share a non-empty group id.
+    // Atomic group: both txns carry the canonical algosdk group id.
     expect(mbr.group).toBeDefined();
     expect(call.group).toBeDefined();
-    expect(Buffer.from(mbr.group as Uint8Array).toString('hex')).toBe(
-      Buffer.from(call.group as Uint8Array).toString('hex')
-    );
+    expectCanonicalGroup(result.txnBytes);
+  });
+
+  it('propagates box references discovered by simulation onto the app call', async () => {
+    const boxName = new Uint8Array(Buffer.from('arc200-balance-box'));
+    // Simulation reports one unnamed box on THIS contract; the builder must
+    // carry it into the final app call (dropping it would break the transfer).
+    mockGetAlgodClient.mockReturnValueOnce({
+      simulateTransactions: () => ({
+        do: async () => ({
+          txnGroups: [
+            {
+              unnamedResourcesAccessed: {
+                boxes: [{ app: FIXTURE_APP_ID, name: boxName }],
+              },
+            },
+          ],
+        }),
+      }),
+    });
+
+    const result = (await TransactionService.buildTransaction({
+      from: SENDER,
+      to: RECIPIENT,
+      amount: 3,
+      contractId: FIXTURE_APP_ID,
+      assetType: 'arc200',
+    })) as { transactions: algosdk.Transaction[]; txnBytes: Uint8Array[] };
+
+    const d = decodeBytes(result.txnBytes[0]);
+    const boxes = d.applicationCall?.boxes ?? [];
+    expect(boxes).toHaveLength(1);
+    // appIndex 0 = a box on the called app itself (algosdk foreign-app index).
+    expect(Number(boxes[0].appIndex)).toBe(0);
+    expect(Buffer.from(boxes[0].name).toString()).toBe('arc200-balance-box');
   });
 });
 
@@ -496,9 +551,7 @@ describe('ARC-72 transfer construction', () => {
     expect(call.applicationCall?.appIndex).toBe(BigInt(FIXTURE_APP_ID));
     expect(call.rekeyTo).toBeUndefined();
 
-    // Both txns belong to the same atomic group.
-    expect(Buffer.from(mbr.group as Uint8Array).toString('hex')).toBe(
-      Buffer.from(call.group as Uint8Array).toString('hex')
-    );
+    // Both txns carry the canonical algosdk group id.
+    expectCanonicalGroup(result.txnBytes);
   });
 });
