@@ -304,7 +304,11 @@ describe('determineSigningMethod — precedence & classification', () => {
     const result = determineSigningMethod([makeStandard(), makeLedger(), rs]);
 
     expect(result.method).toBe('remote_signer');
-    // Only the remote-signer accounts are surfaced for the QR flow.
+    // Documented, intentional behaviour: remote-signer wins and ONLY the
+    // remote-signer accounts are surfaced — the ledger/standard accounts are
+    // dropped from `accounts`. Asserted explicitly (not hidden) so that if a
+    // future atomic-group flow needs per-account signing of a mixed group, this
+    // narrowing is visible and this test must be revisited.
     expect(result.accounts).toEqual([rs]);
     expect(result.signerDeviceIds).toEqual(['device-mix']);
   });
@@ -381,7 +385,7 @@ describe('createRemoteSigningRequestFromBase64 — decode delegation', () => {
       algosdk.encodeUnsignedTransaction(original)
     ).toString('base64');
 
-    await createRemoteSigningRequestFromBase64([b64], ['']);
+    await createRemoteSigningRequestFromBase64([b64], [seededAddress(21).addr]);
 
     expect(spy).toHaveBeenCalledTimes(1);
     const passedTxns = spy.mock.calls[0][0] as algosdk.Transaction[];
@@ -402,8 +406,13 @@ describe('createRemoteSigningRequestFromBase64 — decode delegation', () => {
     const b64s = [t0, t1, t2].map((t) =>
       Buffer.from(algosdk.encodeUnsignedTransaction(t)).toString('base64')
     );
+    const signers = [
+      seededAddress(30).addr,
+      seededAddress(31).addr,
+      seededAddress(32).addr,
+    ];
 
-    await createRemoteSigningRequestFromBase64(b64s, ['', '', '']);
+    await createRemoteSigningRequestFromBase64(b64s, signers);
 
     const passedTxns = spy.mock.calls[0][0] as algosdk.Transaction[];
     expect(passedTxns.map((t) => t.txID())).toEqual([
@@ -411,6 +420,8 @@ describe('createRemoteSigningRequestFromBase64 — decode delegation', () => {
       t1.txID(),
       t2.txID(),
     ]);
+    // Signer addresses are forwarded 1:1 alongside the decoded group.
+    expect(spy.mock.calls[0][1]).toEqual(signers);
   });
 
   it('forwards signer addresses and options through to the service unchanged', async () => {
