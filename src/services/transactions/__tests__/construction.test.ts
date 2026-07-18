@@ -256,6 +256,36 @@ describe('buildVerificationTransaction', () => {
 });
 
 // ===========================================================================
+// Native VOI payment (index.ts buildVoiTransaction, via buildTransaction)
+// ===========================================================================
+
+describe('native VOI payment construction', () => {
+  it('encodes a pay to the recipient with the right amount and no drain/rekey', async () => {
+    const result = await TransactionService.buildTransaction({
+      from: SENDER,
+      to: RECIPIENT,
+      amount: 1_000_000,
+      assetType: 'voi',
+      note: 'voi-note',
+    });
+    expect('txnBytes' in result).toBe(true);
+    const d = decodeBytes((result as { txnBytes: Uint8Array }).txnBytes);
+
+    expect(d.type).toBe('pay');
+    expect(d.sender.toString()).toBe(SENDER);
+    // Funds go to the intended recipient — NOT back to the sender.
+    expect(d.payment?.receiver.toString()).toBe(RECIPIENT);
+    expect(d.payment?.receiver.toString()).not.toBe(SENDER);
+    expect(d.payment?.amount).toBe(1_000_000n);
+    // A normal send must never sweep the account or move signing authority.
+    expect(d.payment?.closeRemainderTo).toBeUndefined();
+    expect(d.rekeyTo).toBeUndefined();
+    expect(d.fee).toBe(1000n);
+    expect(TEXT.decode(d.note)).toBe('voi-note');
+  });
+});
+
+// ===========================================================================
 // ASA transfer (index.ts buildAsaTransaction, via buildTransaction)
 // ===========================================================================
 
@@ -368,12 +398,15 @@ describe('ARC-200 transfer construction', () => {
     expect(mbr.payment?.receiver.toString()).toBe(escrow);
     expect(mbr.payment?.receiver.toString()).not.toBe(RECIPIENT);
     expect(mbr.payment?.amount).toBe(28500n);
+    // The prepended MBR payment must not itself drain or rekey the account.
     expect(mbr.payment?.closeRemainderTo).toBeUndefined();
+    expect(mbr.rekeyTo).toBeUndefined();
 
     // Tx 1: the ARC-200 app call.
     const call = decodeBytes(result.txnBytes[1]);
     expect(call.type).toBe('appl');
     expect(call.applicationCall?.appIndex).toBe(BigInt(FIXTURE_APP_ID));
+    expect(call.rekeyTo).toBeUndefined();
 
     // Atomic group: both txns share a non-empty group id.
     expect(mbr.group).toBeDefined();
@@ -454,10 +487,14 @@ describe('ARC-72 transfer construction', () => {
     expect(mbr.type).toBe('pay');
     expect(mbr.payment?.receiver.toString()).toBe(escrow);
     expect(mbr.payment?.amount).toBe(28500n);
+    // The prepended MBR payment must not itself drain or rekey the account.
+    expect(mbr.payment?.closeRemainderTo).toBeUndefined();
+    expect(mbr.rekeyTo).toBeUndefined();
 
     const call = decodeBytes(result.txnBytes[1]);
     expect(call.type).toBe('appl');
     expect(call.applicationCall?.appIndex).toBe(BigInt(FIXTURE_APP_ID));
+    expect(call.rekeyTo).toBeUndefined();
 
     // Both txns belong to the same atomic group.
     expect(Buffer.from(mbr.group as Uint8Array).toString('hex')).toBe(
