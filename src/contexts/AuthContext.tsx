@@ -209,6 +209,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const now = Date.now();
 
       if (nextAppState === 'background') {
+        // Ignore duplicate background events while a background is already
+        // pending: iOS can emit several, and resetting the timestamp/timer on a
+        // later one would extend an already-backgrounded session past the grace
+        // window (e.g. a second 'background' at 59s → ~119s of unlocked grace).
+        // The FIRST background starts the window; subsequent ones are no-ops.
+        if (backgroundedAtRef.current !== null) {
+          return;
+        }
+
         // App is going to background - start grace period timer.
         // Record the background timestamp SYNCHRONOUSLY in the ref (before the
         // async setAuthState) so a foreground return can compute the true

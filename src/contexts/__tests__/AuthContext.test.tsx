@@ -493,6 +493,44 @@ describe('AuthContext — background/foreground app-state lock', () => {
 
     expect(result.current.authState.isLocked).toBe(true);
   });
+
+  // FIXED (TASK-165, Codex diff-review P2): the grace window is measured from
+  // the FIRST background event. A duplicate 'background' (iOS emits several)
+  // must NOT reset the timestamp/timer, or an attacker/flaky OS could extend an
+  // already-backgrounded unlocked session indefinitely.
+  it('does not extend the grace window when a duplicate background event fires', async () => {
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      await result.current.unlock(TEST_PIN);
+    });
+    expect(result.current.authState.isLocked).toBe(false);
+
+    const t0 = Date.now();
+
+    // First background starts the 60s window.
+    await act(async () => {
+      appStateHandler!('background');
+      await Promise.resolve();
+    });
+
+    // A second background at 59s must be ignored (no timestamp/timer reset).
+    await act(async () => {
+      jest.setSystemTime(t0 + 59 * 1000);
+      appStateHandler!('background');
+      await Promise.resolve();
+    });
+
+    // Foreground at 61s — past grace measured from the FIRST background. If the
+    // duplicate had reset the marker, elapsed would read 2s and stay unlocked.
+    await act(async () => {
+      jest.setSystemTime(t0 + 61 * 1000);
+      appStateHandler!('active');
+      await Promise.resolve();
+    });
+
+    expect(result.current.authState.isLocked).toBe(true);
+  });
 });
 
 describe('AuthContext — unmount teardown (no leaks)', () => {
