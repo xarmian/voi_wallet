@@ -101,17 +101,27 @@ function persistedKeys(): string[] {
   return setItemMock.mock.calls.map((call) => String(call[0]));
 }
 
+/** Flatten an Error to a scannable string (JSON.stringify(Error) === "{}"). */
+function errorToString(err: Error): string {
+  return `${err.name}: ${err.message}\n${err.stack ?? ''}`;
+}
+
 /**
- * Serialize a console argument so an object/typed-array carrying a secret is
- * surfaced (a naive `String(obj)` would collapse to "[object Object]" and hide
- * a leak). Uint8Arrays become plain number arrays so byte-form leaks are seen.
+ * Serialize a console argument so an object/typed-array/Error carrying a secret
+ * is surfaced (a naive `String(obj)` collapses to "[object Object]" and
+ * `JSON.stringify(new Error(secret))` collapses to "{}", both hiding a leak).
+ * Uint8Arrays become plain number arrays so byte-form leaks are seen; Errors
+ * expose message + stack.
  */
 function serializeArg(arg: unknown): string {
   if (typeof arg === 'string') return arg;
+  if (arg instanceof Error) return errorToString(arg);
   try {
-    return JSON.stringify(arg, (_key, value) =>
-      value instanceof Uint8Array ? Array.from(value) : value
-    );
+    return JSON.stringify(arg, (_key, value) => {
+      if (value instanceof Uint8Array) return Array.from(value);
+      if (value instanceof Error) return errorToString(value);
+      return value;
+    });
   } catch {
     return String(arg);
   }
@@ -462,6 +472,56 @@ describe('remoteSignerStore (TASK-159)', () => {
             .getState()
             .validateRequest(makeRequest({ id: 'req-lost' }))
         ).toEqual({
+          valid: false,
+          error: 'Request has already been processed',
+        });
+      }
+    );
+
+    // KNOWN GAP (reported, source NOT modified): markRequestProcessed persists
+    // the WHOLE set each call, fire-and-forget and un-serialized. If two writes
+    // land out of order, the older (smaller) set clobbers the newer one on disk,
+    // dropping the most recent id — a replay of that id is accepted after a
+    // restart. it.failing asserts the DESIRED behaviour (both ids stay blocked)
+    // and currently fails, documenting the last-write-wins race.
+    it.failing(
+      'out-of-order fire-and-forget writes can drop the newer id (replay after restart)',
+      async () => {
+        // Defer the two processed-id writes and release them in REVERSE order.
+        const commits: (() => void)[] = [];
+        const deferWrite = (key: string, value: string) =>
+          new Promise<void>((resolve) => {
+            commits.push(() => {
+              mockAsyncStore.set(key, value);
+              resolve();
+            });
+          });
+        setItemMock.mockImplementationOnce(deferWrite);
+        setItemMock.mockImplementationOnce(deferWrite);
+
+        const store = useRemoteSignerStore.getState();
+        store.markRequestProcessed('req-a'); // write #1 persists ["req-a"]
+        store.markRequestProcessed('req-b'); // write #2 persists ["req-a","req-b"]
+
+        // Newer write lands first, then the older write overwrites it.
+        commits[1]();
+        commits[0]();
+        await flush();
+
+        // Restart from disk only.
+        useRemoteSignerStore.setState({
+          processedRequestIds: new Set(),
+          isInitialized: false,
+        });
+        await useRemoteSignerStore.getState().initialize();
+
+        const state = useRemoteSignerStore.getState();
+        // DESIRED: both durably blocked. ACTUAL: req-b was clobbered → accepted.
+        expect(state.validateRequest(makeRequest({ id: 'req-a' }))).toEqual({
+          valid: false,
+          error: 'Request has already been processed',
+        });
+        expect(state.validateRequest(makeRequest({ id: 'req-b' }))).toEqual({
           valid: false,
           error: 'Request has already been processed',
         });
