@@ -437,10 +437,12 @@ describe('ARC-200 transfer construction', () => {
     expectCanonicalGroup(result.txnBytes);
   });
 
-  it('propagates box references discovered by simulation onto the app call', async () => {
+  it('propagates GROUP-LEVEL simulation box references onto the app call', async () => {
     const boxName = new Uint8Array(Buffer.from('arc200-balance-box'));
-    // Simulation reports one unnamed box on THIS contract; the builder must
-    // carry it into the final app call (dropping it would break the transfer).
+    // Simulation reports one unnamed box on THIS contract via the group-level
+    // `unnamedResourcesAccessed`; the builder must carry it into the final app
+    // call (dropping it would break the transfer). ARC-72's test covers the
+    // per-transaction (txnResults) branch.
     mockGetAlgodClient.mockReturnValueOnce({
       simulateTransactions: () => ({
         do: async () => ({
@@ -558,18 +560,24 @@ describe('ARC-72 transfer construction', () => {
     expectCanonicalGroup(result.txnBytes);
   });
 
-  it('propagates box references discovered by simulation onto the app call', async () => {
+  it('propagates PER-TRANSACTION simulation box references onto the app call', async () => {
     const boxName = new Uint8Array(Buffer.from('arc72-owner-box'));
-    // Simulation reports one unnamed box on THIS contract; the builder must
-    // carry it into the final app call (dropping it would break the transfer).
+    // The builder merges boxes from BOTH the group-level and the per-transaction
+    // (txnResults[i]) `unnamedResourcesAccessed`. This test exercises the
+    // per-transaction branch (ARC-200's test covers the group-level branch), so a
+    // regression that ignores either source is caught.
     mockGetAlgodClient.mockReturnValueOnce({
       simulateTransactions: () => ({
         do: async () => ({
           txnGroups: [
             {
-              unnamedResourcesAccessed: {
-                boxes: [{ app: FIXTURE_APP_ID, name: boxName }],
-              },
+              txnResults: [
+                {
+                  unnamedResourcesAccessed: {
+                    boxes: [{ app: FIXTURE_APP_ID, name: boxName }],
+                  },
+                },
+              ],
             },
           ],
         }),
