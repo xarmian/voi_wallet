@@ -540,7 +540,10 @@ describe('ARC-72 transfer construction', () => {
     const mbr = decodeBytes(result.txnBytes[0]);
     const escrow = algosdk.getApplicationAddress(FIXTURE_APP_ID).toString();
     expect(mbr.type).toBe('pay');
+    // MBR is funded by the sender, not some other account.
+    expect(mbr.sender.toString()).toBe(SENDER);
     expect(mbr.payment?.receiver.toString()).toBe(escrow);
+    expect(mbr.payment?.receiver.toString()).not.toBe(RECIPIENT);
     expect(mbr.payment?.amount).toBe(28500n);
     // The prepended MBR payment must not itself drain or rekey the account.
     expect(mbr.payment?.closeRemainderTo).toBeUndefined();
@@ -553,5 +556,41 @@ describe('ARC-72 transfer construction', () => {
 
     // Both txns carry the canonical algosdk group id.
     expectCanonicalGroup(result.txnBytes);
+  });
+
+  it('propagates box references discovered by simulation onto the app call', async () => {
+    const boxName = new Uint8Array(Buffer.from('arc72-owner-box'));
+    // Simulation reports one unnamed box on THIS contract; the builder must
+    // carry it into the final app call (dropping it would break the transfer).
+    mockGetAlgodClient.mockReturnValueOnce({
+      simulateTransactions: () => ({
+        do: async () => ({
+          txnGroups: [
+            {
+              unnamedResourcesAccessed: {
+                boxes: [{ app: FIXTURE_APP_ID, name: boxName }],
+              },
+            },
+          ],
+        }),
+      }),
+    });
+
+    const result = (await TransactionService.buildTransaction({
+      from: SENDER,
+      to: RECIPIENT,
+      amount: 1,
+      contractId: FIXTURE_APP_ID,
+      tokenId: '77',
+      assetType: 'arc72',
+    })) as { transactions: algosdk.Transaction[]; txnBytes: Uint8Array[] };
+
+    // Recipient already holds a token (default mock) -> single app-call.
+    const d = decodeBytes(result.txnBytes[0]);
+    const boxes = d.applicationCall?.boxes ?? [];
+    expect(boxes).toHaveLength(1);
+    // appIndex 0 = a box on the called app itself (algosdk foreign-app index).
+    expect(Number(boxes[0].appIndex)).toBe(0);
+    expect(Buffer.from(boxes[0].name).toString()).toBe('arc72-owner-box');
   });
 });
