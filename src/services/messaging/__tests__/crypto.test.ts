@@ -324,7 +324,11 @@ describe('messaging crypto: verifySender', () => {
     const bobKeys = deriveMessagingKeyPairFromSecret(bob.sk, bob.addr);
 
     // Alice is the real (on-chain) sender of this transaction.
-    const payload = await encryptMessageV2('bind me', alice.pk, bobKeys.publicKey);
+    const payload = await encryptMessageV2(
+      'bind me',
+      alice.pk,
+      bobKeys.publicKey
+    );
     // Attacker rewrites the self-asserted `from` to Mallory's key.
     const forged: EncryptedMessagePayloadV2 = {
       ...payload,
