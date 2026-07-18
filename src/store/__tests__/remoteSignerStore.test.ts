@@ -188,25 +188,30 @@ const INITIAL_PROGRESS = {
   status: 'idle' as const,
 };
 
-// Every console logging channel a leak could plausibly use. Spying on ALL of
-// them (not a hand-picked subset) keeps allConsoleOutput()'s "capture EVERY
-// channel" claim honest — a regression logging a secret via console.trace /
-// dir / table / group / assert cannot slip past the no-leak assertion.
-const CONSOLE_METHODS = [
-  'log',
-  'info',
-  'debug',
-  'warn',
-  'error',
-  'trace',
-  'dir',
-  'dirxml',
-  'table',
-  'group',
-  'groupCollapsed',
-  'groupEnd',
-  'assert',
-] as const;
+/**
+ * Every function-valued property of `console` (own + inherited), so the no-leak
+ * assertion captures EVERY output channel — log/info/warn/error, but also
+ * trace/dir/table/group*, and the argument-taking utilities count/assert/
+ * timeLog/timeEnd/timeStamp. Enumerating dynamically (rather than a hand-picked
+ * list) means a regression can't leak a secret via some rarely-used method the
+ * harness forgot to spy.
+ */
+function allConsoleMethodNames(): string[] {
+  const names = new Set<string>();
+  let obj: object | null = console;
+  while (obj && obj !== Object.prototype) {
+    for (const name of Object.getOwnPropertyNames(obj)) {
+      if (
+        typeof (console as unknown as Record<string, unknown>)[name] ===
+        'function'
+      ) {
+        names.add(name);
+      }
+    }
+    obj = Object.getPrototypeOf(obj);
+  }
+  return [...names];
+}
 
 let consoleSpies: jest.SpyInstance[];
 
@@ -215,11 +220,18 @@ describe('remoteSignerStore (TASK-159)', () => {
     mockAsyncStore.clear();
     // Silence + capture the store's chatty logging across every channel (also
     // lets us assert no secret is ever logged, on any method).
-    consoleSpies = CONSOLE_METHODS.filter(
-      (name) =>
-        typeof (console as unknown as Record<string, unknown>)[name] ===
-        'function'
-    ).map((name) => jest.spyOn(console, name).mockImplementation(() => {}));
+    consoleSpies = [];
+    for (const name of allConsoleMethodNames()) {
+      try {
+        consoleSpies.push(
+          jest
+            .spyOn(console, name as jest.FunctionPropertyNames<Console>)
+            .mockImplementation(() => {})
+        );
+      } catch {
+        // Non-configurable property — cannot spy; skip it.
+      }
+    }
     // Reset the singleton store to a pristine slate (fresh Set/Map instances).
     useRemoteSignerStore.setState({
       appMode: 'wallet',
