@@ -76,7 +76,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
   useRemoteSignerStore,
-  __resetProcessedPersistChainForTests,
+  __drainProcessedPersistChainForTests,
 } from '../remoteSignerStore';
 
 // Storage keys — mirror the (unexported) STORAGE_KEYS in the source. If the
@@ -219,11 +219,12 @@ function allConsoleMethodNames(): string[] {
 let consoleSpies: jest.SpyInstance[];
 
 describe('remoteSignerStore (TASK-159)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Drain + reset the module-level persistence chain FIRST so any queued write
+    // from a prior test runs to completion (against the about-to-be-cleared
+    // store), then wipe storage — this guarantees no cross-test write bleed.
+    await __drainProcessedPersistChainForTests();
     mockAsyncStore.clear();
-    // Settle the module-level persistence chain so a deferred/pending write from
-    // a prior test can't bleed into this one.
-    __resetProcessedPersistChainForTests();
     // Silence + capture the store's chatty logging across every channel (also
     // lets us assert no secret is ever logged, on any method).
     consoleSpies = [];

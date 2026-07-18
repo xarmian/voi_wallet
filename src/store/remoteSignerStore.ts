@@ -70,12 +70,18 @@ function enqueueProcessedPersist(getIds: () => Set<string>): void {
 }
 
 /**
- * TEST-ONLY: reset the module-level persistence chain to a settled promise so a
- * pending/deferred write from a previous test cannot bleed into the next one.
- * Not part of the runtime API.
+ * TEST-ONLY: DRAIN the module-level persistence chain (await any queued/in-flight
+ * write to completion) and reset it to a settled promise, so a pending write from
+ * a previous test cannot still run — and mutate storage — during the next one.
+ * Awaiting is required: merely reassigning the module variable would leave an
+ * already-queued task running against its live getIds() callback. Not part of the
+ * runtime API. (All tests release any deferred write before ending, so this never
+ * hangs.)
  */
-export function __resetProcessedPersistChainForTests(): void {
+export async function __drainProcessedPersistChainForTests(): Promise<void> {
+  const pending = processedPersistChain;
   processedPersistChain = Promise.resolve();
+  await pending.catch(() => {});
 }
 
 /**
