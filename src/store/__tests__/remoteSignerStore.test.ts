@@ -10,14 +10,21 @@
  *      (persisted `processedRequestIds` are re-hydrated by `initialize`).
  *   3. Request state-machine transitions — the `SigningProgress` progression
  *      idle → reviewing → signing → complete (and the error branch), plus the
- *      reset back to idle when the pending request is cleared.
+ *      reset back to idle / request replacement.
  *
  * DR-3 / CLAUDE.md: this is TEST-ONLY — the store/crypto source is never
  * modified. All key material used as leak canaries is REAL algosdk-derived
- * crypto from the shared fixtures (no fabricated bytes). A real secret is
- * deliberately routed THROUGH the store's in-memory state so the "not
- * persisted / not logged" assertions would genuinely FAIL if the store ever
- * leaked it — they are not vacuous.
+ * crypto from the shared fixtures (no fabricated bytes). Real secrets are
+ * deliberately routed THROUGH the store's in-memory state — as a mnemonic
+ * string, as the raw 64-byte secret key, and as a base64 transaction blob — so
+ * the "not persisted / not logged" assertions check EVERY serialized encoding
+ * (hex, base64, JSON array, JSON object) and would genuinely FAIL if the store
+ * ever wrote or logged that state. They are not vacuous.
+ *
+ * The AsyncStorage mock commits writes only after a microtask (mirroring the
+ * real async native module), so every assertion that depends on a durable value
+ * must await a flush — that makes the store's fire-and-forget persistence of
+ * processed-request ids explicit rather than hidden behind a synchronous mock.
  */
 
 import algosdk from 'algosdk';
@@ -44,8 +51,9 @@ jest.mock('@/platform', () => {
 
 // In-memory AsyncStorage. The backing map (mock-prefixed so the jest.mock
 // factory may close over it) persists across the module's own reads/writes so
-// initialize() can re-hydrate what the actions wrote; tests clear it via the
-// exposed `__store` handle in beforeEach.
+// initialize() can re-hydrate what the actions wrote; tests clear it via
+// mockAsyncStore in beforeEach. setItem commits only after a microtask so the
+// store's non-awaited (fire-and-forget) persistence surfaces in tests.
 const mockAsyncStore = new Map<string, string>();
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
@@ -54,12 +62,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
       mockAsyncStore.has(key) ? mockAsyncStore.get(key)! : null
     ),
     setItem: jest.fn(async (key: string, value: string) => {
+      await Promise.resolve();
       mockAsyncStore.set(key, value);
     }),
     removeItem: jest.fn(async (key: string) => {
+      await Promise.resolve();
       mockAsyncStore.delete(key);
     }),
-    __store: mockAsyncStore,
   },
 }));
 
@@ -79,6 +88,9 @@ const ALLOWED_KEYS = new Set<string>(Object.values(STORAGE_KEYS));
 
 const setItemMock = AsyncStorage.setItem as jest.Mock;
 
+/** Drain microtasks + the 0ms macrotask queue so deferred writes commit. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 /** Every value written to AsyncStorage this test, concatenated. */
 function allPersistedValues(): string {
   return setItemMock.mock.calls.map((call) => String(call[1])).join('\n');
@@ -87,6 +99,44 @@ function allPersistedValues(): string {
 /** Distinct keys written to AsyncStorage this test. */
 function persistedKeys(): string[] {
   return setItemMock.mock.calls.map((call) => String(call[0]));
+}
+
+/**
+ * Serialize a console argument so an object/typed-array carrying a secret is
+ * surfaced (a naive `String(obj)` would collapse to "[object Object]" and hide
+ * a leak). Uint8Arrays become plain number arrays so byte-form leaks are seen.
+ */
+function serializeArg(arg: unknown): string {
+  if (typeof arg === 'string') return arg;
+  try {
+    return JSON.stringify(arg, (_key, value) =>
+      value instanceof Uint8Array ? Array.from(value) : value
+    );
+  } catch {
+    return String(arg);
+  }
+}
+
+/** All console output captured this test, fully serialized. */
+function allConsoleOutput(): string {
+  return [logSpy, warnSpy, errorSpy]
+    .flatMap((spy) => spy.mock.calls)
+    .map((call) => call.map(serializeArg).join(' '))
+    .join('\n');
+}
+
+/**
+ * Every plausible serialized encoding of a real secret key. If any of these
+ * substrings appears in persisted state or logs, the key leaked.
+ */
+function secretKeyEncodings(sk: Uint8Array): string[] {
+  const buf = Buffer.from(sk);
+  return [
+    buf.toString('hex'),
+    buf.toString('base64'),
+    JSON.stringify(Array.from(sk)), // e.g. JSON.stringify(state.txns bytes)
+    JSON.stringify(sk), // e.g. {"0":..} if a Uint8Array were stringified
+  ];
 }
 
 /** Base64 msgpack of a real (harmless self-payment) unsigned transaction. */
@@ -129,14 +179,6 @@ let logSpy: jest.SpyInstance;
 let warnSpy: jest.SpyInstance;
 let errorSpy: jest.SpyInstance;
 
-/** All console output captured this test, concatenated. */
-function allConsoleOutput(): string {
-  return [logSpy, warnSpy, errorSpy]
-    .flatMap((spy) => spy.mock.calls)
-    .map((call) => call.map((a: unknown) => String(a)).join(' '))
-    .join('\n');
-}
-
 describe('remoteSignerStore (TASK-159)', () => {
   beforeEach(() => {
     mockAsyncStore.clear();
@@ -165,53 +207,56 @@ describe('remoteSignerStore (TASK-159)', () => {
   // 1. Persistence — no sensitive material at rest
   // -------------------------------------------------------------------------
   describe('persistence', () => {
-    it('never persists the pending request or its transaction bytes', () => {
-      const secretMnemonic = makeAccount('leak-canary').mnemonic;
+    it('never persists or logs the pending request, its txn bytes, or key material', async () => {
+      const canary = makeAccount('leak-canary');
       const acct = makeAccount('signer-primary');
       const blob = txnBlob(acct.addr);
 
-      // Route a REAL secret (25-word mnemonic) and the real txn blob through
-      // in-memory state. If the store persisted the pending request, these
-      // assertions would fail — so they are not vacuous.
+      // Route REAL secrets through in-memory state in three forms: a 25-word
+      // mnemonic (meta.desc), the raw 64-byte secret key (attached to the
+      // request object), and a base64 transaction blob (txns[].b).
       const request = makeRequest({
         txns: [{ i: 0, b: blob, s: acct.addr }],
-        meta: { desc: secretMnemonic },
-      });
-
-      useRemoteSignerStore.getState().setPendingRequest(request);
-
-      // The request lives in memory…
-      expect(useRemoteSignerStore.getState().pendingRequest).toBe(request);
-      // …but setPendingRequest touched AsyncStorage not at all.
-      expect(setItemMock).not.toHaveBeenCalled();
-
-      // And even after exercising every persisting action, none of the
-      // sensitive material reaches disk.
-      const persisted = allPersistedValues();
-      expect(persisted).not.toContain(secretMnemonic);
-      expect(persisted).not.toContain(blob);
-    });
-
-    it('does not leak a routed secret into persisted state or logs', async () => {
-      const canary = makeAccount('leak-canary');
-      const request = makeRequest({ meta: { desc: canary.mnemonic } });
+        meta: { desc: canary.mnemonic },
+      }) as RemoteSignerRequest & { skCanary?: Uint8Array };
+      request.skCanary = canary.sk;
 
       const store = useRemoteSignerStore.getState();
       store.setPendingRequest(request);
-      store.setSigningProgress({ status: 'signing', currentIndex: 1 });
+
+      // setPendingRequest is in-memory only — it writes nothing at all.
+      expect(setItemMock).not.toHaveBeenCalled();
+      expect(useRemoteSignerStore.getState().pendingRequest).toBe(request);
+
+      // Drive EVERY persisting action while the secret-bearing request is set,
+      // so a regression that serialized store state (incl. pendingRequest) to
+      // disk during any of these would be caught.
       await store.setAppMode('signer');
       await store.initializeSignerConfig('Air-gapped Pixel');
+      await store.addPairedSigner({
+        deviceId: 'voi-signer-abc',
+        pairedAt: Date.now(),
+        addresses: [makeAccount('paired').addr],
+      });
       store.markRequestProcessed(request.id);
+      await flush();
 
-      // Real secret key bytes (hex) and mnemonic never touch storage or logs.
-      const secretHex = Buffer.from(canary.sk).toString('hex');
+      const canaries = [
+        canary.mnemonic,
+        blob,
+        ...secretKeyEncodings(canary.sk),
+      ];
+
       const persisted = allPersistedValues();
-      expect(persisted).not.toContain(canary.mnemonic);
-      expect(persisted).not.toContain(secretHex);
+      expect(setItemMock).toHaveBeenCalled(); // guard: writes DID happen…
+      for (const secret of canaries) {
+        expect(persisted).not.toContain(secret); // …none carried a secret.
+      }
 
       const logs = allConsoleOutput();
-      expect(logs).not.toContain(canary.mnemonic);
-      expect(logs).not.toContain(secretHex);
+      for (const secret of canaries) {
+        expect(logs).not.toContain(secret);
+      }
     });
 
     it('only ever writes the four whitelisted storage keys', async () => {
@@ -228,6 +273,7 @@ describe('remoteSignerStore (TASK-159)', () => {
         addresses: [makeAccount('paired').addr],
       });
       store.markRequestProcessed('req-x');
+      await flush();
 
       const keys = persistedKeys();
       expect(keys.length).toBeGreaterThan(0);
@@ -271,6 +317,7 @@ describe('remoteSignerStore (TASK-159)', () => {
         addresses: [pairedAddr],
       });
       store.markRequestProcessed('req-persisted-1');
+      await flush(); // let the fire-and-forget processed-ids write land
 
       // Simulate a fresh app launch: wipe in-memory state, keep AsyncStorage.
       useRemoteSignerStore.setState({
@@ -330,9 +377,51 @@ describe('remoteSignerStore (TASK-159)', () => {
       });
     });
 
+    it('updates the in-memory replay guard synchronously; persistence is fire-and-forget', async () => {
+      const store = useRemoteSignerStore.getState();
+      store.markRequestProcessed('req-fire');
+
+      // In-session replay protection is effective immediately…
+      expect(
+        useRemoteSignerStore.getState().processedRequestIds.has('req-fire')
+      ).toBe(true);
+      // …while the durable write is fire-and-forget: nothing on disk yet.
+      expect(
+        mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)
+      ).toBeUndefined();
+
+      await flush();
+      expect(mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)).toBe(
+        JSON.stringify(['req-fire'])
+      );
+    });
+
+    it('keeps the in-memory replay guard even when the durable write fails', async () => {
+      // Model a rejected native write (e.g. disk full) for the processed-ids
+      // persistence. markRequestProcessed must not throw and must still block
+      // replays within the session.
+      setItemMock.mockImplementationOnce(async () => {
+        throw new Error('disk full');
+      });
+
+      const store = useRemoteSignerStore.getState();
+      expect(() => store.markRequestProcessed('req-nowrite')).not.toThrow();
+      await flush();
+
+      const state = useRemoteSignerStore.getState();
+      expect(state.processedRequestIds.has('req-nowrite')).toBe(true);
+      expect(state.validateRequest(makeRequest({ id: 'req-nowrite' }))).toEqual(
+        {
+          valid: false,
+          error: 'Request has already been processed',
+        }
+      );
+    });
+
     it('persists processed ids so replays are blocked after a restart', async () => {
       const store = useRemoteSignerStore.getState();
       store.markRequestProcessed('req-replayable');
+      await flush();
 
       expect(mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)).toBe(
         JSON.stringify(['req-replayable'])
@@ -359,10 +448,12 @@ describe('remoteSignerStore (TASK-159)', () => {
       expect(useRemoteSignerStore.getState().processedRequestIds.size).toBe(1);
     });
 
-    it('markRequestProcessed accumulates ids without dropping earlier ones', () => {
+    it('markRequestProcessed accumulates ids without dropping earlier ones', async () => {
       const store = useRemoteSignerStore.getState();
       store.markRequestProcessed('req-a');
       store.markRequestProcessed('req-b');
+      await flush();
+
       const ids = useRemoteSignerStore.getState().processedRequestIds;
       expect(ids.has('req-a')).toBe(true);
       expect(ids.has('req-b')).toBe(true);
@@ -491,6 +582,32 @@ describe('remoteSignerStore (TASK-159)', () => {
       const state = useRemoteSignerStore.getState();
       expect(state.pendingRequest).toBeNull();
       expect(state.signingProgress).toEqual(INITIAL_PROGRESS);
+    });
+
+    it('replacing an in-flight request resets progress and drops any stale error', () => {
+      const store = useRemoteSignerStore.getState();
+      // First request advances into an error state.
+      store.setPendingRequest(makeRequest({ id: 'req-first' }, 3));
+      store.setSigningProgress({
+        status: 'error',
+        currentIndex: 2,
+        error: 'boom',
+      });
+
+      // A brand-new request arrives while the previous one is errored.
+      const next = makeRequest({ id: 'req-next' }, 1);
+      store.setPendingRequest(next);
+
+      const state = useRemoteSignerStore.getState();
+      expect(state.pendingRequest).toBe(next);
+      // Progress is fully reset for the new request — index/total/status…
+      expect(state.signingProgress).toEqual({
+        currentIndex: 0,
+        totalTransactions: 1,
+        status: 'reviewing',
+      });
+      // …and crucially no stale error carried over.
+      expect(state.signingProgress.error).toBeUndefined();
     });
 
     it('setPendingRequest does not mark the request processed', () => {
