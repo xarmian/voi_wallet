@@ -74,7 +74,10 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { useRemoteSignerStore } from '../remoteSignerStore';
+import {
+  useRemoteSignerStore,
+  __resetProcessedPersistChainForTests,
+} from '../remoteSignerStore';
 
 // Storage keys — mirror the (unexported) STORAGE_KEYS in the source. If the
 // source keys ever drift, the persisted-keys whitelist test below catches it.
@@ -218,6 +221,9 @@ let consoleSpies: jest.SpyInstance[];
 describe('remoteSignerStore (TASK-159)', () => {
   beforeEach(() => {
     mockAsyncStore.clear();
+    // Settle the module-level persistence chain so a deferred/pending write from
+    // a prior test can't bleed into this one.
+    __resetProcessedPersistChainForTests();
     // Silence + capture the store's chatty logging across every channel (also
     // lets us assert no secret is ever logged, on any method).
     consoleSpies = [];
@@ -516,12 +522,11 @@ describe('remoteSignerStore (TASK-159)', () => {
       });
     });
 
-    // FIXED (TASK-166 BUG2): processed-id writes are SERIALIZED through one
-    // module-level chain and each writes the LATEST full set read at execution
-    // time, so two rapid marks can no longer clobber each other — both ids are
-    // durably persisted and survive a restart. The old code wrote the whole set
-    // per call unserialized, so an out-of-order landing dropped the newer id.
-    it('serializes processed-id writes so rapid marks cannot clobber each other (both survive restart)', async () => {
+    // Durability integration check: two rapid marks both persist and survive a
+    // restart. (This passes on the old code too under a FIFO write mock — the
+    // out-of-order race is guarded non-vacuously by the delayed-write test
+    // below, which fails against the pre-fix source.)
+    it('persists both ids from rapid marks and blocks each replay after restart', async () => {
       const store = useRemoteSignerStore.getState();
       store.markRequestProcessed('req-a');
       store.markRequestProcessed('req-b');
@@ -581,6 +586,69 @@ describe('remoteSignerStore (TASK-159)', () => {
       );
       expect(persisted.has('req-a')).toBe(true);
       expect(persisted.has('req-b')).toBe(true);
+    });
+
+    // FIXED (TASK-166, Codex diff-review P1): a markRequestProcessed that lands
+    // WHILE initialize() is hydrating from disk must not lose durability. Its
+    // queued write can persist a partial set and clobber the loaded ids on disk;
+    // initialize() re-persists the merged union so the durable copy matches
+    // memory and a later restart still blocks both.
+    it('re-persists the merged union so a mark during hydration survives restart', async () => {
+      // Disk already holds an old processed id from a prior session.
+      mockAsyncStore.set(
+        STORAGE_KEYS.PROCESSED_REQUESTS,
+        JSON.stringify(['old-id'])
+      );
+      // Fresh process: in-memory guard empty, not yet initialized.
+      useRemoteSignerStore.setState({
+        processedRequestIds: new Set(),
+        isInitialized: false,
+      });
+
+      // Defer the mark's persist write so it lands AFTER initialize() has read
+      // the old id — modelling the clobber: the mark's partial write (['new-id'])
+      // would otherwise overwrite ['old-id'] on disk.
+      let releaseMarkWrite!: () => void;
+      setItemMock.mockImplementationOnce(
+        (key: string, value: string) =>
+          new Promise<void>((resolve) => {
+            releaseMarkWrite = () => {
+              mockAsyncStore.set(key, value);
+              resolve();
+            };
+          })
+      );
+
+      // Start hydration and, while it is in flight, mark a new id.
+      const initP = useRemoteSignerStore.getState().initialize();
+      useRemoteSignerStore.getState().markRequestProcessed('new-id');
+
+      await initP; // union merges {new-id} with loaded {old-id}; re-persist queued
+      releaseMarkWrite(); // the mark's clobber write lands (['new-id'])
+      await flush(); // then the re-persist writes the full union
+
+      // Durable copy has BOTH ids despite the clobber.
+      const persisted = new Set<string>(
+        JSON.parse(mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)!)
+      );
+      expect(persisted.has('old-id')).toBe(true);
+      expect(persisted.has('new-id')).toBe(true);
+
+      // Restart from disk only — both replays stay blocked.
+      useRemoteSignerStore.setState({
+        processedRequestIds: new Set(),
+        isInitialized: false,
+      });
+      await useRemoteSignerStore.getState().initialize();
+      const state = useRemoteSignerStore.getState();
+      expect(state.validateRequest(makeRequest({ id: 'old-id' }))).toEqual({
+        valid: false,
+        error: 'Request has already been processed',
+      });
+      expect(state.validateRequest(makeRequest({ id: 'new-id' }))).toEqual({
+        valid: false,
+        error: 'Request has already been processed',
+      });
     });
 
     it('persists processed ids so replays are blocked after a restart', async () => {

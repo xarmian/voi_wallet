@@ -70,6 +70,15 @@ function enqueueProcessedPersist(getIds: () => Set<string>): void {
 }
 
 /**
+ * TEST-ONLY: reset the module-level persistence chain to a settled promise so a
+ * pending/deferred write from a previous test cannot bleed into the next one.
+ * Not part of the runtime API.
+ */
+export function __resetProcessedPersistChainForTests(): void {
+  processedPersistChain = Promise.resolve();
+}
+
+/**
  * Get app mode early, before store hydration completes.
  * Used by AppNavigator to determine which services to initialize.
  * This avoids a race condition where services start before the store is ready.
@@ -217,8 +226,9 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         const storedProcessed = await AsyncStorage.getItem(
           STORAGE_KEYS.PROCESSED_REQUESTS
         );
+        const inMemoryIds = get().processedRequestIds;
         const processedRequestIds = new Set<string>([
-          ...get().processedRequestIds,
+          ...inMemoryIds,
           ...(storedProcessed ? (JSON.parse(storedProcessed) as string[]) : []),
         ]);
 
@@ -229,6 +239,17 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
           processedRequestIds,
           isInitialized: true,
         });
+
+        // If any id was already in memory during this async hydration (a
+        // markRequestProcessed that landed mid-load), its queued write may have
+        // persisted only a partial set and clobbered the loaded ids on disk.
+        // Re-persist the merged union so the DURABLE copy matches memory —
+        // otherwise the union heals memory but a later restart could still
+        // accept a replay of a clobbered id. Serialized after that write, and a
+        // no-op in the common fresh-start case (nothing in memory yet).
+        if (inMemoryIds.size > 0) {
+          enqueueProcessedPersist(() => get().processedRequestIds);
+        }
 
         // Clean up old processed requests
         get().cleanupProcessedRequests();
