@@ -227,6 +227,19 @@ export function verifySignedTransactionBytes(
  */
 export const MAX_AIRGAP_CONFIRMATION_BASE64_LEN = 2048;
 
+/**
+ * Read a payment transaction's amount across algosdk field shapes — v3
+ * (`txn.payment.amount`), v2 (`txn.amount`), and raw msgpack (`amt`) — mirroring
+ * the v2/v3 receiver handling in {@link verifySignedTransaction}. A zero amount
+ * is frequently omitted from the encoding, so a missing value reads as `0n`.
+ * Exported so the multi-shape fallback (esp. the v2 path) is unit-testable
+ * directly, since algosdk 3.x's decoder only ever emits the v3 shape at runtime.
+ */
+export function readPaymentAmount(txnAny: any): bigint {
+  const raw = txnAny?.payment?.amount ?? txnAny?.amount ?? txnAny?.amt ?? 0;
+  return BigInt(raw ?? 0);
+}
+
 /** Expectations the wallet imposes on an airgap-transfer confirmation. */
 export interface AirgapConfirmationExpectations {
   /** The STANDARD account being transferred; the confirmation must self-sign for it. */
@@ -291,10 +304,10 @@ export function verifyAirgapTransferConfirmation(
     );
     const txnAny = signedTxn.txn as any;
 
-    // The verification self-payment must move zero value. algosdk omits a zero
-    // amount from the encoding, so `undefined` is treated as 0.
-    const rawAmount = txnAny.payment?.amount ?? txnAny.amt ?? 0;
-    if (BigInt(rawAmount ?? 0) !== 0n) {
+    // The verification self-payment must move zero value. Read the amount across
+    // v3/v2/msgpack field shapes (a zero amount is often omitted → treated as 0)
+    // so a v2-decoded non-zero self-payment cannot slip through as "zero".
+    if (readPaymentAmount(txnAny) !== 0n) {
       return {
         valid: false,
         error: 'Verification transaction must be a zero-amount self-payment',

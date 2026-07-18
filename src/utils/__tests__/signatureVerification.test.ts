@@ -21,6 +21,7 @@ import {
   verifyEd25519Signature,
   verifySignedTransactionBytes,
   verifyAirgapTransferConfirmation,
+  readPaymentAmount,
   MAX_AIRGAP_CONFIRMATION_BASE64_LEN,
 } from '../signatureVerification';
 
@@ -256,6 +257,36 @@ describe('verifySignedTransaction', () => {
       senderAddr
     );
     expect(result.valid).toBe(false);
+  });
+});
+
+describe('readPaymentAmount', () => {
+  it('reads the v3 shape (txn.payment.amount)', () => {
+    expect(readPaymentAmount({ payment: { amount: 1000n } })).toBe(1000n);
+  });
+
+  it('reads the v2 shape (txn.amount) — the field the raw v3 accessor missed', () => {
+    // A v2-decoded non-zero self-payment must NOT fall through to 0 and be
+    // accepted as "zero-amount" (Codex P2 regression).
+    expect(readPaymentAmount({ amount: 1000n })).toBe(1000n);
+    expect(readPaymentAmount({ amount: 12345 })).toBe(12345n);
+  });
+
+  it('reads the raw msgpack shape (amt)', () => {
+    expect(readPaymentAmount({ amt: 500 })).toBe(500n);
+  });
+
+  it('treats an omitted/zero amount as 0n across shapes', () => {
+    expect(readPaymentAmount({})).toBe(0n);
+    expect(readPaymentAmount({ payment: {} })).toBe(0n);
+    expect(readPaymentAmount({ payment: { amount: 0n } })).toBe(0n);
+    expect(readPaymentAmount({ amount: 0 })).toBe(0n);
+  });
+
+  it('prefers the v3 field when multiple shapes are present', () => {
+    expect(
+      readPaymentAmount({ payment: { amount: 7n }, amount: 99n, amt: 42 })
+    ).toBe(7n);
   });
 });
 
