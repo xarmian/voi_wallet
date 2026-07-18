@@ -460,6 +460,39 @@ describe('AuthContext — background/foreground app-state lock', () => {
     // SECURITY EXPECTATION: must be locked. Currently stays unlocked (bug).
     expect(result.current.authState.isLocked).toBe(true);
   });
+
+  // FIXED (TASK-165, Codex diff-review P1): iOS returns to the foreground via
+  // background -> inactive -> active. The foreground decision must NOT gate on
+  // `previousAppState === 'background'` — an intervening 'inactive' would make
+  // the 'active' event skip the expiry check, re-opening the suspend bypass on
+  // iOS. Gating on the synchronous `backgroundedAtRef` instead means any
+  // 'active' with a pending background marker is evaluated.
+  it('locks on an iOS background -> inactive -> active return after the grace window', async () => {
+    const { result } = await mountAuth();
+
+    await act(async () => {
+      await result.current.unlock(TEST_PIN);
+    });
+    expect(result.current.authState.isLocked).toBe(false);
+
+    const t0 = Date.now();
+
+    await act(async () => {
+      appStateHandler!('background');
+      await Promise.resolve();
+    });
+
+    // Suspended past the grace window, then the iOS wake sequence: an 'inactive'
+    // event precedes 'active'. The armed 60s timer never fired (JS was frozen).
+    await act(async () => {
+      jest.setSystemTime(t0 + 60 * 1000 + 5000);
+      appStateHandler!('inactive');
+      appStateHandler!('active');
+      await Promise.resolve();
+    });
+
+    expect(result.current.authState.isLocked).toBe(true);
+  });
 });
 
 describe('AuthContext — unmount teardown (no leaks)', () => {

@@ -205,8 +205,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return () => {};
     }
 
-    let previousAppState = AppState.currentState;
-
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       const now = Date.now();
 
@@ -232,12 +230,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }, BACKGROUND_GRACE_PERIOD);
       } else if (
         nextAppState === 'active' &&
-        previousAppState === 'background'
+        backgroundedAtRef.current !== null
       ) {
-        // App is returning from background. Read the synchronous ref (not the
-        // closed-over React state, which is stale for a listener created once
-        // at mount) so a return AFTER the grace window locks even when the
-        // 60s JS timer never fired because the OS suspended the runtime.
+        // Returning to foreground after a background. Gate on the ref being set
+        // (NOT previousAppState === 'background'): iOS returns via
+        // background -> inactive -> active, and an intervening 'inactive' would
+        // otherwise make the subsequent 'active' skip the expiry check entirely
+        // — re-opening the suspend bypass and leaving the ref/timer dangling.
+        // Read the synchronous ref (not the closed-over React state, stale for a
+        // listener created once at mount) so a return AFTER the grace window
+        // locks even when the 60s JS timer never fired because JS was suspended.
         const backgroundedAt = backgroundedAtRef.current;
 
         // Clear the background timer
@@ -247,7 +249,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
 
         // Check if grace period has expired
-        if (backgroundedAt && now - backgroundedAt > BACKGROUND_GRACE_PERIOD) {
+        if (now - backgroundedAt > BACKGROUND_GRACE_PERIOD) {
           // Grace period expired - lock the app (lock() clears the ref)
           lock();
         } else {
@@ -260,8 +262,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }));
         }
       }
-
-      previousAppState = nextAppState;
     };
 
     const subscription = AppState.addEventListener(
