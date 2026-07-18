@@ -127,9 +127,9 @@ function serializeArg(arg: unknown): string {
   }
 }
 
-/** All console output captured this test, fully serialized. */
+/** All console output captured this test, fully serialized across EVERY channel. */
 function allConsoleOutput(): string {
-  return [logSpy, infoSpy, debugSpy, warnSpy, errorSpy]
+  return consoleSpies
     .flatMap((spy) => spy.mock.calls)
     .map((call) => call.map(serializeArg).join(' '))
     .join('\n');
@@ -188,22 +188,38 @@ const INITIAL_PROGRESS = {
   status: 'idle' as const,
 };
 
-let logSpy: jest.SpyInstance;
-let infoSpy: jest.SpyInstance;
-let debugSpy: jest.SpyInstance;
-let warnSpy: jest.SpyInstance;
-let errorSpy: jest.SpyInstance;
+// Every console logging channel a leak could plausibly use. Spying on ALL of
+// them (not a hand-picked subset) keeps allConsoleOutput()'s "capture EVERY
+// channel" claim honest — a regression logging a secret via console.trace /
+// dir / table / group / assert cannot slip past the no-leak assertion.
+const CONSOLE_METHODS = [
+  'log',
+  'info',
+  'debug',
+  'warn',
+  'error',
+  'trace',
+  'dir',
+  'dirxml',
+  'table',
+  'group',
+  'groupCollapsed',
+  'groupEnd',
+  'assert',
+] as const;
+
+let consoleSpies: jest.SpyInstance[];
 
 describe('remoteSignerStore (TASK-159)', () => {
   beforeEach(() => {
     mockAsyncStore.clear();
-    // Silence + capture the store's chatty logging (also lets us assert no
-    // secret is ever logged).
-    logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
-    debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
-    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    // Silence + capture the store's chatty logging across every channel (also
+    // lets us assert no secret is ever logged, on any method).
+    consoleSpies = CONSOLE_METHODS.filter(
+      (name) =>
+        typeof (console as unknown as Record<string, unknown>)[name] ===
+        'function'
+    ).map((name) => jest.spyOn(console, name).mockImplementation(() => {}));
     // Reset the singleton store to a pristine slate (fresh Set/Map instances).
     useRemoteSignerStore.setState({
       appMode: 'wallet',
