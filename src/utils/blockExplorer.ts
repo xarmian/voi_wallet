@@ -2,7 +2,7 @@
  * Utility functions for blockchain network block explorer integration
  */
 
-import { NetworkId, NetworkConfiguration } from '@/types/network';
+import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 
 // Legacy constant for backwards compatibility
