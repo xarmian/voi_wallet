@@ -262,6 +262,10 @@ describe('AuthContext — biometric unlock', () => {
     expect(ok).toBe(true);
     expect(result.current.authState.isLocked).toBe(false);
     expect(result.current.authState.isAuthenticated).toBe(true);
+    // The unlock MUST route through the biometric gate + vault-population path,
+    // not just flip flags — otherwise a regression could "unlock" without ever
+    // authenticating or loading the session vault.
+    expect(mockBiometricUnlock).toHaveBeenCalledWith('Unlock your wallet');
     expect(mockSetUnlocked).toHaveBeenCalledWith(true);
   });
 
@@ -277,7 +281,9 @@ describe('AuthContext — biometric unlock', () => {
     expect(ok).toBe(false);
     expect(result.current.authState.isLocked).toBe(true);
     expect(result.current.authState.isAuthenticated).toBe(false);
-    // A cancel must NOT flip the lock signal to unlocked.
+    // Went through the biometric gate, and a cancel must NOT flip the lock
+    // signal to unlocked.
+    expect(mockBiometricUnlock).toHaveBeenCalledWith('Unlock your wallet');
     expect(mockSetUnlocked).not.toHaveBeenCalledWith(true);
   });
 
@@ -293,6 +299,9 @@ describe('AuthContext — biometric unlock', () => {
     expect(ok).toBe(false);
     expect(result.current.authState.isLocked).toBe(true);
     expect(result.current.authState.biometricEnabled).toBe(false);
+    // The gate ran and the lock signal was never flipped to unlocked.
+    expect(mockBiometricUnlock).toHaveBeenCalledWith('Unlock your wallet');
+    expect(mockSetUnlocked).not.toHaveBeenCalledWith(true);
   });
 
   it('refuses biometric unlock when biometrics are not enabled', async () => {
