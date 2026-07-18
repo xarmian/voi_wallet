@@ -168,18 +168,26 @@ function setWallet(accounts: unknown[]) {
 
 /**
  * Verify (independently, via tweetnacl over the real bytesToSign) that a signed
- * blob carries a valid Ed25519 signature for `expectedSignerPk` and, when
+ * blob (a) is a signature over the SAME transaction that was submitted for
+ * signing — not some other transaction signed with the right key — and (b)
+ * carries a valid Ed25519 signature for `expectedSignerPk`, and, when
  * `notSignerPk` is given, does NOT verify against that other key. Confirms the
- * manager signed with the intended (rekey-resolved) key.
+ * manager signed the intended transaction with the intended (rekey-resolved) key.
  */
 function assertSignedBy(
   blob: Uint8Array,
+  expectedTxn: algosdk.Transaction,
   expectedSignerPk: Uint8Array,
   notSignerPk?: Uint8Array
 ) {
   const decoded = algosdk.decodeSignedTransaction(blob);
   expect(decoded.sig).toBeDefined();
   const message = decoded.txn.bytesToSign();
+  // The blob must sign the exact transaction we handed in (same bytes-to-sign
+  // and same sender), so a "signs the wrong txn with the right key" regression
+  // is caught rather than silently passing.
+  expect(Buffer.compare(message, expectedTxn.bytesToSign())).toBe(0);
+  expect(decoded.txn.sender.toString()).toBe(expectedTxn.sender.toString());
   expect(
     nacl.sign.detached.verify(message, decoded.sig!, expectedSignerPk)
   ).toBe(true);
@@ -333,8 +341,9 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
 
     const blob = await SecureKeyManager.signTransaction(txn, OWNER.addr);
 
-    // Real signature, verified independently against the owner's public key.
-    assertSignedBy(blob, OWNER.pk, OTHER.pk);
+    // Real signature over THIS transaction, verified independently against the
+    // owner's public key.
+    assertSignedBy(blob, txn, OWNER.pk, OTHER.pk);
     // Signed with the owner's own key material.
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith(
       'acc-owner',
@@ -359,7 +368,7 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
 
     // The signature MUST verify against AUTH's key and MUST NOT verify against
     // the sender's (REKEYED) key — proving rekey resolution picked the right key.
-    assertSignedBy(blob, AUTH.pk, REKEYED.pk);
+    assertSignedBy(blob, txn, AUTH.pk, REKEYED.pk);
     // The auth account's id (not the sender's) was used for key retrieval.
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-auth', undefined);
     expect(mockSecureGetPrivateKey).not.toHaveBeenCalledWith(
@@ -372,9 +381,7 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
     expect(mockGetAccountRekeyInfo).toHaveBeenCalledWith(REKEYED.addr, true);
     // The auth key copy the manager signed with was zeroed on the way out.
     expect(handedOutKeys).toHaveLength(1);
-    expect(Array.from(handedOutKeys[0])).toEqual(
-      Array.from(new Uint8Array(64))
-    );
+    expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
   });
 
   it('forwards the PIN to the secure store when signing', async () => {
@@ -389,7 +396,7 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
 
     // A dropped PIN would still produce a valid signature here, so assert the
     // PIN actually reached the secure store rather than only checking the blob.
-    assertSignedBy(blob, OWNER.pk);
+    assertSignedBy(blob, txn, OWNER.pk);
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-owner', '654321');
   });
 
@@ -417,28 +424,6 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
     expect(mockNetworkGetInstance).toHaveBeenCalledWith(
       NetworkId.ALGORAND_MAINNET
     );
-  });
-
-  it('does not sign a rekeyed account whose auth address is unresolved and whose sender key is absent', async () => {
-    // Degenerate/malformed rekey info (isRekeyed with no authAddress) is not the
-    // reachable happy path, but it documents the manager's fall-through: with no
-    // auth address it drops to the SENDER key path, which for a watch account
-    // holds no key — so no signature is produced. (Safety here rests on the key
-    // being absent, not on an explicit rekey guard; see report note.)
-    setWallet([watchAccount(REKEYED, 'acc-rekeyed')]);
-    mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: true });
-    const txn = paymentTxn(REKEYED.addr);
-
-    await expect(
-      SecureKeyManager.signTransaction(txn, REKEYED.addr)
-    ).rejects.toThrow();
-    // The manager fell through to the sender-key path (which then failed);
-    // it never obtained usable key bytes, so nothing was signed.
-    expect(mockSecureGetPrivateKey).toHaveBeenCalledWith(
-      'acc-rekeyed',
-      undefined
-    );
-    expect(handedOutKeys).toHaveLength(0);
   });
 
   it('throws when rekeyed but the signing key is not in the wallet', async () => {
@@ -508,9 +493,11 @@ describe('SecureKeyManager.signTransaction (Ledger paths)', () => {
 
     // The manager forwards the device's signed blob unchanged, and it verifies.
     expect(result).toBe(ledgerBlob);
-    assertSignedBy(result, LEDGER.pk, OTHER.pk);
+    assertSignedBy(result, txn, LEDGER.pk, OTHER.pk);
+    // The exact transaction (not null/stale/altered bytes) is handed to the device.
     expect(mockLedgerSignTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
+        transaction: txn,
         signerAddress: LEDGER.addr,
         derivationIndex: 0,
       })
@@ -551,10 +538,10 @@ describe('SecureKeyManager.signTransaction (Ledger paths)', () => {
 
     expect(result).toBe(ledgerBlob);
     // The blob verifies against the Ledger AUTH key, not the rekeyed sender.
-    assertSignedBy(result, LEDGER.pk, REKEYED.pk);
-    // Signs with the Ledger auth address, never the software store.
+    assertSignedBy(result, txn, LEDGER.pk, REKEYED.pk);
+    // Signs the exact transaction with the Ledger auth address, never the store.
     expect(mockLedgerSignTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({ signerAddress: LEDGER.addr })
+      expect.objectContaining({ transaction: txn, signerAddress: LEDGER.addr })
     );
     expect(mockSecureGetPrivateKey).not.toHaveBeenCalled();
   });
@@ -573,9 +560,7 @@ describe('SecureKeyManager key cleanup', () => {
 
     expect(handedOutKeys).toHaveLength(1);
     // The exact buffer the manager signed with is fully zeroed.
-    expect(Array.from(handedOutKeys[0])).toEqual(
-      Array.from(new Uint8Array(64))
-    );
+    expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
   });
 
   it('zeroes the private key even when signing throws (finally cleanup)', async () => {
@@ -587,13 +572,15 @@ describe('SecureKeyManager key cleanup', () => {
     ).rejects.toBeDefined();
 
     expect(handedOutKeys).toHaveLength(1);
-    expect(Array.from(handedOutKeys[0])).toEqual(
-      Array.from(new Uint8Array(64))
-    );
+    expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
   });
 
   it('does not leak key or mnemonic material to the console', async () => {
-    setWallet([standardAccount(OWNER, 'acc-owner')]);
+    // A key-derived mnemonic account (empty stored mnemonic) forces the
+    // key-retrieval + derivation path, and a rekeyed sender forces the AUTH-key
+    // software-signing path — both are exercised alongside the standard path.
+    const derivedOnly = standardAccount(OWNER, 'acc-owner');
+    (derivedOnly as { mnemonic: string }).mnemonic = '';
 
     const spies = [
       jest.spyOn(console, 'log').mockImplementation(() => {}),
@@ -604,25 +591,54 @@ describe('SecureKeyManager key cleanup', () => {
     ];
 
     try {
-      const txn = paymentTxn(OWNER.addr);
-      await SecureKeyManager.signTransaction(txn, OWNER.addr);
+      // Standard software signing.
+      setWallet([derivedOnly]);
+      await SecureKeyManager.signTransaction(
+        paymentTxn(OWNER.addr),
+        OWNER.addr
+      );
+      // Mnemonic derived from a retrieved key (not a cached plaintext phrase).
       await SecureKeyManager.getMnemonic(OWNER.addr);
-      // Also exercise an error path — failure logging is a classic leak site.
+      // Error path — failure logging is a classic leak site.
       await expect(
         SecureKeyManager.signTransaction(null, OWNER.addr)
       ).rejects.toBeDefined();
 
+      // Rekeyed software signing with AUTH's key.
+      setWallet([
+        watchAccount(REKEYED, 'acc-rekeyed'),
+        standardAccount(AUTH, 'acc-auth'),
+      ]);
+      mockGetAccountRekeyInfo.mockResolvedValue({
+        isRekeyed: true,
+        authAddress: AUTH.addr,
+      });
+      await SecureKeyManager.signTransaction(
+        paymentTxn(REKEYED.addr),
+        REKEYED.addr
+      );
+
+      // Ledger failure logging path (the manager console.errors the raw error).
+      setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
+      mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+      mockGetConnectedDevice.mockReturnValue({ id: 'device-acc-ledger' });
+      mockLedgerSignTransaction.mockRejectedValue(new Error('device fault'));
+      await expect(
+        SecureKeyManager.signTransaction(paymentTxn(LEDGER.addr), LEDGER.addr)
+      ).rejects.toBeDefined();
+
       // Every plausible serialization of the secret an accidental log could take:
       // hex, base64, decimal-byte arrays (how a Uint8Array/Buffer stringifies),
-      // and the full mnemonic. (Individual mnemonic words are intentionally NOT
-      // checked — short BIP39 words collide as substrings of ordinary log text.)
-      const forbidden = [
-        OWNER.mnemonic,
-        Buffer.from(OWNER.sk).toString('hex'),
-        Buffer.from(OWNER.sk.slice(0, 32)).toString('hex'), // seed half
-        Buffer.from(OWNER.sk).toString('base64'),
-        Array.from(OWNER.sk).join(','), // Uint8Array/Buffer decimal serialization
-      ];
+      // and the full mnemonic — for BOTH the standard and the AUTH signing keys.
+      // (Individual mnemonic words are intentionally NOT checked — short BIP39
+      // words collide as substrings of ordinary log text.)
+      const forbidden = [OWNER, AUTH].flatMap((acct) => [
+        acct.mnemonic,
+        Buffer.from(acct.sk).toString('hex'),
+        Buffer.from(acct.sk.slice(0, 32)).toString('hex'), // seed half
+        Buffer.from(acct.sk).toString('base64'),
+        Array.from(acct.sk).join(','), // Uint8Array/Buffer decimal serialization
+      ]);
       const logged = spies
         .flatMap((s) => s.mock.calls)
         .flat()
@@ -684,9 +700,7 @@ describe('SecureKeyManager.getMnemonic', () => {
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-owner');
     // The key buffer used for derivation was wiped afterward.
     expect(handedOutKeys).toHaveLength(1);
-    expect(Array.from(handedOutKeys[0])).toEqual(
-      Array.from(new Uint8Array(64))
-    );
+    expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
   });
 
   it('rejects for account types without a recovery phrase', async () => {
@@ -760,6 +774,62 @@ describe('SecureKeyManager.getSigningInfo', () => {
       signingAccountId: 'acc-auth',
       isRekeyed: true,
       authAddress: AUTH.addr,
+    });
+  });
+
+  it('reports a Ledger account as signable (connection deferred)', async () => {
+    setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
+
+    const info = await SecureKeyManager.getSigningInfo(LEDGER.addr);
+
+    expect(info).toMatchObject({
+      canSign: true,
+      signingAddress: LEDGER.addr,
+      signingAccountId: 'acc-ledger',
+      isRekeyed: false,
+    });
+  });
+
+  it('reports a watch account rekeyed to a standard signer we hold as signable', async () => {
+    setWallet([
+      watchAccount(REKEYED, 'acc-watch'),
+      standardAccount(AUTH, 'acc-auth'),
+    ]);
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: AUTH.addr,
+    });
+
+    const info = await SecureKeyManager.getSigningInfo(
+      REKEYED.addr,
+      NetworkId.VOI_MAINNET
+    );
+
+    expect(info).toMatchObject({
+      canSign: true,
+      signingAddress: AUTH.addr,
+      signingAccountId: 'acc-auth',
+      isRekeyed: true,
+      authAddress: AUTH.addr,
+    });
+    // Rekey state was resolved on the caller-specified network.
+    expect(mockNetworkGetInstance).toHaveBeenCalledWith(NetworkId.VOI_MAINNET);
+  });
+
+  it('reports a watch account rekeyed to a signer we do NOT hold as not signable', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-watch')]);
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: OTHER.addr, // signer absent from the wallet
+    });
+
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr);
+
+    expect(info).toMatchObject({
+      canSign: false,
+      signingAddress: OTHER.addr,
+      isRekeyed: true,
+      authAddress: OTHER.addr,
     });
   });
 
