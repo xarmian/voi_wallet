@@ -43,8 +43,9 @@ export const getAddressUrl = (
     ? getNetworkConfig(networkId).blockExplorerUrl
     : VOI_BLOCK_EXPLORER_BASE_URL;
 
+  // allo.info serves addresses under /account/ (/address/ 302-redirects there)
   if (baseUrl.includes('allo.info')) {
-    return `${baseUrl}/address/${address}`;
+    return `${baseUrl}/account/${address}`;
   }
 
   return `${baseUrl}/address/${address}`;
@@ -61,10 +62,7 @@ export const getAssetUrl = (assetId: number, networkId?: NetworkId): string => {
     ? getNetworkConfig(networkId).blockExplorerUrl
     : VOI_BLOCK_EXPLORER_BASE_URL;
 
-  if (baseUrl.includes('allo.info')) {
-    return `${baseUrl}/asset/${assetId}`;
-  }
-
+  // Both allo.info and the Voi explorer serve assets under /asset/
   return `${baseUrl}/asset/${assetId}`;
 };
 
@@ -82,10 +80,7 @@ export const getBlockUrl = (
     ? getNetworkConfig(networkId).blockExplorerUrl
     : VOI_BLOCK_EXPLORER_BASE_URL;
 
-  if (baseUrl.includes('allo.info')) {
-    return `${baseUrl}/block/${blockNumber}`;
-  }
-
+  // Both allo.info and the Voi explorer serve blocks under /block/
   return `${baseUrl}/block/${blockNumber}`;
 };
 
