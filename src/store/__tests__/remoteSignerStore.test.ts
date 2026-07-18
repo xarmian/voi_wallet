@@ -476,98 +476,112 @@ describe('remoteSignerStore (TASK-159)', () => {
       );
     });
 
-    // KNOWN GAP (reported, source intentionally NOT modified): markRequestProcessed
-    // persists fire-and-forget. If that durable write is rejected (disk full) or
-    // the app terminates before it lands, the id is only in the volatile Set —
-    // so after a restart the SAME request id is accepted again (replay). The
-    // in-session guard held (see test above), but cross-restart durability is
-    // best-effort. This it.failing asserts the DESIRED secure behaviour (replay
-    // still blocked) and currently fails, documenting the gap without a source fix.
-    it.failing(
-      'a processed id whose durable write failed is NOT replay-blocked after restart',
-      async () => {
-        setItemMock.mockImplementationOnce(async () => {
-          throw new Error('disk full');
-        });
+    // FIXED (TASK-166 BUG1): a TRANSIENT durable-write failure no longer drops
+    // the replay guard. The serialized persistence chain retries the write, so a
+    // first-attempt failure (disk full) is recovered, the id lands on disk, and
+    // a restart re-hydrates it — the replay stays blocked cross-restart.
+    // (A PERMANENT/retry-exhausted failure is the accepted residual of the
+    // sync/void contract; closing that fully would require awaiting the write
+    // before releasing the signature.)
+    it('re-blocks replay after restart when the first durable write attempt failed (retried)', async () => {
+      // Fail ONLY the first setItem for the processed-ids write; the retry wins.
+      setItemMock.mockImplementationOnce(async () => {
+        throw new Error('disk full');
+      });
 
-        const store = useRemoteSignerStore.getState();
-        store.markRequestProcessed('req-lost');
-        await flush();
+      const store = useRemoteSignerStore.getState();
+      store.markRequestProcessed('req-lost');
+      await flush();
 
-        // The durable write was rejected — nothing landed on disk.
-        expect(
-          mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)
-        ).toBeUndefined();
+      // The retry persisted the id despite the first failure.
+      expect(mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)).toBe(
+        JSON.stringify(['req-lost'])
+      );
 
-        // Restart: only AsyncStorage survives, the in-memory Set is gone.
-        useRemoteSignerStore.setState({
-          processedRequestIds: new Set(),
-          isInitialized: false,
-        });
-        await useRemoteSignerStore.getState().initialize();
+      // Restart: only AsyncStorage survives, the in-memory Set is gone.
+      useRemoteSignerStore.setState({
+        processedRequestIds: new Set(),
+        isInitialized: false,
+      });
+      await useRemoteSignerStore.getState().initialize();
 
-        // DESIRED: replay still rejected. ACTUAL: accepted → this fails, so
-        // it.failing turns the documented gap into a green (expected-fail) test.
-        expect(
-          useRemoteSignerStore
-            .getState()
-            .validateRequest(makeRequest({ id: 'req-lost' }))
-        ).toEqual({
-          valid: false,
-          error: 'Request has already been processed',
-        });
-      }
-    );
+      // Replay still rejected after restart.
+      expect(
+        useRemoteSignerStore
+          .getState()
+          .validateRequest(makeRequest({ id: 'req-lost' }))
+      ).toEqual({
+        valid: false,
+        error: 'Request has already been processed',
+      });
+    });
 
-    // KNOWN GAP (reported, source NOT modified): markRequestProcessed persists
-    // the WHOLE set each call, fire-and-forget and un-serialized. If two writes
-    // land out of order, the older (smaller) set clobbers the newer one on disk,
-    // dropping the most recent id — a replay of that id is accepted after a
-    // restart. it.failing asserts the DESIRED behaviour (both ids stay blocked)
-    // and currently fails, documenting the last-write-wins race.
-    it.failing(
-      'out-of-order fire-and-forget writes can drop the newer id (replay after restart)',
-      async () => {
-        // Defer the two processed-id writes and release them in REVERSE order.
-        const commits: (() => void)[] = [];
-        const deferWrite = (key: string, value: string) =>
+    // FIXED (TASK-166 BUG2): processed-id writes are SERIALIZED through one
+    // module-level chain and each writes the LATEST full set read at execution
+    // time, so two rapid marks can no longer clobber each other — both ids are
+    // durably persisted and survive a restart. The old code wrote the whole set
+    // per call unserialized, so an out-of-order landing dropped the newer id.
+    it('serializes processed-id writes so rapid marks cannot clobber each other (both survive restart)', async () => {
+      const store = useRemoteSignerStore.getState();
+      store.markRequestProcessed('req-a');
+      store.markRequestProcessed('req-b');
+      await flush();
+
+      // Disk holds BOTH ids (serialized, latest-set-at-write-time writes).
+      const persisted = new Set<string>(
+        JSON.parse(mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)!)
+      );
+      expect(persisted.has('req-a')).toBe(true);
+      expect(persisted.has('req-b')).toBe(true);
+
+      // Restart from disk only — both replays stay blocked.
+      useRemoteSignerStore.setState({
+        processedRequestIds: new Set(),
+        isInitialized: false,
+      });
+      await useRemoteSignerStore.getState().initialize();
+
+      const state = useRemoteSignerStore.getState();
+      expect(state.validateRequest(makeRequest({ id: 'req-a' }))).toEqual({
+        valid: false,
+        error: 'Request has already been processed',
+      });
+      expect(state.validateRequest(makeRequest({ id: 'req-b' }))).toEqual({
+        valid: false,
+        error: 'Request has already been processed',
+      });
+    });
+
+    // A delayed write still persists EVERY id, because each queued task reads
+    // the latest set at execution time (belt-and-suspenders on ordering): defer
+    // the first write, mark two ids, then release — the single write captures
+    // both. Proves the latest-set-at-write-time property directly.
+    it('a delayed processed-id write persists every id marked before it runs', async () => {
+      let releaseFirstWrite!: () => void;
+      setItemMock.mockImplementationOnce(
+        (key: string, value: string) =>
           new Promise<void>((resolve) => {
-            commits.push(() => {
+            releaseFirstWrite = () => {
               mockAsyncStore.set(key, value);
               resolve();
-            });
-          });
-        setItemMock.mockImplementationOnce(deferWrite);
-        setItemMock.mockImplementationOnce(deferWrite);
+            };
+          })
+      );
 
-        const store = useRemoteSignerStore.getState();
-        store.markRequestProcessed('req-a'); // write #1 persists ["req-a"]
-        store.markRequestProcessed('req-b'); // write #2 persists ["req-a","req-b"]
+      const store = useRemoteSignerStore.getState();
+      store.markRequestProcessed('req-a'); // enqueues the (deferred) first write
+      store.markRequestProcessed('req-b'); // marked before the write executes
+      await flush(); // let the first (deferred) write reach setItem and park
 
-        // Newer write lands first, then the older write overwrites it.
-        commits[1]();
-        commits[0]();
-        await flush();
+      releaseFirstWrite();
+      await flush();
 
-        // Restart from disk only.
-        useRemoteSignerStore.setState({
-          processedRequestIds: new Set(),
-          isInitialized: false,
-        });
-        await useRemoteSignerStore.getState().initialize();
-
-        const state = useRemoteSignerStore.getState();
-        // DESIRED: both durably blocked. ACTUAL: req-b was clobbered → accepted.
-        expect(state.validateRequest(makeRequest({ id: 'req-a' }))).toEqual({
-          valid: false,
-          error: 'Request has already been processed',
-        });
-        expect(state.validateRequest(makeRequest({ id: 'req-b' }))).toEqual({
-          valid: false,
-          error: 'Request has already been processed',
-        });
-      }
-    );
+      const persisted = new Set<string>(
+        JSON.parse(mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)!)
+      );
+      expect(persisted.has('req-a')).toBe(true);
+      expect(persisted.has('req-b')).toBe(true);
+    });
 
     it('persists processed ids so replays are blocked after a restart', async () => {
       const store = useRemoteSignerStore.getState();
@@ -737,13 +751,11 @@ describe('remoteSignerStore (TASK-159)', () => {
       });
     });
 
-    // KNOWN GAP (reported, source NOT modified): setSigningProgress is a shallow
-    // partial-merge setter, so transitioning error -> signing/complete does NOT
-    // drop the stale `error` message. That contradicts SigningProgress' contract
-    // (`error` is the "error message if status is 'error'"). it.failing asserts
-    // the DESIRED behaviour (error cleared once the status leaves 'error') and
-    // currently fails, rather than pinning the buggy retention as correct.
-    it.failing('leaving the error state drops the stale error message', () => {
+    // FIXED (TASK-166 BUG3): setSigningProgress now drops a stale `error` message
+    // whenever the merged status leaves 'error' (e.g. error -> signing on
+    // recovery), honoring the SigningProgress contract (`error` is only
+    // meaningful while status is 'error').
+    it('leaving the error state drops the stale error message', () => {
       const store = useRemoteSignerStore.getState();
       store.setPendingRequest(makeRequest({}, 1));
       store.setSigningProgress({ status: 'error', error: 'boom' });

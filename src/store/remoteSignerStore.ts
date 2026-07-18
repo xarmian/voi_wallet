@@ -23,6 +23,52 @@ const STORAGE_KEYS = {
 // Module-level promise for early mode detection (before store hydration)
 let appModePromise: Promise<AppMode> | null = null;
 
+// Bounded retry for the replay-guard persistence so a transient native write
+// failure (e.g. momentary disk pressure) does not silently drop a processed id.
+const PROCESSED_PERSIST_MAX_ATTEMPTS = 3;
+
+// Serialized persistence chain for the processed-request-id set. ALL durable
+// writes of PROCESSED_REQUESTS go through this single chain so they can never
+// interleave — an out-of-order landing can no longer let an older/smaller set
+// clobber a newer one (replay after restart). Each queued task writes the
+// LATEST full set (read at execution time, so a delayed write still persists
+// every id) and NEVER rejects the chain: it swallows a final, retry-exhausted
+// failure so a single bad write cannot stall every later persist.
+let processedPersistChain: Promise<void> = Promise.resolve();
+
+async function writeProcessedIds(ids: string[]): Promise<void> {
+  let lastError: unknown;
+  for (
+    let attempt = 1;
+    attempt <= PROCESSED_PERSIST_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      await AsyncStorage.setItem(
+        STORAGE_KEYS.PROCESSED_REQUESTS,
+        JSON.stringify(ids)
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  // Retry-exhausted: the in-memory guard still blocks in-session replays, but
+  // cross-restart durability is lost for this id (accepted residual — a full
+  // guarantee would require awaiting the write before releasing the signature).
+  console.warn(
+    '[RemoteSignerStore] Failed to persist processed requests after retries:',
+    lastError
+  );
+}
+
+function enqueueProcessedPersist(getIds: () => Set<string>): void {
+  processedPersistChain = processedPersistChain
+    // Recover before chaining so a prior failure can never block later writes.
+    .catch(() => {})
+    .then(() => writeProcessedIds(Array.from(getIds())));
+}
+
 /**
  * Get app mode early, before store hydration completes.
  * Used by AppNavigator to determine which services to initialize.
@@ -163,13 +209,18 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
           storedSigners ? JSON.parse(storedSigners) : []
         );
 
-        // Load processed requests (for replay prevention in signer mode)
+        // Load processed requests (for replay prevention in signer mode). UNION
+        // with any ids already in memory rather than replacing: a
+        // markRequestProcessed that lands during this async hydration must not
+        // be dropped (which would let that id replay). Union keeps both the
+        // persisted history and any just-marked id.
         const storedProcessed = await AsyncStorage.getItem(
           STORAGE_KEYS.PROCESSED_REQUESTS
         );
-        const processedRequestIds = new Set<string>(
-          storedProcessed ? JSON.parse(storedProcessed) : []
-        );
+        const processedRequestIds = new Set<string>([
+          ...get().processedRequestIds,
+          ...(storedProcessed ? (JSON.parse(storedProcessed) as string[]) : []),
+        ]);
 
         set({
           appMode,
@@ -255,9 +306,15 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 
     setSigningProgress: (progress: Partial<SigningProgress>) => {
       const { signingProgress } = get();
-      set({
-        signingProgress: { ...signingProgress, ...progress },
-      });
+      const merged: SigningProgress = { ...signingProgress, ...progress };
+      // Per the SigningProgress contract, `error` is only meaningful while
+      // status is 'error'. Drop any stale message once the state leaves 'error'
+      // (e.g. error -> signing on recovery), unless this same update set a new
+      // error explicitly.
+      if (merged.status !== 'error') {
+        delete merged.error;
+      }
+      set({ signingProgress: merged });
     },
 
     markRequestProcessed: (requestId: string) => {
@@ -266,16 +323,12 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       updated.add(requestId);
       set({ processedRequestIds: updated });
 
-      // Persist asynchronously
-      AsyncStorage.setItem(
-        STORAGE_KEYS.PROCESSED_REQUESTS,
-        JSON.stringify(Array.from(updated))
-      ).catch((err) =>
-        console.warn(
-          '[RemoteSignerStore] Failed to persist processed requests:',
-          err
-        )
-      );
+      // Durability goes through the serialized, retrying persistence chain. The
+      // in-memory guard above is already effective for in-session replays; this
+      // makes the cross-restart guard robust against out-of-order writes and
+      // transient failures. The task reads the LATEST set at write time (not the
+      // `updated` snapshot) so a delayed write still persists every id.
+      enqueueProcessedPersist(() => get().processedRequestIds);
     },
 
     isRequestProcessed: (requestId: string) => {
