@@ -169,17 +169,20 @@ function setWallet(accounts: unknown[]) {
 /**
  * Verify (independently, via tweetnacl over the real bytesToSign) that a signed
  * blob (a) is a signature over the SAME transaction that was submitted for
- * signing — not some other transaction signed with the right key — and (b)
- * carries a valid Ed25519 signature for `expectedSignerPk`, and, when
- * `notSignerPk` is given, does NOT verify against that other key. Confirms the
- * manager signed the intended transaction with the intended (rekey-resolved) key.
+ * signing — not some other transaction signed with the right key — (b) carries a
+ * valid Ed25519 signature for `expectedSignerPk` (and, when `opts.notSignerPk`
+ * is given, does NOT verify against that other key), and (c) carries the correct
+ * Algorand auth-address (`sgnr`) framing: for rekeyed signing the signer differs
+ * from the sender so the blob MUST encode `sgnr = opts.authAddr` or Algorand
+ * rejects it; for direct signing `sgnr` MUST be absent.
  */
 function assertSignedBy(
   blob: Uint8Array,
   expectedTxn: algosdk.Transaction,
   expectedSignerPk: Uint8Array,
-  notSignerPk?: Uint8Array
+  opts: { notSignerPk?: Uint8Array; authAddr?: string } = {}
 ) {
+  const { notSignerPk, authAddr } = opts;
   const decoded = algosdk.decodeSignedTransaction(blob);
   expect(decoded.sig).toBeDefined();
   const message = decoded.txn.bytesToSign();
@@ -195,6 +198,63 @@ function assertSignedBy(
     expect(nacl.sign.detached.verify(message, decoded.sig!, notSignerPk)).toBe(
       false
     );
+  }
+  // Algorand-compat: rekeyed signatures must be framed with the auth address.
+  if (authAddr) {
+    expect(decoded.sgnr?.toString()).toBe(authAddr);
+  } else {
+    expect(decoded.sgnr).toBeUndefined();
+  }
+}
+
+/**
+ * Derive the Algorand address for a mnemonic and immediately zero the throwaway
+ * secret key algosdk materializes, so no live key bytes linger in the test after
+ * we have read the (public) address.
+ */
+function addressForMnemonic(mnemonic: string): string {
+  const { addr, sk } = algosdk.mnemonicToSecretKey(mnemonic);
+  try {
+    return addr.toString();
+  } finally {
+    sk.fill(0);
+  }
+}
+
+/**
+ * Recursively collect every string and byte-sequence reachable from a logged
+ * console argument, rendering byte sequences (Uint8Array/Buffer, incl. ones
+ * NESTED inside objects/arrays such as `console.error({ privateKey })`) in hex,
+ * base64, and decimal-joined form so the leak scan cannot be evaded by wrapping
+ * a key in a structure.
+ */
+function collectLoggable(value: unknown, out: string[], depth = 0): void {
+  if (value == null || depth > 6) return;
+  if (typeof value === 'string') {
+    out.push(value);
+    return;
+  }
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+    const buf = Buffer.from(value as Uint8Array);
+    out.push(
+      buf.toString('hex'),
+      buf.toString('base64'),
+      Array.from(buf).join(',')
+    );
+    return;
+  }
+  if (value instanceof Error) {
+    out.push(value.message, value.stack ?? '');
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectLoggable(item, out, depth + 1);
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value))
+      collectLoggable(item, out, depth + 1);
+    return;
   }
 }
 
@@ -343,7 +403,7 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
 
     // Real signature over THIS transaction, verified independently against the
     // owner's public key.
-    assertSignedBy(blob, txn, OWNER.pk, OTHER.pk);
+    assertSignedBy(blob, txn, OWNER.pk, { notSignerPk: OTHER.pk });
     // Signed with the owner's own key material.
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith(
       'acc-owner',
@@ -368,7 +428,10 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
 
     // The signature MUST verify against AUTH's key and MUST NOT verify against
     // the sender's (REKEYED) key — proving rekey resolution picked the right key.
-    assertSignedBy(blob, txn, AUTH.pk, REKEYED.pk);
+    assertSignedBy(blob, txn, AUTH.pk, {
+      notSignerPk: REKEYED.pk,
+      authAddr: AUTH.addr,
+    });
     // The auth account's id (not the sender's) was used for key retrieval.
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-auth', undefined);
     expect(mockSecureGetPrivateKey).not.toHaveBeenCalledWith(
@@ -493,7 +556,7 @@ describe('SecureKeyManager.signTransaction (Ledger paths)', () => {
 
     // The manager forwards the device's signed blob unchanged, and it verifies.
     expect(result).toBe(ledgerBlob);
-    assertSignedBy(result, txn, LEDGER.pk, OTHER.pk);
+    assertSignedBy(result, txn, LEDGER.pk, { notSignerPk: OTHER.pk });
     // The exact transaction (not null/stale/altered bytes) is handed to the device.
     expect(mockLedgerSignTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -538,7 +601,10 @@ describe('SecureKeyManager.signTransaction (Ledger paths)', () => {
 
     expect(result).toBe(ledgerBlob);
     // The blob verifies against the Ledger AUTH key, not the rekeyed sender.
-    assertSignedBy(result, txn, LEDGER.pk, REKEYED.pk);
+    assertSignedBy(result, txn, LEDGER.pk, {
+      notSignerPk: REKEYED.pk,
+      authAddr: LEDGER.addr,
+    });
     // Signs the exact transaction with the Ledger auth address, never the store.
     expect(mockLedgerSignTransaction).toHaveBeenCalledWith(
       expect.objectContaining({ transaction: txn, signerAddress: LEDGER.addr })
@@ -639,20 +705,14 @@ describe('SecureKeyManager key cleanup', () => {
         Buffer.from(acct.sk).toString('base64'),
         Array.from(acct.sk).join(','), // Uint8Array/Buffer decimal serialization
       ]);
-      const logged = spies
-        .flatMap((s) => s.mock.calls)
-        .flat()
-        .map((arg) => {
-          if (typeof arg === 'string') return arg;
-          if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`;
-          if (arg instanceof Uint8Array) return Array.from(arg).join(',');
-          try {
-            return JSON.stringify(arg);
-          } catch {
-            return String(arg);
-          }
-        })
-        .join('\n');
+      // Recursively surface every string/byte-sequence in the logged args —
+      // including keys nested inside objects/arrays — in all encodings, so a
+      // structured leak like `console.error({ privateKey })` cannot slip past.
+      const loggedParts: string[] = [];
+      for (const call of spies.flatMap((s) => s.mock.calls)) {
+        for (const arg of call) collectLoggable(arg, loggedParts);
+      }
+      const logged = loggedParts.join('\n');
 
       for (const secret of forbidden) {
         // Guard against a degenerate empty needle matching everything.
@@ -678,9 +738,7 @@ describe('SecureKeyManager.getMnemonic', () => {
     // Boolean equality so a mismatch does not render the mnemonic into CI output.
     expect(mnemonic === OWNER.mnemonic).toBe(true);
     // Round-trips to the real fixture address (Algorand/Pera compatibility).
-    expect(algosdk.mnemonicToSecretKey(mnemonic).addr.toString()).toBe(
-      OWNER.addr
-    );
+    expect(addressForMnemonic(mnemonic)).toBe(OWNER.addr);
     expect(mockSecureGetPrivateKey).not.toHaveBeenCalled();
   });
 
@@ -694,9 +752,7 @@ describe('SecureKeyManager.getMnemonic', () => {
 
     // Real derivation from the real key (checked via the public address, so no
     // secret is rendered on failure).
-    expect(algosdk.mnemonicToSecretKey(mnemonic).addr.toString()).toBe(
-      OWNER.addr
-    );
+    expect(addressForMnemonic(mnemonic)).toBe(OWNER.addr);
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-owner');
     // The key buffer used for derivation was wiped afterward.
     expect(handedOutKeys).toHaveLength(1);
