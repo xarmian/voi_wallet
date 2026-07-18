@@ -80,6 +80,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const sessionTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const backgroundTimer = useRef<NodeJS.Timeout | undefined>(undefined);
 
+  // Synchronous, render-independent record of WHEN the app was backgrounded.
+  // The AppState handler must decide lock-vs-unlock on foreground from a value
+  // written the instant we background — NOT from React state, whose commit can
+  // be skipped entirely if the OS suspends the JS runtime before the render
+  // lands (that stale-null read was the lock-BYPASS this ref closes). authState
+  // .backgroundedAt is kept in sync for any external observer, but THIS ref is
+  // the source of truth for the grace-window decision.
+  const backgroundedAtRef = useRef<number | null>(null);
+
   // Always-fresh mirror of authState so the inactivity interval can read the
   // latest activity/auth flags and route through the single lock() (below)
   // rather than mutating state inline (needed so lock's session teardown runs).
@@ -88,12 +97,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     checkInitialAuthState();
-    setupAppStateListener();
+    // Capture the subscription remover so the effect cleanup can tear the
+    // AppState listener down — otherwise it leaks across every mount. The
+    // remover is callable on both native (subscription.remove()) and web
+    // (no-op) paths.
+    const removeAppStateListener = setupAppStateListener();
 
     return () => {
       if (activityTimer.current) clearInterval(activityTimer.current);
       if (sessionTimer.current) clearTimeout(sessionTimer.current);
       if (backgroundTimer.current) clearTimeout(backgroundTimer.current);
+      removeAppStateListener();
     };
   }, []);
 
@@ -197,7 +211,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const now = Date.now();
 
       if (nextAppState === 'background') {
-        // App is going to background - start grace period timer
+        // App is going to background - start grace period timer.
+        // Record the background timestamp SYNCHRONOUSLY in the ref (before the
+        // async setAuthState) so a foreground return can compute the true
+        // elapsed time even if the OS suspends JS before React commits.
+        backgroundedAtRef.current = now;
         setAuthState((prev) => ({
           ...prev,
           backgroundedAt: now,
@@ -216,8 +234,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         nextAppState === 'active' &&
         previousAppState === 'background'
       ) {
-        // App is returning from background
-        const backgroundedAt = authState.backgroundedAt;
+        // App is returning from background. Read the synchronous ref (not the
+        // closed-over React state, which is stale for a listener created once
+        // at mount) so a return AFTER the grace window locks even when the
+        // 60s JS timer never fired because the OS suspended the runtime.
+        const backgroundedAt = backgroundedAtRef.current;
 
         // Clear the background timer
         if (backgroundTimer.current) {
@@ -227,10 +248,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Check if grace period has expired
         if (backgroundedAt && now - backgroundedAt > BACKGROUND_GRACE_PERIOD) {
-          // Grace period expired - lock the app
+          // Grace period expired - lock the app (lock() clears the ref)
           lock();
         } else {
           // Within grace period - update activity and keep unlocked
+          backgroundedAtRef.current = null;
           setAuthState((prev) => ({
             ...prev,
             backgroundedAt: null,
@@ -413,6 +435,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(backgroundTimer.current);
       backgroundTimer.current = undefined;
     }
+
+    // Keep the synchronous background marker in lockstep with the state reset
+    // above so a subsequent foreground return can't re-read a stale timestamp.
+    backgroundedAtRef.current = null;
   };
 
   const setupPin = async (
