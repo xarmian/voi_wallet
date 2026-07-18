@@ -20,7 +20,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Modal,
-  Alert,
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -36,8 +35,9 @@ import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { AnimatedQRCode } from '@/components/remoteSigner/AnimatedQRCode';
 import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
-import { verifySignedTransaction } from '@/utils/signatureVerification';
+import { verifyAirgapTransferConfirmation } from '@/utils/signatureVerification';
 import { generateArc0300AccountExportUri } from '@/utils/arc0300';
+import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { useSecureScreen } from '@/hooks/useSecureScreen';
 
@@ -79,23 +79,29 @@ export function TransferToAirgapFlow({
   const [verifiedSignerDeviceId, setVerifiedSignerDeviceId] = useState<
     string | null
   >(null);
-  const [verifiedSignerDeviceName, setVerifiedSignerDeviceName] = useState<
-    string | undefined
-  >(undefined);
+  // The airgap confirmation carries no device name today; the setter is unused,
+  // so keep only the (undefined) value passed to convertStandardToRemoteSigner.
+  const [verifiedSignerDeviceName] = useState<string | undefined>(undefined);
 
   // Handle disclaimer acceptance
   const handleAcceptDisclaimer = useCallback(async () => {
     setState('generating');
 
+    // Hoisted so the finally block can zero the raw secret key on EVERY path
+    // (success, error, early throw), not just success.
+    let privateKey: Uint8Array | null = null;
+
     try {
       // Retrieve the private key (will prompt for biometric/PIN authentication internally)
-      const privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+      privateKey = await AccountSecureStorage.getPrivateKey(account.id);
 
       if (!privateKey) {
         throw new Error('Could not retrieve private key for this account');
       }
 
-      // Generate ARC-300 URI
+      // Generate ARC-300 URI. The returned string embeds the key and is an
+      // immutable JS string (cannot be zeroed); its lifetime is minimized by
+      // clearing privateKeyQrData the moment the QR leaves screen (below).
       const arc300Uri = generateArc0300AccountExportUri({
         privateKeyBytes: privateKey,
         name: account.label,
@@ -104,9 +110,6 @@ export function TransferToAirgapFlow({
       // For now we'll just use the raw URI - if it needs animation, AnimatedQRCode handles it
       setPrivateKeyQrData(arc300Uri);
       setState('displaying_qr');
-
-      // Zero out the private key from memory
-      privateKey.fill(0);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Failed to prepare transfer';
@@ -123,6 +126,10 @@ export function TransferToAirgapFlow({
         setError(message);
       }
       setState('error');
+    } finally {
+      // Zero the raw secret key on EVERY path so the mutable Uint8Array never
+      // lingers in memory after this handler returns.
+      privateKey?.fill(0);
     }
   }, [account]);
 
@@ -168,11 +175,21 @@ export function TransferToAirgapFlow({
           );
         }
 
-        // Verify the signature locally
+        // Verify the confirmation locally before we ever delete the local key.
+        // verifyAirgapTransferConfirmation layers wallet-side checks (bounded
+        // blob, amount === 0, genesis === active network) on top of the
+        // sig/self-payment/no-rekey/no-msig core. NOTE: this proves the airgap
+        // can sign for this address on this chain — it is NOT a freshness/replay
+        // guard (see the helper's docblock; closing that needs a two-sided
+        // nonce, declined in TASK-146).
         const signedTxnBase64 = Buffer.from(signedTxns[0]).toString('base64');
-        const verificationResult = verifySignedTransaction(
+        const netConfig = getNetworkConfig(networkId);
+        const verificationResult = verifyAirgapTransferConfirmation(
           signedTxnBase64,
-          account.address
+          {
+            expectedSignerAddress: account.address,
+            expectedGenesisHashBase64: netConfig.genesisHash,
+          }
         );
 
         if (!verificationResult.valid) {
@@ -180,6 +197,11 @@ export function TransferToAirgapFlow({
             verificationResult.error || 'Signature verification failed'
           );
         }
+
+        // The private-key QR has served its purpose and the transfer is
+        // verified; drop the key-bearing URI from React state NOW rather than
+        // holding it through confirm_deletion → converting → success.
+        setPrivateKeyQrData(null);
 
         // Extract signer device info from the response metadata if available
         // For now, we'll use a generated device ID since the response might not have it
@@ -195,7 +217,7 @@ export function TransferToAirgapFlow({
         setState('error');
       }
     },
-    [account.address]
+    [account.address, networkId]
   );
 
   // Handle user confirming deletion
@@ -240,7 +262,19 @@ export function TransferToAirgapFlow({
   // Handle retry
   const handleRetry = useCallback(() => {
     setError(null);
+    // Drop any key-bearing URI before returning to the disclaimer; a fresh key
+    // is re-generated on re-acceptance.
+    setPrivateKeyQrData(null);
     setState('disclaimer');
+  }, []);
+
+  // Belt-and-suspenders: drop the key-bearing URI from state on unmount so it is
+  // never retained past the lifetime of this flow (e.g. if the modal is
+  // dismissed while the QR is on screen).
+  useEffect(() => {
+    return () => {
+      setPrivateKeyQrData(null);
+    };
   }, []);
 
   // Handle back to QR

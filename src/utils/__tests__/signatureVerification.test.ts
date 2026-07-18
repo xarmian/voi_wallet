@@ -20,6 +20,9 @@ import {
   extractTransactionComponents,
   verifyEd25519Signature,
   verifySignedTransactionBytes,
+  verifyAirgapTransferConfirmation,
+  readPaymentAmount,
+  MAX_AIRGAP_CONFIRMATION_BASE64_LEN,
 } from '../signatureVerification';
 
 // Deterministic-enough suggested params. genesisHash is 32 zero bytes; we never
@@ -254,6 +257,143 @@ describe('verifySignedTransaction', () => {
       senderAddr
     );
     expect(result.valid).toBe(false);
+  });
+});
+
+describe('readPaymentAmount', () => {
+  it('reads the v3 shape (txn.payment.amount)', () => {
+    expect(readPaymentAmount({ payment: { amount: 1000n } })).toBe(1000n);
+  });
+
+  it('reads the v2 shape (txn.amount) — the field the raw v3 accessor missed', () => {
+    // A v2-decoded non-zero self-payment must NOT fall through to 0 and be
+    // accepted as "zero-amount" (Codex P2 regression).
+    expect(readPaymentAmount({ amount: 1000n })).toBe(1000n);
+    expect(readPaymentAmount({ amount: 12345 })).toBe(12345n);
+  });
+
+  it('reads the raw msgpack shape (amt)', () => {
+    expect(readPaymentAmount({ amt: 500 })).toBe(500n);
+  });
+
+  it('treats an omitted/zero amount as 0n across shapes', () => {
+    expect(readPaymentAmount({})).toBe(0n);
+    expect(readPaymentAmount({ payment: {} })).toBe(0n);
+    expect(readPaymentAmount({ payment: { amount: 0n } })).toBe(0n);
+    expect(readPaymentAmount({ amount: 0 })).toBe(0n);
+  });
+
+  it('prefers the v3 field when multiple shapes are present', () => {
+    expect(
+      readPaymentAmount({ payment: { amount: 7n }, amount: 99n, amt: 42 })
+    ).toBe(7n);
+  });
+});
+
+describe('verifyAirgapTransferConfirmation', () => {
+  // Use a REAL (non-zero) genesis hash: algosdk omits an all-zero genesisHash
+  // from the encoding, which never happens for a real network. The Voi mainnet
+  // genesis stands in for "the active network" here.
+  const ACTIVE_GENESIS_B64 = 'r20fSQI8gWe/kFZziNonSPCXLwcQmH/nxROvnnueWOk=';
+  const ACTIVE_GENESIS = new Uint8Array(
+    Buffer.from(ACTIVE_GENESIS_B64, 'base64')
+  );
+  const OTHER_GENESIS_B64 = 'wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=';
+
+  /** Sign a self-payment on ACTIVE_GENESIS (overridable), mirroring the airgap. */
+  function signConfirmation(overrides: Record<string, unknown> = {}) {
+    const acct = algosdk.generateAccount();
+    const address = addrOf(acct);
+    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender: address,
+      receiver: address,
+      amount: 0,
+      suggestedParams: {
+        ...SUGGESTED_PARAMS,
+        genesisHash: ACTIVE_GENESIS,
+      } as algosdk.SuggestedParams,
+      ...overrides,
+    } as Parameters<
+      typeof algosdk.makePaymentTxnWithSuggestedParamsFromObject
+    >[0]);
+    const signedBase64 = Buffer.from(txn.signTxn(acct.sk)).toString('base64');
+    return { acct, address, signedBase64 };
+  }
+
+  it('accepts a zero-amount self-payment on the matching network (happy path)', () => {
+    const { address, signedBase64 } = signConfirmation();
+    const result = verifyAirgapTransferConfirmation(signedBase64, {
+      expectedSignerAddress: address,
+      expectedGenesisHashBase64: ACTIVE_GENESIS_B64,
+    });
+    expect(result).toEqual({ valid: true });
+  });
+
+  it('rejects a confirmation for a DIFFERENT network (genesis mismatch)', () => {
+    const { address, signedBase64 } = signConfirmation();
+    const result = verifyAirgapTransferConfirmation(signedBase64, {
+      expectedSignerAddress: address,
+      expectedGenesisHashBase64: OTHER_GENESIS_B64,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/different network/i);
+  });
+
+  it('rejects a non-zero-amount self-payment (shape bind)', () => {
+    // Still a self-payment (receiver === sender) so it clears the base checks,
+    // but the amount is non-zero → the confirmation-shape guard must reject it.
+    const { address, signedBase64 } = signConfirmation({ amount: 1000 });
+    const result = verifyAirgapTransferConfirmation(signedBase64, {
+      expectedSignerAddress: address,
+      expectedGenesisHashBase64: ACTIVE_GENESIS_B64,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/zero-amount self-payment/i);
+  });
+
+  it('rejects an over-long payload before decoding (bounded input)', () => {
+    const address = addrOf(algosdk.generateAccount());
+    const tooLong = 'A'.repeat(MAX_AIRGAP_CONFIRMATION_BASE64_LEN + 1);
+    const result = verifyAirgapTransferConfirmation(tooLong, {
+      expectedSignerAddress: address,
+      expectedGenesisHashBase64: ACTIVE_GENESIS_B64,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/missing or too large/i);
+  });
+
+  it('rejects an empty payload', () => {
+    const address = addrOf(algosdk.generateAccount());
+    const result = verifyAirgapTransferConfirmation('', {
+      expectedSignerAddress: address,
+      expectedGenesisHashBase64: ACTIVE_GENESIS_B64,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/missing or too large/i);
+  });
+
+  it('delegates to the base verifier: rejects a rekeying confirmation', () => {
+    const rekeyTarget = addrOf(algosdk.generateAccount());
+    const { address, signedBase64 } = signConfirmation({
+      rekeyTo: rekeyTarget,
+    });
+    const result = verifyAirgapTransferConfirmation(signedBase64, {
+      expectedSignerAddress: address,
+      expectedGenesisHashBase64: ACTIVE_GENESIS_B64,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/rekey/i);
+  });
+
+  it('delegates to the base verifier: rejects a wrong expected signer', () => {
+    const { signedBase64 } = signConfirmation();
+    const other = addrOf(algosdk.generateAccount());
+    const result = verifyAirgapTransferConfirmation(signedBase64, {
+      expectedSignerAddress: other,
+      expectedGenesisHashBase64: ACTIVE_GENESIS_B64,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toMatch(/does not match expected signer/i);
   });
 });
 
