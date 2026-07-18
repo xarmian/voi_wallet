@@ -533,4 +533,34 @@ describe('AuthContext — unmount teardown (no leaks)', () => {
 
     expect(mockEnterLocked).not.toHaveBeenCalled();
   });
+
+  it('does not fire the armed background-grace lock after unmount', async () => {
+    const rendered = await mountAuth();
+
+    await act(async () => {
+      await rendered.result.current.unlock(TEST_PIN);
+    });
+
+    // Background the app so the 60s grace timer is ARMED before we unmount —
+    // this is the timer the mount-effect cleanup must clear (regression guard:
+    // dropping the backgroundTimer cleanup would let it fire post-unmount).
+    await act(async () => {
+      appStateHandler!('background');
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      rendered.unmount();
+    });
+
+    mockEnterLocked.mockClear();
+
+    // Grace window elapses after unmount — the cleared timer must never fire.
+    await act(async () => {
+      jest.advanceTimersByTime(60 * 1000 + 5000);
+      await Promise.resolve();
+    });
+
+    expect(mockEnterLocked).not.toHaveBeenCalled();
+  });
 });
