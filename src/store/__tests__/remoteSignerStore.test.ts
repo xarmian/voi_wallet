@@ -119,7 +119,7 @@ function serializeArg(arg: unknown): string {
 
 /** All console output captured this test, fully serialized. */
 function allConsoleOutput(): string {
-  return [logSpy, warnSpy, errorSpy]
+  return [logSpy, infoSpy, debugSpy, warnSpy, errorSpy]
     .flatMap((spy) => spy.mock.calls)
     .map((call) => call.map(serializeArg).join(' '))
     .join('\n');
@@ -176,6 +176,8 @@ const INITIAL_PROGRESS = {
 };
 
 let logSpy: jest.SpyInstance;
+let infoSpy: jest.SpyInstance;
+let debugSpy: jest.SpyInstance;
 let warnSpy: jest.SpyInstance;
 let errorSpy: jest.SpyInstance;
 
@@ -185,6 +187,8 @@ describe('remoteSignerStore (TASK-159)', () => {
     // Silence + capture the store's chatty logging (also lets us assert no
     // secret is ever logged).
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+    debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     // Reset the singleton store to a pristine slate (fresh Set/Map instances).
@@ -233,11 +237,14 @@ describe('remoteSignerStore (TASK-159)', () => {
       // disk during any of these would be caught.
       await store.setAppMode('signer');
       await store.initializeSignerConfig('Air-gapped Pixel');
+      await store.updateSignerDeviceName('Renamed Signer');
       await store.addPairedSigner({
         deviceId: 'voi-signer-abc',
         pairedAt: Date.now(),
         addresses: [makeAccount('paired').addr],
       });
+      await store.updateSignerActivity('voi-signer-abc');
+      await store.removePairedSigner('voi-signer-abc');
       store.markRequestProcessed(request.id);
       await flush();
 
@@ -418,6 +425,49 @@ describe('remoteSignerStore (TASK-159)', () => {
       );
     });
 
+    // KNOWN GAP (reported, source intentionally NOT modified): markRequestProcessed
+    // persists fire-and-forget. If that durable write is rejected (disk full) or
+    // the app terminates before it lands, the id is only in the volatile Set —
+    // so after a restart the SAME request id is accepted again (replay). The
+    // in-session guard held (see test above), but cross-restart durability is
+    // best-effort. This it.failing asserts the DESIRED secure behaviour (replay
+    // still blocked) and currently fails, documenting the gap without a source fix.
+    it.failing(
+      'a processed id whose durable write failed is NOT replay-blocked after restart',
+      async () => {
+        setItemMock.mockImplementationOnce(async () => {
+          throw new Error('disk full');
+        });
+
+        const store = useRemoteSignerStore.getState();
+        store.markRequestProcessed('req-lost');
+        await flush();
+
+        // The durable write was rejected — nothing landed on disk.
+        expect(
+          mockAsyncStore.get(STORAGE_KEYS.PROCESSED_REQUESTS)
+        ).toBeUndefined();
+
+        // Restart: only AsyncStorage survives, the in-memory Set is gone.
+        useRemoteSignerStore.setState({
+          processedRequestIds: new Set(),
+          isInitialized: false,
+        });
+        await useRemoteSignerStore.getState().initialize();
+
+        // DESIRED: replay still rejected. ACTUAL: accepted → this fails, so
+        // it.failing turns the documented gap into a green (expected-fail) test.
+        expect(
+          useRemoteSignerStore
+            .getState()
+            .validateRequest(makeRequest({ id: 'req-lost' }))
+        ).toEqual({
+          valid: false,
+          error: 'Request has already been processed',
+        });
+      }
+    );
+
     it('persists processed ids so replays are blocked after a restart', async () => {
       const store = useRemoteSignerStore.getState();
       store.markRequestProcessed('req-replayable');
@@ -570,6 +620,30 @@ describe('remoteSignerStore (TASK-159)', () => {
         status: 'error',
         error: 'user rejected',
       });
+    });
+
+    it('merges partially: recovering from error requires clearing it explicitly', () => {
+      const store = useRemoteSignerStore.getState();
+      store.setPendingRequest(makeRequest({}, 1));
+      store.setSigningProgress({ status: 'error', error: 'boom' });
+
+      // setSigningProgress does a shallow merge, so flipping status back to
+      // 'signing' alone does NOT drop the prior `error` field. This documents
+      // the store's merge contract (the SigningProgress type intends `error`
+      // only when status === 'error', so a clean recovery must clear it).
+      store.setSigningProgress({ status: 'signing', currentIndex: 1 });
+      expect(useRemoteSignerStore.getState().signingProgress).toEqual({
+        currentIndex: 1,
+        totalTransactions: 1,
+        status: 'signing',
+        error: 'boom',
+      });
+
+      // A caller recovering cleanly clears it explicitly.
+      store.setSigningProgress({ error: undefined });
+      expect(
+        useRemoteSignerStore.getState().signingProgress.error
+      ).toBeUndefined();
     });
 
     it('resets to idle and clears the request when set to null', () => {
