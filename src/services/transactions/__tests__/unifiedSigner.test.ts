@@ -658,14 +658,14 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
   });
 
   // FIXED (TASK-163): a rekeyed account's WalletConnect txn carrying `authAddr`
-  // used to be returned UNSIGNED yet reported success. The handler overrode
-  // `signerAddress = authAddr` and then the guard `txnSender !== signerAddress`
-  // tripped (a rekeyed account's sender A and authority B differ by design), so
-  // it was never handed to SecureKeyManager. The fix removes that override:
-  // on-chain rekey state is the source of truth, so the SENDER is passed to
-  // SecureKeyManager, which resolves the authority (B) internally and signs with
-  // it — identical to the already-working non-authAddr rekey path. The
-  // dApp-supplied authAddr is advisory and no longer selects the signing key.
+  // used to be returned UNSIGNED yet reported success. The handler used the
+  // dApp-supplied `authAddr`/`signers` to select the signing key, then the guard
+  // `txnSender !== signerAddress` tripped (a rekeyed account's sender A and
+  // authority B differ by design), so it was never handed to SecureKeyManager.
+  // The fix decides eligibility from the sender and always passes the SENDER to
+  // SecureKeyManager, which resolves the authority (B) from on-chain state and
+  // signs with it — identical to the already-working non-authAddr rekey path.
+  // The dApp-supplied authAddr/signers are advisory and never select the key.
   it('signs a rekeyed WalletConnect txn (authAddr set) with the on-chain authority key', async () => {
     const authority = accountOf('wc-authority', AccountType.STANDARD); // B
     const account = accountOf('wc-rekeyed', AccountType.STANDARD); // A (sender)
@@ -690,6 +690,75 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
     expect(mockSignTransaction).toHaveBeenCalledTimes(1);
     expect(mockSignTransaction.mock.calls[0][1]).toBe(rekeyed);
     // The produced blob is a real signature by the authority B.
+    const blob = new Uint8Array(
+      Buffer.from((result.signedTransactions as string[])[0], 'base64')
+    );
+    expect(blobIsSignedBy(blob, authority.address)).toBe(true);
+  });
+
+  // Codex diff-review P1: the same bug reachable via `signers: [authority]`.
+  // Some dApps mark a rekeyed account's WC txn with signers = [authAddr] (the
+  // ARC-0001 "these addresses must sign" hint = the authority). The old code
+  // used signers[0] as the KEY, so the guard txnSender(A) !== signers[0](B)
+  // skipped it unsigned. Eligibility now comes from the sender, and the key is
+  // always the sender (authority resolved on-chain) — so this signs correctly.
+  it('signs a rekeyed WalletConnect txn when signers lists the authority (standard path)', async () => {
+    const authority = accountOf('wc-auth-signers', AccountType.STANDARD); // B
+    const account = accountOf('wc-rekeyed-signers', AccountType.STANDARD); // A
+    const rekeyed = account.address;
+    rekeyRegistry.set(rekeyed, authority.address); // A -> B on-chain
+    const txn = paymentTxn(rekeyed, { amount: 1 });
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [
+          {
+            txn: unsignedB64(txn),
+            authAddr: authority.address,
+            signers: [authority.address],
+          },
+        ],
+        accountAddress: rekeyed,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSignTransaction.mock.calls[0][1]).toBe(rekeyed); // sender, not B
+    const blob = new Uint8Array(
+      Buffer.from((result.signedTransactions as string[])[0], 'base64')
+    );
+    expect(blobIsSignedBy(blob, authority.address)).toBe(true);
+  });
+
+  it('signs a rekeyed WalletConnect txn when signers lists the authority (Ledger path)', async () => {
+    const authority = accountOf('wc-auth-signers-l', AccountType.STANDARD); // B
+    const account = accountOf('wc-rekeyed-signers-l', AccountType.LEDGER); // A
+    const rekeyed = account.address;
+    rekeyRegistry.set(rekeyed, authority.address); // A -> B on-chain
+    const txn = paymentTxn(rekeyed, { amount: 1 });
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      walletConnectParams: {
+        transactions: [
+          {
+            txn: unsignedB64(txn),
+            authAddr: authority.address,
+            signers: [authority.address],
+          },
+        ],
+        accountAddress: rekeyed,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSignTransaction.mock.calls[0][1]).toBe(rekeyed); // sender, not B
     const blob = new Uint8Array(
       Buffer.from((result.signedTransactions as string[])[0], 'base64')
     );

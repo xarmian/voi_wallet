@@ -418,23 +418,21 @@ export class UnifiedTransactionSigner {
             // Get the transaction sender address
             const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
-            // Determine signer address
-            let signerAddress = request.walletConnectParams!.accountAddress;
-            if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
-              signerAddress = wtxn.signers[0];
-            }
-            // NOTE (TASK-163): wtxn.authAddr (the dApp-supplied rekey
-            // authority) is intentionally NOT used to select the signing key.
-            // On-chain rekey state is the source of truth — we pass the SENDER
-            // to SecureKeyManager.signTransaction below, which resolves the
-            // current authority itself and signs with it (emitting the correct
-            // sgnr). Overriding signerAddress with authAddr both broke the
-            // ownership guard for rekeyed accounts (sender ≠ authority → the txn
-            // was passed through UNSIGNED yet reported success) and would let a
-            // dApp choose which of our keys signs.
-
-            // Skip signing if the transaction sender doesn't match our account
-            if (txnSender !== signerAddress) {
+            // Decide whether this batch entry is one we should sign, then sign
+            // it with the SENDER's key. The dApp-supplied `authAddr`/`signers`
+            // are advisory hints for ELIGIBILITY only — never key selection: a
+            // dApp must not be able to direct which of our keys signs, and rekey
+            // authority is resolved from on-chain state, not from the request
+            // (TASK-163). SecureKeyManager.signTransaction(txn, txnSender)
+            // resolves any current rekey authority itself and signs with it
+            // (emitting the correct sgnr) — identical to the non-rekeyed path.
+            if (
+              !this.shouldSignBatchEntry(
+                txnSender,
+                request.walletConnectParams!.accountAddress,
+                wtxn
+              )
+            ) {
               signedTxns.push(wtxn.txn);
               callbacks?.onLedgerSigned?.({ index: i + 1, total });
               continue;
@@ -442,7 +440,7 @@ export class UnifiedTransactionSigner {
 
             const signedTxnBlob = await SecureKeyManager.signTransaction(
               txn,
-              signerAddress,
+              txnSender,
               request.pin // optional; controller supplies for software keys, undefined for Ledger
             );
 
@@ -495,30 +493,28 @@ export class UnifiedTransactionSigner {
               // Get the transaction sender address
               const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
-              // Determine signer address
-              let signerAddress = request.walletConnectParams!.accountAddress;
-              if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
-                signerAddress = wtxn.signers[0];
-              }
-              // NOTE (TASK-163): wtxn.authAddr (the dApp-supplied rekey
-              // authority) is intentionally NOT used to select the signing key.
-              // On-chain rekey state is the source of truth — we pass the SENDER
-              // to SecureKeyManager.signTransaction below, which resolves the
-              // current authority itself and signs with it (emitting the correct
-              // sgnr). Overriding signerAddress with authAddr both broke the
-              // ownership guard for rekeyed accounts (sender ≠ authority → the
-              // txn was passed through UNSIGNED yet reported success) and would
-              // let a dApp choose which of our keys signs.
-
-              // Skip signing if the transaction sender doesn't match our account
-              // This handles cases where the transaction is for a different signer
-              if (txnSender !== signerAddress) {
+              // Decide whether this batch entry is one we should sign, then sign
+              // it with the SENDER's key. The dApp-supplied `authAddr`/`signers`
+              // are advisory hints for ELIGIBILITY only — never key selection: a
+              // dApp must not be able to direct which of our keys signs, and
+              // rekey authority is resolved from on-chain state, not from the
+              // request (TASK-163). SecureKeyManager.signTransaction(txn,
+              // txnSender) resolves any current rekey authority itself and signs
+              // with it (emitting the correct sgnr) — same as the non-rekeyed
+              // path.
+              if (
+                !this.shouldSignBatchEntry(
+                  txnSender,
+                  request.walletConnectParams!.accountAddress,
+                  wtxn
+                )
+              ) {
                 return wtxn.txn;
               }
 
               const signedTxnBlob = await SecureKeyManager.signTransaction(
                 txn,
-                signerAddress,
+                txnSender,
                 request.pin
               );
 
@@ -568,6 +564,31 @@ export class UnifiedTransactionSigner {
       AccountSecureStorage.clearPrivateKeyCache();
       throw error;
     }
+  }
+
+  /**
+   * Decide whether a WalletConnect batch entry should be signed by this wallet.
+   *
+   * The signing KEY is always the transaction sender's — SecureKeyManager
+   * resolves any on-chain rekey authority itself. This gates ELIGIBILITY only,
+   * from the DECODED sender and the dApp's advisory `signers` hint; it never
+   * lets request metadata (`authAddr`/`signers`) select which key signs
+   * (TASK-163). We sign when:
+   *  - the sender is our WC session account (covers normal AND rekeyed senders —
+   *    a rekey does not change the transaction sender), or
+   *  - the dApp's `signers` hint designates the sender and we control it
+   *    (multi-account atomic groups; preserves the pre-existing `signers`
+   *    behavior, minus the ability to point at a different key than the sender).
+   */
+  private shouldSignBatchEntry(
+    txnSender: string,
+    sessionAccount: string,
+    wtxn: WalletTransaction
+  ): boolean {
+    if (txnSender === sessionAccount) {
+      return true;
+    }
+    return wtxn.signers?.includes(txnSender) ?? false;
   }
 
   /**
