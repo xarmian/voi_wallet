@@ -423,9 +423,15 @@ export class UnifiedTransactionSigner {
             if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
               signerAddress = wtxn.signers[0];
             }
-            if (wtxn.authAddr) {
-              signerAddress = wtxn.authAddr;
-            }
+            // NOTE (TASK-163): wtxn.authAddr (the dApp-supplied rekey
+            // authority) is intentionally NOT used to select the signing key.
+            // On-chain rekey state is the source of truth — we pass the SENDER
+            // to SecureKeyManager.signTransaction below, which resolves the
+            // current authority itself and signs with it (emitting the correct
+            // sgnr). Overriding signerAddress with authAddr both broke the
+            // ownership guard for rekeyed accounts (sender ≠ authority → the txn
+            // was passed through UNSIGNED yet reported success) and would let a
+            // dApp choose which of our keys signs.
 
             // Skip signing if the transaction sender doesn't match our account
             if (txnSender !== signerAddress) {
@@ -494,9 +500,15 @@ export class UnifiedTransactionSigner {
               if (wtxn.signers && wtxn.signers.length > 0 && wtxn.signers[0]) {
                 signerAddress = wtxn.signers[0];
               }
-              if (wtxn.authAddr) {
-                signerAddress = wtxn.authAddr;
-              }
+              // NOTE (TASK-163): wtxn.authAddr (the dApp-supplied rekey
+              // authority) is intentionally NOT used to select the signing key.
+              // On-chain rekey state is the source of truth — we pass the SENDER
+              // to SecureKeyManager.signTransaction below, which resolves the
+              // current authority itself and signs with it (emitting the correct
+              // sgnr). Overriding signerAddress with authAddr both broke the
+              // ownership guard for rekeyed accounts (sender ≠ authority → the
+              // txn was passed through UNSIGNED yet reported success) and would
+              // let a dApp choose which of our keys signs.
 
               // Skip signing if the transaction sender doesn't match our account
               // This handles cases where the transaction is for a different signer

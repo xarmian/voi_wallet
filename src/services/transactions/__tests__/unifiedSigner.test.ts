@@ -93,6 +93,13 @@ const mockGetInstance = NetworkService.getInstance as unknown as jest.Mock;
 
 const keyRegistry = new Map<string, Uint8Array>();
 
+// Models the on-chain rekey resolution that the REAL SecureKeyManager performs:
+// maps a rekeyed account's address -> the authority address whose key actually
+// signs. The signTransaction mock consults this so a test can prove the source
+// passes the SENDER (and the authority key resolves internally), exactly as the
+// production keyManager does via getAccountRekeyInfo.
+const rekeyRegistry = new Map<string, string>();
+
 /** Real single-sig signature over `txn` using the fixture key for `address`. */
 function realSign(txn: algosdk.Transaction, address: string): Uint8Array {
   const sk = keyRegistry.get(address);
@@ -202,6 +209,7 @@ let signer: UnifiedTransactionSigner;
 
 beforeEach(() => {
   keyRegistry.clear();
+  rekeyRegistry.clear();
   signer = new UnifiedTransactionSigner();
 
   // Default happy-path leaf behaviour (clearMocks resets call data each test).
@@ -218,9 +226,12 @@ beforeEach(() => {
     confirmed: false,
   });
 
-  // Real signing at the secure-storage boundary.
+  // Real signing at the secure-storage boundary. Resolves rekey authority the
+  // way the production SecureKeyManager does: if `address` is a rekeyed account,
+  // sign with the mapped authority's key; otherwise sign with `address` itself.
   mockSignTransaction.mockImplementation(
-    async (txn: algosdk.Transaction, address: string) => realSign(txn, address)
+    async (txn: algosdk.Transaction, address: string) =>
+      realSign(txn, rekeyRegistry.get(address) ?? address)
   );
 
   // Default algod stub for keyreg / appl paths.
@@ -646,46 +657,44 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
     );
   });
 
-  // KNOWN SOURCE BUG (reported, NOT fixed here — DR-3 forbids touching source).
-  // When a dApp marks a rekeyed account's WalletConnect txn with `authAddr`
-  // (the WC convention for "sign with this authority"), the handler sets
-  // `signerAddress = authAddr` and then applies the guard
-  // `if (txnSender !== signerAddress) pass-through-unsigned`
-  // (unifiedSigner.ts ~L421-435). For a rekeyed account the sender (A) and the
-  // authority (B) are necessarily different, so the txn is returned UNSIGNED yet
-  // reported as a success — it is never handed to SecureKeyManager. The
-  // non-authAddr path is unaffected (there SecureKeyManager resolves the rekey
-  // internally). `it.failing` pins the CORRECT expectation (the txn is signed by
-  // the authority key) so this suite goes green today and flips red the moment
-  // the source is fixed.
-  it.failing(
-    'BUG: a rekeyed WalletConnect txn (authAddr set) is signed by the authority',
-    async () => {
-      const authority = accountOf('wc-authority', AccountType.STANDARD); // B
-      const account = accountOf('wc-rekeyed', AccountType.STANDARD); // A (sender)
-      const rekeyed = account.address;
-      const txn = paymentTxn(rekeyed, { amount: 1 });
+  // FIXED (TASK-163): a rekeyed account's WalletConnect txn carrying `authAddr`
+  // used to be returned UNSIGNED yet reported success. The handler overrode
+  // `signerAddress = authAddr` and then the guard `txnSender !== signerAddress`
+  // tripped (a rekeyed account's sender A and authority B differ by design), so
+  // it was never handed to SecureKeyManager. The fix removes that override:
+  // on-chain rekey state is the source of truth, so the SENDER is passed to
+  // SecureKeyManager, which resolves the authority (B) internally and signs with
+  // it — identical to the already-working non-authAddr rekey path. The
+  // dApp-supplied authAddr is advisory and no longer selects the signing key.
+  it('signs a rekeyed WalletConnect txn (authAddr set) with the on-chain authority key', async () => {
+    const authority = accountOf('wc-authority', AccountType.STANDARD); // B
+    const account = accountOf('wc-rekeyed', AccountType.STANDARD); // A (sender)
+    const rekeyed = account.address;
+    // A is rekeyed to B on-chain (what SecureKeyManager would resolve).
+    rekeyRegistry.set(rekeyed, authority.address);
+    const txn = paymentTxn(rekeyed, { amount: 1 });
 
-      const result = await signer.signTransaction({
-        type: 'batch_transaction',
-        account,
-        pin: '1234',
-        walletConnectParams: {
-          transactions: [
-            { txn: unsignedB64(txn), authAddr: authority.address },
-          ],
-          accountAddress: rekeyed,
-        },
-      });
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(txn), authAddr: authority.address }],
+        accountAddress: rekeyed,
+      },
+    });
 
-      // CORRECT behavior: the authority key signs the rekeyed account's txn.
-      expect(mockSignTransaction).toHaveBeenCalled();
-      const blob = new Uint8Array(
-        Buffer.from((result.signedTransactions as string[])[0], 'base64')
-      );
-      expect(blobIsSignedBy(blob, authority.address)).toBe(true);
-    }
-  );
+    expect(result.success).toBe(true);
+    // The SENDER (A) is routed through SecureKeyManager — NOT the dApp authAddr
+    // (B). SecureKeyManager resolves A -> B from on-chain state and signs with B.
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSignTransaction.mock.calls[0][1]).toBe(rekeyed);
+    // The produced blob is a real signature by the authority B.
+    const blob = new Uint8Array(
+      Buffer.from((result.signedTransactions as string[])[0], 'base64')
+    );
+    expect(blobIsSignedBy(blob, authority.address)).toBe(true);
+  });
 
   it('passes through an already-signed / undecodable entry unchanged', async () => {
     const account = accountOf('batch-logicsig', AccountType.STANDARD);
