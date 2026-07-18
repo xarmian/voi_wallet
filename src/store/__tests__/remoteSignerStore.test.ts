@@ -136,16 +136,19 @@ function allConsoleOutput(): string {
 }
 
 /**
- * Every plausible serialized encoding of a real secret key. If any of these
- * substrings appears in persisted state or logs, the key leaked.
+ * Every plausible serialized encoding of a byte array. If any of these
+ * substrings appears in persisted state or logs, those bytes leaked. Covers
+ * the four ways a byte buffer typically ends up in a string: hex, base64,
+ * `JSON.stringify(Array.from(bytes))` ("[..]") and `JSON.stringify(bytes)`
+ * ("{\"0\":..}", how a raw Uint8Array serializes).
  */
-function secretKeyEncodings(sk: Uint8Array): string[] {
-  const buf = Buffer.from(sk);
+function byteEncodings(bytes: Uint8Array): string[] {
+  const buf = Buffer.from(bytes);
   return [
     buf.toString('hex'),
     buf.toString('base64'),
-    JSON.stringify(Array.from(sk)), // e.g. JSON.stringify(state.txns bytes)
-    JSON.stringify(sk), // e.g. {"0":..} if a Uint8Array were stringified
+    JSON.stringify(Array.from(bytes)),
+    JSON.stringify(bytes),
   ];
 }
 
@@ -224,7 +227,11 @@ describe('remoteSignerStore (TASK-159)', () => {
     it('never persists or logs the pending request, its txn bytes, or key material', async () => {
       const canary = makeAccount('leak-canary');
       const acct = makeAccount('signer-primary');
-      const blob = txnBlob(acct.addr);
+      const rawTxn = algosdk.encodeUnsignedTransaction(paymentTxn(acct.addr));
+      const blob = Buffer.from(rawTxn).toString('base64');
+      // The private half of the 64-byte sk is its first 32 bytes (seed); a
+      // regression could leak just that.
+      const seed = canary.sk.slice(0, 32);
 
       // Route REAL secrets through in-memory state in three forms: a 25-word
       // mnemonic (meta.desc), the raw 64-byte secret key (attached to the
@@ -258,10 +265,16 @@ describe('remoteSignerStore (TASK-159)', () => {
       store.markRequestProcessed(request.id);
       await flush();
 
+      // Check the mnemonic plus every byte encoding of the full secret key, the
+      // 32-byte seed, and the decoded transaction bytes — so a leak of any of
+      // them (hex/base64/JSON array/JSON object, or a decode-then-persist of the
+      // blob) is caught, not just the original base64 blob string.
       const canaries = [
         canary.mnemonic,
         blob,
-        ...secretKeyEncodings(canary.sk),
+        ...byteEncodings(canary.sk),
+        ...byteEncodings(seed),
+        ...byteEncodings(rawTxn),
       ];
 
       const persisted = allPersistedValues();
@@ -682,25 +695,35 @@ describe('remoteSignerStore (TASK-159)', () => {
       });
     });
 
-    it('merges partially: recovering from error requires clearing it explicitly', () => {
+    it('merges partial updates for non-error fields (advancing the index)', () => {
+      const store = useRemoteSignerStore.getState();
+      store.setPendingRequest(makeRequest({}, 2));
+
+      // A bare index bump merges over the existing progress without disturbing
+      // the (error-free) status/total.
+      store.setSigningProgress({ currentIndex: 1 });
+      expect(useRemoteSignerStore.getState().signingProgress).toEqual({
+        currentIndex: 1,
+        totalTransactions: 2,
+        status: 'reviewing',
+      });
+    });
+
+    // KNOWN GAP (reported, source NOT modified): setSigningProgress is a shallow
+    // partial-merge setter, so transitioning error -> signing/complete does NOT
+    // drop the stale `error` message. That contradicts SigningProgress' contract
+    // (`error` is the "error message if status is 'error'"). it.failing asserts
+    // the DESIRED behaviour (error cleared once the status leaves 'error') and
+    // currently fails, rather than pinning the buggy retention as correct.
+    it.failing('leaving the error state drops the stale error message', () => {
       const store = useRemoteSignerStore.getState();
       store.setPendingRequest(makeRequest({}, 1));
       store.setSigningProgress({ status: 'error', error: 'boom' });
 
-      // setSigningProgress does a shallow merge, so flipping status back to
-      // 'signing' alone does NOT drop the prior `error` field. This documents
-      // the store's merge contract (the SigningProgress type intends `error`
-      // only when status === 'error', so a clean recovery must clear it).
+      // Recover: flip back to signing.
       store.setSigningProgress({ status: 'signing', currentIndex: 1 });
-      expect(useRemoteSignerStore.getState().signingProgress).toEqual({
-        currentIndex: 1,
-        totalTransactions: 1,
-        status: 'signing',
-        error: 'boom',
-      });
 
-      // A caller recovering cleanly clears it explicitly.
-      store.setSigningProgress({ error: undefined });
+      // DESIRED: no stale error once we're no longer in the error state.
       expect(
         useRemoteSignerStore.getState().signingProgress.error
       ).toBeUndefined();
