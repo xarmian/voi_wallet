@@ -221,6 +221,19 @@ beforeEach(() => {
   mockGetDevices.mockReturnValue([]);
 });
 
+afterEach(() => {
+  // Key hygiene: zero every copy the (mocked) secure store handed out, even the
+  // ones the manager under test did not itself wipe (e.g. bare getPrivateKey,
+  // whose caller owns cleanup). The canonical fixture keys in `keyRegistry` are
+  // deliberately NOT zeroed here — they are the shared module-global originals
+  // and are throwaway, deterministic, label-derived test keys (never real user
+  // material). Zeroing the handed-out copies keeps live key bytes from lingering
+  // across tests without corrupting the fixtures.
+  for (const key of handedOutKeys) {
+    key.fill(0);
+  }
+});
+
 // ===========================================================================
 // getPrivateKey — wallet lookup + error paths
 // ===========================================================================
@@ -350,6 +363,46 @@ describe('SecureKeyManager.signTransaction (real algosdk signing)', () => {
       'acc-rekeyed',
       undefined
     );
+    // Rekey status was resolved for the SENDER address (not the auth address)
+    // and with skipTimestamp=true — querying the wrong account here would let a
+    // multi-network rekey regression slip through.
+    expect(mockGetAccountRekeyInfo).toHaveBeenCalledWith(REKEYED.addr, true);
+    // The auth key copy the manager signed with was zeroed on the way out.
+    expect(handedOutKeys).toHaveLength(1);
+    expect(Array.from(handedOutKeys[0])).toEqual(
+      Array.from(new Uint8Array(64))
+    );
+  });
+
+  it('forwards the PIN to the secure store when signing', async () => {
+    setWallet([standardAccount(OWNER, 'acc-owner')]);
+    const txn = paymentTxn(OWNER.addr);
+
+    const blob = await SecureKeyManager.signTransaction(
+      txn,
+      OWNER.addr,
+      '654321'
+    );
+
+    // A dropped PIN would still produce a valid signature here, so assert the
+    // PIN actually reached the secure store rather than only checking the blob.
+    assertSignedBy(blob, OWNER.pk);
+    expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-owner', '654321');
+  });
+
+  it('fails closed when rekeyed with no resolvable auth address', async () => {
+    // isRekeyed with a missing authAddress must NOT silently fall back to
+    // signing with the sender's (absent) key — it must fail without producing
+    // any signature or touching key material.
+    setWallet([watchAccount(REKEYED, 'acc-rekeyed')]);
+    mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: true });
+    const txn = paymentTxn(REKEYED.addr);
+
+    await expect(
+      SecureKeyManager.signTransaction(txn, REKEYED.addr)
+    ).rejects.toThrow();
+    // No AUTH key was ever fetched.
+    expect(handedOutKeys).toHaveLength(0);
   });
 
   it('throws when rekeyed but the signing key is not in the wallet', async () => {
@@ -509,29 +562,40 @@ describe('SecureKeyManager key cleanup', () => {
       const txn = paymentTxn(OWNER.addr);
       await SecureKeyManager.signTransaction(txn, OWNER.addr);
       await SecureKeyManager.getMnemonic(OWNER.addr);
+      // Also exercise an error path — failure logging is a classic leak site.
+      await expect(
+        SecureKeyManager.signTransaction(null, OWNER.addr)
+      ).rejects.toBeDefined();
 
+      // Every plausible serialization of the secret an accidental log could take:
+      // hex, base64, decimal-byte arrays (how a Uint8Array/Buffer stringifies),
+      // and the full mnemonic. (Individual mnemonic words are intentionally NOT
+      // checked — short BIP39 words collide as substrings of ordinary log text.)
       const forbidden = [
         OWNER.mnemonic,
         Buffer.from(OWNER.sk).toString('hex'),
         Buffer.from(OWNER.sk.slice(0, 32)).toString('hex'), // seed half
+        Buffer.from(OWNER.sk).toString('base64'),
+        Array.from(OWNER.sk).join(','), // Uint8Array/Buffer decimal serialization
       ];
       const logged = spies
         .flatMap((s) => s.mock.calls)
         .flat()
-        .map((arg) =>
-          typeof arg === 'string'
-            ? arg
-            : (() => {
-                try {
-                  return JSON.stringify(arg);
-                } catch {
-                  return String(arg);
-                }
-              })()
-        )
+        .map((arg) => {
+          if (typeof arg === 'string') return arg;
+          if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`;
+          if (arg instanceof Uint8Array) return Array.from(arg).join(',');
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        })
         .join('\n');
 
       for (const secret of forbidden) {
+        // Guard against a degenerate empty needle matching everything.
+        expect(secret.length).toBeGreaterThan(0);
         expect(logged.includes(secret)).toBe(false);
       }
     } finally {
