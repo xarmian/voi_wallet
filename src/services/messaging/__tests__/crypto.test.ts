@@ -297,17 +297,44 @@ describe('messaging crypto: verifySender', () => {
     expect(verifySender(bob.addr, payload)).toBe(false);
   });
 
-  it('returns true/false correctly for a v2 payload (uses `from`)', () => {
-    const payload: EncryptedMessagePayloadV2 = {
-      v: 2,
-      from: encodeBase64(alice.pk),
-      epk: encodeBase64(new Uint8Array(32)),
-      n: encodeBase64(new Uint8Array(24)),
-      c: encodeBase64(new Uint8Array(16)),
-      t: Date.now(),
-    };
+  it('returns true/false correctly for a real v2 payload (uses `from`)', async () => {
+    AppLockSignal.setUnlocked(true);
+    const bobKeys = deriveMessagingKeyPairFromSecret(bob.sk, bob.addr);
+    const payload = await encryptMessageV2(
+      'v2 sender check',
+      alice.pk,
+      bobKeys.publicKey
+    );
+
+    expect(payload.v).toBe(2);
     expect(verifySender(alice.addr, payload)).toBe(true);
     expect(verifySender(mallory.addr, payload)).toBe(false);
+  });
+
+  it('v2: rejects a note whose `from` was swapped away from the true sender', async () => {
+    // Security boundary note: v2 does NOT bind `from` into the KDF/secretbox
+    // (crypto.ts encryptMessageV2), so `from` is a self-asserted claim and
+    // decryptMessageV2 will still open the ciphertext regardless of it. Sender
+    // authenticity therefore rests entirely on verifySender comparing `from`
+    // against the on-chain, signature-authenticated transaction sender.
+    AppLockSignal.setUnlocked(true);
+    const bobKeys = deriveMessagingKeyPairFromSecret(bob.sk, bob.addr);
+
+    // Alice is the real (on-chain) sender of this transaction.
+    const payload = await encryptMessageV2('bind me', alice.pk, bobKeys.publicKey);
+    // Attacker rewrites the self-asserted `from` to Mallory's key.
+    const forged: EncryptedMessagePayloadV2 = {
+      ...payload,
+      from: encodeBase64(mallory.pk),
+    };
+
+    // The ciphertext is untouched, so it still opens (from is not authenticated
+    // by the cipher) — this documents the boundary, it is not the defense.
+    expect(decryptMessageV2(forged, bobKeys.secretKey)).toBe('bind me');
+
+    // The defense: verifySender against Alice (the true tx sender) now FAILS,
+    // because the note's `from` no longer matches the authenticated sender.
+    expect(verifySender(alice.addr, forged)).toBe(false);
   });
 
   it('returns false for a malformed sender address rather than throwing', async () => {
