@@ -413,6 +413,48 @@ describe('AuthContext — background/foreground app-state lock', () => {
     expect(result.current.authState.isLocked).toBe(false);
     expect(result.current.authState.isAuthenticated).toBe(true);
   });
+
+  // KNOWN BUG (reported, source intentionally NOT fixed — TASK-160 is test-only).
+  // Lock-BYPASS on a suspended app: the AppState 'change' handler is created once
+  // in the mount effect and closes over a STALE `authState.backgroundedAt` (the
+  // value at first render — null). The only thing that actually locks after
+  // backgrounding is the 60s JS setTimeout. If the OS suspends the JS runtime
+  // (common on real devices) that timer never fires; when the user returns after
+  // the grace window the handler reads the stale null backgroundedAt, so the
+  // `now - backgroundedAt > grace` branch is skipped and the wallet stays
+  // UNLOCKED. Documented via it.failing; flip to a plain `it` once the handler
+  // reads live state (e.g. via a ref) so a post-grace foreground return locks.
+  it.failing(
+    'locks on foreground return after the grace window when the background timer never fired (suspended app)',
+    async () => {
+      const { result } = await mountAuth();
+
+      await act(async () => {
+        await result.current.unlock(TEST_PIN);
+      });
+      expect(result.current.authState.isLocked).toBe(false);
+
+      const t0 = Date.now();
+
+      // App backgrounds; a 60s JS lock timer is armed.
+      await act(async () => {
+        appStateHandler!('background');
+        await Promise.resolve();
+      });
+
+      // Model a SUSPENDED app: the JS runtime was frozen so the armed background
+      // timer never ran, yet real wall-clock time advanced well past the grace
+      // window. setSystemTime moves Date.now WITHOUT firing any pending timer.
+      await act(async () => {
+        jest.setSystemTime(t0 + 60 * 1000 + 5000);
+        appStateHandler!('active');
+        await Promise.resolve();
+      });
+
+      // SECURITY EXPECTATION: must be locked. Currently stays unlocked (bug).
+      expect(result.current.authState.isLocked).toBe(true);
+    }
+  );
 });
 
 describe('AuthContext — unmount teardown (no leaks)', () => {
