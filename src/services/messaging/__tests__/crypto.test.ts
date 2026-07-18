@@ -249,10 +249,13 @@ describe('messaging crypto v1: tampered / wrong-key rejection', () => {
     payload = await encryptMessage('authenticated secret', alice.sk, bob.addr);
   });
 
-  it('rejects a flipped ciphertext byte', () => {
+  // Flip a byte in the Poly1305 tag (index 0) AND in the encrypted body
+  // (index 16+, past the 16-byte tag) so a defect that checks the tag but not
+  // the ciphertext body would still be caught.
+  it.each([0, 20])('rejects a flipped ciphertext byte @%i', (i) => {
     const tampered = {
       ...payload,
-      ciphertext: tamperBase64(payload.ciphertext),
+      ciphertext: tamperBase64(payload.ciphertext, i),
     };
     expect(() => decryptMessage(tampered, bob.sk)).toThrow(
       /corrupted or tampered/
@@ -441,8 +444,9 @@ describe('messaging crypto v2: tampered / wrong-key rejection', () => {
     payload = await encryptMessageV2('v2 secret', alice.pk, bobKeys.publicKey);
   });
 
-  it('rejects a flipped ciphertext byte', () => {
-    const tampered = { ...payload, c: tamperBase64(payload.c) };
+  // Tag byte (0) and encrypted-body byte (20, past the 16-byte tag).
+  it.each([0, 20])('rejects a flipped ciphertext byte @%i', (i) => {
+    const tampered = { ...payload, c: tamperBase64(payload.c, i) };
     expect(() => decryptMessageV2(tampered, bobSecret)).toThrow(
       /corrupted or tampered/
     );
