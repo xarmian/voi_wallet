@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { hideSplashScreen } from '@/utils/splashController';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -41,6 +42,11 @@ export default class ErrorBoundary extends React.Component<
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error);
     console.error('Error info:', errorInfo);
+    // Fail-safe for the cold-boot splash (F-48, TASK-182): a render throw on the
+    // init path would otherwise leave the branded native splash overlay up,
+    // hiding this fallback UI and trapping the user. hideSplashScreen() is
+    // idempotent, so this is a no-op once the readiness owner has run.
+    void hideSplashScreen();
   }
 
   render() {

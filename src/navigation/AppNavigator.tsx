@@ -70,6 +70,7 @@ import {
   useRemoteSignerStore,
 } from '@/store/remoteSignerStore';
 import { useWalletStore } from '@/store/walletStore';
+import { hideSplashScreen } from '@/utils/splashController';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
@@ -1079,6 +1080,11 @@ function AppStack() {
   const [initialRoute, setInitialRoute] =
     useState<keyof RootStackParamList>('Onboarding');
   const [isLoading, setIsLoading] = useState(true);
+  // Subscribe to the remote-signer gate so this component (the splash readiness
+  // owner) re-renders when MainTabNavigator's `isInitialized` gate resolves.
+  const isSignerInitialized = useRemoteSignerStore(
+    (state) => state.isInitialized
+  );
 
   useEffect(() => {
     checkInitialRoute();
@@ -1100,6 +1106,26 @@ function AppStack() {
       setIsLoading(false);
     }
   };
+
+  // Single readiness owner for the native splash (F-48, TASK-182). Hide it only
+  // once the FIRST real content frame can render:
+  //   - the initial-route storage await has resolved (isLoading false), AND
+  //   - for the Main route, MainTabNavigator's remote-signer gate has hydrated
+  //     (isSignerInitialized) — the Onboarding route has no such gate, so it is
+  //     ready as soon as the route resolves.
+  // This effect runs AFTER commit, so the content it gates on is already painted
+  // when the splash lifts — no blank flash. checkInitialRoute() always clears
+  // isLoading in its finally, and remoteSignerStore.initialize() always sets
+  // isInitialized (even on its caught-error path), so this readiness condition
+  // cannot silently stall; the error boundary and the index.ts watchdog cover
+  // the render-throw and hard-hang cases as belt-and-suspenders.
+  const contentReady =
+    !isLoading && (initialRoute !== 'Main' || isSignerInitialized);
+  useEffect(() => {
+    if (contentReady) {
+      void hideSplashScreen();
+    }
+  }, [contentReady]);
 
   if (isLoading) {
     return null; // Or a loading screen
