@@ -19,7 +19,9 @@ function AppContent() {
     // Initialize debug logger first
     debugLogger.addDebugEntry('App startup initiated');
 
-    // Test crypto polyfills on app startup
+    // Verify crypto polyfills on startup. Cheap typeof checks run in every
+    // build; the heavier algosdk keygen probe is gated to __DEV__ inside
+    // testCryptoPolyfills() so it never runs on the release cold-boot path.
     const isWorking = testCryptoPolyfills();
     if (!isWorking) {
       console.warn('Crypto polyfills are not working correctly. Wallet functionality may be impaired.');
