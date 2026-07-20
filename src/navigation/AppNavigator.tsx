@@ -70,7 +70,10 @@ import {
   useRemoteSignerStore,
 } from '@/store/remoteSignerStore';
 import { useWalletStore } from '@/store/walletStore';
-import { hideSplashScreen } from '@/utils/splashController';
+import {
+  hideSplashScreen,
+  isColdBootContentReady,
+} from '@/utils/splashController';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
@@ -1080,11 +1083,18 @@ function AppStack() {
   const [initialRoute, setInitialRoute] =
     useState<keyof RootStackParamList>('Onboarding');
   const [isLoading, setIsLoading] = useState(true);
-  // Subscribe to the remote-signer gate so this component (the splash readiness
-  // owner) re-renders when MainTabNavigator's `isInitialized` gate resolves.
+  // Subscribe to the init-cascade gates this component (the splash readiness
+  // owner) must cover, so it re-renders as each resolves:
+  //   - remote-signer gate (MainTabNavigator's `isInitialized`) — gate 2,
+  //   - app mode (decided by that same gate) — selects signer vs wallet Home,
+  //   - wallet-store hydration (`isInitialized`) — gate 3, cached balances in
+  //     state so the normal-wallet Home renders real content, not its
+  //     "Loading wallet..." placeholder.
   const isSignerInitialized = useRemoteSignerStore(
     (state) => state.isInitialized
   );
+  const appMode = useAppMode();
+  const isWalletInitialized = useWalletStore((state) => state.isInitialized);
 
   useEffect(() => {
     checkInitialRoute();
@@ -1108,19 +1118,29 @@ function AppStack() {
   };
 
   // Single readiness owner for the native splash (F-48, TASK-182). Hide it only
-  // once the FIRST real content frame can render:
-  //   - the initial-route storage await has resolved (isLoading false), AND
-  //   - for the Main route, MainTabNavigator's remote-signer gate has hydrated
-  //     (isSignerInitialized) — the Onboarding route has no such gate, so it is
-  //     ready as soon as the route resolves.
+  // once the FIRST real content frame can render — covering ALL THREE gates of
+  // the F-03 init cascade (route + remote-signer + wallet-store hydration). See
+  // isColdBootContentReady() for the exact gate/scoping rules; in short, on the
+  // common existing-wallet cold start it now also waits for the wallet store's
+  // cached balances so the splash never lifts onto Home's "Loading wallet..."
+  // placeholder.
+  //
   // This effect runs AFTER commit, so the content it gates on is already painted
-  // when the splash lifts — no blank flash. checkInitialRoute() always clears
-  // isLoading in its finally, and remoteSignerStore.initialize() always sets
-  // isInitialized (even on its caught-error path), so this readiness condition
-  // cannot silently stall; the error boundary and the index.ts watchdog cover
-  // the render-throw and hard-hang cases as belt-and-suspenders.
-  const contentReady =
-    !isLoading && (initialRoute !== 'Main' || isSignerInitialized);
+  // when the splash lifts — no blank flash. Every gate is guaranteed to resolve
+  // (or throw) so this cannot silently stall: checkInitialRoute() always clears
+  // isLoading in its finally; remoteSignerStore.initialize() always sets
+  // isInitialized (even on its caught-error path); and walletStore.initialize()
+  // — kicked off early in initializeServices() AND again by Home's mount effect —
+  // always sets isInitialized (success and caught-error paths alike). The error
+  // boundary and the index.ts watchdog cover the render-throw and hard-hang
+  // cases as belt-and-suspenders.
+  const contentReady = isColdBootContentReady({
+    routeResolved: !isLoading,
+    isMainRoute: initialRoute === 'Main',
+    signerInitialized: isSignerInitialized,
+    isSignerMode: appMode === 'signer',
+    walletInitialized: isWalletInitialized,
+  });
   useEffect(() => {
     if (contentReady) {
       void hideSplashScreen();
