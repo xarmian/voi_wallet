@@ -60,4 +60,47 @@ describe('networkStore.initializeNetwork (F-04 non-blocking health, TASK-178)', 
     // The refresh was still kicked off — just fired, not awaited.
     expect(healthProbeStarted).toBe(true);
   });
+
+  it('does not let a superseded (stale) refresh overwrite fresher status for the same network', async () => {
+    // Each refresh gets its own deferred probe so we can control settle order.
+    const resolvers: Array<(status: unknown) => void> = [];
+    const fakeService = {
+      getCurrentNetworkId: jest.fn().mockReturnValue(NON_DEFAULT),
+      switchNetwork: jest.fn().mockResolvedValue(undefined),
+      checkNetworkHealth: jest.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve);
+          })
+      ),
+    };
+    (NetworkService.getInstance as jest.Mock).mockReturnValue(fakeService);
+
+    const store = useNetworkStore.getState();
+    const older = store.refreshNetworkStatus(NON_DEFAULT); // earlier refresh
+    const newer = store.refreshNetworkStatus(NON_DEFAULT); // later refresh
+    expect(resolvers).toHaveLength(2);
+
+    const fresh = {
+      isConnected: true,
+      lastSync: 2,
+      algodHeight: 2,
+      indexerHealth: true,
+    };
+    const stale = {
+      isConnected: false,
+      lastSync: 1,
+      algodHeight: 1,
+      indexerHealth: false,
+    };
+
+    // The later refresh settles first and publishes; the earlier one settles
+    // afterwards and must be dropped, not overwrite the fresher status.
+    resolvers[1](fresh);
+    await newer;
+    resolvers[0](stale);
+    await older;
+
+    expect(useNetworkStore.getState().status[NON_DEFAULT]).toEqual(fresh);
+  });
 });

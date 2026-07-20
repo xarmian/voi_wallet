@@ -27,6 +27,13 @@ interface NetworkStoreState extends NetworkState {
   isCurrentNetworkHealthy: boolean;
 }
 
+// Monotonic per-network refresh tokens. A refresh publishes its result only if
+// it is still the latest issued for that network — so a slow probe from an
+// earlier refresh (e.g. one left in flight across a rapid A→B→A switch, whose
+// service-level dedup no longer applies because it now runs on a different
+// per-network instance) can't overwrite fresher status for the same network.
+const refreshSeq: Partial<Record<NetworkId, number>> = {};
+
 export const useNetworkStore = create<NetworkStoreState>()(
   subscribeWithSelector((set, get) => ({
     // Initial state
@@ -162,9 +169,18 @@ export const useNetworkStore = create<NetworkStoreState>()(
     async refreshNetworkStatus(networkId?: NetworkId) {
       const targetNetworkId = networkId || get().currentNetwork;
 
+      // Claim the latest refresh token for this network before awaiting.
+      const seq = (refreshSeq[targetNetworkId] ?? 0) + 1;
+      refreshSeq[targetNetworkId] = seq;
+      const isLatest = () => refreshSeq[targetNetworkId] === seq;
+
       try {
         const networkService = NetworkService.getInstance(targetNetworkId);
         const networkStatus = await networkService.checkNetworkHealth();
+
+        // A newer refresh for this network started while we were probing — its
+        // (fresher) result must win, so drop ours instead of overwriting.
+        if (!isLatest()) return;
 
         set((state) => ({
           status: {
@@ -177,6 +193,8 @@ export const useNetworkStore = create<NetworkStoreState>()(
           `Failed to refresh network status for ${targetNetworkId}:`,
           error
         );
+
+        if (!isLatest()) return;
 
         // Set unhealthy status on error
         set((state) => ({
