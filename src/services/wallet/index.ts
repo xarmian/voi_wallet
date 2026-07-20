@@ -38,6 +38,51 @@ import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
 
+/**
+ * F-22 (TASK-179) — getCurrentWallet() memoization.
+ *
+ * getCurrentWallet() sits on the cold-boot path AND every signing/key-retrieval
+ * and WalletConnect flow (43 call sites). Each call re-parsed the whole wallet
+ * blob, scanned every account for a legacy mnemonic, ran algosdk.isValidAddress
+ * (base32 decode + SHA-512/256 checksum) on every account, and merged settings —
+ * identical work on an unchanged blob (~40-50 checksum hashes per cold boot).
+ *
+ * This memo caches ONLY the parsed/healed/validated Wallet, keyed on the exact
+ * raw stored string. Because this feeds signing (a stale wallet after a
+ * restore/reset/rekey must NEVER be signed), it holds to these invariants:
+ *   1. The current stored raw string is read on EVERY call (never cached), so
+ *      external wipes/rewrites that bypass this service — restore clearAllData()
+ *      removes voi_wallet_metadata directly (backup/restorers.ts), and
+ *      migrateLegacyValue rewrites it — are always observed. A null read busts
+ *      the memo and returns null (no stale wallet survives a reset).
+ *   2. Cache HIT only when the raw string is byte-identical to the cached key;
+ *      any change (including removal) re-parses.
+ *   3. Every return is a DEEP CLONE — callers mutate the returned wallet in place
+ *      before persisting, so a shared reference would corrupt the cache.
+ *   4. The legacy/unsanitized read (a blob still carrying a per-account mnemonic)
+ *      is NEVER memoized: its raw string would become the cache key and retain a
+ *      secret. Only the sanitized path is cached (persisted blobs are
+ *      mnemonic-stripped at write time), so the memo holds no key material.
+ *   5. Concurrent cold-boot loads of the same raw string collapse into one parse
+ *      via in-flight promise dedup (mirrors walletStore's balanceLoadsInFlight).
+ */
+let cachedWalletRawString: string | null = null;
+let cachedWallet: Wallet | null = null;
+const getCurrentWalletParsesInFlight = new Map<
+  string,
+  Promise<Wallet | null>
+>();
+
+/**
+ * Account fields that carry key material and must NEVER be retained in the module
+ * memo or become a cache/in-flight key. `mnemonic` is the persisted schema's only
+ * secret (StandardAccountMetadata); `privateKey` is checked as defense-in-depth
+ * against a corrupt/legacy/tampered blob that carries key material on a mistyped
+ * or malformed account object — a type-gated check would miss it, so detection is
+ * type-AGNOSTIC and fails closed on ANY account.
+ */
+const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
+
 export class MultiAccountWalletService {
   private static readonly STORAGE_PREFIX = 'voi_account_';
   private static readonly WALLET_KEY = 'voi_wallet_metadata';
@@ -686,84 +731,208 @@ export class MultiAccountWalletService {
   // Wallet Management
   static async getCurrentWallet(): Promise<Wallet | null> {
     try {
+      // (1) ALWAYS read the current stored raw string. This read is intentionally
+      // NOT memoized: external wipes/rewrites that bypass this service (restore
+      // clearAllData() removing voi_wallet_metadata directly, migrateLegacyValue
+      // rewriting it) must be observed on every call so signing never sees a
+      // stale wallet.
       const walletData = await this.getStoredValue(this.WALLET_KEY);
+
       if (!walletData) {
+        // Removed key busts the memo and returns null — no stale wallet survives
+        // a restore/reset.
+        cachedWalletRawString = null;
+        cachedWallet = null;
         return null;
       }
-      const wallet = JSON.parse(walletData) as Wallet;
 
-      const hasSensitiveMnemonic = wallet.accounts.some(
-        (acc) =>
-          acc.type === AccountType.STANDARD &&
-          !!(acc as StandardAccountMetadata).mnemonic
+      // (2) Cache hit: byte-identical raw string. Skip the JSON.parse +
+      // legacy-mnemonic scan + per-account algosdk.isValidAddress checksum
+      // hashing + settings merge; hand back a deep clone so the caller can mutate
+      // its copy freely.
+      if (walletData === cachedWalletRawString && cachedWallet) {
+        return this.deepCloneWallet(cachedWallet);
+      }
+
+      // Parse once to classify the blob. JSON.parse is synchronous (it never
+      // yields), so a concurrent caller cannot interleave between here and the
+      // memo write below: the first caller to finish a sanitized load populates
+      // the memo, and overlapping callers then take the fast path (2) or join the
+      // in-flight load (4). Secret detection is type-AGNOSTIC (see
+      // SECRET_ACCOUNT_FIELDS): a mnemonic/privateKey on ANY account object —
+      // even one with a wrong or malformed `type` — is caught so its raw string
+      // can never become a cache/in-flight key.
+      const parsed = JSON.parse(walletData) as Wallet;
+      const hasSecretMaterial = parsed.accounts.some((acc) =>
+        this.accountHasSecretMaterial(acc)
       );
 
-      if (hasSensitiveMnemonic) {
-        wallet.accounts = wallet.accounts.map((acc) => {
-          if (acc.type === AccountType.STANDARD) {
-            const { mnemonic: _mnemonic, ...rest } =
-              acc as StandardAccountMetadata;
-            return {
-              ...rest,
-              mnemonic: '',
-            } as StandardAccountMetadata;
-          }
-          return acc;
-        });
+      // (3) Legacy/unsanitized path: the raw string still carries plaintext key
+      // material. It is handled ENTIRELY inline and is NEVER placed in the module
+      // cache OR the in-flight map — its raw string is a secret and must never
+      // become a module-level key (invariant #4). This is a one-time legacy
+      // migration; concurrent double-execution is idempotent (both strip to the
+      // same sanitized blob), so it needs no dedup.
+      if (hasSecretMaterial) {
+        parsed.accounts = parsed.accounts.map((acc) =>
+          this.stripAccountSecrets(acc)
+        );
 
-        await this.storeWallet(wallet);
+        await this.storeWallet(parsed);
+
+        const sanitized = await this.mergeSettingsAndHeal(parsed);
+        return this.deepCloneWallet(sanitized);
       }
 
-      const defaultSettings = this.getDefaultWalletSettings();
-      const persistedSettings = wallet.settings ?? {};
-      wallet.settings = {
-        ...defaultSettings,
-        ...persistedSettings,
-        numberLocale:
-          persistedSettings.numberLocale !== undefined
-            ? persistedSettings.numberLocale
-            : defaultSettings.numberLocale,
-      };
+      // (4) Sanitized path: the raw string carries no secret, so it is safe to
+      // use as both the in-flight dedup key and the cache key. Collapse
+      // concurrent cold-boot loads of the same raw string into one heal/validate
+      // pass; every caller still receives its own deep clone.
+      const inFlight = getCurrentWalletParsesInFlight.get(walletData);
+      if (inFlight) {
+        const shared = await inFlight;
+        return shared ? this.deepCloneWallet(shared) : null;
+      }
 
-      // Heal-on-read: repair invalid, missing, or non-base32 (e.g. a persisted
-      // algosdk `Address` object serialized to `{"publicKey":{...}}`) addresses
-      // by re-deriving them from the stored hex public key. This only ever
-      // rewrites to a freshly derived, checksum-valid base32 address obtained
-      // from an exactly-32-byte public key; it never weakens validation.
-      let modified = false;
-      wallet.accounts = wallet.accounts.map((acc) => {
-        const rawAddress = acc.address as unknown;
-        const currentAddress = typeof rawAddress === 'string' ? rawAddress : '';
-        if (!currentAddress || !algosdk.isValidAddress(currentAddress)) {
-          try {
-            const rawPublicKey = acc.publicKey as unknown;
-            const hexPublicKey =
-              typeof rawPublicKey === 'string' ? rawPublicKey : '';
-            if (hexPublicKey && /^[0-9a-fA-F]+$/.test(hexPublicKey)) {
-              const pubBytes = new Uint8Array(
-                hexPublicKey.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))
-              );
-              if (pubBytes.length === 32) {
-                const derived = algosdk.encodeAddress(pubBytes);
-                if (algosdk.isValidAddress(derived)) {
-                  modified = true;
-                  return { ...acc, address: derived } as AccountMetadata;
-                }
-              }
-            }
-          } catch {}
+      const loadPromise = (async () => {
+        const wallet = await this.mergeSettingsAndHeal(parsed);
+        // Fail-closed: only memoize a wallet whose accounts hold NO secret
+        // material, keyed on a secret-free raw string. hasSecretMaterial already
+        // guaranteed this above; re-checking the healed result keeps the
+        // invariant local to the write so a future refactor cannot silently cache
+        // key material. (If heal-on-read re-stored a repaired address the stored
+        // string also changed, so this entry is simply superseded on the next
+        // read — never served stale, since every read compares the live string.)
+        if (
+          !wallet.accounts.some((acc) => this.accountHasSecretMaterial(acc))
+        ) {
+          cachedWalletRawString = walletData;
+          cachedWallet = wallet;
         }
-        return acc;
-      });
-
-      if (modified) {
-        await this.storeWallet(wallet);
+        return wallet;
+      })();
+      getCurrentWalletParsesInFlight.set(walletData, loadPromise);
+      try {
+        const wallet = await loadPromise;
+        return this.deepCloneWallet(wallet);
+      } finally {
+        getCurrentWalletParsesInFlight.delete(walletData);
       }
-      return wallet;
     } catch (error) {
       console.error('Failed to get current wallet:', error);
       return null;
     }
+  }
+
+  /**
+   * Applies the default-settings merge and heal-on-read address repair to an
+   * already-parsed, mnemonic-free wallet, persisting only when a repair actually
+   * ran. Shared by both getCurrentWallet() load paths and free of any caching
+   * side effect — the caller decides whether the result is memoized, so a
+   * mnemonic-bearing blob (handled inline in getCurrentWallet before it is
+   * stripped) can never be routed through the memo.
+   */
+  private static async mergeSettingsAndHeal(wallet: Wallet): Promise<Wallet> {
+    const defaultSettings = this.getDefaultWalletSettings();
+    const persistedSettings = wallet.settings ?? {};
+    wallet.settings = {
+      ...defaultSettings,
+      ...persistedSettings,
+      numberLocale:
+        persistedSettings.numberLocale !== undefined
+          ? persistedSettings.numberLocale
+          : defaultSettings.numberLocale,
+    };
+
+    // Heal-on-read: repair invalid, missing, or non-base32 (e.g. a persisted
+    // algosdk `Address` object serialized to `{"publicKey":{...}}`) addresses
+    // by re-deriving them from the stored hex public key. This only ever
+    // rewrites to a freshly derived, checksum-valid base32 address obtained
+    // from an exactly-32-byte public key; it never weakens validation.
+    let modified = false;
+    wallet.accounts = wallet.accounts.map((acc) => {
+      const rawAddress = acc.address as unknown;
+      const currentAddress = typeof rawAddress === 'string' ? rawAddress : '';
+      if (!currentAddress || !algosdk.isValidAddress(currentAddress)) {
+        try {
+          const rawPublicKey = acc.publicKey as unknown;
+          const hexPublicKey =
+            typeof rawPublicKey === 'string' ? rawPublicKey : '';
+          if (hexPublicKey && /^[0-9a-fA-F]+$/.test(hexPublicKey)) {
+            const pubBytes = new Uint8Array(
+              hexPublicKey.match(/.{1,2}/g)!.map((b) => parseInt(b, 16))
+            );
+            if (pubBytes.length === 32) {
+              const derived = algosdk.encodeAddress(pubBytes);
+              if (algosdk.isValidAddress(derived)) {
+                modified = true;
+                return { ...acc, address: derived } as AccountMetadata;
+              }
+            }
+          }
+        } catch {}
+      }
+      return acc;
+    });
+
+    if (modified) {
+      await this.storeWallet(wallet);
+    }
+
+    return wallet;
+  }
+
+  /**
+   * Deep clone via JSON round-trip. The Wallet is fully JSON-serializable (it is
+   * parsed from and persisted as JSON), so this produces a fully independent copy
+   * with no shared nested references. Required because getCurrentWallet()'s
+   * consumers mutate the returned object in place (e.g. wallet.accounts[i] = ...
+   * then storeWallet); handing out the cached reference would corrupt the memo.
+   */
+  private static deepCloneWallet(wallet: Wallet): Wallet {
+    return JSON.parse(JSON.stringify(wallet)) as Wallet;
+  }
+
+  /**
+   * Type-agnostic secret detector. Returns true if an account object carries key
+   * material in any SECRET_ACCOUNT_FIELDS entry, regardless of its declared
+   * `type`. Empty strings and absent fields are NOT secrets; any non-empty string
+   * (a mnemonic phrase / private key hex) or any unexpected non-string presence
+   * in a secret field fails closed as a secret. Used to keep the module memo free
+   * of key material even for corrupt/mistyped legacy blobs.
+   */
+  private static accountHasSecretMaterial(acc: unknown): boolean {
+    if (!acc || typeof acc !== 'object') {
+      return false;
+    }
+    const record = acc as Record<string, unknown>;
+    return SECRET_ACCOUNT_FIELDS.some((field) => {
+      const value = record[field];
+      if (value == null) {
+        return false;
+      }
+      return typeof value === 'string' ? value.length > 0 : true;
+    });
+  }
+
+  /**
+   * Removes every SECRET_ACCOUNT_FIELDS entry from an account object (any type),
+   * then restores the persisted-schema shape: a STANDARD account always carries
+   * an explicit empty `mnemonic` (matching sanitizeWalletForPersistence). Used on
+   * the inline legacy path so a mnemonic-bearing blob is fully scrubbed before it
+   * is re-stored or returned — and never memoized.
+   */
+  private static stripAccountSecrets(acc: AccountMetadata): AccountMetadata {
+    const record: Record<string, unknown> = {
+      ...(acc as unknown as Record<string, unknown>),
+    };
+    for (const field of SECRET_ACCOUNT_FIELDS) {
+      delete record[field];
+    }
+    if (record.type === AccountType.STANDARD) {
+      record.mnemonic = '';
+    }
+    return record as unknown as AccountMetadata;
   }
 
   static async createWallet(
