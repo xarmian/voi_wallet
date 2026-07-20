@@ -100,6 +100,53 @@ describe('NetworkService.checkNetworkHealth TTL cache + dedup (F-04, TASK-178)',
     await new Promise((resolve) => setImmediate(resolve));
   });
 
+  it('discards a post-switch stale probe (does not clobber status or re-add the cache)', async () => {
+    const service = NetworkService.getInstance(NetworkId.VOI_MAINNET);
+    (service as any).healthCheckCache.clear();
+    (service as any).healthCheckInFlight.clear();
+
+    const baseline: NetworkStatus = {
+      isConnected: false,
+      lastSync: 111,
+      algodHeight: 0,
+      indexerHealth: false,
+    };
+    (service as any).networkStatus = { ...baseline };
+
+    // Deferred raw algod client so the probe can settle AFTER we simulate a
+    // switch. Exercises the REAL performNetworkHealthCheck (not a stub).
+    let resolveAlgod!: (v: unknown) => void;
+    (service as any).algodClient = {
+      status: () => ({
+        do: () =>
+          new Promise((resolve) => {
+            resolveAlgod = resolve;
+          }),
+      }),
+    };
+    (service as any).indexerClient = {
+      makeHealthCheck: () => ({ do: async () => ({}) }),
+    };
+
+    // Probe starts on VOI, capturing the current generation.
+    const probe = service.checkNetworkHealth();
+
+    // Simulate switchNetwork's invalidation while the probe is in flight.
+    (service as any).healthCheckCache.clear();
+    (service as any).healthCheckInFlight.clear();
+    (service as any).healthCheckGeneration++;
+
+    resolveAlgod({ lastRound: 42 });
+    await probe;
+
+    // The stale (previous-network) result must neither overwrite the current
+    // shared status nor re-populate the cache switchNetwork deliberately cleared.
+    expect((service as any).networkStatus).toEqual(baseline);
+    expect((service as any).healthCheckCache.has(NetworkId.VOI_MAINNET)).toBe(
+      false
+    );
+  });
+
   it('does not block switchNetwork (cold launch to a non-default network) on a hung health probe', async () => {
     const service = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     (service as any).healthCheckCache.clear();

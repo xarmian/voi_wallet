@@ -90,6 +90,13 @@ export class NetworkService {
   private healthCheckInFlight: Map<NetworkId, Promise<NetworkStatus>> =
     new Map();
 
+  // Bumped on every switchNetwork. A probe captures this before its (up to
+  // ~15s) requests; on settle it commits to networkStatus/cache only if the
+  // generation is unchanged. This instance is mutated in place across switches,
+  // so a late-settling probe for a previous network must not clobber the
+  // current network's status or re-populate the cache switchNetwork cleared.
+  private healthCheckGeneration = 0;
+
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
     this.config = getNetworkConfig(networkId);
@@ -200,9 +207,12 @@ export class NetworkService {
       };
 
       // Invalidate the health-check TTL/in-flight caches so the switched-to
-      // network can never be served a status probed before the switch.
+      // network can never be served a status probed before the switch, and bump
+      // the generation so any probe already in flight for the previous network
+      // discards its result instead of clobbering the new network's status.
       this.healthCheckCache.clear();
       this.healthCheckInFlight.clear();
+      this.healthCheckGeneration++;
 
       // Kick off an initial health check but do NOT block the switch on it: the
       // client reconfiguration above is the only real prerequisite for callers
@@ -292,6 +302,7 @@ export class NetworkService {
     force?: boolean;
   }): Promise<NetworkStatus> {
     const networkId = this.currentNetworkId;
+    const generation = this.healthCheckGeneration;
 
     if (!options?.force) {
       const cached = this.healthCheckCache.get(networkId);
@@ -309,8 +320,13 @@ export class NetworkService {
     }
 
     const request = (async () => {
-      const status = await this.performNetworkHealthCheck();
-      this.healthCheckCache.set(networkId, { status, timestamp: Date.now() });
+      const status = await this.performNetworkHealthCheck(generation);
+      // Only repopulate the cache if we haven't switched networks since this
+      // probe started; otherwise switchNetwork deliberately cleared it and this
+      // result is for a network we've left.
+      if (this.healthCheckGeneration === generation) {
+        this.healthCheckCache.set(networkId, { status, timestamp: Date.now() });
+      }
       return status;
     })();
 
@@ -326,7 +342,9 @@ export class NetworkService {
     }
   }
 
-  private async performNetworkHealthCheck(): Promise<NetworkStatus> {
+  private async performNetworkHealthCheck(
+    generation: number
+  ): Promise<NetworkStatus> {
     try {
       const [algodStatus, indexerHealth] = await Promise.allSettled([
         this.withTimeout(this.algodClient.status().do(), 'algod status'),
@@ -339,23 +357,34 @@ export class NetworkService {
       const isAlgodHealthy = algodStatus.status === 'fulfilled';
       const isIndexerHealthy = indexerHealth.status === 'fulfilled';
 
-      this.networkStatus = {
+      const status: NetworkStatus = {
         isConnected: isAlgodHealthy && isIndexerHealthy,
         lastSync: Date.now(),
         algodHeight: isAlgodHealthy ? Number(algodStatus.value.lastRound) : 0,
         indexerHealth: isIndexerHealthy,
       };
 
-      return this.networkStatus;
+      // Don't let a probe for a network we've since switched away from clobber
+      // the current network's status (this instance is reused across switches).
+      if (this.healthCheckGeneration === generation) {
+        this.networkStatus = status;
+      }
+
+      return status;
     } catch (error) {
       console.error('Network health check failed:', error);
-      this.networkStatus = {
+      const status: NetworkStatus = {
         isConnected: false,
         lastSync: Date.now(),
         algodHeight: 0,
         indexerHealth: false,
       };
-      return this.networkStatus;
+
+      if (this.healthCheckGeneration === generation) {
+        this.networkStatus = status;
+      }
+
+      return status;
     }
   }
 
