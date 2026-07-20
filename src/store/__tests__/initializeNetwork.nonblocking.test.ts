@@ -63,7 +63,7 @@ describe('networkStore.initializeNetwork (F-04 non-blocking health, TASK-178)', 
 
   it('does not let a superseded (stale) refresh overwrite fresher status for the same network', async () => {
     // Each refresh gets its own deferred probe so we can control settle order.
-    const resolvers: Array<(status: unknown) => void> = [];
+    const resolvers: ((status: unknown) => void)[] = [];
     const fakeService = {
       getCurrentNetworkId: jest.fn().mockReturnValue(NON_DEFAULT),
       switchNetwork: jest.fn().mockResolvedValue(undefined),

@@ -153,7 +153,7 @@ describe('NetworkService.checkNetworkHealth TTL cache + dedup (F-04, TASK-178)',
     (service as any).healthCheckInFlight.clear();
 
     // Each algod probe gets its own deferred so we control settle order.
-    const algodResolvers: Array<(v: unknown) => void> = [];
+    const algodResolvers: ((v: unknown) => void)[] = [];
     (service as any).algodClient = {
       status: () => ({
         do: () =>
