@@ -469,27 +469,51 @@ export const useWalletStore = create<WalletState>()(
       try {
         set({ isLoading: true, lastError: null });
 
-        // Load persisted asset network filter
-        try {
-          const persistedFilter = await AsyncStorage.getItem(
-            '@wallet-asset-network-filter'
-          );
-          if (
-            persistedFilter &&
-            ['all', 'voi', 'algorand'].includes(persistedFilter)
-          ) {
-            set({
-              assetNetworkFilter: persistedFilter as 'all' | 'voi' | 'algorand',
-            });
-          }
-        } catch (error) {
-          console.warn('Failed to load persisted asset network filter:', error);
+        // Batch the three mutually-independent cold-boot reads (F-03): the asset
+        // network filter, the asset filter settings (which is itself internally a
+        // single Promise.all over its keys), and the current wallet. They gated
+        // each other only through serial awaits, so they run concurrently here.
+        //
+        // The filter/settings reads keep their ORIGINAL non-fatal semantics: a
+        // failure warns and falls back to defaults WITHOUT aborting wallet load.
+        // They are wrapped in `.catch(() => sentinel)` so they never reject the
+        // Promise.all. getCurrentWallet() is intentionally NOT wrapped, so its
+        // rejection still propagates to the outer catch (lastError), exactly as
+        // when it was the third serial await.
+        //
+        // Balance-cache loads remain STRICTLY AFTER this — they key into the
+        // resolved account list and depend on it, so they must not race ahead of
+        // getCurrentWallet.
+        const [persistedFilter, filterSettings, wallet] = await Promise.all([
+          AsyncStorage.getItem('@wallet-asset-network-filter').catch(
+            (error) => {
+              console.warn(
+                'Failed to load persisted asset network filter:',
+                error
+              );
+              return null;
+            }
+          ),
+          AssetFilterStorage.loadAssetFilterSettings().catch((error) => {
+            console.warn(
+              'Failed to load persisted asset filter settings:',
+              error
+            );
+            return null;
+          }),
+          MultiAccountWalletService.getCurrentWallet(),
+        ]);
+
+        if (
+          persistedFilter &&
+          ['all', 'voi', 'algorand'].includes(persistedFilter)
+        ) {
+          set({
+            assetNetworkFilter: persistedFilter as 'all' | 'voi' | 'algorand',
+          });
         }
 
-        // Load persisted asset filter settings
-        try {
-          const filterSettings =
-            await AssetFilterStorage.loadAssetFilterSettings();
+        if (filterSettings) {
           set({
             assetSortBy: filterSettings.sortBy,
             assetSortOrder: filterSettings.sortOrder,
@@ -497,14 +521,7 @@ export const useWalletStore = create<WalletState>()(
             assetFilterValueThreshold: filterSettings.valueThreshold,
             assetNativeTokensFirst: filterSettings.nativeTokensFirst,
           });
-        } catch (error) {
-          console.warn(
-            'Failed to load persisted asset filter settings:',
-            error
-          );
         }
-
-        const wallet = await MultiAccountWalletService.getCurrentWallet();
 
         if (wallet) {
           // Initialize account states

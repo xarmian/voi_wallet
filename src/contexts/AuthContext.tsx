@@ -27,8 +27,13 @@ const checkBiometricAvailability = async (): Promise<{
   }
   try {
     const LocalAuthentication = require('expo-local-authentication');
-    const hasHardware = await LocalAuthentication.hasHardwareAsync();
-    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    // hasHardwareAsync and isEnrolledAsync are independent native reads — run
+    // them concurrently (F-03) instead of serially. A rejection in either still
+    // rejects the Promise.all and is caught below (→ unavailable), unchanged.
+    const [hasHardware, isEnrolled] = await Promise.all([
+      LocalAuthentication.hasHardwareAsync(),
+      LocalAuthentication.isEnrolledAsync(),
+    ]);
     return { hasHardware, isEnrolled };
   } catch {
     return { hasHardware: false, isEnrolled: false };
@@ -162,12 +167,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkInitialAuthState = async () => {
     try {
-      const wallet = await MultiAccountWalletService.getCurrentWallet();
-      const hasPin = await AccountSecureStorage.hasPin();
-      const { hasHardware, isEnrolled } = await checkBiometricAvailability();
-      const biometricEnabled = await AccountSecureStorage.isBiometricEnabled();
+      // Parallelize the independent lock-determining probes (F-03). These five
+      // reads (wallet, PIN presence, biometric hardware/enrollment, biometric
+      // enabled flag, PIN timeout) do not depend on each other, so they run
+      // concurrently instead of as a 7-deep serial await chain. The lock state
+      // computed for every resolved-value input is IDENTICAL to the prior serial
+      // predicate below — only the I/O is parallelized.
+      //
+      // Promise.all, NOT Promise.allSettled: a probe that *rejects* still
+      // propagates to the catch below, leaving the app at its LOCKED default
+      // (isLocked: true / isAuthenticated: false) — exactly as the serial awaits
+      // did. Do NOT switch to allSettled: coercing a rejected hasPin to `false`
+      // would flip a rejecting read into the `!hasPin` unlocked setup state.
+      //
+      // NOTE — pre-existing fail-OPEN, out of scope for this I/O-only change:
+      // hasPin() and getCurrentWallet() catch their OWN storage errors and
+      // resolve falsy (false / null) rather than rejecting (AccountSecureStorage
+      // .hasPin, wallet/index.ts getCurrentWallet), so a storage read *failure*
+      // is indistinguishable here from "no PIN / no wallet" and lands in the
+      // unlocked setup state. That predates this diff and is unchanged by it;
+      // closing it would require an auth/lock SEMANTICS change (surfacing a read
+      // failure as a locked state) that needs human auth sign-off — see TASK-177.
+      const [wallet, hasPin, biometric, biometricEnabled, timeoutMinutes] =
+        await Promise.all([
+          MultiAccountWalletService.getCurrentWallet(),
+          AccountSecureStorage.hasPin(),
+          checkBiometricAvailability(),
+          AccountSecureStorage.isBiometricEnabled(),
+          AccountSecureStorage.getPinTimeout(),
+        ]);
+      const { hasHardware, isEnrolled } = biometric;
       const biometricAvailable = hasHardware && isEnrolled;
-      const timeoutMinutes = await AccountSecureStorage.getPinTimeout();
 
       if (!wallet || wallet.accounts.length === 0 || !hasPin) {
         // No wallet setup yet or no PIN set - allow access for setup

@@ -85,6 +85,7 @@ import {
   getAppModeEarly,
   useRemoteSignerStore,
 } from '@/store/remoteSignerStore';
+import { useWalletStore } from '@/store/walletStore';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
@@ -1197,6 +1198,17 @@ export default function AppNavigator() {
 
     const initializeServices = async () => {
       try {
+        // Kick off remote-signer store hydration EARLY (F-03 cross-stage
+        // parallelization). Previously it started only once MainTabNavigator
+        // mounted (behind the AppStack render gate), daisy-chaining it after the
+        // first frame. Starting it here runs it concurrently with AppStack's
+        // checkInitialRoute and the service init below. It reuses the same
+        // getAppModeEarly() promise awaited just below, and its initialize() is
+        // coalesced, so the later MainTabNavigator mount-effect call dedupes onto
+        // this in-flight pass rather than starting a second one. Fire-and-forget:
+        // it must not block service init.
+        void useRemoteSignerStore.getState().initialize();
+
         // Get app mode BEFORE initializing network services
         // This avoids a race condition with store hydration
         const appMode = await getAppModeEarly();
@@ -1204,6 +1216,16 @@ export default function AppNavigator() {
 
         // Initialize Network store (needed in both modes for basic config)
         await initializeNetwork();
+
+        // Kick off wallet store hydration EARLY too (F-03). It previously started
+        // only when HomeScreen/AirgapHomeScreen mounted — the last of three
+        // render gates. Starting it here (well ahead of that gate) lets the
+        // wallet/account list + persisted balance cache load during startup.
+        // It is kept AFTER initializeNetwork() on purpose: walletStore.initialize
+        // reads the ACTIVE network to key the balance cache, matching where the
+        // Home mount effect ran it (always post-network-init). Its initialize()
+        // coalescer dedupes the later Home mount-effect call. Fire-and-forget.
+        void useWalletStore.getState().initialize();
 
         // Variables for cleanup - only defined if services are initialized
         let wcService: WalletConnectService | null = null;
