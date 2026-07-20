@@ -1498,13 +1498,27 @@ export default function AppNavigator() {
         }
 
         // --- Branch: Ledger transport (useful in BOTH modes) ---
+        // F-24: only eagerly initialize the Ledger transport at boot when the
+        // user has a previously paired Ledger persisted. This loads that
+        // device's metadata into the in-memory map so rekey/signing
+        // getDevices() consumers (keyManager) see it, WITHOUT pulling
+        // ble-plx/rxjs into the cold-boot eval graph or starting a permanent
+        // 15s health-check interval for the ~100% of users who never use a
+        // Ledger. Users with no persisted device defer init to the first Ledger
+        // screen (DeviceDiscovery) / first signing attempt (keyManager), which
+        // call initialize() themselves.
         const initLedger = async () => {
           try {
-            await ledgerTransportService.initialize({
-              enableBle: true,
-              enableUsb: true,
-            });
-            console.log('Ledger transport service initialized');
+            const initialized =
+              await ledgerTransportService.initializeIfPersistedDevices({
+                enableBle: true,
+                enableUsb: true,
+              });
+            console.log(
+              initialized
+                ? 'Ledger transport service initialized'
+                : 'Ledger transport init deferred (no persisted devices)'
+            );
           } catch (error) {
             console.warn(
               'Failed to initialize Ledger transport service:',

@@ -80,6 +80,17 @@ export class LedgerDeviceStorage {
   }
 
   /**
+   * Whether any valid Ledger device is persisted. Used as the boot-time gate
+   * (F-24) for eagerly initializing the transport: a user who has never paired a
+   * Ledger returns false and skips transport init entirely. A single AsyncStorage
+   * read; validation matches loadDevices() so an invalid-only store reads false.
+   */
+  async hasPersistedDevices(): Promise<boolean> {
+    const devices = await this.loadDevices();
+    return devices.length > 0;
+  }
+
+  /**
    * Save device information to storage
    */
   async saveDevice(deviceInfo: LedgerDeviceInfo): Promise<void> {
