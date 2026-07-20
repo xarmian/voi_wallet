@@ -75,6 +75,21 @@ export class NetworkService {
   // another network's decimals.
   private assetCacheGeneration = 0;
 
+  // Short-TTL cache + in-flight dedup for checkNetworkHealth, KEYED BY
+  // NetworkId. On cold boot the store's init refresh and HomeScreen's account
+  // load both probe health within the same window; without this each call
+  // issued 2 fresh HTTP requests (~15s worst case each). Keying by NetworkId
+  // stops a stale result from one network being served for another;
+  // switchNetwork clears both maps so a switched-to network never reuses
+  // pre-switch data.
+  private static readonly HEALTH_CHECK_TTL_MS = 5000;
+  private healthCheckCache: Map<
+    NetworkId,
+    { status: NetworkStatus; timestamp: number }
+  > = new Map();
+  private healthCheckInFlight: Map<NetworkId, Promise<NetworkStatus>> =
+    new Map();
+
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
     this.config = getNetworkConfig(networkId);
@@ -184,8 +199,18 @@ export class NetworkService {
         envoiHealth: undefined,
       };
 
-      // Perform initial health check
-      await this.checkNetworkHealth();
+      // Invalidate the health-check TTL/in-flight caches so the switched-to
+      // network can never be served a status probed before the switch.
+      this.healthCheckCache.clear();
+      this.healthCheckInFlight.clear();
+
+      // Kick off an initial health check but do NOT block the switch on it: the
+      // client reconfiguration above is the only real prerequisite for callers
+      // (cold-boot WalletConnect startup + queued txn-request navigation), and
+      // every caller re-refreshes status right after this returns. Awaiting a
+      // ~15s-timeout probe here stalled cold boot on a slow/unavailable node.
+      // checkNetworkHealth never rejects, so this is safe to leave unawaited.
+      void this.checkNetworkHealth();
 
       // Cache this instance under the new network ID and mark it active
       NetworkService.instances.set(networkId, this);
@@ -255,7 +280,53 @@ export class NetworkService {
     ) as Promise<T>;
   }
 
-  async checkNetworkHealth(): Promise<NetworkStatus> {
+  /**
+   * Health check with a short-TTL cache + in-flight dedup, keyed by the current
+   * NetworkId. Within HEALTH_CHECK_TTL_MS a completed result is reused and
+   * concurrent callers share a single in-flight probe, so the cold-boot burst
+   * (store init refresh + HomeScreen account load) issues ONE round-trip
+   * instead of several. Pass { force: true } to bypass the cache (e.g. an
+   * explicit pull-to-refresh that must reflect current connectivity).
+   */
+  async checkNetworkHealth(options?: {
+    force?: boolean;
+  }): Promise<NetworkStatus> {
+    const networkId = this.currentNetworkId;
+
+    if (!options?.force) {
+      const cached = this.healthCheckCache.get(networkId);
+      if (
+        cached &&
+        Date.now() - cached.timestamp < NetworkService.HEALTH_CHECK_TTL_MS
+      ) {
+        return { ...cached.status };
+      }
+
+      const inFlight = this.healthCheckInFlight.get(networkId);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
+
+    const request = (async () => {
+      const status = await this.performNetworkHealthCheck();
+      this.healthCheckCache.set(networkId, { status, timestamp: Date.now() });
+      return status;
+    })();
+
+    this.healthCheckInFlight.set(networkId, request);
+    try {
+      return await request;
+    } finally {
+      // Only clear the entry if it is still ours — a concurrent force refresh or
+      // a switchNetwork()-triggered clear may have replaced/removed it.
+      if (this.healthCheckInFlight.get(networkId) === request) {
+        this.healthCheckInFlight.delete(networkId);
+      }
+    }
+  }
+
+  private async performNetworkHealthCheck(): Promise<NetworkStatus> {
     try {
       const [algodStatus, indexerHealth] = await Promise.allSettled([
         this.withTimeout(this.algodClient.status().do(), 'algod status'),

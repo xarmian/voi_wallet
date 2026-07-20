@@ -85,8 +85,14 @@ export const useNetworkStore = create<NetworkStoreState>()(
 
         set({ currentNetwork: networkToUse });
 
-        // Perform initial health check
-        await get().refreshNetworkStatus(networkToUse);
+        // Fire the initial health check OFF the cold-boot critical path. The
+        // persisted-network read + switchNetwork (client reconfiguration) above
+        // are the only real prerequisites for downstream startup (WalletConnect
+        // restore, queued txn-request navigation); those ran the network against
+        // the correct clients already. Awaiting the ~15s-timeout health probe
+        // here stalled the whole service-init branch on a slow/unavailable node.
+        // refreshNetworkStatus swallows its own errors, so this never rejects.
+        void get().refreshNetworkStatus(networkToUse);
 
         console.log(`Network store initialized with: ${networkToUse}`);
       } catch (error) {
