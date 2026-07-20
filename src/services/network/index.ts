@@ -75,6 +75,34 @@ export class NetworkService {
   // another network's decimals.
   private assetCacheGeneration = 0;
 
+  // Short-TTL cache + in-flight dedup for checkNetworkHealth, KEYED BY
+  // NetworkId. On cold boot the store's init refresh and HomeScreen's account
+  // load both probe health within the same window; without this each call
+  // issued 2 fresh HTTP requests (~15s worst case each). Keying by NetworkId
+  // stops a stale result from one network being served for another;
+  // switchNetwork clears both maps so a switched-to network never reuses
+  // pre-switch data.
+  private static readonly HEALTH_CHECK_TTL_MS = 5000;
+  private healthCheckCache: Map<
+    NetworkId,
+    { status: NetworkStatus; timestamp: number }
+  > = new Map();
+  private healthCheckInFlight: Map<NetworkId, Promise<NetworkStatus>> =
+    new Map();
+
+  // Bumped on every switchNetwork. A probe captures this before its (up to
+  // ~15s) requests; on settle it commits to networkStatus/cache only if the
+  // generation is unchanged. This instance is mutated in place across switches,
+  // so a late-settling probe for a previous network must not clobber the
+  // current network's status or re-populate the cache switchNetwork cleared.
+  private healthCheckGeneration = 0;
+
+  // Incremented for every ACTUAL probe (not cache/in-flight reuse). A probe
+  // commits only if it is still the latest issued — so a forced refresh that
+  // supersedes an older concurrent probe is never overwritten by that older
+  // probe settling later (last-issued wins, not last-settled).
+  private healthCheckSeq = 0;
+
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
     this.config = getNetworkConfig(networkId);
@@ -184,8 +212,21 @@ export class NetworkService {
         envoiHealth: undefined,
       };
 
-      // Perform initial health check
-      await this.checkNetworkHealth();
+      // Invalidate the health-check TTL/in-flight caches so the switched-to
+      // network can never be served a status probed before the switch, and bump
+      // the generation so any probe already in flight for the previous network
+      // discards its result instead of clobbering the new network's status.
+      this.healthCheckCache.clear();
+      this.healthCheckInFlight.clear();
+      this.healthCheckGeneration++;
+
+      // Kick off an initial health check but do NOT block the switch on it: the
+      // client reconfiguration above is the only real prerequisite for callers
+      // (cold-boot WalletConnect startup + queued txn-request navigation), and
+      // every caller re-refreshes status right after this returns. Awaiting a
+      // ~15s-timeout probe here stalled cold boot on a slow/unavailable node.
+      // checkNetworkHealth never rejects, so this is safe to leave unawaited.
+      void this.checkNetworkHealth();
 
       // Cache this instance under the new network ID and mark it active
       NetworkService.instances.set(networkId, this);
@@ -255,7 +296,69 @@ export class NetworkService {
     ) as Promise<T>;
   }
 
-  async checkNetworkHealth(): Promise<NetworkStatus> {
+  /**
+   * Health check with a short-TTL cache + in-flight dedup, keyed by the current
+   * NetworkId. Within HEALTH_CHECK_TTL_MS a completed result is reused and
+   * concurrent callers share a single in-flight probe, so the cold-boot burst
+   * (store init refresh + HomeScreen account load) issues ONE round-trip
+   * instead of several. Pass { force: true } to bypass the cache (e.g. an
+   * explicit pull-to-refresh that must reflect current connectivity).
+   */
+  async checkNetworkHealth(options?: {
+    force?: boolean;
+  }): Promise<NetworkStatus> {
+    const networkId = this.currentNetworkId;
+    const generation = this.healthCheckGeneration;
+
+    if (!options?.force) {
+      const cached = this.healthCheckCache.get(networkId);
+      if (
+        cached &&
+        Date.now() - cached.timestamp < NetworkService.HEALTH_CHECK_TTL_MS
+      ) {
+        return { ...cached.status };
+      }
+
+      const inFlight = this.healthCheckInFlight.get(networkId);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
+
+    const seq = ++this.healthCheckSeq;
+    const request = (async () => {
+      const status = await this.performNetworkHealthCheck();
+      // Commit to the shared status + cache only if this probe is still current:
+      // no network switch since it started (generation), and no newer probe has
+      // superseded it (seq). Otherwise it's for a network we've left, or a stale
+      // result that a forced refresh already replaced — return it to our own
+      // caller but don't let it clobber current state or the just-cleared cache.
+      if (
+        this.healthCheckGeneration === generation &&
+        this.healthCheckSeq === seq
+      ) {
+        this.networkStatus = status;
+        this.healthCheckCache.set(networkId, { status, timestamp: Date.now() });
+      }
+      return status;
+    })();
+
+    this.healthCheckInFlight.set(networkId, request);
+    try {
+      return await request;
+    } finally {
+      // Only clear the entry if it is still ours — a concurrent force refresh or
+      // a switchNetwork()-triggered clear may have replaced/removed it.
+      if (this.healthCheckInFlight.get(networkId) === request) {
+        this.healthCheckInFlight.delete(networkId);
+      }
+    }
+  }
+
+  // Runs the raw algod/indexer probes and returns the computed status. Pure with
+  // respect to instance state: committing to networkStatus/cache is the
+  // caller's (checkNetworkHealth) job, gated on generation + seq.
+  private async performNetworkHealthCheck(): Promise<NetworkStatus> {
     try {
       const [algodStatus, indexerHealth] = await Promise.allSettled([
         this.withTimeout(this.algodClient.status().do(), 'algod status'),
@@ -268,23 +371,20 @@ export class NetworkService {
       const isAlgodHealthy = algodStatus.status === 'fulfilled';
       const isIndexerHealthy = indexerHealth.status === 'fulfilled';
 
-      this.networkStatus = {
+      return {
         isConnected: isAlgodHealthy && isIndexerHealthy,
         lastSync: Date.now(),
         algodHeight: isAlgodHealthy ? Number(algodStatus.value.lastRound) : 0,
         indexerHealth: isIndexerHealthy,
       };
-
-      return this.networkStatus;
     } catch (error) {
       console.error('Network health check failed:', error);
-      this.networkStatus = {
+      return {
         isConnected: false,
         lastSync: Date.now(),
         algodHeight: 0,
         indexerHealth: false,
       };
-      return this.networkStatus;
     }
   }
 

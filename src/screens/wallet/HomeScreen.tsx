@@ -364,13 +364,23 @@ export default function HomeScreen() {
       const currentViewMode = isMultiNetworkView;
 
       try {
-        const [networkHealth] = await Promise.allSettled([
-          VoiNetworkService.checkNetworkHealth(),
-        ]);
-
-        if (networkHealth.status === 'fulfilled') {
-          setNetworkStatus(networkHealth.value);
-        }
+        // Kick the health check off CONCURRENTLY with the mappings/balance load
+        // instead of awaiting it first. The service dedups/caches by NetworkId
+        // within a short TTL, so on cold boot this reuses the status networkStore
+        // already fetched during init (or shares its in-flight probe) rather than
+        // issuing a duplicate ~15s request, and never delays the first balance.
+        const networkHealthPromise = VoiNetworkService.checkNetworkHealth()
+          .then((status) => {
+            if (
+              viewModeRef.current === currentViewMode &&
+              activeAccountIdRef.current === accountId
+            ) {
+              setNetworkStatus(status);
+            }
+          })
+          .catch((error) => {
+            console.warn('[HomeScreen] Network health check failed:', error);
+          });
 
         // Check if view mode or account changed while loading
         if (
@@ -418,6 +428,9 @@ export default function HomeScreen() {
         await Promise.all([
           loadAccountTransactions(accountId),
           loadEnvoiName(accountId),
+          // Already running concurrently (self-handles state + errors); await it
+          // here only so it settles within loadData rather than dangling.
+          networkHealthPromise,
         ]);
       } catch (error) {
         console.error('Failed to load account data:', error);
@@ -880,7 +893,9 @@ export default function HomeScreen() {
 
     try {
       const [networkHealth] = await Promise.allSettled([
-        VoiNetworkService.checkNetworkHealth(),
+        // Explicit refresh (pull-to-refresh) must reflect current connectivity,
+        // so bypass the short-TTL cache.
+        VoiNetworkService.checkNetworkHealth({ force: true }),
       ]);
 
       if (networkHealth.status === 'fulfilled') {
