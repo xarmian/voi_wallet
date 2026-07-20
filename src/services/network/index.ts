@@ -97,6 +97,12 @@ export class NetworkService {
   // current network's status or re-populate the cache switchNetwork cleared.
   private healthCheckGeneration = 0;
 
+  // Incremented for every ACTUAL probe (not cache/in-flight reuse). A probe
+  // commits only if it is still the latest issued — so a forced refresh that
+  // supersedes an older concurrent probe is never overwritten by that older
+  // probe settling later (last-issued wins, not last-settled).
+  private healthCheckSeq = 0;
+
   private constructor(networkId: NetworkId = DEFAULT_NETWORK_ID) {
     this.currentNetworkId = networkId;
     this.config = getNetworkConfig(networkId);
@@ -319,12 +325,19 @@ export class NetworkService {
       }
     }
 
+    const seq = ++this.healthCheckSeq;
     const request = (async () => {
-      const status = await this.performNetworkHealthCheck(generation);
-      // Only repopulate the cache if we haven't switched networks since this
-      // probe started; otherwise switchNetwork deliberately cleared it and this
-      // result is for a network we've left.
-      if (this.healthCheckGeneration === generation) {
+      const status = await this.performNetworkHealthCheck();
+      // Commit to the shared status + cache only if this probe is still current:
+      // no network switch since it started (generation), and no newer probe has
+      // superseded it (seq). Otherwise it's for a network we've left, or a stale
+      // result that a forced refresh already replaced — return it to our own
+      // caller but don't let it clobber current state or the just-cleared cache.
+      if (
+        this.healthCheckGeneration === generation &&
+        this.healthCheckSeq === seq
+      ) {
+        this.networkStatus = status;
         this.healthCheckCache.set(networkId, { status, timestamp: Date.now() });
       }
       return status;
@@ -342,9 +355,10 @@ export class NetworkService {
     }
   }
 
-  private async performNetworkHealthCheck(
-    generation: number
-  ): Promise<NetworkStatus> {
+  // Runs the raw algod/indexer probes and returns the computed status. Pure with
+  // respect to instance state: committing to networkStatus/cache is the
+  // caller's (checkNetworkHealth) job, gated on generation + seq.
+  private async performNetworkHealthCheck(): Promise<NetworkStatus> {
     try {
       const [algodStatus, indexerHealth] = await Promise.allSettled([
         this.withTimeout(this.algodClient.status().do(), 'algod status'),
@@ -357,34 +371,20 @@ export class NetworkService {
       const isAlgodHealthy = algodStatus.status === 'fulfilled';
       const isIndexerHealthy = indexerHealth.status === 'fulfilled';
 
-      const status: NetworkStatus = {
+      return {
         isConnected: isAlgodHealthy && isIndexerHealthy,
         lastSync: Date.now(),
         algodHeight: isAlgodHealthy ? Number(algodStatus.value.lastRound) : 0,
         indexerHealth: isIndexerHealthy,
       };
-
-      // Don't let a probe for a network we've since switched away from clobber
-      // the current network's status (this instance is reused across switches).
-      if (this.healthCheckGeneration === generation) {
-        this.networkStatus = status;
-      }
-
-      return status;
     } catch (error) {
       console.error('Network health check failed:', error);
-      const status: NetworkStatus = {
+      return {
         isConnected: false,
         lastSync: Date.now(),
         algodHeight: 0,
         indexerHealth: false,
       };
-
-      if (this.healthCheckGeneration === generation) {
-        this.networkStatus = status;
-      }
-
-      return status;
     }
   }
 

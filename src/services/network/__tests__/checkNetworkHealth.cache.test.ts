@@ -147,6 +147,46 @@ describe('NetworkService.checkNetworkHealth TTL cache + dedup (F-04, TASK-178)',
     );
   });
 
+  it('lets the latest-issued probe win: a forced refresh is not overwritten by an older concurrent probe settling later', async () => {
+    const service = NetworkService.getInstance(NetworkId.VOI_MAINNET);
+    (service as any).healthCheckCache.clear();
+    (service as any).healthCheckInFlight.clear();
+
+    // Each algod probe gets its own deferred so we control settle order.
+    const algodResolvers: Array<(v: unknown) => void> = [];
+    (service as any).algodClient = {
+      status: () => ({
+        do: () =>
+          new Promise((resolve) => {
+            algodResolvers.push(resolve);
+          }),
+      }),
+    };
+    (service as any).indexerClient = {
+      makeHealthCheck: () => ({ do: async () => ({}) }),
+    };
+
+    const older = service.checkNetworkHealth(); // seq 1
+    const forced = service.checkNetworkHealth({ force: true }); // seq 2 (bypasses dedup)
+
+    // Two independent probes are in flight.
+    expect(algodResolvers.length).toBe(2);
+
+    // Settle the NEWER (forced) probe first with height 2, then the OLDER with 1.
+    algodResolvers[1]({ lastRound: 2 });
+    await forced;
+    algodResolvers[0]({ lastRound: 1 });
+    await older;
+
+    const key = (service as any).currentNetworkId as NetworkId;
+    // The forced (latest-issued) result must win, despite the older probe
+    // settling last.
+    expect((service as any).networkStatus.algodHeight).toBe(2);
+    expect((service as any).healthCheckCache.get(key).status.algodHeight).toBe(
+      2
+    );
+  });
+
   it('does not block switchNetwork (cold launch to a non-default network) on a hung health probe', async () => {
     const service = NetworkService.getInstance(NetworkId.VOI_MAINNET);
     (service as any).healthCheckCache.clear();
