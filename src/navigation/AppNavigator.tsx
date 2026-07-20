@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, {
+  useEffect,
+  useState,
+  useRef,
+  useCallback,
+  Suspense,
+} from 'react';
 import {
   NavigationContainer,
   StackActions,
@@ -29,14 +35,10 @@ import MultiNetworkAssetScreen from '@/screens/wallet/MultiNetworkAssetScreen';
 import TransactionDetailScreen from '@/screens/wallet/TransactionDetailScreen';
 import WebViewScreen from '@/screens/wallet/WebViewScreen';
 import SendScreen from '@/screens/wallet/SendScreen';
-import SwapScreen from '@/screens/wallet/SwapScreen';
 import TransactionConfirmationScreen from '@/screens/wallet/TransactionConfirmationScreen';
 import TransactionResultScreen from '@/screens/wallet/TransactionResultScreen';
 import UniversalTransactionSigningScreen from '@/screens/wallet/UniversalTransactionSigningScreen';
 import ReceiveScreen from '@/screens/wallet/ReceiveScreen';
-import ClaimableTokensScreen from '@/screens/wallet/ClaimableTokensScreen';
-import ClaimTokenScreen from '@/screens/wallet/ClaimTokenScreen';
-import ClaimAllConfirmationScreen from '@/screens/wallet/ClaimAllConfirmationScreen';
 import DiscoverScreen from '@/screens/wallet/DiscoverScreen';
 import NFTScreen from '@/screens/wallet/NFTScreen';
 import NFTDetailScreen from '@/screens/wallet/NFTDetailScreen';
@@ -55,27 +57,9 @@ import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
 import RekeyAccountScreen from '@/screens/wallet/RekeyAccountScreen';
 import OnboardingScreen from '@/screens/onboarding/OnboardingScreen';
-import SessionProposalScreen from '@/screens/walletconnect/SessionProposalScreen';
-import SessionsScreen from '@/screens/walletconnect/SessionsScreen';
-import TransactionRequestScreen from '@/screens/walletconnect/TransactionRequestScreen';
-import QRScannerScreen from '@/screens/walletconnect/QRScannerScreen';
-import WalletConnectPairingScreen from '@/screens/walletconnect/WalletConnectPairingScreen';
-import WalletConnectErrorScreen from '@/screens/walletconnect/WalletConnectErrorScreen';
 import QRAccountImportScreen from '@/screens/account/QRAccountImportScreen';
 import AccountImportPreviewScreen from '@/screens/account/AccountImportPreviewScreen';
-import LedgerAccountImportScreen from '@/screens/account/LedgerAccountImportScreen';
 import CreateWalletScreen from '@/screens/onboarding/CreateWalletScreen';
-// Remote Signer screens
-import {
-  AirgapHomeScreen,
-  ExportAccountsScreen,
-  ImportRemoteSignerScreen,
-  RemoteSignerSettingsScreen,
-  SignRequestScannerScreen,
-  TransactionReviewScreen,
-  SignatureDisplayScreen,
-  ImportFromOnlineWalletScreen,
-} from '@/screens/remoteSigner';
 // ARC-0090 transaction screens
 import KeyregConfirmScreen from '@/screens/transaction/KeyregConfirmScreen';
 import AppCallConfirmScreen from '@/screens/transaction/AppCallConfirmScreen';
@@ -98,7 +82,6 @@ import { ledgerTransportService } from '@/services/ledger/transport';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
 import { useNetworkStore } from '@/store/networkStore';
 import { notificationService } from '@/services/notifications';
-import { realtimeService } from '@/services/realtime';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
@@ -121,6 +104,108 @@ import MyProfileScreen from '@/screens/social/MyProfileScreen';
 import MessagesInboxScreen from '@/screens/social/MessagesInboxScreen';
 import NewMessageScreen from '@/screens/social/NewMessageScreen';
 import ChatScreen from '@/screens/social/ChatScreen';
+
+// ---------------------------------------------------------------------------
+// Code-split rarely-used screen clusters (F-01, TASK-176)
+//
+// These clusters pull in the heaviest / least-used slices of the module graph
+// (WalletConnect ↔ @walletconnect, Swap ↔ @txnlab/deflex, remote-signer,
+// Ledger import, claim flows). Loading them with React.lazy defers their module
+// factories to first navigation instead of evaluating them at cold boot, which
+// is the module-graph cost F-01 targets. HomeScreen + core navigation stay
+// eager. NOTE: this defers the SCREEN modules only; the ledger transport service
+// (imported at module scope below) and the realtime singleton (pulled via
+// walletStore) are deferred by separate tasks (TASK-180 / realtime scoping).
+//
+// Each lazy screen needs its own Suspense boundary: native-stack does not
+// provide one, and a suspended component without a boundary throws. The split
+// module resolves from the already-loaded production bundle within ~a frame, so
+// a neutral transparent fallback avoids a visible flash without theme coupling.
+function LazyScreenFallback() {
+  return <View style={{ flex: 1 }} />;
+}
+
+// Return type is intentionally inferred as a function component: annotating it as
+// React.ComponentType<P> would union in ComponentClass<P>, which fails React
+// Navigation's ScreenComponentType variance check for screens that take a
+// required `navigation` prop without `route`.
+function lazyScreen<P extends object>(
+  factory: () => Promise<{ default: React.ComponentType<P> }>
+) {
+  const LazyComponent = React.lazy(factory);
+  return function SuspendedScreen(props: P) {
+    return (
+      <Suspense fallback={<LazyScreenFallback />}>
+        <LazyComponent {...props} />
+      </Suspense>
+    );
+  };
+}
+
+// Swap (→ services/swap → @txnlab/deflex)
+const SwapScreen = lazyScreen(() => import('@/screens/wallet/SwapScreen'));
+
+// Claim flows
+const ClaimableTokensScreen = lazyScreen(
+  () => import('@/screens/wallet/ClaimableTokensScreen')
+);
+const ClaimTokenScreen = lazyScreen(
+  () => import('@/screens/wallet/ClaimTokenScreen')
+);
+const ClaimAllConfirmationScreen = lazyScreen(
+  () => import('@/screens/wallet/ClaimAllConfirmationScreen')
+);
+
+// WalletConnect screens (→ @walletconnect/*)
+const SessionProposalScreen = lazyScreen(
+  () => import('@/screens/walletconnect/SessionProposalScreen')
+);
+const SessionsScreen = lazyScreen(
+  () => import('@/screens/walletconnect/SessionsScreen')
+);
+const TransactionRequestScreen = lazyScreen(
+  () => import('@/screens/walletconnect/TransactionRequestScreen')
+);
+const QRScannerScreen = lazyScreen(
+  () => import('@/screens/walletconnect/QRScannerScreen')
+);
+const WalletConnectPairingScreen = lazyScreen(
+  () => import('@/screens/walletconnect/WalletConnectPairingScreen')
+);
+const WalletConnectErrorScreen = lazyScreen(
+  () => import('@/screens/walletconnect/WalletConnectErrorScreen')
+);
+
+// Ledger import screen (screen module only; transport service import is TASK-180)
+const LedgerAccountImportScreen = lazyScreen(
+  () => import('@/screens/account/LedgerAccountImportScreen')
+);
+
+// Remote Signer screens
+const AirgapHomeScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/AirgapHomeScreen')
+);
+const ExportAccountsScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/ExportAccountsScreen')
+);
+const ImportRemoteSignerScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/ImportRemoteSignerScreen')
+);
+const RemoteSignerSettingsScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/RemoteSignerSettingsScreen')
+);
+const SignRequestScannerScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/SignRequestScannerScreen')
+);
+const TransactionReviewScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/TransactionReviewScreen')
+);
+const SignatureDisplayScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/SignatureDisplayScreen')
+);
+const ImportFromOnlineWalletScreen = lazyScreen(
+  () => import('@/screens/remoteSigner/ImportFromOnlineWalletScreen')
+);
 
 export type RootStackParamList = {
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
