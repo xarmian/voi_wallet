@@ -23,6 +23,16 @@ const STORAGE_KEYS = {
 // Module-level promise for early mode detection (before store hydration)
 let appModePromise: Promise<AppMode> | null = null;
 
+// Coalescer for the remote-signer store initialize(): a single shared in-flight
+// promise so overlapping initialize() calls dedupe into ONE hydration pass. With
+// F-03 the store is kicked off early from AppNavigator's mount effect AND from
+// the MainTabNavigator / HomeScreen / RemoteSignerSettings mount effects; without
+// this guard those concurrent calls would each run a full read+set pass. Reset on
+// settle (see the finally below), so a later explicit initialize() still
+// re-hydrates. Module-level (not a store field) so it survives the store's own
+// state resets.
+let remoteSignerInitializationPromise: Promise<void> | null = null;
+
 // Bounded retry for the replay-guard persistence so a transient native write
 // failure (e.g. momentary disk pressure) does not silently drop a processed id.
 const PROCESSED_PERSIST_MAX_ATTEMPTS = 3;
@@ -203,23 +213,38 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
 
     // ============ Initialization ============
     initialize: async () => {
-      try {
-        // Load app mode
-        const storedMode = await AsyncStorage.getItem(STORAGE_KEYS.APP_MODE);
-        const appMode: AppMode = storedMode === 'signer' ? 'signer' : 'wallet';
+      // Coalesce concurrent initialize() calls into a single hydration pass (see
+      // the remoteSignerInitializationPromise comment above). Share the in-flight
+      // promise instead of starting a second full read+set pass.
+      if (remoteSignerInitializationPromise) {
+        return remoteSignerInitializationPromise;
+      }
 
-        // Load signer config (if exists)
-        const storedConfig = await AsyncStorage.getItem(
-          STORAGE_KEYS.SIGNER_CONFIG
-        );
+      let resolveInitialization: () => void = () => {};
+      remoteSignerInitializationPromise = new Promise<void>((resolve) => {
+        resolveInitialization = resolve;
+      });
+
+      try {
+        // Batch the independent cold-boot reads (F-03). APP_MODE reuses the
+        // promise getAppModeEarly() already cached at startup — AppNavigator
+        // awaits it before this store can mount — instead of re-reading the same
+        // key. The remaining three keys are mutually independent, so they load
+        // concurrently rather than in a 4-deep serial await chain.
+        const [appMode, storedConfig, storedSigners, storedProcessed] =
+          await Promise.all([
+            getAppModeEarly(),
+            AsyncStorage.getItem(STORAGE_KEYS.SIGNER_CONFIG),
+            AsyncStorage.getItem(STORAGE_KEYS.PAIRED_SIGNERS),
+            AsyncStorage.getItem(STORAGE_KEYS.PROCESSED_REQUESTS),
+          ]);
+
+        // Parse signer config (if exists)
         const signerConfig: SignerDeviceConfig | null = storedConfig
           ? JSON.parse(storedConfig)
           : null;
 
-        // Load paired signers
-        const storedSigners = await AsyncStorage.getItem(
-          STORAGE_KEYS.PAIRED_SIGNERS
-        );
+        // Parse paired signers
         const pairedSigners = new Map<string, SignerDeviceInfo>(
           storedSigners ? JSON.parse(storedSigners) : []
         );
@@ -227,11 +252,10 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
         // Load processed requests (for replay prevention in signer mode). UNION
         // with any ids already in memory rather than replacing: a
         // markRequestProcessed that lands during this async hydration must not
-        // be dropped (which would let that id replay). Union keeps both the
+        // be dropped (which would let that id replay). Reading the in-memory set
+        // AFTER the awaits above (unchanged from the serial version) is what
+        // captures a mark that landed while we were loading. Union keeps both the
         // persisted history and any just-marked id.
-        const storedProcessed = await AsyncStorage.getItem(
-          STORAGE_KEYS.PROCESSED_REQUESTS
-        );
         const inMemoryIds = get().processedRequestIds;
         const processedRequestIds = new Set<string>([
           ...inMemoryIds,
@@ -262,6 +286,11 @@ export const useRemoteSignerStore = create<RemoteSignerState>()(
       } catch (error) {
         console.error('[RemoteSignerStore] Failed to initialize:', error);
         set({ isInitialized: true });
+      } finally {
+        // Reset the coalescer on settle so a later explicit initialize()
+        // re-hydrates, and resolve the shared promise for any coalesced caller.
+        remoteSignerInitializationPromise = null;
+        resolveInitialization();
       }
     },
 

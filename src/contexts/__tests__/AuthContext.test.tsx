@@ -204,6 +204,185 @@ describe('AuthContext — initial state', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// F-03 (TASK-177): the initial lock-state probes are now parallelized with
+// Promise.all inside checkInitialAuthState. These tests pin the two invariants
+// the parallelization MUST preserve:
+//   (1) REJECTION FAIL-CLOSED — if a lock-determining read (esp. hasPin)
+//       *rejects*, the app stays LOCKED, never in the `!hasPin` unlocked setup
+//       state. Promise.all propagates the rejection to the catch (leaving the
+//       locked default); this guards against a regression to Promise.allSettled,
+//       which would coerce a rejected hasPin to a falsy default and slip into
+//       unlocked setup state.
+//       SCOPE: this is the rejection path ONLY. Production hasPin() /
+//       getCurrentWallet() swallow their OWN storage errors and resolve falsy
+//       (false / null), so a storage *failure* is treated as "no PIN / no
+//       wallet" = unlocked setup state — a PRE-EXISTING fail-open left unchanged
+//       by this I/O-only diff (see the TASK-177 auth-semantics fork). These
+//       tests therefore assert the layer's rejection handling, not an
+//       end-to-end fail-closed guarantee.
+//   (2) PARITY — for every resolved-value input, the computed lock state is
+//       identical to the prior serial logic
+//       (`!wallet || wallet.accounts.length === 0 || !hasPin` ⇒ unlocked setup).
+// ---------------------------------------------------------------------------
+describe('AuthContext — F-03 parallelized probes (rejection fail-closed + parity)', () => {
+  it('stays LOCKED (fail-closed) when the hasPin read REJECTS — never slips into unlocked setup state', async () => {
+    // A wallet-with-accounts is present, so if hasPin were coerced to `false`
+    // (the Promise.allSettled failure mode this guards against) the app would
+    // WRONGLY enter the `!hasPin` unlocked setup branch. The read instead
+    // rejects, so it MUST remain locked.
+    mockWallet.mockResolvedValue(WALLET_WITH_ACCOUNTS);
+    mockHasPin.mockRejectedValue(new Error('keychain read failed'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    // Left at the LOCKED default; the unlocked setup state was never entered.
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+
+  it('stays LOCKED (fail-closed) when the wallet read REJECTS', async () => {
+    mockWallet.mockRejectedValue(new Error('wallet store unavailable'));
+    mockHasPin.mockResolvedValue(true);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+
+    errorSpy.mockRestore();
+  });
+
+  it('stays LOCKED (fail-closed) when the pin-timeout read REJECTS for a wallet-with-PIN', async () => {
+    mockWallet.mockResolvedValue(WALLET_WITH_ACCOUNTS);
+    mockHasPin.mockResolvedValue(true);
+    mockGetPinTimeout.mockRejectedValue(new Error('timeout read failed'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+
+    errorSpy.mockRestore();
+  });
+
+  it('computes LOCKED for a PIN/passphrase-protected wallet launch', async () => {
+    mockWallet.mockResolvedValue(WALLET_WITH_ACCOUNTS);
+    mockHasPin.mockResolvedValue(true);
+    mockGetPinTimeout.mockResolvedValue('never');
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.hasPin).toBe(true);
+    expect(result.current.authState.timeoutMinutes).toBe('never');
+  });
+
+  it('computes LOCKED on a biometric-invalidated launch (enrollment gone) — never unlocks, biometrics disabled', async () => {
+    // Wallet + PIN exist. Biometrics were enabled, but enrollment is now
+    // invalidated (isEnrolledAsync → false): the biometric probe outcome must
+    // NOT change the lock decision. Still LOCKED; biometricEnabled reported off.
+    mockWallet.mockResolvedValue(WALLET_WITH_ACCOUNTS);
+    mockHasPin.mockResolvedValue(true);
+    mockIsBiometricEnabled.mockResolvedValue(true);
+    // One-shot: this mount's single probe returns "not enrolled"; do NOT leak a
+    // persistent override into the biometric-unlock suite that follows.
+    (LocalAuthentication.isEnrolledAsync as jest.Mock).mockResolvedValueOnce(
+      false
+    );
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.biometricEnabled).toBe(false);
+  });
+
+  it('computes LOCKED even when the biometric availability probe THROWS (wallet+PIN)', async () => {
+    mockWallet.mockResolvedValue(WALLET_WITH_ACCOUNTS);
+    mockHasPin.mockResolvedValue(true);
+    // One-shot rejection (see above) so the throw does not bleed into later tests.
+    (LocalAuthentication.hasHardwareAsync as jest.Mock).mockRejectedValueOnce(
+      new Error('native biometric probe failed')
+    );
+
+    const { result } = await mountAuth();
+
+    // checkBiometricAvailability swallows the throw → unavailable; the lock
+    // decision is unaffected and stays LOCKED.
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.biometricEnabled).toBe(false);
+  });
+
+  // Parity table: the parallelized probe chain must compute the SAME lock state
+  // as the documented serial predicate for representative input combinations.
+  const parityCases: {
+    name: string;
+    wallet: unknown;
+    hasPin: boolean;
+    expectedLocked: boolean;
+  }[] = [
+    {
+      name: 'wallet-with-accounts + PIN',
+      wallet: WALLET_WITH_ACCOUNTS,
+      hasPin: true,
+      expectedLocked: true,
+    },
+    {
+      name: 'wallet-with-accounts + no PIN',
+      wallet: WALLET_WITH_ACCOUNTS,
+      hasPin: false,
+      expectedLocked: false,
+    },
+    {
+      name: 'no wallet + PIN',
+      wallet: null,
+      hasPin: true,
+      expectedLocked: false,
+    },
+    {
+      name: 'no wallet + no PIN',
+      wallet: null,
+      hasPin: false,
+      expectedLocked: false,
+    },
+    {
+      name: 'wallet with EMPTY accounts + PIN',
+      wallet: { accounts: [] },
+      hasPin: true,
+      expectedLocked: false,
+    },
+  ];
+
+  it.each(parityCases)(
+    'parity: $name ⇒ locked=$expectedLocked (matches serial logic)',
+    async ({ wallet, hasPin, expectedLocked }) => {
+      mockWallet.mockResolvedValue(wallet as never);
+      mockHasPin.mockResolvedValue(hasPin);
+
+      const { result } = await mountAuth();
+
+      // Recompute the expected lock state from the ORIGINAL serial predicate and
+      // assert both against the hand-authored expectation and the parallel result.
+      const w = wallet as { accounts?: unknown[] } | null;
+      const serialUnlockedSetup =
+        !w || (w.accounts?.length ?? 0) === 0 || !hasPin;
+      expect(serialUnlockedSetup).toBe(!expectedLocked);
+
+      expect(result.current.authState.isLocked).toBe(expectedLocked);
+      expect(result.current.authState.isAuthenticated).toBe(!expectedLocked);
+    }
+  );
+});
+
 describe('AuthContext — PIN unlock', () => {
   it('unlocks with a valid PIN and populates the session vault + lock signal', async () => {
     const { result } = await mountAuth();
