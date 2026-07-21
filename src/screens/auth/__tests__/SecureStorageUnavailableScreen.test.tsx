@@ -244,4 +244,44 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
 
     alertSpy.mockRestore();
   });
+
+  it('FIX 3(b): a HUNG wipe step times out — the reset never sticks on "Resetting…"', async () => {
+    jest.useFakeTimers();
+    const alertSpy = autoConfirmAlerts();
+    // clearAll never settles (wedged native keystore deletion). Bounded reset
+    // steps must time out so the flow proceeds instead of hanging forever.
+    mockClearAll.mockReturnValue(new Promise(() => {}));
+    const onRetry = jest.fn(async () => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { getByLabelText, getByPlaceholderText, queryByText } = render(
+      <SecureStorageUnavailableScreen onRetry={onRetry} />
+    );
+
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await act(async () => {
+      fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+      await Promise.resolve();
+    });
+
+    // Advance past the per-step timeout so the hung clearAll is abandoned and the
+    // flow continues to clearAllWallets + the recheck.
+    await act(async () => {
+      jest.advanceTimersByTime(8000);
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+    });
+
+    // The recheck ran (flow did NOT hang on clearAll) and, since onRetry didn't
+    // resolve the failure, the "didn't resolve" guidance is shown (not a stuck
+    // spinner).
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(queryByText(/resolve the problem/i)).not.toBeNull();
+
+    errorSpy.mockRestore();
+    alertSpy.mockRestore();
+    jest.useRealTimers();
+  });
 });

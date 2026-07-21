@@ -42,6 +42,34 @@ const showAlert = (
   }
 };
 
+// No-stuck bound for each reset step (TASK-213). A wedged native call — a hung
+// keystore deletion or a recheck that never settles — must not leave the button
+// pinned on "Resetting…" forever. On timeout the step is abandoned (best-effort)
+// so the flow proceeds to the recheck / the "reset didn't resolve it" guidance
+// instead of hanging. 8s comfortably exceeds any healthy local wipe.
+const RESET_STEP_TIMEOUT_MS = 8000;
+
+const withTimeout = <T,>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+
 interface SecureStorageUnavailableScreenProps {
   /**
    * Re-run the auth-init check. Wired to AuthContext.recheckAuthState so a
@@ -129,18 +157,30 @@ export default function SecureStorageUnavailableScreen({
       // Android it also clears the secure-store presence sentinel so hasPinStrict
       // reads genuine ABSENCE (not a fail-closed throw) afterward.
       try {
-        await AccountSecureStorage.clearAll();
+        await withTimeout(
+          AccountSecureStorage.clearAll(),
+          RESET_STEP_TIMEOUT_MS,
+          'clearAll'
+        );
       } catch (error) {
-        console.error('Reset: clearAll failed (continuing):', error);
+        console.error('Reset: clearAll failed/timed out (continuing):', error);
       }
       try {
-        await MultiAccountWalletService.clearAllWallets();
+        await withTimeout(
+          MultiAccountWalletService.clearAllWallets(),
+          RESET_STEP_TIMEOUT_MS,
+          'clearAllWallets'
+        );
       } catch (error) {
-        console.error('Reset: clearAllWallets failed (continuing):', error);
+        console.error(
+          'Reset: clearAllWallets failed/timed out (continuing):',
+          error
+        );
       }
       // Re-run the auth check: with local data wiped it resolves to genuine
       // absence ⇒ unlocked setup ⇒ Onboarding (restore-from-recovery-phrase).
-      await onRetry();
+      // Bounded too, so a recheck that never settles can't strand "Resetting…".
+      await withTimeout(onRetry(), RESET_STEP_TIMEOUT_MS, 'recheck');
     } catch (error) {
       // A throw here (or a recheck that re-lands on recovery without throwing)
       // leaves this screen mounted; resetAttempted stays true and the inline

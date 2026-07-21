@@ -631,6 +631,59 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     expect(result.current.authState.isAuthenticated).toBe(true);
   });
 
+  it('(m) a HUNG breadcrumb read does NOT stall boot — times out and fails CLOSED to recovery', async () => {
+    // No-stuck (Codex round-5 finding 2): isPinSetupPending is on the boot path in
+    // the key-bearing guard. A read that never settles must NOT leave boot awaiting
+    // forever (authChecked false behind the splash). withTimeout converts the hang
+    // into `false` ⇒ the guard falls through to RECOVERY (fail-closed), never a
+    // wrongful resume and never a stall.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(false);
+    mockHasKeyBearing.mockResolvedValue(true);
+    mockIsPinSetupPending.mockReturnValue(new Promise<boolean>(() => {})); // hangs
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const rendered = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {
+      for (let i = 0; i < 20; i += 1) {
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+      }
+    });
+
+    expect(rendered.result.current.authState.authChecked).toBe(true);
+    expect(rendered.result.current.authState.securityUnavailable).toBe(true);
+    expect(rendered.result.current.authState.pinSetupResume).toBe(false);
+    expect(rendered.result.current.authState.isAuthenticated).toBe(false);
+
+    errorSpy.mockRestore();
+  });
+
+  it('(n) a HUNG self-heal clear does NOT stall boot — the verdict still settles (LOCKED)', async () => {
+    // The readable-PIN self-heal clear is AWAITED (durable) but bounded, so a
+    // wedged removeItem cannot strand boot. It times out and the lock verdict
+    // still resolves.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(true);
+    mockHasKeyBearing.mockResolvedValue(false);
+    mockIsPinSetupPending.mockResolvedValue(true);
+    mockClearPinSetupPending.mockReturnValue(new Promise<void>(() => {})); // hangs
+
+    const rendered = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {
+      for (let i = 0; i < 20; i += 1) {
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+      }
+    });
+
+    expect(rendered.result.current.authState.authChecked).toBe(true);
+    expect(rendered.result.current.authState.isLocked).toBe(true);
+    expect(rendered.result.current.authState.securityUnavailable).toBe(false);
+  });
+
   it('never RETRIES a genuine absence — a false-resolving strict read reads exactly once', async () => {
     // Absence must NOT be retried (only failures are). One attempt, no backoff.
     mockHasWalletStrict.mockResolvedValue(false);

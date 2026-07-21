@@ -378,12 +378,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // keystore break to SecuritySetup (a lock-takeover fail-OPEN). This is the
       // "clear whenever the strict PIN read confirms a PIN exists" guarantee;
       // hasPinStrict is kept a pure read, so the clear lives here at the sole read
-      // site. Fire-and-forget: the breadcrumb is only ever read at the NEXT boot,
-      // and a killed clear is retried on the next readable-PIN boot; the primary
-      // durable clear is in setupPin. When hasPin is true the key-bearing guard
-      // below cannot fire, so this never races the breadcrumb READ.
+      // site. AWAITED (not fire-and-forget) so the breadcrumb is DURABLY gone
+      // before this boot's verdict — closing the window where a killed
+      // fire-and-forget clear could leave it for a later keystore-break boot. The
+      // primary clear is still in setupPin; this is the belt-and-suspenders that
+      // makes lingering impossible for realistic failure modes. Bounded by
+      // withTimeout so a wedged removeItem cannot stall boot, and its result is
+      // swallowed (best-effort) so it never perturbs the lock verdict. When hasPin
+      // is true the key-bearing guard below cannot fire, so this never races the
+      // breadcrumb READ.
       if (hasPin) {
-        void clearPinSetupPending();
+        await withTimeout(
+          clearPinSetupPending(),
+          STRICT_READ_TIMEOUT_MS,
+          'pin_setup_pending self-heal clear'
+        ).catch(() => {});
       }
 
       if (hasKeyBearingAccount && !hasPin) {
@@ -404,7 +413,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         //
         // isPinSetupPending fails CLOSED (a breadcrumb read error resolves absent),
         // so an unreadable breadcrumb takes the recovery path, never SecuritySetup.
-        const restoreInProgress = await isPinSetupPending();
+        // Bounded by withTimeout so a HUNG breadcrumb read (a promise that never
+        // settles) cannot strand boot here after the strict probes succeeded — a
+        // timeout resolves to `false` (fail CLOSED to recovery), never a hang and
+        // never a wrongful resume.
+        const restoreInProgress = await withTimeout(
+          isPinSetupPending(),
+          STRICT_READ_TIMEOUT_MS,
+          'pin_setup_pending read'
+        ).catch(() => false);
         if (restoreInProgress) {
           // Resume PIN setup. isLocked/isAuthenticated are set to the FAIL-CLOSED
           // pair (locked, not authenticated) as defense in depth: the navigator
