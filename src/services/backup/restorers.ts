@@ -90,8 +90,11 @@ export async function clearAllData(): Promise<void> {
     // Clear all accounts via AccountSecureStorage
     await AccountSecureStorage.clearAll();
 
-    // Clear wallet metadata
-    await storage.removeItem(STORAGE_KEYS.WALLET_KEY);
+    // Clear wallet metadata. TASK-212: funnel the wipe through the wallet
+    // service (instead of removing voi_wallet_metadata directly) so it bumps the
+    // reset epoch + serializes on the write chain — an in-flight getCurrentWallet
+    // read-repair write can no longer resurrect the wallet blob mid-restore.
+    await MultiAccountWalletService.clearAllWallets();
     await storage.removeItem(STORAGE_KEYS.ACCOUNT_LIST);
 
     // Clear settings

@@ -83,9 +83,42 @@ const getCurrentWalletParsesInFlight = new Map<
  */
 const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
 
+/**
+ * TASK-212 — write-vs-wipe serialization for the wallet-metadata blob.
+ *
+ * getCurrentWallet() performs read-repair WRITES (legacy-mnemonic strip,
+ * heal-on-read address repair) while processing a just-read blob. A concurrent
+ * reset/restore can wipe voi_wallet_metadata BETWEEN that read and the pending
+ * write; the in-flight write would then re-persist (resurrect) the stale
+ * metadata after the wipe. Two coordinated mechanisms close the race:
+ *
+ *   1. A reset EPOCH bumped synchronously by every wipe funneled through the
+ *      service (clearAllWallets — restore now routes through it too). A
+ *      read-repair write captures the epoch at read time and is SKIPPED if a
+ *      wipe bumped it in the meantime. It never applies to intentional writes
+ *      (createWallet / addAccount / persistRestoredWallet), which must persist.
+ *   2. A single write CHAIN that serializes every WALLET_KEY mutation (writes
+ *      AND wipes) so a write and a wipe can never interleave at the storage
+ *      layer — regardless of the storage adapter's ordering guarantees. If a
+ *      read-repair write did slip past the epoch check, the wipe enqueued after
+ *      it still runs last and wins.
+ */
+let walletResetEpoch = 0;
+let walletWriteChain: Promise<unknown> = Promise.resolve();
+
 export class MultiAccountWalletService {
   private static readonly STORAGE_PREFIX = 'voi_account_';
   private static readonly WALLET_KEY = 'voi_wallet_metadata';
+  // TASK-212: durable "wallet was intentionally wiped" tombstone. Persisted in
+  // general storage (survives app restart, unlike the in-memory reset epoch) and
+  // set by clearAllWallets in the same chain task that removes the primary blob.
+  // migrateLegacyValue refuses to resurrect a wallet from a surviving legacy
+  // secure-store copy while this is set (it BAILS when set, so it never itself
+  // clears it); a storeWallet primary write (createWallet / restore / any
+  // intentional write) clears it, marking the wiped state over. Closes the
+  // wipe→migration resurrection gap (incl. across a restart) without keeping the
+  // legacy delete on the write chain.
+  private static readonly WIPE_TOMBSTONE_KEY = 'voi_wallet_wiped';
 
   // Account Management Methods
   static async createStandardAccount(
@@ -242,6 +275,8 @@ export class MultiAccountWalletService {
       );
     }
 
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
 
     try {
@@ -304,10 +339,12 @@ export class MultiAccountWalletService {
           settings: this.getDefaultWalletSettings(),
         };
 
+        // Creation write (no prior wallet existed) — always persist, like
+        // createWallet; it establishes a fresh wallet and has nothing to resurrect.
         await this.storeWallet(newWallet);
       } else {
         wallet.accounts.push(accountMetadata);
-        await this.storeWallet(wallet);
+        await this.storeWallet(wallet, readEpoch);
       }
 
       return accountMetadata;
@@ -412,6 +449,8 @@ export class MultiAccountWalletService {
       });
     }
 
+    // TASK-212: guard the ledger-association write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     const derivedAccounts = await ledgerAlgorandService.deriveAccounts(
       startIndex,
@@ -437,7 +476,8 @@ export class MultiAccountWalletService {
         await this.ensureLedgerAssociation(
           wallet,
           existingAccount as LedgerAccountMetadata,
-          deviceInfo
+          deviceInfo,
+          readEpoch
         );
       }
 
@@ -466,6 +506,8 @@ export class MultiAccountWalletService {
       );
     }
 
+    // TASK-212: guard the ledger-association write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -486,7 +528,8 @@ export class MultiAccountWalletService {
     return this.ensureLedgerAssociation(
       wallet,
       account as LedgerAccountMetadata,
-      deviceInfo
+      deviceInfo,
+      readEpoch
     );
   }
 
@@ -675,6 +718,8 @@ export class MultiAccountWalletService {
     signerDeviceId: string,
     signerDeviceName?: string
   ): Promise<RemoteSignerAccountMetadata> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -723,14 +768,31 @@ export class MultiAccountWalletService {
     wallet.accounts[accountIndex] = remoteSignerAccount;
 
     // Store the updated wallet
-    await this.storeWallet(wallet);
+    await this.storeWallet(wallet, readEpoch);
 
     return remoteSignerAccount;
+  }
+
+  /**
+   * TASK-212: true if a wipe/reset advanced the reset epoch since `readEpoch` was
+   * captured. getCurrentWallet() returns null (fail-closed) rather than hand back
+   * a stale pre-wipe wallet — it feeds signing / key retrieval, so a read that a
+   * concurrent reset/restore raced must not be served (the caller re-reads to see
+   * the current state).
+   */
+  private static resetRacedRead(readEpoch: number): boolean {
+    return readEpoch !== walletResetEpoch;
   }
 
   // Wallet Management
   static async getCurrentWallet(): Promise<Wallet | null> {
     try {
+      // TASK-212: capture the reset epoch BEFORE the read. Any read-repair write
+      // this call performs (legacy strip / heal-on-read) is guarded on it and
+      // skipped if a wipe/reset bumps the epoch before the write lands, so a
+      // concurrent restore/reset can't be undone by an in-flight repair.
+      const readEpoch = walletResetEpoch;
+
       // (1) ALWAYS read the current stored raw string. This read is intentionally
       // NOT memoized: external wipes/rewrites that bypass this service (restore
       // clearAllData() removing voi_wallet_metadata directly, migrateLegacyValue
@@ -751,6 +813,7 @@ export class MultiAccountWalletService {
       // hashing + settings merge; hand back a deep clone so the caller can mutate
       // its copy freely.
       if (walletData === cachedWalletRawString && cachedWallet) {
+        if (this.resetRacedRead(readEpoch)) return null;
         return this.deepCloneWallet(cachedWallet);
       }
 
@@ -778,9 +841,11 @@ export class MultiAccountWalletService {
           this.stripAccountSecrets(acc)
         );
 
-        await this.storeWallet(parsed);
+        // Read-repair write: skipped if a wipe/reset raced this read (TASK-212).
+        await this.storeWallet(parsed, readEpoch);
 
-        const sanitized = await this.mergeSettingsAndHeal(parsed);
+        const sanitized = await this.mergeSettingsAndHeal(parsed, readEpoch);
+        if (this.resetRacedRead(readEpoch)) return null;
         return this.deepCloneWallet(sanitized);
       }
 
@@ -791,11 +856,12 @@ export class MultiAccountWalletService {
       const inFlight = getCurrentWalletParsesInFlight.get(walletData);
       if (inFlight) {
         const shared = await inFlight;
+        if (this.resetRacedRead(readEpoch)) return null;
         return shared ? this.deepCloneWallet(shared) : null;
       }
 
       const loadPromise = (async () => {
-        const wallet = await this.mergeSettingsAndHeal(parsed);
+        const wallet = await this.mergeSettingsAndHeal(parsed, readEpoch);
         // Fail-closed: only memoize a wallet whose accounts hold NO secret
         // material, keyed on a secret-free raw string. hasSecretMaterial already
         // guaranteed this above; re-checking the healed result keeps the
@@ -803,7 +869,13 @@ export class MultiAccountWalletService {
         // key material. (If heal-on-read re-stored a repaired address the stored
         // string also changed, so this entry is simply superseded on the next
         // read — never served stale, since every read compares the live string.)
+        //
+        // TASK-212: also require the reset epoch to be unchanged. A wipe/reset
+        // that raced this in-flight load synchronously busts the memo; without
+        // this guard, resuming here would re-populate cachedWallet with the
+        // now-wiped blob (transient stale state until the next read).
         if (
+          readEpoch === walletResetEpoch &&
           !wallet.accounts.some((acc) => this.accountHasSecretMaterial(acc))
         ) {
           cachedWalletRawString = walletData;
@@ -814,6 +886,7 @@ export class MultiAccountWalletService {
       getCurrentWalletParsesInFlight.set(walletData, loadPromise);
       try {
         const wallet = await loadPromise;
+        if (this.resetRacedRead(readEpoch)) return null;
         return this.deepCloneWallet(wallet);
       } finally {
         getCurrentWalletParsesInFlight.delete(walletData);
@@ -832,7 +905,10 @@ export class MultiAccountWalletService {
    * mnemonic-bearing blob (handled inline in getCurrentWallet before it is
    * stripped) can never be routed through the memo.
    */
-  private static async mergeSettingsAndHeal(wallet: Wallet): Promise<Wallet> {
+  private static async mergeSettingsAndHeal(
+    wallet: Wallet,
+    readEpoch: number
+  ): Promise<Wallet> {
     const defaultSettings = this.getDefaultWalletSettings();
     const persistedSettings = wallet.settings ?? {};
     wallet.settings = {
@@ -876,7 +952,8 @@ export class MultiAccountWalletService {
     });
 
     if (modified) {
-      await this.storeWallet(wallet);
+      // Read-repair write: skipped if a wipe/reset raced this read (TASK-212).
+      await this.storeWallet(wallet, readEpoch);
     }
 
     return wallet;
@@ -952,6 +1029,8 @@ export class MultiAccountWalletService {
   }
 
   static async getAccount(accountId: string): Promise<AccountMetadata> {
+    // TASK-212: guard the ledger-association write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -971,7 +1050,8 @@ export class MultiAccountWalletService {
         return await this.ensureLedgerAssociation(
           wallet,
           account as LedgerAccountMetadata,
-          connectedDevice
+          connectedDevice,
+          readEpoch
         );
       }
     }
@@ -990,6 +1070,8 @@ export class MultiAccountWalletService {
   static async updateAccountMetadata(
     updatedAccount: AccountMetadata
   ): Promise<void> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -1006,16 +1088,21 @@ export class MultiAccountWalletService {
       acc.id === updatedAccount.id ? updatedAccount : acc
     );
 
-    await this.storeWallet({
-      ...wallet,
-      accounts,
-    });
+    await this.storeWallet(
+      {
+        ...wallet,
+        accounts,
+      },
+      readEpoch
+    );
   }
 
   static async updateAccountLabel(
     accountId: string,
     label: string
   ): Promise<AccountMetadata> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -1039,15 +1126,20 @@ export class MultiAccountWalletService {
       acc.id === accountId ? updatedAccount : acc
     );
 
-    await this.storeWallet({
-      ...wallet,
-      accounts,
-    });
+    await this.storeWallet(
+      {
+        ...wallet,
+        accounts,
+      },
+      readEpoch
+    );
 
     return updatedAccount;
   }
 
   static async setActiveAccount(accountId: string): Promise<void> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -1059,7 +1151,7 @@ export class MultiAccountWalletService {
     }
 
     wallet.activeAccountId = accountId;
-    await this.storeWallet(wallet);
+    await this.storeWallet(wallet, readEpoch);
   }
 
   static async getPrivateKey(accountId: string): Promise<Uint8Array> {
@@ -1067,6 +1159,8 @@ export class MultiAccountWalletService {
   }
 
   static async deleteAccount(accountId: string): Promise<void> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       throw new Error('No wallet found');
@@ -1083,20 +1177,60 @@ export class MultiAccountWalletService {
       wallet.activeAccountId = wallet.accounts[0].id;
     }
 
-    await this.storeWallet(wallet);
+    await this.storeWallet(wallet, readEpoch);
   }
 
   static async clearAllWallets(): Promise<void> {
+    // TASK-212: this is the canonical wallet-metadata wipe — restore
+    // (backup/restorers.ts clearAllData) and LockScreen.performReset() both
+    // funnel through it. Bump the reset epoch and bust the memo SYNCHRONOUSLY,
+    // before any await, so an in-flight read-repair write that captured an older
+    // epoch is skipped and no cached clone survives the reset.
+    walletResetEpoch++;
+    const bumpedEpoch = walletResetEpoch;
+    cachedWalletRawString = null;
+    cachedWallet = null;
     try {
       // Clears wallet METADATA only (the account list / active-account record).
       // Private keys in secure storage are NOT touched here; callers that need a
       // full reset must also call AccountSecureStorage.clearAll() — as
       // LockScreen.performReset() does immediately before invoking this method.
-      await storage.removeItem(this.WALLET_KEY);
-      await this.clearLegacyValue(this.WALLET_KEY);
+      //
+      // Serialize ONLY the primary removeItem + tombstone-set on the chain, so a
+      // hanging legacy secure-store deletion can never block it (or a subsequent
+      // write/wipe). The durable tombstone (survives restart) is what guarantees a
+      // surviving legacy copy can't be re-migrated to resurrect this wallet — so
+      // the legacy delete itself is best-effort below.
+      //
+      // Set the tombstone FIRST, then remove the primary: if the app dies or the
+      // removeItem fails in between, we are left tombstone-set (migration blocked)
+      // + primary-present (still readable) — never primary-gone-without-tombstone,
+      // which would let a surviving legacy copy resurrect on next launch. A stale
+      // tombstone with the primary present is harmless (migration only fires when
+      // the primary is absent) and the next primary write clears it.
+      await this.enqueueWalletWrite(async () => {
+        await storage.setItem(this.WIPE_TOMBSTONE_KEY, '1');
+        await storage.removeItem(this.WALLET_KEY);
+      });
+      // Best-effort legacy secure-store cleanup, OUTSIDE the chain and
+      // fire-and-forget (the tombstone, not this delete, prevents resurrection),
+      // so a stalled/failing keychain op can neither block the chain nor fail the
+      // reset. For migrated installs the legacy key is already absent (no-op).
+      void this.clearLegacyValue(this.WALLET_KEY);
 
       console.log('All wallet metadata cleared');
     } catch (error) {
+      // The primary removal failed — the wallet was NOT wiped. Revert the
+      // optimistic epoch bump (unless another wipe has since advanced it) so
+      // future intentional writes aren't wrongly skipped as if a reset landed.
+      // (Best-effort: the revert can't un-skip a guarded task that already ran in
+      // the failure window, and if setItem(tombstone) succeeded before removeItem
+      // threw, the tombstone lingers beside the still-present primary — both are
+      // self-healing: readers prefer a present primary, and the next successful
+      // primary write clears the stale tombstone. Not a resurrection.)
+      if (walletResetEpoch === bumpedEpoch) {
+        walletResetEpoch = bumpedEpoch - 1;
+      }
       console.error('Failed to clear wallet data:', error);
       throw new Error(
         `Failed to clear wallet data: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -1464,7 +1598,10 @@ export class MultiAccountWalletService {
   private static async ensureLedgerAssociation(
     wallet: Wallet,
     account: LedgerAccountMetadata,
-    deviceInfo: LedgerDeviceInfo
+    deviceInfo: LedgerDeviceInfo,
+    // TASK-212: epoch captured by the caller before it read `wallet`, so this
+    // metadata-timestamp write is skipped if a reset raced that read.
+    readEpoch: number
   ): Promise<LedgerAccountMetadata> {
     const accountIndex = wallet.accounts.findIndex(
       (acc) => acc.id === account.id
@@ -1499,10 +1636,13 @@ export class MultiAccountWalletService {
     const accounts = [...wallet.accounts];
     accounts[accountIndex] = nextAccount;
 
-    await this.storeWallet({
-      ...wallet,
-      accounts,
-    });
+    await this.storeWallet(
+      {
+        ...wallet,
+        accounts,
+      },
+      readEpoch
+    );
 
     return nextAccount;
   }
@@ -1510,6 +1650,8 @@ export class MultiAccountWalletService {
   private static async addAccountToWallet(
     accountMetadata: AccountMetadata
   ): Promise<void> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       // If no wallet exists, create one with this account
@@ -1526,7 +1668,7 @@ export class MultiAccountWalletService {
       }
     } else {
       wallet.accounts.push(accountMetadata);
-      await this.storeWallet(wallet);
+      await this.storeWallet(wallet, readEpoch);
     }
   }
 
@@ -1546,9 +1688,85 @@ export class MultiAccountWalletService {
     return wallet;
   }
 
-  private static async storeWallet(wallet: Wallet): Promise<void> {
-    const persistencePayload = this.sanitizeWalletForPersistence(wallet);
-    await this.storeValue(this.WALLET_KEY, JSON.stringify(persistencePayload));
+  /**
+   * TASK-212 — serialize a WALLET_KEY mutation on the shared write chain so
+   * writes and wipes never interleave at the storage layer. Each task runs after
+   * the previous settles (success OR failure); a task's rejection is isolated so
+   * it can't poison later writes, but is still surfaced to THIS caller.
+   */
+  private static enqueueWalletWrite<T>(task: () => Promise<T>): Promise<T> {
+    const run = walletWriteChain.then(task, task);
+    walletWriteChain = run.catch(() => {});
+    return run;
+  }
+
+  /**
+   * Persist the wallet metadata, serialized on the write chain.
+   *
+   * TASK-212 — pass `readEpoch` for any write DERIVED FROM A PRIOR getCurrentWallet
+   * READ (the read-repair writes AND every intentional read-modify-write mutation:
+   * addAccount, deleteAccount, setActiveAccount, label/metadata updates, ledger
+   * association, standard→remote-signer conversion, …). The write is then SKIPPED
+   * if a wipe/reset advanced the reset epoch since that read, so a concurrent
+   * restore/reset can't be undone by re-persisting the pre-reset blob (which would
+   * recreate account records whose secure keys were already wiped). The epoch is
+   * re-checked INSIDE the serialized task (after any earlier-enqueued wipe), and
+   * the write chain still guarantees a wipe enqueued afterward wins even if the
+   * check narrowly passes. CREATION writes (createWallet / createWalletWithAccount
+   * / persistRestoredWallet) pass no epoch and always persist.
+   */
+  private static async storeWallet(
+    wallet: Wallet,
+    readEpoch?: number
+  ): Promise<void> {
+    // Sanitize + serialize a SNAPSHOT now (synchronously), before enqueuing, so a
+    // later in-place mutation of `wallet` by the caller can't alter what is
+    // persisted once this task reaches the front of the chain.
+    const serialized = JSON.stringify(
+      this.sanitizeWalletForPersistence(wallet)
+    );
+    const wrote = await this.enqueueWalletWrite(async () => {
+      if (readEpoch !== undefined) {
+        // Guarded write (read-repair OR intentional read-modify-write): skip if a
+        // wipe advanced the epoch since the read this write derives from...
+        if (readEpoch !== walletResetEpoch) {
+          return false;
+        }
+        // ...OR if a wipe has COMPLETED (tombstone set AND primary now absent)
+        // since. A reset started in the epoch-bump→removeItem gap leaves the epoch
+        // matching but the wipe task's tombstone set before this write runs, so
+        // the tombstone is the backstop against a stale mutation resurrecting the
+        // just-wiped wallet. Require the primary to actually be ABSENT: a stuck
+        // tombstone left beside a still-present primary (a failed removeItem/
+        // tombstone-clear, or a crash mid-write) must NOT silently disable
+        // mutations — such a write is not a resurrection and proceeds below,
+        // clearing the stale marker. (Creation writes pass no epoch.)
+        const wiped = await storage.getItem(this.WIPE_TOMBSTONE_KEY);
+        if (wiped != null) {
+          const current = await storage.getItem(this.WALLET_KEY);
+          if (current == null) {
+            return false;
+          }
+        }
+      }
+      // TASK-212: only the PRIMARY (AsyncStorage) write is serialized on the
+      // chain, so a hanging legacy secure-store op can never block a subsequent
+      // write or wipe.
+      await storage.setItem(this.WALLET_KEY, serialized);
+      // A primary blob now exists — the wiped state (if any) is over. Clear the
+      // durable tombstone atomically with the write so migrateLegacyValue is
+      // re-enabled and no stale "wiped" marker lingers past a create/restore.
+      await storage.removeItem(this.WIPE_TOMBSTONE_KEY);
+      return true;
+    });
+    // Best-effort legacy secure-store cleanup, OUTSIDE the chain and
+    // fire-and-forget so a stalled keychain op can't hold up this write (or the
+    // chain). Harmless if it lingers: the primary copy is authoritative and
+    // getStoredValue prefers it (migrateLegacyValue only runs when primary is
+    // absent).
+    if (wrote) {
+      void this.clearLegacyValue(this.WALLET_KEY);
+    }
   }
 
   /**
@@ -1691,60 +1909,118 @@ export class MultiAccountWalletService {
     if (value) {
       return value;
     }
+    // TASK-212: for the wallet blob, honor the durable wipe tombstone BEFORE the
+    // legacy fallback — a wiped wallet whose best-effort legacy delete failed must
+    // read as ABSENT here too, so the strict boot probes never treat a surviving
+    // legacy secure-store copy as a present wallet.
+    if (key === this.WALLET_KEY) {
+      const wiped = await storage.getItem(this.WIPE_TOMBSTONE_KEY);
+      if (wiped != null) {
+        return null;
+      }
+    }
     const legacy = await secureStorage.getItem(key);
     return legacy ?? null;
   }
 
-  private static async storeValue(key: string, value: string): Promise<void> {
-    try {
-      await storage.setItem(key, value);
-      await this.clearLegacyValue(key);
-    } catch (error) {
-      console.error(`Failed to store value for key ${key}:`, error);
-      throw error;
-    }
-  }
-
+  /**
+   * Strip key material from every account before persistence. TASK-212: this is
+   * now type-AGNOSTIC — it removes ALL SECRET_ACCOUNT_FIELDS (mnemonic +
+   * privateKey) from every account regardless of `type`, matching the
+   * type-agnostic read-path detector/scrubber (accountHasSecretMaterial /
+   * stripAccountSecrets, F-22/TASK-179). A corrupt/mistyped account carrying key
+   * material on a non-STANDARD type is now scrubbed on the write path too, not
+   * just the read path. STANDARD accounts keep the persisted-schema shape (an
+   * explicit empty `mnemonic`).
+   */
   private static sanitizeWalletForPersistence(wallet: Wallet): Wallet {
     return {
       ...wallet,
       accounts: wallet.accounts.map((account) => {
-        if (account.type === AccountType.STANDARD) {
-          const { mnemonic: _mnemonic, ...rest } =
-            account as StandardAccountMetadata;
-          return {
-            ...rest,
-            mnemonic: '',
-          } as StandardAccountMetadata;
+        const record: Record<string, unknown> = {
+          ...(account as unknown as Record<string, unknown>),
+        };
+        for (const field of SECRET_ACCOUNT_FIELDS) {
+          delete record[field];
         }
-        return { ...account } as AccountMetadata;
+        if (record.type === AccountType.STANDARD) {
+          record.mnemonic = '';
+        }
+        return record as unknown as AccountMetadata;
       }),
     };
   }
 
   private static async migrateLegacyValue(key: string): Promise<string | null> {
     try {
+      // TASK-212: capture the reset epoch for the WALLET_KEY migration BEFORE
+      // reading the legacy blob, so a concurrent wipe isn't undone by
+      // re-persisting the migrated blob (this is a third read-path write to
+      // WALLET_KEY, alongside heal-on-read and legacy-strip).
+      const migrationEpoch = walletResetEpoch;
+
       // Try to get from secure storage (legacy location)
       const legacyValue = await secureStorage.getItem(key);
       if (!legacyValue) {
         return null;
       }
 
-      let valueToPersist = legacyValue;
       if (key === this.WALLET_KEY) {
+        // Fail CLOSED: sanitize the legacy wallet blob BEFORE it can reach general
+        // storage. A corrupt/unparseable blob may still carry plaintext key
+        // material, so on any parse/sanitize failure we must NOT copy the raw
+        // payload into AsyncStorage — leave the legacy copy and report absence.
+        let sanitized: string;
         try {
           const legacyWallet = JSON.parse(legacyValue) as Wallet;
-          valueToPersist = JSON.stringify(
+          sanitized = JSON.stringify(
             this.sanitizeWalletForPersistence(legacyWallet)
           );
         } catch (error) {
-          console.warn('Failed to sanitize legacy wallet payload', error);
+          console.warn(
+            'Failed to sanitize legacy wallet payload; not migrating',
+            error
+          );
+          return null;
         }
+
+        // Serialize + epoch-guard the WALLET_KEY migration on the write chain.
+        const migrated = await this.enqueueWalletWrite(async () => {
+          if (migrationEpoch !== walletResetEpoch) {
+            // A wipe/reset raced this migration — do NOT resurrect the blob.
+            return false;
+          }
+          // TASK-212: re-check primary ABSENCE inside the serialized task. A
+          // concurrent createWallet/restore may have written a fresh primary blob
+          // while we awaited the legacy value; migrating the stale legacy blob
+          // would clobber it (a reset epoch doesn't change in this race). Because
+          // that write is also serialized on this chain, this read is atomic wrt
+          // it.
+          const current = await storage.getItem(key);
+          if (current != null) {
+            return false;
+          }
+          // TASK-212: honor the durable wipe tombstone. If the wallet was
+          // intentionally wiped and not since re-created, a surviving legacy copy
+          // must NOT resurrect it — this holds even across an app restart (when
+          // the in-memory reset epoch has reset to 0). Any create/restore clears
+          // the tombstone, at which point a primary exists and migration no
+          // longer fires.
+          const wiped = await storage.getItem(this.WIPE_TOMBSTONE_KEY);
+          if (wiped != null) {
+            return false;
+          }
+          await storage.setItem(key, sanitized);
+          return true;
+        });
+        // Drop the legacy copy either way; the wipe path also clears it.
+        await secureStorage.deleteItem(key).catch(() => {});
+        return migrated ? sanitized : null;
       }
 
-      await storage.setItem(key, valueToPersist);
+      await storage.setItem(key, legacyValue);
       await secureStorage.deleteItem(key).catch(() => {});
-      return valueToPersist;
+      return legacyValue;
     } catch (error) {
       console.error(`Failed to migrate legacy value for key ${key}:`, error);
       return null;
