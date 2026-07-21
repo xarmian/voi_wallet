@@ -13,6 +13,18 @@ jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn(async () => {}),
 }));
 
+// The adapter now imports AsyncStorage (TASK-213 Android presence sentinel); its
+// native module is null under jest, so provide an in-memory mock. This test runs
+// the non-sentinel write paths, but the top-level import must still resolve.
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  __esModule: true,
+  default: {
+    getItem: jest.fn(async () => null),
+    setItem: jest.fn(async () => {}),
+    removeItem: jest.fn(async () => {}),
+  },
+}));
+
 import * as SecureStore from 'expo-secure-store';
 import { MobileSecureStorageAdapter } from '../mobile/secureStorage';
 

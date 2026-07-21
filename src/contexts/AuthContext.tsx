@@ -97,9 +97,50 @@ const BACKGROUND_GRACE_PERIOD = 60 * 1000; // 60 seconds
 const STRICT_READ_MAX_ATTEMPTS = 3;
 const STRICT_READ_BACKOFF_MS = 200;
 
+// TASK-213 (no-stuck): per-read timeout so a HUNG storage read (a promise that
+// never resolves OR rejects — e.g. a wedged native bridge) cannot strand the
+// boot. Without it, an awaited read that never settles means checkInitialAuthState
+// never reaches a terminal setAuthState, authChecked stays false forever, the
+// navigator renders null under the splash, and the 10s splash watchdog only
+// force-HIDES the splash to reveal a blank screen with no recovery UI. Wrapping
+// each read in a timeout converts a hang into a REJECTION, which the strict-read
+// retry loop already handles: it retries, then fails CLOSED to the recovery
+// screen (which now offers Retry AND a reset escape hatch). The bound is chosen
+// so even the worst case — the non-critical reads hang, then all 3 strict
+// attempts hang (2000 + 2000+200 + 2000+400 + 2000 = 8600 ms) — still settles
+// UNDER the 10s splash watchdog, so recovery paints before the splash is torn
+// down onto a blank frame.
+const STRICT_READ_TIMEOUT_MS = 2000;
+
 // Web-safe delay. Used only for the bounded strict-read backoff above.
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+// Reject if `promise` has not settled within `ms`. On timeout the underlying
+// read is abandoned (its eventual settlement is ignored) and a labelled Error is
+// thrown so the caller can retry / fail closed. The timer is always cleared so no
+// stray handle survives once the promise settles first.
+const withTimeout = <T,>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> => {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authState, setAuthState] = useState<AuthState>({
@@ -211,11 +252,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       let biometricAvailable = false;
       let timeoutMinutes: number | 'never' = 5;
       try {
-        const [biometric, isBiometricEnabled, pinTimeout] = await Promise.all([
-          checkBiometricAvailability(),
-          AccountSecureStorage.isBiometricEnabled(),
-          AccountSecureStorage.getPinTimeout(),
-        ]);
+        // Wrapped in a timeout (no-stuck): these non-critical reads are NEWLY on
+        // the app-render-gating path, so a hang here would stall boot just like a
+        // strict-read hang. On timeout the catch below falls back to safe display
+        // defaults — it NEVER drives the lock decision.
+        const [biometric, isBiometricEnabled, pinTimeout] = await withTimeout(
+          Promise.all([
+            checkBiometricAvailability(),
+            AccountSecureStorage.isBiometricEnabled(),
+            AccountSecureStorage.getPinTimeout(),
+          ]),
+          STRICT_READ_TIMEOUT_MS,
+          'Non-critical auth-init reads'
+        );
         biometricAvailable = biometric.hasHardware && biometric.isEnrolled;
         biometricEnabled = isBiometricEnabled;
         timeoutMinutes = pinTimeout;
@@ -241,15 +290,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // pair so the loop can RETRY it. A retry happens ONLY on a read FAILURE —
       // a genuine ABSENCE resolves `false` and is never retried. The short
       // backoff tolerates transient cold-boot keychain/keystore unavailability.
-      let lockState: { hasWallet: boolean; hasPin: boolean } | null = null;
+      let lockState: {
+        hasWallet: boolean;
+        hasPin: boolean;
+        hasKeyBearingAccount: boolean;
+      } | null = null;
       let lastError: unknown;
       for (let attempt = 1; attempt <= STRICT_READ_MAX_ATTEMPTS; attempt += 1) {
         try {
-          const [hasWallet, hasPin] = await Promise.all([
-            MultiAccountWalletService.hasWalletWithAccountsStrict(),
-            AccountSecureStorage.hasPinStrict(),
-          ]);
-          lockState = { hasWallet, hasPin };
+          // Timeout-wrapped (no-stuck): a strict read that HANGS (never settles)
+          // is converted into a rejection so this loop retries and, if it never
+          // recovers, fails CLOSED to the recovery screen — instead of leaving
+          // authChecked false forever behind the splash.
+          //
+          // hasKeyBearingAccount is read from the SAME strict pass so the
+          // Android-swallow-to-null guard below (Codex round-4) can act on the
+          // durable, keystore-independent signal it needs.
+          const [hasWallet, hasPin, hasKeyBearingAccount] = await withTimeout(
+            Promise.all([
+              MultiAccountWalletService.hasWalletWithAccountsStrict(),
+              AccountSecureStorage.hasPinStrict(),
+              MultiAccountWalletService.hasKeyBearingAccountStrict(),
+            ]),
+            STRICT_READ_TIMEOUT_MS,
+            'Strict lock-determining auth reads'
+          );
+          lockState = { hasWallet, hasPin, hasKeyBearingAccount };
           break;
         } catch (error) {
           lastError = error;
@@ -282,7 +348,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const { hasWallet, hasPin } = lockState;
+      const { hasWallet, hasPin, hasKeyBearingAccount } = lockState;
+
+      if (hasKeyBearingAccount && !hasPin) {
+        // FAIL CLOSED (TASK-213 Codex round-4): a locally-key-bearing (STANDARD)
+        // account CANNOT exist without a PIN — setupPin always precedes the key
+        // import and the key is wrapped under the secret. So "key-bearing account
+        // present, PIN absent" is an IMPOSSIBLE genuine state: the PIN read was an
+        // Android swallow-to-null failure that the per-key presence sentinel could
+        // not catch (a pre-sentinel install whose keystore broke on its first boot
+        // after upgrade). Falling into the `!hasPin` setup branch here would be the
+        // exact fail-OPEN this task closes (offering to set a NEW PIN over a real
+        // wallet — a lock-takeover). Enter recovery instead. The wallet-metadata
+        // signal is read from plaintext AsyncStorage, unaffected by keystore desync.
+        console.error(
+          'Key-bearing account present but PIN read resolved absent — treating as a ' +
+            'secure-storage read failure and failing closed to recovery.'
+        );
+        setAuthState((prev) => ({
+          ...prev,
+          isLocked: true,
+          isAuthenticated: false,
+          securityUnavailable: true,
+          authChecked: true,
+          biometricEnabled: false,
+          backgroundedAt: null,
+        }));
+        return;
+      }
 
       if (!hasWallet || !hasPin) {
         // Genuine ABSENCE of a wallet or PIN — allow access for setup (UNCHANGED

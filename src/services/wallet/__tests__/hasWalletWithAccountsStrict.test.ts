@@ -127,3 +127,61 @@ describe('hasWalletWithAccountsStrict — absence vs failure (TASK-213)', () => 
     expect(mockStorageSet).not.toHaveBeenCalled();
   });
 });
+
+// TASK-213 Codex round-4: hasKeyBearingAccountStrict is the durable, keystore-
+// independent corroborating signal that closes the residual Android swallow-to-
+// null fail-open. It answers "does a persisted wallet hold ≥1 locally-key-bearing
+// (STANDARD) account?" — a state that is IMPOSSIBLE without a configured PIN.
+describe('hasKeyBearingAccountStrict — STANDARD-account signal (TASK-213)', () => {
+  it('resolves FALSE for genuine absence (no wallet blob)', async () => {
+    await expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict()
+    ).resolves.toBe(false);
+  });
+
+  it('resolves TRUE when a STANDARD (locally-key-bearing) account is present', async () => {
+    mockStore[WALLET_KEY] = JSON.stringify({
+      accounts: [{ id: 'a', type: 'standard' }],
+    });
+    await expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict()
+    ).resolves.toBe(true);
+  });
+
+  it('resolves FALSE for a watch-only / ledger / remote-signer wallet (no local key ⇒ PIN-less is legit)', async () => {
+    mockStore[WALLET_KEY] = JSON.stringify({
+      accounts: [
+        { id: 'w', type: 'watch' },
+        { id: 'l', type: 'ledger' },
+        { id: 'r', type: 'remote_signer' },
+      ],
+    });
+    await expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict()
+    ).resolves.toBe(false);
+  });
+
+  it('THROWS (fails closed) when the storage read FAILS — a read failure, not absence', async () => {
+    mockStorageGet.mockImplementationOnce(async () => {
+      throw new Error('AsyncStorage unavailable');
+    });
+    await expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict()
+    ).rejects.toThrow('AsyncStorage unavailable');
+  });
+
+  it('resolves FALSE (never a false positive) on an unparseable blob — corruption is owned by hasWalletWithAccountsStrict', async () => {
+    mockStore[WALLET_KEY] = '{not-valid-json';
+    await expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict()
+    ).resolves.toBe(false);
+  });
+
+  it('is a PURE read — never writes', async () => {
+    mockStore[WALLET_KEY] = JSON.stringify({
+      accounts: [{ id: 'a', type: 'standard' }],
+    });
+    await MultiAccountWalletService.hasKeyBearingAccountStrict();
+    expect(mockStorageSet).not.toHaveBeenCalled();
+  });
+});

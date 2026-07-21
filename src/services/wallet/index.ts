@@ -1639,6 +1639,45 @@ export class MultiAccountWalletService {
   }
 
   /**
+   * STRICT, boot-only probe: does a persisted wallet hold ≥1 locally-KEY-BEARING
+   * (STANDARD) account? (TASK-213 Codex round-4). A STANDARD account stores its
+   * private key encrypted under the user secret, and setupPin ALWAYS precedes the
+   * key import (SecuritySetupScreen), so a STANDARD account can NEVER exist
+   * without a PIN having been configured. WATCH / LEDGER / REMOTE_SIGNER accounts
+   * hold no local PIN-wrapped key, so a PIN-less wallet of only those is legit.
+   *
+   * The auth-init path uses this as a corroborating durable signal (wallet
+   * metadata lives in plaintext AsyncStorage, UNAFFECTED by an Android keystore
+   * desync) to close the residual Android fail-OPEN the per-key presence sentinel
+   * cannot cover: a PRE-sentinel install whose keystore breaks on its very first
+   * boot after upgrade has no sentinel yet, so a swallowed-to-null PIN read looks
+   * like genuine absence — but if a STANDARD account exists, that "absence" is
+   * impossible and must be a read FAILURE ⇒ fail CLOSED.
+   *
+   * PROPAGATES a storage READ failure (fail closed, same as the sibling strict
+   * reads); resolves `false` for genuine absence or a structurally-unusable blob
+   * (whose corruption is already surfaced by hasWalletWithAccountsStrict). It only
+   * ever answers a POSITIVE "a key-bearing account exists", never weakens a verdict.
+   */
+  static async hasKeyBearingAccountStrict(): Promise<boolean> {
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (!walletData) {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(walletData) as Wallet;
+      if (!Array.isArray(parsed.accounts)) {
+        return false;
+      }
+      return parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD);
+    } catch {
+      // A corrupt blob is handled (thrown) by hasWalletWithAccountsStrict; here we
+      // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
+      return false;
+    }
+  }
+
+  /**
    * Strict sibling of getStoredValue (TASK-213): reads the primary then the
    * legacy secure-store location but PROPAGATES storage read errors instead of
    * collapsing them to null. Resolves `null` ONLY for genuine absence (both

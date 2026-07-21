@@ -36,6 +36,9 @@ jest.mock('@/services/wallet', () => ({
     // TASK-213: the STRICT, boot-only wallet-presence probe the auth-init path
     // now uses (throws on read FAILURE, resolves false only on genuine absence).
     hasWalletWithAccountsStrict: jest.fn(),
+    // TASK-213 Codex round-4: does a persisted wallet hold ≥1 locally-key-bearing
+    // (STANDARD) account? Used to close the Android swallow-to-null fail-open.
+    hasKeyBearingAccountStrict: jest.fn(),
   },
 }));
 
@@ -96,6 +99,8 @@ const mockWallet = MultiAccountWalletService.getCurrentWallet as jest.Mock;
 // STRICT boot probes (TASK-213) — these are what checkInitialAuthState reads now.
 const mockHasWalletStrict =
   MultiAccountWalletService.hasWalletWithAccountsStrict as jest.Mock;
+const mockHasKeyBearing =
+  MultiAccountWalletService.hasKeyBearingAccountStrict as jest.Mock;
 const mockHasPinStrict = AccountSecureStorage.hasPinStrict as jest.Mock;
 const mockHasPin = AccountSecureStorage.hasPin as jest.Mock;
 const mockIsBiometricEnabled =
@@ -193,6 +198,11 @@ beforeEach(() => {
   // mocked for any incidental callers but no longer gate the initial lock state.
   mockHasWalletStrict.mockResolvedValue(true);
   mockHasPinStrict.mockResolvedValue(true);
+  // Default to NO key-bearing account so the Codex round-4 guard
+  // (hasKeyBearingAccount && !hasPin ⇒ recovery) never fires unless a test opts
+  // in — the guard only matters for the wallet+no-PIN cases, which the existing
+  // suite treats as legit watch-only/absence states.
+  mockHasKeyBearing.mockResolvedValue(false);
   mockWallet.mockResolvedValue(WALLET_WITH_ACCOUNTS);
   mockHasPin.mockResolvedValue(true);
   mockIsBiometricEnabled.mockResolvedValue(true);
@@ -400,6 +410,108 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     expect(result.current.authState.hasWallet).toBe(true);
 
     errorSpy.mockRestore();
+  });
+
+  it('(g) a HUNG strict read (never settles) TIMES OUT, retries, and fails CLOSED to recovery — never stuck behind the splash', async () => {
+    // No-stuck regression (TASK-213 Codex round-4 P2): a strict read that never
+    // resolves NOR rejects. Without a per-read timeout, checkInitialAuthState
+    // would never reach a terminal setAuthState — authChecked stays false, the
+    // navigator renders null under the splash forever, and the 10s watchdog only
+    // hides the splash onto a BLANK screen. The timeout converts the hang into a
+    // rejection the retry loop already handles, so boot fails CLOSED to recovery.
+    mockHasWalletStrict.mockResolvedValue(true);
+    // A promise that never settles, returned on every attempt.
+    const neverSettles = new Promise<boolean>(() => {});
+    mockHasPinStrict.mockReturnValue(neverSettles);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const rendered = renderHook(() => useAuth(), { wrapper });
+    // Pump fake timers well past 3 attempts × (2000ms per-read timeout + backoff)
+    // ≈ 6.6s worst case.
+    await act(async () => {
+      for (let i = 0; i < 20; i += 1) {
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+      }
+    });
+
+    // Settled into recovery (NOT left indeterminate behind the splash).
+    expect(rendered.result.current.authState.authChecked).toBe(true);
+    expect(rendered.result.current.authState.securityUnavailable).toBe(true);
+    expect(rendered.result.current.authState.isAuthenticated).toBe(false);
+    expect(rendered.result.current.authState.isLocked).toBe(true);
+    // Retried (the hang was surfaced as a failure on each attempt).
+    expect(mockHasPinStrict.mock.calls.length).toBeGreaterThan(1);
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+
+  it('(h) a HUNG non-critical read (biometric/timeout) does NOT stall boot — falls back to defaults and still computes the lock verdict', async () => {
+    // The non-critical biometric/isBiometricEnabled/getPinTimeout reads are on the
+    // render-gating path now; a hang there must not strand boot. It times out to
+    // the safe display defaults and the strict lock verdict still resolves.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(true);
+    mockGetPinTimeout.mockReturnValue(new Promise<number>(() => {})); // hangs
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const rendered = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {
+      for (let i = 0; i < 12; i += 1) {
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+      }
+    });
+
+    // Boot still reached a verdict (LOCKED wallet+PIN), NOT recovery, with the
+    // default 5-min timeout after the non-critical read timed out.
+    expect(rendered.result.current.authState.authChecked).toBe(true);
+    expect(rendered.result.current.authState.securityUnavailable).toBe(false);
+    expect(rendered.result.current.authState.isLocked).toBe(true);
+    expect(rendered.result.current.authState.timeoutMinutes).toBe(5);
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('(i) Android swallow-to-null closure: a KEY-BEARING account + absent PIN ⇒ RECOVERY, never unlocked setup', async () => {
+    // Codex round-4 P1: a pre-sentinel Android install whose keystore breaks on
+    // its first post-upgrade boot has no presence sentinel, so hasPinStrict reads
+    // the swallowed-to-null PIN as genuine ABSENCE (false). But a locally-key-
+    // bearing (STANDARD) account CANNOT exist without a PIN, so this state is
+    // impossible-genuine and must be a read failure ⇒ fail CLOSED to recovery
+    // (NOT the unlocked setup branch that would offer to set a NEW PIN).
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(false); // swallowed-to-null on Android
+    mockHasKeyBearing.mockResolvedValue(true); // durable, keystore-independent
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.securityUnavailable).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+
+  it('(i2) a PIN-less wallet with NO key-bearing account (watch-only) ⇒ unlocked setup, NOT recovery', async () => {
+    // The guard must NOT over-fire: a genuinely PIN-less watch-only wallet is a
+    // legitimate boot state and must still reach the setup branch.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(false);
+    mockHasKeyBearing.mockResolvedValue(false);
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.isLocked).toBe(false);
+    expect(result.current.authState.isAuthenticated).toBe(true);
+    expect(result.current.authState.hasPin).toBe(false);
   });
 
   it('never RETRIES a genuine absence — a false-resolving strict read reads exactly once', async () => {
