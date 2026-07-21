@@ -229,7 +229,7 @@ beforeEach(() => {
   // TASK-213: default to NO restore-in-progress breadcrumb so the key-bearing
   // guard stays fail-closed (recovery) exactly as before; opt-in per test.
   mockIsPinSetupPending.mockResolvedValue(false);
-  mockClearPinSetupPending.mockResolvedValue(undefined);
+  mockClearPinSetupPending.mockResolvedValue(true);
 });
 
 afterEach(() => {

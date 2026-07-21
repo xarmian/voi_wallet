@@ -49,9 +49,14 @@ describe('pinSetupPending breadcrumb (TASK-213)', () => {
     await expect(isPinSetupPending()).resolves.toBe(false);
   });
 
-  it('clear removes the marker; isPending then resolves FALSE', async () => {
+  it('mark PROPAGATES a write failure (bounded) so restore fails fast, not hangs', async () => {
+    mockSetItem.mockRejectedValueOnce(new Error('AsyncStorage write failed'));
+    await expect(markPinSetupPending()).rejects.toThrow();
+  });
+
+  it('clear removes the marker and returns TRUE (confirmed); isPending then FALSE', async () => {
     await markPinSetupPending();
-    await clearPinSetupPending();
+    await expect(clearPinSetupPending()).resolves.toBe(true);
     expect(store.has(PIN_SETUP_PENDING_KEY)).toBe(false);
     await expect(isPinSetupPending()).resolves.toBe(false);
   });
@@ -70,25 +75,26 @@ describe('pinSetupPending breadcrumb (TASK-213)', () => {
     await expect(isPinSetupPending()).resolves.toBe(false);
   });
 
-  it('clear RETRIES a transient removeItem failure, then VERIFIES the marker is gone', async () => {
+  it('clear RETRIES a transient removeItem failure, VERIFIES removal, returns TRUE', async () => {
     await markPinSetupPending();
     // First removal attempt throws; the retry succeeds and removal is confirmed.
     mockRemoveItem.mockRejectedValueOnce(
       new Error('transient AsyncStorage remove failure')
     );
-    await clearPinSetupPending();
+    await expect(clearPinSetupPending()).resolves.toBe(true);
     expect(store.has(PIN_SETUP_PENDING_KEY)).toBe(false);
     // Retried the removal (more than one attempt).
     expect(mockRemoveItem.mock.calls.length).toBeGreaterThan(1);
   });
 
-  it('clear NEVER throws even when removeItem PERSISTENTLY rejects (fail-closed read makes it safe)', async () => {
-    // Even if removal can never succeed, clear must resolve (not throw) — a marker
-    // that cannot be removed also cannot be READ (isPending fails closed), so it
-    // can never cause a fail-open resume.
+  it('clear returns FALSE (never throws) when removal can NEVER be confirmed — the abort signal setupPin keys off', async () => {
+    // A marker that cannot be verifiably removed makes clear return FALSE so
+    // setupPin ABORTS rather than committing a PIN into an ambiguous state. It is
+    // still safe if a caller ignores the result: a marker that cannot be removed
+    // also cannot be READ (isPending fails closed), so it can never fail open.
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     mockRemoveItem.mockRejectedValue(new Error('AsyncStorage remove failed'));
-    await expect(clearPinSetupPending()).resolves.toBeUndefined();
+    await expect(clearPinSetupPending()).resolves.toBe(false);
     warnSpy.mockRestore();
   });
 });

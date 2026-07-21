@@ -84,21 +84,28 @@ const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
  * and should surface the error rather than proceed without the guard.
  */
 export async function markPinSetupPending(): Promise<void> {
-  await storage.setItem(PIN_SETUP_PENDING_KEY, PENDING_VALUE);
+  // Bounded so a wedged AsyncStorage write cannot permanently stall the restore
+  // submission before any account is restored. On timeout it THROWS, so restore
+  // fails fast and cleanly (a store that cannot take this write cannot take the
+  // account writes that follow either) rather than hanging.
+  await withTimeout(
+    storage.setItem(PIN_SETUP_PENDING_KEY, PENDING_VALUE),
+    CLEAR_OP_TIMEOUT_MS
+  );
 }
 
 /**
  * Clear the breadcrumb — bounded, retrying, verifying, and NEVER-throwing.
  *
- * It re-reads to CONFIRM the marker is gone and retries a bounded number of times,
- * so on a functioning store it ESTABLISHES removal rather than silently accepting
- * a failed removeItem. Every op is time-bounded so a wedged store cannot hang the
- * caller. It never throws: a persistent failure is SAFE because isPinSetupPending()
- * fails closed (an unreadable/broken marker resolves absent ⇒ recovery, never a
- * resume), so a marker that genuinely cannot be removed also cannot be read to
- * cause a fail-open.
+ * Returns TRUE only when removal is CONFIRMED by a re-read (the marker is gone),
+ * FALSE when removal could not be confirmed within the bounded retries. Callers
+ * that must NOT commit a PIN while a live breadcrumb could persist (setupPin) key
+ * off this: they abort on FALSE. It re-reads to confirm and retries, so on a
+ * functioning store it ESTABLISHES removal rather than silently accepting a failed
+ * removeItem. Every op is time-bounded so a wedged store cannot hang the caller.
+ * It never throws.
  */
-export async function clearPinSetupPending(): Promise<void> {
+export async function clearPinSetupPending(): Promise<boolean> {
   for (let attempt = 0; attempt < CLEAR_MAX_ATTEMPTS; attempt += 1) {
     try {
       await withTimeout(
@@ -111,7 +118,7 @@ export async function clearPinSetupPending(): Promise<void> {
         CLEAR_OP_TIMEOUT_MS
       );
       if (remaining !== PENDING_VALUE) {
-        return; // confirmed gone (null) — or unreadable, which fails closed on read
+        return true; // confirmed gone (null)
       }
     } catch {
       // Timeout or read/write error — retry. (Never rethrow: see the doc above.)
@@ -120,6 +127,7 @@ export async function clearPinSetupPending(): Promise<void> {
   console.warn(
     'pin_setup_pending breadcrumb clear could not be confirmed after retries'
   );
+  return false;
 }
 
 /**
