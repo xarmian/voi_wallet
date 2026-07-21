@@ -281,7 +281,9 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
   });
 
   it('(b) enters RECOVERY when the strict WALLET read FAILS at boot', async () => {
-    mockHasWalletStrict.mockRejectedValue(new Error('wallet store unavailable'));
+    mockHasWalletStrict.mockRejectedValue(
+      new Error('wallet store unavailable')
+    );
     mockHasPinStrict.mockResolvedValue(true);
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -315,6 +317,9 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     expect(result.current.authState.isLocked).toBe(false);
     expect(result.current.authState.isAuthenticated).toBe(true);
     expect(result.current.authState.hasPin).toBe(false);
+    // Route derives from hasWallet — a wallet exists here ⇒ Main (not Onboarding).
+    expect(result.current.authState.hasWallet).toBe(true);
+    expect(result.current.authState.authChecked).toBe(true);
   });
 
   it('(d) genuine wallet+PIN ⇒ locked, NOT recovery (unchanged)', async () => {
@@ -327,6 +332,8 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     expect(result.current.authState.isLocked).toBe(true);
     expect(result.current.authState.isAuthenticated).toBe(false);
     expect(result.current.authState.hasPin).toBe(true);
+    expect(result.current.authState.hasWallet).toBe(true);
+    expect(result.current.authState.authChecked).toBe(true);
   });
 
   it('(e) a TRANSIENT strict-read failure that SUCCEEDS on retry proceeds normally (LOCKED) — no recovery screen', async () => {
@@ -387,6 +394,10 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     expect(result.current.authState.securityUnavailable).toBe(false);
     expect(result.current.authState.isLocked).toBe(true);
     expect(result.current.authState.isAuthenticated).toBe(false);
+    // Codex round-2 guard: after recovery the AUTHORITATIVE hasWallet is correct
+    // (true ⇒ the navigator derives route=Main, never a stale unguarded
+    // Onboarding). The route is a single source of truth = this verdict.
+    expect(result.current.authState.hasWallet).toBe(true);
 
     errorSpy.mockRestore();
   });

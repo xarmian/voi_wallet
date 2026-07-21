@@ -62,6 +62,13 @@ export interface AuthState {
   // storage FAILURE resolves to the recovery screen instead of briefly exposing
   // the unauthenticated setup flow. Starts false; only ever transitions to true.
   authChecked: boolean;
+  // Authoritative "a wallet with ≥1 account exists", from the SAME strict boot
+  // read that decides the lock state (TASK-213). The navigator derives its
+  // initial route (Main vs Onboarding) from this single source of truth so the
+  // route can never diverge from the fail-closed auth verdict (a stale route
+  // must not expose the unguarded setup flow after a recovery/transient blip).
+  // Meaningful only once authChecked is true and securityUnavailable is false.
+  hasWallet: boolean;
 }
 
 export interface AuthContextType {
@@ -106,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     hasPin: false,
     securityUnavailable: false,
     authChecked: false,
+    hasWallet: false,
   });
 
   const activityTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -286,6 +294,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isAuthenticated: true,
           securityUnavailable: false,
           authChecked: true,
+          hasWallet,
           biometricEnabled: biometricEnabled && biometricAvailable,
           backgroundedAt: null,
           timeoutMinutes,
@@ -301,6 +310,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: false,
         securityUnavailable: false,
         authChecked: true,
+        hasWallet,
         biometricEnabled: biometricEnabled && biometricAvailable,
         backgroundedAt: null,
         timeoutMinutes,

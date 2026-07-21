@@ -1,10 +1,4 @@
-import React, {
-  useEffect,
-  useState,
-  useRef,
-  useCallback,
-  Suspense,
-} from 'react';
+import React, { useEffect, useRef, useCallback, Suspense } from 'react';
 import {
   NavigationContainer,
   StackActions,
@@ -1081,9 +1075,6 @@ function MainTabNavigator() {
 }
 
 function AppStack() {
-  const [initialRoute, setInitialRoute] =
-    useState<keyof RootStackParamList>('Onboarding');
-  const [isLoading, setIsLoading] = useState(true);
   // Subscribe to the init-cascade gates this component (the splash readiness
   // owner) must cover, so it re-renders as each resolves:
   //   - remote-signer gate (MainTabNavigator's `isInitialized`) — gate 2,
@@ -1096,67 +1087,44 @@ function AppStack() {
   );
   const appMode = useAppMode();
   const isWalletInitialized = useWalletStore((state) => state.isInitialized);
-  // TASK-213: the initial route is chosen by the error-SWALLOWING
-  // getCurrentWallet() below, which returns null on a storage read FAILURE and
-  // would route to the UN-guarded Onboarding flow (AuthGuard only wraps `Main`).
-  // AuthContext.checkInitialAuthState performs the authoritative, fail-closed
-  // determination (with bounded retry); when it finds secure storage unreadable
-  // it sets securityUnavailable, and we render the recovery screen OVER the whole
-  // navigator — so a storage failure can never expose onboarding/create/import.
+  // TASK-213: derive the initial route from the SINGLE authoritative auth verdict
+  // (AuthContext.checkInitialAuthState) instead of a second, error-SWALLOWING
+  // wallet read. That verdict distinguishes a storage read FAILURE (→ recovery,
+  // below) from genuine absence (→ Onboarding) and presence (→ Main) with bounded
+  // retry, so the route can NEVER diverge from the fail-closed lock state — e.g.
+  // a stale Onboarding route can no longer expose the UN-guarded setup flow after
+  // a recovery Retry or a transient blip (AuthGuard only wraps `Main`). hasWallet
+  // is meaningful only once authChecked is true, which gates the render below.
   const { authState, recheckAuthState } = useAuth();
-
-  useEffect(() => {
-    checkInitialRoute();
-  }, []);
-
-  const checkInitialRoute = async () => {
-    try {
-      const wallet = await MultiAccountWalletService.getCurrentWallet();
-
-      if (wallet && wallet.accounts.length > 0) {
-        setInitialRoute('Main');
-      } else {
-        setInitialRoute('Onboarding');
-      }
-    } catch (error) {
-      console.error('Failed to check initial route:', error);
-      setInitialRoute('Onboarding');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const initialRoute: keyof RootStackParamList = authState.hasWallet
+    ? 'Main'
+    : 'Onboarding';
 
   // Single readiness owner for the native splash (F-48, TASK-182). Hide it only
-  // once the FIRST real content frame can render — covering ALL THREE gates of
-  // the F-03 init cascade (route + remote-signer + wallet-store hydration). See
+  // once the FIRST real content frame can render — covering ALL gates of the init
+  // cascade (auth verdict + remote-signer + wallet-store hydration). See
   // isColdBootContentReady() for the exact gate/scoping rules; in short, on the
-  // common existing-wallet cold start it now also waits for the wallet store's
-  // cached balances so the splash never lifts onto Home's "Loading wallet..."
-  // placeholder.
+  // common existing-wallet cold start it also waits for the wallet store's cached
+  // balances so the splash never lifts onto Home's "Loading wallet..." placeholder.
   //
   // This effect runs AFTER commit, so the content it gates on is already painted
   // when the splash lifts — no blank flash. Every gate is guaranteed to resolve
-  // (or throw) so this cannot silently stall: checkInitialRoute() always clears
-  // isLoading in its finally; remoteSignerStore.initialize() always sets
-  // isInitialized (even on its caught-error path); and walletStore.initialize()
-  // — kicked off early in initializeServices() AND again by Home's mount effect —
-  // always sets isInitialized (success and caught-error paths alike). The error
-  // boundary and the index.ts watchdog cover the render-throw and hard-hang
-  // cases as belt-and-suspenders.
-  // TASK-213: for a non-Main (Onboarding) initial route, hold the splash until
-  // the auth-init verdict is in (authChecked) so a pending storage FAILURE
-  // resolves to the recovery screen below instead of briefly exposing the
-  // unguarded onboarding flow. `Main` is unchanged (AuthGuard gates it), so its
-  // splash-readiness timing is unaffected.
-  const routeReady =
-    !isLoading && (initialRoute === 'Main' || authState.authChecked);
+  // (or throw) so this cannot silently stall: checkInitialAuthState() always
+  // reaches a terminal setAuthState that sets authChecked (locked, unlocked-setup,
+  // recovery, and the defensive catch alike); remoteSignerStore.initialize()
+  // always sets isInitialized (even on its caught-error path); and
+  // walletStore.initialize() — kicked off early in initializeServices() AND again
+  // by Home's mount effect — always sets isInitialized (success and caught-error
+  // paths alike). The error boundary and the index.ts watchdog cover the
+  // render-throw and hard-hang cases as belt-and-suspenders.
+  //
   // The recovery screen is real, ready-to-paint content — lift the splash for it
   // regardless of the route's normal gates (e.g. a Main route whose signer/wallet
   // stores haven't hydrated must not keep the splash over the recovery screen).
   const contentReady =
     authState.securityUnavailable ||
     isColdBootContentReady({
-      routeResolved: routeReady,
+      routeResolved: authState.authChecked,
       isMainRoute: initialRoute === 'Main',
       signerInitialized: isSignerInitialized,
       isSignerMode: appMode === 'signer',
@@ -1175,8 +1143,13 @@ function AppStack() {
     return <SecureStorageUnavailableScreen onRetry={recheckAuthState} />;
   }
 
-  if (!routeReady) {
-    return null; // Or a loading screen
+  // Wait for the auth-init verdict before mounting ANY route: the navigator's
+  // Onboarding branch is UN-guarded, so it must not mount until authChecked has
+  // resolved whether this is genuine absence (→ Onboarding) or a failure
+  // (→ recovery, above). initialRouteName is honored only at this first mount, so
+  // gating here guarantees the mounted route matches the settled auth verdict.
+  if (!authState.authChecked) {
+    return null; // Native splash stays up until the first content frame.
   }
 
   return (
