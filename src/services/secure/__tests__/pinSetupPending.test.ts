@@ -72,7 +72,9 @@ describe('pinSetupPending breadcrumb (TASK-213)', () => {
 
   it('clear NEVER throws even when removeItem rejects (best-effort, self-healed later)', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    mockRemoveItem.mockRejectedValueOnce(new Error('AsyncStorage remove failed'));
+    mockRemoveItem.mockRejectedValueOnce(
+      new Error('AsyncStorage remove failed')
+    );
     await expect(clearPinSetupPending()).resolves.toBeUndefined();
     warnSpy.mockRestore();
   });

@@ -220,14 +220,14 @@ export default function SecureStorageUnavailableScreen({
         </TouchableOpacity>
 
         <Text style={styles.hint}>
-          If retrying doesn&apos;t help, your device&apos;s secure storage may be
-          permanently reset (for example after changing your device passcode or
-          restoring your phone from a backup). Resetting erases ALL local wallet
-          data on this device. Only accounts you hold a recovery phrase for can be
-          restored — each from its own phrase. Watch-only, Ledger, and
-          remote-signer accounts, and account names, are not covered by a recovery
-          phrase and must be re-added manually. Make sure you have every recovery
-          phrase before continuing.
+          If retrying doesn&apos;t help, your device&apos;s secure storage may
+          be permanently reset (for example after changing your device passcode
+          or restoring your phone from a backup). Resetting erases ALL local
+          wallet data on this device. Only accounts you hold a recovery phrase
+          for can be restored — each from its own phrase. Watch-only, Ledger,
+          and remote-signer accounts, and account names, are not covered by a
+          recovery phrase and must be re-added manually. Make sure you have
+          every recovery phrase before continuing.
         </Text>
 
         <Text style={styles.resetPrompt}>
@@ -246,7 +246,10 @@ export default function SecureStorageUnavailableScreen({
         />
 
         {resetAttempted && !busy ? (
-          <Text style={styles.resetFailedNotice} accessibilityLiveRegion="polite">
+          <Text
+            style={styles.resetFailedNotice}
+            accessibilityLiveRegion="polite"
+          >
             Reset didn&apos;t resolve the problem. Fully restart your device and
             reopen the app. If it keeps happening, contact support.
           </Text>
