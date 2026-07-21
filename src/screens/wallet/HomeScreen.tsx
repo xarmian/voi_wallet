@@ -218,6 +218,15 @@ export default function HomeScreen() {
 
   const initialize = useWalletStore((state) => state.initialize);
   const wallet = useWalletStore((state) => state.wallet);
+  // Wallet-store hydration flag (F-48, TASK-182). This is the SAME signal the
+  // splash readiness owner (AppStack) gates on, so the "Loading wallet..."
+  // placeholder and the splash hide stay in lockstep. Once the store is
+  // initialized its cached balances are already in `accountStates`, so real
+  // content is renderable — never show the placeholder then, even while the
+  // local `loading` flag is mid-flight on a redundant re-init. This closes the
+  // gap where the splash could lift onto (or a redundant re-init could re-show)
+  // the placeholder despite cached content being ready.
+  const isWalletInitialized = useWalletStore((state) => state.isInitialized);
   const loadAccountTransactions = useWalletStore(
     (state) => state.loadAccountTransactions
   );
@@ -1232,7 +1241,12 @@ export default function HomeScreen() {
     currentNetworkConfig,
   ]);
 
-  if (loading) {
+  // Show the placeholder only while the wallet store has NOT yet hydrated its
+  // cached balances. Once `isWalletInitialized` is true the cached balances are
+  // in state and real content is renderable, so we skip the placeholder even if
+  // the local `loading` flag is still mid-flight (F-48, TASK-182) — keeping this
+  // in lockstep with the splash readiness gate.
+  if (loading && !isWalletInitialized) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingContainer}>
