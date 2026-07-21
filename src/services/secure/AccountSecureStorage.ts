@@ -1601,15 +1601,22 @@ export class AccountSecureStorage {
           throw new VaultLockedError();
         }
 
-        // Cache the key for subsequent calls (60-second TTL). TASK-220: skip if a
-        // full reset advanced the generation since this read began — do not
-        // repopulate a cache the reset just zeroed with a just-wiped secret.
-        if (this.secureResetGeneration === readGen) {
-          this.privateKeyCache.set(cacheKey, {
-            key: new Uint8Array(privateKey), // Store a copy
-            timestamp: Date.now(),
-          });
+        // TASK-220: a full reset (clearAll) during any await of this read wiped the
+        // persisted secret this key derives from and zeroed the in-memory cache.
+        // Abort (zero + throw) — mirroring the vault-lock abort above — so an
+        // in-flight pre-reset signing read never RETURNS or re-caches a key a
+        // "delete everything" just removed. In normal operation the generation
+        // never advances mid-read, so signing is unaffected.
+        if (this.secureResetGeneration !== readGen) {
+          privateKey.fill(0);
+          throw new ResetRacedError();
         }
+
+        // Cache the key for subsequent calls (60-second TTL).
+        this.privateKeyCache.set(cacheKey, {
+          key: new Uint8Array(privateKey), // Store a copy
+          timestamp: Date.now(),
+        });
 
         // LAZY MIGRATION TRIGGER (DOC-137 §4.5.1, PR5): a legacy-tier (Format
         // A/C) decrypt just succeeded and a verified secret is available (an
@@ -1649,7 +1656,10 @@ export class AccountSecureStorage {
           error instanceof AccountRetrievalError ||
           // Vault locked mid-derivation (Codex P1-D): surface as-is so the caller
           // re-auths rather than treating it as a generic retrieval failure.
-          error instanceof VaultLockedError
+          error instanceof VaultLockedError ||
+          // TASK-220: reset raced this read — surface as-is so signing aborts
+          // cleanly rather than reporting a generic retrieval failure.
+          error instanceof ResetRacedError
         ) {
           throw error;
         }
