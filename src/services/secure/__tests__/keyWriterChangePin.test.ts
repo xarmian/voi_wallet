@@ -119,6 +119,12 @@ const mockPlatform = platform as unknown as {
     setItemWithAuth: jest.Mock;
     deleteItem: jest.Mock;
   };
+  storage: {
+    getItem: jest.Mock;
+    setItem: jest.Mock;
+    removeItem: jest.Mock;
+    multiRemove: jest.Mock;
+  };
 };
 
 // Reach the private statics the way the merged suites do (cast, no `any`).
@@ -407,6 +413,48 @@ describe('setupPin — first-secret device→v2 migration (§5.4)', () => {
     await AccountSecureStorage.setupPin('123456', 'pin');
     expect(mockPlatform.__secure.has(secretKey('acct-watch'))).toBe(false);
     expect(await AccountSecureStorage.verifyPin('123456')).toBe(true);
+  });
+
+  it('clears the pin_setup_pending breadcrumb BEFORE committing the PIN (TASK-213 anti-fail-open)', async () => {
+    useFastWriter();
+    // A restore-in-progress breadcrumb sits in plaintext AsyncStorage (restore
+    // sets it BEFORE the PIN). Establishing the PIN must clear it — with confirmed
+    // removal, BEFORE the credential commits — so a PIN can never coexist on disk
+    // with a live breadcrumb (which a later keystore break could resume over).
+    mockPlatform.__kv.set('pin_setup_pending', 'true');
+
+    await AccountSecureStorage.setupPin('123456', 'pin');
+
+    expect(mockPlatform.__kv.has('pin_setup_pending')).toBe(false);
+    // The PIN credential is committed and verifies (the clear did not block it).
+    expect(await AccountSecureStorage.verifyPin('123456')).toBe(true);
+  });
+
+  it('ABORTS setupPin (no PIN committed) when the breadcrumb removal cannot be confirmed', async () => {
+    useFastWriter();
+    mockPlatform.__kv.set('pin_setup_pending', 'true');
+    // Plaintext removal can never be confirmed → clearPinSetupPending returns
+    // false → setupPin MUST abort rather than commit a PIN alongside a live marker.
+    const originalRemove =
+      mockPlatform.storage.removeItem.getMockImplementation();
+    mockPlatform.storage.removeItem.mockRejectedValue(new Error('kv wedged'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        AccountSecureStorage.setupPin('123456', 'pin')
+      ).rejects.toThrow(/Failed to set up PIN/);
+      // No PIN credential was committed (fail-closed): nothing to verify against.
+      expect(await AccountSecureStorage.verifyPin('123456')).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+      // Restore the shared mock impl (clearMocks preserves impls across tests).
+      mockPlatform.storage.removeItem.mockImplementation(
+        originalRemove ??
+          (async (k: string) => {
+            mockPlatform.__kv.delete(k);
+          })
+      );
+    }
   });
 });
 

@@ -1,10 +1,4 @@
-import React, {
-  useEffect,
-  useState,
-  useRef,
-  useCallback,
-  Suspense,
-} from 'react';
+import React, { useEffect, useRef, useCallback, Suspense } from 'react';
 import {
   NavigationContainer,
   StackActions,
@@ -57,6 +51,7 @@ import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
 import RekeyAccountScreen from '@/screens/wallet/RekeyAccountScreen';
 import OnboardingScreen from '@/screens/onboarding/OnboardingScreen';
+import SecureStorageUnavailableScreen from '@/screens/auth/SecureStorageUnavailableScreen';
 import QRAccountImportScreen from '@/screens/account/QRAccountImportScreen';
 import AccountImportPreviewScreen from '@/screens/account/AccountImportPreviewScreen';
 import CreateWalletScreen from '@/screens/onboarding/CreateWalletScreen';
@@ -218,7 +213,10 @@ export type RootStackParamList = {
   SecuritySetup: {
     mnemonic?: string;
     accounts?: ScannedAccount[];
-    source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger';
+    // 'restore' = post-restore PIN setup (no import branch runs; setupPin only).
+    // RestoreWalletScreen already navigates with it via CommonActions.reset, and
+    // TASK-213's cold-boot resume routes here with it as the initial param.
+    source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger' | 'restore';
     accountLabel?: string;
   };
   MnemonicImport: { isOnboarding?: boolean } | undefined;
@@ -1080,9 +1078,6 @@ function MainTabNavigator() {
 }
 
 function AppStack() {
-  const [initialRoute, setInitialRoute] =
-    useState<keyof RootStackParamList>('Onboarding');
-  const [isLoading, setIsLoading] = useState(true);
   // Subscribe to the init-cascade gates this component (the splash readiness
   // owner) must cover, so it re-renders as each resolves:
   //   - remote-signer gate (MainTabNavigator's `isInitialized`) — gate 2,
@@ -1095,60 +1090,78 @@ function AppStack() {
   );
   const appMode = useAppMode();
   const isWalletInitialized = useWalletStore((state) => state.isInitialized);
-
-  useEffect(() => {
-    checkInitialRoute();
-  }, []);
-
-  const checkInitialRoute = async () => {
-    try {
-      const wallet = await MultiAccountWalletService.getCurrentWallet();
-
-      if (wallet && wallet.accounts.length > 0) {
-        setInitialRoute('Main');
-      } else {
-        setInitialRoute('Onboarding');
-      }
-    } catch (error) {
-      console.error('Failed to check initial route:', error);
-      setInitialRoute('Onboarding');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // TASK-213: derive the initial route from the SINGLE authoritative auth verdict
+  // (AuthContext.checkInitialAuthState) instead of a second, error-SWALLOWING
+  // wallet read. That verdict distinguishes a storage read FAILURE (→ recovery,
+  // below) from genuine absence (→ Onboarding) and presence (→ Main) with bounded
+  // retry, so the route can NEVER diverge from the fail-closed lock state — e.g.
+  // a stale Onboarding route can no longer expose the UN-guarded setup flow after
+  // a recovery Retry or a transient blip (AuthGuard only wraps `Main`). hasWallet
+  // is meaningful only once authChecked is true, which gates the render below.
+  const { authState, recheckAuthState } = useAuth();
+  // TASK-213 (restore-before-PIN): when the boot verdict is "resume PIN setup"
+  // (a restore persisted key-bearing accounts but was cold-killed before the PIN),
+  // the initial route is SecuritySetup(source:'restore') — NOT Main and NOT the
+  // recovery screen. This must take precedence over the hasWallet→Main derivation
+  // (a restored wallet HAS accounts, so hasWallet is true here). SecuritySetup is
+  // an unguarded route; Main is only ever reached from it AFTER setupPin succeeds
+  // (which sets a PIN and clears the breadcrumb), so this never exposes the wallet.
+  const initialRoute: keyof RootStackParamList = authState.pinSetupResume
+    ? 'SecuritySetup'
+    : authState.hasWallet
+      ? 'Main'
+      : 'Onboarding';
 
   // Single readiness owner for the native splash (F-48, TASK-182). Hide it only
-  // once the FIRST real content frame can render — covering ALL THREE gates of
-  // the F-03 init cascade (route + remote-signer + wallet-store hydration). See
+  // once the FIRST real content frame can render — covering ALL gates of the init
+  // cascade (auth verdict + remote-signer + wallet-store hydration). See
   // isColdBootContentReady() for the exact gate/scoping rules; in short, on the
-  // common existing-wallet cold start it now also waits for the wallet store's
-  // cached balances so the splash never lifts onto Home's "Loading wallet..."
-  // placeholder.
+  // common existing-wallet cold start it also waits for the wallet store's cached
+  // balances so the splash never lifts onto Home's "Loading wallet..." placeholder.
   //
   // This effect runs AFTER commit, so the content it gates on is already painted
   // when the splash lifts — no blank flash. Every gate is guaranteed to resolve
-  // (or throw) so this cannot silently stall: checkInitialRoute() always clears
-  // isLoading in its finally; remoteSignerStore.initialize() always sets
-  // isInitialized (even on its caught-error path); and walletStore.initialize()
-  // — kicked off early in initializeServices() AND again by Home's mount effect —
-  // always sets isInitialized (success and caught-error paths alike). The error
-  // boundary and the index.ts watchdog cover the render-throw and hard-hang
-  // cases as belt-and-suspenders.
-  const contentReady = isColdBootContentReady({
-    routeResolved: !isLoading,
-    isMainRoute: initialRoute === 'Main',
-    signerInitialized: isSignerInitialized,
-    isSignerMode: appMode === 'signer',
-    walletInitialized: isWalletInitialized,
-  });
+  // (or throw) so this cannot silently stall: checkInitialAuthState() always
+  // reaches a terminal setAuthState that sets authChecked (locked, unlocked-setup,
+  // recovery, and the defensive catch alike); remoteSignerStore.initialize()
+  // always sets isInitialized (even on its caught-error path); and
+  // walletStore.initialize() — kicked off early in initializeServices() AND again
+  // by Home's mount effect — always sets isInitialized (success and caught-error
+  // paths alike). The error boundary and the index.ts watchdog cover the
+  // render-throw and hard-hang cases as belt-and-suspenders.
+  //
+  // The recovery screen is real, ready-to-paint content — lift the splash for it
+  // regardless of the route's normal gates (e.g. a Main route whose signer/wallet
+  // stores haven't hydrated must not keep the splash over the recovery screen).
+  const contentReady =
+    authState.securityUnavailable ||
+    isColdBootContentReady({
+      routeResolved: authState.authChecked,
+      isMainRoute: initialRoute === 'Main',
+      signerInitialized: isSignerInitialized,
+      isSignerMode: appMode === 'signer',
+      walletInitialized: isWalletInitialized,
+    });
   useEffect(() => {
     if (contentReady) {
       void hideSplashScreen();
     }
   }, [contentReady]);
 
-  if (isLoading) {
-    return null; // Or a loading screen
+  // Fail-closed recovery (TASK-213): secure storage was found unreadable at boot.
+  // Render ONLY the recovery screen — over every route, including the unguarded
+  // onboarding flow — so the app grants ZERO wallet access until it recovers.
+  if (authState.securityUnavailable) {
+    return <SecureStorageUnavailableScreen onRetry={recheckAuthState} />;
+  }
+
+  // Wait for the auth-init verdict before mounting ANY route: the navigator's
+  // Onboarding branch is UN-guarded, so it must not mount until authChecked has
+  // resolved whether this is genuine absence (→ Onboarding) or a failure
+  // (→ recovery, above). initialRouteName is honored only at this first mount, so
+  // gating here guarantees the mounted route matches the settled auth verdict.
+  if (!authState.authChecked) {
+    return null; // Native splash stays up until the first content frame.
   }
 
   return (
@@ -1163,7 +1176,17 @@ function AppStack() {
     >
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
       <Stack.Screen name="CreateWallet" component={CreateWalletScreen} />
-      <Stack.Screen name="SecuritySetup" component={SecuritySetupScreen} />
+      <Stack.Screen
+        name="SecuritySetup"
+        component={SecuritySetupScreen}
+        // TASK-213: when SecuritySetup is the INITIAL route (the restore-before-PIN
+        // resume), it is mounted without navigation params, so seed source:'restore'
+        // here. Harmless otherwise — an explicit navigate() (create/import/ledger)
+        // provides its own params, which override these initial defaults.
+        initialParams={
+          authState.pinSetupResume ? { source: 'restore' } : undefined
+        }
+      />
       <Stack.Screen name="MnemonicImport" component={MnemonicImportScreen} />
       <Stack.Screen name="AddWatchAccount" component={AddWatchAccountScreen} />
       <Stack.Screen name="Main" component={MainTabNavigator} />

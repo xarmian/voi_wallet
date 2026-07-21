@@ -2,13 +2,23 @@ import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import LockScreen from '@/screens/auth/LockScreen';
+import SecureStorageUnavailableScreen from '@/screens/auth/SecureStorageUnavailableScreen';
 
 interface AuthGuardProps {
   children: React.ReactNode;
 }
 
 export default function AuthGuard({ children }: AuthGuardProps) {
-  const { authState } = useAuth();
+  const { authState, recheckAuthState } = useAuth();
+
+  // Fail-closed recovery (TASK-213): when the strict boot reads found secure
+  // storage unreadable, render ONLY the recovery screen — no children, no lock
+  // screen — so the app grants ZERO wallet access until the check recovers. This
+  // takes priority over the normal lock so a broken store never falls through to
+  // the PIN pad (which cannot unlock a store it can't read) or to the wallet.
+  if (authState.securityUnavailable) {
+    return <SecureStorageUnavailableScreen onRetry={recheckAuthState} />;
+  }
 
   const showLock = authState.isLocked || !authState.isAuthenticated;
 

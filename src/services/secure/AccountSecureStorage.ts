@@ -44,6 +44,7 @@ import {
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import type { SecretSource } from './SessionKeyVault';
+import { clearPinSetupPending } from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2037,6 +2038,24 @@ export class AccountSecureStorage {
   ): Promise<void> {
     try {
       this.validateSecret(newSecret, secretSource);
+      // TASK-213 (fail-OPEN closure): clear the restore-before-PIN breadcrumb —
+      // with CONFIRMED removal — BEFORE committing the PIN, not after. A PIN
+      // credential must never come to exist on disk while a live breadcrumb could
+      // still be read: otherwise a commit that partially fails (e.g. the Android
+      // presence-sentinel write fails, so a later keystore break makes the PIN read
+      // resolve absent) would let the stale breadcrumb route that wallet to
+      // SecuritySetup — a NEW PIN over a real wallet. Clearing FIRST makes every
+      // such race fail CLOSED (recovery), never open. If removal cannot be
+      // CONFIRMED (a wedged/unhealthy store), ABORT rather than commit a PIN into
+      // that ambiguous state — the caller simply retries. clearPinSetupPending is
+      // bounded + verifying + never-throwing; a no-op when no breadcrumb exists
+      // (normal onboarding) on a healthy store.
+      const breadcrumbCleared = await clearPinSetupPending();
+      if (!breadcrumbCleared) {
+        throw new Error(
+          'Could not clear the restore setup marker before establishing the PIN'
+        );
+      }
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
       // to verify (first-secret setup).
@@ -2408,6 +2427,36 @@ export class AccountSecureStorage {
     } catch (error) {
       return false;
     }
+  }
+
+  /**
+   * STRICT, boot-only PIN-presence probe (TASK-213). Unlike hasPin() — which
+   * swallows secure-storage read/decrypt errors and resolves `false`, making a
+   * genuine read FAILURE indistinguishable from genuine absence (the auth-init
+   * fail-OPEN) — this variant THROWS on a genuine secure-storage read/decrypt
+   * failure and resolves `false` ONLY for genuine ABSENCE (no credential stored
+   * in either the primary secure-store or the legacy AsyncStorage location).
+   *
+   * It is a pure read: no JSON parse, no legacy-migration WRITE, no cache
+   * mutation, and no secret material is ever returned or logged. Presence is
+   * decided purely on whether a raw credential value exists.
+   *
+   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
+   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
+   * read failure. Do NOT route other callers here: hasPin()'s error-swallowing
+   * contract (resolve falsy on failure) is relied on by its other call sites.
+   */
+  static async hasPinStrict(): Promise<boolean> {
+    // A throw from either getItem (keychain/keystore unavailable, decrypt error)
+    // PROPAGATES to the caller — it is never coerced to `false`. Presence in
+    // EITHER the secure store or the legacy AsyncStorage location counts as
+    // "PIN set"; both getItems return `null` (not throw) for genuine absence.
+    const secure = await secureStorage.getItem(this.PIN_KEY);
+    if (secure) {
+      return true;
+    }
+    const legacy = await storage.getItem(this.PIN_KEY);
+    return Boolean(legacy);
   }
 
   static async changePin(

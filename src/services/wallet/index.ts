@@ -1595,6 +1595,106 @@ export class MultiAccountWalletService {
     }
   }
 
+  /**
+   * STRICT, boot-only wallet-presence probe (TASK-213). Unlike getCurrentWallet()
+   * — which swallows storage read errors and resolves `null`, making a genuine
+   * read FAILURE indistinguishable from "no wallet" (the auth-init fail-OPEN) —
+   * this variant THROWS on a genuine storage read failure (or a present-but-
+   * corrupt/unparseable blob) and resolves `false` ONLY for genuine ABSENCE (no
+   * wallet stored, or a stored wallet with zero accounts).
+   *
+   * It does NOT decrypt or return key material, does NOT heal-on-read, and does
+   * NOT touch the module wallet cache — it only answers "does a usable wallet
+   * exist?" so the auth-init path can distinguish absence from failure.
+   *
+   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
+   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
+   * read failure. Every OTHER caller must keep using getCurrentWallet(), whose
+   * error-swallowing contract (resolve null on failure) is relied on across its
+   * many call sites, including signing.
+   */
+  static async hasWalletWithAccountsStrict(): Promise<boolean> {
+    // Strict raw read: a throw (keychain / AsyncStorage unavailable) propagates
+    // to the caller instead of collapsing to null.
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (!walletData) {
+      // Genuine ABSENCE — no wallet blob in either the primary or legacy location.
+      return false;
+    }
+    // A present-but-corrupt blob is a read FAILURE, not absence: let JSON.parse
+    // throw so the caller fails CLOSED rather than treating corruption as "no
+    // wallet" (which would drop into the unlocked setup state).
+    const parsed = JSON.parse(walletData) as Wallet;
+    if (!Array.isArray(parsed.accounts)) {
+      // Valid JSON but a structurally-corrupt wallet (missing / non-array
+      // `accounts`, e.g. {"accounts":{}}). That is corruption, NOT absence —
+      // fail CLOSED by throwing so the auth-init path enters recovery rather
+      // than the unlocked setup state. Only a genuine EMPTY array below is the
+      // intended absence-like "no accounts yet" ⇒ setup case.
+      throw new Error(
+        'Corrupt wallet blob: `accounts` is present but not an array'
+      );
+    }
+    return parsed.accounts.length > 0;
+  }
+
+  /**
+   * STRICT, boot-only probe: does a persisted wallet hold ≥1 locally-KEY-BEARING
+   * (STANDARD) account? (TASK-213 Codex round-4). A STANDARD account stores its
+   * private key encrypted under the user secret, and setupPin ALWAYS precedes the
+   * key import (SecuritySetupScreen), so a STANDARD account can NEVER exist
+   * without a PIN having been configured. WATCH / LEDGER / REMOTE_SIGNER accounts
+   * hold no local PIN-wrapped key, so a PIN-less wallet of only those is legit.
+   *
+   * The auth-init path uses this as a corroborating durable signal (wallet
+   * metadata lives in plaintext AsyncStorage, UNAFFECTED by an Android keystore
+   * desync) to close the residual Android fail-OPEN the per-key presence sentinel
+   * cannot cover: a PRE-sentinel install whose keystore breaks on its very first
+   * boot after upgrade has no sentinel yet, so a swallowed-to-null PIN read looks
+   * like genuine absence — but if a STANDARD account exists, that "absence" is
+   * impossible and must be a read FAILURE ⇒ fail CLOSED.
+   *
+   * PROPAGATES a storage READ failure (fail closed, same as the sibling strict
+   * reads); resolves `false` for genuine absence or a structurally-unusable blob
+   * (whose corruption is already surfaced by hasWalletWithAccountsStrict). It only
+   * ever answers a POSITIVE "a key-bearing account exists", never weakens a verdict.
+   */
+  static async hasKeyBearingAccountStrict(): Promise<boolean> {
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (!walletData) {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(walletData) as Wallet;
+      if (!Array.isArray(parsed.accounts)) {
+        return false;
+      }
+      return parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD);
+    } catch {
+      // A corrupt blob is handled (thrown) by hasWalletWithAccountsStrict; here we
+      // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
+      return false;
+    }
+  }
+
+  /**
+   * Strict sibling of getStoredValue (TASK-213): reads the primary then the
+   * legacy secure-store location but PROPAGATES storage read errors instead of
+   * collapsing them to null. Resolves `null` ONLY for genuine absence (both
+   * locations empty). No JSON parse, no migration WRITE, no cache side effect.
+   */
+  private static async getStoredValueStrict(
+    key: string
+  ): Promise<string | null> {
+    // A throw here is a genuine read failure and propagates; `null` = absent.
+    const value = await storage.getItem(key);
+    if (value) {
+      return value;
+    }
+    const legacy = await secureStorage.getItem(key);
+    return legacy ?? null;
+  }
+
   private static async storeValue(key: string, value: string): Promise<void> {
     try {
       await storage.setItem(key, value);

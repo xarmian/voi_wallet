@@ -13,16 +13,23 @@ const hasChromeStorage =
 export class ExtensionStorageAdapter implements StorageAdapter {
   async getItem(key: string): Promise<string | null> {
     if (!hasChromeStorage) {
-      // Fallback to localStorage for web builds
-      try {
-        return localStorage.getItem(key);
-      } catch {
-        return null;
-      }
+      // Fallback to localStorage for web builds. localStorage.getItem returns
+      // null for a genuinely-absent key and only throws on a real access
+      // FAILURE (storage disabled/blocked) — rethrow so fail-closed callers
+      // (auth-init strict reads, TASK-213) can tell failure from absence.
+      return localStorage.getItem(key);
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       chrome.storage.local.get([key], (result) => {
+        // Distinguish a genuine read FAILURE (chrome API error) from ABSENCE:
+        // a swallowed lastError previously made both resolve `null`, which let a
+        // storage failure masquerade as "no value" (a fail-OPEN at auth init).
+        // Mirrors the setItem/removeItem lastError handling in this adapter.
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
         resolve(result[key] ?? null);
       });
     });

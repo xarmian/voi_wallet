@@ -11,6 +11,7 @@ import * as Crypto from 'expo-crypto';
 import { storage } from '@/platform';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { markPinSetupPending } from '@/services/secure/pinSetupPending';
 import {
   AccountType,
   StandardAccountMetadata,
@@ -644,6 +645,17 @@ export async function performFullRestore(
 ): Promise<RestoreResult> {
   // Clear all existing data first
   await clearAllData();
+
+  // TASK-213 (restore-before-PIN false-lockout fix): set the durable plaintext
+  // breadcrumb NOW — after the old PIN is wiped, BEFORE any key-bearing (STANDARD)
+  // account is persisted below. Restore writes STANDARD account key material with
+  // NO PIN yet (the user sets the PIN afterward on SecuritySetup). A cold-kill in
+  // that window would otherwise boot into the fail-closed recovery screen (whose
+  // Reset WIPES this just-restored wallet); the breadcrumb lets checkInitialAuthState
+  // route to SecuritySetup (resume PIN setup) instead. setupPin clears it on
+  // success. Placed BEFORE restoreAccounts so the breadcrumb can never be missing
+  // while a key-bearing account sits on disk without a PIN.
+  await markPinSetupPending();
 
   // Restore accounts
   const accountCounts = await restoreAccounts(accounts);

@@ -20,6 +20,7 @@ import {
   clearAccountSecrets,
 } from '@/utils/accountQRParser';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
@@ -50,6 +51,13 @@ interface Props {
 
 export default function SecuritySetupScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
+  // TASK-213: set the PIN through AuthContext (not AccountSecureStorage directly)
+  // so authState.hasPin flips to true on success. Otherwise a wallet set up in this
+  // session — including the cold-restore RESUME path (pinSetupResume) — would keep
+  // hasPin=false in context, and lock()/inactivity/background auto-lock would no-op
+  // until the NEXT launch. AuthContext.setupPin delegates to the same atomic
+  // AccountSecureStorage.setupPin and then updates hasPin.
+  const { setupPin: authSetupPin } = useAuth();
   const styles = useThemedStyles(createStyles);
   const [mode, setMode] = useState<SecretSource>('pin');
   const [pin, setPin] = useState('');
@@ -117,7 +125,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       // any pre-existing device-key accounts under the new secret before committing
       // the credential (verify-before-delete), so onboarding never strands keys.
       setSetupStep(`Setting up ${secretLabel}...`);
-      await AccountSecureStorage.setupPin(pin, mode);
+      await authSetupPin(pin, mode);
 
       // Store biometric preference. When the user opts into biometrics at
       // onboarding, capture the just-set PIN behind the write-time auth gate
