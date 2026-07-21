@@ -411,8 +411,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         //      into the setup branch would be a fail-OPEN (offering a NEW PIN over
         //      a real wallet). Fail CLOSED to recovery.
         //
-        // isPinSetupPending fails CLOSED (a breadcrumb read error resolves absent),
-        // so an unreadable breadcrumb takes the recovery path, never SecuritySetup.
+        // WHY A STALE BREADCRUMB CANNOT FAIL OPEN HERE (see pinSetupPending.ts):
+        //  - This branch is reached only when the strict PIN read RESOLVED false.
+        //    A PIN committed via secureStorage records a durable presence sentinel,
+        //    so a later keystore break makes that read THROW (present-but-unreadable)
+        //    → the `!lockState` recovery path above, NOT this guard. So reaching
+        //    here means no such committed-PIN sentinel exists (genuine absence or a
+        //    pre-sentinel install with no PIN of its own) — a resume is correct.
+        //  - isPinSetupPending fails CLOSED (a breadcrumb read error resolves
+        //    absent), so a broken store — the only state where a stale marker could
+        //    survive un-cleared — takes the RECOVERY path, never a resume.
         // Bounded by withTimeout so a HUNG breadcrumb read (a promise that never
         // settles) cannot strand boot here after the strict probes succeeded — a
         // timeout resolves to `false` (fail CLOSED to recovery), never a hang and

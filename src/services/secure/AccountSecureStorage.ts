@@ -2053,8 +2053,11 @@ export class AccountSecureStorage {
       // breadcrumb (if any) is stale. Clear it here — the PRIMARY clear point —
       // so a LATER keystore break fails CLOSED to recovery instead of routing to
       // SecuritySetup over this now-protected wallet (the fail-OPEN this guards).
-      // Best-effort (clearPinSetupPending never throws): a clear failure is
-      // self-healed by the readable-PIN boot clear in checkInitialAuthState.
+      // clearPinSetupPending is internally BOUNDED (per-op timeouts + bounded
+      // retries) and NEVER throws, so this await cannot hang the SecuritySetup
+      // submit; it verifies removal (retries) so the marker is durably gone on a
+      // functioning store, and any residual is self-healed by the readable-PIN
+      // boot clear in checkInitialAuthState.
       await clearPinSetupPending();
     } catch (error) {
       throw new AccountStorageError(

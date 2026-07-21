@@ -70,11 +70,24 @@ describe('pinSetupPending breadcrumb (TASK-213)', () => {
     await expect(isPinSetupPending()).resolves.toBe(false);
   });
 
-  it('clear NEVER throws even when removeItem rejects (best-effort, self-healed later)', async () => {
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  it('clear RETRIES a transient removeItem failure, then VERIFIES the marker is gone', async () => {
+    await markPinSetupPending();
+    // First removal attempt throws; the retry succeeds and removal is confirmed.
     mockRemoveItem.mockRejectedValueOnce(
-      new Error('AsyncStorage remove failed')
+      new Error('transient AsyncStorage remove failure')
     );
+    await clearPinSetupPending();
+    expect(store.has(PIN_SETUP_PENDING_KEY)).toBe(false);
+    // Retried the removal (more than one attempt).
+    expect(mockRemoveItem.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('clear NEVER throws even when removeItem PERSISTENTLY rejects (fail-closed read makes it safe)', async () => {
+    // Even if removal can never succeed, clear must resolve (not throw) — a marker
+    // that cannot be removed also cannot be READ (isPending fails closed), so it
+    // can never cause a fail-open resume.
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockRemoveItem.mockRejectedValue(new Error('AsyncStorage remove failed'));
     await expect(clearPinSetupPending()).resolves.toBeUndefined();
     warnSpy.mockRestore();
   });
