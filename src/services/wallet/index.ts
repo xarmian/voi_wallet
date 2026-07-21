@@ -1595,6 +1595,57 @@ export class MultiAccountWalletService {
     }
   }
 
+  /**
+   * STRICT, boot-only wallet-presence probe (TASK-213). Unlike getCurrentWallet()
+   * — which swallows storage read errors and resolves `null`, making a genuine
+   * read FAILURE indistinguishable from "no wallet" (the auth-init fail-OPEN) —
+   * this variant THROWS on a genuine storage read failure (or a present-but-
+   * corrupt/unparseable blob) and resolves `false` ONLY for genuine ABSENCE (no
+   * wallet stored, or a stored wallet with zero accounts).
+   *
+   * It does NOT decrypt or return key material, does NOT heal-on-read, and does
+   * NOT touch the module wallet cache — it only answers "does a usable wallet
+   * exist?" so the auth-init path can distinguish absence from failure.
+   *
+   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
+   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
+   * read failure. Every OTHER caller must keep using getCurrentWallet(), whose
+   * error-swallowing contract (resolve null on failure) is relied on across its
+   * many call sites, including signing.
+   */
+  static async hasWalletWithAccountsStrict(): Promise<boolean> {
+    // Strict raw read: a throw (keychain / AsyncStorage unavailable) propagates
+    // to the caller instead of collapsing to null.
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (!walletData) {
+      // Genuine ABSENCE — no wallet blob in either the primary or legacy location.
+      return false;
+    }
+    // A present-but-corrupt blob is a read FAILURE, not absence: let JSON.parse
+    // throw so the caller fails CLOSED rather than treating corruption as "no
+    // wallet" (which would drop into the unlocked setup state).
+    const parsed = JSON.parse(walletData) as Wallet;
+    return Array.isArray(parsed.accounts) && parsed.accounts.length > 0;
+  }
+
+  /**
+   * Strict sibling of getStoredValue (TASK-213): reads the primary then the
+   * legacy secure-store location but PROPAGATES storage read errors instead of
+   * collapsing them to null. Resolves `null` ONLY for genuine absence (both
+   * locations empty). No JSON parse, no migration WRITE, no cache side effect.
+   */
+  private static async getStoredValueStrict(
+    key: string
+  ): Promise<string | null> {
+    // A throw here is a genuine read failure and propagates; `null` = absent.
+    const value = await storage.getItem(key);
+    if (value) {
+      return value;
+    }
+    const legacy = await secureStorage.getItem(key);
+    return legacy ?? null;
+  }
+
   private static async storeValue(key: string, value: string): Promise<void> {
     try {
       await storage.setItem(key, value);

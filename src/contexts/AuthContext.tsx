@@ -49,6 +49,13 @@ export interface AuthState {
   backgroundedAt: number | null;
   timeoutMinutes: number | 'never';
   hasPin: boolean;
+  // Fail-closed recovery flag (TASK-213). True ONLY when the strict, lock-
+  // determining secure-storage reads at boot STILL fail after bounded retry —
+  // i.e. secure storage is genuinely unreadable. When true the app shows the
+  // "secure storage unavailable" recovery screen (Retry re-runs the check) and
+  // grants ZERO wallet access: it is neither the unlocked setup state nor the
+  // normal PIN-lock. It is never set for genuine absence or a readable wallet.
+  securityUnavailable: boolean;
 }
 
 export interface AuthContextType {
@@ -69,6 +76,18 @@ const DEFAULT_SESSION_TIMEOUT = 5 * 60 * 1000; // 5 minutes default
 const ACTIVITY_CHECK_INTERVAL = 30 * 1000; // 30 seconds
 const BACKGROUND_GRACE_PERIOD = 60 * 1000; // 60 seconds
 
+// TASK-213: bounded retry for the STRICT, lock-determining secure-storage reads
+// at boot. A transient keychain/keystore unavailability (common at cold boot) is
+// retried a few times with a short linear backoff before the app fails CLOSED to
+// the recovery state — so a transient hiccup recovers silently and never strands
+// a legitimate user, while a persistent failure never falls open to setup state.
+const STRICT_READ_MAX_ATTEMPTS = 3;
+const STRICT_READ_BACKOFF_MS = 200;
+
+// Web-safe delay. Used only for the bounded strict-read backoff above.
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authState, setAuthState] = useState<AuthState>({
     isLocked: true,
@@ -79,6 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     backgroundedAt: null,
     timeoutMinutes: 5,
     hasPin: false,
+    securityUnavailable: false,
   });
 
   const activityTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -167,44 +187,96 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkInitialAuthState = async () => {
     try {
-      // Parallelize the independent lock-determining probes (F-03). These five
-      // reads (wallet, PIN presence, biometric hardware/enrollment, biometric
-      // enabled flag, PIN timeout) do not depend on each other, so they run
-      // concurrently instead of as a 7-deep serial await chain. The lock state
-      // computed for every resolved-value input is IDENTICAL to the prior serial
-      // predicate below — only the I/O is parallelized.
-      //
-      // Promise.all, NOT Promise.allSettled: a probe that *rejects* still
-      // propagates to the catch below, leaving the app at its LOCKED default
-      // (isLocked: true / isAuthenticated: false) — exactly as the serial awaits
-      // did. Do NOT switch to allSettled: coercing a rejected hasPin to `false`
-      // would flip a rejecting read into the `!hasPin` unlocked setup state.
-      //
-      // NOTE — pre-existing fail-OPEN, out of scope for this I/O-only change:
-      // hasPin() and getCurrentWallet() catch their OWN storage errors and
-      // resolve falsy (false / null) rather than rejecting (AccountSecureStorage
-      // .hasPin, wallet/index.ts getCurrentWallet), so a storage read *failure*
-      // is indistinguishable here from "no PIN / no wallet" and lands in the
-      // unlocked setup state. That predates this diff and is unchanged by it;
-      // closing it would require an auth/lock SEMANTICS change (surfacing a read
-      // failure as a locked state) that needs human auth sign-off — see TASK-177.
-      const [wallet, hasPin, biometric, biometricEnabled, timeoutMinutes] =
-        await Promise.all([
-          MultiAccountWalletService.getCurrentWallet(),
-          AccountSecureStorage.hasPin(),
+      // ── Non-lock-determining reads (display/config only) ───────────────────
+      // Biometric availability, the biometric-enabled flag, and the PIN timeout
+      // do NOT gate wallet access, so a failure here falls back to safe display
+      // defaults (no biometrics, 5-min timeout) and NEVER drives the lock
+      // decision. Only the STRICT reads below decide locked/unlocked/recovery.
+      let biometricEnabled = false;
+      let biometricAvailable = false;
+      let timeoutMinutes: number | 'never' = 5;
+      try {
+        const [biometric, isBiometricEnabled, pinTimeout] = await Promise.all([
           checkBiometricAvailability(),
           AccountSecureStorage.isBiometricEnabled(),
           AccountSecureStorage.getPinTimeout(),
         ]);
-      const { hasHardware, isEnrolled } = biometric;
-      const biometricAvailable = hasHardware && isEnrolled;
+        biometricAvailable = biometric.hasHardware && biometric.isEnrolled;
+        biometricEnabled = isBiometricEnabled;
+        timeoutMinutes = pinTimeout;
+      } catch (error) {
+        // Non-security-critical — this must NOT affect the fail-closed lock
+        // decision, so keep the safe display defaults and continue.
+        console.warn(
+          'Non-critical auth-init reads failed; using display defaults',
+          error
+        );
+      }
 
-      if (!wallet || wallet.accounts.length === 0 || !hasPin) {
-        // No wallet setup yet or no PIN set - allow access for setup
+      // ── Lock-determining reads (STRICT, bounded retry, fail-closed) ─────────
+      // TASK-213: the STRICT variants THROW on a genuine secure-storage read/
+      // decrypt FAILURE and resolve falsy ONLY for genuine ABSENCE. That is what
+      // lets boot fail CLOSED: a read failure can no longer masquerade as "no
+      // wallet / no PIN" and slip into the unlocked setup state (the fail-OPEN
+      // this closes). The prior code used the error-SWALLOWING getCurrentWallet()
+      // / hasPin(), which resolved falsy on failure and dropped straight into the
+      // `!hasPin` unlocked branch.
+      //
+      // Promise.all (NOT allSettled): a throw in EITHER strict read rejects the
+      // pair so the loop can RETRY it. A retry happens ONLY on a read FAILURE —
+      // a genuine ABSENCE resolves `false` and is never retried. The short
+      // backoff tolerates transient cold-boot keychain/keystore unavailability.
+      let lockState: { hasWallet: boolean; hasPin: boolean } | null = null;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= STRICT_READ_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          const [hasWallet, hasPin] = await Promise.all([
+            MultiAccountWalletService.hasWalletWithAccountsStrict(),
+            AccountSecureStorage.hasPinStrict(),
+          ]);
+          lockState = { hasWallet, hasPin };
+          break;
+        } catch (error) {
+          lastError = error;
+          // Back off briefly, then retry. No delay after the final attempt.
+          if (attempt < STRICT_READ_MAX_ATTEMPTS) {
+            await delay(STRICT_READ_BACKOFF_MS * attempt);
+          }
+        }
+      }
+
+      if (!lockState) {
+        // FAIL CLOSED (TASK-213): the strict lock-determining reads STILL failed
+        // after retry, so secure storage is genuinely unreadable. Do NOT grant
+        // setup access and do NOT show the normal PIN lock (which cannot recover
+        // a broken store). Enter the recovery state — zero wallet access; its
+        // Retry re-runs this check and recovers if storage becomes readable.
+        console.error(
+          'Secure storage unavailable at auth init after retries:',
+          lastError
+        );
+        setAuthState((prev) => ({
+          ...prev,
+          isLocked: true,
+          isAuthenticated: false,
+          securityUnavailable: true,
+          biometricEnabled: false,
+          backgroundedAt: null,
+        }));
+        return;
+      }
+
+      const { hasWallet, hasPin } = lockState;
+
+      if (!hasWallet || !hasPin) {
+        // Genuine ABSENCE of a wallet or PIN — allow access for setup (UNCHANGED
+        // behavior). securityUnavailable is cleared: a transient failure that
+        // recovered on retry lands here and never shows the recovery screen.
         setAuthState((prev) => ({
           ...prev,
           isLocked: false,
           isAuthenticated: true,
+          securityUnavailable: false,
           biometricEnabled: biometricEnabled && biometricAvailable,
           backgroundedAt: null,
           timeoutMinutes,
@@ -213,18 +285,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Wallet exists and has PIN - require authentication
+      // Wallet exists and has a PIN — require authentication (UNCHANGED).
       setAuthState((prev) => ({
         ...prev,
         isLocked: true,
         isAuthenticated: false,
+        securityUnavailable: false,
         biometricEnabled: biometricEnabled && biometricAvailable,
         backgroundedAt: null,
         timeoutMinutes,
         hasPin,
       }));
     } catch (error) {
-      console.error('Failed to check initial auth state:', error);
+      // Defensive: any UNEXPECTED failure in the auth-init path fails CLOSED to
+      // the recovery state rather than leaving the app indeterminate (possibly
+      // unlocked). Retry re-runs this check.
+      console.error(
+        'Unexpected failure during auth init; failing closed:',
+        error
+      );
+      setAuthState((prev) => ({
+        ...prev,
+        isLocked: true,
+        isAuthenticated: false,
+        securityUnavailable: true,
+        biometricEnabled: false,
+        backgroundedAt: null,
+      }));
     }
   };
 

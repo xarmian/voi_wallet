@@ -2410,6 +2410,36 @@ export class AccountSecureStorage {
     }
   }
 
+  /**
+   * STRICT, boot-only PIN-presence probe (TASK-213). Unlike hasPin() — which
+   * swallows secure-storage read/decrypt errors and resolves `false`, making a
+   * genuine read FAILURE indistinguishable from genuine absence (the auth-init
+   * fail-OPEN) — this variant THROWS on a genuine secure-storage read/decrypt
+   * failure and resolves `false` ONLY for genuine ABSENCE (no credential stored
+   * in either the primary secure-store or the legacy AsyncStorage location).
+   *
+   * It is a pure read: no JSON parse, no legacy-migration WRITE, no cache
+   * mutation, and no secret material is ever returned or logged. Presence is
+   * decided purely on whether a raw credential value exists.
+   *
+   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
+   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
+   * read failure. Do NOT route other callers here: hasPin()'s error-swallowing
+   * contract (resolve falsy on failure) is relied on by its other call sites.
+   */
+  static async hasPinStrict(): Promise<boolean> {
+    // A throw from either getItem (keychain/keystore unavailable, decrypt error)
+    // PROPAGATES to the caller — it is never coerced to `false`. Presence in
+    // EITHER the secure store or the legacy AsyncStorage location counts as
+    // "PIN set"; both getItems return `null` (not throw) for genuine absence.
+    const secure = await secureStorage.getItem(this.PIN_KEY);
+    if (secure) {
+      return true;
+    }
+    const legacy = await storage.getItem(this.PIN_KEY);
+    return Boolean(legacy);
+  }
+
   static async changePin(
     currentPin: string,
     newPin: string,
