@@ -476,41 +476,99 @@ export class LedgerTransportService {
     this.stopDiscovery({ ble: true, usb: true });
   }
 
-  async disconnect(): Promise<void> {
-    if (!this.currentTransport || !this.currentDeviceId) {
-      return;
+  /**
+   * Tear down a transport that is going away: detach its disconnect listener,
+   * drop it as the current transport, stop health monitoring, and close it.
+   * The shared teardown for {@link disconnect} and the involuntary null-out
+   * paths (BLE/USB 'remove', health-check auto-disconnect) — which used to
+   * orphan `currentDisconnectHandler` on a dead transport and leak an unclosed
+   * transport (TASK-216, follow-up to F-24).
+   *
+   * ALL shared state (`currentTransport` / `currentDeviceId` /
+   * `currentDisconnectHandler` + the health-check interval) is cleared
+   * SYNCHRONOUSLY at claim time — before the first await — and ONLY when
+   * `transport` is still `currentTransport`. That gives two guarantees:
+   *   - Idempotent per transport: a second involuntary path (or `disconnect()`)
+   *     racing the same transport while its `close()` is in flight sees it
+   *     already claimed and no-ops instead of double-closing.
+   *   - Successor-safe: a new connection that lands while `close()` is pending
+   *     is a *different* `currentTransport`, so neither this teardown nor its
+   *     caller (which passes the transport it captured before any await) touches
+   *     it. Callers that probe across an await (health-check) must pass the
+   *     transport they probed, not a re-read of `currentTransport`.
+   *
+   * The listener is detached synchronously so the leak is fixed even when the
+   * caller can't await. Returns the (already-caught, never-rejecting) `close()`
+   * promise so a caller that must await teardown can — or `null` when the
+   * transport was already claimed / superseded, so the caller can skip its own
+   * follow-up (e.g. `markDeviceDisconnected`). `close()` failures are emitted as
+   * 'error', never thrown.
+   */
+  private releaseTransport(transport: Transport): Promise<void> | null {
+    // Claim: only the first caller to reach a still-current transport tears it
+    // down. A concurrent path — or a stale probe of a now-superseded transport
+    // — no-ops here, leaving any successor untouched.
+    if (this.currentTransport !== transport) {
+      return null;
     }
+    const handler = this.currentDisconnectHandler;
+    this.currentTransport = null;
+    this.currentDeviceId = null;
+    this.currentDisconnectHandler = null;
+    // F-24: the transport this interval monitored is gone — stop it now.
+    this.stopConnectionHealthMonitoring();
 
-    const deviceId = this.currentDeviceId;
-    const transport = this.currentTransport;
-
+    // Detach disconnect listener synchronously if supported, to avoid leaks.
     try {
-      // Detach disconnect listener if supported to avoid leaks
-      if (this.currentDisconnectHandler) {
+      if (handler) {
         const anyTransport = transport as any;
         if (typeof anyTransport.off === 'function') {
-          anyTransport.off('disconnect', this.currentDisconnectHandler);
+          anyTransport.off('disconnect', handler);
         } else if (typeof anyTransport.removeListener === 'function') {
-          anyTransport.removeListener(
-            'disconnect',
-            this.currentDisconnectHandler
-          );
+          anyTransport.removeListener('disconnect', handler);
+        } else if (typeof anyTransport.removeEventListener === 'function') {
+          // Mirror the addEventListener fallback used when attaching.
+          anyTransport.removeEventListener('disconnect', handler);
         }
-        this.currentDisconnectHandler = null;
       }
-      await transport.close();
     } catch (error) {
       this.emit(
         'error',
         error instanceof Error ? error : new Error(String(error))
       );
-    } finally {
-      this.currentTransport = null;
-      this.currentDeviceId = null;
-      // F-24: no transport is connected anymore — stop the health-check interval
-      // (explicit-disconnect path).
-      this.stopConnectionHealthMonitoring();
-      this.markDeviceDisconnected(deviceId);
+    }
+
+    // close() may reject on an already-gone device (and .then() captures a sync
+    // throw too); emit, never throw, so fire-and-forget callers stay safe.
+    return Promise.resolve()
+      .then(() => transport.close())
+      .catch((error) =>
+        this.emit(
+          'error',
+          error instanceof Error ? error : new Error(String(error))
+        )
+      );
+  }
+
+  async disconnect(): Promise<void> {
+    const transport = this.currentTransport;
+    const deviceId = this.currentDeviceId;
+    if (!transport || !deviceId) {
+      return;
+    }
+
+    // releaseTransport clears state synchronously; await the close so callers
+    // like switchDevice() don't reconnect over a still-closing transport.
+    const closing = this.releaseTransport(transport);
+    if (closing) {
+      await closing;
+      // Only mark the device disconnected if a successor hasn't reconnected the
+      // SAME device while close() was in flight — otherwise this stale teardown
+      // would flag the live device disconnected and emit a spurious
+      // 'disconnected' (TASK-216).
+      if (this.currentDeviceId !== deviceId) {
+        this.markDeviceDisconnected(deviceId);
+      }
     }
   }
 
@@ -642,11 +700,18 @@ export class LedgerTransportService {
         if (type === 'remove' && descriptor) {
           this.devices.delete(descriptor.id);
           if (this.currentDeviceId === descriptor.id) {
-            this.currentDeviceId = null;
-            this.currentTransport = null;
-            // F-24: the connected device went away during discovery — stop the
-            // health-check interval along with the transport it monitored.
-            this.stopConnectionHealthMonitoring();
+            // TASK-216: the connected device went away during discovery. Hand
+            // the transport to releaseTransport, which clears state, stops the
+            // health-check interval, detaches the listener, and closes it.
+            // Fire-and-forget: this discovery callback isn't awaited. Runs
+            // synchronously with no intervening await, so the claim always
+            // succeeds here — signal a disconnect for the connection too (not
+            // only 'deviceRemoved' for the discovery list).
+            const transport = this.currentTransport;
+            if (transport) {
+              void this.releaseTransport(transport);
+              this.markDeviceDisconnected(descriptor.id);
+            }
           }
           this.emit('deviceRemoved', { id: descriptor.id });
         }
@@ -769,11 +834,18 @@ export class LedgerTransportService {
         if (type === 'remove') {
           this.devices.delete(id);
           if (this.currentDeviceId === id) {
-            this.currentDeviceId = null;
-            this.currentTransport = null;
-            // F-24: the connected device went away during discovery — stop the
-            // health-check interval along with the transport it monitored.
-            this.stopConnectionHealthMonitoring();
+            // TASK-216: the connected device went away during discovery. Hand
+            // the transport to releaseTransport, which clears state, stops the
+            // health-check interval, detaches the listener, and closes it.
+            // Fire-and-forget: this discovery callback isn't awaited. Runs
+            // synchronously with no intervening await, so the claim always
+            // succeeds here — signal a disconnect for the connection too (not
+            // only 'deviceRemoved' for the discovery list).
+            const transport = this.currentTransport;
+            if (transport) {
+              void this.releaseTransport(transport);
+              this.markDeviceDisconnected(id);
+            }
           }
           this.emit('deviceRemoved', { id });
         }
@@ -955,14 +1027,20 @@ export class LedgerTransportService {
     deviceId: string
   ): void {
     const handler = () => {
-      if (this.currentDeviceId === deviceId) {
-        this.currentTransport = null;
-        this.currentDeviceId = null;
-        // F-24: transport-initiated disconnect — stop health monitoring so the
-        // interval never outlives the connection it was scoped to.
-        this.stopConnectionHealthMonitoring();
+      // TASK-216: route the live-transport branch through the shared teardown so
+      // a transport-initiated disconnect ALSO detaches this listener and closes
+      // the transport (releasing native BLE/HID resources) — not just clears
+      // state. releaseTransport is successor-safe: it no-ops if a same-device
+      // reconnect already replaced this transport, so a stale/repeated callback
+      // from the dead transport can't clobber the live successor. (F-24 stopped
+      // the health interval here; that now happens inside releaseTransport.)
+      // Mark disconnected only when we claimed the live transport: any successor
+      // takeover routes through releaseTransport/disconnect(), which detaches
+      // this very handler and marks the device, so a superseded callback should
+      // stay silent.
+      if (this.releaseTransport(transport) !== null) {
+        this.markDeviceDisconnected(deviceId);
       }
-      this.markDeviceDisconnected(deviceId);
     };
     this.currentDisconnectHandler = handler;
     const anyTransport = transport as any;
@@ -1209,6 +1287,12 @@ export class LedgerTransportService {
     // APDU wins, the timer would otherwise self-expire ~5s later — a stray,
     // uncollected timer per check (4/min) for the whole connected session.
     let raceTimer: ReturnType<typeof setTimeout> | undefined;
+    // TASK-216: snapshot the transport (and its device) we probe so that, if it
+    // fails, we tear down THIS transport and mark THIS device — not whatever is
+    // current after the await (a successor may have connected while this probe
+    // was in flight). Declared out here so the catch block can reach them.
+    const probedTransport = this.currentTransport;
+    const probedDeviceId = this.currentDeviceId;
     try {
       // APDU: get app and version (same as used by Algorand app service)
       // Use shorter timeout for health checks to avoid blocking
@@ -1219,7 +1303,7 @@ export class LedgerTransportService {
         );
       });
 
-      const healthCheck = this.currentTransport.send(0xb0, 0x01, 0x00, 0x00);
+      const healthCheck = probedTransport.send(0xb0, 0x01, 0x00, 0x00);
 
       await Promise.race([healthCheck, timeout]);
       // console.log('Ledger Health Check: OK'); // Only log failures to reduce noise
@@ -1240,15 +1324,18 @@ export class LedgerTransportService {
           error instanceof Error ? error : new Error(String(error))
         );
 
-        // Consider transport unhealthy; clear state and notify
-        const deviceId = this.currentDeviceId;
-        this.currentTransport = null;
-        this.currentDeviceId = null;
-        // F-24: this check just disconnected the transport it was monitoring —
-        // stop the interval so it does not keep waking on a dead connection.
-        this.stopConnectionHealthMonitoring();
-        if (deviceId) {
-          this.markDeviceDisconnected(deviceId);
+        // Consider the probed transport unhealthy; tear it down and notify.
+        // TASK-216: releaseTransport detaches the listener, clears state, stops
+        // the interval, and closes it — but only if `probedTransport` is still
+        // current. Mark the probed device disconnected ONLY when we actually
+        // claimed the live transport. If a concurrent teardown (disconnect /
+        // discovery 'remove') or a device switch superseded this probe, that
+        // path already marked the device — and connect() always disconnect()s
+        // the old device before switching — so re-marking here would only emit
+        // a duplicate 'disconnected'.
+        const claimed = this.releaseTransport(probedTransport) !== null;
+        if (claimed && probedDeviceId) {
+          this.markDeviceDisconnected(probedDeviceId);
         }
       } else {
         // Log but don't disconnect for temporary issues
