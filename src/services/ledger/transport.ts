@@ -1,8 +1,6 @@
 import { Platform, PermissionsAndroid } from 'react-native';
 import type { Permission, PermissionStatus } from 'react-native';
-import TransportBLE from '@ledgerhq/react-native-hw-transport-ble';
-import TransportHID from '@ledgerhq/react-native-hid';
-import Transport from '@ledgerhq/hw-transport';
+import type Transport from '@ledgerhq/hw-transport';
 import type { Subscription as TransportSubscription } from '@ledgerhq/hw-transport';
 import type { Device as BleDevice } from 'react-native-ble-plx';
 import type { DeviceModelId } from '@ledgerhq/devices';
@@ -13,6 +11,44 @@ import {
 } from '@/types/wallet';
 import { ledgerDeviceStorage, LedgerDeviceStorage } from './storage';
 import { isLedgerSigningInProgress } from '@/services/ledger/signingState';
+
+// F-24: Lazy transport-module loaders. The BLE transport pulls in
+// react-native-ble-plx + rxjs and the HID transport its own native deps; both
+// are only needed once discovery/connect actually runs. Loading them via
+// dynamic import (instead of a static top-of-file import) keeps them out of the
+// cold-boot eval graph for the ~100% of sessions that never touch a Ledger.
+// The resolved module is cached; a failed load resets the cache so a later
+// attempt can retry rather than being poisoned by a stale rejection.
+type TransportBLEModule =
+  typeof import('@ledgerhq/react-native-hw-transport-ble').default;
+type TransportHIDModule = typeof import('@ledgerhq/react-native-hid').default;
+
+let transportBlePromise: Promise<TransportBLEModule> | null = null;
+let transportHidPromise: Promise<TransportHIDModule> | null = null;
+
+async function loadTransportBLE(): Promise<TransportBLEModule> {
+  if (!transportBlePromise) {
+    transportBlePromise = import('@ledgerhq/react-native-hw-transport-ble')
+      .then((mod) => mod.default)
+      .catch((error) => {
+        transportBlePromise = null;
+        throw error;
+      });
+  }
+  return transportBlePromise;
+}
+
+async function loadTransportHID(): Promise<TransportHIDModule> {
+  if (!transportHidPromise) {
+    transportHidPromise = import('@ledgerhq/react-native-hid')
+      .then((mod) => mod.default)
+      .catch((error) => {
+        transportHidPromise = null;
+        throw error;
+      });
+  }
+  return transportHidPromise;
+}
 
 export type LedgerTransportType = 'ble' | 'usb';
 
@@ -138,6 +174,26 @@ export class LedgerTransportService {
     };
   }
 
+  /**
+   * Boot-time initialization gate (F-24). Only eagerly initialize the transport
+   * when the user has a previously paired Ledger persisted in storage; a user
+   * who has never used a Ledger skips transport init entirely, so the BLE/HID
+   * modules stay out of the cold-boot eval graph and no health-check interval is
+   * started. When persisted devices DO exist we still initialize so their
+   * metadata is loaded into the in-memory map BEFORE any getDevices() consumer
+   * (rekey/signing via keyManager) reads it. Returns whether init actually ran.
+   */
+  async initializeIfPersistedDevices(
+    options: InitializeOptions = {}
+  ): Promise<boolean> {
+    const hasPersisted = await ledgerDeviceStorage.hasPersistedDevices();
+    if (!hasPersisted) {
+      return false;
+    }
+    await this.initialize(options);
+    return true;
+  }
+
   async initialize(options: InitializeOptions = {}): Promise<void> {
     const {
       enableBle = true,
@@ -148,7 +204,9 @@ export class LedgerTransportService {
     this.bleEnabled = enableBle;
     this.usbEnabled = enableUsb;
 
-    // Load previously discovered devices from storage
+    // Load previously discovered devices from storage. This populates the
+    // in-memory device map (metadata only, no live descriptor) so getDevices()
+    // consumers see previously paired Ledgers even before discovery/connect.
     await this.loadPersistedDevices();
 
     if (!enableBle) {
@@ -166,8 +224,20 @@ export class LedgerTransportService {
       });
     }
 
-    // Begin passive connection health monitoring
-    this.startConnectionHealthMonitoring();
+    // NOTE (F-24): health monitoring is intentionally NOT started here. It is a
+    // no-op whenever no transport is connected, so a permanent boot-time
+    // interval just burns a foreground JS wakeup every 15s for every user. It is
+    // now started on a successful connect() and stopped on every disconnect
+    // path, so a CONNECTED transport is always monitored and nothing else is.
+  }
+
+  /**
+   * Whether the periodic connection health-check interval is currently running.
+   * Exposed so callers/tests can assert monitoring is scoped to a live
+   * connection (started on connect, stopped on disconnect).
+   */
+  isHealthMonitoringActive(): boolean {
+    return this.healthCheckTimer !== null;
   }
 
   getConnectedDevice(): LedgerDeviceInfo | null {
@@ -333,6 +403,14 @@ export class LedgerTransportService {
           this.connectingDeviceId = null;
           this.isConnecting = false;
 
+          // F-24: begin health monitoring only now that a transport is actually
+          // connected. Every path that clears currentTransport (explicit
+          // disconnect, transport 'disconnect' event, discovery-removed, and the
+          // health check's own serious-error disconnect) stops it again, so a
+          // CONNECTED transport is never left unmonitored and a disconnected one
+          // never keeps the interval alive.
+          this.startConnectionHealthMonitoring();
+
           this.markDeviceConnected(deviceId);
           console.log('Ledger Connection Complete');
           return transport;
@@ -429,6 +507,9 @@ export class LedgerTransportService {
     } finally {
       this.currentTransport = null;
       this.currentDeviceId = null;
+      // F-24: no transport is connected anymore — stop the health-check interval
+      // (explicit-disconnect path).
+      this.stopConnectionHealthMonitoring();
       this.markDeviceDisconnected(deviceId);
     }
   }
@@ -504,6 +585,7 @@ export class LedgerTransportService {
       return;
     }
 
+    const TransportBLE = await loadTransportBLE();
     const supported = await TransportBLE.isSupported().catch((error) => {
       console.log('Ledger BLE support check failed', error);
       return false;
@@ -562,6 +644,9 @@ export class LedgerTransportService {
           if (this.currentDeviceId === descriptor.id) {
             this.currentDeviceId = null;
             this.currentTransport = null;
+            // F-24: the connected device went away during discovery — stop the
+            // health-check interval along with the transport it monitored.
+            this.stopConnectionHealthMonitoring();
           }
           this.emit('deviceRemoved', { id: descriptor.id });
         }
@@ -629,6 +714,7 @@ export class LedgerTransportService {
       return;
     }
 
+    const TransportHID = await loadTransportHID();
     const supported = await TransportHID.isSupported().catch(() => false);
     this.updatePermissionsStatus({ usbAuthorized: supported });
     if (!supported) {
@@ -685,6 +771,9 @@ export class LedgerTransportService {
           if (this.currentDeviceId === id) {
             this.currentDeviceId = null;
             this.currentTransport = null;
+            // F-24: the connected device went away during discovery — stop the
+            // health-check interval along with the transport it monitored.
+            this.stopConnectionHealthMonitoring();
           }
           this.emit('deviceRemoved', { id });
         }
@@ -781,6 +870,7 @@ export class LedgerTransportService {
       if (this.cancelRequested) {
         throw new Error('Connection cancelled');
       }
+      const TransportBLE = await loadTransportBLE();
       // Prefer an up-to-date descriptor when available; fallback to deviceId
       const transport = await TransportBLE.open(descriptor ?? deviceId);
       if (this.cancelRequested) {
@@ -812,6 +902,7 @@ export class LedgerTransportService {
     }
 
     try {
+      const TransportHID = await loadTransportHID();
       const transport = await TransportHID.open(usbDescriptor);
       return transport;
     } catch (error) {
@@ -867,6 +958,9 @@ export class LedgerTransportService {
       if (this.currentDeviceId === deviceId) {
         this.currentTransport = null;
         this.currentDeviceId = null;
+        // F-24: transport-initiated disconnect — stop health monitoring so the
+        // interval never outlives the connection it was scoped to.
+        this.stopConnectionHealthMonitoring();
       }
       this.markDeviceDisconnected(deviceId);
     };
@@ -1111,12 +1205,19 @@ export class LedgerTransportService {
       return;
     }
 
+    // F-24: the 5s race timeout must be cleared once the race settles. If the
+    // APDU wins, the timer would otherwise self-expire ~5s later — a stray,
+    // uncollected timer per check (4/min) for the whole connected session.
+    let raceTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       // APDU: get app and version (same as used by Algorand app service)
       // Use shorter timeout for health checks to avoid blocking
-      const timeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Health check timeout')), 5000)
-      );
+      const timeout = new Promise((_, reject) => {
+        raceTimer = setTimeout(
+          () => reject(new Error('Health check timeout')),
+          5000
+        );
+      });
 
       const healthCheck = this.currentTransport.send(0xb0, 0x01, 0x00, 0x00);
 
@@ -1143,6 +1244,9 @@ export class LedgerTransportService {
         const deviceId = this.currentDeviceId;
         this.currentTransport = null;
         this.currentDeviceId = null;
+        // F-24: this check just disconnected the transport it was monitoring —
+        // stop the interval so it does not keep waking on a dead connection.
+        this.stopConnectionHealthMonitoring();
         if (deviceId) {
           this.markDeviceDisconnected(deviceId);
         }
@@ -1151,6 +1255,12 @@ export class LedgerTransportService {
         console.log(
           'Ledger Health Check: Temporary communication issue, not disconnecting'
         );
+      }
+    } finally {
+      // F-24: always clear the race timeout, whether the APDU won (timer still
+      // pending) or the timeout itself fired (already settled — a no-op).
+      if (raceTimer) {
+        clearTimeout(raceTimer);
       }
     }
   }
