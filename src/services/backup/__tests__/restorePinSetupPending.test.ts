@@ -29,6 +29,11 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
 
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
+    // TASK-212: clearAllData() now funnels the wallet-metadata wipe through the
+    // service instead of removing the key directly.
+    clearAllWallets: jest.fn(async () => {
+      order.push('clearWallet');
+    }),
     persistRestoredWallet: jest.fn(async () => {
       order.push('persistList');
     }),

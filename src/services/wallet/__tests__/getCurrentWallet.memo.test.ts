@@ -47,11 +47,38 @@ jest.mock('../../secure/AccountSecureStorage', () => ({
 
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
-import { storage } from '@/platform';
-import { AccountType, StandardAccountMetadata } from '@/types/wallet';
+import { storage, secureStorage } from '@/platform';
+import { AccountType, StandardAccountMetadata, Wallet } from '@/types/wallet';
 import { MultiAccountWalletService } from '../index';
 
 const WALLET_KEY = 'voi_wallet_metadata';
+const WIPE_TOMBSTONE_KEY = 'voi_wallet_wiped';
+
+/**
+ * Build a persisted-wallet blob whose account has an INVALID address but a valid
+ * hex publicKey, so getCurrentWallet()'s heal-on-read path re-derives the
+ * address and performs a storeWallet() (the read-repair write TASK-212 guards).
+ */
+function makeHealTriggeringBlob(): string {
+  const account = algosdk.generateAccount();
+  return JSON.stringify({
+    id: 'wallet-1',
+    version: '1.0',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    accounts: [
+      {
+        id: 'acc-1',
+        address: 'INVALID_ADDRESS', // fails algosdk.isValidAddress -> heal-on-read
+        publicKey: Buffer.from(account.sk.slice(32)).toString('hex'),
+        type: AccountType.STANDARD,
+        label: 'Account 1',
+        mnemonic: '',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    activeAccountId: 'acc-1',
+  });
+}
 
 /**
  * Build a valid persisted-wallet JSON blob backed by a freshly generated
@@ -316,5 +343,213 @@ describe('getCurrentWallet() memoization (F-22, TASK-179)', () => {
     const w2 = await MultiAccountWalletService.getCurrentWallet();
     if (!w2) throw new Error('expected a wallet');
     expect((storage.setItem as jest.Mock).mock.calls.length).toBeGreaterThan(0);
+  });
+
+  // === TASK-212: write-vs-wipe serialization ===============================
+
+  it('(i) a heal-on-read write does NOT resurrect metadata wiped concurrently by clearAllWallets', async () => {
+    mockStore[WALLET_KEY] = makeHealTriggeringBlob();
+
+    // The read triggers a heal-on-read storeWallet(); it races a wipe funneled
+    // through the service (which bumps the reset epoch synchronously and
+    // serializes the removal on the write chain). The wipe MUST win — the
+    // in-flight repair must not re-persist the stale blob.
+    const readP = MultiAccountWalletService.getCurrentWallet();
+    const wipeP = MultiAccountWalletService.clearAllWallets();
+    await Promise.all([readP, wipeP]);
+    // Drain any trailing queued write.
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+    // And the next read confirms no wallet survives.
+    expect(await MultiAccountWalletService.getCurrentWallet()).toBeNull();
+  });
+
+  it('(i2) a heal-on-read write applied with NO concurrent wipe still persists the repair', async () => {
+    mockStore[WALLET_KEY] = makeHealTriggeringBlob();
+
+    const w1 = await MultiAccountWalletService.getCurrentWallet();
+    if (!w1) throw new Error('expected a wallet');
+
+    // No wipe raced this read, so the heal-on-read write is NOT skipped: the
+    // stored blob is rewritten with a valid, re-derived address.
+    expect(mockStore[WALLET_KEY]).toBeDefined();
+    expect(mockStore[WALLET_KEY]).not.toContain('INVALID_ADDRESS');
+    expect(algosdk.isValidAddress(firstStandard(w1).address)).toBe(true);
+  });
+
+  it('(j) sanitizeWalletForPersistence scrubs secrets on ALL account types on the write path (type-agnostic)', async () => {
+    const account = algosdk.generateAccount();
+    const leakedMnemonic = algosdk.secretKeyToMnemonic(account.sk);
+    const leakedPrivateKey = Buffer.from(account.sk).toString('hex');
+    // A WATCH account (which must never carry key material) with a stray mnemonic
+    // AND privateKey. The old type-gated sanitizer (type === STANDARD) would have
+    // persisted both; the type-agnostic one must scrub them on any type.
+    const wallet = {
+      id: 'wallet-1',
+      version: '1.0',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      accounts: [
+        {
+          id: 'acc-1',
+          address: account.addr.toString(),
+          publicKey: Buffer.from(account.sk.slice(32)).toString('hex'),
+          type: AccountType.WATCH,
+          label: 'Watch',
+          mnemonic: leakedMnemonic,
+          privateKey: leakedPrivateKey,
+        },
+      ],
+      activeAccountId: 'acc-1',
+    } as unknown as Wallet;
+
+    // persistRestoredWallet() is the public write wrapper -> storeWallet ->
+    // sanitizeWalletForPersistence.
+    await MultiAccountWalletService.persistRestoredWallet(wallet);
+
+    const persisted = mockStore[WALLET_KEY];
+    expect(persisted).toBeDefined();
+    expect(persisted).not.toContain(leakedMnemonic);
+    expect(persisted).not.toContain(leakedPrivateKey);
+  });
+
+  it('(k) an intentional mutation (setActiveAccount) does NOT resurrect metadata wiped concurrently', async () => {
+    mockStore[WALLET_KEY] = makeWalletBlob().blob; // valid, single account acc-1
+
+    // setActiveAccount reads the wallet, mutates, then storeWallet(). A reset
+    // funneled through the service races between that read and the write. Either
+    // the read fails-closed (getCurrentWallet returns null once the epoch bumps →
+    // "No wallet found" throw) OR the write is skipped (epoch advanced) — both
+    // mean the wipe wins. Tolerate the throw; the point is NO resurrection.
+    const mutateP = MultiAccountWalletService.setActiveAccount('acc-1').catch(
+      () => {}
+    );
+    const wipeP = MultiAccountWalletService.clearAllWallets();
+    await Promise.all([mutateP, wipeP]);
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+    expect(await MultiAccountWalletService.getCurrentWallet()).toBeNull();
+  });
+
+  it('(k2) an intentional mutation with NO concurrent wipe still persists', async () => {
+    mockStore[WALLET_KEY] = makeWalletBlob({ label: 'Before' }).blob;
+
+    await MultiAccountWalletService.updateAccountLabel('acc-1', 'After');
+
+    // No wipe raced, so the label update persisted.
+    expect(mockStore[WALLET_KEY]).toBeDefined();
+    const w = await MultiAccountWalletService.getCurrentWallet();
+    if (!w) throw new Error('expected a wallet');
+    expect(firstStandard(w).label).toBe('After');
+  });
+
+  it('(l) after a wipe, a surviving legacy copy is NOT re-migrated to resurrect the wallet (durable tombstone guards it regardless of the in-memory epoch)', async () => {
+    mockStore[WALLET_KEY] = makeWalletBlob().blob;
+    await MultiAccountWalletService.clearAllWallets();
+    // Primary gone; the durable tombstone is persisted in general storage.
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+    expect(mockStore[WIPE_TOMBSTONE_KEY]).toBe('1');
+
+    // A legacy secure-store copy survives (e.g. its best-effort delete failed).
+    // getStoredValue sees the primary absent and falls back to migrateLegacyValue.
+    const legacyBlob = makeWalletBlob({ label: 'Legacy' }).blob;
+    (secureStorage.getItem as jest.Mock).mockResolvedValueOnce(legacyBlob);
+
+    const result = await MultiAccountWalletService.getCurrentWallet();
+
+    // The tombstone blocks migration — the wiped wallet is NOT resurrected. (The
+    // reset epoch passes here since no wipe raced THIS read; the tombstone is the
+    // effective guard, and it survives an app restart when the epoch resets.)
+    expect(result).toBeNull();
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('(l2) a create/restore after a wipe clears the tombstone and persists the new wallet', async () => {
+    mockStore[WALLET_KEY] = makeWalletBlob().blob;
+    await MultiAccountWalletService.clearAllWallets();
+    expect(mockStore[WIPE_TOMBSTONE_KEY]).toBe('1');
+
+    // Restore/create writes a fresh primary — the wiped state is over.
+    const fresh = JSON.parse(makeWalletBlob({ label: 'Fresh' }).blob) as Wallet;
+    await MultiAccountWalletService.persistRestoredWallet(fresh);
+
+    expect(mockStore[WALLET_KEY]).toBeDefined();
+    // Tombstone cleared atomically with the write.
+    expect(mockStore[WIPE_TOMBSTONE_KEY]).toBeUndefined();
+    const w = await MultiAccountWalletService.getCurrentWallet();
+    if (!w) throw new Error('expected the restored wallet');
+    expect(firstStandard(w).label).toBe('Fresh');
+  });
+
+  it('(m) migrateLegacyValue fails CLOSED on a corrupt legacy wallet blob (never copies raw secrets to general storage)', async () => {
+    const account = algosdk.generateAccount();
+    const leakedMnemonic = algosdk.secretKeyToMnemonic(account.sk);
+    // A corrupt (non-JSON) legacy secure-store blob that still contains a
+    // mnemonic. Primary storage is empty, so getStoredValue falls back to
+    // migrateLegacyValue.
+    const corruptLegacy = '{not valid json ' + leakedMnemonic;
+    (secureStorage.getItem as jest.Mock).mockResolvedValueOnce(corruptLegacy);
+    (storage.setItem as jest.Mock).mockClear();
+
+    const result = await MultiAccountWalletService.getCurrentWallet();
+
+    // Nothing migrated: no wallet, and the raw secret-bearing payload was NOT
+    // written to general storage.
+    expect(result).toBeNull();
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+    const wroteSecret = (storage.setItem as jest.Mock).mock.calls.some(
+      (c) => typeof c[1] === 'string' && c[1].includes(leakedMnemonic)
+    );
+    expect(wroteSecret).toBe(false);
+  });
+
+  it('(n) migrateLegacyValue does NOT clobber a primary blob written concurrently (re-checks absence in-chain)', async () => {
+    const freshBlob = makeWalletBlob({ label: 'Fresh' }).blob;
+    const legacyBlob = makeWalletBlob({ label: 'Legacy' }).blob;
+    // getStoredValue sees the primary absent (triggers migration); by the time the
+    // serialized migration task re-checks, a concurrent create/restore has written
+    // a fresh primary blob. The migration must observe that and skip.
+    (storage.getItem as jest.Mock)
+      .mockResolvedValueOnce(null) // getStoredValue: primary absent -> migrate
+      .mockResolvedValueOnce(freshBlob); // migration re-check: primary now present
+    (secureStorage.getItem as jest.Mock).mockResolvedValueOnce(legacyBlob);
+    (storage.setItem as jest.Mock).mockClear();
+
+    await MultiAccountWalletService.getCurrentWallet();
+
+    // Migration must NOT have written the stale legacy blob over the fresh primary.
+    expect(storage.setItem as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it('(p) getCurrentWallet returns null (fail-closed) when a wipe races the in-flight read', async () => {
+    mockStore[WALLET_KEY] = makeWalletBlob().blob;
+    // Prime the memo so the wallet is fully loaded once.
+    await MultiAccountWalletService.getCurrentWallet();
+
+    // A read starts (captures the reset epoch) and a wipe bumps the epoch before
+    // it returns. getCurrentWallet feeds signing, so it must NOT hand back the
+    // stale pre-wipe wallet — it returns null.
+    const readP = MultiAccountWalletService.getCurrentWallet();
+    const wipeP = MultiAccountWalletService.clearAllWallets();
+    const [read] = await Promise.all([readP, wipeP]);
+
+    expect(read).toBeNull();
+  });
+
+  it('(q) a stuck tombstone beside a PRESENT primary does not disable mutations — the write proceeds and clears it', async () => {
+    mockStore[WALLET_KEY] = makeWalletBlob({ label: 'Before' }).blob;
+    // Simulate a stuck tombstone: set beside a still-present primary (a wipe's
+    // removeItem failed, or a create's tombstone-clear failed, or a crash between
+    // the two). A guarded mutation must NOT silently skip on it.
+    mockStore[WIPE_TOMBSTONE_KEY] = '1';
+
+    await MultiAccountWalletService.updateAccountLabel('acc-1', 'After');
+
+    // The update persisted and the stale tombstone was cleared.
+    expect(mockStore[WIPE_TOMBSTONE_KEY]).toBeUndefined();
+    const w = await MultiAccountWalletService.getCurrentWallet();
+    if (!w) throw new Error('expected wallet');
+    expect(firstStandard(w).label).toBe('After');
   });
 });

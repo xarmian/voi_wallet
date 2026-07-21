@@ -126,6 +126,20 @@ describe('hasWalletWithAccountsStrict — absence vs failure (TASK-213)', () => 
     await MultiAccountWalletService.hasWalletWithAccountsStrict();
     expect(mockStorageSet).not.toHaveBeenCalled();
   });
+
+  it('resolves FALSE when the wipe tombstone is set even if a legacy secure-store copy survives (TASK-212)', async () => {
+    // Wiped: primary absent, durable tombstone set, but a legacy secure-store copy
+    // lingers (its best-effort delete failed). The strict probe must read it as
+    // ABSENT — the tombstone gates the legacy fallback, so a wiped wallet never
+    // boots as "present".
+    mockStore['voi_wallet_wiped'] = '1';
+    mockSecureGet.mockImplementation(async () =>
+      JSON.stringify({ accounts: [{ id: 'a' }] })
+    );
+    await expect(
+      MultiAccountWalletService.hasWalletWithAccountsStrict()
+    ).resolves.toBe(false);
+  });
 });
 
 // TASK-213 Codex round-4: hasKeyBearingAccountStrict is the durable, keystore-
