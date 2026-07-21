@@ -281,3 +281,351 @@ describe('checkConnectionHealth race-timer cleanup (F-24)', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 });
+
+// ===========================================================================
+// (d) Involuntary teardown: detach the disconnect listener AND close the
+//     orphaned transport (TASK-216 — follow-up to F-24).
+//
+// The three INVOLUNTARY null-out paths (BLE 'remove', USB 'remove', health-
+// check auto-disconnect) used to clear currentTransport + stop monitoring but
+// left currentDisconnectHandler attached to, and never close()d, the now-dead
+// transport — a dangling-listener + unclosed-transport leak. All three now
+// route through releaseTransport(), mirroring the explicit disconnect() path.
+// ===========================================================================
+
+describe('involuntary transport teardown (TASK-216)', () => {
+  /**
+   * Put the service into a "connected" state around `fakeTransport` without
+   * driving a full connect(): set the private current* fields + a disconnect
+   * handler and start monitoring, exactly as a live connection would. Returns
+   * the handler so a test can assert it gets detached.
+   */
+  function primeConnected(
+    fakeTransport: ReturnType<typeof makeFakeTransport>,
+    deviceId: string
+  ): () => void {
+    const handler = jest.fn();
+    const s = service as unknown as {
+      currentTransport: unknown;
+      currentDeviceId: string;
+      currentDisconnectHandler: (() => void) | null;
+    };
+    s.currentTransport = fakeTransport;
+    s.currentDeviceId = deviceId;
+    s.currentDisconnectHandler = handler;
+    // Emitted teardown errors would otherwise go unobserved.
+    service.on('error', () => {});
+    service.startConnectionHealthMonitoring();
+    expect(service.isHealthMonitoringActive()).toBe(true);
+    return handler;
+  }
+
+  function assertTornDown(
+    fakeTransport: ReturnType<typeof makeFakeTransport>,
+    handler: () => void
+  ) {
+    // Listener detached from the dead transport…
+    expect(fakeTransport.off).toHaveBeenCalledWith('disconnect', handler);
+    // …transport closed…
+    expect(fakeTransport.close).toHaveBeenCalledTimes(1);
+    // …monitoring stopped and references dropped.
+    expect(service.isHealthMonitoringActive()).toBe(false);
+    const s = service as unknown as {
+      currentTransport: unknown;
+      currentDisconnectHandler: unknown;
+    };
+    expect(s.currentTransport).toBeNull();
+    expect(s.currentDisconnectHandler).toBeNull();
+  }
+
+  it('health-check auto-disconnect detaches the listener AND closes the transport', async () => {
+    const fakeTransport = makeFakeTransport();
+    // A "serious" error string routes checkConnectionHealth into the
+    // auto-disconnect branch (matched on 'disconnected').
+    fakeTransport.send = jest
+      .fn()
+      .mockRejectedValue(new Error('device disconnected'));
+    const handler = primeConnected(fakeTransport, 'dev');
+
+    await (
+      service as unknown as { checkConnectionHealth: () => Promise<void> }
+    ).checkConnectionHealth();
+    // close() is dispatched on a microtask (fire-and-forget); flush it.
+    await Promise.resolve();
+
+    assertTornDown(fakeTransport, handler);
+  });
+
+  it('USB discovery "remove" of the connected device detaches the listener AND closes the transport', async () => {
+    let usbObserver: { next: (e: unknown) => void } | undefined;
+    mockHidTransport.listen.mockImplementation((obs: any) => {
+      usbObserver = obs;
+      return { unsubscribe: jest.fn() };
+    });
+
+    await service.startDiscovery({ ble: false, usb: true });
+    expect(usbObserver).toBeDefined();
+
+    const fakeTransport = makeFakeTransport();
+    const handler = primeConnected(fakeTransport, USB_DEVICE_ID);
+    const disconnected: (string | undefined)[] = [];
+    service.on('disconnected', (info) =>
+      disconnected.push('id' in info ? info.id : undefined)
+    );
+
+    // The connected USB device is unplugged mid-discovery.
+    usbObserver!.next({
+      type: 'remove',
+      descriptor: { vendorId: 1, productId: 2 },
+    });
+    // close() is invoked synchronously; flush the fire-and-forget promise.
+    await Promise.resolve();
+
+    assertTornDown(fakeTransport, handler);
+    // Removing the connected device signals a disconnect, not just removal.
+    expect(disconnected).toContain(USB_DEVICE_ID);
+  });
+
+  it('BLE discovery "remove" of the connected device detaches the listener AND closes the transport', async () => {
+    // BLE discovery gates on runtime permissions; grant them for the test.
+    jest
+      .spyOn(
+        service as unknown as {
+          ensureBlePermissions: () => Promise<boolean>;
+        },
+        'ensureBlePermissions'
+      )
+      .mockResolvedValue(true);
+    let bleObserver: { next: (e: unknown) => void } | undefined;
+    mockBleTransport.listen.mockImplementation((obs: any) => {
+      bleObserver = obs;
+      return { unsubscribe: jest.fn() };
+    });
+
+    await service.startDiscovery({ ble: true, usb: false });
+    expect(bleObserver).toBeDefined();
+
+    const BLE_ID = 'ble-device-1';
+    const fakeTransport = makeFakeTransport();
+    const handler = primeConnected(fakeTransport, BLE_ID);
+    const disconnected: (string | undefined)[] = [];
+    service.on('disconnected', (info) =>
+      disconnected.push('id' in info ? info.id : undefined)
+    );
+
+    // The connected BLE device drops out of range mid-discovery.
+    bleObserver!.next({ type: 'remove', descriptor: { id: BLE_ID } });
+    await Promise.resolve();
+
+    assertTornDown(fakeTransport, handler);
+    // Removing the connected device signals a disconnect, not just removal.
+    expect(disconnected).toContain(BLE_ID);
+  });
+
+  it('teardown is idempotent — a second involuntary path racing the same transport does not double-close', async () => {
+    const fakeTransport = makeFakeTransport();
+    const handler = primeConnected(fakeTransport, USB_DEVICE_ID);
+
+    // Two teardown paths land on the SAME transport before the first close()
+    // settles (e.g. a health-check auto-disconnect while a USB 'remove' fires).
+    // The first claims it; the second must see it already claimed and no-op.
+    const releaseTransport = (t: unknown) =>
+      (
+        service as unknown as {
+          releaseTransport: (t: unknown) => Promise<void>;
+        }
+      ).releaseTransport(t);
+    await Promise.all([
+      releaseTransport(fakeTransport),
+      releaseTransport(fakeTransport),
+    ]);
+
+    // Exactly one close() + one detach despite two teardown calls.
+    expect(fakeTransport.close).toHaveBeenCalledTimes(1);
+    expect(fakeTransport.off).toHaveBeenCalledTimes(1);
+    expect(fakeTransport.off).toHaveBeenCalledWith('disconnect', handler);
+  });
+
+  it('a stale health-check failure does not tear down a successor transport', async () => {
+    const oldTransport = makeFakeTransport();
+    oldTransport.send = jest
+      .fn()
+      .mockRejectedValue(new Error('device disconnected'));
+    primeConnected(oldTransport, 'old-dev');
+    const disconnected: (string | undefined)[] = [];
+    service.on('disconnected', (info) =>
+      disconnected.push('id' in info ? info.id : undefined)
+    );
+
+    // Probe starts against oldTransport, then suspends at the APDU await.
+    const check = (
+      service as unknown as { checkConnectionHealth: () => Promise<void> }
+    ).checkConnectionHealth();
+
+    // A successor connects and takes over currentTransport while the (already
+    // doomed) probe of oldTransport is still in flight.
+    const newTransport = makeFakeTransport();
+    const s = service as unknown as {
+      currentTransport: unknown;
+      currentDeviceId: string;
+      currentDisconnectHandler: (() => void) | null;
+    };
+    s.currentTransport = newTransport;
+    s.currentDeviceId = 'new-dev';
+    s.currentDisconnectHandler = jest.fn();
+
+    await check;
+    await Promise.resolve();
+
+    // The stale failure tears down oldTransport (it's no longer current, so
+    // releaseTransport no-ops) — the successor must be left fully intact.
+    expect(newTransport.close).not.toHaveBeenCalled();
+    expect(newTransport.off).not.toHaveBeenCalled();
+    expect(s.currentTransport).toBe(newTransport);
+    expect(s.currentDeviceId).toBe('new-dev');
+    // The stale health-check loser stays silent — it did not claim the
+    // transport, so it re-marks nothing (in real code the successor takeover
+    // via connect()->disconnect() is what marks the old device). The live
+    // successor is never marked.
+    expect(disconnected).not.toContain('new-dev');
+  });
+
+  it('a discovery remove during an in-flight health check emits disconnected exactly once', async () => {
+    let usbObserver: { next: (e: unknown) => void } | undefined;
+    mockHidTransport.listen.mockImplementation((obs: any) => {
+      usbObserver = obs;
+      return { unsubscribe: jest.fn() };
+    });
+    await service.startDiscovery({ ble: false, usb: true });
+
+    const fakeTransport = makeFakeTransport();
+    fakeTransport.send = jest
+      .fn()
+      .mockRejectedValue(new Error('device disconnected'));
+    primeConnected(fakeTransport, USB_DEVICE_ID);
+    const disconnected: (string | undefined)[] = [];
+    service.on('disconnected', (info) =>
+      disconnected.push('id' in info ? info.id : undefined)
+    );
+
+    // Health check starts probing the device, then suspends at the APDU await.
+    const check = (
+      service as unknown as { checkConnectionHealth: () => Promise<void> }
+    ).checkConnectionHealth();
+
+    // The device is unplugged mid-probe: the discovery 'remove' claims + marks
+    // it. The subsequent stale health-check failure must NOT re-mark it.
+    usbObserver!.next({
+      type: 'remove',
+      descriptor: { vendorId: 1, productId: 2 },
+    });
+    await check;
+    await Promise.resolve();
+
+    expect(disconnected.filter((id) => id === USB_DEVICE_ID)).toHaveLength(1);
+  });
+
+  it('disconnect() does not mark a device disconnected if a successor reconnects it during close()', async () => {
+    const oldTransport = makeFakeTransport();
+    let resolveClose: (() => void) | undefined;
+    oldTransport.close = jest.fn(
+      () => new Promise<void>((r) => (resolveClose = r))
+    );
+    primeConnected(oldTransport, USB_DEVICE_ID);
+    const markSpy = jest.spyOn(
+      service as unknown as {
+        markDeviceDisconnected: (id: string) => void;
+      },
+      'markDeviceDisconnected'
+    );
+
+    // releaseTransport clears state synchronously, then disconnect() awaits the
+    // (hanging) close(). Flush the microtask that actually invokes close().
+    const disconnecting = service.disconnect();
+    await Promise.resolve();
+    expect(resolveClose).toBeDefined();
+
+    // A successor reconnects the SAME device while close() is still pending.
+    const s = service as unknown as {
+      currentTransport: unknown;
+      currentDeviceId: string;
+    };
+    s.currentTransport = makeFakeTransport();
+    s.currentDeviceId = USB_DEVICE_ID;
+
+    resolveClose!();
+    await disconnecting;
+
+    // The stale teardown must NOT flag the reconnected device disconnected.
+    expect(markSpy).not.toHaveBeenCalled();
+    expect(s.currentDeviceId).toBe(USB_DEVICE_ID);
+  });
+
+  it('a stale transport-initiated disconnect does not clobber a same-device successor', async () => {
+    const svc = service as unknown as {
+      attachDisconnectListener: (t: unknown, id: string) => void;
+      currentTransport: unknown;
+      currentDeviceId: string;
+      currentDisconnectHandler: (() => void) | null;
+      markDeviceDisconnected: (id: string) => void;
+    };
+
+    // Live connection on USB_DEVICE_ID with its disconnect handler registered.
+    const oldTransport = makeFakeTransport();
+    svc.attachDisconnectListener(oldTransport, USB_DEVICE_ID);
+    const oldHandler = getDisconnectHandler(oldTransport);
+    svc.currentTransport = oldTransport;
+    svc.currentDeviceId = USB_DEVICE_ID;
+    service.startConnectionHealthMonitoring();
+
+    // The SAME device reconnects: a successor takes over + registers its own
+    // disconnect handler (attachDisconnectListener updates currentDisconnectHandler).
+    const newTransport = makeFakeTransport();
+    svc.attachDisconnectListener(newTransport, USB_DEVICE_ID);
+    const newHandler = getDisconnectHandler(newTransport);
+    svc.currentTransport = newTransport;
+    svc.currentDeviceId = USB_DEVICE_ID;
+
+    const markSpy = jest.spyOn(svc, 'markDeviceDisconnected');
+
+    // The OLD transport now fires its (stale) disconnect event.
+    oldHandler();
+
+    // Successor untouched: still current, its handler intact, still monitored,
+    // and no spurious 'disconnected' emitted for the live device.
+    expect(svc.currentTransport).toBe(newTransport);
+    expect(svc.currentDeviceId).toBe(USB_DEVICE_ID);
+    expect(svc.currentDisconnectHandler).toBe(newHandler);
+    expect(service.isHealthMonitoringActive()).toBe(true);
+    expect(markSpy).not.toHaveBeenCalled();
+  });
+
+  it('a transport-initiated disconnect on the live transport detaches the listener AND closes it', async () => {
+    const svc = service as unknown as {
+      attachDisconnectListener: (t: unknown, id: string) => void;
+      currentTransport: unknown;
+      currentDeviceId: string;
+      currentDisconnectHandler: (() => void) | null;
+    };
+    const fakeTransport = makeFakeTransport();
+    svc.attachDisconnectListener(fakeTransport, USB_DEVICE_ID);
+    const handler = getDisconnectHandler(fakeTransport);
+    svc.currentTransport = fakeTransport;
+    svc.currentDeviceId = USB_DEVICE_ID;
+    service.on('error', () => {});
+    service.startConnectionHealthMonitoring();
+
+    // The connected transport fires its own 'disconnect' (device dropped).
+    handler();
+    // close() is dispatched on a microtask (fire-and-forget); flush it.
+    await Promise.resolve();
+
+    // Now routed through releaseTransport: listener detached + transport closed,
+    // not just state cleared.
+    expect(fakeTransport.off).toHaveBeenCalledWith('disconnect', handler);
+    expect(fakeTransport.close).toHaveBeenCalledTimes(1);
+    expect(service.isHealthMonitoringActive()).toBe(false);
+    expect(svc.currentTransport).toBeNull();
+    expect(svc.currentDisconnectHandler).toBeNull();
+  });
+});
