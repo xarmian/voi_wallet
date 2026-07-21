@@ -8,6 +8,10 @@ import React, {
 import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
+import {
+  isPinSetupPending,
+  clearPinSetupPending,
+} from '@/services/secure/pinSetupPending';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
@@ -69,6 +73,15 @@ export interface AuthState {
   // must not expose the unguarded setup flow after a recovery/transient blip).
   // Meaningful only once authChecked is true and securityUnavailable is false.
   hasWallet: boolean;
+  // Resume-PIN-setup flag (TASK-213 restore-before-PIN fix). True ONLY when the
+  // boot verdict found a key-bearing account with no readable PIN AND the durable
+  // pin_setup_pending breadcrumb was set — i.e. a restore-from-backup persisted
+  // STANDARD accounts and was cold-killed before the user set a PIN. The navigator
+  // routes its initial route to SecuritySetup(source:'restore') so the user
+  // RESUMES PIN setup instead of hitting the recovery screen (whose Reset would
+  // wipe the just-restored wallet). Without the breadcrumb the SAME key-bearing/
+  // no-PIN state is a genuine keystore break and stays fail-closed to recovery.
+  pinSetupResume: boolean;
 }
 
 export interface AuthContextType {
@@ -155,6 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     securityUnavailable: false,
     authChecked: false,
     hasWallet: false,
+    pinSetupResume: false,
   });
 
   const activityTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -342,6 +356,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isAuthenticated: false,
           securityUnavailable: true,
           authChecked: true,
+          pinSetupResume: false,
           biometricEnabled: false,
           backgroundedAt: null,
         }));
@@ -350,17 +365,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const { hasWallet, hasPin, hasKeyBearingAccount } = lockState;
 
+      // SELF-HEAL (TASK-213, anti-fail-open): a readable PIN proves setup
+      // completed, so any lingering pin_setup_pending breadcrumb is stale. Clear
+      // it on EVERY readable-PIN boot so it can never later route a genuine
+      // keystore break to SecuritySetup (a lock-takeover fail-OPEN). This is the
+      // "clear whenever the strict PIN read confirms a PIN exists" guarantee;
+      // hasPinStrict is kept a pure read, so the clear lives here at the sole read
+      // site. Fire-and-forget: the breadcrumb is only ever read at the NEXT boot,
+      // and a killed clear is retried on the next readable-PIN boot; the primary
+      // durable clear is in setupPin. When hasPin is true the key-bearing guard
+      // below cannot fire, so this never races the breadcrumb READ.
+      if (hasPin) {
+        void clearPinSetupPending();
+      }
+
       if (hasKeyBearingAccount && !hasPin) {
-        // FAIL CLOSED (TASK-213 Codex round-4): a locally-key-bearing (STANDARD)
-        // account CANNOT exist without a PIN — setupPin always precedes the key
-        // import and the key is wrapped under the secret. So "key-bearing account
-        // present, PIN absent" is an IMPOSSIBLE genuine state: the PIN read was an
-        // Android swallow-to-null failure that the per-key presence sentinel could
-        // not catch (a pre-sentinel install whose keystore broke on its first boot
-        // after upgrade). Falling into the `!hasPin` setup branch here would be the
-        // exact fail-OPEN this task closes (offering to set a NEW PIN over a real
-        // wallet — a lock-takeover). Enter recovery instead. The wallet-metadata
-        // signal is read from plaintext AsyncStorage, unaffected by keystore desync.
+        // A locally-key-bearing (STANDARD) account with NO readable PIN. Two very
+        // different causes, disambiguated by the durable plaintext breadcrumb:
+        //
+        //  (1) RESTORE-BEFORE-PIN (breadcrumb SET): restore-from-backup persists
+        //      STANDARD accounts BEFORE the user sets a PIN, then routes to
+        //      SecuritySetup. A cold-kill in that window leaves this exact on-disk
+        //      state on a HEALTHY wallet. Route to SecuritySetup to RESUME PIN
+        //      setup — NOT recovery, whose Reset would wipe the restored wallet.
+        //
+        //  (2) GENUINE KEYSTORE BREAK (breadcrumb ABSENT): an Android
+        //      swallow-to-null PIN read on a wallet whose keystore desynced. Here
+        //      "key-bearing + no PIN" is an IMPOSSIBLE genuine state and falling
+        //      into the setup branch would be a fail-OPEN (offering a NEW PIN over
+        //      a real wallet). Fail CLOSED to recovery.
+        //
+        // isPinSetupPending fails CLOSED (a breadcrumb read error resolves absent),
+        // so an unreadable breadcrumb takes the recovery path, never SecuritySetup.
+        const restoreInProgress = await isPinSetupPending();
+        if (restoreInProgress) {
+          // Resume PIN setup. isLocked/isAuthenticated are set to the FAIL-CLOSED
+          // pair (locked, not authenticated) as defense in depth: the navigator
+          // routes the initial route to SecuritySetup (never Main) off
+          // pinSetupResume, and Main stays lock-guarded even if it were reached
+          // before a PIN is set. hasWallet reflects the on-disk reality (true).
+          setAuthState((prev) => ({
+            ...prev,
+            isLocked: true,
+            isAuthenticated: false,
+            securityUnavailable: false,
+            authChecked: true,
+            pinSetupResume: true,
+            hasWallet: true,
+            hasPin: false,
+            biometricEnabled: false,
+            backgroundedAt: null,
+          }));
+          return;
+        }
         console.error(
           'Key-bearing account present but PIN read resolved absent — treating as a ' +
             'secure-storage read failure and failing closed to recovery.'
@@ -371,6 +428,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isAuthenticated: false,
           securityUnavailable: true,
           authChecked: true,
+          pinSetupResume: false,
           biometricEnabled: false,
           backgroundedAt: null,
         }));
@@ -387,6 +445,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isAuthenticated: true,
           securityUnavailable: false,
           authChecked: true,
+          pinSetupResume: false,
           hasWallet,
           biometricEnabled: biometricEnabled && biometricAvailable,
           backgroundedAt: null,
@@ -403,6 +462,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: false,
         securityUnavailable: false,
         authChecked: true,
+        pinSetupResume: false,
         hasWallet,
         biometricEnabled: biometricEnabled && biometricAvailable,
         backgroundedAt: null,
@@ -423,6 +483,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: false,
         securityUnavailable: true,
         authChecked: true,
+        pinSetupResume: false,
         biometricEnabled: false,
         backgroundedAt: null,
       }));

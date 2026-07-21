@@ -213,7 +213,10 @@ export type RootStackParamList = {
   SecuritySetup: {
     mnemonic?: string;
     accounts?: ScannedAccount[];
-    source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger';
+    // 'restore' = post-restore PIN setup (no import branch runs; setupPin only).
+    // RestoreWalletScreen already navigates with it via CommonActions.reset, and
+    // TASK-213's cold-boot resume routes here with it as the initial param.
+    source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger' | 'restore';
     accountLabel?: string;
   };
   MnemonicImport: { isOnboarding?: boolean } | undefined;
@@ -1096,9 +1099,18 @@ function AppStack() {
   // a recovery Retry or a transient blip (AuthGuard only wraps `Main`). hasWallet
   // is meaningful only once authChecked is true, which gates the render below.
   const { authState, recheckAuthState } = useAuth();
-  const initialRoute: keyof RootStackParamList = authState.hasWallet
-    ? 'Main'
-    : 'Onboarding';
+  // TASK-213 (restore-before-PIN): when the boot verdict is "resume PIN setup"
+  // (a restore persisted key-bearing accounts but was cold-killed before the PIN),
+  // the initial route is SecuritySetup(source:'restore') — NOT Main and NOT the
+  // recovery screen. This must take precedence over the hasWallet→Main derivation
+  // (a restored wallet HAS accounts, so hasWallet is true here). SecuritySetup is
+  // an unguarded route; Main is only ever reached from it AFTER setupPin succeeds
+  // (which sets a PIN and clears the breadcrumb), so this never exposes the wallet.
+  const initialRoute: keyof RootStackParamList = authState.pinSetupResume
+    ? 'SecuritySetup'
+    : authState.hasWallet
+      ? 'Main'
+      : 'Onboarding';
 
   // Single readiness owner for the native splash (F-48, TASK-182). Hide it only
   // once the FIRST real content frame can render — covering ALL gates of the init
@@ -1164,7 +1176,17 @@ function AppStack() {
     >
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
       <Stack.Screen name="CreateWallet" component={CreateWalletScreen} />
-      <Stack.Screen name="SecuritySetup" component={SecuritySetupScreen} />
+      <Stack.Screen
+        name="SecuritySetup"
+        component={SecuritySetupScreen}
+        // TASK-213: when SecuritySetup is the INITIAL route (the restore-before-PIN
+        // resume), it is mounted without navigation params, so seed source:'restore'
+        // here. Harmless otherwise — an explicit navigate() (create/import/ledger)
+        // provides its own params, which override these initial defaults.
+        initialParams={
+          authState.pinSetupResume ? { source: 'restore' } : undefined
+        }
+      />
       <Stack.Screen name="MnemonicImport" component={MnemonicImportScreen} />
       <Stack.Screen name="AddWatchAccount" component={AddWatchAccountScreen} />
       <Stack.Screen name="Main" component={MainTabNavigator} />

@@ -44,6 +44,7 @@ import {
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import type { SecretSource } from './SessionKeyVault';
+import { clearPinSetupPending } from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2048,6 +2049,13 @@ export class AccountSecureStorage {
         })
       );
       this.legacyCheckRequired = false;
+      // TASK-213: a PIN is now durably established, so the restore-before-PIN
+      // breadcrumb (if any) is stale. Clear it here — the PRIMARY clear point —
+      // so a LATER keystore break fails CLOSED to recovery instead of routing to
+      // SecuritySetup over this now-protected wallet (the fail-OPEN this guards).
+      // Best-effort (clearPinSetupPending never throws): a clear failure is
+      // self-healed by the readable-PIN boot clear in checkInitialAuthState.
+      await clearPinSetupPending();
     } catch (error) {
       throw new AccountStorageError(
         `Failed to set up PIN: ${error instanceof Error ? error.message : 'Unknown error'}`
