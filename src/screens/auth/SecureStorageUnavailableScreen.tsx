@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  TextInput,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -75,6 +76,19 @@ export default function SecureStorageUnavailableScreen({
   const styles = useThemedStyles(createStyles);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  // Type-RESET friction (Dave's decision, TASK-213): the destructive wipe stays
+  // disabled until the user types the exact word RESET — stronger intent than a
+  // checkbox, ON TOP OF the existing double confirmation.
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  // FIX 3(a): "reset didn't resolve it" signal. Set when a reset attempt starts.
+  // On a SUCCESSFUL reset the recheck clears securityUnavailable and this screen
+  // UNMOUNTS, destroying this state — so the message never shows. If the reset
+  // does NOT resolve the failure the screen stays mounted, this stays true, and
+  // the guidance renders (no silent loop). This survives-by-unmount design needs
+  // no fragile post-await timing check.
+  const [resetAttempted, setResetAttempted] = useState(false);
+  const RESET_CONFIRM_WORD = 'RESET';
+  const canReset = resetConfirmText === RESET_CONFIRM_WORD;
   // Avoid a setState-after-unmount warning: on a SUCCESSFUL retry/reset this
   // screen unmounts (securityUnavailable cleared) before the handler resumes.
   const mountedRef = useRef(true);
@@ -103,6 +117,10 @@ export default function SecureStorageUnavailableScreen({
 
   const performReset = async () => {
     setIsResetting(true);
+    // Mark the attempt BEFORE the wipe. A SUCCESSFUL reset unmounts this screen
+    // (securityUnavailable cleared), discarding this flag; if we stay mounted the
+    // reset did NOT resolve the failure and the guidance below renders.
+    setResetAttempted(true);
     try {
       // Best-effort local wipe. Each step is isolated so a throw in one (a broken
       // keystore can make key-material deletion fail) still lets the wallet-
@@ -124,13 +142,10 @@ export default function SecureStorageUnavailableScreen({
       // absence ⇒ unlocked setup ⇒ Onboarding (restore-from-recovery-phrase).
       await onRetry();
     } catch (error) {
+      // A throw here (or a recheck that re-lands on recovery without throwing)
+      // leaves this screen mounted; resetAttempted stays true and the inline
+      // "reset didn't resolve it" guidance renders — no silent loop.
       console.error('Reset of secure storage state failed:', error);
-      if (mountedRef.current) {
-        showAlert(
-          'Reset failed',
-          'The app could not reset its local data. Fully close and reopen the app, then try again.'
-        );
-      }
     } finally {
       if (mountedRef.current) {
         setIsResetting(false);
@@ -139,10 +154,12 @@ export default function SecureStorageUnavailableScreen({
   };
 
   const confirmReset = () => {
-    if (busy) return;
+    // Gate on both the typed-RESET word and the not-busy state, so this can never
+    // be triggered before the friction is satisfied.
+    if (busy || !canReset) return;
     showAlert(
       'Reset and start over?',
-      'This permanently deletes this device’s local wallet data. Your accounts stay safe on-chain and can be restored with your recovery phrase. Without your recovery phrase this cannot be undone.',
+      'This permanently erases ALL local wallet data on this device. Only accounts backed by a recovery phrase you personally hold can be restored — each from its own phrase. Watch-only, Ledger, and remote-signer accounts must be re-added manually. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -151,7 +168,7 @@ export default function SecureStorageUnavailableScreen({
           onPress: () =>
             showAlert(
               'Are you sure?',
-              'Make sure you have your recovery phrase before continuing. All local wallet data will be erased.',
+              'Make sure you have EVERY recovery phrase before continuing. All local wallet data on this device will be permanently erased.',
               [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -203,17 +220,47 @@ export default function SecureStorageUnavailableScreen({
         </TouchableOpacity>
 
         <Text style={styles.hint}>
-          If retrying doesn&apos;t help, your device&apos;s secure storage may
-          be permanently reset (for example after changing your device passcode
-          or restoring from a backup). You can reset this app and restore your
-          wallet from your recovery phrase — your funds remain safe on-chain.
+          If retrying doesn&apos;t help, your device&apos;s secure storage may be
+          permanently reset (for example after changing your device passcode or
+          restoring your phone from a backup). Resetting erases ALL local wallet
+          data on this device. Only accounts you hold a recovery phrase for can be
+          restored — each from its own phrase. Watch-only, Ledger, and
+          remote-signer accounts, and account names, are not covered by a recovery
+          phrase and must be re-added manually. Make sure you have every recovery
+          phrase before continuing.
         </Text>
 
+        <Text style={styles.resetPrompt}>
+          Type {RESET_CONFIRM_WORD} below to enable erasing all local data.
+        </Text>
+        <TextInput
+          style={styles.resetInput}
+          value={resetConfirmText}
+          onChangeText={setResetConfirmText}
+          editable={!busy}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          placeholder={RESET_CONFIRM_WORD}
+          placeholderTextColor={theme.colors.textMuted}
+          accessibilityLabel="Type RESET to enable erasing all local data"
+        />
+
+        {resetAttempted && !busy ? (
+          <Text style={styles.resetFailedNotice} accessibilityLiveRegion="polite">
+            Reset didn&apos;t resolve the problem. Fully restart your device and
+            reopen the app. If it keeps happening, contact support.
+          </Text>
+        ) : null}
+
         <TouchableOpacity
-          style={[styles.resetButton, busy && styles.buttonDisabled]}
+          style={[
+            styles.resetButton,
+            (busy || !canReset) && styles.buttonDisabled,
+          ]}
           onPress={confirmReset}
-          disabled={busy}
+          disabled={busy || !canReset}
           accessibilityRole="button"
+          accessibilityState={{ disabled: busy || !canReset }}
           accessibilityLabel="Reset app and restore from recovery phrase"
         >
           <Ionicons name="trash-outline" size={18} color={theme.colors.error} />
@@ -301,5 +348,34 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.error,
       fontSize: 14,
       fontWeight: '600',
+    },
+    resetPrompt: {
+      fontSize: 13,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+      marginTop: theme.spacing.xl,
+      marginBottom: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.lg,
+    },
+    resetInput: {
+      alignSelf: 'stretch',
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.borderRadius.md,
+      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.md,
+      marginHorizontal: theme.spacing.lg,
+      color: theme.colors.text,
+      fontSize: 16,
+      textAlign: 'center',
+      letterSpacing: 2,
+    },
+    resetFailedNotice: {
+      fontSize: 13,
+      color: theme.colors.error,
+      textAlign: 'center',
+      marginTop: theme.spacing.lg,
+      lineHeight: 18,
+      paddingHorizontal: theme.spacing.lg,
     },
   });

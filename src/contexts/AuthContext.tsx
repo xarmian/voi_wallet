@@ -120,10 +120,17 @@ const STRICT_READ_BACKOFF_MS = 200;
 // retry loop already handles: it retries, then fails CLOSED to the recovery
 // screen (which now offers Retry AND a reset escape hatch). The bound is chosen
 // so even the worst case — the non-critical reads hang, then all 3 strict
-// attempts hang (2000 + 2000+200 + 2000+400 + 2000 = 8600 ms) — still settles
-// UNDER the 10s splash watchdog, so recovery paints before the splash is torn
-// down onto a blank frame.
-const STRICT_READ_TIMEOUT_MS = 2000;
+// attempts hang — still settles COMFORTABLY under the 10s splash watchdog, so
+// recovery paints before the splash is torn down onto a blank frame.
+//
+// TASK-213 (P3, watchdog margin): trimmed 2000 → 1500 ms. The worst case is now
+// 1500 (non-critical) + 1500+200 + 1500+400 + 1500 = 6600 ms, leaving ~3.4 s of
+// slack under the 10 s watchdog (was only ~1.4 s at 2000 ms) so cold-boot timer/
+// scheduling drift can't push the settle past the watchdog and force it to hide
+// onto a blank frame before recovery renders. 1500 ms is still far above a normal
+// keychain/keystore read (<100 ms), so it never trips on a healthy-but-slow read;
+// a genuinely wedged read still times out → retries → fails CLOSED to recovery.
+const STRICT_READ_TIMEOUT_MS = 1500;
 
 // Web-safe delay. Used only for the bounded strict-read backoff above.
 const delay = (ms: number): Promise<void> =>
