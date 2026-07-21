@@ -219,9 +219,10 @@ export class AccountSecureStorage {
   //     marker. Set by clearAll before its destructive removals; makes
   //     migrateLegacyAccountDataLocked REFUSE to resurrect a wiped secret from a
   //     surviving legacy blob (incl. across a restart, when the in-memory
-  //     generation is gone). Cleared ONLY by commitPendingCreate AFTER a
-  //     successful wallet-metadata commit — NEVER on a bare secret write (that
-  //     would reopen a crash-resurrection window).
+  //     generation is gone). STICKY: once set by a reset it is never cleared, so
+  //     a surviving legacy blob for ANY old id can never be resurrected. A new
+  //     account writes its primary secret directly (never migrates), so a
+  //     permanent tombstone blocks nothing legitimate.
   //   - PENDING_CREATES_KEY: durable intent journal { [accountId]: token }
   //     written BEFORE the secret so an in-flight/crashed creation's secret is
   //     enumerable even before it reaches any index (the account list is written
@@ -1166,27 +1167,51 @@ export class AccountSecureStorage {
   }
 
   /**
+   * Generation-guarded write for a NON-SECRET account record (watch / rekeyed /
+   * ledger / remote-signer) created during restore (TASK-220, Codex diff-review
+   * P2). No secret exists to orphan or journal, but the write must still ABORT
+   * (ResetRacedError) if a reset raced the restore so it does not leave a secure
+   * account-metadata/list record behind after the wipe. The generation check and
+   * the write share one mutex task, so no clearAll can interleave.
+   */
+  static async storeAccountMetadataForCreation(
+    account: AccountMetadata,
+    creationGen: number
+  ): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      await this.storeAccountLocked(account);
+    });
+  }
+
+  /**
    * Commit a pending creation AFTER its wallet-metadata write succeeded: drop the
-   * journal entry (iff still ours) and clear the secure wipe tombstone — but ONLY
-   * if the generation is still the one this creation captured, so a LATER reset's
-   * tombstone is never clobbered (Codex R2).
+   * journal entry (iff still ours).
+   *
+   * The secure wipe tombstone is intentionally NOT cleared here — it is STICKY
+   * after an explicit reset (Codex diff-review P1). Clearing it on a new creation
+   * would re-enable migrateLegacyAccountDataLocked and let a SURVIVING legacy
+   * `voi_account_<otherId>` blob — one whose best-effort legacy delete failed at
+   * wipe time, for a DIFFERENT old id — resurrect its secret. Unlike the single
+   * wallet-metadata blob (whose tombstone TASK-212 clears on the one primary
+   * write), the secure store holds many per-account secrets, so one new account's
+   * write proves nothing about other ids. A freshly created/restored account
+   * writes its PRIMARY secret directly and never needs migration, so a permanent
+   * tombstone blocks nothing legitimate; nothing writes legacy-format secrets
+   * anymore (they are read-only for one-time migration). Net: once a device has
+   * been wiped, pre-wipe secrets can never be resurrected.
    */
   static async commitPendingCreate(
     accountId: string,
-    token: string,
-    creationGen: number
+    token: string
   ): Promise<void> {
     return this.runKeyMutationExclusive(async () => {
       const journal = await this.readPendingCreateJournal();
       if (journal[accountId] === token) {
         delete journal[accountId];
         await this.writePendingCreateJournal(journal);
-      }
-      // Generation-conditional: only the creation that is still "current" (no
-      // reset since it began) may declare the wiped state over. A creation that
-      // was raced never reaches here (its metadata write throws ResetRacedError).
-      if (this.secureResetGeneration === creationGen) {
-        await storage.removeItem(this.SECURE_WIPE_TOMBSTONE_KEY);
       }
     });
   }

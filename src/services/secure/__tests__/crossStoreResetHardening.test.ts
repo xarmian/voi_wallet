@@ -9,8 +9,8 @@
 //   * a duplicate pending id is rejected so an earlier raced attempt can never
 //     delete a later same-id attempt's secret;
 //   * ownership-checked rollback deletes ONLY the attempt's own secret;
-//   * the durable wipe tombstone is NOT cleared on a bare secret write, is cleared
-//     generation-conditionally at commit, and blocks legacy-blob resurrection.
+//   * the durable wipe tombstone is STICKY after a reset (never cleared, even by a
+//     later commit) and permanently blocks legacy-blob resurrection.
 //
 // SECURITY NOTE: key material is throwaway random bytes; nothing real is used or
 // logged. secureStorage / AsyncStorage are in-memory Map sinks.
@@ -229,7 +229,7 @@ describe('TASK-220 wipe tombstone lifecycle', () => {
     expect(tombstoneSet()).toBe(true);
   });
 
-  it('is cleared by commitPendingCreate when the generation still matches', async () => {
+  it('is STICKY: commitPendingCreate drops the journal entry but does NOT clear the tombstone (Codex diff-review P1)', async () => {
     await AccountSecureStorage.clearAll();
     const gen = AccountSecureStorage.getResetGeneration();
     const token = await AccountSecureStorage.storeAccountForCreation(
@@ -237,12 +237,15 @@ describe('TASK-220 wipe tombstone lifecycle', () => {
       freshSk(),
       gen
     );
-    await AccountSecureStorage.commitPendingCreate('t2', token, gen);
-    expect(tombstoneSet()).toBe(false);
+    await AccountSecureStorage.commitPendingCreate('t2', token);
+    // The tombstone stays set — a surviving legacy blob for ANY old id must
+    // remain un-resurrectable after a reset.
+    expect(tombstoneSet()).toBe(true);
+    // The journal entry, however, is finalized.
     expect(journal()['t2']).toBeUndefined();
   });
 
-  it("does NOT clobber a LATER reset's tombstone (generation-conditional clear)", async () => {
+  it('stays set across a later reset too (never clobbered / never cleared)', async () => {
     await AccountSecureStorage.clearAll();
     const gen = AccountSecureStorage.getResetGeneration();
     const token = await AccountSecureStorage.storeAccountForCreation(
@@ -250,11 +253,9 @@ describe('TASK-220 wipe tombstone lifecycle', () => {
       freshSk(),
       gen
     );
-    // A LATER reset bumps the generation and re-sets the tombstone.
-    await AccountSecureStorage.clearAll();
+    await AccountSecureStorage.clearAll(); // a LATER reset re-sets it
     expect(tombstoneSet()).toBe(true);
-    // A late commit for the stale generation must NOT clear the new tombstone.
-    await AccountSecureStorage.commitPendingCreate('t3', token, gen);
+    await AccountSecureStorage.commitPendingCreate('t3', token);
     expect(tombstoneSet()).toBe(true);
   });
 });
@@ -290,5 +291,44 @@ describe('TASK-220 legacy resurrection block', () => {
     const account = await AccountSecureStorage.retrieveAccount(id);
     expect(account.id).toBe(id);
     expect(mockKv.has(`${METADATA_PREFIX}${id}`)).toBe(true); // migrated
+  });
+
+  it('sticky tombstone still blocks a surviving legacy blob AFTER a new account is created + committed (Codex diff-review P1)', async () => {
+    const oldId = 'old-legacy';
+    const legacyBlob = JSON.stringify({
+      accountId: oldId,
+      address: `ADDR_${oldId}`,
+      type: 'standard',
+      publicData: {
+        publicKey: 'cc'.repeat(32),
+        label: oldId,
+        color: '#000000',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      authMethod: 'biometric',
+      lastAccessed: '2026-01-01T00:00:00.000Z',
+      encryptedPrivateKey: { format: 'test-envelope' },
+    });
+
+    // Reset the device (sets the sticky tombstone) but a legacy blob for an OLD
+    // id survives the best-effort legacy delete.
+    await AccountSecureStorage.clearAll();
+    mockSecure.set(`${LEGACY_PREFIX}${oldId}`, legacyBlob);
+
+    // Create + commit a brand-new account after the reset.
+    const gen = AccountSecureStorage.getResetGeneration();
+    const token = await AccountSecureStorage.storeAccountForCreation(
+      standardAccount('brand-new'),
+      freshSk(),
+      gen
+    );
+    await AccountSecureStorage.commitPendingCreate('brand-new', token);
+
+    // The old legacy secret must STILL be un-resurrectable (tombstone sticky).
+    await expect(AccountSecureStorage.retrieveAccount(oldId)).rejects.toThrow();
+    expect(mockKv.has(`${METADATA_PREFIX}${oldId}`)).toBe(false);
+    // ...while the new account is fully usable.
+    const fresh = await AccountSecureStorage.retrieveAccount('brand-new');
+    expect(fresh.id).toBe('brand-new');
   });
 });

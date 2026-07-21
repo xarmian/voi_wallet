@@ -263,7 +263,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             notes: backupAccount.notes,
           };
 
-          await AccountSecureStorage.storeAccount(watchAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            watchAccount,
+            creationGen
+          );
           restoredAccounts.push(watchAccount);
           counts.watch++;
           counts.total++;
@@ -289,7 +292,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             rekeyedFrom: backupAccount.rekeyedFrom,
           };
 
-          await AccountSecureStorage.storeAccount(rekeyedAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            rekeyedAccount,
+            creationGen
+          );
           restoredAccounts.push(rekeyedAccount);
           counts.rekeyed++;
           counts.total++;
@@ -316,7 +322,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             deviceName: backupAccount.deviceName,
           };
 
-          await AccountSecureStorage.storeAccount(ledgerAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            ledgerAccount,
+            creationGen
+          );
           restoredAccounts.push(ledgerAccount);
           counts.ledger++;
           counts.total++;
@@ -360,7 +369,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             authLevel: withDefaultAuthLevel(backupAccount.authLevel),
           };
 
-          await AccountSecureStorage.storeAccount(remoteSignerAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            remoteSignerAccount,
+            creationGen
+          );
           restoredAccounts.push(remoteSignerAccount);
           counts.remoteSigner++;
           counts.total++;
@@ -408,13 +420,9 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
     }
 
     // TASK-220: metadata committed — finalize each STANDARD secret (drop its
-    // journal entry) and clear the secure wipe tombstone (generation-conditional).
+    // pending-creation journal entry). The secure wipe tombstone stays sticky.
     for (const p of pendingCreates) {
-      await AccountSecureStorage.commitPendingCreate(
-        p.id,
-        p.token,
-        creationGen
-      );
+      await AccountSecureStorage.commitPendingCreate(p.id, p.token);
     }
 
     return counts;

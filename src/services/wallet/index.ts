@@ -159,8 +159,7 @@ export class MultiAccountWalletService {
         await this.addAccountToWallet(accountMetadata, creationGen);
         await AccountSecureStorage.commitPendingCreate(
           accountMetadata.id,
-          token,
-          creationGen
+          token
         );
         return accountMetadata;
       } catch (error) {
@@ -267,8 +266,7 @@ export class MultiAccountWalletService {
         await this.addAccountToWallet(accountMetadata, creationGen);
         await AccountSecureStorage.commitPendingCreate(
           accountMetadata.id,
-          token,
-          creationGen
+          token
         );
         return accountMetadata;
       } catch (error) {
