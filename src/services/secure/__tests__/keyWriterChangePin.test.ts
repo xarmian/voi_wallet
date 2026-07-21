@@ -408,6 +408,19 @@ describe('setupPin — first-secret device→v2 migration (§5.4)', () => {
     expect(mockPlatform.__secure.has(secretKey('acct-watch'))).toBe(false);
     expect(await AccountSecureStorage.verifyPin('123456')).toBe(true);
   });
+
+  it('clears the pin_setup_pending breadcrumb on success (TASK-213 anti-fail-open)', async () => {
+    useFastWriter();
+    // A restore-in-progress breadcrumb sits in plaintext AsyncStorage (restore
+    // sets it BEFORE the PIN). Establishing the PIN must clear it here — the
+    // PRIMARY clear — so a LATER keystore break fails CLOSED to recovery instead
+    // of routing to SecuritySetup over this now-protected wallet (the fail-OPEN).
+    mockPlatform.__kv.set('pin_setup_pending', 'true');
+
+    await AccountSecureStorage.setupPin('123456', 'pin');
+
+    expect(mockPlatform.__kv.has('pin_setup_pending')).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

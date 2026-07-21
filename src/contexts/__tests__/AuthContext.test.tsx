@@ -27,6 +27,10 @@ import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 import { enterLockedState } from '@/services/secure/sessionTeardown';
 import { AppLockSignal } from '@/services/secure/appLockState';
+import {
+  isPinSetupPending,
+  clearPinSetupPending,
+} from '@/services/secure/pinSetupPending';
 import * as LocalAuthentication from 'expo-local-authentication';
 
 // --- Mocks: wallet + every secure-store leaf, vault, teardown, lock signal. ---
@@ -57,6 +61,15 @@ jest.mock('@/services/secure', () => ({
     setBiometricEnabled: jest.fn(),
     clearBiometricSecret: jest.fn(),
   },
+}));
+
+// TASK-213 restore-before-PIN breadcrumb. Separate submodule path (NOT the
+// mocked @/services/secure barrel), so it needs its own mock. Defaults are set in
+// beforeEach: ABSENT breadcrumb + a no-op clear, so the key-bearing guard behaves
+// EXACTLY as before unless a test opts into a restore-in-progress state.
+jest.mock('@/services/secure/pinSetupPending', () => ({
+  isPinSetupPending: jest.fn(),
+  clearPinSetupPending: jest.fn(),
 }));
 
 jest.mock('@/services/secure/SessionKeyVault', () => ({
@@ -113,6 +126,8 @@ const mockMigrate = AccountSecureStorage.migrateAllAccountsToV2 as jest.Mock;
 const mockVaultSet = SessionKeyVault.set as jest.Mock;
 const mockBiometricUnlock = unlockVaultWithBiometrics as jest.Mock;
 const mockEnterLocked = enterLockedState as jest.Mock;
+const mockIsPinSetupPending = isPinSetupPending as jest.Mock;
+const mockClearPinSetupPending = clearPinSetupPending as jest.Mock;
 const mockSetUnlocked = AppLockSignal.setUnlocked as jest.Mock;
 
 // A non-empty account list so checkInitialAuthState treats the wallet as
@@ -211,6 +226,10 @@ beforeEach(() => {
   mockGetCredentialSource.mockResolvedValue('pin');
   mockMigrate.mockResolvedValue(undefined);
   mockBiometricUnlock.mockResolvedValue({ status: 'unlocked' });
+  // TASK-213: default to NO restore-in-progress breadcrumb so the key-bearing
+  // guard stays fail-closed (recovery) exactly as before; opt-in per test.
+  mockIsPinSetupPending.mockResolvedValue(false);
+  mockClearPinSetupPending.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -512,6 +531,104 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     expect(result.current.authState.isLocked).toBe(false);
     expect(result.current.authState.isAuthenticated).toBe(true);
     expect(result.current.authState.hasPin).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // TASK-213 restore-before-PIN: the pin_setup_pending breadcrumb disambiguates
+  // "key-bearing account + no readable PIN" between a genuine keystore break
+  // (fail CLOSED to recovery) and a restore that persisted STANDARD accounts
+  // before the PIN (route to SecuritySetup RESUME). The breadcrumb must NEVER
+  // reopen the Android fail-open: a real, readable PIN self-heals any stale
+  // breadcrumb, and an absent breadcrumb still routes a genuine break to recovery.
+  // -------------------------------------------------------------------------
+  it('(j) restore-before-PIN: key-bearing + no PIN + breadcrumb SET ⇒ resume SecuritySetup, NOT recovery/unlocked', async () => {
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(false); // no PIN yet (restore not finished)
+    mockHasKeyBearing.mockResolvedValue(true); // restore persisted STANDARD accounts
+    mockIsPinSetupPending.mockResolvedValue(true); // durable breadcrumb present
+
+    const { result } = await mountAuth();
+
+    // Routes to SecuritySetup resume — never the recovery screen (whose Reset
+    // would wipe the just-restored wallet).
+    expect(result.current.authState.pinSetupResume).toBe(true);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.authChecked).toBe(true);
+    // AND still grants ZERO wallet access before the PIN is set (defense in depth:
+    // the navigator routes to SecuritySetup, and Main stays lock-guarded).
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.hasWallet).toBe(true);
+    expect(result.current.authState.hasPin).toBe(false);
+  });
+
+  it('(j2) genuine keystore break: key-bearing + no PIN + NO breadcrumb ⇒ RECOVERY (fail-closed, unchanged)', async () => {
+    // The exact Android swallow-to-null scenario, breadcrumb ABSENT (default). Must
+    // stay fail-closed — the breadcrumb fix must not weaken this.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(false);
+    mockHasKeyBearing.mockResolvedValue(true);
+    mockIsPinSetupPending.mockResolvedValue(false);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.securityUnavailable).toBe(true);
+    expect(result.current.authState.pinSetupResume).toBe(false);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+
+    errorSpy.mockRestore();
+  });
+
+  it('(k) anti-fail-open: a STALE breadcrumb + key-bearing wallet WITH a readable PIN ⇒ LOCKED (not resume), breadcrumb self-healed', async () => {
+    // The dangerous case: a PIN was set (setupPin should have cleared it) but a
+    // stale breadcrumb lingers. A readable PIN means the guard does NOT fire and
+    // the self-heal clears the stale breadcrumb — so a LATER keystore break can
+    // never later route to SecuritySetup over this protected wallet.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(true); // PIN is readable
+    mockHasKeyBearing.mockResolvedValue(true);
+    mockIsPinSetupPending.mockResolvedValue(true); // stale breadcrumb
+
+    const { result } = await mountAuth();
+
+    // Normal locked boot — NOT resume, NOT recovery.
+    expect(result.current.authState.pinSetupResume).toBe(false);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.hasPin).toBe(true);
+    // Self-heal fired: the stale breadcrumb was cleared on this readable-PIN boot.
+    expect(mockClearPinSetupPending).toHaveBeenCalled();
+  });
+
+  it('(k2) self-heal on a normal wallet+PIN boot: a stale breadcrumb is cleared even without a key-bearing account', async () => {
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(true);
+    mockHasKeyBearing.mockResolvedValue(false);
+    mockIsPinSetupPending.mockResolvedValue(true);
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.pinSetupResume).toBe(false);
+    expect(mockClearPinSetupPending).toHaveBeenCalled();
+  });
+
+  it('(l) breadcrumb does NOT perturb genuine absence: no wallet + breadcrumb SET ⇒ unlocked setup, not resume', async () => {
+    // The guard requires a key-bearing account; a breadcrumb alone must never
+    // force the resume/recovery path on a genuinely empty install.
+    mockHasWalletStrict.mockResolvedValue(false);
+    mockHasPinStrict.mockResolvedValue(false);
+    mockHasKeyBearing.mockResolvedValue(false);
+    mockIsPinSetupPending.mockResolvedValue(true);
+
+    const { result } = await mountAuth();
+
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.pinSetupResume).toBe(false);
+    expect(result.current.authState.isLocked).toBe(false);
+    expect(result.current.authState.isAuthenticated).toBe(true);
   });
 
   it('never RETRIES a genuine absence — a false-resolving strict read reads exactly once', async () => {

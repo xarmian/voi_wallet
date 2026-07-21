@@ -94,9 +94,12 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
   it('the guarded Reset wipes local data (clearAll + clearAllWallets) then re-runs the check', async () => {
     const alertSpy = autoConfirmAlerts();
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText } = render(
+    const { getByLabelText, getByPlaceholderText } = render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
+
+    // Type-RESET friction (TASK-213): the wipe is gated until RESET is typed.
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
 
     await act(async () => {
       fireEvent.press(
@@ -120,9 +123,11 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     mockClearAll.mockRejectedValueOnce(new Error('keystore delete failed'));
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText } = render(
+    const { getByLabelText, getByPlaceholderText } = render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
+
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
 
     await act(async () => {
       fireEvent.press(
@@ -138,6 +143,105 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     expect(onRetry).toHaveBeenCalledTimes(1);
 
     errorSpy.mockRestore();
+    alertSpy.mockRestore();
+  });
+
+  it('the wipe stays DISABLED until the exact word RESET is typed (TASK-213)', async () => {
+    const alertSpy = autoConfirmAlerts();
+    const onRetry = jest.fn(async () => {});
+    const { getByLabelText, getByPlaceholderText } = render(
+      <SecureStorageUnavailableScreen onRetry={onRetry} />
+    );
+
+    // Pressing with NOTHING typed does nothing — no confirm dialog, no wipe.
+    await act(async () => {
+      fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+      await Promise.resolve();
+    });
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(mockClearAll).not.toHaveBeenCalled();
+
+    // A near-miss (wrong case) still does NOT enable it.
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'reset');
+    await act(async () => {
+      fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+      await Promise.resolve();
+    });
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(mockClearAll).not.toHaveBeenCalled();
+
+    // Exact RESET enables it — now the confirm chain runs and the wipe fires.
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await act(async () => {
+      fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+      await Promise.resolve();
+    });
+    expect(alertSpy).toHaveBeenCalled();
+    expect(mockClearAll).toHaveBeenCalledTimes(1);
+
+    alertSpy.mockRestore();
+  });
+
+  it('the reset confirmation copy is accurate — no single-recovery-phrase over-promise (TASK-213)', async () => {
+    const alertSpy = autoConfirmAlerts();
+    const onRetry = jest.fn(async () => {});
+    const { getByLabelText, getByPlaceholderText } = render(
+      <SecureStorageUnavailableScreen onRetry={onRetry} />
+    );
+
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await act(async () => {
+      fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+      await Promise.resolve();
+    });
+
+    const messages = alertSpy.mock.calls.map((c) => String(c[1]));
+    const combined = messages.join('\n');
+    // Erases ALL local data — not just "a wallet" restorable from one phrase.
+    expect(combined).toMatch(/erases ALL local wallet data/i);
+    // Names the account kinds a single seed does NOT restore.
+    expect(combined).toMatch(/watch-only/i);
+    expect(combined).toMatch(/ledger/i);
+    expect(combined).toMatch(/remote-signer/i);
+    // Each phrase restores only its own accounts; requires EVERY phrase.
+    expect(combined).toMatch(/each from its own phrase/i);
+    expect(combined).toMatch(/every recovery phrase/i);
+
+    alertSpy.mockRestore();
+  });
+
+  it('FIX 3(a): shows a "reset didn\'t resolve it" message when the recheck stays on recovery', async () => {
+    // onRetry that resolves WITHOUT clearing the recovery state (e.g. AsyncStorage
+    // itself unwritable) leaves this screen mounted. Instead of silently looping,
+    // the guidance renders.
+    const alertSpy = autoConfirmAlerts();
+    const onRetry = jest.fn(async () => {}); // does not resolve the failure
+    const { getByLabelText, getByPlaceholderText, queryByText } = render(
+      <SecureStorageUnavailableScreen onRetry={onRetry} />
+    );
+
+    // No message before a reset attempt.
+    expect(queryByText(/resolve the problem/i)).toBeNull();
+
+    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await act(async () => {
+      fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+      await Promise.resolve();
+    });
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(queryByText(/resolve the problem/i)).not.toBeNull();
+
     alertSpy.mockRestore();
   });
 });
