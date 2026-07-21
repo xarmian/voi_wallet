@@ -620,13 +620,12 @@ export const useWalletStore = create<WalletState>()(
         const newAccount =
           await MultiAccountWalletService.createStandardAccount(request);
 
-        // If this is the first account, create the wallet
-        let { wallet } = get();
-        if (!wallet) {
-          wallet = await MultiAccountWalletService.createWallet(newAccount);
-        } else {
-          wallet = await MultiAccountWalletService.getCurrentWallet();
-        }
+        // createStandardAccount already persisted the wallet metadata (via
+        // addAccountToWallet, which creates the wallet on the first account).
+        // TASK-220: re-read the authoritative wallet instead of issuing a second,
+        // now generation-guarded, createWallet write — that redundant write both
+        // double-persisted and would need its own creation-generation handling.
+        const wallet = await MultiAccountWalletService.getCurrentWallet();
 
         // Initialize account state
         const { accountStates } = get();

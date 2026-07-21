@@ -27,6 +27,7 @@ import {
   LedgerAccountError,
   LedgerDeviceNotConnectedError,
   RekeyVerificationError,
+  ResetRacedError,
   Wallet,
   WalletSettings,
   withDefaultAuthLevel,
@@ -145,16 +146,45 @@ export class MultiAccountWalletService {
       };
 
       const secretKey = account.sk;
+      // TASK-220: capture the secure reset generation BEFORE the key write so
+      // the cross-store creation is atomic against a concurrent full reset.
+      const creationGen = AccountSecureStorage.getResetGeneration();
+      let token: string | undefined;
       try {
-        await this.storeAccountSecurely(accountMetadata, secretKey);
-        await this.addAccountToWallet(accountMetadata);
+        token = await AccountSecureStorage.storeAccountForCreation(
+          accountMetadata,
+          secretKey,
+          creationGen
+        );
+        await this.addAccountToWallet(accountMetadata, creationGen);
+        await AccountSecureStorage.commitPendingCreate(
+          accountMetadata.id,
+          token,
+          creationGen
+        );
         return accountMetadata;
+      } catch (error) {
+        // DR-2 (reset wins): a reset raced this creation → roll back the just-
+        // written secret (ownership-checked; a no-op if the reset already
+        // deleted it) so neither store keeps a half-created account.
+        if (error instanceof ResetRacedError && token !== undefined) {
+          await AccountSecureStorage.deleteAccountIfAttemptMatches(
+            accountMetadata.id,
+            token
+          );
+        }
+        throw error;
       } finally {
         if (secretKey) {
           secretKey.fill(0);
         }
       }
     } catch (error) {
+      // Preserve ResetRacedError so the UI can show "wallet was reset — creation
+      // cancelled" instead of a generic failure.
+      if (error instanceof ResetRacedError) {
+        throw error;
+      }
       throw new Error(
         `Failed to create account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -225,10 +255,30 @@ export class MultiAccountWalletService {
       };
 
       const secretKey = account.sk;
+      // TASK-220: guard the cross-store creation against a concurrent full reset.
+      const creationGen = AccountSecureStorage.getResetGeneration();
+      let token: string | undefined;
       try {
-        await this.storeAccountSecurely(accountMetadata, secretKey);
-        await this.addAccountToWallet(accountMetadata);
+        token = await AccountSecureStorage.storeAccountForCreation(
+          accountMetadata,
+          secretKey,
+          creationGen
+        );
+        await this.addAccountToWallet(accountMetadata, creationGen);
+        await AccountSecureStorage.commitPendingCreate(
+          accountMetadata.id,
+          token,
+          creationGen
+        );
         return accountMetadata;
+      } catch (error) {
+        if (error instanceof ResetRacedError && token !== undefined) {
+          await AccountSecureStorage.deleteAccountIfAttemptMatches(
+            accountMetadata.id,
+            token
+          );
+        }
+        throw error;
       } finally {
         if (secretKey) {
           secretKey.fill(0);
@@ -237,7 +287,8 @@ export class MultiAccountWalletService {
     } catch (error) {
       if (
         error instanceof InvalidMnemonicError ||
-        error instanceof AccountExistsError
+        error instanceof AccountExistsError ||
+        error instanceof ResetRacedError
       ) {
         throw error;
       }
@@ -277,6 +328,10 @@ export class MultiAccountWalletService {
 
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
+    // TASK-220: guard the no-wallet CREATION write (below) against a concurrent
+    // full reset. Ledger accounts hold no secret, so there is nothing to roll
+    // back — the guard just stops a reset being defeated by a resurrected wallet.
+    const creationGen = AccountSecureStorage.getResetGeneration();
     const wallet = await this.getCurrentWallet();
 
     try {
@@ -339,9 +394,10 @@ export class MultiAccountWalletService {
           settings: this.getDefaultWalletSettings(),
         };
 
-        // Creation write (no prior wallet existed) — always persist, like
-        // createWallet; it establishes a fresh wallet and has nothing to resurrect.
-        await this.storeWallet(newWallet);
+        // Creation write (no prior wallet existed) — guarded on the creation
+        // generation (TASK-220) so a concurrent reset aborts it instead of
+        // resurrecting a wallet; nothing to resurrect otherwise.
+        await this.storeWallet(newWallet, undefined, creationGen);
       } else {
         wallet.accounts.push(accountMetadata);
         await this.storeWallet(wallet, readEpoch);
@@ -352,7 +408,8 @@ export class MultiAccountWalletService {
       if (
         error instanceof AccountExistsError ||
         error instanceof LedgerAccountError ||
-        error instanceof LedgerDeviceNotConnectedError
+        error instanceof LedgerDeviceNotConnectedError ||
+        error instanceof ResetRacedError
       ) {
         throw error;
       }
@@ -566,12 +623,18 @@ export class MultiAccountWalletService {
         notes: request.notes,
       };
 
-      await this.addAccountToWallet(accountMetadata);
+      // TASK-220: guard the (possibly wallet-creating) metadata write against a
+      // concurrent full reset. Watch accounts hold no secret, so there is nothing
+      // to roll back — the guard just prevents a reset being defeated by a
+      // resurrected/recreated wallet.
+      const creationGen = AccountSecureStorage.getResetGeneration();
+      await this.addAccountToWallet(accountMetadata, creationGen);
       return accountMetadata;
     } catch (error) {
       if (
         error instanceof InvalidAddressError ||
-        error instanceof AccountExistsError
+        error instanceof AccountExistsError ||
+        error instanceof ResetRacedError
       ) {
         throw error;
       }
@@ -630,12 +693,15 @@ export class MultiAccountWalletService {
         rekeyedFrom: request.rekeyedFrom,
       };
 
-      await this.addAccountToWallet(accountMetadata);
+      // TASK-220: guard the metadata write against a concurrent full reset.
+      const creationGen = AccountSecureStorage.getResetGeneration();
+      await this.addAccountToWallet(accountMetadata, creationGen);
       return accountMetadata;
     } catch (error) {
       if (
         error instanceof InvalidAddressError ||
-        error instanceof RekeyVerificationError
+        error instanceof RekeyVerificationError ||
+        error instanceof ResetRacedError
       ) {
         throw error;
       }
@@ -681,12 +747,15 @@ export class MultiAccountWalletService {
         authLevel: withDefaultAuthLevel(request.authLevel),
       };
 
-      await this.addAccountToWallet(accountMetadata);
+      // TASK-220: guard the metadata write against a concurrent full reset.
+      const creationGen = AccountSecureStorage.getResetGeneration();
+      await this.addAccountToWallet(accountMetadata, creationGen);
       return accountMetadata;
     } catch (error) {
       if (
         error instanceof InvalidAddressError ||
-        error instanceof AccountExistsError
+        error instanceof AccountExistsError ||
+        error instanceof ResetRacedError
       ) {
         throw error;
       }
@@ -1013,7 +1082,11 @@ export class MultiAccountWalletService {
   }
 
   static async createWallet(
-    firstAccountMetadata: StandardAccountMetadata
+    firstAccountMetadata: StandardAccountMetadata,
+    // TASK-220: secure reset generation captured before the first account's key
+    // write, so a concurrent full reset aborts this creation (ResetRacedError)
+    // instead of resurrecting a wallet whose secret the reset just deleted.
+    creationGen?: number
   ): Promise<Wallet> {
     const wallet: Wallet = {
       id: this.generateWalletId(),
@@ -1024,7 +1097,7 @@ export class MultiAccountWalletService {
       settings: this.getDefaultWalletSettings(),
     };
 
-    await this.storeWallet(wallet);
+    await this.storeWallet(wallet, undefined, creationGen);
     return wallet;
   }
 
@@ -1414,7 +1487,9 @@ export class MultiAccountWalletService {
           : undefined,
       };
 
-      await this.addAccountToWallet(accountMetadata);
+      // TASK-220: guard the metadata write against a concurrent full reset.
+      const creationGen = AccountSecureStorage.getResetGeneration();
+      await this.addAccountToWallet(accountMetadata, creationGen);
 
       return accountMetadata;
     } catch (error) {
@@ -1648,7 +1723,12 @@ export class MultiAccountWalletService {
   }
 
   private static async addAccountToWallet(
-    accountMetadata: AccountMetadata
+    accountMetadata: AccountMetadata,
+    // TASK-220: the secure reset generation captured by the caller BEFORE it
+    // wrote any secret. Threaded into every metadata creation/add write so a
+    // full reset racing this account-add aborts the write (ResetRacedError)
+    // rather than resurrecting a wiped wallet or orphaning the new key.
+    creationGen: number
   ): Promise<void> {
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
@@ -1656,24 +1736,32 @@ export class MultiAccountWalletService {
     if (!wallet) {
       // If no wallet exists, create one with this account
       if (accountMetadata.type === AccountType.STANDARD) {
-        await this.createWallet(accountMetadata as StandardAccountMetadata);
+        await this.createWallet(
+          accountMetadata as StandardAccountMetadata,
+          creationGen
+        );
       } else if (
         accountMetadata.type === AccountType.REMOTE_SIGNER ||
         accountMetadata.type === AccountType.WATCH
       ) {
         // Create wallet with non-standard account (no mnemonic required)
-        await this.createWalletWithAccount(accountMetadata);
+        await this.createWalletWithAccount(accountMetadata, creationGen);
       } else {
         throw new Error('Cannot create wallet with this account type');
       }
     } else {
       wallet.accounts.push(accountMetadata);
-      await this.storeWallet(wallet, readEpoch);
+      // Pass BOTH the read epoch (don't resurrect a concurrently-wiped wallet)
+      // and the creation generation (abort + let the caller roll back a raced
+      // STANDARD key). For a STANDARD add either guard tripping throws
+      // ResetRacedError; for a non-secret add the wallet simply isn't resurrected.
+      await this.storeWallet(wallet, readEpoch, creationGen);
     }
   }
 
   private static async createWalletWithAccount(
-    accountMetadata: AccountMetadata
+    accountMetadata: AccountMetadata,
+    creationGen?: number
   ): Promise<Wallet> {
     const wallet: Wallet = {
       id: this.generateWalletId(),
@@ -1684,7 +1772,7 @@ export class MultiAccountWalletService {
       settings: this.getDefaultWalletSettings(),
     };
 
-    await this.storeWallet(wallet);
+    await this.storeWallet(wallet, undefined, creationGen);
     return wallet;
   }
 
@@ -1717,7 +1805,16 @@ export class MultiAccountWalletService {
    */
   private static async storeWallet(
     wallet: Wallet,
-    readEpoch?: number
+    readEpoch?: number,
+    // TASK-220: pass for a CREATION/ADD write that follows a fresh key/account
+    // creation (createWallet, createWalletWithAccount, ledger/restore creation,
+    // and the STANDARD existing-wallet add). Captured before the secret write;
+    // if the SECURE reset generation advanced since, a full reset raced this
+    // creation, so the write is ABORTED with ResetRacedError (not silently
+    // skipped) — the caller then rolls back the just-written secret and the
+    // reset wins (DR-2). This is the guard that fires in the clearAll()→
+    // clearAllWallets() window, where walletResetEpoch has not yet bumped.
+    creationGen?: number
   ): Promise<void> {
     // Sanitize + serialize a SNAPSHOT now (synchronously), before enqueuing, so a
     // later in-place mutation of `wallet` by the caller can't alter what is
@@ -1726,10 +1823,23 @@ export class MultiAccountWalletService {
       this.sanitizeWalletForPersistence(wallet)
     );
     const wrote = await this.enqueueWalletWrite(async () => {
+      // TASK-220 creation/add guard: abort if a reset advanced the SECURE
+      // generation since this creation captured it. Throwing (not skipping) lets
+      // the caller roll back the secret it already wrote so neither store keeps a
+      // half-created account.
+      if (
+        creationGen !== undefined &&
+        AccountSecureStorage.getResetGeneration() !== creationGen
+      ) {
+        throw new ResetRacedError();
+      }
       if (readEpoch !== undefined) {
         // Guarded write (read-repair OR intentional read-modify-write): skip if a
         // wipe advanced the epoch since the read this write derives from...
         if (readEpoch !== walletResetEpoch) {
+          // A creation/add write must ABORT (so its secret is rolled back), not
+          // silently skip like a pure read-modify-write mutation.
+          if (creationGen !== undefined) throw new ResetRacedError();
           return false;
         }
         // ...OR if a wipe has COMPLETED (tombstone set AND primary now absent)
@@ -1745,6 +1855,7 @@ export class MultiAccountWalletService {
         if (wiped != null) {
           const current = await storage.getItem(this.WALLET_KEY);
           if (current == null) {
+            if (creationGen !== undefined) throw new ResetRacedError();
             return false;
           }
         }
@@ -1776,9 +1887,16 @@ export class MultiAccountWalletService {
    * via sanitizeWalletForPersistence() and clears any legacy secure-store copy.
    * Restore code MUST use this instead of a raw storage.setItem so a restored
    * wallet can never leak a mnemonic into general storage.
+   *
+   * TASK-220: pass the secure reset generation captured at the start of the
+   * restore so this commit is ABORTED (ResetRacedError) if a full reset raced
+   * the restore — the restore then rolls back the secrets it wrote (DR-2).
    */
-  static async persistRestoredWallet(wallet: Wallet): Promise<void> {
-    await this.storeWallet(wallet);
+  static async persistRestoredWallet(
+    wallet: Wallet,
+    creationGen?: number
+  ): Promise<void> {
+    await this.storeWallet(wallet, undefined, creationGen);
   }
 
   private static getDefaultWalletSettings(): WalletSettings {
@@ -1801,7 +1919,17 @@ export class MultiAccountWalletService {
   // Storage methods using platform adapters
   private static async getStoredValue(key: string): Promise<string | null> {
     try {
-      const value = await storage.getItem(key);
+      // TASK-220 (DR-3): serialize ONLY the primary read on the write chain so it
+      // observes a wipe's removeItem that was enqueued before it. Closes the
+      // stale-read window where getCurrentWallet, having captured walletResetEpoch
+      // AFTER a reset already bumped it, still reads the pre-wipe blob because the
+      // wipe's removeItem is queued (so resetRacedRead sees a matching epoch and
+      // returns the stale wallet). Idle chain → ~one microtask; an active wipe →
+      // the read waits for it (the correct read-after-wipe). No reentrancy: the
+      // enqueued task does ONLY getItem; migrateLegacyValue enqueues its OWN task
+      // AFTER this read resolves — sequential, never nested. Parse/heal stay off
+      // the chain (this returns just the raw string).
+      const value = await this.enqueueWalletWrite(() => storage.getItem(key));
       if (value) {
         return value;
       }

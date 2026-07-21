@@ -371,6 +371,37 @@ export class AccountCreationError extends AccountError {
   }
 }
 
+/**
+ * TASK-220: a full reset/wipe raced an in-flight account creation/import/restore.
+ * The reset wins (DR-2): the creation is aborted and any just-written secret is
+ * rolled back so neither the secure key store nor the wallet metadata is left
+ * holding a half-created account. Surfaced to the UI as "wallet was reset —
+ * creation cancelled, try again."
+ */
+export class ResetRacedError extends AccountError {
+  constructor(
+    message: string = 'A wallet reset occurred while creating this account'
+  ) {
+    super(message, 'RESET_RACED');
+    this.name = 'ResetRacedError';
+  }
+}
+
+/**
+ * TASK-220: a second creation/restore attempt targeted an accountId that already
+ * has an uncommitted pending-creation entry (ownership collision — e.g. two
+ * concurrent restores of the same backup). Rejected at the secret-write boundary
+ * so an earlier attempt's rollback can never delete a later attempt's secret.
+ */
+export class DuplicatePendingCreateError extends AccountError {
+  constructor(
+    message: string = 'Another creation for this account is already in progress'
+  ) {
+    super(message, 'DUPLICATE_PENDING_CREATE');
+    this.name = 'DuplicatePendingCreateError';
+  }
+}
+
 export class AccountImportError extends AccountError {
   constructor(message: string = 'Account import error') {
     super(message, 'ACCOUNT_IMPORT_ERROR');
