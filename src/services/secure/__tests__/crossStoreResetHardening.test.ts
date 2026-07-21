@@ -187,6 +187,13 @@ describe('TASK-220 reset drains the journal (reset wins)', () => {
     expect(hasSecret('inflight')).toBe(false);
     expect(Object.keys(journal())).toHaveLength(0);
   });
+
+  it('clearAll zeroes the in-memory private-key cache (Codex diff-review P1)', async () => {
+    const spy = jest.spyOn(AccountSecureStorage, 'clearPrivateKeyCache');
+    await AccountSecureStorage.clearAll();
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
 });
 
 describe('TASK-220 ownership-safe rollback', () => {

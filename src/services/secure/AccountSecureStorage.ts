@@ -1370,6 +1370,12 @@ export class AccountSecureStorage {
     pin?: string
   ): Promise<Uint8Array> {
     const cacheKey = `${accountId}-${pin || 'biometric'}`;
+    // TASK-220: the reset generation at read start. A full reset (clearAll) bumps
+    // it synchronously and zeroes the in-memory key cache; if it advances while
+    // this read is in flight, we must NOT repopulate the cache with a key derived
+    // from a now-wiped secret (that would revive a key a "delete everything" just
+    // removed, for up to the 60 s TTL).
+    const readGen = this.secureResetGeneration;
 
     // Periodically clean up expired entries
     if (Math.random() < 0.1) {
@@ -1595,11 +1601,15 @@ export class AccountSecureStorage {
           throw new VaultLockedError();
         }
 
-        // Cache the key for subsequent calls (60-second TTL)
-        this.privateKeyCache.set(cacheKey, {
-          key: new Uint8Array(privateKey), // Store a copy
-          timestamp: Date.now(),
-        });
+        // Cache the key for subsequent calls (60-second TTL). TASK-220: skip if a
+        // full reset advanced the generation since this read began — do not
+        // repopulate a cache the reset just zeroed with a just-wiped secret.
+        if (this.secureResetGeneration === readGen) {
+          this.privateKeyCache.set(cacheKey, {
+            key: new Uint8Array(privateKey), // Store a copy
+            timestamp: Date.now(),
+          });
+        }
 
         // LAZY MIGRATION TRIGGER (DOC-137 §4.5.1, PR5): a legacy-tier (Format
         // A/C) decrypt just succeeded and a verified secret is available (an
@@ -3453,6 +3463,11 @@ export class AccountSecureStorage {
     // reliably aborted, even if the mutex is momentarily busy). Mirrors
     // clearAllWallets bumping walletResetEpoch at its entry (TASK-212).
     this.secureResetGeneration += 1;
+    // TASK-220: zero the in-memory private-key cache NOW (synchronously) so a full
+    // wipe can't leave a decrypted key readable from cache after the persisted
+    // secret is gone. Paired with the generation guard on the cache write in
+    // getPrivateKey, an in-flight pre-reset read can't repopulate it either.
+    this.clearPrivateKeyCache();
     // Full wipe deletes account key material → hold the GLOBAL key-mutation
     // mutex across the whole thing (P1-1a) so it can't interleave with a rewrap
     // or a store. Uses deleteAccountLocked (already inside the mutex — never
