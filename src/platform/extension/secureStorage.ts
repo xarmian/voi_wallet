@@ -129,14 +129,21 @@ export class ExtensionSecureStorageAdapter implements SecureStorageAdapter {
   async getItem(key: string): Promise<string | null> {
     const encrypted = await extensionStorage.getItem(`${SECURE_PREFIX}${key}`);
     if (!encrypted) {
+      // Genuine ABSENCE (no stored item) — resolve null. A read FAILURE from the
+      // underlying store already threw above and propagates.
       return null;
     }
 
     try {
       return await this.decrypt(encrypted);
-    } catch (error) {
-      console.error('Failed to decrypt secure storage item:', error);
-      return null;
+    } catch {
+      // A PRESENT-but-undecryptable item is a genuine read/decrypt FAILURE, NOT
+      // absence. THROW so fail-closed callers (auth-init strict reads, TASK-213)
+      // can distinguish it from "no value"; the error-swallowing callers
+      // (hasPin/getCurrentWallet/...) still catch and resolve falsy, so their
+      // contract is unchanged. Never log the ciphertext or decrypted plaintext.
+      console.error('Failed to decrypt secure storage item');
+      throw new Error('Secure storage decrypt failed');
     }
   }
 
