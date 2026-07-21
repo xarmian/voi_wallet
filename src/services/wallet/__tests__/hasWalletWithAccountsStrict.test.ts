@@ -32,7 +32,9 @@ jest.mock('@/platform', () => ({
 
 // Mock the heavy/native side of the wallet dependency graph; the strict probe
 // only touches storage.
-jest.mock('@/services/ledger/transport', () => ({ ledgerTransportService: {} }));
+jest.mock('@/services/ledger/transport', () => ({
+  ledgerTransportService: {},
+}));
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
 jest.mock('@/services/network', () => ({ NetworkService: {} }));
 jest.mock('../../secure/AccountSecureStorage', () => ({
@@ -107,6 +109,16 @@ describe('hasWalletWithAccountsStrict — absence vs failure (TASK-213)', () => 
     await expect(
       MultiAccountWalletService.hasWalletWithAccountsStrict()
     ).rejects.toBeInstanceOf(SyntaxError);
+  });
+
+  it('THROWS (fails closed) on valid JSON with a NON-array accounts field — corruption, not absence', async () => {
+    // Regression for Codex P2: {"accounts":{}} is valid JSON but structurally
+    // corrupt. It must NOT resolve false (absence ⇒ unlocked setup); it must
+    // throw so the auth-init path fails closed into recovery.
+    mockStore[WALLET_KEY] = JSON.stringify({ accounts: {} });
+    await expect(
+      MultiAccountWalletService.hasWalletWithAccountsStrict()
+    ).rejects.toThrow(/not an array/);
   });
 
   it('is a PURE read — never writes (no migration/cache side effect)', async () => {

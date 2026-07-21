@@ -57,6 +57,7 @@ import CreateAccountScreen from '@/screens/account/CreateAccountScreen';
 import MnemonicImportScreen from '@/screens/account/MnemonicImportScreen';
 import RekeyAccountScreen from '@/screens/wallet/RekeyAccountScreen';
 import OnboardingScreen from '@/screens/onboarding/OnboardingScreen';
+import SecureStorageUnavailableScreen from '@/screens/auth/SecureStorageUnavailableScreen';
 import QRAccountImportScreen from '@/screens/account/QRAccountImportScreen';
 import AccountImportPreviewScreen from '@/screens/account/AccountImportPreviewScreen';
 import CreateWalletScreen from '@/screens/onboarding/CreateWalletScreen';
@@ -1095,6 +1096,14 @@ function AppStack() {
   );
   const appMode = useAppMode();
   const isWalletInitialized = useWalletStore((state) => state.isInitialized);
+  // TASK-213: the initial route is chosen by the error-SWALLOWING
+  // getCurrentWallet() below, which returns null on a storage read FAILURE and
+  // would route to the UN-guarded Onboarding flow (AuthGuard only wraps `Main`).
+  // AuthContext.checkInitialAuthState performs the authoritative, fail-closed
+  // determination (with bounded retry); when it finds secure storage unreadable
+  // it sets securityUnavailable, and we render the recovery screen OVER the whole
+  // navigator — so a storage failure can never expose onboarding/create/import.
+  const { authState, recheckAuthState } = useAuth();
 
   useEffect(() => {
     checkInitialRoute();
@@ -1134,20 +1143,39 @@ function AppStack() {
   // always sets isInitialized (success and caught-error paths alike). The error
   // boundary and the index.ts watchdog cover the render-throw and hard-hang
   // cases as belt-and-suspenders.
-  const contentReady = isColdBootContentReady({
-    routeResolved: !isLoading,
-    isMainRoute: initialRoute === 'Main',
-    signerInitialized: isSignerInitialized,
-    isSignerMode: appMode === 'signer',
-    walletInitialized: isWalletInitialized,
-  });
+  // TASK-213: for a non-Main (Onboarding) initial route, hold the splash until
+  // the auth-init verdict is in (authChecked) so a pending storage FAILURE
+  // resolves to the recovery screen below instead of briefly exposing the
+  // unguarded onboarding flow. `Main` is unchanged (AuthGuard gates it), so its
+  // splash-readiness timing is unaffected.
+  const routeReady =
+    !isLoading && (initialRoute === 'Main' || authState.authChecked);
+  // The recovery screen is real, ready-to-paint content — lift the splash for it
+  // regardless of the route's normal gates (e.g. a Main route whose signer/wallet
+  // stores haven't hydrated must not keep the splash over the recovery screen).
+  const contentReady =
+    authState.securityUnavailable ||
+    isColdBootContentReady({
+      routeResolved: routeReady,
+      isMainRoute: initialRoute === 'Main',
+      signerInitialized: isSignerInitialized,
+      isSignerMode: appMode === 'signer',
+      walletInitialized: isWalletInitialized,
+    });
   useEffect(() => {
     if (contentReady) {
       void hideSplashScreen();
     }
   }, [contentReady]);
 
-  if (isLoading) {
+  // Fail-closed recovery (TASK-213): secure storage was found unreadable at boot.
+  // Render ONLY the recovery screen — over every route, including the unguarded
+  // onboarding flow — so the app grants ZERO wallet access until it recovers.
+  if (authState.securityUnavailable) {
+    return <SecureStorageUnavailableScreen onRetry={recheckAuthState} />;
+  }
+
+  if (!routeReady) {
     return null; // Or a loading screen
   }
 

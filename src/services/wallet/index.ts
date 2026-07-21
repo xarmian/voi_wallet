@@ -1625,7 +1625,17 @@ export class MultiAccountWalletService {
     // throw so the caller fails CLOSED rather than treating corruption as "no
     // wallet" (which would drop into the unlocked setup state).
     const parsed = JSON.parse(walletData) as Wallet;
-    return Array.isArray(parsed.accounts) && parsed.accounts.length > 0;
+    if (!Array.isArray(parsed.accounts)) {
+      // Valid JSON but a structurally-corrupt wallet (missing / non-array
+      // `accounts`, e.g. {"accounts":{}}). That is corruption, NOT absence —
+      // fail CLOSED by throwing so the auth-init path enters recovery rather
+      // than the unlocked setup state. Only a genuine EMPTY array below is the
+      // intended absence-like "no accounts yet" ⇒ setup case.
+      throw new Error(
+        'Corrupt wallet blob: `accounts` is present but not an array'
+      );
+    }
+    return parsed.accounts.length > 0;
   }
 
   /**

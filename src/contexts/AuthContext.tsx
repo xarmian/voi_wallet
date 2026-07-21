@@ -56,6 +56,12 @@ export interface AuthState {
   // grants ZERO wallet access: it is neither the unlocked setup state nor the
   // normal PIN-lock. It is never set for genuine absence or a readable wallet.
   securityUnavailable: boolean;
+  // True once checkInitialAuthState has produced its FIRST verdict (any branch:
+  // recovery, unlocked-setup, or locked). Consumers that render UN-guarded routes
+  // (the navigator's Onboarding branch, TASK-213) wait on this so a pending
+  // storage FAILURE resolves to the recovery screen instead of briefly exposing
+  // the unauthenticated setup flow. Starts false; only ever transitions to true.
+  authChecked: boolean;
 }
 
 export interface AuthContextType {
@@ -99,6 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     timeoutMinutes: 5,
     hasPin: false,
     securityUnavailable: false,
+    authChecked: false,
   });
 
   const activityTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -260,6 +267,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isLocked: true,
           isAuthenticated: false,
           securityUnavailable: true,
+          authChecked: true,
           biometricEnabled: false,
           backgroundedAt: null,
         }));
@@ -277,6 +285,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isLocked: false,
           isAuthenticated: true,
           securityUnavailable: false,
+          authChecked: true,
           biometricEnabled: biometricEnabled && biometricAvailable,
           backgroundedAt: null,
           timeoutMinutes,
@@ -291,6 +300,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLocked: true,
         isAuthenticated: false,
         securityUnavailable: false,
+        authChecked: true,
         biometricEnabled: biometricEnabled && biometricAvailable,
         backgroundedAt: null,
         timeoutMinutes,
@@ -309,6 +319,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLocked: true,
         isAuthenticated: false,
         securityUnavailable: true,
+        authChecked: true,
         biometricEnabled: false,
         backgroundedAt: null,
       }));
