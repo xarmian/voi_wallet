@@ -266,6 +266,12 @@ export default function HomeScreen() {
   const loadMultiNetworkBalance = useWalletStore(
     (state) => state.loadMultiNetworkBalance
   );
+  // Retry must FORCE: the hook's `reload` is unforced and `loadAccountBalance`
+  // returns early on a fresh cached balance, so after a failed forced refresh
+  // (e.g. post-transaction) an unforced retry would be a silent no-op.
+  const loadAccountBalance = useWalletStore(
+    (state) => state.loadAccountBalance
+  );
   const loadTokenMappings = useWalletStore((state) => state.loadTokenMappings);
 
   // Asset filter settings - use individual hooks to avoid unnecessary re-renders
@@ -359,11 +365,17 @@ export default function HomeScreen() {
     : !!accountBalance;
   const retryBalance = React.useCallback(() => {
     if (isMultiNetworkView) {
+      // The multi-network hook's reload already forces.
       void reloadMultiNetworkBalance();
-    } else {
-      void reloadBalance();
+    } else if (activeAccount?.id) {
+      void loadAccountBalance(activeAccount.id, true);
     }
-  }, [isMultiNetworkView, reloadMultiNetworkBalance, reloadBalance]);
+  }, [
+    isMultiNetworkView,
+    reloadMultiNetworkBalance,
+    loadAccountBalance,
+    activeAccount?.id,
+  ]);
 
   // Load wallet data and mark activity once when Home mounts. Kept separate from
   // the remote-signer effect below so that the remote-signer store flipping
