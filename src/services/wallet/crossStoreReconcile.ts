@@ -48,9 +48,16 @@ const EMPTY_RESULT: ReconcileResult = {
 
 /**
  * Repair cross-store secret/metadata half-state, fail-closed. Safe to call once
- * at boot after the strict lock-determining reads succeed. Returns a summary; on
- * any strict read/probe failure it returns `{ ran: false }` having mutated
- * nothing. Presence-based — needs no unlock.
+ * at boot after the strict lock-determining reads succeed. Presence-based — needs
+ * no unlock.
+ *
+ * Two phases with different failure semantics:
+ *  - Phase 1 (reads/probes) is STRICT and all-or-nothing: any failure THROWS
+ *    (rejects) before any mutation, so the pass deletes nothing on a bad read.
+ *  - Phase 2 (mutations) is BEST-EFFORT: it never throws; the resolved summary
+ *    reports the repairs that ACTUALLY completed, so a later-step failure cannot
+ *    discard a verdict-affecting prune the caller must react to. Remaining repairs
+ *    are retried next boot.
  */
 export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // ── Phase 1: STRICT reads. Any throw here aborts the whole pass (delete
@@ -120,44 +127,64 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     // (an account-list-only ghost) not a repair target of this design; left as-is.
   }
 
-  // Prune phantoms from the wallet blob FIRST (empty ⇒ canonical clearAllWallets).
-  // This is the only mutation that can change the boot lock verdict (emptying the
-  // wallet), so run it earliest — if the caller's outer boot timeout races Phase 2,
-  // the verdict-affecting change is most likely already committed before the
-  // caller reads back the refreshed signals.
-  if (phantomIds.length > 0) {
-    await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
-  }
-  // Deletes: each acquires the key-mutation mutex, serialized against any secret
-  // write. deleteAccount removes secret + secure metadata + account-list entry.
-  for (const id of orphanSecretIds) {
-    await AccountSecureStorage.deleteAccount(id);
-  }
-  // Drop journal entries for the orphans we just deleted AND the stale entries.
-  const journalIdsToDrop = [...orphanSecretIds, ...staleJournalIds];
-  if (journalIdsToDrop.length > 0) {
-    await AccountSecureStorage.dropPendingCreateEntries(journalIdsToDrop);
+  // Phase 2 is BEST-EFFORT and reports what it ACTUALLY completed. Fail-closed is
+  // a Phase-1 property (never delete on a bad read); once Phase 1 passed cleanly,
+  // a Phase-2 mutation FAILURE is a storage error, not a safety issue. Crucially,
+  // a later-step failure must NOT discard the outcome: if a phantom prune already
+  // emptied the wallet and then an orphan delete throws, the caller still needs to
+  // see phantomAccountsPruned so it can refresh the (now stale) lock verdict (Codex
+  // P2). So track completed work and return it even if a step throws.
+  const phantomsPruned: string[] = [];
+  const orphansDeleted: string[] = [];
+  const journalDropped: string[] = [];
+  try {
+    // Prune phantoms FIRST — the only mutation that can change the boot lock
+    // verdict (emptying the wallet ⇒ canonical clearAllWallets) — so the
+    // verdict-affecting change is committed as early as possible.
+    if (phantomIds.length > 0) {
+      await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
+      phantomsPruned.push(...phantomIds);
+    }
+    // Deletes: each acquires the key-mutation mutex, serialized against any secret
+    // write. deleteAccount removes secret + secure metadata + account-list entry.
+    for (const id of orphanSecretIds) {
+      await AccountSecureStorage.deleteAccount(id);
+      orphansDeleted.push(id);
+    }
+    // Drop journal entries for the orphans we just deleted AND the stale entries.
+    const journalIdsToDrop = [...orphansDeleted, ...staleJournalIds];
+    if (journalIdsToDrop.length > 0) {
+      await AccountSecureStorage.dropPendingCreateEntries(journalIdsToDrop);
+      journalDropped.push(...journalIdsToDrop);
+    }
+  } catch (error) {
+    // A Phase-2 repair failed after Phase 1 passed cleanly. Keep the partial
+    // outcome (below) so the caller can still refresh the verdict; the remaining
+    // repairs are retried on the next boot. ids/status only — no secret material.
+    console.warn('[bootReconcile] Phase 2 repair partially failed:', error);
   }
 
   if (
-    orphanSecretIds.length > 0 ||
-    phantomIds.length > 0 ||
-    staleJournalIds.length > 0
+    orphansDeleted.length > 0 ||
+    phantomsPruned.length > 0 ||
+    journalDropped.length > 0
   ) {
     // ids/status only — no key/mnemonic/secret material.
     console.log(
       `[bootReconcile] repaired cross-store half-state: ` +
-        `${orphanSecretIds.length} orphan secret(s), ` +
-        `${phantomIds.length} phantom account(s), ` +
-        `${staleJournalIds.length} stale journal entr(ies)`
+        `${orphansDeleted.length} orphan secret(s), ` +
+        `${phantomsPruned.length} phantom account(s), ` +
+        `${journalDropped.length} journal entr(ies) dropped`
     );
   }
 
   return {
     ran: true,
-    orphanSecretsDeleted: orphanSecretIds,
-    phantomAccountsPruned: phantomIds,
-    staleJournalDropped: staleJournalIds,
+    orphanSecretsDeleted: orphansDeleted,
+    phantomAccountsPruned: phantomsPruned,
+    staleJournalDropped: staleJournalIds.filter((id) =>
+      journalDropped.includes(id)
+    ),
   };
 }
 

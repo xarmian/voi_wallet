@@ -241,3 +241,45 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
     });
   });
 });
+
+describe('reconcileCrossStoreHalfState — Phase 2 is best-effort (partial failure)', () => {
+  // Codex P2: prune runs first; if a later orphan delete throws, the outcome must
+  // still report the completed prune so the caller can refresh the (now stale)
+  // lock verdict — the reconcile must NOT throw away the result.
+  it('preserves a completed phantom prune when a later orphan delete throws', async () => {
+    setup({
+      blob: ['phantom'],
+      list: ['orphan'],
+      journal: {},
+      secrets: ['orphan'], // orphan has a secret, no blob → orphan-delete
+    });
+    secure.deleteAccount.mockRejectedValueOnce(
+      new Error('keychain delete failed')
+    );
+
+    // Does NOT reject — Phase 2 is best-effort.
+    const result = await reconcileCrossStoreHalfState();
+
+    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+    expect(result.ran).toBe(true);
+    // The prune completed and is reported so the caller refreshes the verdict...
+    expect(result.phantomAccountsPruned).toEqual(['phantom']);
+    // ...but the failed orphan delete is NOT reported as done.
+    expect(result.orphanSecretsDeleted).toEqual([]);
+    // Journal drop for the failed orphan did not run (retried next boot).
+    expect(secure.dropPendingCreateEntries).not.toHaveBeenCalled();
+  });
+
+  it('reports no completed work when the phantom prune itself throws', async () => {
+    setup({ blob: ['phantom'], list: [], journal: {}, secrets: [] });
+    wallet.pruneStandardAccounts.mockRejectedValueOnce(
+      new Error('storeWallet failed')
+    );
+
+    const result = await reconcileCrossStoreHalfState();
+
+    expect(result.ran).toBe(true);
+    // Prune threw → not recorded → caller does NOT refresh (wallet likely intact).
+    expect(result.phantomAccountsPruned).toEqual([]);
+  });
+});
