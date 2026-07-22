@@ -84,6 +84,16 @@ describe('probeSecretPresenceStrict', () => {
     ).resolves.toBe(false);
   });
 
+  // Codex P2: match the reader's `if (stored)` truthiness — an empty-string
+  // primary value is ABSENT to the reader, so the probe must fall through (here,
+  // to legacy/tombstone, both empty → false), not report the empty as present.
+  it('treats an empty-string primary value as absent (truthiness, not != null)', async () => {
+    mockSecure.set(`${SECRET_PREFIX}acc1`, '');
+    await expect(
+      AccountSecureStorage.probeSecretPresenceStrict('acc1')
+    ).resolves.toBe(false);
+  });
+
   // Codex P1: a live account whose key is still in LEGACY format (not yet
   // migrated) has NO primary secret. The reader would migrate it on next access,
   // so the probe MUST count it as present — else the reconcile prunes a real,
@@ -177,6 +187,52 @@ describe('readPendingCreatesStrict', () => {
     await expect(
       AccountSecureStorage.readPendingCreatesStrict()
     ).rejects.toThrow('not an object');
+  });
+});
+
+describe('readAccountListStrict', () => {
+  const METADATA_LIST_KEY = 'voi_account_list';
+
+  it('returns the primary list', async () => {
+    mockKv.set(METADATA_LIST_KEY, JSON.stringify(['a', 'b']));
+    await expect(AccountSecureStorage.readAccountListStrict()).resolves.toEqual(
+      ['a', 'b']
+    );
+  });
+
+  it('returns [] for genuine absence', async () => {
+    await expect(AccountSecureStorage.readAccountListStrict()).resolves.toEqual(
+      []
+    );
+  });
+
+  it('reads the legacy list WITHOUT migrating (no write, no delete)', async () => {
+    // Primary absent, legacy present: getAllAccountIds would migrate here; the
+    // strict read-only sibling must NOT write the primary or delete the legacy.
+    mockSecure.set(METADATA_LIST_KEY, JSON.stringify(['c']));
+    await expect(AccountSecureStorage.readAccountListStrict()).resolves.toEqual(
+      ['c']
+    );
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(secureStorage.deleteItem).not.toHaveBeenCalled();
+    // Legacy copy still there (untouched).
+    expect(mockSecure.get(METADATA_LIST_KEY)).toBe(JSON.stringify(['c']));
+  });
+
+  it('PROPAGATES a storage read failure (fail closed)', async () => {
+    (storage.getItem as jest.Mock).mockRejectedValueOnce(
+      new Error('list read failed')
+    );
+    await expect(AccountSecureStorage.readAccountListStrict()).rejects.toThrow(
+      'list read failed'
+    );
+  });
+
+  it('THROWS on a corrupt (unparseable) primary list', async () => {
+    mockKv.set(METADATA_LIST_KEY, '{not json');
+    await expect(
+      AccountSecureStorage.readAccountListStrict()
+    ).rejects.toThrow();
   });
 });
 

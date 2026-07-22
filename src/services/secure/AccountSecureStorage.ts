@@ -1280,7 +1280,9 @@ export class AccountSecureStorage {
       timeoutMs,
       'secret presence probe'
     );
-    if (primary != null) {
+    // Truthiness (not `!= null`) to match the reader's `if (stored)` semantics —
+    // an empty-string value reads as absent there too (Codex P2).
+    if (primary) {
       return true;
     }
     // Primary absent: mirror migrateLegacyAccountDataLocked. A set wipe tombstone
@@ -1300,7 +1302,8 @@ export class AccountSecureStorage {
       timeoutMs,
       'legacy secret presence probe'
     );
-    return legacy != null;
+    // Truthiness to match migrateLegacyAccountDataLocked's `if (!legacyData)`.
+    return !!legacy;
   }
 
   /**
@@ -1993,6 +1996,29 @@ export class AccountSecureStorage {
         `Failed to retrieve account list: ${(error as Error).message}`
       );
     }
+  }
+
+  /**
+   * READ-ONLY strict read of the account-id list for the boot reconcile
+   * (TASK-222). getAllAccountIds MIGRATES a legacy secure-store list — it WRITES
+   * the primary and DELETES the legacy copy — which would be a mutation during
+   * the reconcile's abort-safe phase-one reads (a later probe/journal failure
+   * must leave the store untouched; Codex P2). This sibling reads the primary,
+   * then the legacy location, WITHOUT migrating, and PROPAGATES a read failure or
+   * a corrupt (unparseable) list so the reconcile fails closed. Resolves `[]`
+   * only for genuine absence.
+   */
+  static async readAccountListStrict(): Promise<string[]> {
+    const primary = await storage.getItem(this.METADATA_LIST_KEY);
+    if (primary) {
+      // A corrupt list throws here → propagates → reconcile aborts (fail closed).
+      return JSON.parse(primary) as string[];
+    }
+    const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
+    if (legacy) {
+      return JSON.parse(legacy) as string[];
+    }
+    return [];
   }
 
   private static async encryptPrivateKey(

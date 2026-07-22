@@ -54,11 +54,14 @@ const EMPTY_RESULT: ReconcileResult = {
  */
 export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // ── Phase 1: STRICT reads. Any throw here aborts the whole pass (delete
-  // nothing). getStandardAccountIdsStrict / getAllAccountIds / the journal read
-  // all propagate a storage failure; a corrupt wallet blob propagates too.
+  // nothing). getStandardAccountIdsStrict / readAccountListStrict / the journal
+  // read all propagate a storage failure; a corrupt wallet blob propagates too.
+  // readAccountListStrict (not getAllAccountIds) is READ-ONLY — getAllAccountIds
+  // migrates a legacy list (write + delete), which would mutate the store during
+  // this abort-safe read phase (Codex P2).
   const blobStandardIds =
     await MultiAccountWalletService.getStandardAccountIdsStrict();
-  const accountListIds = await AccountSecureStorage.getAllAccountIds();
+  const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
   const journalIds = Object.keys(journal);
 

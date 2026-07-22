@@ -11,7 +11,7 @@
 
 jest.mock('@/services/secure', () => ({
   AccountSecureStorage: {
-    getAllAccountIds: jest.fn(),
+    readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(async () => {}),
@@ -31,7 +31,7 @@ import { MultiAccountWalletService } from '../index';
 import { reconcileCrossStoreHalfState } from '../crossStoreReconcile';
 
 const secure = AccountSecureStorage as unknown as {
-  getAllAccountIds: jest.Mock;
+  readAccountListStrict: jest.Mock;
   readPendingCreatesStrict: jest.Mock;
   probeSecretPresenceStrict: jest.Mock;
   deleteAccount: jest.Mock;
@@ -56,7 +56,7 @@ function setup(opts: {
   secrets?: string[];
 }) {
   const secrets = new Set(opts.secrets ?? []);
-  secure.getAllAccountIds.mockResolvedValue(opts.list ?? []);
+  secure.readAccountListStrict.mockResolvedValue(opts.list ?? []);
   secure.readPendingCreatesStrict.mockResolvedValue(opts.journal ?? {});
   wallet.getStandardAccountIdsStrict.mockResolvedValue(opts.blob ?? []);
   secure.probeSecretPresenceStrict.mockImplementation(async (id: string) =>
@@ -89,7 +89,9 @@ describe('reconcileCrossStoreHalfState — fail-closed abort (delete nothing)', 
 
   it('aborts and mutates nothing when the account-list read throws', async () => {
     setup({ blob: ['a'], secrets: ['a'] });
-    secure.getAllAccountIds.mockRejectedValue(new Error('list read failed'));
+    secure.readAccountListStrict.mockRejectedValue(
+      new Error('list read failed')
+    );
 
     await expect(reconcileCrossStoreHalfState()).rejects.toThrow(
       'list read failed'
