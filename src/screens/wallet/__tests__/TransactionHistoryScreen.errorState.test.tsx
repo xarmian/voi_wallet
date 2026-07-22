@@ -97,6 +97,7 @@ const baseState = {
   transactionsError: null,
   multiNetworkBalanceError: null,
   recentTransactions: [],
+  recentTransactionsScope: 'all',
   isBalanceLoading: false,
   isBackgroundRefreshing: false,
   balanceLastUpdated: 0,
@@ -162,6 +163,22 @@ describe('TransactionHistoryScreen error surfacing', () => {
 
     expect(getByText('No Transactions')).toBeTruthy();
     expect(queryByTestId('transactions-error')).toBeNull();
+  });
+
+  it('ignores rows the store is currently holding for a different resource', () => {
+    // AssetDetailScreen loads a single asset's history into the SAME array.
+    // Rendering those rows here would present another list's transactions as
+    // this account's full history.
+    mockAccountState = {
+      ...baseState,
+      recentTransactions: [{ id: 'a' }, { id: 'b' }],
+      recentTransactionsScope: '42_asa',
+    };
+
+    const { queryByText, getByText } = render(<TransactionHistoryScreen />);
+
+    expect(queryByText('tx-a')).toBeNull();
+    expect(getByText('No Transactions')).toBeTruthy();
   });
 
   it('keeps loaded rows and surfaces a footer error when a later page fails', () => {

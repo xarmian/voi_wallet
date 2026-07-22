@@ -102,6 +102,14 @@ interface AccountUIState {
   multiNetworkBalanceError: string | null;
   balance?: AccountBalance;
   recentTransactions: TransactionInfo[];
+  /**
+   * Which resource `recentTransactions` currently holds — `'all'` or an asset
+   * scope. The account-wide and per-asset loaders share ONE array, so without
+   * this tag AssetDetailScreen renders the account-wide history as the asset's
+   * own (and a failed asset fetch looks like a partial success). Consumers read
+   * the array only when the tag matches what they are showing.
+   */
+  recentTransactionsScope: string | null;
   isBalanceLoading: boolean;
   isBackgroundRefreshing: boolean;
   balanceLastUpdated: number;
@@ -274,6 +282,7 @@ const createInitialAccountState = (): AccountUIState => ({
   transactionsError: null,
   multiNetworkBalanceError: null,
   recentTransactions: [],
+  recentTransactionsScope: null,
   isBalanceLoading: false,
   isBackgroundRefreshing: false,
   balanceLastUpdated: 0,
@@ -1305,6 +1314,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...get().accountStates[accountId],
               recentTransactions: dedupedTransactions,
+              recentTransactionsScope: ALL_TRANSACTIONS_SCOPE,
               isTransactionsLoading: false,
             },
           },
@@ -1390,6 +1400,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...get().accountStates[accountId],
               recentTransactions: uniqueTransactions,
+              recentTransactionsScope: assetKey,
               isTransactionsLoading: false,
               assetTransactionsPagination: {
                 ...get().accountStates[accountId]?.assetTransactionsPagination,
@@ -1494,6 +1505,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...get().accountStates[accountId],
               recentTransactions: updatedTransactions,
+              recentTransactionsScope: assetKey,
               assetTransactionsPagination: {
                 ...get().accountStates[accountId]?.assetTransactionsPagination,
                 [assetKey]: {
@@ -1585,6 +1597,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...get().accountStates[accountId],
               recentTransactions: uniqueTransactions,
+              recentTransactionsScope: ALL_TRANSACTIONS_SCOPE,
               isTransactionsLoading: false,
               transactionsPagination: {
                 nextToken: result.nextToken,
@@ -1676,6 +1689,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...get().accountStates[accountId],
               recentTransactions: updatedTransactions,
+              recentTransactionsScope: ALL_TRANSACTIONS_SCOPE,
               transactionsPagination: {
                 nextToken: result.nextToken,
                 hasMore: !!result.nextToken,
@@ -2785,6 +2799,7 @@ const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   transactionsError: null,
   multiNetworkBalanceError: null,
   recentTransactions: [],
+  recentTransactionsScope: null,
   isBalanceLoading: false,
   isBackgroundRefreshing: false,
   balanceLastUpdated: 0,

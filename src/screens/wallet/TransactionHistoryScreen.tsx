@@ -33,6 +33,9 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetwork } from '@/store/networkStore';
 
+// Stable empty reference so a scope mismatch does not churn list identity.
+const EMPTY_TRANSACTIONS: TransactionInfo[] = [];
+
 export default function TransactionHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const loadMoreInFlightRef = useRef(false);
@@ -60,7 +63,13 @@ export default function TransactionHistoryScreen() {
     (state) => state.assetMetadataCache
   );
 
-  const allTransactions = accountState.recentTransactions || [];
+  // Read the shared `recentTransactions` array only while it holds the
+  // ACCOUNT-WIDE history — AssetDetailScreen loads a single asset's history
+  // into the same array, and rendering that here would be the wrong list.
+  const allTransactions =
+    accountState.recentTransactionsScope === ALL_TRANSACTIONS_SCOPE
+      ? accountState.recentTransactions || []
+      : EMPTY_TRANSACTIONS;
   // Not the shared `lastError` (every other loader clears it) and not any
   // transaction error either — only an ACCOUNT-WIDE one. AssetDetailScreen
   // writes asset-scoped failures into the same field, and rendering those here
@@ -79,7 +88,7 @@ export default function TransactionHistoryScreen() {
 
   // Load token metadata for ARC-200 transactions
   useEffect(() => {
-    const transactions = accountState.recentTransactions || [];
+    const transactions = allTransactions;
     const arc200ContractIds = transactions
       .filter((tx) => tx.isArc200 && tx.contractId)
       .map((tx) => tx.contractId!)
@@ -88,12 +97,12 @@ export default function TransactionHistoryScreen() {
     if (arc200ContractIds.length > 0) {
       loadTokenMetadata(arc200ContractIds);
     }
-  }, [accountState.recentTransactions, loadTokenMetadata]);
+  }, [allTransactions, loadTokenMetadata]);
 
   // Resolve ASA params for transactions whose asset isn't in current holdings,
   // so amounts render with correct decimals instead of a 0-decimals fallback.
   useEffect(() => {
-    const transactions = accountState.recentTransactions || [];
+    const transactions = allTransactions;
     const asaAssetIds = transactions
       .filter((tx) => !tx.isArc200 && tx.assetId && tx.assetId !== 0)
       .map((tx) => tx.assetId!)
@@ -104,7 +113,7 @@ export default function TransactionHistoryScreen() {
     }
     // currentNetwork: re-resolve for the new network after a switch even if the
     // transaction list reference hasn't changed (cache is network-scoped).
-  }, [accountState.recentTransactions, loadAssetMetadata, currentNetwork]);
+  }, [allTransactions, loadAssetMetadata, currentNetwork]);
 
   // Stable identity: it is a dependency of the memoized empty/error component,
   // and an unstable one would remount that subtree on every render.

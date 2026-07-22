@@ -173,6 +173,29 @@ describe('operation-scoped account errors (TASK-40)', () => {
     );
   });
 
+  it('tags the shared transaction array with the resource it holds', async () => {
+    // AssetDetailScreen and TransactionHistoryScreen read the SAME array; the
+    // tag is what lets each tell whether the rows are actually theirs.
+    mockGetAllTransactionHistory.mockResolvedValue({
+      transactions: [{ id: 'a' }],
+      nextToken: undefined,
+    });
+    await useWalletStore.getState().loadAllTransactions('acc-1');
+    expect(accountState('acc-1').recentTransactionsScope).toBe(
+      ALL_TRANSACTIONS_SCOPE
+    );
+
+    mockGetAssetTransactionHistory.mockResolvedValue({
+      transactions: [{ id: 'b' }],
+      nextToken: undefined,
+      hasMore: false,
+    });
+    await useWalletStore.getState().loadAssetTransactions('acc-1', 42, false);
+    expect(accountState('acc-1').recentTransactionsScope).toBe(
+      assetTransactionsScope(42, false)
+    );
+  });
+
   it('clearAccountError clears every scoped field', async () => {
     mockGetAccountBalance.mockRejectedValue(new Error('algod is down'));
     mockGetTransactionHistory.mockRejectedValue(new Error('indexer is down'));

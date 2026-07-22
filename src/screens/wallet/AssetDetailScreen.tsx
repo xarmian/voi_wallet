@@ -64,6 +64,9 @@ interface AssetDetailRouteParams {
   networkId?: string; // Optional network filter for multi-network context
 }
 
+// Stable empty reference so a scope mismatch does not churn list identity.
+const EMPTY_TRANSACTIONS: TransactionInfo[] = [];
+
 export default function AssetDetailScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
@@ -709,16 +712,22 @@ export default function AssetDetailScreen() {
     return formatCurrency(usdValue);
   };
 
-  const getFilteredTransactions = () => {
+  const getFilteredTransactions = (scope: string) => {
     // If viewing a specific network, use network-specific transactions
     if (networkId) {
       return networkSpecificTransactions;
     }
 
-    // Otherwise use transactions from wallet store
+    // Otherwise use transactions from wallet store. The store keeps ONE array
+    // shared with the account-wide history, so only read it while it actually
+    // holds THIS asset's transactions — otherwise Home's account-wide history
+    // would render here as if it were the asset's, and a failed asset fetch
+    // would look like a partially-successful one (TASK-40).
     // Transactions are already filtered by the NetworkService at the API level
-    // No client-side filtering needed anymore
-    return accountState.recentTransactions || [];
+    // when the scope matches, so no client-side filtering is needed.
+    return accountState.recentTransactionsScope === scope
+      ? accountState.recentTransactions || []
+      : EMPTY_TRANSACTIONS;
   };
 
   const handleOptOut = async () => {
@@ -845,8 +854,6 @@ export default function AssetDetailScreen() {
     return false;
   };
 
-  const filteredTransactions = getFilteredTransactions();
-
   const asset = effectiveBalance?.assets?.find(
     (a) =>
       a.assetId === assetId ||
@@ -855,6 +862,14 @@ export default function AssetDetailScreen() {
   const isArc200 = asset?.assetType === 'arc200';
   const assetKey = assetTransactionsScope(assetId, isArc200);
   const pagination = accountState.assetTransactionsPagination?.[assetKey];
+
+  const filteredTransactions = getFilteredTransactions(assetKey);
+
+  // `isLoadingNetworkTransactions` was another write-only flag; it is what
+  // distinguishes "still fetching" from "nothing to show" on the networkId path.
+  const isLoadingTransactions = networkId
+    ? isLoadingNetworkTransactions
+    : accountState.isTransactionsLoading;
 
   const handleLoadMore = React.useCallback(() => {
     // The store only flips `isLoadingMore` after an await, so guard on an
@@ -1278,7 +1293,9 @@ export default function AssetDetailScreen() {
   ]);
 
   // Never render the "no transactions yet" empty state for a FAILED fetch —
-  // it is indistinguishable from an asset with no activity (TASK-40 / U-03).
+  // it is indistinguishable from an asset with no activity (TASK-40 / U-03) —
+  // and never for an IN-FLIGHT one either, now that the list is scope-gated and
+  // starts empty until this asset's own transactions land.
   const renderListEmpty = React.useCallback(() => {
     if (transactionsError) {
       return (
@@ -1292,6 +1309,15 @@ export default function AssetDetailScreen() {
       );
     }
 
+    if (isLoadingTransactions) {
+      return (
+        <ListFooterSpinner
+          text="Loading transactions..."
+          style={styles.emptyTransactions}
+        />
+      );
+    }
+
     return (
       <ListEmptyState
         icon="receipt-outline"
@@ -1300,7 +1326,12 @@ export default function AssetDetailScreen() {
         style={styles.emptyTransactions}
       />
     );
-  }, [transactionsError, loadTransactions, styles.emptyTransactions]);
+  }, [
+    transactionsError,
+    isLoadingTransactions,
+    loadTransactions,
+    styles.emptyTransactions,
+  ]);
 
   return (
     <NFTBackground>
