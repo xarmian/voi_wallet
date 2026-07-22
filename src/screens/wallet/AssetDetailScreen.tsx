@@ -214,6 +214,11 @@ export default function AssetDetailScreen() {
   // slot; without it a failure rendered as an empty list (TASK-40 / U-03).
   const [networkTransactionsError, setNetworkTransactionsError] =
     useState<unknown>(null);
+  // Distinguishes "this screen has not fetched yet" from "this asset has no
+  // activity". The scope gate below starts the list empty, and the store only
+  // flips `isTransactionsLoading` after an await, so without this the
+  // definitive empty state would flash before the fetch even registers.
+  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false);
 
   useEffect(() => {
     if (!networkId) {
@@ -430,6 +435,9 @@ export default function AssetDetailScreen() {
     } catch (error) {
       console.error('Failed to load transactions:', error);
       setNetworkTransactionsError(error);
+    } finally {
+      // Always set, even on failure, so a spinner can never wedge.
+      setHasAttemptedLoad(true);
     }
   }, [
     accountId,
@@ -867,9 +875,11 @@ export default function AssetDetailScreen() {
 
   // `isLoadingNetworkTransactions` was another write-only flag; it is what
   // distinguishes "still fetching" from "nothing to show" on the networkId path.
-  const isLoadingTransactions = networkId
-    ? isLoadingNetworkTransactions
-    : accountState.isTransactionsLoading;
+  const isLoadingTransactions =
+    !hasAttemptedLoad ||
+    (networkId
+      ? isLoadingNetworkTransactions
+      : accountState.isTransactionsLoading);
 
   const handleLoadMore = React.useCallback(() => {
     // The store only flips `isLoadingMore` after an await, so guard on an

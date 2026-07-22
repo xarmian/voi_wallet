@@ -38,6 +38,11 @@ const EMPTY_TRANSACTIONS: TransactionInfo[] = [];
 
 export default function TransactionHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
+  // Distinguishes "this screen has not fetched yet" from "the account has no
+  // transactions". Needed because the scope gate below starts the list empty
+  // and the store only flips `isTransactionsLoading` after an await, leaving a
+  // window in which the definitive empty state would otherwise be shown.
+  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false);
   const loadMoreInFlightRef = useRef(false);
   const navigation = useNavigation<StackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
@@ -124,6 +129,9 @@ export default function TransactionHistoryScreen() {
       await loadAllTransactions(activeAccount.id);
     } catch (error) {
       console.error('Failed to load transaction history:', error);
+    } finally {
+      // Always set, even on failure/early-return, so a spinner can never wedge.
+      setHasAttemptedLoad(true);
     }
   }, [activeAccount, loadAllTransactions]);
 
@@ -303,6 +311,15 @@ export default function TransactionHistoryScreen() {
       );
     }
 
+    if (!hasAttemptedLoad || accountState.isTransactionsLoading) {
+      return (
+        <ListFooterSpinner
+          text="Loading transactions..."
+          style={styles.emptyContainer}
+        />
+      );
+    }
+
     return (
       <ListEmptyState
         icon="receipt-outline"
@@ -314,6 +331,8 @@ export default function TransactionHistoryScreen() {
     );
   }, [
     transactionsError,
+    hasAttemptedLoad,
+    accountState.isTransactionsLoading,
     loadTransactions,
     styles.emptyContainer,
     styles.emptyIcon.color,

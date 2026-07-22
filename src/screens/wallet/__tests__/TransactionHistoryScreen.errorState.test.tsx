@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import { render, fireEvent } from '@testing-library/react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
 
 import TransactionHistoryScreen from '../TransactionHistoryScreen';
 import { lightTheme } from '@/constants/themes';
@@ -116,42 +116,61 @@ beforeEach(() => {
   expect(lightTheme).toBeDefined();
 });
 
+// The mount effect fetches; settle it so assertions run after the first load
+// attempt has registered.
+const settle = () => act(async () => {});
+
 describe('TransactionHistoryScreen error surfacing', () => {
-  it('shows the empty state when the account genuinely has no transactions', () => {
+  it('shows the empty state when the account genuinely has no transactions', async () => {
     const { getByText, queryByTestId } = render(<TransactionHistoryScreen />);
+    await settle();
 
     expect(getByText('No Transactions')).toBeTruthy();
     expect(queryByTestId('transactions-error')).toBeNull();
   });
 
-  it('shows an error state instead of "No Transactions" when the fetch failed', () => {
+  it('shows a loading state, not the empty state, before the first fetch settles', async () => {
+    // The store only flips `isTransactionsLoading` after an await, so the
+    // definitive "No Transactions" copy must not be reachable in the meantime.
+    const { queryByText, getByText } = render(<TransactionHistoryScreen />);
+
+    expect(queryByText('No Transactions')).toBeNull();
+    expect(getByText('Loading transactions...')).toBeTruthy();
+
+    await settle();
+  });
+
+  it('shows an error state instead of "No Transactions" when the fetch failed', async () => {
     mockAccountState = {
       ...baseState,
       transactionsError: { scope: 'all', message: 'Network request failed' },
     };
 
     const { queryByText, getByTestId } = render(<TransactionHistoryScreen />);
+    await settle();
 
     // The whole point of the fix: a failure must not look like an empty account.
     expect(queryByText('No Transactions')).toBeNull();
     expect(getByTestId('transactions-error')).toBeTruthy();
   });
 
-  it('offers a retry that re-runs the load', () => {
+  it('offers a retry that re-runs the load', async () => {
     mockAccountState = {
       ...baseState,
       transactionsError: { scope: 'all', message: 'Network request failed' },
     };
 
     const { getByTestId } = render(<TransactionHistoryScreen />);
+    await settle();
     mockLoadAllTransactions.mockClear();
 
     fireEvent.press(getByTestId('transactions-error-retry'));
+    await settle();
 
     expect(mockLoadAllTransactions).toHaveBeenCalledWith('acct-1');
   });
 
-  it('ignores an asset-scoped error and still shows the genuine empty state', () => {
+  it('ignores an asset-scoped error and still shows the genuine empty state', async () => {
     // AssetDetailScreen writes into the same field; blaming this list for its
     // failure would be wrong, and hiding a real empty state behind it worse.
     mockAccountState = {
@@ -160,12 +179,13 @@ describe('TransactionHistoryScreen error surfacing', () => {
     };
 
     const { getByText, queryByTestId } = render(<TransactionHistoryScreen />);
+    await settle();
 
     expect(getByText('No Transactions')).toBeTruthy();
     expect(queryByTestId('transactions-error')).toBeNull();
   });
 
-  it('ignores rows the store is currently holding for a different resource', () => {
+  it('ignores rows the store is currently holding for a different resource', async () => {
     // AssetDetailScreen loads a single asset's history into the SAME array.
     // Rendering those rows here would present another list's transactions as
     // this account's full history.
@@ -176,12 +196,13 @@ describe('TransactionHistoryScreen error surfacing', () => {
     };
 
     const { queryByText, getByText } = render(<TransactionHistoryScreen />);
+    await settle();
 
     expect(queryByText('tx-a')).toBeNull();
     expect(getByText('No Transactions')).toBeTruthy();
   });
 
-  it('keeps loaded rows and surfaces a footer error when a later page fails', () => {
+  it('keeps loaded rows and surfaces a footer error when a later page fails', async () => {
     mockAccountState = {
       ...baseState,
       recentTransactions: [{ id: 'a' }, { id: 'b' }],
@@ -192,6 +213,7 @@ describe('TransactionHistoryScreen error surfacing', () => {
     const { getByText, getByTestId, queryByTestId } = render(
       <TransactionHistoryScreen />
     );
+    await settle();
 
     // Already-loaded rows are still valid — only the next page failed.
     expect(getByText('tx-a')).toBeTruthy();
