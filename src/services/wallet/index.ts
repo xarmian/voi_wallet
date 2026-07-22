@@ -2026,8 +2026,22 @@ export class MultiAccountWalletService {
    * decrypt, no heal-on-read, no cache side effect.
    */
   static async getStandardAccountIdsStrict(): Promise<string[]> {
+    // A present-but-EMPTY primary blob ('') is CORRUPTION, not absence (a
+    // genuinely absent wallet is null). getStoredValueStrict collapses '' to null
+    // (its `if (value)` skip), which here would return [] and make EVERY present
+    // secret look like an orphan → mass-deleted by the reconcile. Detect the raw
+    // empty string up front and fail CLOSED (Codex). This is the sole destructive
+    // amplification of the pre-existing ''-as-absent ambiguity, so it is guarded
+    // here rather than in the shared getStoredValueStrict (whose lock-verdict
+    // callers keep their existing absence semantics).
+    const rawPrimary = await storage.getItem(this.WALLET_KEY);
+    if (rawPrimary === '') {
+      throw new Error('Corrupt wallet blob: present but empty');
+    }
     const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
-    if (!walletData) {
+    // `== null` (not truthiness): a '' surfaced from the legacy location is also
+    // corruption and must reach JSON.parse (which throws) rather than collapse.
+    if (walletData == null) {
       // Genuine absence — mirrors hasWalletWithAccountsStrict's absence case.
       return [];
     }

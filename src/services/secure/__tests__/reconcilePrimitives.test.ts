@@ -235,6 +235,15 @@ describe('readAccountListStrict', () => {
     );
   });
 
+  // Codex: a present-but-empty value is corruption, not absence — must not
+  // collapse to [] (which silently drops the list as a candidate source).
+  it('THROWS on a present-but-empty ("") stored list', async () => {
+    mockKv.set(METADATA_LIST_KEY, '');
+    await expect(
+      AccountSecureStorage.readAccountListStrict()
+    ).rejects.toThrow();
+  });
+
   it('THROWS on a corrupt (unparseable) primary list', async () => {
     mockKv.set(METADATA_LIST_KEY, '{not json');
     await expect(

@@ -2020,13 +2020,17 @@ export class AccountSecureStorage {
    * only for genuine absence.
    */
   static async readAccountListStrict(): Promise<string[]> {
+    // `!= null` (not truthiness): a present-but-EMPTY value ('') is CORRUPTION,
+    // not absence — a genuinely absent list is null. Routing '' to the parser
+    // makes JSON.parse('') throw → reconcile aborts (fail closed). Collapsing ''
+    // to [] would silently drop the list as a candidate source (Codex).
     const primary = await storage.getItem(this.METADATA_LIST_KEY);
-    if (primary) {
+    if (primary != null) {
       // A corrupt list throws here → propagates → reconcile aborts (fail closed).
       return this.parseAccountListStrict(primary);
     }
     const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
-    if (legacy) {
+    if (legacy != null) {
       return this.parseAccountListStrict(legacy);
     }
     return [];

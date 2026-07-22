@@ -138,6 +138,15 @@ it('THROWS on a STANDARD account with a non-string id (corruption, not data)', a
   ).rejects.toThrow('non-string id');
 });
 
+it('THROWS on a present-but-empty primary blob (corruption, not absence)', async () => {
+  // '' would collapse to [] via getStoredValueStrict and make every present
+  // secret look like an orphan → mass-deleted. Must fail closed.
+  mockStore[WALLET_KEY] = '';
+  await expect(
+    MultiAccountWalletService.getStandardAccountIdsStrict()
+  ).rejects.toThrow('present but empty');
+});
+
 it('does not write or migrate (pure read)', async () => {
   mockStore[WALLET_KEY] = blob([{ id: 's1', type: 'standard' }]);
   await MultiAccountWalletService.getStandardAccountIdsStrict();
