@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  SectionList,
   TextInput,
   TouchableOpacity,
   RefreshControl,
@@ -20,6 +20,7 @@ import FriendListItem from '@/components/social/FriendListItem';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { ListEmptyState } from '@/components/common/ListEmptyState';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { GlassButton } from '@/components/common/GlassButton';
@@ -55,9 +56,24 @@ export default function FriendsScreen() {
     ? searchFriends(searchQuery)
     : sortedFriends;
 
-  // Group friends
-  const favorites = filteredFriends.filter((f) => f.isFavorite);
-  const regular = filteredFriends.filter((f) => !f.isFavorite);
+  // Group friends into SectionList sections (empty groups are omitted so no
+  // header renders for them, matching the previous conditional rendering).
+  const sections = useMemo(() => {
+    const favorites = filteredFriends.filter((f) => f.isFavorite);
+    const regular = filteredFriends.filter((f) => !f.isFavorite);
+
+    const result: { title: string; data: Friend[] }[] = [];
+    if (favorites.length > 0) {
+      result.push({ title: 'Favorites', data: favorites });
+    }
+    if (regular.length > 0) {
+      result.push({
+        title: searchQuery.trim() ? 'Results' : 'All Friends',
+        data: regular,
+      });
+    }
+    return result;
+  }, [filteredFriends, searchQuery]);
 
   // Handle friend press
   const handleFriendPress = useCallback(
@@ -85,47 +101,71 @@ export default function FriendsScreen() {
   }, [navigation]);
 
   // Render empty state
-  const renderEmptyState = () => {
+  const renderEmptyState = useCallback(() => {
     if (isLoading) {
       return null;
     }
 
     if (searchQuery.trim()) {
       return (
-        <View style={styles.emptyState}>
-          <Ionicons
-            name="search-outline"
-            size={64}
-            color={theme.colors.textMuted}
-          />
-          <Text style={styles.emptyTitle}>No friends found</Text>
-          <Text style={styles.emptyText}>Try a different search term</Text>
-        </View>
+        <ListEmptyState
+          icon="search-outline"
+          title="No friends found"
+          subtitle="Try a different search term"
+          style={styles.emptyState}
+        />
       );
     }
 
     return (
-      <View style={styles.emptyState}>
-        <Ionicons
-          name="people-outline"
-          size={64}
-          color={theme.colors.textMuted}
-        />
-        <Text style={styles.emptyTitle}>No friends yet</Text>
-        <Text style={styles.emptyText}>
-          Add friends by searching for their Envoi name
-        </Text>
-        <GlassButton
-          variant="primary"
-          size="md"
-          label="Add Friend"
-          icon="person-add"
-          onPress={handleAddFriend}
-          style={{ marginTop: theme.spacing.lg }}
-        />
-      </View>
+      <ListEmptyState
+        icon="people-outline"
+        title="No friends yet"
+        subtitle="Add friends by searching for their Envoi name"
+        style={styles.emptyState}
+        action={
+          <GlassButton
+            variant="primary"
+            size="md"
+            label="Add Friend"
+            icon="person-add"
+            onPress={handleAddFriend}
+            style={{ marginTop: theme.spacing.lg }}
+          />
+        }
+      />
     );
-  };
+  }, [
+    isLoading,
+    searchQuery,
+    styles.emptyState,
+    handleAddFriend,
+    theme.spacing.lg,
+  ]);
+
+  const renderFriendItem = useCallback(
+    ({ item }: { item: Friend }) => (
+      <FriendListItem
+        friend={item}
+        onPress={handleFriendPress}
+        showLastInteraction={false}
+        showAddress
+      />
+    ),
+    [handleFriendPress]
+  );
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: { title: string; data: Friend[] } }) => (
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>{section.title}</Text>
+        <Text style={styles.sectionCount}>{section.data.length}</Text>
+      </View>
+    ),
+    [styles.sectionHeader, styles.sectionTitle, styles.sectionCount]
+  );
+
+  const keyExtractor = useCallback((item: Friend) => item.id, []);
 
   return (
     <NFTBackground>
@@ -193,11 +233,13 @@ export default function FriendsScreen() {
         </BlurredContainer>
 
         {/* Friends List */}
-        <ScrollView
+        <SectionList
+          sections={sections}
+          renderItem={renderFriendItem}
+          renderSectionHeader={renderSectionHeader}
+          keyExtractor={keyExtractor}
           contentContainerStyle={
-            filteredFriends.length === 0
-              ? styles.emptyListContent
-              : styles.listContent
+            sections.length === 0 ? styles.emptyListContent : styles.listContent
           }
           refreshControl={
             <RefreshControl
@@ -206,51 +248,18 @@ export default function FriendsScreen() {
               tintColor={theme.colors.primary}
             />
           }
-        >
-          {filteredFriends.length === 0 ? (
-            renderEmptyState()
-          ) : (
-            <>
-              {favorites.length > 0 && (
-                <View style={styles.section}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Favorites</Text>
-                    <Text style={styles.sectionCount}>{favorites.length}</Text>
-                  </View>
-                  {favorites.map((friend) => (
-                    <FriendListItem
-                      key={friend.id}
-                      friend={friend}
-                      onPress={handleFriendPress}
-                      showLastInteraction={false}
-                      showAddress={true}
-                    />
-                  ))}
-                </View>
-              )}
-
-              {regular.length > 0 && (
-                <View style={styles.section}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>
-                      {searchQuery.trim() ? 'Results' : 'All Friends'}
-                    </Text>
-                    <Text style={styles.sectionCount}>{regular.length}</Text>
-                  </View>
-                  {regular.map((friend) => (
-                    <FriendListItem
-                      key={friend.id}
-                      friend={friend}
-                      onPress={handleFriendPress}
-                      showLastInteraction={false}
-                      showAddress={true}
-                    />
-                  ))}
-                </View>
-              )}
-            </>
-          )}
-        </ScrollView>
+          ListEmptyComponent={renderEmptyState}
+          stickySectionHeadersEnabled={false}
+          // Rows are variable height (name/address wrapping), so no
+          // getItemLayout here — a wrong fixed height breaks scrolling.
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={11}
+          // Safe: rows pass `disableBlur`, so no BlurView is mounted inside
+          // this VirtualizedList (see SafeBlurView's Android warning).
+          removeClippedSubviews
+          showsVerticalScrollIndicator={false}
+        />
 
         {/* Floating Add Button */}
         <TouchableOpacity
@@ -312,9 +321,6 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       padding: theme.spacing.sm,
     },
-    section: {
-      marginBottom: theme.spacing.sm,
-    },
     sectionHeader: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -340,20 +346,6 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
       paddingHorizontal: theme.spacing.xl,
       paddingVertical: theme.spacing.xxl,
-    },
-    emptyTitle: {
-      fontSize: 20,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginTop: theme.spacing.lg,
-      marginBottom: theme.spacing.sm,
-      textAlign: 'center',
-    },
-    emptyText: {
-      fontSize: 14,
-      color: theme.colors.textMuted,
-      textAlign: 'center',
-      lineHeight: 20,
     },
     fab: {
       position: 'absolute',

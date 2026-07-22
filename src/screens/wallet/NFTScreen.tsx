@@ -375,31 +375,39 @@ export default function NFTScreen() {
     );
   };
 
-  const renderEmptyState = () => (
-    <View style={styles.emptyContainer}>
-      <GlassCard variant="light" style={styles.emptyCard}>
-        <View
-          style={[
-            styles.emptyIconContainer,
-            { backgroundColor: `${theme.colors.primary}15` },
-          ]}
-        >
-          <Ionicons
-            name="images-outline"
-            size={48}
-            color={theme.colors.primary}
-          />
-        </View>
-        <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
-          No NFTs Found
-        </Text>
-        <Text
-          style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}
-        >
-          Your NFT collection will appear here when you have ARC-72 tokens
-        </Text>
-      </GlassCard>
-    </View>
+  // Memoized: an unstable component identity makes VirtualizedList remount the
+  // empty subtree on every render.
+  const renderEmptyState = useCallback(
+    () => (
+      <View style={styles.emptyContainer}>
+        <GlassCard variant="light" style={styles.emptyCard}>
+          <View
+            style={[
+              styles.emptyIconContainer,
+              { backgroundColor: `${theme.colors.primary}15` },
+            ]}
+          >
+            <Ionicons
+              name="images-outline"
+              size={48}
+              color={theme.colors.primary}
+            />
+          </View>
+          <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
+            No NFTs Found
+          </Text>
+          <Text
+            style={[
+              styles.emptySubtitle,
+              { color: theme.colors.textSecondary },
+            ]}
+          >
+            Your NFT collection will appear here when you have ARC-72 tokens
+          </Text>
+        </GlassCard>
+      </View>
+    ),
+    [styles, theme]
   );
 
   const renderContent = () => {
@@ -428,7 +436,7 @@ export default function NFTScreen() {
           theme={theme}
           refreshing={refreshing}
           onRefresh={onRefresh}
-          ListEmptyComponent={renderEmptyState()}
+          ListEmptyComponent={renderEmptyState}
           processingNFTKey={settingThemeNFT}
           imageErrors={imageErrors}
           onImageError={handleImageError}

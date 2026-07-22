@@ -18,6 +18,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
 import { NFTToken, ARC72Collection } from '@/types/nft';
+import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 
@@ -379,13 +380,7 @@ export default function CollectionDetailScreen() {
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.5}
           ListEmptyComponent={renderEmptyState}
-          ListFooterComponent={
-            loadingMore ? (
-              <View style={styles.loadingMoreContainer}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              </View>
-            ) : null
-          }
+          ListFooterComponent={<ListFooterSpinner visible={loadingMore} />}
           showsVerticalScrollIndicator={false}
         />
       )}
@@ -514,9 +509,5 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 16,
     marginTop: 16,
-  },
-  loadingMoreContainer: {
-    paddingVertical: 16,
-    alignItems: 'center',
   },
 });

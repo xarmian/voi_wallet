@@ -4,7 +4,7 @@ import {
   Text,
   StyleSheet,
   RefreshControl,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
   Alert,
   ActivityIndicator,
@@ -44,6 +44,8 @@ import { NetworkService } from '@/services/network';
 import UnifiedAuthModal from '@/components/UnifiedAuthModal';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { GlassCard } from '@/components/common/GlassCard';
+import { ListEmptyState } from '@/components/common/ListEmptyState';
+import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SwapService } from '@/services/swap';
@@ -69,7 +71,7 @@ export default function AssetDetailScreen() {
   const [optingOut, setOptingOut] = useState(false);
   const [isSwappable, setIsSwappable] = useState(false);
   const [checkingSwappable, setCheckingSwappable] = useState(true);
-  const loadMoreCalledRef = React.useRef(false);
+  const loadMoreInFlightRef = React.useRef(false);
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<any>>();
   const isSwapEnabled = useIsSwapEnabled();
@@ -827,32 +829,29 @@ export default function AssetDetailScreen() {
   const pagination = accountState.assetTransactionsPagination?.[assetKey];
 
   const handleLoadMore = React.useCallback(() => {
-    // Prevent duplicate calls
-    if (loadMoreCalledRef.current) {
+    // The store only flips `isLoadingMore` after an await, so guard on an
+    // in-flight ref as well — otherwise two `onEndReached` events fired in the
+    // same tick would both pass the store-side check and double-fetch a page.
+    if (loadMoreInFlightRef.current) {
       return;
     }
-
-    console.log('[handleLoadMore] Called - assetId:', assetId);
-    console.log(
-      '[handleLoadMore] Asset pagination state:',
-      JSON.stringify(pagination)
-    );
 
     if (!pagination || !pagination.hasMore || pagination.isLoadingMore) {
-      console.log(
-        '[handleLoadMore] Skipping - no more data or already loading'
-      );
       return;
     }
 
-    console.log('[handleLoadMore] Triggering loadMoreAssetTransactions');
-    loadMoreCalledRef.current = true;
-    loadMoreAssetTransactions(accountId, assetId, isArc200);
-
-    setTimeout(() => {
-      loadMoreCalledRef.current = false;
-    }, 1000);
+    loadMoreInFlightRef.current = true;
+    void loadMoreAssetTransactions(accountId, assetId, isArc200).finally(() => {
+      loadMoreInFlightRef.current = false;
+    });
   }, [assetId, accountId, pagination, isArc200, loadMoreAssetTransactions]);
+
+  // Index-suffixed for the same reason as TransactionHistoryScreen: indexer
+  // payloads can repeat an id, and duplicate keys drop rows from a FlatList.
+  const keyExtractor = React.useCallback(
+    (item: TransactionInfo, index: number) => `${item.id}-${index}`,
+    []
+  );
 
   const renderTransactionItem = ({ item: tx }: { item: TransactionInfo }) => {
     const isOutgoing = tx.from === currentAccount?.address;
@@ -865,6 +864,10 @@ export default function AssetDetailScreen() {
         ]}
         borderRadius={theme.borderRadius.lg}
         opacity={0.7}
+        // Row of a virtualized list: BlurView must not be mounted inside a
+        // FlatList/VirtualizedList (Android view recycling crashes — see
+        // SafeBlurView). Falls back to the solid glass background.
+        disableBlur
       >
         <TouchableOpacity
           style={{ flex: 1 }}
@@ -1194,31 +1197,28 @@ export default function AssetDetailScreen() {
     </>
   );
 
-  const renderListFooter = () => {
-    // All assets now use assetTransactionsPagination (including native VOI)
-    if (!pagination?.hasMore) return null;
-
-    return (
-      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-        {pagination?.isLoadingMore && (
-          <ActivityIndicator size="small" color={themeColors.primary} />
-        )}
-      </View>
-    );
-  };
-
-  const renderListEmpty = () => (
-    <View style={styles.emptyTransactions}>
-      <Ionicons
-        name="receipt-outline"
-        size={64}
-        color={themeColors.textMuted}
+  // All assets now use assetTransactionsPagination (including native VOI).
+  // Memoized: an unstable component identity makes VirtualizedList remount the
+  // footer/empty subtree on every render.
+  const renderListFooter = React.useCallback(
+    () => (
+      <ListFooterSpinner
+        visible={!!pagination?.hasMore && !!pagination?.isLoadingMore}
       />
-      <Text style={styles.emptyTitle}>No transactions yet</Text>
-      <Text style={styles.emptySubtitle}>
-        Transactions for this asset will appear here when they occur.
-      </Text>
-    </View>
+    ),
+    [pagination?.hasMore, pagination?.isLoadingMore]
+  );
+
+  const renderListEmpty = React.useCallback(
+    () => (
+      <ListEmptyState
+        icon="receipt-outline"
+        title="No transactions yet"
+        subtitle="Transactions for this asset will appear here when they occur."
+        style={styles.emptyTransactions}
+      />
+    ),
+    [styles.emptyTransactions]
   );
 
   return (
@@ -1233,20 +1233,33 @@ export default function AssetDetailScreen() {
           onAccountSelectorPress={() => {}}
         />
 
-        <ScrollView
+        <FlatList
+          data={filteredTransactions}
+          renderItem={renderTransactionItem}
+          keyExtractor={keyExtractor}
           contentContainerStyle={styles.content}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
-        >
-          {renderListHeader()}
-          {filteredTransactions.length === 0
-            ? renderListEmpty()
-            : filteredTransactions.map((tx) => (
-                <View key={tx.id}>{renderTransactionItem({ item: tx })}</View>
-              ))}
-          {renderListFooter()}
-        </ScrollView>
+          // Passed as an element, not a component reference: the header is
+          // large and interactive, and an unstable component identity would
+          // make VirtualizedList remount the whole subtree on every render.
+          ListHeaderComponent={renderListHeader()}
+          ListEmptyComponent={renderListEmpty}
+          ListFooterComponent={renderListFooter}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
+          // Rows are variable height (address/label wrapping), so no
+          // getItemLayout here — a wrong fixed height breaks scrolling.
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={11}
+          // Intentionally left off: the list header still renders GlassCard /
+          // BlurredContainer glass, and clipping detaches/reattaches those
+          // native views on Android (see SafeBlurView). Rows themselves pass
+          // `disableBlur`, so nothing is recycled with a live BlurView.
+          removeClippedSubviews={false}
+        />
 
         {/* PIN Entry Modal */}
         <UnifiedAuthModal
@@ -1429,21 +1442,6 @@ const createStyles = (theme: Theme) =>
     },
     emptyTransactions: {
       paddingVertical: theme.spacing.xl,
-      alignItems: 'center',
-    },
-    emptyTitle: {
-      fontSize: 20,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginTop: theme.spacing.md,
-      marginBottom: theme.spacing.xs,
-    },
-    emptySubtitle: {
-      fontSize: 16,
-      color: theme.colors.textMuted,
-      textAlign: 'center',
-      lineHeight: 22,
-      paddingHorizontal: theme.spacing.md,
     },
     transactionItem: {
       padding: theme.spacing.lg,

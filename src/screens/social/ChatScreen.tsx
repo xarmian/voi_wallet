@@ -32,6 +32,7 @@ import MessagingService, {
   isMessagingKeyRegistered,
 } from '@/services/messaging';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
+import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { formatAddress } from '@/utils/address';
@@ -423,13 +424,7 @@ export default function ChatScreen() {
           keyboardShouldPersistTaps="handled"
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.3}
-          ListFooterComponent={
-            isLoadingMore ? (
-              <View style={styles.loadingMore}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              </View>
-            ) : null
-          }
+          ListFooterComponent={<ListFooterSpinner visible={isLoadingMore} />}
           ListEmptyComponent={
             <View style={styles.emptyState}>
               <View style={styles.emptyStateInner}>
@@ -542,10 +537,6 @@ const createStyles = (theme: Theme) =>
     },
     messagesContent: {
       paddingVertical: theme.spacing.md,
-    },
-    loadingMore: {
-      paddingVertical: theme.spacing.md,
-      alignItems: 'center',
     },
     emptyListContent: {
       flexGrow: 1,
