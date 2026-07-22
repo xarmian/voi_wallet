@@ -1023,9 +1023,10 @@ export class AccountSecureStorage {
       // then leaves this marker; without the bail, the next readMetadata/
       // getPrivateKey miss would re-migrate a legacy `voi_account_<id>` copy and
       // undo the wipe (incl. across a restart, when secureResetGeneration is 0
-      // again). Cleared by the first committed creation/restore. Migration only
-      // fires when the PRIMARY secret is absent, so this never blocks a freshly
-      // written real secret.
+      // again). The marker is STICKY — never cleared in production (see
+      // commitPendingCreate) — so a surviving legacy blob for ANY old id stays
+      // dead after a wipe. Migration only fires when the PRIMARY secret is absent,
+      // so this never blocks a freshly written real secret.
       const wiped = await storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY);
       if (wiped != null) {
         return null;

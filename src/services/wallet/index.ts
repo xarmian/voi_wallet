@@ -1661,13 +1661,6 @@ export class MultiAccountWalletService {
     }
   }
 
-  private static async storeAccountSecurely(
-    accountMetadata: AccountMetadata,
-    privateKey?: Uint8Array
-  ): Promise<void> {
-    await AccountSecureStorage.storeAccount(accountMetadata, privateKey);
-  }
-
   private static async ensureLedgerAssociation(
     wallet: Wallet,
     account: LedgerAccountMetadata,
