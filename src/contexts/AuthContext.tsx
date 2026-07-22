@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
 import { AccountSecureStorage } from '@/services/secure';
 import {
   isPinSetupPending,
@@ -371,6 +372,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const { hasWallet, hasPin, hasKeyBearingAccount } = lockState;
+
+      // BOOT RECONCILE (TASK-222, Component 3 of DOC-221): repair cross-store
+      // secret/metadata half-state left by a crash mid-storeAccount or a
+      // partially-completed reset — an orphaned secret (no wallet-blob account)
+      // or a phantom account (blob STANDARD entry whose secret is gone). Runs
+      // AFTER the strict lock reads succeed so it never fires on an unreadable
+      // store, and it is FAIL-CLOSED end to end: it aborts (deletes nothing) on
+      // any strict read/probe failure. Bounded by withTimeout and best-effort
+      // (result swallowed) so a wedged read or a repair error degrades to "no
+      // repair this boot" and never stalls the splash. It intentionally does NOT
+      // recompute the lock verdict from `lockState`: the only path that could
+      // change wallet existence is pruning a phantom whose secret is already gone
+      // (an unusable account); leaving this boot's fail-safe LOCKED verdict stand
+      // is correct, and the store is consistent for the next boot / any signing.
+      await withTimeout(
+        reconcileCrossStoreHalfState(),
+        STRICT_READ_TIMEOUT_MS,
+        'cross-store boot reconcile'
+      ).catch((error) => {
+        // ids/status only upstream; here we log the failure class, not contents.
+        console.warn('Cross-store boot reconcile skipped:', error);
+      });
 
       // SELF-HEAL (TASK-213, anti-fail-open): a readable PIN proves setup
       // completed, so any lingering pin_setup_pending breadcrumb is stale. Clear

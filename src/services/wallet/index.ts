@@ -2015,6 +2015,72 @@ export class MultiAccountWalletService {
   }
 
   /**
+   * STRICT, boot-only read of the STANDARD (key-bearing) account ids from the
+   * persisted wallet blob (TASK-222). Sibling of hasKeyBearingAccountStrict, but
+   * returns the ids so the cross-store reconcile can match blob accounts against
+   * secure-store secrets. FAILS CLOSED: a storage read failure or a corrupt blob
+   * (unparseable, or `accounts` present-but-not-an-array) PROPAGATES so the
+   * reconcile aborts its destructive pass rather than treating corruption as
+   * "no STANDARD accounts" (which would orphan-delete every real secret). A
+   * genuine ABSENCE (no blob, or an empty/tombstoned blob) resolves `[]`. No
+   * decrypt, no heal-on-read, no cache side effect.
+   */
+  static async getStandardAccountIdsStrict(): Promise<string[]> {
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (!walletData) {
+      // Genuine absence — mirrors hasWalletWithAccountsStrict's absence case.
+      return [];
+    }
+    // Let JSON.parse throw on a corrupt blob so the caller fails CLOSED.
+    const parsed = JSON.parse(walletData) as Wallet;
+    if (!Array.isArray(parsed.accounts)) {
+      throw new Error(
+        'Corrupt wallet blob: `accounts` is present but not an array'
+      );
+    }
+    return parsed.accounts
+      .filter((acc) => acc?.type === AccountType.STANDARD)
+      .map((acc) => acc.id);
+  }
+
+  /**
+   * Remove the given STANDARD account ids from the wallet blob only (TASK-222
+   * reconcile: phantom-metadata repair — a blob STANDARD account whose secret is
+   * strictly absent). Touches ONLY the wallet metadata blob; the secure store is
+   * the caller's separate concern (a phantom has no secret to delete). If the
+   * prune empties the wallet, routes through clearAllWallets so the canonical
+   * wipe path (tombstone + memo bust + epoch bump) runs instead of persisting an
+   * empty accounts array. Epoch-guarded like every other blob mutation so a reset
+   * racing boot is not undone. A no-op when nothing matches.
+   */
+  static async pruneStandardAccounts(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const readEpoch = walletResetEpoch;
+    const wallet = await this.getCurrentWallet();
+    if (!wallet) {
+      // No wallet to prune (absent or a reset already wiped it) — nothing to do.
+      return;
+    }
+    const toPrune = new Set(ids);
+    const remaining = wallet.accounts.filter((acc) => !toPrune.has(acc.id));
+    if (remaining.length === wallet.accounts.length) {
+      // None of the ids were present — no write.
+      return;
+    }
+    if (remaining.length === 0) {
+      // Pruning empties the wallet — use the canonical metadata wipe.
+      await this.clearAllWallets();
+      return;
+    }
+    wallet.accounts = remaining;
+    // Keep activeAccountId pointing at a surviving account.
+    if (toPrune.has(wallet.activeAccountId)) {
+      wallet.activeAccountId = remaining[0].id;
+    }
+    await this.storeWallet(wallet, readEpoch);
+  }
+
+  /**
    * Strict sibling of getStoredValue (TASK-213): reads the primary then the
    * legacy secure-store location but PROPAGATES storage read errors instead of
    * collapsing them to null. Resolves `null` ONLY for genuine absence (both

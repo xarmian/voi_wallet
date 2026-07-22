@@ -1239,6 +1239,113 @@ export class AccountSecureStorage {
     });
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // TASK-222 — boot-reconcile strict probes. These back the fail-closed
+  // cross-store half-state repair (crossStoreReconcile.ts, hooked at boot in
+  // AuthContext). Every probe here must either return a DEFINITE answer or THROW
+  // — never swallow a read failure to a falsy "absent", because the reconcile
+  // interprets "absent" destructively (an absent secret makes its blob account a
+  // phantom to prune). A swallowed keychain hiccup reported as "absent" would
+  // mass-prune live accounts, so these siblings of the internal readers fail
+  // CLOSED (propagate) instead. See the strict-read family in the wallet service
+  // (getStoredValueStrict, TASK-213) for the same discipline on the blob side.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * STRICT presence probe for a single account's secret (TASK-222). Reads the
+   * PRIMARY secret key ONLY — no legacy fallback and no migration WRITE (unlike
+   * readSecretLocked, which folds/rewrites legacy blobs), so a boot probe never
+   * mutates the store it is inspecting. Resolves `true` if the primary secret is
+   * present, `false` for genuine absence, and PROPAGATES a read failure/timeout
+   * (the caller aborts the whole destructive pass on any throw). Needs no unlock
+   * — it inspects presence, never decrypts. Bounded so a wedged keychain read
+   * cannot stall boot: a hang becomes a rejection the reconcile treats as "read
+   * failed → abort", NOT as "absent".
+   */
+  static async probeSecretPresenceStrict(
+    accountId: string,
+    timeoutMs: number = 1500
+  ): Promise<boolean> {
+    const raw = await this.withTimeout(
+      secureStorage.getItem(this.secretKey(accountId)),
+      timeoutMs,
+      'secret presence probe'
+    );
+    return raw != null;
+  }
+
+  /**
+   * STRICT read of the durable pending-creation journal (TASK-222). Public
+   * sibling of readPendingCreateJournal for the boot reconcile. A `storage`
+   * read failure PROPAGATES (fail closed); only a structurally-malformed value
+   * degrades to `{}` (the private reader already tolerates bad JSON, and a
+   * corrupt journal is not a reason to abort a repair). Bounded so a wedged read
+   * cannot stall boot.
+   */
+  static async readPendingCreatesStrict(
+    timeoutMs: number = 1500
+  ): Promise<Record<string, string>> {
+    return this.withTimeout(
+      this.readPendingCreateJournal(),
+      timeoutMs,
+      'pending-creation journal read'
+    );
+  }
+
+  /**
+   * Unconditionally drop the given ids from the pending-creation journal
+   * (TASK-222 reconcile cleanup) under the key-mutation mutex. Unlike
+   * deleteAccountIfAttemptMatches this is NOT ownership-checked — the reconcile
+   * runs once at boot before any creation flow starts, and it drops only entries
+   * it has already classified as orphaned-secret (deleted here) or stale (no
+   * secret, no blob account). Touches ONLY the journal; deleting the secret is
+   * the caller's separate deleteAccount step. A no-op for ids not present.
+   */
+  static async dropPendingCreateEntries(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    return this.runKeyMutationExclusive(async () => {
+      const journal = await this.readPendingCreateJournal();
+      let changed = false;
+      for (const id of ids) {
+        if (journal[id] !== undefined) {
+          delete journal[id];
+          changed = true;
+        }
+      }
+      if (changed) {
+        await this.writePendingCreateJournal(journal);
+      }
+    });
+  }
+
+  /**
+   * Reject `promise` if it has not settled within `ms`. On timeout the abandoned
+   * read's eventual settlement is ignored and a labelled Error is thrown so the
+   * boot reconcile fails CLOSED (treats it as a read failure, not "absent").
+   * Mirrors the AuthContext withTimeout used for the strict lock reads.
+   */
+  private static withTimeout<T>(
+    promise: Promise<T>,
+    ms: number,
+    label: string
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${ms}ms`));
+      }, ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
   /** The body of storeAccount, assuming the key-mutation mutex is HELD. Shared by
    *  storeAccount (public wrapper) and storeAccountForCreation. */
   private static async storeAccountLocked(
