@@ -26,6 +26,7 @@ import {
   isLedgerSigningInProgress,
   setLedgerSigningInProgress,
 } from './signingState';
+import { isLedgerTransportError } from '@/utils/errorMapping';
 
 export interface LedgerAccountDerivation {
   address: string;
@@ -313,11 +314,13 @@ class LedgerAlgorandService {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
-        // Don't retry on certain errors
+        // Don't retry on certain errors.
+        // TASK-41: the transport check was two case-sensitive substring tests
+        // on `message`, which missed `DisconnectedDevice` and any lowercase
+        // variant and then burned the full retry budget on a dead transport.
         if (
           error instanceof LedgerAppNotOpenError ||
-          lastError.message.includes('COMMUNICATION_ERROR') ||
-          lastError.message.includes('Transport')
+          isLedgerTransportError(error)
         ) {
           break;
         }

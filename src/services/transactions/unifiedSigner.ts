@@ -17,19 +17,20 @@ import {
   LedgerDeviceNotConnectedError,
   LedgerAppNotOpenError,
   LedgerUserRejectedError,
+  RemoteSignerRequiredError,
 } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 
 /**
- * Error thrown when attempting to sign with a remote signer account directly
+ * Error thrown when attempting to sign with a remote signer account directly.
+ *
+ * TASK-41: the canonical declaration now lives in `@/types/wallet` — it was
+ * previously declared here AND in `remoteSigner/signingRouter.ts` with
+ * incompatible constructors, so cross-module `instanceof` checks could fail.
+ * Re-exported so existing import paths keep working.
  */
-export class RemoteSignerRequiredError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RemoteSignerRequiredError';
-  }
-}
+export { RemoteSignerRequiredError };
 
 /**
  * Unified callback interface for ALL signing operations
@@ -605,10 +606,12 @@ export class UnifiedTransactionSigner {
 
     // Check for REMOTE_SIGNER accounts - these cannot be signed directly
     if (request.account.type === AccountType.REMOTE_SIGNER) {
-      throw new RemoteSignerRequiredError(
-        'This account uses remote signing via QR codes. ' +
-          'Please use the remote signer flow instead of direct signing.'
-      );
+      throw new RemoteSignerRequiredError({
+        accountAddress: request.account.address,
+        message:
+          'This account uses remote signing via QR codes. ' +
+          'Please use the remote signer flow instead of direct signing.',
+      });
     }
 
     // Check for WATCH accounts - these cannot sign at all

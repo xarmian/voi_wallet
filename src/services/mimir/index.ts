@@ -97,10 +97,19 @@ export class MimirApiError extends Error {
   constructor(
     message: string,
     public status?: number,
-    public code?: string
+    public code?: string,
+    /**
+     * TASK-41: originating error, preserved when the retry loop or the outer
+     * catch rebuilds the failure. The error-mapper reads it to distinguish an
+     * abort/timeout from a DNS failure.
+     */
+    cause?: unknown
   ) {
     super(message);
     this.name = 'MimirApiError';
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
   }
 }
 
@@ -159,7 +168,10 @@ export class MimirApiService {
 
       console.error('Mimir API request failed:', error);
       throw new MimirApiError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }
@@ -248,7 +260,10 @@ export class MimirApiService {
 
       console.error('Mimir API ARC-200 transfers request failed:', error);
       throw new MimirApiError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }
@@ -345,7 +360,10 @@ export class MimirApiService {
 
       console.error('Mimir API tokens request failed:', error);
       throw new MimirApiError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }
@@ -385,8 +403,15 @@ export class MimirApiService {
       }
     }
 
+    // TASK-41 (DR-6): the retry loop only ever sees transport failures (a
+    // non-OK response is returned, not thrown), so there is no status to
+    // carry — but the code and the originating error must survive, otherwise
+    // the mapper cannot tell an offline device from an aborted request.
     throw new MimirApiError(
-      `All ${this.config.retryAttempts} attempts failed. Last error: ${lastError!.message}`
+      `All ${this.config.retryAttempts} attempts failed. Last error: ${lastError!.message}`,
+      undefined,
+      'NETWORK_ERROR',
+      lastError!
     );
   }
 
@@ -425,7 +450,10 @@ export class MimirApiService {
 
       console.error('Mimir API account info request failed:', error);
       throw new MimirApiError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }
@@ -473,7 +501,10 @@ export class MimirApiService {
 
       console.error('Mimir API approvals request failed:', error);
       throw new MimirApiError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }
@@ -521,7 +552,10 @@ export class MimirApiService {
 
       console.error('Mimir API balance request failed:', error);
       throw new MimirApiError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }

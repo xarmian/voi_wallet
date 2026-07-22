@@ -31,6 +31,7 @@ import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { parseAmountToBaseUnits } from '@/utils/bigint';
+import { toErrorAlert } from '@/utils/errorMapping';
 // Removed TransactionConfirmationCard in favor of unified TransactionVerification
 import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -243,10 +244,12 @@ export default function TransactionConfirmationScreen() {
           ? 0
           : parseAmountToBaseUnits(params.amount, decimals);
     } catch (error) {
-      Alert.alert(
-        'Invalid amount',
-        error instanceof Error ? error.message : 'Please re-enter the amount.'
-      );
+      // TASK-41: `parseAmountToBaseUnits` throws developer-facing text
+      // ("Amount exceeds safe integer range for 6 decimals"); map it.
+      const { message } = toErrorAlert(error, {
+        fallbackMessage: "That amount couldn't be read.",
+      });
+      Alert.alert('Invalid Amount', message);
       return;
     }
 

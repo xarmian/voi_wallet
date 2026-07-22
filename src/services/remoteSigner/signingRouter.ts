@@ -6,7 +6,11 @@
  */
 
 import algosdk from 'algosdk';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import {
+  AccountMetadata,
+  AccountType,
+  RemoteSignerRequiredError,
+} from '@/types/wallet';
 import { RemoteSignerService } from './index';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import { NetworkService } from '@/services/network';
@@ -193,19 +197,14 @@ export function determineSigningMethod(
 
 /**
  * Error thrown when attempting to sign with a remote signer account
- * but not using the QR flow
+ * but not using the QR flow.
+ *
+ * TASK-41: the canonical declaration now lives in `@/types/wallet` — it was
+ * previously declared here AND in `transactions/unifiedSigner.ts` with
+ * incompatible constructors, so cross-module `instanceof` checks could fail.
+ * Re-exported here so existing import paths keep working.
  */
-export class RemoteSignerRequiredError extends Error {
-  constructor(
-    public readonly accountAddress: string,
-    public readonly signerDeviceId: string
-  ) {
-    super(
-      `Account ${accountAddress} is a remote signer account. Use QR-based signing instead.`
-    );
-    this.name = 'RemoteSignerRequiredError';
-  }
-}
+export { RemoteSignerRequiredError };
 
 /**
  * Validate that an account can be signed directly (not via remote signer)
@@ -214,9 +213,9 @@ export class RemoteSignerRequiredError extends Error {
 export function validateNotRemoteSigner(account: AccountMetadata): void {
   if (account.type === AccountType.REMOTE_SIGNER) {
     const rsAccount = account as any;
-    throw new RemoteSignerRequiredError(
-      account.address,
-      rsAccount.signerDeviceId
-    );
+    throw new RemoteSignerRequiredError({
+      accountAddress: account.address,
+      signerDeviceId: rsAccount.signerDeviceId,
+    });
   }
 }

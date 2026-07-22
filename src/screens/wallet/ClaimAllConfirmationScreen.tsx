@@ -48,6 +48,7 @@ import {
 import VoiNetworkService, { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
+import { toErrorAlert } from '@/utils/errorMapping';
 import {
   resolveAddressOrName,
   isLikelyEnvoiName,
@@ -417,10 +418,10 @@ export default function ClaimAllConfirmationScreen() {
         callbackId,
       });
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Failed to build claim transactions';
+      // TASK-41: claim building fails with raw contract/algod strings.
+      const { message } = toErrorAlert(error, {
+        fallbackMessage: "We couldn't build these claim transactions.",
+      });
       Alert.alert('Claim Failed', message);
     } finally {
       setIsClaiming(false);

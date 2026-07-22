@@ -27,6 +27,7 @@ import {
   useWalletStore,
 } from '@/store/walletStore';
 import { formatCurrency } from '@/utils/formatting';
+import { isAccountNotFoundError } from '@/utils/errorMapping';
 import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { NetworkService } from '@/services/network';
 import { MimirApiService } from '@/services/mimir';
@@ -211,11 +212,11 @@ export default function AccountInfoScreen() {
         setVoiAccountInfo(info);
       } catch (error) {
         console.error('Failed to load Voi account info:', error);
-        if (
-          error instanceof Error &&
-          error.message &&
-          error.message.includes('account does not exist')
-        ) {
+        // TASK-41: this used to be `error.message.includes('account does not
+        // exist')` — control flow bound to one exact algod string. Any
+        // rewording (or a typed AccountNotFoundError) silently fell through
+        // and left the card blank forever. Classify instead of string-match.
+        if (isAccountNotFoundError(error)) {
           setVoiAccountInfo({
             address: displayAddress,
             amount: 0,
@@ -235,11 +236,8 @@ export default function AccountInfoScreen() {
         setAlgoAccountInfo(info);
       } catch (error) {
         console.error('Failed to load Algorand account info:', error);
-        if (
-          error instanceof Error &&
-          error.message &&
-          error.message.includes('account does not exist')
-        ) {
+        // TASK-41: see loadVoi — classified, not string-matched.
+        if (isAccountNotFoundError(error)) {
           setAlgoAccountInfo({
             address: displayAddress,
             amount: 0,
