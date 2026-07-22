@@ -51,6 +51,10 @@ export default function FriendListItem({
     <BlurredContainer
       style={styles.container}
       borderRadius={theme.borderRadius.lg}
+      // Row of a virtualized list: BlurView must not be mounted inside a
+      // FlatList/SectionList (Android view recycling crashes — see
+      // SafeBlurView). Falls back to the solid glass background.
+      disableBlur
     >
       <TouchableOpacity
         style={styles.touchable}

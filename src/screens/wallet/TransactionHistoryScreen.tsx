@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   RefreshControl,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
   ActivityIndicator,
   ListRenderItem,
@@ -25,12 +25,15 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { serializeTransactionForNavigation } from '@/utils/navigationParams';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { ListEmptyState } from '@/components/common/ListEmptyState';
+import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetwork } from '@/store/networkStore';
 
 export default function TransactionHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
+  const loadMoreInFlightRef = useRef(false);
   const navigation = useNavigation<StackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
@@ -109,7 +112,11 @@ export default function TransactionHistoryScreen() {
   };
 
   const handleLoadMore = useCallback(async () => {
+    // The store only flips `isLoadingMore` after an await, so guard on an
+    // in-flight ref as well — otherwise two `onEndReached` events fired in the
+    // same tick would both pass the store-side check and double-fetch a page.
     if (
+      loadMoreInFlightRef.current ||
       !activeAccount ||
       !accountState.transactionsPagination?.hasMore ||
       accountState.transactionsPagination?.isLoadingMore
@@ -117,10 +124,13 @@ export default function TransactionHistoryScreen() {
       return;
     }
 
+    loadMoreInFlightRef.current = true;
     try {
       await loadMoreTransactions(activeAccount.id);
     } catch (error) {
       console.error('Failed to load more transactions:', error);
+    } finally {
+      loadMoreInFlightRef.current = false;
     }
   }, [
     activeAccount,
@@ -224,23 +234,28 @@ export default function TransactionHistoryScreen() {
     ]
   );
 
-  const renderFooter = () => {
-    if (!accountState.transactionsPagination?.isLoadingMore) {
-      return null;
-    }
+  const renderFooter = useCallback(
+    () => (
+      <ListFooterSpinner
+        visible={!!accountState.transactionsPagination?.isLoadingMore}
+        text="Loading more transactions..."
+      />
+    ),
+    [accountState.transactionsPagination?.isLoadingMore]
+  );
 
-    return (
-      <View style={styles.loadingFooter}>
-        <ActivityIndicator
-          size="small"
-          color={styles.activityIndicator.color}
-        />
-        <Text style={styles.loadingFooterText}>
-          Loading more transactions...
-        </Text>
-      </View>
-    );
-  };
+  const renderEmptyState = useCallback(
+    () => (
+      <ListEmptyState
+        icon="receipt-outline"
+        iconColor={styles.emptyIcon.color}
+        title="No Transactions"
+        subtitle="Your transaction history will appear here when you start using your wallet."
+        style={styles.emptyContainer}
+      />
+    ),
+    [styles.emptyContainer, styles.emptyIcon.color]
+  );
 
   const keyExtractor = useCallback(
     (item: TransactionInfo, index: number) => `${item.id}-${index}`,
@@ -288,35 +303,34 @@ export default function TransactionHistoryScreen() {
             />
             <Text style={styles.loadingText}>Loading transactions...</Text>
           </View>
-        ) : allTransactions.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Ionicons
-              name="receipt-outline"
-              size={64}
-              color={styles.emptyIcon.color}
-            />
-            <Text style={styles.emptyTitle}>No Transactions</Text>
-            <Text style={styles.emptySubtitle}>
-              Your transaction history will appear here when you start using
-              your wallet.
-            </Text>
-          </View>
         ) : (
-          <ScrollView
-            contentContainerStyle={styles.listContainer}
+          <FlatList
+            data={allTransactions}
+            renderItem={renderTransaction}
+            keyExtractor={keyExtractor}
+            contentContainerStyle={
+              allTransactions.length === 0
+                ? styles.emptyListContainer
+                : styles.listContainer
+            }
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
             }
             onScrollBeginDrag={() => updateActivity()}
             showsVerticalScrollIndicator={false}
-          >
-            {allTransactions.map((item, index) => (
-              <View key={`${item.id}-${index}`}>
-                {renderTransaction({ item, index, separators: {} as any })}
-              </View>
-            ))}
-            {renderFooter()}
-          </ScrollView>
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            ListEmptyComponent={renderEmptyState}
+            ListFooterComponent={renderFooter}
+            // Rows are variable height (address/label wrapping), so no
+            // getItemLayout here — a wrong fixed height breaks scrolling.
+            initialNumToRender={12}
+            maxToRenderPerBatch={12}
+            windowSize={11}
+            // Safe: rows pass `disableBlur`, so no BlurView is mounted inside
+            // this VirtualizedList (see SafeBlurView's Android warning).
+            removeClippedSubviews
+          />
         )}
       </SafeAreaView>
     </NFTBackground>
@@ -366,33 +380,15 @@ const createStyles = (theme: Theme) =>
       paddingVertical: 80,
       paddingHorizontal: theme.spacing.xl,
     },
-    emptyTitle: {
-      fontSize: 24,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginTop: theme.spacing.md,
-      marginBottom: theme.spacing.sm,
-    },
-    emptySubtitle: {
-      fontSize: 16,
-      color: theme.colors.textMuted,
-      textAlign: 'center',
-      lineHeight: 24,
-      paddingHorizontal: theme.spacing.md,
-    },
     listContainer: {
       paddingHorizontal: theme.spacing.md,
       paddingVertical: theme.spacing.sm,
       paddingBottom: theme.spacing.xxl,
     },
-    loadingFooter: {
-      paddingVertical: theme.spacing.lg,
-      alignItems: 'center',
-    },
-    loadingFooterText: {
-      fontSize: 14,
-      color: theme.colors.textSecondary,
-      marginTop: theme.spacing.xs,
+    emptyListContainer: {
+      flexGrow: 1,
+      justifyContent: 'center',
+      paddingHorizontal: theme.spacing.md,
     },
     backIcon: {
       color: theme.colors.primary,

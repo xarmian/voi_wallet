@@ -13,6 +13,7 @@ import { ARC72Collection } from '@/types/nft';
 import { NFTService } from '@/services/nft';
 import { Theme } from '@/constants/themes';
 import CollectionListItem from '@/components/common/CollectionListItem';
+import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
 
 interface CollectionBrowserProps {
   theme: Theme;
@@ -193,13 +194,7 @@ export default function CollectionBrowser({
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.5}
         ListEmptyComponent={renderEmptyState}
-        ListFooterComponent={
-          loadingMore ? (
-            <View style={styles.loadingMoreContainer}>
-              <ActivityIndicator size="small" color={theme.colors.primary} />
-            </View>
-          ) : null
-        }
+        ListFooterComponent={<ListFooterSpinner visible={loadingMore} />}
         showsVerticalScrollIndicator={false}
       />
     </>
@@ -255,9 +250,5 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 16,
     marginTop: 16,
-  },
-  loadingMoreContainer: {
-    paddingVertical: 16,
-    alignItems: 'center',
   },
 });

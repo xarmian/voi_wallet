@@ -10,7 +10,7 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   RefreshControl,
   TouchableOpacity,
   ActivityIndicator,
@@ -266,30 +266,112 @@ export default function ClaimableTokensScreen() {
     );
   };
 
-  // Render empty state
-  const renderEmptyState = () => (
-    <View style={styles.emptyContainer}>
-      <View style={styles.emptyIconContainer}>
-        <Ionicons
-          name="gift-outline"
-          size={64}
-          color={styles.emptyIcon.color}
-        />
+  // Render empty state. This screen keeps its own empty state rather than the
+  // shared ListEmptyState: it has a distinct circular icon badge.
+  const renderEmptyState = useCallback(
+    () => (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconContainer}>
+          <Ionicons
+            name="gift-outline"
+            size={64}
+            color={styles.emptyIcon.color}
+          />
+        </View>
+        <Text style={styles.emptyTitle}>No Claimable Tokens</Text>
+        <Text style={styles.emptySubtitle}>
+          When someone approves tokens for you to claim, they will appear here.
+        </Text>
       </View>
-      <Text style={styles.emptyTitle}>No Claimable Tokens</Text>
-      <Text style={styles.emptySubtitle}>
-        When someone approves tokens for you to claim, they will appear here.
-      </Text>
-    </View>
+    ),
+    [styles]
   );
 
   // Render loading state
-  const renderLoadingState = () => (
-    <View style={styles.loadingContainer}>
-      <ActivityIndicator size="large" color={theme.colors.primary} />
-      <Text style={styles.loadingText}>Loading claimable tokens...</Text>
-    </View>
+  const renderLoadingState = useCallback(
+    () => (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+        <Text style={styles.loadingText}>Loading claimable tokens...</Text>
+      </View>
+    ),
+    [styles, theme.colors.primary]
   );
+
+  // Empty slot doubles as the initial-load placeholder so pull-to-refresh
+  // stays available in both states. Memoized: an unstable component identity
+  // makes VirtualizedList remount the empty subtree on every render.
+  const showLoadingState = isLoading && !isRefreshing;
+  const renderListEmpty = useCallback(
+    () => (showLoadingState ? renderLoadingState() : renderEmptyState()),
+    [showLoadingState, renderLoadingState, renderEmptyState]
+  );
+
+  // Summary + pending-refresh banner scroll with the list, as before.
+  const renderListHeader = () => {
+    if (displayedItems.length === 0) return null;
+
+    return (
+      <>
+        {/* Pending refresh indicator */}
+        {isPendingRefresh && (
+          <Animated.View
+            style={[styles.pendingRefreshBanner, pulseAnimatedStyle]}
+          >
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={styles.pendingRefreshText}>
+              Updating claim status...
+            </Text>
+          </Animated.View>
+        )}
+
+        {/* Summary card */}
+        <GlassCard variant="light" padding="md" style={styles.summaryCard}>
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryValue}>{visibleCount}</Text>
+              <Text style={styles.summaryLabel}>Available</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryValue}>{claimableCount}</Text>
+              <Text style={styles.summaryLabel}>Claimable</Text>
+            </View>
+            {hiddenCount > 0 && (
+              <>
+                <View style={styles.summaryDivider} />
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryValue}>{hiddenCount}</Text>
+                  <Text style={styles.summaryLabel}>Hidden</Text>
+                </View>
+              </>
+            )}
+          </View>
+        </GlassCard>
+      </>
+    );
+  };
+
+  // Each row keeps its own Swipeable. FlatList keys cells by `keyExtractor`
+  // and mounts/unmounts them (it does not reuse instances across items), so a
+  // row's open/closed swipe state stays bound to its own item.
+  const renderItem = useCallback(
+    ({ item }: { item: ClaimableItem }) => (
+      <Swipeable
+        renderRightActions={() => renderRightActions(item)}
+        overshootRight={false}
+      >
+        <ClaimableTokenItem
+          item={item}
+          onPress={() => handleItemPress(item)}
+          isHidden={hiddenApprovals.has(item.id)}
+        />
+      </Swipeable>
+    ),
+    [hiddenApprovals, renderRightActions, handleItemPress]
+  );
+
+  const keyExtractor = useCallback((item: ClaimableItem) => item.id, []);
 
   return (
     <NFTBackground>
@@ -327,9 +409,16 @@ export default function ClaimableTokensScreen() {
           </TouchableOpacity>
         )}
 
-        <ScrollView
+        <FlatList
           style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
+          data={displayedItems}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          contentContainerStyle={
+            displayedItems.length === 0
+              ? styles.emptyListContent
+              : styles.scrollContent
+          }
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
@@ -337,78 +426,22 @@ export default function ClaimableTokensScreen() {
               tintColor={theme.colors.primary}
             />
           }
-        >
-          {isLoading && !isRefreshing && displayedItems.length === 0 ? (
-            renderLoadingState()
-          ) : displayedItems.length === 0 ? (
-            renderEmptyState()
-          ) : (
-            <>
-              {/* Pending refresh indicator */}
-              {isPendingRefresh && (
-                <Animated.View
-                  style={[styles.pendingRefreshBanner, pulseAnimatedStyle]}
-                >
-                  <ActivityIndicator
-                    size="small"
-                    color={theme.colors.primary}
-                  />
-                  <Text style={styles.pendingRefreshText}>
-                    Updating claim status...
-                  </Text>
-                </Animated.View>
-              )}
-
-              {/* Summary card */}
-              <GlassCard
-                variant="light"
-                padding="md"
-                style={styles.summaryCard}
-              >
-                <View style={styles.summaryRow}>
-                  <View style={styles.summaryItem}>
-                    <Text style={styles.summaryValue}>{visibleCount}</Text>
-                    <Text style={styles.summaryLabel}>Available</Text>
-                  </View>
-                  <View style={styles.summaryDivider} />
-                  <View style={styles.summaryItem}>
-                    <Text style={styles.summaryValue}>{claimableCount}</Text>
-                    <Text style={styles.summaryLabel}>Claimable</Text>
-                  </View>
-                  {hiddenCount > 0 && (
-                    <>
-                      <View style={styles.summaryDivider} />
-                      <View style={styles.summaryItem}>
-                        <Text style={styles.summaryValue}>{hiddenCount}</Text>
-                        <Text style={styles.summaryLabel}>Hidden</Text>
-                      </View>
-                    </>
-                  )}
-                </View>
-              </GlassCard>
-
-              {/* Token list */}
-              <View style={styles.listContainer}>
-                {displayedItems.map((item) => {
-                  const isHidden = hiddenApprovals.has(item.id);
-                  return (
-                    <Swipeable
-                      key={item.id}
-                      renderRightActions={() => renderRightActions(item)}
-                      overshootRight={false}
-                    >
-                      <ClaimableTokenItem
-                        item={item}
-                        onPress={() => handleItemPress(item)}
-                        isHidden={isHidden}
-                      />
-                    </Swipeable>
-                  );
-                })}
-              </View>
-            </>
-          )}
-        </ScrollView>
+          // Passed as an element, not a component reference: the header holds
+          // a running Reanimated banner, and an unstable component identity
+          // would make VirtualizedList remount it on every render.
+          ListHeaderComponent={renderListHeader()}
+          ListEmptyComponent={renderListEmpty}
+          // Rows are variable height (token name/amount wrapping), so no
+          // getItemLayout here — a wrong fixed height breaks scrolling.
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={11}
+          // Intentionally left off: the list header renders a GlassCard, whose
+          // glass uses BlurView, and clipping detaches/reattaches those native
+          // views on Android (see SafeBlurView). Rows themselves use plain
+          // Views, so nothing is recycled with a live BlurView.
+          removeClippedSubviews={false}
+        />
       </SafeAreaView>
     </NFTBackground>
   );
@@ -425,6 +458,11 @@ const createStyles = (theme: Theme) =>
     scrollContent: {
       padding: 16,
       paddingBottom: 32,
+    },
+    emptyListContent: {
+      flexGrow: 1,
+      justifyContent: 'center',
+      padding: 16,
     },
     hiddenToggle: {
       flexDirection: 'row',
@@ -480,9 +518,6 @@ const createStyles = (theme: Theme) =>
       width: 1,
       height: 32,
       backgroundColor: theme.colors.border,
-    },
-    listContainer: {
-      gap: 0,
     },
     swipeAction: {
       justifyContent: 'center',

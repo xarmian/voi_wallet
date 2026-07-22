@@ -26,7 +26,11 @@ interface NFTGridViewProps {
   refreshing?: boolean;
   onRefresh?: () => void;
   onEndReached?: () => void;
-  ListEmptyComponent?: React.ReactElement;
+  /**
+   * Prefer passing a component reference (not `render()` output) so the list
+   * only evaluates the empty state when there is actually nothing to show.
+   */
+  ListEmptyComponent?: React.ComponentType<unknown> | React.ReactElement | null;
   ListFooterComponent?: React.ReactElement;
   processingNFTKey?: string | null;
   imageErrors?: Set<string>;

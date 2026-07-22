@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   TextInput,
   TouchableOpacity,
   RefreshControl,
@@ -34,6 +34,7 @@ import { MessageThread, MESSAGE_FEE_DISPLAY } from '@/services/messaging/types';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { ListEmptyState } from '@/components/common/ListEmptyState';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useTheme } from '@/contexts/ThemeContext';
 import { GlassButton } from '@/components/common/GlassButton';
@@ -375,14 +376,13 @@ export default function MessagesInboxScreen() {
   );
 
   // Render thread item
-  const renderThreadItem = (thread: MessageThread) => {
+  const renderThreadItem = ({ item: thread }: { item: MessageThread }) => {
     const friendInfo = getFriendInfo(thread);
     const hasUnread = thread.unreadCount > 0;
     const isHidden = hiddenThreads.has(thread.friendAddress);
 
     return (
       <Swipeable
-        key={thread.friendAddress}
         renderRightActions={() => renderRightActions(thread.friendAddress)}
         overshootRight={false}
       >
@@ -392,6 +392,10 @@ export default function MessagesInboxScreen() {
             isHidden && showHiddenThreads && styles.threadItemHidden,
           ]}
           borderRadius={theme.borderRadius.lg}
+          // Row of a virtualized list: BlurView must not be mounted inside a
+          // FlatList/VirtualizedList (Android view recycling crashes — see
+          // SafeBlurView). Falls back to the solid glass background.
+          disableBlur
         >
           <TouchableOpacity
             style={styles.threadTouchable}
@@ -498,7 +502,7 @@ export default function MessagesInboxScreen() {
   })();
 
   // Render unsupported message for Ledger accounts
-  const renderLedgerUnsupported = () => {
+  const renderLedgerUnsupported = useCallback(() => {
     return (
       <View style={styles.emptyState}>
         <Ionicons
@@ -514,10 +518,10 @@ export default function MessagesInboxScreen() {
         </Text>
       </View>
     );
-  };
+  }, [styles, theme.colors.textMuted]);
 
   // Render key registration prompt
-  const renderKeyRegistrationPrompt = () => {
+  const renderKeyRegistrationPrompt = useCallback(() => {
     return (
       <View style={styles.emptyState}>
         <Ionicons name="key-outline" size={64} color={theme.colors.primary} />
@@ -547,10 +551,12 @@ export default function MessagesInboxScreen() {
         )}
       </View>
     );
-  };
+  }, [styles, theme, isRegistering, handleRegisterKey]);
 
-  // Render empty state
-  const renderEmptyState = () => {
+  // Render empty state. Memoized: an unstable component identity makes
+  // VirtualizedList remount the empty subtree (and its GlassButton animations)
+  // on every render.
+  const renderEmptyState = useCallback(() => {
     // Show unsupported message for Ledger accounts
     if (isLedgerBacked) {
       return renderLedgerUnsupported();
@@ -573,40 +579,55 @@ export default function MessagesInboxScreen() {
 
     if (searchQuery.trim()) {
       return (
-        <View style={styles.emptyState}>
-          <Ionicons
-            name="search-outline"
-            size={64}
-            color={theme.colors.textMuted}
-          />
-          <Text style={styles.emptyTitle}>No conversations found</Text>
-          <Text style={styles.emptyText}>Try a different search term</Text>
-        </View>
+        <ListEmptyState
+          icon="search-outline"
+          title="No conversations found"
+          subtitle="Try a different search term"
+          style={styles.emptyState}
+        />
       );
     }
 
     return (
-      <View style={styles.emptyState}>
-        <Ionicons
-          name="chatbubbles-outline"
-          size={64}
-          color={theme.colors.textMuted}
-        />
-        <Text style={styles.emptyTitle}>No messages yet</Text>
-        <Text style={styles.emptyText}>
-          Start a conversation with someone on the Voi Network
-        </Text>
-        <GlassButton
-          variant="primary"
-          size="md"
-          label="New Message"
-          icon="create-outline"
-          onPress={handleNewMessage}
-          style={{ marginTop: theme.spacing.lg }}
-        />
-      </View>
+      <ListEmptyState
+        icon="chatbubbles-outline"
+        title="No messages yet"
+        subtitle="Start a conversation with someone on the Voi Network"
+        style={styles.emptyState}
+        action={
+          <GlassButton
+            variant="primary"
+            size="md"
+            label="New Message"
+            icon="create-outline"
+            onPress={handleNewMessage}
+            style={{ marginTop: theme.spacing.lg }}
+          />
+        }
+      />
     );
-  };
+  }, [
+    isLedgerBacked,
+    isCheckingRegistration,
+    isKeyRegistered,
+    searchQuery,
+    styles,
+    theme,
+    handleNewMessage,
+    renderLedgerUnsupported,
+    renderKeyRegistrationPrompt,
+  ]);
+
+  // Threads are only listable once messaging is usable for this account;
+  // otherwise the list stays empty and ListEmptyComponent explains why.
+  const canShowThreads =
+    !isLedgerBacked && !isCheckingRegistration && isKeyRegistered;
+  const threadListData = canShowThreads ? filteredThreads : [];
+
+  const keyExtractor = useCallback(
+    (item: MessageThread) => item.friendAddress,
+    []
+  );
 
   return (
     <NFTBackground>
@@ -696,17 +717,17 @@ export default function MessagesInboxScreen() {
         )}
 
         {/* Messages List */}
-        <ScrollView
+        <FlatList
+          data={threadListData}
+          renderItem={renderThreadItem}
+          keyExtractor={keyExtractor}
           contentContainerStyle={
-            isLedgerBacked ||
-            isCheckingRegistration ||
-            filteredThreads.length === 0 ||
-            !isKeyRegistered
+            threadListData.length === 0
               ? styles.emptyListContent
               : styles.listContent
           }
           refreshControl={
-            !isLedgerBacked && isKeyRegistered && !isCheckingRegistration ? (
+            canShowThreads ? (
               <RefreshControl
                 refreshing={isRefreshing}
                 onRefresh={handleRefresh}
@@ -714,14 +735,17 @@ export default function MessagesInboxScreen() {
               />
             ) : undefined
           }
-        >
-          {isLedgerBacked ||
-          isCheckingRegistration ||
-          !isKeyRegistered ||
-          filteredThreads.length === 0
-            ? renderEmptyState()
-            : filteredThreads.map(renderThreadItem)}
-        </ScrollView>
+          ListEmptyComponent={renderEmptyState}
+          // Rows are variable height (name/preview wrapping), so no
+          // getItemLayout here — a wrong fixed height breaks scrolling.
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={11}
+          // Safe: rows pass `disableBlur`, so no BlurView is mounted inside
+          // this VirtualizedList (see SafeBlurView's Android warning).
+          removeClippedSubviews
+          showsVerticalScrollIndicator={false}
+        />
 
         {/* Account List Modal */}
         <AccountListModal

@@ -270,6 +270,10 @@ const TransactionListItem = React.memo(
         style={containerStyle}
         borderRadius={theme.borderRadius.lg}
         opacity={0.7}
+        // Row of a virtualized list: BlurView must not be mounted inside a
+        // FlatList/VirtualizedList (Android view recycling crashes — see
+        // SafeBlurView). Falls back to the solid glass background.
+        disableBlur
       >
         <TouchableOpacity
           onPress={() => onPress(transaction)}
