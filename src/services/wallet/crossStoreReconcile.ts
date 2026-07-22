@@ -76,15 +76,21 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     ...journalIds,
   ]);
 
-  // Probe EVERY candidate's secret presence before touching anything. A single
-  // probe throw/timeout aborts — we never delete on a partially-read picture.
-  const secretPresent = new Map<string, boolean>();
-  for (const id of candidates) {
-    secretPresent.set(
-      id,
-      await AccountSecureStorage.probeSecretPresenceStrict(id)
-    );
-  }
+  // Probe EVERY candidate's secret presence before touching anything. Run the
+  // probes CONCURRENTLY (Promise.all) so Phase 1 wall-clock is one probe deep, not
+  // the sum over N candidates — otherwise a multi-account device can be starved by
+  // the caller's boot timeout and never actually repair. Fail-closed is preserved:
+  // Promise.all rejects on the FIRST probe throw/timeout, so the whole pass aborts
+  // before any mutation — we never delete on a partially-read picture.
+  const candidateList = [...candidates];
+  const presence = await Promise.all(
+    candidateList.map((id) =>
+      AccountSecureStorage.probeSecretPresenceStrict(id)
+    )
+  );
+  const secretPresent = new Map<string, boolean>(
+    candidateList.map((id, i) => [id, presence[i]])
+  );
 
   // ── Phase 2: classify + act. Reached ONLY when every read/probe above
   // succeeded, so an "absent" below is a true absence, never a swallowed error.
@@ -114,6 +120,14 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     // (an account-list-only ghost) not a repair target of this design; left as-is.
   }
 
+  // Prune phantoms from the wallet blob FIRST (empty ⇒ canonical clearAllWallets).
+  // This is the only mutation that can change the boot lock verdict (emptying the
+  // wallet), so run it earliest — if the caller's outer boot timeout races Phase 2,
+  // the verdict-affecting change is most likely already committed before the
+  // caller reads back the refreshed signals.
+  if (phantomIds.length > 0) {
+    await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
+  }
   // Deletes: each acquires the key-mutation mutex, serialized against any secret
   // write. deleteAccount removes secret + secure metadata + account-list entry.
   for (const id of orphanSecretIds) {
@@ -123,10 +137,6 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const journalIdsToDrop = [...orphanSecretIds, ...staleJournalIds];
   if (journalIdsToDrop.length > 0) {
     await AccountSecureStorage.dropPendingCreateEntries(journalIdsToDrop);
-  }
-  // Prune phantoms from the wallet blob (empty ⇒ canonical clearAllWallets).
-  if (phantomIds.length > 0) {
-    await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
   }
 
   if (

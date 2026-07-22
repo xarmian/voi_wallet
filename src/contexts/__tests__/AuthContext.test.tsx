@@ -22,6 +22,7 @@ import { act, renderHook } from '@testing-library/react-native';
 import { AuthProvider, useAuth } from '../AuthContext';
 
 import { MultiAccountWalletService } from '@/services/wallet';
+import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
 import { AccountSecureStorage } from '@/services/secure';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
@@ -44,6 +45,14 @@ jest.mock('@/services/wallet', () => ({
     // (STANDARD) account? Used to close the Android swallow-to-null fail-open.
     hasKeyBearingAccountStrict: jest.fn(),
   },
+}));
+
+// TASK-222: the cross-store boot reconcile. Mocked so the hook's integration
+// behavior (never-blocks-boot, post-phantom-prune verdict refresh, one-shot
+// latch) is driven deterministically without exercising the real reconcile
+// (unit-tested separately). Default (no-op success) is set in beforeEach.
+jest.mock('@/services/wallet/crossStoreReconcile', () => ({
+  reconcileCrossStoreHalfState: jest.fn(),
 }));
 
 jest.mock('@/services/secure', () => ({
@@ -129,6 +138,15 @@ const mockEnterLocked = enterLockedState as jest.Mock;
 const mockIsPinSetupPending = isPinSetupPending as jest.Mock;
 const mockClearPinSetupPending = clearPinSetupPending as jest.Mock;
 const mockSetUnlocked = AppLockSignal.setUnlocked as jest.Mock;
+const mockReconcile = reconcileCrossStoreHalfState as jest.Mock;
+
+// A clean, no-op reconcile result (nothing to repair).
+const RECONCILE_NOOP = {
+  ran: true,
+  orphanSecretsDeleted: [],
+  phantomAccountsPruned: [],
+  staleJournalDropped: [],
+};
 
 // A non-empty account list so checkInitialAuthState treats the wallet as
 // "requires auth". Address is a throwaway label, never key material.
@@ -213,6 +231,9 @@ beforeEach(() => {
   // mocked for any incidental callers but no longer gate the initial lock state.
   mockHasWalletStrict.mockResolvedValue(true);
   mockHasPinStrict.mockResolvedValue(true);
+  // TASK-222: default the boot reconcile to a clean no-op so it never perturbs
+  // the lock verdict in tests that don't opt into a repair scenario.
+  mockReconcile.mockResolvedValue(RECONCILE_NOOP);
   // Default to NO key-bearing account so the Codex round-4 guard
   // (hasKeyBearingAccount && !hasPin ⇒ recovery) never fires unless a test opts
   // in — the guard only matters for the wallet+no-PIN cases, which the existing
@@ -812,6 +833,88 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
       expect(result.current.authState.securityUnavailable).toBe(false);
     }
   );
+});
+
+// TASK-222 Component 3 — the boot-reconcile hook's INTEGRATION into
+// checkInitialAuthState (the reconcile itself is unit-tested in
+// crossStoreReconcile.test.ts). These cover the acceptance criteria a unit test
+// of the pure function cannot: never blocks boot, the post-phantom-prune verdict
+// refresh, fail-safe on refresh failure, and the one-shot boot latch.
+describe('AuthContext — TASK-222 boot reconcile hook', () => {
+  it('never blocks boot: a reconcile REJECTION is swallowed and boot still reaches a terminal verdict', async () => {
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(true);
+    mockReconcile.mockRejectedValue(new Error('reconcile boom'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    // Verdict comes from the strict reads; the reconcile failure is ignored.
+    expect(result.current.authState.authChecked).toBe(true);
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.hasWallet).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
+  it('phantom prune that empties the wallet REFRESHES the verdict to onboarding', async () => {
+    // Boot verdict reads wallet+PIN present (⇒ would be LOCKED); the reconcile
+    // reports it pruned a phantom, so the refresh re-reads the now-empty store.
+    mockHasWalletStrict.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mockHasPinStrict.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mockReconcile.mockResolvedValue({
+      ...RECONCILE_NOOP,
+      phantomAccountsPruned: ['acct-1'],
+    });
+
+    const { result } = await mountAuth();
+
+    // Refreshed signals: no wallet ⇒ unlocked onboarding, not a locked ghost.
+    expect(result.current.authState.hasWallet).toBe(false);
+    expect(result.current.authState.isLocked).toBe(false);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.authChecked).toBe(true);
+  });
+
+  it('a REFRESH failure after a phantom prune keeps the prior LOCKED verdict (never falls open)', async () => {
+    mockHasWalletStrict
+      .mockResolvedValueOnce(true) // boot verdict: wallet present
+      .mockRejectedValue(new Error('refresh read boom')); // refresh fails
+    mockHasPinStrict.mockResolvedValue(true);
+    mockReconcile.mockResolvedValue({
+      ...RECONCILE_NOOP,
+      phantomAccountsPruned: ['acct-1'],
+    });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = await mountAuth();
+
+    // Refresh threw ⇒ keep the pre-reconcile fail-safe verdict (LOCKED).
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.hasWallet).toBe(true);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(result.current.authState.authChecked).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
+  it('runs the reconcile at boot exactly ONCE and NOT again on recheckAuthState (one-shot latch)', async () => {
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockResolvedValue(true);
+
+    const { result } = await mountAuth();
+    expect(mockReconcile).toHaveBeenCalledTimes(1);
+
+    // A mid-session recheck (as ChangePinScreen / LockScreen trigger) must NOT
+    // re-arm the ownership-unchecked reconcile against a possible live creation.
+    await act(async () => {
+      await result.current.recheckAuthState();
+    });
+    await flush();
+
+    expect(mockReconcile).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('AuthContext — PIN unlock', () => {

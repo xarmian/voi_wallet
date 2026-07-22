@@ -198,6 +198,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const authStateRef = useRef(authState);
   authStateRef.current = authState;
 
+  // TASK-222: one-shot latch for the cross-store boot reconcile. checkInitialAuthState
+  // is ALSO invoked by recheckAuthState() (ChangePinScreen, LockScreen, recovery),
+  // i.e. on a LIVE, possibly-unlocked wallet — not only at boot. The reconcile's
+  // destructive primitives are ownership-UNCHECKED (they infer delete from absence),
+  // which is only safe when no account-creation can be in-flight — true at the first
+  // boot check, NOT on a mid-session recheck. This latch guarantees the reconcile
+  // runs at most ONCE per app launch (the first successful auth check), so a recheck
+  // can never arm it against a concurrent creation. It resets on remount (next launch),
+  // so a boot where the reconcile could not run (strict reads failed) retries next boot.
+  const bootReconcileDoneRef = useRef(false);
+
   useEffect(() => {
     checkInitialAuthState();
     // Capture the subscription remover so the effect cleanup can tear the
@@ -380,49 +391,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // any strict read/probe failure. Bounded by withTimeout and best-effort
       // (a failure is swallowed) so a wedged read or a repair error degrades to
       // "no repair this boot" and never stalls the splash.
-      const reconcileOutcome = await withTimeout(
-        reconcileCrossStoreHalfState(),
-        STRICT_READ_TIMEOUT_MS,
-        'cross-store boot reconcile'
-      ).catch((error) => {
-        // ids/status only upstream; here we log the failure class, not contents.
-        console.warn('Cross-store boot reconcile skipped:', error);
-        return null;
-      });
+      //
+      // LATCHED to run at most ONCE per app launch (bootReconcileDoneRef): this
+      // function is reused by recheckAuthState() on a live/unlocked wallet, where
+      // the reconcile's ownership-unchecked deletes would be unsafe against a
+      // concurrent creation. The latch is set only once we reach here (after the
+      // strict reads succeeded), so a failed-strict-reads boot retries next launch.
+      //
+      // Residual (accepted): the outer withTimeout can, on a wedged store, abandon
+      // Phase 2 mid-flight and skip the refresh below, routing on the stale verdict
+      // while the abandoned prune later empties the wallet. This is fail-SAFE (still
+      // locked, never falls open) and self-heals next boot; Phase 1 now probes
+      // concurrently and the prune runs first, so the window is small.
+      if (!bootReconcileDoneRef.current) {
+        bootReconcileDoneRef.current = true;
 
-      // If the reconcile PRUNED a phantom account it may have emptied the wallet
-      // (pruneStandardAccounts → clearAllWallets), which invalidates the
-      // pre-reconcile lock signals — routing on the stale `hasWallet=true` would
-      // land the user in Main with no wallet after PIN entry instead of
-      // onboarding (Codex P2). Refresh the three strict signals ONCE so the
-      // verdict reflects the repair. Best-effort + bounded: on any failure keep
-      // the pre-reconcile FAIL-SAFE (locked) verdict — never fall open. Orphan
-      // deletion never affects these blob-derived signals, so this only runs on
-      // the rare phantom-prune path.
-      if (
-        reconcileOutcome &&
-        reconcileOutcome.phantomAccountsPruned.length > 0
-      ) {
-        try {
-          const [freshWallet, freshPin, freshKeyBearing] = await withTimeout(
-            Promise.all([
-              MultiAccountWalletService.hasWalletWithAccountsStrict(),
-              AccountSecureStorage.hasPinStrict(),
-              MultiAccountWalletService.hasKeyBearingAccountStrict(),
-            ]),
-            STRICT_READ_TIMEOUT_MS,
-            'post-reconcile lock-read refresh'
-          );
-          lockState = {
-            hasWallet: freshWallet,
-            hasPin: freshPin,
-            hasKeyBearingAccount: freshKeyBearing,
-          };
-        } catch (error) {
-          console.warn(
-            'Post-reconcile lock refresh failed; keeping prior verdict:',
-            error
-          );
+        const reconcileOutcome = await withTimeout(
+          reconcileCrossStoreHalfState(),
+          STRICT_READ_TIMEOUT_MS,
+          'cross-store boot reconcile'
+        ).catch((error) => {
+          // ids/status only upstream; here we log the failure class, not contents.
+          console.warn('Cross-store boot reconcile skipped:', error);
+          return null;
+        });
+
+        // If the reconcile PRUNED a phantom account it may have emptied the wallet
+        // (pruneStandardAccounts → clearAllWallets), which invalidates the
+        // pre-reconcile lock signals — routing on the stale `hasWallet=true` would
+        // land the user in Main with no wallet after PIN entry instead of
+        // onboarding (Codex P2). Refresh the three strict signals ONCE so the
+        // verdict reflects the repair. Best-effort + bounded: on any failure keep
+        // the pre-reconcile FAIL-SAFE (locked) verdict — never fall open. Orphan
+        // deletion never affects these blob-derived signals, so this only runs on
+        // the rare phantom-prune path.
+        if (
+          reconcileOutcome &&
+          reconcileOutcome.phantomAccountsPruned.length > 0
+        ) {
+          try {
+            const [freshWallet, freshPin, freshKeyBearing] = await withTimeout(
+              Promise.all([
+                MultiAccountWalletService.hasWalletWithAccountsStrict(),
+                AccountSecureStorage.hasPinStrict(),
+                MultiAccountWalletService.hasKeyBearingAccountStrict(),
+              ]),
+              STRICT_READ_TIMEOUT_MS,
+              'post-reconcile lock-read refresh'
+            );
+            lockState = {
+              hasWallet: freshWallet,
+              hasPin: freshPin,
+              hasKeyBearingAccount: freshKeyBearing,
+            };
+          } catch (error) {
+            console.warn(
+              'Post-reconcile lock refresh failed; keeping prior verdict:',
+              error
+            );
+          }
         }
       }
 
