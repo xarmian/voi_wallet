@@ -1239,6 +1239,172 @@ export class AccountSecureStorage {
     });
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // TASK-222 — boot-reconcile strict probes. These back the fail-closed
+  // cross-store half-state repair (crossStoreReconcile.ts, hooked at boot in
+  // AuthContext). Every probe here must either return a DEFINITE answer or THROW
+  // — never swallow a read failure to a falsy "absent", because the reconcile
+  // interprets "absent" destructively (an absent secret makes its blob account a
+  // phantom to prune). A swallowed keychain hiccup reported as "absent" would
+  // mass-prune live accounts, so these siblings of the internal readers fail
+  // CLOSED (propagate) instead. See the strict-read family in the wallet service
+  // (getStoredValueStrict, TASK-213) for the same discipline on the blob side.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * STRICT presence probe for a single account's secret (TASK-222). Answers "is
+   * this account's key RETRIEVABLE?" with the SAME semantics as the real reader
+   * (readSecretLocked → migrateLegacyAccountDataLocked), but READ-ONLY — it never
+   * performs the migration write, so a boot probe never mutates the store it is
+   * inspecting. Mirroring the reader is load-bearing: the reader treats a missing
+   * PRIMARY secret as a reason to migrate a still-present LEGACY `voi_account_<id>`
+   * blob, so a live, not-yet-migrated account has NO primary secret yet. Probing
+   * the primary key alone would misclassify such an account as a phantom and
+   * prune it — losing funds (Codex P1). Presence is therefore:
+   *   primary present                          → true
+   *   primary absent, wipe tombstone SET       → false  (migration bails; the
+   *                                                       secret is intentionally
+   *                                                       dead — mirrors :1030)
+   *   primary absent, no tombstone, legacy blob → true   (live + migratable)
+   *   otherwise                                → false  (genuine absence)
+   * PROPAGATES a read failure/timeout so the caller aborts the whole destructive
+   * pass on any throw. Needs no unlock — it inspects presence, never decrypts.
+   * Bounded so a wedged keychain read cannot stall boot.
+   */
+  static async probeSecretPresenceStrict(
+    accountId: string,
+    timeoutMs: number = 1500
+  ): Promise<boolean> {
+    const primary = await this.withTimeout(
+      secureStorage.getItem(this.secretKey(accountId)),
+      timeoutMs,
+      'secret presence probe'
+    );
+    // Truthiness (not `!= null`) to match the reader's `if (stored)` semantics —
+    // an empty-string value reads as absent there too (Codex P2).
+    if (primary) {
+      return true;
+    }
+    // Primary absent: mirror migrateLegacyAccountDataLocked. A set wipe tombstone
+    // means a legacy blob is intentionally dead (never resurrected) → absent.
+    const wiped = await this.withTimeout(
+      storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY),
+      timeoutMs,
+      'wipe tombstone probe'
+    );
+    if (wiped != null) {
+      return false;
+    }
+    // No tombstone: a surviving legacy `voi_account_<id>` blob is a LIVE key the
+    // reader would migrate on next access — count it as present (do NOT migrate).
+    const legacy = await this.withTimeout(
+      secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
+      timeoutMs,
+      'legacy secret presence probe'
+    );
+    // Truthiness to match migrateLegacyAccountDataLocked's `if (!legacyData)`.
+    return !!legacy;
+  }
+
+  /**
+   * STRICT read of the durable pending-creation journal (TASK-222). Unlike the
+   * tolerant private readPendingCreateJournal (which degrades bad JSON to `{}` —
+   * a safe default on the WRITE paths), this FAILS CLOSED for the reconcile: a
+   * storage read failure OR structurally-malformed content (unparseable, or a
+   * non-object) PROPAGATES, so a corrupt journal aborts the destructive pass
+   * rather than silently hiding a journal-only half-created secret from repair
+   * (Codex P2). Resolves `{}` only for genuine absence. Bounded so a wedged read
+   * cannot stall boot.
+   */
+  static async readPendingCreatesStrict(
+    timeoutMs: number = 1500
+  ): Promise<Record<string, string>> {
+    const raw = await this.withTimeout(
+      storage.getItem(this.PENDING_CREATES_KEY),
+      timeoutMs,
+      'pending-creation journal read'
+    );
+    if (raw == null) {
+      return {};
+    }
+    // Throw (not swallow) on corruption so the reconcile fails closed. Validate
+    // the full declared shape: a non-null, non-array object whose values are all
+    // strings (the per-attempt tokens). Keys are always strings from JSON.
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('Corrupt pending-creation journal: not an object');
+    }
+    const entries = parsed as Record<string, unknown>;
+    // Reject an empty key (a garbage candidate id) or a non-string token value.
+    if (
+      Object.keys(entries).some((id) => id === '') ||
+      !Object.values(entries).every((token) => typeof token === 'string')
+    ) {
+      throw new Error(
+        'Corrupt pending-creation journal: empty key or non-string token'
+      );
+    }
+    return parsed as Record<string, string>;
+  }
+
+  /**
+   * Unconditionally drop the given ids from the pending-creation journal
+   * (TASK-222 reconcile cleanup) under the key-mutation mutex. Unlike
+   * deleteAccountIfAttemptMatches this is NOT ownership-checked — the reconcile
+   * runs once at boot before any creation flow starts, and it drops only entries
+   * it has already classified as orphaned-secret (deleted here) or stale (no
+   * secret, no blob account). Touches ONLY the journal; deleting the secret is
+   * the caller's separate deleteAccount step. A no-op for ids not present.
+   */
+  static async dropPendingCreateEntries(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    return this.runKeyMutationExclusive(async () => {
+      const journal = await this.readPendingCreateJournal();
+      let changed = false;
+      for (const id of ids) {
+        if (journal[id] !== undefined) {
+          delete journal[id];
+          changed = true;
+        }
+      }
+      if (changed) {
+        await this.writePendingCreateJournal(journal);
+      }
+    });
+  }
+
+  /**
+   * Reject `promise` if it has not settled within `ms`. On timeout the abandoned
+   * read's eventual settlement is ignored and a labelled Error is thrown so the
+   * boot reconcile fails CLOSED (treats it as a read failure, not "absent").
+   * Mirrors the AuthContext withTimeout used for the strict lock reads.
+   */
+  private static withTimeout<T>(
+    promise: Promise<T>,
+    ms: number,
+    label: string
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${ms}ms`));
+      }, ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
   /** The body of storeAccount, assuming the key-mutation mutex is HELD. Shared by
    *  storeAccount (public wrapper) and storeAccountForCreation. */
   private static async storeAccountLocked(
@@ -1842,6 +2008,55 @@ export class AccountSecureStorage {
         `Failed to retrieve account list: ${(error as Error).message}`
       );
     }
+  }
+
+  /**
+   * READ-ONLY strict read of the account-id list for the boot reconcile
+   * (TASK-222). getAllAccountIds MIGRATES a legacy secure-store list — it WRITES
+   * the primary and DELETES the legacy copy — which would be a mutation during
+   * the reconcile's abort-safe phase-one reads (a later probe/journal failure
+   * must leave the store untouched; Codex P2). This sibling reads the primary,
+   * then the legacy location, WITHOUT migrating, and PROPAGATES a read failure or
+   * a corrupt (unparseable) list so the reconcile fails closed. Resolves `[]`
+   * only for genuine absence.
+   */
+  static async readAccountListStrict(): Promise<string[]> {
+    // `!= null` (not truthiness): a present-but-EMPTY value ('') is CORRUPTION,
+    // not absence — a genuinely absent list is null. Routing '' to the parser
+    // makes JSON.parse('') throw → reconcile aborts (fail closed). Collapsing ''
+    // to [] would silently drop the list as a candidate source (Codex).
+    const primary = await storage.getItem(this.METADATA_LIST_KEY);
+    if (primary != null) {
+      // A corrupt list throws here → propagates → reconcile aborts (fail closed).
+      return this.parseAccountListStrict(primary);
+    }
+    const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
+    if (legacy != null) {
+      return this.parseAccountListStrict(legacy);
+    }
+    return [];
+  }
+
+  /**
+   * Parse + STRUCTURALLY VALIDATE an account-id list for the strict read. A list
+   * that is valid JSON but not a string[] (e.g. `"id"`, `{}`, or `[1,2]`) is
+   * CORRUPTION, not data — returning it unchecked would spread non-ids (a bare
+   * string spreads into per-character candidate ids) into the reconcile's
+   * destructive classification (Codex P2). Throw so the reconcile fails closed.
+   */
+  private static parseAccountListStrict(raw: string): string[] {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every((id) => typeof id === 'string' && id !== '')
+    ) {
+      // Reject non-string OR empty-string entries: an empty/garbage id must not
+      // become a reconcile candidate (Codex).
+      throw new Error(
+        'Corrupt account list: not an array of non-empty strings'
+      );
+    }
+    return parsed as string[];
   }
 
   private static async encryptPrivateKey(
