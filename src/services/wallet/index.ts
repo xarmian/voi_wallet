@@ -2052,19 +2052,30 @@ export class MultiAccountWalletService {
         'Corrupt wallet blob: `accounts` is present but not an array'
       );
     }
-    const standardIds = parsed.accounts
-      .filter((acc) => acc?.type === AccountType.STANDARD)
-      .map((acc) => acc.id);
     // This is a RAW strict read (no heal/validate pass like getCurrentWallet), so
-    // a STANDARD account with a non-string id is CORRUPTION — feeding it to the
-    // reconcile as a candidate id would drive destructive classification on bad
-    // data. Throw so the reconcile fails closed (Codex).
-    if (!standardIds.every((id) => typeof id === 'string')) {
-      throw new Error(
-        'Corrupt wallet blob: STANDARD account with a non-string id'
-      );
+    // validate EVERY account entry fully rather than silently filtering. A
+    // malformed entry — a non-string/empty id, or an UNRECOGNIZED `type` — is
+    // CORRUPTION, not data: a STANDARD account whose `type` field is corrupted to
+    // a non-standard value would silently drop out of the blob-standard set here,
+    // and if that id is then supplied by the account list or journal with a
+    // present secret, the reconcile would misclassify it as an orphan and DELETE
+    // its secret. Throw so the reconcile fails closed on any malformed entry
+    // (Codex). A genuinely non-STANDARD account (watch/ledger/rekeyed/remote) has
+    // a recognized type and is simply not a STANDARD id — that is valid data.
+    const validTypes = new Set<string>(Object.values(AccountType));
+    for (const acc of parsed.accounts) {
+      if (
+        acc == null ||
+        typeof acc.id !== 'string' ||
+        acc.id === '' ||
+        !validTypes.has(acc.type)
+      ) {
+        throw new Error('Corrupt wallet blob: malformed account entry');
+      }
     }
-    return standardIds;
+    return parsed.accounts
+      .filter((acc) => acc.type === AccountType.STANDARD)
+      .map((acc) => acc.id);
   }
 
   /**

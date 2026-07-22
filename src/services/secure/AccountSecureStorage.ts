@@ -1338,13 +1338,14 @@ export class AccountSecureStorage {
     ) {
       throw new Error('Corrupt pending-creation journal: not an object');
     }
+    const entries = parsed as Record<string, unknown>;
+    // Reject an empty key (a garbage candidate id) or a non-string token value.
     if (
-      !Object.values(parsed as Record<string, unknown>).every(
-        (token) => typeof token === 'string'
-      )
+      Object.keys(entries).some((id) => id === '') ||
+      !Object.values(entries).every((token) => typeof token === 'string')
     ) {
       throw new Error(
-        'Corrupt pending-creation journal: non-string token value'
+        'Corrupt pending-creation journal: empty key or non-string token'
       );
     }
     return parsed as Record<string, string>;
@@ -2047,9 +2048,13 @@ export class AccountSecureStorage {
     const parsed = JSON.parse(raw) as unknown;
     if (
       !Array.isArray(parsed) ||
-      !parsed.every((id) => typeof id === 'string')
+      !parsed.every((id) => typeof id === 'string' && id !== '')
     ) {
-      throw new Error('Corrupt account list: not an array of strings');
+      // Reject non-string OR empty-string entries: an empty/garbage id must not
+      // become a reconcile candidate (Codex).
+      throw new Error(
+        'Corrupt account list: not an array of non-empty strings'
+      );
     }
     return parsed as string[];
   }

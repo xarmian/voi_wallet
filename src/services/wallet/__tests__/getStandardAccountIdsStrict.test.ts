@@ -114,28 +114,59 @@ it('THROWS on a structurally-corrupt blob (accounts not an array)', async () => 
   ).rejects.toThrow('not an array');
 });
 
-it('THROWS on a STANDARD account with a non-string id (corruption, not data)', async () => {
-  // Raw strict read — no heal pass — so a non-string id is corruption that must
-  // not become a reconcile candidate. Fail closed.
-  mockStore[WALLET_KEY] = JSON.stringify({
+function blobWithAccount(acc: Record<string, unknown>): string {
+  return JSON.stringify({
     id: 'w1',
     version: '1',
     createdAt: '',
-    accounts: [
-      {
-        id: 42,
-        address: 'ADDR',
-        publicKey: 'PUB',
-        type: 'standard',
-        isHidden: false,
-      },
-    ],
+    accounts: [acc],
     activeAccountId: '',
     settings: {},
   });
+}
+
+it('THROWS on a STANDARD account with a non-string id (corruption, not data)', async () => {
+  // Raw strict read — no heal pass — so a non-string id is corruption that must
+  // not become a reconcile candidate. Fail closed.
+  mockStore[WALLET_KEY] = blobWithAccount({
+    id: 42,
+    address: 'ADDR',
+    publicKey: 'PUB',
+    type: 'standard',
+    isHidden: false,
+  });
   await expect(
     MultiAccountWalletService.getStandardAccountIdsStrict()
-  ).rejects.toThrow('non-string id');
+  ).rejects.toThrow('malformed account entry');
+});
+
+it('THROWS on an empty-string account id', async () => {
+  mockStore[WALLET_KEY] = blobWithAccount({
+    id: '',
+    address: 'ADDR',
+    publicKey: 'PUB',
+    type: 'standard',
+    isHidden: false,
+  });
+  await expect(
+    MultiAccountWalletService.getStandardAccountIdsStrict()
+  ).rejects.toThrow('malformed account entry');
+});
+
+// The critical case: a STANDARD account whose `type` is corrupted to an
+// unrecognized value would silently drop out of the standard-id set and, if that
+// id appears in the list/journal with a present secret, be deleted as an orphan.
+it('THROWS on an account with an unrecognized type (corrupt enum)', async () => {
+  mockStore[WALLET_KEY] = blobWithAccount({
+    id: 'a',
+    address: 'ADDR',
+    publicKey: 'PUB',
+    type: 42,
+    isHidden: false,
+  });
+  await expect(
+    MultiAccountWalletService.getStandardAccountIdsStrict()
+  ).rejects.toThrow('malformed account entry');
 });
 
 it('THROWS on a present-but-empty primary blob (corruption, not absence)', async () => {

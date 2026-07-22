@@ -186,7 +186,14 @@ describe('readPendingCreatesStrict', () => {
     mockKv.set(PENDING_CREATES_KEY, JSON.stringify({ a: 't1', b: 5 }));
     await expect(
       AccountSecureStorage.readPendingCreatesStrict()
-    ).rejects.toThrow('non-string token value');
+    ).rejects.toThrow('non-string token');
+  });
+
+  it('THROWS on a journal with an empty-string key (garbage candidate id)', async () => {
+    mockKv.set(PENDING_CREATES_KEY, JSON.stringify({ '': 't1' }));
+    await expect(
+      AccountSecureStorage.readPendingCreatesStrict()
+    ).rejects.toThrow('empty key');
   });
 
   it('THROWS on structurally-invalid journal (non-object)', async () => {
@@ -257,14 +264,21 @@ describe('readAccountListStrict', () => {
   it('THROWS on valid JSON that is not an array (e.g. a bare string)', async () => {
     mockKv.set(METADATA_LIST_KEY, JSON.stringify('abc'));
     await expect(AccountSecureStorage.readAccountListStrict()).rejects.toThrow(
-      'not an array of strings'
+      'non-empty strings'
     );
   });
 
   it('THROWS on an array containing non-string entries', async () => {
     mockKv.set(METADATA_LIST_KEY, JSON.stringify(['a', 2, 'c']));
     await expect(AccountSecureStorage.readAccountListStrict()).rejects.toThrow(
-      'not an array of strings'
+      'non-empty strings'
+    );
+  });
+
+  it('THROWS on an array containing an empty-string entry (garbage id)', async () => {
+    mockKv.set(METADATA_LIST_KEY, JSON.stringify(['a', '', 'c']));
+    await expect(AccountSecureStorage.readAccountListStrict()).rejects.toThrow(
+      'non-empty strings'
     );
   });
 });
