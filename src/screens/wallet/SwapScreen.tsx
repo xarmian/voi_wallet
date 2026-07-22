@@ -49,6 +49,7 @@ import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
+import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
 import {
   parseAmountToBaseUnits,
   sanitizeAmountInput,
@@ -349,10 +350,11 @@ export default function SwapScreen() {
     } catch (error) {
       if (requestId !== quoteRequestIdRef.current) return;
       console.error('Error fetching quote:', error);
+      // TASK-41: aggregator/HTTP errors are unreadable ("Deflex: 502 <html>…").
       setQuoteError(
-        error instanceof Error
-          ? error.message
-          : 'Failed to get quote. Please try again.'
+        getUserFacingMessage(error, {
+          fallbackMessage: "We couldn't get a quote for this swap.",
+        })
       );
       setQuote(null);
     } finally {
@@ -810,12 +812,12 @@ export default function SwapScreen() {
       });
     } catch (error) {
       console.error('Error executing swap:', error);
-      Alert.alert(
-        'Swap Failed',
-        error instanceof Error
-          ? error.message
-          : 'Failed to execute swap. Please try again.'
-      );
+      // TASK-41: keep the "Swap Failed" framing but map the body — a raw
+      // algod/aggregator string here is the least actionable message in the app.
+      const { message } = toErrorAlert(error, {
+        fallbackMessage: "We couldn't complete this swap.",
+      });
+      Alert.alert('Swap Failed', message);
     } finally {
       setIsSwapping(false);
       setIsWaitingForConfirmation(false);

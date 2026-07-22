@@ -67,7 +67,10 @@ import {
   AccountMetadata,
   AccountType,
   RemoteSignerAccountMetadata,
+  RemoteSignerRequiredError as FromWalletTypes,
 } from '@/types/wallet';
+// TASK-41: imported purely to prove the class identity is shared, not duplicated.
+import { RemoteSignerRequiredError as FromUnifiedSigner } from '@/services/transactions/unifiedSigner';
 
 // ---------------------------------------------------------------------------
 // Fixtures — REAL addresses from deterministic seeds (DR-3)
@@ -513,5 +516,28 @@ describe('validateNotRemoteSigner — fail-closed rejection of remote signers', 
 
   it('does NOT throw for a WATCH account (rejection here is remote-signer specific)', () => {
     expect(() => validateNotRemoteSigner(makeWatch())).not.toThrow();
+  });
+
+  // TASK-41: `RemoteSignerRequiredError` used to be declared TWICE — here and
+  // in `transactions/unifiedSigner.ts` — with incompatible constructors. Two
+  // distinct classes sharing one `name` meant an `instanceof` check against
+  // one silently returned false for an error thrown by the other, and callers
+  // fell through to a generic failure path. It now has a single declaration in
+  // `@/types/wallet`; both modules re-export it.
+  it('is the SAME class across signingRouter, unifiedSigner and @/types/wallet', () => {
+    expect(RemoteSignerRequiredError).toBe(FromWalletTypes);
+    expect(RemoteSignerRequiredError).toBe(FromUnifiedSigner);
+
+    let thrown: unknown;
+    try {
+      validateNotRemoteSigner(makeRemoteSigner('signer-device-xyz'));
+    } catch (err) {
+      thrown = err;
+    }
+
+    // The cross-module check that used to be able to fail.
+    expect(thrown).toBeInstanceOf(FromUnifiedSigner);
+    expect(thrown).toBeInstanceOf(FromWalletTypes);
+    expect((thrown as any).code).toBe('REMOTE_SIGNER_REQUIRED');
   });
 });

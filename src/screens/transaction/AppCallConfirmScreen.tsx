@@ -24,6 +24,7 @@ import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { getNetworkConfig } from '@/services/network/config';
 import { decodeBase64Url } from '@/utils/arc0090Uri';
+import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 
 // Algorand zero address (used as template placeholder)
@@ -173,11 +174,17 @@ export default function AppCallConfirmScreen() {
           ]
         );
       } else if (!success && result?.error) {
-        setError(result.error.message || 'Transaction failed');
-        Alert.alert(
-          'Transaction Failed',
-          result.error.message || 'Failed to submit transaction'
+        // TASK-41: app calls fail with `logic eval error: assert failed pc=…`,
+        // which means nothing to a user. Map it to a plain-language reason.
+        setError(
+          getUserFacingMessage(result.error, {
+            fallbackMessage: "We couldn't submit this transaction.",
+          })
         );
+        const { message } = toErrorAlert(result.error, {
+          fallbackMessage: "We couldn't submit this transaction.",
+        });
+        Alert.alert('Transaction Failed', message);
       }
     },
     [navigation]

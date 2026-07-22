@@ -11,6 +11,7 @@ import {
 } from '@/types/wallet';
 import { ledgerDeviceStorage, LedgerDeviceStorage } from './storage';
 import { isLedgerSigningInProgress } from '@/services/ledger/signingState';
+import { isPermissionDeniedError } from '@/utils/errorMapping';
 
 // F-24: Lazy transport-module loaders. The BLE transport pulls in
 // react-native-ble-plx + rxjs and the HID transport its own native deps; both
@@ -421,11 +422,11 @@ export class LedgerTransportService {
             lastError.message
           );
 
-          // Don't retry on permission errors
-          if (
-            lastError.message.includes('Permission') ||
-            lastError.message.includes('Unauthorized')
-          ) {
+          // Don't retry on permission errors.
+          // TASK-41: was two case-sensitive substring tests on `message`, so a
+          // lowercase "permission denied" from the BLE stack was retried
+          // pointlessly instead of surfacing the Settings prompt.
+          if (isPermissionDeniedError(error)) {
             break;
           }
 

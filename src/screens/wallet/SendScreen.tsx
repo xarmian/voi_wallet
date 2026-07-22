@@ -60,6 +60,7 @@ import {
   formatAddress,
 } from '@/utils/address';
 import { isAlgorandPaymentUri, parseAlgorandUri } from '@/utils/algorandUri';
+import { toErrorAlert } from '@/utils/errorMapping';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import AccountSelector from '@/components/account/AccountSelector';
 import AccountListModal from '@/components/account/AccountListModal';
@@ -1507,10 +1508,13 @@ export default function SendScreen() {
       });
     } catch (error) {
       console.error('Error preparing transaction:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to prepare transaction'
-      );
+      // TASK-41: never surface the raw SDK/algod message here — it produces
+      // strings like "TransactionPool.Remember: ... overspend ..." at the most
+      // stressful moment in the app.
+      const { title, message } = toErrorAlert(error, {
+        fallbackMessage: "We couldn't prepare this transaction.",
+      });
+      Alert.alert(title, message);
     } finally {
       setIsSending(false);
     }

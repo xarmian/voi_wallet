@@ -28,6 +28,7 @@ import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { getNetworkConfig } from '@/services/network/config';
 import { decodeBase64Url } from '@/utils/arc0090Uri';
+import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 
 type KeyregConfirmScreenRouteProp = RouteProp<
@@ -144,11 +145,17 @@ export default function KeyregConfirmScreen() {
           ]
         );
       } else if (!success && result?.error) {
-        setError(result.error.message || 'Transaction failed');
-        Alert.alert(
-          'Transaction Failed',
-          result.error.message || 'Failed to submit transaction'
+        // TASK-41: `result.error` is whatever the signer/algod threw. Map it
+        // instead of piping the raw message into the banner and the alert.
+        setError(
+          getUserFacingMessage(result.error, {
+            fallbackMessage: "We couldn't submit this transaction.",
+          })
         );
+        const { message } = toErrorAlert(result.error, {
+          fallbackMessage: "We couldn't submit this transaction.",
+        });
+        Alert.alert('Transaction Failed', message);
       }
     },
     [params.isOnline, navigation]

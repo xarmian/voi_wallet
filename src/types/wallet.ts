@@ -448,6 +448,54 @@ export class LedgerUserRejectedError extends LedgerAccountError {
   }
 }
 
+export interface RemoteSignerRequiredErrorOptions {
+  /** Address of the account that must be signed remotely. */
+  accountAddress?: string;
+  /** Device id of the paired offline signer, when known. */
+  signerDeviceId?: string;
+  /** Override the generated message. */
+  message?: string;
+}
+
+/**
+ * Thrown when a REMOTE_SIGNER account is asked to sign directly instead of
+ * through the QR flow.
+ *
+ * TASK-41: this class used to be declared TWICE — in
+ * `services/remoteSigner/signingRouter.ts` and `services/transactions/
+ * unifiedSigner.ts` — with incompatible constructors. Two distinct classes
+ * share one `name`, so an `instanceof` check against one of them silently
+ * returned `false` for an error thrown by the other, and callers fell through
+ * to a generic failure path. It now lives here (the one module both signers
+ * already import) and both call sites re-export it for compatibility.
+ *
+ * The constructor takes an OPTIONS OBJECT rather than preserving the two
+ * legacy positional signatures, and that is deliberate: they were mutually
+ * contradictory. `signingRouter` used `(accountAddress, signerDeviceId)` while
+ * `unifiedSigner` used `(message)`, so a single leading string means "an
+ * address" under one and "a user-facing message" under the other. No overload
+ * can disambiguate them, and guessing would either drop the address or print a
+ * bare address where a sentence belongs. Every construction site in the repo
+ * is updated and `tsc` covers all of them, so the change cannot fail silently.
+ */
+export class RemoteSignerRequiredError extends AccountError {
+  readonly accountAddress?: string;
+  readonly signerDeviceId?: string;
+
+  constructor(options: RemoteSignerRequiredErrorOptions = {}) {
+    super(
+      options.message ??
+        (options.accountAddress
+          ? `Account ${options.accountAddress} is a remote signer account. Use QR-based signing instead.`
+          : 'This account uses remote signing via QR codes. Please use the remote signer flow instead of direct signing.'),
+      'REMOTE_SIGNER_REQUIRED'
+    );
+    this.name = 'RemoteSignerRequiredError';
+    this.accountAddress = options.accountAddress;
+    this.signerDeviceId = options.signerDeviceId;
+  }
+}
+
 // Transaction Signing Context
 export interface TransactionSigningContext {
   transaction: any; // algosdk.Transaction type

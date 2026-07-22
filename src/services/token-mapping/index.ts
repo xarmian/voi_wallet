@@ -453,6 +453,7 @@ export class TokenMappingService {
    */
   private async fetchWithRetry(): Promise<TokenMappingAPIResponse> {
     let lastError: Error | null = null;
+    let lastStatus: number | undefined;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
@@ -483,6 +484,13 @@ export class TokenMappingService {
         return data;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Unknown error');
+        // TASK-41 (DR-6): the retry loop used to discard the HTTP status of the
+        // last attempt, so the error-mapper could not tell "rate limited" or
+        // "server down" from a plain fetch failure and every failure degraded
+        // to a generic message. Carry the status forward.
+        if (error instanceof TokenMappingAPIError) {
+          lastStatus = error.status;
+        }
 
         if (attempt < this.config.retryAttempts) {
           console.warn(
@@ -495,7 +503,9 @@ export class TokenMappingService {
     }
 
     throw new TokenMappingAPIError(
-      `Failed after ${this.config.retryAttempts} attempts: ${lastError?.message}`
+      `Failed after ${this.config.retryAttempts} attempts: ${lastError?.message}`,
+      lastStatus,
+      lastError ?? undefined
     );
   }
 

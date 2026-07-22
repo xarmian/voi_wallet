@@ -30,6 +30,7 @@ import {
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
 import { dedupeTransactions } from '@/utils/transactions';
+import { toErrorAlert } from '@/utils/errorMapping';
 import TransactionAddressDisplay from '@/components/transaction/TransactionAddressDisplay';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { getNetworkConfig } from '@/services/network/config';
@@ -782,7 +783,13 @@ export default function AssetDetailScreen() {
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
     } catch (error: any) {
-      Alert.alert('Error', `Failed to opt out: ${error.message}`);
+      // TASK-41: this was the literal `Failed to opt out: ${error.message}`
+      // called out by the audit — an opt-out that trips the minimum balance
+      // showed raw algod text.
+      const { message } = toErrorAlert(error, {
+        fallbackMessage: "We couldn't remove this asset from your wallet.",
+      });
+      Alert.alert('Opt-Out Failed', message);
     } finally {
       setOptingOut(false);
     }

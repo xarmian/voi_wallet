@@ -122,20 +122,31 @@ export class TokenMappingError extends Error {
 export class TokenMappingAPIError extends TokenMappingError {
   constructor(
     message: string,
-    public status?: number
+    public status?: number,
+    /**
+     * TASK-41: the originating error, preserved when a retry loop rebuilds the
+     * failure. Without it the underlying cause (abort, DNS, 503) was lost.
+     */
+    cause?: unknown
   ) {
     super(message, 'API_ERROR', { status });
+    this.name = 'TokenMappingAPIError';
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
   }
 }
 
 export class TokenMappingCacheError extends TokenMappingError {
   constructor(message: string) {
     super(message, 'CACHE_ERROR');
+    this.name = 'TokenMappingCacheError';
   }
 }
 
 export class TokenMappingValidationError extends TokenMappingError {
   constructor(message: string, details?: any) {
     super(message, 'VALIDATION_ERROR', details);
+    this.name = 'TokenMappingValidationError';
   }
 }

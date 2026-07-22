@@ -23,6 +23,7 @@ import {
 } from '@/store/walletStore';
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
+import { toErrorAlert } from '@/utils/errorMapping';
 import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 import { SwapService } from '@/services/swap';
@@ -357,7 +358,12 @@ export default function MultiNetworkAssetScreen() {
           `Successfully opted into ${optInPending.symbol} on ${getNetworkConfig(optInPending.networkId).name}`
         );
       } catch (error: any) {
-        Alert.alert('Error', `Failed to opt in: ${error.message}`);
+        // TASK-41: opt-in failures are almost always a minimum-balance
+        // shortfall; the raw algod string never said so.
+        const { message } = toErrorAlert(error, {
+          fallbackMessage: "We couldn't opt in to this asset.",
+        });
+        Alert.alert('Opt-In Failed', message);
         setShowAuthModal(false);
       } finally {
         setIsOptingIn(false);

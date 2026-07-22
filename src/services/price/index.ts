@@ -47,10 +47,15 @@ export class VoiPriceError extends Error {
   constructor(
     message: string,
     public status?: number,
-    public code?: string
+    public code?: string,
+    /** TASK-41: originating error, preserved across retry-loop rebuilds. */
+    cause?: unknown
   ) {
     super(message);
     this.name = 'VoiPriceError';
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
   }
 }
 
@@ -149,7 +154,10 @@ export class VoiPriceService {
       }
 
       throw new VoiPriceError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        undefined,
+        'NETWORK_ERROR',
+        error
       );
     }
   }
@@ -189,8 +197,14 @@ export class VoiPriceService {
       }
     }
 
+    // TASK-41 (DR-6): only transport failures reach here (a non-OK response is
+    // returned, not thrown), so there is no status — but the code and the
+    // originating error must survive for the error-mapper.
     throw new VoiPriceError(
-      `All ${this.config.retryAttempts} attempts failed. Last error: ${lastError!.message}`
+      `All ${this.config.retryAttempts} attempts failed. Last error: ${lastError!.message}`,
+      undefined,
+      'NETWORK_ERROR',
+      lastError!
     );
   }
 
