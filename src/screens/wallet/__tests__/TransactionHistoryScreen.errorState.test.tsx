@@ -20,6 +20,7 @@ const mockLoadAllTransactions = jest.fn(async () => {});
 let mockAccountState: Record<string, unknown> = {};
 
 jest.mock('@/store/walletStore', () => ({
+  ALL_TRANSACTIONS_SCOPE: 'all',
   useActiveAccount: () => ({ id: 'acct-1', address: 'ADDR1' }),
   useAccountState: () => mockAccountState,
   useWalletStore: (selector: (s: any) => unknown) =>
@@ -125,7 +126,7 @@ describe('TransactionHistoryScreen error surfacing', () => {
   it('shows an error state instead of "No Transactions" when the fetch failed', () => {
     mockAccountState = {
       ...baseState,
-      transactionsError: 'Network request failed',
+      transactionsError: { scope: 'all', message: 'Network request failed' },
     };
 
     const { queryByText, getByTestId } = render(<TransactionHistoryScreen />);
@@ -138,7 +139,7 @@ describe('TransactionHistoryScreen error surfacing', () => {
   it('offers a retry that re-runs the load', () => {
     mockAccountState = {
       ...baseState,
-      transactionsError: 'Network request failed',
+      transactionsError: { scope: 'all', message: 'Network request failed' },
     };
 
     const { getByTestId } = render(<TransactionHistoryScreen />);
@@ -149,11 +150,25 @@ describe('TransactionHistoryScreen error surfacing', () => {
     expect(mockLoadAllTransactions).toHaveBeenCalledWith('acct-1');
   });
 
+  it('ignores an asset-scoped error and still shows the genuine empty state', () => {
+    // AssetDetailScreen writes into the same field; blaming this list for its
+    // failure would be wrong, and hiding a real empty state behind it worse.
+    mockAccountState = {
+      ...baseState,
+      transactionsError: { scope: '42_asa', message: 'asset fetch failed' },
+    };
+
+    const { getByText, queryByTestId } = render(<TransactionHistoryScreen />);
+
+    expect(getByText('No Transactions')).toBeTruthy();
+    expect(queryByTestId('transactions-error')).toBeNull();
+  });
+
   it('keeps loaded rows and surfaces a footer error when a later page fails', () => {
     mockAccountState = {
       ...baseState,
       recentTransactions: [{ id: 'a' }, { id: 'b' }],
-      transactionsError: 'Network request failed',
+      transactionsError: { scope: 'all', message: 'Network request failed' },
       transactionsPagination: { hasMore: true, isLoadingMore: false },
     };
 

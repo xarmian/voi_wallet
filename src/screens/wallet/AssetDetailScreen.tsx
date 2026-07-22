@@ -20,6 +20,7 @@ import { TransactionInfo, AccountBalance, AssetBalance } from '@/types/wallet';
 import { MappedAsset } from '@/services/token-mapping/types';
 import { useAuth } from '@/contexts/AuthContext';
 import {
+  assetTransactionsScope,
   useWalletStore,
   useAccountState,
   useAccountBalance,
@@ -852,7 +853,7 @@ export default function AssetDetailScreen() {
       (a.assetType === 'arc200' && a.contractId === assetId)
   );
   const isArc200 = asset?.assetType === 'arc200';
-  const assetKey = `${assetId}_${isArc200 ? 'arc200' : 'asa'}`;
+  const assetKey = assetTransactionsScope(assetId, isArc200);
   const pagination = accountState.assetTransactionsPagination?.[assetKey];
 
   const handleLoadMore = React.useCallback(() => {
@@ -873,11 +874,15 @@ export default function AssetDetailScreen() {
     });
   }, [assetId, accountId, pagination, isArc200, loadMoreAssetTransactions]);
 
-  // The networkId path fetches outside the store and keeps its own error; the
-  // default path reads the account's transaction-scoped error.
+  // The networkId path fetches outside the store and keeps its own error. The
+  // default path reads the store error only when it belongs to THIS asset —
+  // the account-wide history loader writes into the same field, and rendering
+  // its failure here would blame the wrong list (TASK-40).
   const transactionsError = networkId
     ? networkTransactionsError
-    : accountState.transactionsError;
+    : accountState.transactionsError?.scope === assetKey
+      ? accountState.transactionsError.message
+      : null;
 
   // Only the store path paginates. On the networkId path the whole list is one
   // fetch, so "try again" means reloading it.

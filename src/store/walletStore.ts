@@ -49,6 +49,33 @@ import {
 } from '@/services/notifications';
 import { realtimeService } from '@/services/realtime';
 
+/**
+ * A transaction-load failure, tagged with the resource it belongs to:
+ * `'all'` for the account-wide history, or `${assetId}_asa|arc200` for a
+ * single asset's history (the same key used by `assetTransactionsPagination`).
+ */
+export interface TransactionsError {
+  scope: string;
+  message: string;
+}
+
+/** Account-wide transaction history, as opposed to a single asset's. */
+export const ALL_TRANSACTIONS_SCOPE = 'all';
+
+export const assetTransactionsScope = (
+  assetId: number,
+  isArc200: boolean
+): string => `${assetId}_${isArc200 ? 'arc200' : 'asa'}`;
+
+const toTransactionsError = (
+  error: unknown,
+  scope: string,
+  fallback: string
+): TransactionsError => ({
+  scope,
+  message: error instanceof Error ? error.message : fallback,
+});
+
 // Account-specific state for UI
 interface AccountUIState {
   isLoading: boolean;
@@ -66,7 +93,12 @@ interface AccountUIState {
    * reads its own field.
    */
   balanceError: string | null;
-  transactionsError: string | null;
+  /**
+   * Scoped so an asset-history failure is not rendered as an account-history
+   * failure (and vice versa) — both loaders write into the SAME
+   * `recentTransactions` array, so an unscoped field leaks across screens.
+   */
+  transactionsError: TransactionsError | null;
   multiNetworkBalanceError: string | null;
   balance?: AccountBalance;
   recentTransactions: TransactionInfo[];
@@ -1288,10 +1320,11 @@ export const useWalletStore = create<WalletState>()(
                 error instanceof Error
                   ? error.message
                   : 'Failed to load transactions',
-              transactionsError:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to load transactions',
+              transactionsError: toTransactionsError(
+                error,
+                ALL_TRANSACTIONS_SCOPE,
+                'Failed to load transactions'
+              ),
               isTransactionsLoading: false,
             },
           },
@@ -1346,7 +1379,7 @@ export const useWalletStore = create<WalletState>()(
         );
 
         // Create asset key for pagination tracking
-        const assetKey = `${assetId}_${isArc200 ? 'arc200' : 'asa'}`;
+        const assetKey = assetTransactionsScope(assetId, isArc200);
 
         // Deduplicate transactions by ID (in case API returns duplicates)
         const uniqueTransactions = dedupeTransactions(result.transactions);
@@ -1380,10 +1413,11 @@ export const useWalletStore = create<WalletState>()(
                 error instanceof Error
                   ? error.message
                   : 'Failed to load asset transactions',
-              transactionsError:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to load asset transactions',
+              transactionsError: toTransactionsError(
+                error,
+                assetTransactionsScope(assetId, isArc200),
+                'Failed to load asset transactions'
+              ),
               isTransactionsLoading: false,
             },
           },
@@ -1401,7 +1435,7 @@ export const useWalletStore = create<WalletState>()(
         const accountState =
           accountStates[accountId] || createInitialAccountState();
 
-        const assetKey = `${assetId}_${isArc200 ? 'arc200' : 'asa'}`;
+        const assetKey = assetTransactionsScope(assetId, isArc200);
         const pagination = accountState.assetTransactionsPagination?.[assetKey];
 
         // Don't load more if already loading or no more data
@@ -1473,7 +1507,7 @@ export const useWalletStore = create<WalletState>()(
         });
       } catch (error) {
         const { accountStates } = get();
-        const assetKey = `${assetId}_${isArc200 ? 'arc200' : 'asa'}`;
+        const assetKey = assetTransactionsScope(assetId, isArc200);
         set({
           accountStates: {
             ...accountStates,
@@ -1481,10 +1515,11 @@ export const useWalletStore = create<WalletState>()(
               ...accountStates[accountId],
               // See loadMoreTransactions: a failed page is surfaced as a
               // retryable footer instead of silently ending pagination.
-              transactionsError:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to load more asset transactions',
+              transactionsError: toTransactionsError(
+                error,
+                assetKey,
+                'Failed to load more asset transactions'
+              ),
               assetTransactionsPagination: {
                 ...accountStates[accountId]?.assetTransactionsPagination,
                 [assetKey]: {
@@ -1570,10 +1605,11 @@ export const useWalletStore = create<WalletState>()(
                 error instanceof Error
                   ? error.message
                   : 'Failed to load all transactions',
-              transactionsError:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to load all transactions',
+              transactionsError: toTransactionsError(
+                error,
+                ALL_TRANSACTIONS_SCOPE,
+                'Failed to load all transactions'
+              ),
               isTransactionsLoading: false,
             },
           },
@@ -1659,10 +1695,11 @@ export const useWalletStore = create<WalletState>()(
               // error: the already-loaded page is still valid, only the next
               // page failed. Previously this was console-only, so pagination
               // just silently stopped.
-              transactionsError:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to load more transactions',
+              transactionsError: toTransactionsError(
+                error,
+                ALL_TRANSACTIONS_SCOPE,
+                'Failed to load more transactions'
+              ),
               transactionsPagination: {
                 hasMore: true,
                 ...accountStates[accountId]?.transactionsPagination,

@@ -16,6 +16,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { TransactionInfo } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
+  ALL_TRANSACTIONS_SCOPE,
   useActiveAccount,
   useAccountState,
   useWalletStore,
@@ -60,9 +61,14 @@ export default function TransactionHistoryScreen() {
   );
 
   const allTransactions = accountState.recentTransactions || [];
-  // Transaction-scoped, not the shared `lastError`: every other loader clears
-  // that field, so it cannot be trusted to mean "this list failed" (TASK-40).
-  const transactionsError = accountState.transactionsError;
+  // Not the shared `lastError` (every other loader clears it) and not any
+  // transaction error either — only an ACCOUNT-WIDE one. AssetDetailScreen
+  // writes asset-scoped failures into the same field, and rendering those here
+  // would blame the wrong list (TASK-40).
+  const transactionsError =
+    accountState.transactionsError?.scope === ALL_TRANSACTIONS_SCOPE
+      ? accountState.transactionsError.message
+      : null;
 
   useEffect(() => {
     if (activeAccount) {

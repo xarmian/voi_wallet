@@ -14,6 +14,7 @@
 const mockGetAccountBalance = jest.fn();
 const mockGetTransactionHistory = jest.fn();
 const mockGetAllTransactionHistory = jest.fn();
+const mockGetAssetTransactionHistory = jest.fn();
 const mockGetCurrentNetworkId = jest.fn(() => 'voi-mainnet');
 const mockGetAccount = jest.fn(async (id: string) => ({
   id,
@@ -29,6 +30,8 @@ jest.mock('@/services/network', () => ({
         mockGetTransactionHistory(...args),
       getAllTransactionHistory: (...args: unknown[]) =>
         mockGetAllTransactionHistory(...args),
+      getAssetTransactionHistory: (...args: unknown[]) =>
+        mockGetAssetTransactionHistory(...args),
       getCurrentNetworkId: () => mockGetCurrentNetworkId(),
     }),
   },
@@ -74,7 +77,11 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
-import { useWalletStore } from '../walletStore';
+import {
+  ALL_TRANSACTIONS_SCOPE,
+  assetTransactionsScope,
+  useWalletStore,
+} from '../walletStore';
 
 const accountState = (id: string) =>
   useWalletStore.getState().accountStates[id];
@@ -84,6 +91,7 @@ describe('operation-scoped account errors (TASK-40)', () => {
     mockGetAccountBalance.mockReset();
     mockGetTransactionHistory.mockReset();
     mockGetAllTransactionHistory.mockReset();
+    mockGetAssetTransactionHistory.mockReset();
     mockGetAccount.mockClear();
     mockGetCurrentNetworkId.mockReset();
     mockGetCurrentNetworkId.mockReturnValue('voi-mainnet');
@@ -104,7 +112,10 @@ describe('operation-scoped account errors (TASK-40)', () => {
 
     await useWalletStore.getState().loadAccountTransactions('acc-1');
 
-    expect(accountState('acc-1').transactionsError).toBe('indexer is down');
+    expect(accountState('acc-1').transactionsError).toEqual({
+      scope: ALL_TRANSACTIONS_SCOPE,
+      message: 'indexer is down',
+    });
     expect(accountState('acc-1').balanceError).toBeNull();
   });
 
@@ -114,12 +125,16 @@ describe('operation-scoped account errors (TASK-40)', () => {
     // landed, even though the history fetch had genuinely failed.
     mockGetAllTransactionHistory.mockRejectedValue(new Error('indexer 503'));
     await useWalletStore.getState().loadAllTransactions('acc-1');
-    expect(accountState('acc-1').transactionsError).toBe('indexer 503');
+    expect(accountState('acc-1').transactionsError?.message).toBe(
+      'indexer 503'
+    );
 
     mockGetAccountBalance.mockResolvedValue({});
     await useWalletStore.getState().loadAccountBalance('acc-1', true);
 
-    expect(accountState('acc-1').transactionsError).toBe('indexer 503');
+    expect(accountState('acc-1').transactionsError?.message).toBe(
+      'indexer 503'
+    );
     expect(accountState('acc-1').balanceError).toBeNull();
   });
 
@@ -128,7 +143,9 @@ describe('operation-scoped account errors (TASK-40)', () => {
       new Error('indexer 503')
     );
     await useWalletStore.getState().loadAllTransactions('acc-1');
-    expect(accountState('acc-1').transactionsError).toBe('indexer 503');
+    expect(accountState('acc-1').transactionsError?.message).toBe(
+      'indexer 503'
+    );
 
     mockGetAllTransactionHistory.mockResolvedValueOnce({
       transactions: [],
@@ -137,6 +154,23 @@ describe('operation-scoped account errors (TASK-40)', () => {
     await useWalletStore.getState().loadAllTransactions('acc-1');
 
     expect(accountState('acc-1').transactionsError).toBeNull();
+  });
+
+  it('tags an asset-history failure with the asset scope, not the account-wide one', async () => {
+    // Both loaders write into the SAME `recentTransactions` array and the same
+    // error field, so without a scope tag an asset failure would render as the
+    // full-history screen's failure (and vice versa).
+    mockGetAssetTransactionHistory.mockRejectedValue(new Error('asset 500'));
+
+    await useWalletStore.getState().loadAssetTransactions('acc-1', 42, false);
+
+    expect(accountState('acc-1').transactionsError).toEqual({
+      scope: assetTransactionsScope(42, false),
+      message: 'asset 500',
+    });
+    expect(accountState('acc-1').transactionsError?.scope).not.toBe(
+      ALL_TRANSACTIONS_SCOPE
+    );
   });
 
   it('clearAccountError clears every scoped field', async () => {
