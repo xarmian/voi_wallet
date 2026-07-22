@@ -468,6 +468,15 @@ export interface RemoteSignerRequiredErrorOptions {
  * returned `false` for an error thrown by the other, and callers fell through
  * to a generic failure path. It now lives here (the one module both signers
  * already import) and both call sites re-export it for compatibility.
+ *
+ * The constructor takes an OPTIONS OBJECT rather than preserving the two
+ * legacy positional signatures, and that is deliberate: they were mutually
+ * contradictory. `signingRouter` used `(accountAddress, signerDeviceId)` while
+ * `unifiedSigner` used `(message)`, so a single leading string means "an
+ * address" under one and "a user-facing message" under the other. No overload
+ * can disambiguate them, and guessing would either drop the address or print a
+ * bare address where a sentence belongs. Every construction site in the repo
+ * is updated and `tsc` covers all of them, so the change cannot fail silently.
  */
 export class RemoteSignerRequiredError extends AccountError {
   readonly accountAddress?: string;
