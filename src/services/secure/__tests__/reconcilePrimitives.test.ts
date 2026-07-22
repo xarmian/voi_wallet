@@ -59,6 +59,8 @@ import { secureStorage, storage } from '@/platform';
 import { AccountSecureStorage } from '../AccountSecureStorage';
 
 const SECRET_PREFIX = 'voi_account_secret_';
+const LEGACY_PREFIX = 'voi_account_';
+const WIPE_TOMBSTONE_KEY = 'voi_secure_wiped';
 const PENDING_CREATES_KEY = 'voi_pending_account_creates';
 const mockSecureGet = secureStorage.getItem as jest.Mock;
 
@@ -76,10 +78,49 @@ describe('probeSecretPresenceStrict', () => {
     ).resolves.toBe(true);
   });
 
-  it('resolves false for a genuinely absent secret', async () => {
+  it('resolves false for a genuinely absent secret (no primary, no legacy)', async () => {
     await expect(
       AccountSecureStorage.probeSecretPresenceStrict('missing')
     ).resolves.toBe(false);
+  });
+
+  // Codex P1: a live account whose key is still in LEGACY format (not yet
+  // migrated) has NO primary secret. The reader would migrate it on next access,
+  // so the probe MUST count it as present — else the reconcile prunes a real,
+  // fund-bearing account as a phantom.
+  it('resolves true when only a LEGACY secret exists (migratable, no tombstone)', async () => {
+    mockSecure.set(`${LEGACY_PREFIX}acc1`, JSON.stringify({ any: 'legacy' }));
+    await expect(
+      AccountSecureStorage.probeSecretPresenceStrict('acc1')
+    ).resolves.toBe(true);
+  });
+
+  // Mirrors migrateLegacyAccountDataLocked: a set wipe tombstone means a
+  // surviving legacy blob is intentionally dead and must NOT be resurrected.
+  it('resolves false for a legacy-only secret when the wipe tombstone is set', async () => {
+    mockSecure.set(`${LEGACY_PREFIX}acc1`, JSON.stringify({ any: 'legacy' }));
+    mockKv.set(WIPE_TOMBSTONE_KEY, '1');
+    await expect(
+      AccountSecureStorage.probeSecretPresenceStrict('acc1')
+    ).resolves.toBe(false);
+  });
+
+  it('short-circuits on a present primary — no legacy/tombstone read, no write', async () => {
+    mockSecure.set(`${SECRET_PREFIX}acc1`, JSON.stringify({ any: 'payload' }));
+    await AccountSecureStorage.probeSecretPresenceStrict('acc1');
+    // Exactly one secure getItem (the primary); tombstone/legacy never consulted.
+    expect(mockSecureGet).toHaveBeenCalledTimes(1);
+    expect(mockSecureGet).toHaveBeenCalledWith(`${SECRET_PREFIX}acc1`);
+    expect(storage.getItem).not.toHaveBeenCalled();
+    expect(secureStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('never migrates/writes even when it falls through to the legacy blob', async () => {
+    mockSecure.set(`${LEGACY_PREFIX}acc1`, JSON.stringify({ any: 'legacy' }));
+    await AccountSecureStorage.probeSecretPresenceStrict('acc1');
+    // Read-only probe: no secret write, no legacy delete (no migration).
+    expect(secureStorage.setItem).not.toHaveBeenCalled();
+    expect(secureStorage.deleteItem).not.toHaveBeenCalled();
   });
 
   it('PROPAGATES a read failure (fail closed, not false)', async () => {
@@ -95,14 +136,6 @@ describe('probeSecretPresenceStrict', () => {
     await expect(
       AccountSecureStorage.probeSecretPresenceStrict('acc1', 20)
     ).rejects.toThrow('timed out');
-  });
-
-  it('reads ONLY the primary key — no legacy fallback / migration write', async () => {
-    await AccountSecureStorage.probeSecretPresenceStrict('acc1');
-    // Exactly one getItem, for the primary secret key; no write anywhere.
-    expect(mockSecureGet).toHaveBeenCalledTimes(1);
-    expect(mockSecureGet).toHaveBeenCalledWith(`${SECRET_PREFIX}acc1`);
-    expect(secureStorage.setItem).not.toHaveBeenCalled();
   });
 });
 
@@ -127,6 +160,23 @@ describe('readPendingCreatesStrict', () => {
     await expect(
       AccountSecureStorage.readPendingCreatesStrict()
     ).rejects.toThrow('kv read failed');
+  });
+
+  // Codex P2: unlike the tolerant private reader, the STRICT read must fail
+  // closed on corrupt content rather than degrade to {} (which would hide a
+  // journal-only half-created secret from the reconcile).
+  it('THROWS on unparseable journal content (fail closed, not {})', async () => {
+    mockKv.set(PENDING_CREATES_KEY, '{not json');
+    await expect(
+      AccountSecureStorage.readPendingCreatesStrict()
+    ).rejects.toThrow();
+  });
+
+  it('THROWS on structurally-invalid journal (non-object)', async () => {
+    mockKv.set(PENDING_CREATES_KEY, JSON.stringify(['a', 'b']));
+    await expect(
+      AccountSecureStorage.readPendingCreatesStrict()
+    ).rejects.toThrow('not an object');
   });
 });
 

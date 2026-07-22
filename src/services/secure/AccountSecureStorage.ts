@@ -1252,44 +1252,88 @@ export class AccountSecureStorage {
   // ───────────────────────────────────────────────────────────────────────────
 
   /**
-   * STRICT presence probe for a single account's secret (TASK-222). Reads the
-   * PRIMARY secret key ONLY — no legacy fallback and no migration WRITE (unlike
-   * readSecretLocked, which folds/rewrites legacy blobs), so a boot probe never
-   * mutates the store it is inspecting. Resolves `true` if the primary secret is
-   * present, `false` for genuine absence, and PROPAGATES a read failure/timeout
-   * (the caller aborts the whole destructive pass on any throw). Needs no unlock
-   * — it inspects presence, never decrypts. Bounded so a wedged keychain read
-   * cannot stall boot: a hang becomes a rejection the reconcile treats as "read
-   * failed → abort", NOT as "absent".
+   * STRICT presence probe for a single account's secret (TASK-222). Answers "is
+   * this account's key RETRIEVABLE?" with the SAME semantics as the real reader
+   * (readSecretLocked → migrateLegacyAccountDataLocked), but READ-ONLY — it never
+   * performs the migration write, so a boot probe never mutates the store it is
+   * inspecting. Mirroring the reader is load-bearing: the reader treats a missing
+   * PRIMARY secret as a reason to migrate a still-present LEGACY `voi_account_<id>`
+   * blob, so a live, not-yet-migrated account has NO primary secret yet. Probing
+   * the primary key alone would misclassify such an account as a phantom and
+   * prune it — losing funds (Codex P1). Presence is therefore:
+   *   primary present                          → true
+   *   primary absent, wipe tombstone SET       → false  (migration bails; the
+   *                                                       secret is intentionally
+   *                                                       dead — mirrors :1030)
+   *   primary absent, no tombstone, legacy blob → true   (live + migratable)
+   *   otherwise                                → false  (genuine absence)
+   * PROPAGATES a read failure/timeout so the caller aborts the whole destructive
+   * pass on any throw. Needs no unlock — it inspects presence, never decrypts.
+   * Bounded so a wedged keychain read cannot stall boot.
    */
   static async probeSecretPresenceStrict(
     accountId: string,
     timeoutMs: number = 1500
   ): Promise<boolean> {
-    const raw = await this.withTimeout(
+    const primary = await this.withTimeout(
       secureStorage.getItem(this.secretKey(accountId)),
       timeoutMs,
       'secret presence probe'
     );
-    return raw != null;
+    if (primary != null) {
+      return true;
+    }
+    // Primary absent: mirror migrateLegacyAccountDataLocked. A set wipe tombstone
+    // means a legacy blob is intentionally dead (never resurrected) → absent.
+    const wiped = await this.withTimeout(
+      storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY),
+      timeoutMs,
+      'wipe tombstone probe'
+    );
+    if (wiped != null) {
+      return false;
+    }
+    // No tombstone: a surviving legacy `voi_account_<id>` blob is a LIVE key the
+    // reader would migrate on next access — count it as present (do NOT migrate).
+    const legacy = await this.withTimeout(
+      secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
+      timeoutMs,
+      'legacy secret presence probe'
+    );
+    return legacy != null;
   }
 
   /**
-   * STRICT read of the durable pending-creation journal (TASK-222). Public
-   * sibling of readPendingCreateJournal for the boot reconcile. A `storage`
-   * read failure PROPAGATES (fail closed); only a structurally-malformed value
-   * degrades to `{}` (the private reader already tolerates bad JSON, and a
-   * corrupt journal is not a reason to abort a repair). Bounded so a wedged read
+   * STRICT read of the durable pending-creation journal (TASK-222). Unlike the
+   * tolerant private readPendingCreateJournal (which degrades bad JSON to `{}` —
+   * a safe default on the WRITE paths), this FAILS CLOSED for the reconcile: a
+   * storage read failure OR structurally-malformed content (unparseable, or a
+   * non-object) PROPAGATES, so a corrupt journal aborts the destructive pass
+   * rather than silently hiding a journal-only half-created secret from repair
+   * (Codex P2). Resolves `{}` only for genuine absence. Bounded so a wedged read
    * cannot stall boot.
    */
   static async readPendingCreatesStrict(
     timeoutMs: number = 1500
   ): Promise<Record<string, string>> {
-    return this.withTimeout(
-      this.readPendingCreateJournal(),
+    const raw = await this.withTimeout(
+      storage.getItem(this.PENDING_CREATES_KEY),
       timeoutMs,
       'pending-creation journal read'
     );
+    if (raw == null) {
+      return {};
+    }
+    // Throw (not swallow) on corruption so the reconcile fails closed.
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error('Corrupt pending-creation journal: not an object');
+    }
+    return parsed as Record<string, string>;
   }
 
   /**
