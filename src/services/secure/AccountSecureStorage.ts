@@ -2012,13 +2012,31 @@ export class AccountSecureStorage {
     const primary = await storage.getItem(this.METADATA_LIST_KEY);
     if (primary) {
       // A corrupt list throws here → propagates → reconcile aborts (fail closed).
-      return JSON.parse(primary) as string[];
+      return this.parseAccountListStrict(primary);
     }
     const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
     if (legacy) {
-      return JSON.parse(legacy) as string[];
+      return this.parseAccountListStrict(legacy);
     }
     return [];
+  }
+
+  /**
+   * Parse + STRUCTURALLY VALIDATE an account-id list for the strict read. A list
+   * that is valid JSON but not a string[] (e.g. `"id"`, `{}`, or `[1,2]`) is
+   * CORRUPTION, not data — returning it unchecked would spread non-ids (a bare
+   * string spreads into per-character candidate ids) into the reconcile's
+   * destructive classification (Codex P2). Throw so the reconcile fails closed.
+   */
+  private static parseAccountListStrict(raw: string): string[] {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every((id) => typeof id === 'string')
+    ) {
+      throw new Error('Corrupt account list: not an array of strings');
+    }
+    return parsed as string[];
   }
 
   private static async encryptPrivateKey(

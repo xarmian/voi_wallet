@@ -234,6 +234,23 @@ describe('readAccountListStrict', () => {
       AccountSecureStorage.readAccountListStrict()
     ).rejects.toThrow();
   });
+
+  // Codex P2: valid JSON that is not a string[] is corruption — returning it
+  // would spread non-ids (a bare string spreads per-character) into the
+  // reconcile's destructive classification. Must throw (fail closed).
+  it('THROWS on valid JSON that is not an array (e.g. a bare string)', async () => {
+    mockKv.set(METADATA_LIST_KEY, JSON.stringify('abc'));
+    await expect(AccountSecureStorage.readAccountListStrict()).rejects.toThrow(
+      'not an array of strings'
+    );
+  });
+
+  it('THROWS on an array containing non-string entries', async () => {
+    mockKv.set(METADATA_LIST_KEY, JSON.stringify(['a', 2, 'c']));
+    await expect(AccountSecureStorage.readAccountListStrict()).rejects.toThrow(
+      'not an array of strings'
+    );
+  });
 });
 
 describe('dropPendingCreateEntries', () => {
