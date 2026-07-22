@@ -13,3 +13,7 @@ export { ExtensionBiometricAdapter, extensionBiometrics } from './biometrics';
 export { ExtensionDeviceIdAdapter, extensionDeviceId } from './deviceId';
 export { ExtensionClipboardAdapter, extensionClipboard } from './clipboard';
 export { ExtensionAlertAdapter, extensionAlert } from './alert';
+export {
+  ExtensionConnectivityAdapter,
+  extensionConnectivity,
+} from './connectivity';

@@ -52,7 +52,22 @@ import { realtimeService } from '@/services/realtime';
 // Account-specific state for UI
 interface AccountUIState {
   isLoading: boolean;
+  /**
+   * Most recent failure for this account, whatever the operation. Kept as the
+   * coarse "something went wrong here" signal.
+   */
   lastError: string | null;
+  /**
+   * Operation-scoped failures (TASK-40 / U-03). `lastError` alone cannot drive
+   * a per-surface error state: every loader clears it on start, so a balance
+   * refresh would erase a transaction-load failure and the transaction list
+   * would silently fall back to its "No Transactions" empty state — exactly the
+   * indistinguishable-from-empty defect being fixed. Each surface therefore
+   * reads its own field.
+   */
+  balanceError: string | null;
+  transactionsError: string | null;
+  multiNetworkBalanceError: string | null;
   balance?: AccountBalance;
   recentTransactions: TransactionInfo[];
   isBalanceLoading: boolean;
@@ -223,6 +238,9 @@ interface WalletState {
 const createInitialAccountState = (): AccountUIState => ({
   isLoading: false,
   lastError: null,
+  balanceError: null,
+  transactionsError: null,
+  multiNetworkBalanceError: null,
   recentTransactions: [],
   isBalanceLoading: false,
   isBackgroundRefreshing: false,
@@ -1070,6 +1088,7 @@ export const useWalletStore = create<WalletState>()(
                 isBalanceLoading: shouldShowLoading,
                 isBackgroundRefreshing: shouldShowBackgroundRefresh,
                 lastError: null,
+                balanceError: null,
               },
             },
           });
@@ -1188,6 +1207,10 @@ export const useWalletStore = create<WalletState>()(
                   error instanceof Error
                     ? error.message
                     : 'Failed to load balance',
+                balanceError:
+                  error instanceof Error
+                    ? error.message
+                    : 'Failed to load balance',
                 isBalanceLoading: false,
                 isBackgroundRefreshing: false,
               },
@@ -1233,6 +1256,7 @@ export const useWalletStore = create<WalletState>()(
               ...accountState,
               isTransactionsLoading: true,
               lastError: null,
+              transactionsError: null,
             },
           },
         });
@@ -1261,6 +1285,10 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...accountStates[accountId],
               lastError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load transactions',
+              transactionsError:
                 error instanceof Error
                   ? error.message
                   : 'Failed to load transactions',
@@ -1303,6 +1331,7 @@ export const useWalletStore = create<WalletState>()(
               ...accountState,
               isTransactionsLoading: true,
               lastError: null,
+              transactionsError: null,
             },
           },
         });
@@ -1351,6 +1380,10 @@ export const useWalletStore = create<WalletState>()(
                 error instanceof Error
                   ? error.message
                   : 'Failed to load asset transactions',
+              transactionsError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load asset transactions',
               isTransactionsLoading: false,
             },
           },
@@ -1385,6 +1418,7 @@ export const useWalletStore = create<WalletState>()(
             ...accountStates,
             [accountId]: {
               ...accountState,
+              transactionsError: null,
               assetTransactionsPagination: {
                 ...accountState.assetTransactionsPagination,
                 [assetKey]: {
@@ -1445,6 +1479,12 @@ export const useWalletStore = create<WalletState>()(
             ...accountStates,
             [accountId]: {
               ...accountStates[accountId],
+              // See loadMoreTransactions: a failed page is surfaced as a
+              // retryable footer instead of silently ending pagination.
+              transactionsError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load more asset transactions',
               assetTransactionsPagination: {
                 ...accountStates[accountId]?.assetTransactionsPagination,
                 [assetKey]: {
@@ -1491,6 +1531,7 @@ export const useWalletStore = create<WalletState>()(
               ...accountState,
               isTransactionsLoading: true,
               lastError: null,
+              transactionsError: null,
             },
           },
         });
@@ -1529,6 +1570,10 @@ export const useWalletStore = create<WalletState>()(
                 error instanceof Error
                   ? error.message
                   : 'Failed to load all transactions',
+              transactionsError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load all transactions',
               isTransactionsLoading: false,
             },
           },
@@ -1559,6 +1604,7 @@ export const useWalletStore = create<WalletState>()(
             ...accountStates,
             [accountId]: {
               ...accountState,
+              transactionsError: null,
               transactionsPagination: {
                 ...accountState.transactionsPagination,
                 isLoadingMore: true,
@@ -1609,6 +1655,14 @@ export const useWalletStore = create<WalletState>()(
             ...accountStates,
             [accountId]: {
               ...accountStates[accountId],
+              // Surfaced as a retryable list footer rather than a whole-screen
+              // error: the already-loaded page is still valid, only the next
+              // page failed. Previously this was console-only, so pagination
+              // just silently stopped.
+              transactionsError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load more transactions',
               transactionsPagination: {
                 hasMore: true,
                 ...accountStates[accountId]?.transactionsPagination,
@@ -1678,6 +1732,7 @@ export const useWalletStore = create<WalletState>()(
             updatedAccountStates[accountId] = {
               ...currentState,
               lastError: error,
+              balanceError: error,
               isBalanceLoading: false,
               isBackgroundRefreshing: false,
             };
@@ -1690,6 +1745,7 @@ export const useWalletStore = create<WalletState>()(
               isBackgroundRefreshing: false,
               balanceLastUpdated: now,
               lastError: null,
+              balanceError: null,
             };
 
             // Collect rekey updates for later processing
@@ -2319,6 +2375,7 @@ export const useWalletStore = create<WalletState>()(
               ...accountState,
               isMultiNetworkBalanceLoading: shouldShowLoading,
               lastError: null,
+              multiNetworkBalanceError: null,
             },
           },
         });
@@ -2364,6 +2421,10 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...accountState,
               lastError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to load multi-network balance',
+              multiNetworkBalanceError:
                 error instanceof Error
                   ? error.message
                   : 'Failed to load multi-network balance',
@@ -2516,7 +2577,13 @@ export const useWalletStore = create<WalletState>()(
         set({
           accountStates: {
             ...accountStates,
-            [accountId]: { ...accountStates[accountId], lastError: null },
+            [accountId]: {
+              ...accountStates[accountId],
+              lastError: null,
+              balanceError: null,
+              transactionsError: null,
+              multiNetworkBalanceError: null,
+            },
           },
         });
       }
@@ -2677,6 +2744,9 @@ const EMPTY_SIGNABLE_ACCOUNTS: (
 const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   isLoading: false,
   lastError: null,
+  balanceError: null,
+  transactionsError: null,
+  multiNetworkBalanceError: null,
   recentTransactions: [],
   isBalanceLoading: false,
   isBackgroundRefreshing: false,
@@ -2841,7 +2911,9 @@ export const useAccountBalance = (accountId: string) =>
       balance: accountState.balance,
       isLoading: accountState.isBalanceLoading,
       isBackgroundRefreshing: accountState.isBackgroundRefreshing,
-      error: accountState.lastError,
+      // Balance-scoped (TASK-40): `lastError` is clobbered by every other
+      // loader, so it cannot drive a balance error state.
+      error: accountState.balanceError,
       reload: reloadFunction,
     });
 
@@ -2910,7 +2982,7 @@ export const useActiveAccountBalance = () =>
         balance: accountState.balance,
         isLoading: accountState.isBalanceLoading,
         isBackgroundRefreshing: accountState.isBackgroundRefreshing,
-        error: accountState.lastError,
+        error: accountState.balanceError,
         reload: activeAccountReloadFunction,
       });
     }
@@ -2929,6 +3001,7 @@ export const clearWalletUICache = () => {
   balanceReloadFunctions.clear();
   envoiNameCache.clear();
   multiNetworkBalanceCache.clear();
+  multiNetworkReloadFunctions.clear();
 
   // Reset active account cache
   lastActiveAccountId = undefined;
@@ -3061,9 +3134,15 @@ const multiNetworkBalanceCache = new Map<
       balance: MultiNetworkBalance | undefined;
       isLoading: boolean;
       lastUpdated: number;
+      error: string | null;
+      reload: () => Promise<void>;
     };
   }
 >();
+
+// Stable reload functions for the multi-network balance, keyed by account, so
+// the hook result keeps a stable identity across renders.
+const multiNetworkReloadFunctions = new Map<string, () => Promise<void>>();
 
 export const useMultiNetworkBalance = (accountId: string) =>
   useWalletStore((state) => {
@@ -3075,11 +3154,21 @@ export const useMultiNetworkBalance = (accountId: string) =>
       return cached.result;
     }
 
+    let reloadFunction = multiNetworkReloadFunctions.get(accountId);
+    if (!reloadFunction) {
+      reloadFunction = () => state.loadMultiNetworkBalance(accountId, true);
+      multiNetworkReloadFunctions.set(accountId, reloadFunction);
+    }
+
     // Create new result and cache it
     const result = {
       balance: accountState?.multiNetworkBalance,
       isLoading: accountState?.isMultiNetworkBalanceLoading ?? false,
       lastUpdated: accountState?.multiNetworkBalanceLastUpdated ?? 0,
+      // TASK-40: this hook previously had no error field at all, so a failed
+      // aggregate-balance load was indistinguishable from an empty wallet.
+      error: accountState?.multiNetworkBalanceError ?? null,
+      reload: reloadFunction,
     } as const;
 
     multiNetworkBalanceCache.set(accountId, { accountState, result });

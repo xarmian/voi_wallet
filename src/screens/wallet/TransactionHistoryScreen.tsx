@@ -27,6 +27,7 @@ import { serializeTransactionForNavigation } from '@/utils/navigationParams';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { ListEmptyState } from '@/components/common/ListEmptyState';
 import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetwork } from '@/store/networkStore';
@@ -57,6 +58,11 @@ export default function TransactionHistoryScreen() {
   const assetMetadataCache = useWalletStore(
     (state) => state.assetMetadataCache
   );
+
+  const allTransactions = accountState.recentTransactions || [];
+  // Transaction-scoped, not the shared `lastError`: every other loader clears
+  // that field, so it cannot be trusted to mean "this list failed" (TASK-40).
+  const transactionsError = accountState.transactionsError;
 
   useEffect(() => {
     if (activeAccount) {
@@ -94,7 +100,9 @@ export default function TransactionHistoryScreen() {
     // transaction list reference hasn't changed (cache is network-scoped).
   }, [accountState.recentTransactions, loadAssetMetadata, currentNetwork]);
 
-  const loadTransactions = async () => {
+  // Stable identity: it is a dependency of the memoized empty/error component,
+  // and an unstable one would remount that subtree on every render.
+  const loadTransactions = useCallback(async () => {
     if (!activeAccount) return;
 
     try {
@@ -102,7 +110,7 @@ export default function TransactionHistoryScreen() {
     } catch (error) {
       console.error('Failed to load transaction history:', error);
     }
-  };
+  }, [activeAccount, loadAllTransactions]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -234,18 +242,53 @@ export default function TransactionHistoryScreen() {
     ]
   );
 
-  const renderFooter = useCallback(
-    () => (
+  const renderFooter = useCallback(() => {
+    // A page that failed to load used to just stop pagination silently.
+    if (transactionsError && allTransactions.length > 0) {
+      return (
+        <ErrorStateView
+          variant="inline"
+          error={transactionsError}
+          fallbackMessage="Couldn't load more transactions."
+          onRetry={handleLoadMore}
+          style={styles.footerError}
+          testID="transactions-footer-error"
+        />
+      );
+    }
+
+    return (
       <ListFooterSpinner
         visible={!!accountState.transactionsPagination?.isLoadingMore}
         text="Loading more transactions..."
       />
-    ),
-    [accountState.transactionsPagination?.isLoadingMore]
-  );
+    );
+  }, [
+    accountState.transactionsPagination?.isLoadingMore,
+    transactionsError,
+    allTransactions.length,
+    handleLoadMore,
+    styles.footerError,
+  ]);
 
-  const renderEmptyState = useCallback(
-    () => (
+  // The core audit finding (U-03): a FAILED fetch used to fall through to the
+  // "No Transactions" empty state, which is indistinguishable from a genuinely
+  // empty account and reads as lost history. An error must look like an error
+  // and must offer a retry.
+  const renderEmptyState = useCallback(() => {
+    if (transactionsError) {
+      return (
+        <ErrorStateView
+          error={transactionsError}
+          fallbackMessage="Couldn't load your transaction history."
+          onRetry={loadTransactions}
+          style={styles.emptyContainer}
+          testID="transactions-error"
+        />
+      );
+    }
+
+    return (
       <ListEmptyState
         icon="receipt-outline"
         iconColor={styles.emptyIcon.color}
@@ -253,16 +296,18 @@ export default function TransactionHistoryScreen() {
         subtitle="Your transaction history will appear here when you start using your wallet."
         style={styles.emptyContainer}
       />
-    ),
-    [styles.emptyContainer, styles.emptyIcon.color]
-  );
+    );
+  }, [
+    transactionsError,
+    loadTransactions,
+    styles.emptyContainer,
+    styles.emptyIcon.color,
+  ]);
 
   const keyExtractor = useCallback(
     (item: TransactionInfo, index: number) => `${item.id}-${index}`,
     []
   );
-
-  const allTransactions = accountState.recentTransactions || [];
 
   if (!activeAccount) {
     return (
@@ -398,5 +443,9 @@ const createStyles = (theme: Theme) =>
     },
     emptyIcon: {
       color: theme.colors.textSecondary,
+    },
+    footerError: {
+      marginHorizontal: theme.spacing.md,
+      marginVertical: theme.spacing.sm,
     },
   });

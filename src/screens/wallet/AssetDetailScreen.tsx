@@ -47,6 +47,7 @@ import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { GlassCard } from '@/components/common/GlassCard';
 import { ListEmptyState } from '@/components/common/ListEmptyState';
 import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SwapService } from '@/services/swap';
@@ -86,17 +87,15 @@ export default function AssetDetailScreen() {
     : currentNetworkConfig;
 
   const { updateActivity } = useAuth();
-  const loadAllTransactions = useWalletStore(
-    (state) => state.loadAllTransactions
-  );
+  // NOTE: `loadAllTransactions` / `loadMoreTransactions` used to be selected
+  // here too. They were left behind by the FlatList conversion (TASK-39) and
+  // were never called — dead store subscriptions that re-rendered the screen
+  // for nothing. This screen paginates via `loadMoreAssetTransactions`.
   const loadAssetTransactions = useWalletStore(
     (state) => state.loadAssetTransactions
   );
   const loadMoreAssetTransactions = useWalletStore(
     (state) => state.loadMoreAssetTransactions
-  );
-  const loadMoreTransactions = useWalletStore(
-    (state) => state.loadMoreTransactions
   );
   const loadMultiNetworkBalance = useWalletStore(
     (state) => state.loadMultiNetworkBalance
@@ -207,6 +206,10 @@ export default function AssetDetailScreen() {
     useState<TransactionInfo[]>([]);
   const [isLoadingNetworkTransactions, setIsLoadingNetworkTransactions] =
     useState(false);
+  // The networkId path fetches outside the store, so it needs its own error
+  // slot; without it a failure rendered as an empty list (TASK-40 / U-03).
+  const [networkTransactionsError, setNetworkTransactionsError] =
+    useState<unknown>(null);
 
   useEffect(() => {
     if (!networkId) {
@@ -375,50 +378,65 @@ export default function AssetDetailScreen() {
     return undefined;
   }, [networkId, isMultiNetworkView, multiNetworkBalance, mappingId, assetId]);
 
-  useEffect(() => {
-    const loadTransactions = async () => {
-      try {
-        // Determine if this is an ARC-200 token
-        const asset = effectiveBalance?.assets?.find(
-          (a) =>
-            a.assetId === assetId ||
-            (a.assetType === 'arc200' && a.contractId === assetId)
-        );
-        const isArc200 = asset?.assetType === 'arc200';
+  const loadTransactions = React.useCallback(async () => {
+    try {
+      // Determine if this is an ARC-200 token
+      const asset = effectiveBalance?.assets?.find(
+        (a) =>
+          a.assetId === assetId ||
+          (a.assetType === 'arc200' && a.contractId === assetId)
+      );
+      const isArc200 = asset?.assetType === 'arc200';
 
-        // If networkId is provided, fetch transactions from that specific network
-        if (networkId && currentAccount) {
-          setIsLoadingNetworkTransactions(true);
-          try {
-            const networkService = NetworkService.getInstance(
-              networkId as NetworkId
-            );
-            const result = await networkService.getAssetTransactionHistory(
-              currentAccount.address,
-              assetId,
-              isArc200
-            );
-            setNetworkSpecificTransactions(
-              dedupeTransactions(result.transactions)
-            );
-          } catch (error) {
-            console.error(
-              `Failed to load transactions from ${networkId}:`,
-              error
-            );
-            setNetworkSpecificTransactions([]);
-          } finally {
-            setIsLoadingNetworkTransactions(false);
-          }
-        } else {
-          // Use wallet store for current network
-          await loadAssetTransactions(accountId, assetId, isArc200);
+      // If networkId is provided, fetch transactions from that specific network
+      if (networkId && currentAccount) {
+        setIsLoadingNetworkTransactions(true);
+        setNetworkTransactionsError(null);
+        try {
+          const networkService = NetworkService.getInstance(
+            networkId as NetworkId
+          );
+          const result = await networkService.getAssetTransactionHistory(
+            currentAccount.address,
+            assetId,
+            isArc200
+          );
+          setNetworkSpecificTransactions(
+            dedupeTransactions(result.transactions)
+          );
+          setNetworkTransactionsError(null);
+        } catch (error) {
+          console.error(
+            `Failed to load transactions from ${networkId}:`,
+            error
+          );
+          // Clear the list: this path also runs on a network switch, and
+          // leaving the previous network's rows up would attribute them to the
+          // wrong chain. The error state (not the empty state) is what renders
+          // for the now-empty list, so the failure is still explicit.
+          setNetworkSpecificTransactions([]);
+          setNetworkTransactionsError(error);
+        } finally {
+          setIsLoadingNetworkTransactions(false);
         }
-      } catch (error) {
-        console.error('Failed to load transactions:', error);
+      } else {
+        // Use wallet store for current network (records its own error)
+        await loadAssetTransactions(accountId, assetId, isArc200);
       }
-    };
+    } catch (error) {
+      console.error('Failed to load transactions:', error);
+      setNetworkTransactionsError(error);
+    }
+  }, [
+    accountId,
+    assetId,
+    effectiveBalance,
+    networkId,
+    currentAccount,
+    loadAssetTransactions,
+  ]);
 
+  useEffect(() => {
     loadTransactions();
     updateActivity();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -460,11 +478,13 @@ export default function AssetDetailScreen() {
             setNetworkSpecificTransactions(
               dedupeTransactions(result.transactions)
             );
+            setNetworkTransactionsError(null);
           } catch (error) {
             console.error(
               `Failed to refresh transactions from ${networkId}:`,
               error
             );
+            setNetworkTransactionsError(error);
           }
         })()
       );
@@ -853,6 +873,22 @@ export default function AssetDetailScreen() {
     });
   }, [assetId, accountId, pagination, isArc200, loadMoreAssetTransactions]);
 
+  // The networkId path fetches outside the store and keeps its own error; the
+  // default path reads the account's transaction-scoped error.
+  const transactionsError = networkId
+    ? networkTransactionsError
+    : accountState.transactionsError;
+
+  // Only the store path paginates. On the networkId path the whole list is one
+  // fetch, so "try again" means reloading it.
+  const retryMoreTransactions = React.useCallback(() => {
+    if (networkId) {
+      void loadTransactions();
+    } else {
+      handleLoadMore();
+    }
+  }, [networkId, loadTransactions, handleLoadMore]);
+
   // Index-suffixed for the same reason as TransactionHistoryScreen: indexer
   // payloads can repeat an id, and duplicate keys drop rows from a FlatList.
   const keyExtractor = React.useCallback(
@@ -1207,26 +1243,59 @@ export default function AssetDetailScreen() {
   // All assets now use assetTransactionsPagination (including native VOI).
   // Memoized: an unstable component identity makes VirtualizedList remount the
   // footer/empty subtree on every render.
-  const renderListFooter = React.useCallback(
-    () => (
+  const renderListFooter = React.useCallback(() => {
+    // A failed next page used to end pagination silently.
+    if (transactionsError && filteredTransactions.length > 0) {
+      return (
+        <ErrorStateView
+          variant="inline"
+          error={transactionsError}
+          fallbackMessage="Couldn't load more transactions."
+          onRetry={retryMoreTransactions}
+          style={styles.transactionsFooterError}
+          testID="asset-transactions-footer-error"
+        />
+      );
+    }
+
+    return (
       <ListFooterSpinner
         visible={!!pagination?.hasMore && !!pagination?.isLoadingMore}
       />
-    ),
-    [pagination?.hasMore, pagination?.isLoadingMore]
-  );
+    );
+  }, [
+    pagination?.hasMore,
+    pagination?.isLoadingMore,
+    transactionsError,
+    filteredTransactions.length,
+    retryMoreTransactions,
+    styles.transactionsFooterError,
+  ]);
 
-  const renderListEmpty = React.useCallback(
-    () => (
+  // Never render the "no transactions yet" empty state for a FAILED fetch —
+  // it is indistinguishable from an asset with no activity (TASK-40 / U-03).
+  const renderListEmpty = React.useCallback(() => {
+    if (transactionsError) {
+      return (
+        <ErrorStateView
+          error={transactionsError}
+          fallbackMessage="Couldn't load transactions for this asset."
+          onRetry={loadTransactions}
+          style={styles.emptyTransactions}
+          testID="asset-transactions-error"
+        />
+      );
+    }
+
+    return (
       <ListEmptyState
         icon="receipt-outline"
         title="No transactions yet"
         subtitle="Transactions for this asset will appear here when they occur."
         style={styles.emptyTransactions}
       />
-    ),
-    [styles.emptyTransactions]
-  );
+    );
+  }, [transactionsError, loadTransactions, styles.emptyTransactions]);
 
   return (
     <NFTBackground>
@@ -1449,6 +1518,9 @@ const createStyles = (theme: Theme) =>
     },
     emptyTransactions: {
       paddingVertical: theme.spacing.xl,
+    },
+    transactionsFooterError: {
+      marginVertical: theme.spacing.sm,
     },
     transactionItem: {
       padding: theme.spacing.lg,

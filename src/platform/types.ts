@@ -170,6 +170,41 @@ export interface AlertAdapter {
   alert(title: string, message?: string): void;
 }
 
+// Connectivity Adapter Interface
+/**
+ * Normalized connectivity snapshot.
+ *
+ * The two platform sources report different things, so the shape is the
+ * intersection of what both can honestly answer:
+ *  - mobile (`@react-native-community/netinfo`) knows both whether an
+ *    interface is up AND whether the internet is actually reachable;
+ *  - extension/web (`navigator.onLine`) only knows whether an interface is up.
+ */
+export interface ConnectivityState {
+  /** A network interface is up. Does NOT imply the internet is reachable. */
+  isConnected: boolean;
+  /**
+   * Whether the internet is actually reachable, or `null` when the platform
+   * cannot determine it. NetInfo reports `null` until its first reachability
+   * probe settles; `navigator.onLine` can never answer this, so the
+   * extension/web adapter always reports `null` rather than guessing.
+   */
+  isInternetReachable: boolean | null;
+  /** Coarse transport label, e.g. 'wifi' | 'cellular' | 'none' | 'unknown'. */
+  type: string;
+}
+
+export interface ConnectivityAdapter {
+  /** Read the current connectivity snapshot. */
+  getState(): Promise<ConnectivityState>;
+  /**
+   * Subscribe to connectivity changes. Returns an unsubscribe function.
+   * Implementations must invoke the listener on every transition, and must
+   * tolerate being unsubscribed more than once.
+   */
+  subscribe(listener: (state: ConnectivityState) => void): () => void;
+}
+
 // Platform capabilities check
 export interface PlatformCapabilities {
   hasBiometrics: boolean;

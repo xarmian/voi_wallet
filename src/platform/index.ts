@@ -23,6 +23,8 @@ import type {
   DeviceIdAdapter,
   ClipboardAdapter,
   AlertAdapter,
+  ConnectivityAdapter,
+  ConnectivityState,
 } from './types';
 
 export * from './types';
@@ -36,6 +38,7 @@ let _biometrics: BiometricAdapter | null = null;
 let _deviceId: DeviceIdAdapter | null = null;
 let _clipboard: ClipboardAdapter | null = null;
 let _alert: AlertAdapter | null = null;
+let _connectivity: ConnectivityAdapter | null = null;
 
 /**
  * Get the crypto adapter for the current platform
@@ -147,6 +150,26 @@ export function getAlert(): AlertAdapter {
     }
   }
   return _alert!;
+}
+
+/**
+ * Get the connectivity adapter for the current platform
+ *
+ * Mobile resolves to NetInfo (a native module); extension/web resolves to the
+ * browser `navigator.onLine` implementation, so the native module never enters
+ * the web bundle (PLAN-12 DR-7).
+ */
+export function getConnectivity(): ConnectivityAdapter {
+  if (!_connectivity) {
+    if (isMobile()) {
+      const { mobileConnectivity } = require('./mobile/connectivity');
+      _connectivity = mobileConnectivity;
+    } else {
+      const { extensionConnectivity } = require('./extension/connectivity');
+      _connectivity = extensionConnectivity;
+    }
+  }
+  return _connectivity!;
 }
 
 // Convenience exports for direct access (use getter functions for lazy loading)
@@ -282,6 +305,28 @@ export const alert = {
 };
 
 /**
+ * Platform-specific connectivity
+ */
+export const connectivity = {
+  getState: (): Promise<ConnectivityState> => getConnectivity().getState(),
+  subscribe: (listener: (state: ConnectivityState) => void): (() => void) =>
+    getConnectivity().subscribe(listener),
+};
+
+/**
+ * True when the snapshot means "the user cannot reach the network".
+ *
+ * `isInternetReachable` is authoritative when the platform can answer it;
+ * `null` (unknown — NetInfo before its first probe, or any browser) falls back
+ * to the interface flag. Kept here rather than in each consumer so the mobile
+ * and extension targets agree on what "offline" means.
+ */
+export function isOffline(state: ConnectivityState): boolean {
+  if (state.isInternetReachable !== null) return !state.isInternetReachable;
+  return !state.isConnected;
+}
+
+/**
  * Reset all cached adapters (for testing)
  */
 export function resetAdapters(): void {
@@ -292,4 +337,5 @@ export function resetAdapters(): void {
   _deviceId = null;
   _clipboard = null;
   _alert = null;
+  _connectivity = null;
 }
