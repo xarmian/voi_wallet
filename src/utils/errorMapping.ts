@@ -145,13 +145,34 @@ export interface MapErrorOptions {
 
 const REDACTED = '[redacted]';
 
+/** Separator between a secret's label and its value: `:`, `=` or ` is `. */
+const LABEL_SEPARATOR = String.raw`["']?\s*(?::|=|\bis\b)\s*["']?\s*`;
+
 /**
- * `label: value` / `label=value` for anything that names key material.
- * Deliberately greedy on the label side so `secret key`, `private-key`,
- * `seed phrase` etc. all match.
+ * A labelled WORD LIST — `mnemonic: abandon ability able …`.
+ *
+ * This MUST consume the whole run of words, not just the first token. An
+ * earlier version stopped at one `\S+`, which left 11 of a 12-word phrase
+ * intact and practically recoverable from a details expander. The value side
+ * therefore matches one-or-more BIP-39-shaped words (3-8 letters).
  */
-const LABELLED_SECRET_RE =
-  /\b(mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|seed|private[\s_-]?key|privkey|secret[\s_-]?key|secretkey|passphrase|password|passcode|\bpin\b)\b\s*(?:is|:|=)\s*\S+/gi;
+const LABELLED_PHRASE_RE = new RegExp(
+  String.raw`\b(mnemonic(?:[\s_-]?phrase)?|recovery[\s_-]?phrase|seed(?:[\s_-]?phrase)?|backup[\s_-]?phrase)\b` +
+    LABEL_SEPARATOR +
+    String.raw`(?:[a-z]{3,8}(?:[ \t]+|["',]|$))+`,
+  'gi'
+);
+
+/**
+ * A labelled SINGLE-TOKEN secret — `privateKey=…`, `pin: 482913`. Runs after
+ * the phrase rule so a hex/base64-encoded mnemonic or seed is still caught.
+ */
+const LABELLED_SECRET_RE = new RegExp(
+  String.raw`\b(private[\s_-]?key|privkey|secret[\s_-]?key|secretkey|passphrase|password|passcode|pin|mnemonic|seed)\b` +
+    LABEL_SEPARATOR +
+    String.raw`\S+`,
+  'gi'
+);
 
 /** 64+ hex chars — an Ed25519 secret key, a seed, or a raw key blob. */
 const LONG_HEX_RE = /\b[0-9a-fA-F]{64,}\b/g;
@@ -160,12 +181,15 @@ const LONG_HEX_RE = /\b[0-9a-fA-F]{64,}\b/g;
 const LONG_BASE64_RE = /[A-Za-z0-9+/]{60,}={0,2}/g;
 
 /**
- * A run of 12+ consecutive short lowercase words — the shape of a BIP-39 /
- * Algorand mnemonic (all words are 3-8 lowercase letters). Real error prose
- * essentially never produces 12 unbroken words in that alphabet, and erring
- * toward over-redaction is correct here.
+ * A run of 8+ consecutive short lowercase words with no label at all — the
+ * shape of a BIP-39 / Algorand mnemonic (every word is 3-8 lowercase letters).
+ *
+ * 8 rather than 12 so a partially-quoted or truncated phrase is still caught.
+ * Real error prose almost never produces 8 unbroken words in that alphabet,
+ * because ordinary English is full of 1-2 letter words (a, to, is, of, in, it)
+ * that break the run — and over-redaction is the correct direction to err.
  */
-const MNEMONIC_RUN_RE = /\b(?:[a-z]{3,8}[ \t]+){11,}[a-z]{3,8}\b/g;
+const MNEMONIC_RUN_RE = /\b(?:[a-z]{3,8}[ \t]+){7,}[a-z]{3,8}\b/g;
 
 /** Markup, so an HTML error page can never be pasted into an alert body. */
 const HTML_TAG_RE = /<[^>]*>/g;
@@ -175,13 +199,14 @@ const HTML_DOC_RE = /<!doctype html|<html[\s>]/i;
  * Strip anything that could be key material from a string before it reaches a
  * user-facing surface, a log, or a crash report.
  *
- * Order matters: labelled secrets are removed first (so `mnemonic: abandon
- * abandon …` collapses to one token), then raw high-entropy blobs, then bare
- * mnemonic-shaped word runs.
+ * Order matters: labelled word lists first (they consume a whole phrase),
+ * then labelled single tokens, then bare mnemonic-shaped runs, then raw
+ * high-entropy blobs.
  */
 export function redactSecrets(input: string): string {
   if (!input) return '';
   return input
+    .replace(LABELLED_PHRASE_RE, (_m, label: string) => `${label}: ${REDACTED}`)
     .replace(LABELLED_SECRET_RE, (_m, label: string) => `${label}: ${REDACTED}`)
     .replace(MNEMONIC_RUN_RE, REDACTED)
     .replace(LONG_HEX_RE, REDACTED)

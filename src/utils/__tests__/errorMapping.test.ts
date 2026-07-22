@@ -82,10 +82,63 @@ describe('redactSecrets — key material never reaches a user-facing string', ()
     expect(out).toContain('at step 3');
   });
 
-  it('removes a labelled mnemonic even when it is short', () => {
-    const out = redactSecrets('mnemonic: abandon ability able about');
-    expect(out).not.toContain('abandon');
+  /**
+   * Regression: an earlier version consumed only the FIRST token after the
+   * label, so `mnemonic: <12 words>` leaked 11 of them — practically enough to
+   * recover the phrase. Every word must go, not just the first.
+   */
+  it.each([
+    ['4 words', 'mnemonic: abandon ability able about'],
+    [
+      '12 words',
+      'mnemonic: abandon ability able about above absent absorb abstract absurd abuse access accident',
+    ],
+    ['seed phrase label', 'seed phrase = abandon ability able about'],
+    ['recovery phrase label', 'recovery phrase: abandon ability able about'],
+    [
+      'json shape',
+      'unexpected token in {"mnemonic":"abandon ability able about"}',
+    ],
+    ['is separator', 'the mnemonic is abandon ability able about'],
+  ])('removes EVERY word of a labelled phrase (%s)', (_label, input) => {
+    const out = redactSecrets(input);
+
+    for (const word of [
+      'abandon',
+      'ability',
+      'able',
+      'about',
+      'above',
+      'absent',
+      'absorb',
+      'abstract',
+      'absurd',
+      'abuse',
+      'access',
+      'accident',
+    ]) {
+      expect(out).not.toContain(word);
+    }
     expect(out).toContain('[redacted]');
+  });
+
+  it('catches a bare 8-word phrase fragment with no label', () => {
+    const out = redactSecrets(
+      'restore failed: abandon ability able about above absent absorb abstract'
+    );
+    expect(out).not.toContain('abandon');
+    expect(out).not.toContain('abstract');
+    expect(out).toContain('[redacted]');
+  });
+
+  it('does not mangle a legitimate message that merely names a secret', () => {
+    // No separator after the label, so nothing is consumed.
+    expect(redactSecrets('Invalid mnemonic phrase')).toBe(
+      'Invalid mnemonic phrase'
+    );
+    expect(redactSecrets('PIN required to access private key')).toBe(
+      'PIN required to access private key'
+    );
   });
 
   it.each([
