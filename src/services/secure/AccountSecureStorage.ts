@@ -32,6 +32,8 @@ import {
   AccountRetrievalError,
   AccountNotFoundError,
   AuthenticationRequiredError,
+  ResetRacedError,
+  DuplicatePendingCreateError,
 } from '../../types/wallet';
 import {
   KeyEnvelopeV2,
@@ -199,6 +201,47 @@ export class AccountSecureStorage {
   private static readonly DEVICE_ID_KEY = 'voi_device_installation_id';
   private static readonly PIN_TIMEOUT_KEY = 'voi_pin_timeout_setting';
   private static readonly PIN_THROTTLE_KEY = 'voi_pin_throttle';
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // TASK-220: cross-store (secret ↔ wallet-metadata) reset hardening. READ THE
+  // DECISION RECORD (DOC-221) BEFORE CHANGING. Mirrors the wallet-metadata
+  // store's TASK-212 mechanism on the secure-key side, which had NO durable
+  // guard of its own (only the in-memory keyMutationChain mutex).
+  //
+  //   - secureResetGeneration: in-memory monotonic counter bumped SYNCHRONOUSLY
+  //     at clearAll() entry (before the mutex), so it is synchronous with the
+  //     reset REQUEST. A creation captures it before its secret write; the write
+  //     (storeAccountForCreation) and the later wallet-metadata write are both
+  //     skipped/aborted if it advanced — the discriminator that fires in the
+  //     clearAll()→clearAllWallets() window (the wallet epoch bumps only in
+  //     clearAllWallets, too late for the secure side).
+  //   - SECURE_WIPE_TOMBSTONE_KEY: durable "secrets were intentionally wiped"
+  //     marker. Set by clearAll before its destructive removals; makes
+  //     migrateLegacyAccountDataLocked REFUSE to resurrect a wiped secret from a
+  //     surviving legacy blob (incl. across a restart, when the in-memory
+  //     generation is gone). STICKY: once set by a reset it is never cleared, so
+  //     a surviving legacy blob for ANY old id can never be resurrected. A new
+  //     account writes its primary secret directly (never migrates), so a
+  //     permanent tombstone blocks nothing legitimate.
+  //   - PENDING_CREATES_KEY: durable intent journal { [accountId]: token }
+  //     written BEFORE the secret so an in-flight/crashed creation's secret is
+  //     enumerable even before it reaches any index (the account list is written
+  //     AFTER the secret). Drained by clearAll (a reset deletes journaled
+  //     in-flight secrets too) and consulted by boot reconcile (TASK-222). The
+  //     token records per-attempt OWNERSHIP so a raced attempt's rollback only
+  //     deletes the secret IT wrote, never a later same-id attempt's.
+  //
+  // Concurrency: storeAccountForCreation / commitPendingCreate /
+  // deleteAccountIfAttemptMatches acquire the key-mutation mutex around the
+  // whole compose (journal + secret/tombstone); clearAll already holds it. The
+  // journal/tombstone helpers below are PLAIN AsyncStorage ops (no mutex) so
+  // they compose safely inside either — never call a mutex-acquiring method from
+  // inside clearAll (non-reentrant chain → deadlock).
+  // ───────────────────────────────────────────────────────────────────────────
+  private static readonly SECURE_WIPE_TOMBSTONE_KEY = 'voi_secure_wiped';
+  private static readonly PENDING_CREATES_KEY = 'voi_pending_account_creates';
+  private static secureResetGeneration = 0;
+  private static pendingCreateTokenCounter = 0;
 
   // In-memory promise-chain mutex serializing the throttle read-modify-write so
   // concurrent verifyPin calls (e.g. batch signing) can never lose an
@@ -975,6 +1018,20 @@ export class AccountSecureStorage {
     accountId: string
   ): Promise<PersistedAccountMetadata | null> {
     try {
+      // TASK-220: refuse to resurrect a secret from a surviving legacy blob while
+      // the durable wipe tombstone is set. A full reset deletes account secrets
+      // then leaves this marker; without the bail, the next readMetadata/
+      // getPrivateKey miss would re-migrate a legacy `voi_account_<id>` copy and
+      // undo the wipe (incl. across a restart, when secureResetGeneration is 0
+      // again). The marker is STICKY — never cleared in production (see
+      // commitPendingCreate) — so a surviving legacy blob for ANY old id stays
+      // dead after a wipe. Migration only fires when the PRIMARY secret is absent,
+      // so this never blocks a freshly written real secret.
+      const wiped = await storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY);
+      if (wiped != null) {
+        return null;
+      }
+
       const legacyKey = `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`;
       const legacyData = await secureStorage.getItem(legacyKey);
       if (!legacyData) {
@@ -1023,61 +1080,224 @@ export class AccountSecureStorage {
     // secret payload AND the account-list mutation — so a store can never
     // interleave with a setupPin/changePin rewrap enumeration+commit. See the
     // keyMutationChain comment above.
+    return this.runKeyMutationExclusive(() =>
+      this.storeAccountLocked(account, privateKey)
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // TASK-220 cross-store creation protocol. READ DOC-221 BEFORE CHANGING.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** Current in-memory secure reset generation (bumped by clearAll). A creation
+   *  captures this before its secret write and guards both stores on it. */
+  static getResetGeneration(): number {
+    return this.secureResetGeneration;
+  }
+
+  /** Mint a per-attempt ownership token. In-memory monotonic counter — ownership
+   *  only needs to be unique among LIVE attempts in one process; a crashed
+   *  attempt's journal entry is reconciled by id at boot (TASK-222). */
+  private static nextPendingCreateToken(): string {
+    this.pendingCreateTokenCounter += 1;
+    return `t${this.pendingCreateTokenCounter}`;
+  }
+
+  /** Read the durable pending-creation journal. PLAIN storage op (no mutex) —
+   *  callers hold the key-mutation mutex around any read-modify-write. */
+  private static async readPendingCreateJournal(): Promise<
+    Record<string, string>
+  > {
+    const raw = await storage.getItem(this.PENDING_CREATES_KEY);
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object'
+        ? (parsed as Record<string, string>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** Write (or clear) the durable pending-creation journal. PLAIN storage op. */
+  private static async writePendingCreateJournal(
+    journal: Record<string, string>
+  ): Promise<void> {
+    if (Object.keys(journal).length === 0) {
+      await storage.removeItem(this.PENDING_CREATES_KEY);
+      return;
+    }
+    await storage.setItem(this.PENDING_CREATES_KEY, JSON.stringify(journal));
+  }
+
+  /**
+   * Atomic guarded secret write for a NEW STANDARD account (TASK-220). In ONE
+   * key-mutation-mutex task: (1) abort if a reset advanced the generation since
+   * the creation began (reset wins); (2) reject a duplicate pending id (another
+   * attempt owns it — prevents an earlier attempt's rollback deleting a later
+   * attempt's secret); (3) record the ownership token in the durable journal
+   * BEFORE writing the secret; (4) write the secret + secure metadata. Because
+   * the generation check and the secret write share one mutex task, no clearAll
+   * can interleave between them — either this sees the reset (writes nothing) or
+   * clearAll sees the journal entry and deletes the secret.
+   *
+   * Returns the ownership token to pass to commitPendingCreate (on success) or
+   * deleteAccountIfAttemptMatches (on rollback). Throws ResetRacedError or
+   * DuplicatePendingCreateError WITHOUT persisting anything.
+   */
+  static async storeAccountForCreation(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number
+  ): Promise<string> {
     return this.runKeyMutationExclusive(async () => {
-      try {
-        const hasPin = await this.hasPin();
-        const lastAccessed = new Date().toISOString();
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      const journal = await this.readPendingCreateJournal();
+      if (journal[account.id] !== undefined) {
+        throw new DuplicatePendingCreateError();
+      }
+      const token = this.nextPendingCreateToken();
+      journal[account.id] = token;
+      await this.writePendingCreateJournal(journal);
+      await this.storeAccountLocked(account, privateKey);
+      return token;
+    });
+  }
 
-        const metadata: PersistedAccountMetadata = {
-          accountId: account.id,
-          address: account.address,
-          type: account.type,
-          publicData: {
-            publicKey: account.publicKey,
-            label: account.label || '',
-            color: account.color || '#000000',
-            createdAt: account.createdAt,
-            importedAt: account.importedAt,
-            avatarUrl: account.avatarUrl,
-            avatarUpdatedAt: account.avatarUpdatedAt,
-          },
-          authMethod: hasPin ? 'pin' : 'biometric',
-          lastAccessed,
-        };
+  /**
+   * Generation-guarded write for a NON-SECRET account record (watch / rekeyed /
+   * ledger / remote-signer) created during restore (TASK-220, Codex diff-review
+   * P2). No secret exists to orphan or journal, but the write must still ABORT
+   * (ResetRacedError) if a reset raced the restore so it does not leave a secure
+   * account-metadata/list record behind after the wipe. The generation check and
+   * the write share one mutex task, so no clearAll can interleave.
+   */
+  static async storeAccountMetadataForCreation(
+    account: AccountMetadata,
+    creationGen: number
+  ): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      await this.storeAccountLocked(account);
+    });
+  }
 
-        // Encrypt and store private key for Standard accounts.
-        //
-        // ALWAYS write the legacy device-key (Format A) envelope — NEVER v2 here
-        // (Codex P1-2). A device-key blob is PIN-independent and can be read back
-        // regardless of the PIN/vault state, so a newly-stored account can never
-        // be stranded under an obsolete/mismatched vault secret (the entire
-        // "wrapped under a secret the credential can't reproduce" class). New
-        // accounts are upgraded to the user-secret v2 envelope by setupPin /
-        // changePin (which enumerate + re-wrap them) or by the PR5 migration
-        // engine. The global key-mutation mutex (held here) still serializes this
-        // write against any concurrent rewrap, so a store during a changePin is
-        // ordered either fully before the enumeration (→ re-wrapped) or fully
-        // after the commit (→ stays device-readable, upgraded on the next
-        // enumerate). Either way the key is readable — never lost (P1-B).
-        if (account.type === AccountType.STANDARD && privateKey) {
-          const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
-          await this.saveSecret(account.id, {
-            accountId: account.id,
-            encryptedPrivateKey,
-            authMethod: metadata.authMethod,
-          });
-        } else {
-          await this.saveSecret(account.id, null);
-        }
-
-        // Store metadata for quick access
-        await this.storeAccountMetadata(metadata);
-      } catch (error) {
-        throw new AccountStorageError(
-          `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
+  /**
+   * Commit a pending creation AFTER its wallet-metadata write succeeded: drop the
+   * journal entry (iff still ours).
+   *
+   * The secure wipe tombstone is intentionally NOT cleared here — it is STICKY
+   * after an explicit reset (Codex diff-review P1). Clearing it on a new creation
+   * would re-enable migrateLegacyAccountDataLocked and let a SURVIVING legacy
+   * `voi_account_<otherId>` blob — one whose best-effort legacy delete failed at
+   * wipe time, for a DIFFERENT old id — resurrect its secret. Unlike the single
+   * wallet-metadata blob (whose tombstone TASK-212 clears on the one primary
+   * write), the secure store holds many per-account secrets, so one new account's
+   * write proves nothing about other ids. A freshly created/restored account
+   * writes its PRIMARY secret directly and never needs migration, so a permanent
+   * tombstone blocks nothing legitimate; nothing writes legacy-format secrets
+   * anymore (they are read-only for one-time migration). Net: once a device has
+   * been wiped, pre-wipe secrets can never be resurrected.
+   */
+  static async commitPendingCreate(
+    accountId: string,
+    token: string
+  ): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      const journal = await this.readPendingCreateJournal();
+      if (journal[accountId] === token) {
+        delete journal[accountId];
+        await this.writePendingCreateJournal(journal);
       }
     });
+  }
+
+  /**
+   * Ownership-safe rollback of a raced creation's secret (TASK-220 / DR-2): delete
+   * the secret + metadata ONLY if the journal still records THIS attempt's token
+   * for the id. A no-op if a reset already drained the journal (secret already
+   * gone) or a later attempt now owns the id — so an earlier raced attempt can
+   * never delete a legitimately-recreated same-id account.
+   */
+  static async deleteAccountIfAttemptMatches(
+    accountId: string,
+    token: string
+  ): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      const journal = await this.readPendingCreateJournal();
+      if (journal[accountId] !== token) {
+        return;
+      }
+      await this.deleteAccountLocked(accountId);
+      delete journal[accountId];
+      await this.writePendingCreateJournal(journal);
+    });
+  }
+
+  /** The body of storeAccount, assuming the key-mutation mutex is HELD. Shared by
+   *  storeAccount (public wrapper) and storeAccountForCreation. */
+  private static async storeAccountLocked(
+    account: AccountMetadata,
+    privateKey?: Uint8Array
+  ): Promise<void> {
+    try {
+      const hasPin = await this.hasPin();
+      const lastAccessed = new Date().toISOString();
+
+      const metadata: PersistedAccountMetadata = {
+        accountId: account.id,
+        address: account.address,
+        type: account.type,
+        publicData: {
+          publicKey: account.publicKey,
+          label: account.label || '',
+          color: account.color || '#000000',
+          createdAt: account.createdAt,
+          importedAt: account.importedAt,
+          avatarUrl: account.avatarUrl,
+          avatarUpdatedAt: account.avatarUpdatedAt,
+        },
+        authMethod: hasPin ? 'pin' : 'biometric',
+        lastAccessed,
+      };
+
+      // Encrypt and store private key for Standard accounts.
+      //
+      // ALWAYS write the legacy device-key (Format A) envelope — NEVER v2 here
+      // (Codex P1-2). A device-key blob is PIN-independent and can be read back
+      // regardless of the PIN/vault state, so a newly-stored account can never
+      // be stranded under an obsolete/mismatched vault secret (the entire
+      // "wrapped under a secret the credential can't reproduce" class). New
+      // accounts are upgraded to the user-secret v2 envelope by setupPin /
+      // changePin (which enumerate + re-wrap them) or by the PR5 migration
+      // engine. The global key-mutation mutex (held here) still serializes this
+      // write against any concurrent rewrap, so a store during a changePin is
+      // ordered either fully before the enumeration (→ re-wrapped) or fully
+      // after the commit (→ stays device-readable, upgraded on the next
+      // enumerate). Either way the key is readable — never lost (P1-B).
+      if (account.type === AccountType.STANDARD && privateKey) {
+        const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
+        await this.saveSecret(account.id, {
+          accountId: account.id,
+          encryptedPrivateKey,
+          authMethod: metadata.authMethod,
+        });
+      } else {
+        await this.saveSecret(account.id, null);
+      }
+
+      // Store metadata for quick access
+      await this.storeAccountMetadata(metadata);
+    } catch (error) {
+      throw new AccountStorageError(
+        `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   static async retrieveAccount(accountId: string): Promise<AccountMetadata> {
@@ -1151,6 +1371,12 @@ export class AccountSecureStorage {
     pin?: string
   ): Promise<Uint8Array> {
     const cacheKey = `${accountId}-${pin || 'biometric'}`;
+    // TASK-220: the reset generation at read start. A full reset (clearAll) bumps
+    // it synchronously and zeroes the in-memory key cache; if it advances while
+    // this read is in flight, we must NOT repopulate the cache with a key derived
+    // from a now-wiped secret (that would revive a key a "delete everything" just
+    // removed, for up to the 60 s TTL).
+    const readGen = this.secureResetGeneration;
 
     // Periodically clean up expired entries
     if (Math.random() < 0.1) {
@@ -1376,7 +1602,18 @@ export class AccountSecureStorage {
           throw new VaultLockedError();
         }
 
-        // Cache the key for subsequent calls (60-second TTL)
+        // TASK-220: a full reset (clearAll) during any await of this read wiped the
+        // persisted secret this key derives from and zeroed the in-memory cache.
+        // Abort (zero + throw) — mirroring the vault-lock abort above — so an
+        // in-flight pre-reset signing read never RETURNS or re-caches a key a
+        // "delete everything" just removed. In normal operation the generation
+        // never advances mid-read, so signing is unaffected.
+        if (this.secureResetGeneration !== readGen) {
+          privateKey.fill(0);
+          throw new ResetRacedError();
+        }
+
+        // Cache the key for subsequent calls (60-second TTL).
         this.privateKeyCache.set(cacheKey, {
           key: new Uint8Array(privateKey), // Store a copy
           timestamp: Date.now(),
@@ -1420,7 +1657,10 @@ export class AccountSecureStorage {
           error instanceof AccountRetrievalError ||
           // Vault locked mid-derivation (Codex P1-D): surface as-is so the caller
           // re-auths rather than treating it as a generic retrieval failure.
-          error instanceof VaultLockedError
+          error instanceof VaultLockedError ||
+          // TASK-220: reset raced this read — surface as-is so signing aborts
+          // cleanly rather than reporting a generic retrieval failure.
+          error instanceof ResetRacedError
         ) {
           throw error;
         }
@@ -3228,18 +3468,46 @@ export class AccountSecureStorage {
   }
 
   static async clearAll(): Promise<void> {
+    // TASK-220: bump the secure reset generation SYNCHRONOUSLY here, BEFORE
+    // acquiring the mutex, so it is synchronous with the reset REQUEST (a
+    // concurrent creation that has already captured the old generation is then
+    // reliably aborted, even if the mutex is momentarily busy). Mirrors
+    // clearAllWallets bumping walletResetEpoch at its entry (TASK-212).
+    this.secureResetGeneration += 1;
+    // TASK-220: zero the in-memory private-key cache NOW (synchronously) so a full
+    // wipe can't leave a decrypted key readable from cache after the persisted
+    // secret is gone. Paired with the generation guard on the cache write in
+    // getPrivateKey, an in-flight pre-reset read can't repopulate it either.
+    this.clearPrivateKeyCache();
     // Full wipe deletes account key material → hold the GLOBAL key-mutation
     // mutex across the whole thing (P1-1a) so it can't interleave with a rewrap
     // or a store. Uses deleteAccountLocked (already inside the mutex — never
     // re-acquire, which would deadlock the promise-chain lock).
     return this.runKeyMutationExclusive(async () => {
       try {
-        const accountIds = await this.getAllAccountIds();
+        // TASK-220: set the durable wipe tombstone FIRST, before any destructive
+        // removal — if the app dies mid-wipe we are left tombstone-set (legacy
+        // resurrection blocked) rather than secrets-gone-without-a-marker. A
+        // committed creation/restore clears it later.
+        await storage.setItem(this.SECURE_WIPE_TOMBSTONE_KEY, '1');
 
-        // Delete all accounts
-        for (const accountId of accountIds) {
+        // TASK-220: drain the pending-creation journal — an in-flight creation
+        // may have written a secret that is not yet in the account list (the
+        // list is written AFTER the secret), so deleting only listed ids would
+        // leave that secret orphaned. Union the journaled ids with the account
+        // list and delete every one, then clear the journal.
+        const journal = await this.readPendingCreateJournal();
+        const listedIds = await this.getAllAccountIds();
+        const idsToDelete = new Set<string>([
+          ...listedIds,
+          ...Object.keys(journal),
+        ]);
+
+        // Delete all accounts (listed + in-flight-journaled)
+        for (const accountId of idsToDelete) {
           await this.deleteAccountLocked(accountId);
         }
+        await this.writePendingCreateJournal({});
 
         // Clear PIN and settings from general storage
         // NOTE: DEVICE_ID_KEY is intentionally NOT cleared - it's used for key derivation

@@ -20,6 +20,17 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
     clearAll: jest.fn(async () => {
       order.push('clearAll');
     }),
+    // TASK-220: STANDARD restore now writes the key via the guarded atomic
+    // storeAccountForCreation (returns an ownership token); non-secret types
+    // still use storeAccount. The breadcrumb-ordering invariant (mark BEFORE any
+    // key-bearing write) is unchanged.
+    getResetGeneration: jest.fn(() => 0),
+    storeAccountForCreation: jest.fn(async () => {
+      order.push('storeAccount');
+      return 'token-1';
+    }),
+    commitPendingCreate: jest.fn(async () => {}),
+    deleteAccountIfAttemptMatches: jest.fn(async () => {}),
     storeAccount: jest.fn(async () => {
       order.push('storeAccount');
     }),

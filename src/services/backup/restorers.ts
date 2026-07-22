@@ -19,6 +19,7 @@ import {
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
+  ResetRacedError,
   Wallet,
   withDefaultAuthLevel,
 } from '@/types/wallet';
@@ -168,6 +169,16 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
     return counts;
   }
 
+  // TASK-220: this runs AFTER performFullRestore's clearAllData() (restore's own
+  // reset). Capture the secure reset generation now so the whole restore —
+  // per-account secret writes AND the final wallet-metadata commit — is atomic
+  // against ANOTHER full reset racing the restore: on such a race every write
+  // aborts (ResetRacedError) and the STANDARD secrets already written are rolled
+  // back (ownership-checked), so the racing reset wins with no orphaned key or
+  // resurrected wallet (DR-2).
+  const creationGen = AccountSecureStorage.getResetGeneration();
+  const pendingCreates: { id: string; token: string }[] = [];
+
   try {
     const restoredAccounts: (
       | StandardAccountMetadata
@@ -215,14 +226,20 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             hasBackup: backupAccount.hasBackup || true, // Restored = backed up
           };
 
-          // Store account securely (this encrypts the private key)
-          await AccountSecureStorage.storeAccount(
-            standardAccount,
-            algoAccount.sk
-          );
-
-          // Clear secret key from memory
-          algoAccount.sk.fill(0);
+          // Store account securely (this encrypts the private key). TASK-220:
+          // the guarded atomic write journals ownership + aborts if a reset
+          // raced; the token lets us roll back precisely this secret.
+          try {
+            const token = await AccountSecureStorage.storeAccountForCreation(
+              standardAccount,
+              algoAccount.sk,
+              creationGen
+            );
+            pendingCreates.push({ id: standardAccount.id, token });
+          } finally {
+            // Clear secret key from memory regardless of outcome.
+            algoAccount.sk.fill(0);
+          }
 
           restoredAccounts.push(standardAccount);
           counts.standard++;
@@ -246,7 +263,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             notes: backupAccount.notes,
           };
 
-          await AccountSecureStorage.storeAccount(watchAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            watchAccount,
+            creationGen
+          );
           restoredAccounts.push(watchAccount);
           counts.watch++;
           counts.total++;
@@ -272,7 +292,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             rekeyedFrom: backupAccount.rekeyedFrom,
           };
 
-          await AccountSecureStorage.storeAccount(rekeyedAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            rekeyedAccount,
+            creationGen
+          );
           restoredAccounts.push(rekeyedAccount);
           counts.rekeyed++;
           counts.total++;
@@ -299,7 +322,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             deviceName: backupAccount.deviceName,
           };
 
-          await AccountSecureStorage.storeAccount(ledgerAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            ledgerAccount,
+            creationGen
+          );
           restoredAccounts.push(ledgerAccount);
           counts.ledger++;
           counts.total++;
@@ -343,7 +369,10 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             authLevel: withDefaultAuthLevel(backupAccount.authLevel),
           };
 
-          await AccountSecureStorage.storeAccount(remoteSignerAccount);
+          await AccountSecureStorage.storeAccountMetadataForCreation(
+            remoteSignerAccount,
+            creationGen
+          );
           restoredAccounts.push(remoteSignerAccount);
           counts.remoteSigner++;
           counts.total++;
@@ -382,11 +411,31 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
       // TASK-111: route through the sanitizing wrapper instead of a raw
       // storage.setItem so any per-account mnemonic is stripped before
       // persistence and legacy secure-store copies are cleared.
-      await MultiAccountWalletService.persistRestoredWallet(wallet);
+      // TASK-220: generation-guarded so a reset racing the restore aborts this
+      // commit (ResetRacedError) instead of resurrecting the wallet.
+      await MultiAccountWalletService.persistRestoredWallet(
+        wallet,
+        creationGen
+      );
+    }
+
+    // TASK-220: metadata committed — finalize each STANDARD secret (drop its
+    // pending-creation journal entry). The secure wipe tombstone stays sticky.
+    for (const p of pendingCreates) {
+      await AccountSecureStorage.commitPendingCreate(p.id, p.token);
     }
 
     return counts;
   } catch (error) {
+    // TASK-220 DR-2: a reset raced the restore → roll back precisely the STANDARD
+    // secrets this attempt wrote (ownership-checked; a no-op for ones the reset
+    // already deleted), then surface the race so restore reports cleanly.
+    if (error instanceof ResetRacedError) {
+      for (const p of pendingCreates) {
+        await AccountSecureStorage.deleteAccountIfAttemptMatches(p.id, p.token);
+      }
+      throw error;
+    }
     throw new BackupError(
       `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'RESTORE_FAILED'
