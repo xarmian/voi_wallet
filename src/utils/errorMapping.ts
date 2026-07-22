@@ -155,11 +155,17 @@ const LABEL_SEPARATOR = String.raw`["']?\s*(?::|=|\bis\b)\s*["']?\s*`;
  * earlier version stopped at one `\S+`, which left 11 of a 12-word phrase
  * intact and practically recoverable from a details expander. The value side
  * therefore matches one-or-more BIP-39-shaped words (3-8 letters).
+ *
+ * Each word ends at whitespace OR at a lookahead for any non-letter — so a
+ * phrase terminated by punctuation (`… able.`, `… able)`, `… able";`) has its
+ * LAST word consumed too, without swallowing the punctuation itself. An
+ * enumerated terminator set missed those, leaving one word visible that the
+ * bare-run matcher could no longer catch on its own.
  */
 const LABELLED_PHRASE_RE = new RegExp(
   String.raw`\b(mnemonic(?:[\s_-]?phrase)?|recovery[\s_-]?phrase|seed(?:[\s_-]?phrase)?|backup[\s_-]?phrase)\b` +
     LABEL_SEPARATOR +
-    String.raw`(?:[a-z]{3,8}(?:[ \t]+|["',]|$))+`,
+    String.raw`(?:[a-z]{3,8}(?:[ \t]+|(?=[^a-z]|$)))+`,
   'gi'
 );
 

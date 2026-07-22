@@ -100,6 +100,13 @@ describe('redactSecrets — key material never reaches a user-facing string', ()
       'unexpected token in {"mnemonic":"abandon ability able about"}',
     ],
     ['is separator', 'the mnemonic is abandon ability able about'],
+    // Terminal punctuation: the LAST word must go too. An enumerated
+    // terminator set left `about.` visible, and a lone trailing word is short
+    // enough that the bare-run matcher could no longer catch it.
+    ['trailing period', 'mnemonic: abandon ability able about.'],
+    ['trailing paren', 'restore failed (mnemonic: abandon ability able about)'],
+    ['trailing semicolon', 'mnemonic="abandon ability able about";'],
+    ['trailing exclamation', 'mnemonic: abandon ability able about!'],
   ])('removes EVERY word of a labelled phrase (%s)', (_label, input) => {
     const out = redactSecrets(input);
 
