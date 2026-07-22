@@ -114,6 +114,30 @@ it('THROWS on a structurally-corrupt blob (accounts not an array)', async () => 
   ).rejects.toThrow('not an array');
 });
 
+it('THROWS on a STANDARD account with a non-string id (corruption, not data)', async () => {
+  // Raw strict read — no heal pass — so a non-string id is corruption that must
+  // not become a reconcile candidate. Fail closed.
+  mockStore[WALLET_KEY] = JSON.stringify({
+    id: 'w1',
+    version: '1',
+    createdAt: '',
+    accounts: [
+      {
+        id: 42,
+        address: 'ADDR',
+        publicKey: 'PUB',
+        type: 'standard',
+        isHidden: false,
+      },
+    ],
+    activeAccountId: '',
+    settings: {},
+  });
+  await expect(
+    MultiAccountWalletService.getStandardAccountIdsStrict()
+  ).rejects.toThrow('non-string id');
+});
+
 it('does not write or migrate (pure read)', async () => {
   mockStore[WALLET_KEY] = blob([{ id: 's1', type: 'standard' }]);
   await MultiAccountWalletService.getStandardAccountIdsStrict();

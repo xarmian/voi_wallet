@@ -1327,7 +1327,9 @@ export class AccountSecureStorage {
     if (raw == null) {
       return {};
     }
-    // Throw (not swallow) on corruption so the reconcile fails closed.
+    // Throw (not swallow) on corruption so the reconcile fails closed. Validate
+    // the full declared shape: a non-null, non-array object whose values are all
+    // strings (the per-attempt tokens). Keys are always strings from JSON.
     const parsed = JSON.parse(raw) as unknown;
     if (
       parsed === null ||
@@ -1335,6 +1337,15 @@ export class AccountSecureStorage {
       Array.isArray(parsed)
     ) {
       throw new Error('Corrupt pending-creation journal: not an object');
+    }
+    if (
+      !Object.values(parsed as Record<string, unknown>).every(
+        (token) => typeof token === 'string'
+      )
+    ) {
+      throw new Error(
+        'Corrupt pending-creation journal: non-string token value'
+      );
     }
     return parsed as Record<string, string>;
   }

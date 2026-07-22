@@ -182,6 +182,13 @@ describe('readPendingCreatesStrict', () => {
     ).rejects.toThrow();
   });
 
+  it('THROWS on a journal with a non-string token value', async () => {
+    mockKv.set(PENDING_CREATES_KEY, JSON.stringify({ a: 't1', b: 5 }));
+    await expect(
+      AccountSecureStorage.readPendingCreatesStrict()
+    ).rejects.toThrow('non-string token value');
+  });
+
   it('THROWS on structurally-invalid journal (non-object)', async () => {
     mockKv.set(PENDING_CREATES_KEY, JSON.stringify(['a', 'b']));
     await expect(

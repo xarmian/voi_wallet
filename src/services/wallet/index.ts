@@ -2038,9 +2038,19 @@ export class MultiAccountWalletService {
         'Corrupt wallet blob: `accounts` is present but not an array'
       );
     }
-    return parsed.accounts
+    const standardIds = parsed.accounts
       .filter((acc) => acc?.type === AccountType.STANDARD)
       .map((acc) => acc.id);
+    // This is a RAW strict read (no heal/validate pass like getCurrentWallet), so
+    // a STANDARD account with a non-string id is CORRUPTION — feeding it to the
+    // reconcile as a candidate id would drive destructive classification on bad
+    // data. Throw so the reconcile fails closed (Codex).
+    if (!standardIds.every((id) => typeof id === 'string')) {
+      throw new Error(
+        'Corrupt wallet blob: STANDARD account with a non-string id'
+      );
+    }
+    return standardIds;
   }
 
   /**
