@@ -29,7 +29,11 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import { TransactionInfo, AssetBalance } from '@/types/wallet';
+import {
+  TransactionInfo,
+  AssetBalance,
+  needsBackupVerification,
+} from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
@@ -81,6 +85,7 @@ import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
+import BackupWarningBanner from '@/components/wallet/BackupWarningBanner';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { toErrorAlert } from '@/utils/errorMapping';
@@ -1061,6 +1066,21 @@ export default function HomeScreen() {
   }, [activeAccount?.address, fetchApprovals]);
 
   // Navigate to claimable tokens screen
+  // TASK-45 / DR-10: the warning is driven by the persisted `backupVerified`
+  // flag via needsBackupVerification(), which fails closed — non-standard
+  // accounts are excluded, and anything other than an explicit `true` (legacy
+  // record, restored account, skipped quiz) keeps the warning up.
+  const showBackupWarning = needsBackupVerification(activeAccount);
+
+  const handleBackupBannerPress = useCallback(() => {
+    if (!activeAccount) return;
+    // Address only — the phrase is loaded on the target screen behind the
+    // existing PIN/biometric gate, never carried through navigation (DR-9).
+    navigation.navigate('VerifyBackup', {
+      accountAddress: activeAccount.address,
+    });
+  }, [activeAccount, navigation]);
+
   const handleClaimableBannerPress = useCallback(() => {
     navigation.navigate('ClaimableTokens');
   }, [navigation]);
@@ -1618,6 +1638,11 @@ export default function HomeScreen() {
                   pill
                 />
               </Animated.View>
+
+              {/* Un-backed-up account warning (TASK-45) */}
+              {showBackupWarning && (
+                <BackupWarningBanner onPress={handleBackupBannerPress} />
+              )}
 
               {/* Claimable Tokens Banner */}
               {visibleClaimableCount > 0 && (

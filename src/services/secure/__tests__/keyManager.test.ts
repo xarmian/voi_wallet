@@ -123,6 +123,7 @@ function standardAccount(acct: TestAccount, id: string) {
     type: AccountType.STANDARD,
     mnemonic: acct.mnemonic,
     hasBackup: true,
+    backupVerified: false,
     isHidden: false,
     createdAt: '2024-01-01T00:00:00.000Z',
     lastUsed: '2024-01-01T00:00:00.000Z',

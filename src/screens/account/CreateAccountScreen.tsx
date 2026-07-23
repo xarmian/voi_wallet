@@ -13,7 +13,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { WalletService } from '@/services/wallet';
 import { useWalletStore } from '@/store/walletStore';
 import { AccountType } from '@/types/wallet';
-import MnemonicBackupFlow from '@/components/wallet/MnemonicBackupFlow';
+import MnemonicBackupFlow, {
+  type MnemonicBackupResult,
+} from '@/components/wallet/MnemonicBackupFlow';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { useSecureScreen } from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
@@ -76,15 +78,20 @@ export default function CreateAccountScreen() {
     }
   };
 
-  const handleBackupConfirmed = async () => {
+  const handleBackupConfirmed = async (result: MnemonicBackupResult) => {
     try {
       // Import the account with the generated mnemonic
       const normalizedLabel = accountLabel.trim();
 
+      // TASK-45 / DR-11: add-account does NOT route through SecuritySetup, so the
+      // quiz outcome is carried on the import request itself. `verified` is true
+      // only when the user completed the word quiz; skipping persists the account
+      // as un-backed-up and the Home banner keeps prompting.
       const newAccount = await importAccount({
         type: AccountType.STANDARD,
         label: normalizedLabel || `Account ${Date.now()}`,
         mnemonic,
+        backupVerified: result.verified,
       });
 
       // Set the new account as active
@@ -137,7 +144,11 @@ export default function CreateAccountScreen() {
         title="Backup New Account"
         subtitle="This is the recovery phrase for your new account. Write it down and store it safely."
         showCopyOption={true}
-        requireVerification={false}
+        // TASK-45 / DR-2: the quiz was fully built but dead — every consumer
+        // passed false. Enabled here (after the DR-12 duplicate-word fix), with
+        // an explicit skip escape rather than a hard gate.
+        requireVerification={true}
+        allowSkipVerification={true}
         onBack={handleBack}
       />
     );

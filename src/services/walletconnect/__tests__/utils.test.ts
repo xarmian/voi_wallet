@@ -131,6 +131,7 @@ function standardAccount(address: string): StandardAccountMetadata {
     type: AccountType.STANDARD,
     mnemonic: '', // no real mnemonic needed; type-selection only
     hasBackup: true,
+    backupVerified: false,
   };
 }
 

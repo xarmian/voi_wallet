@@ -143,6 +143,9 @@ export class MultiAccountWalletService {
         lastUsed: new Date().toISOString(),
         mnemonic,
         hasBackup: false,
+        // TASK-45/DR-11: a freshly generated account has never been confirmed by
+        // the user. Only the verification quiz may flip this to true.
+        backupVerified: false,
       };
 
       const secretKey = account.sk;
@@ -250,7 +253,20 @@ export class MultiAccountWalletService {
         importedAt: new Date().toISOString(),
         lastUsed: new Date().toISOString(),
         mnemonic,
-        hasBackup: !!request.mnemonic, // Assume imported mnemonics are backed up
+        // LEGACY semantics, deliberately unchanged (DR-10): this only records
+        // that a mnemonic was supplied. It is NOT a verification signal.
+        hasBackup: !!request.mnemonic,
+        // TASK-45/DR-11: the ONE place a caller may assert verification, and only
+        // via an explicit literal `true` from a flow that watched the user pass
+        // the quiz. Every other import (QR, plain mnemonic import) omits it and
+        // persists as un-backed-up.
+        //
+        // Additionally gated on a mnemonic actually having been supplied: a raw
+        // private-key import never shows the user a phrase, so there is nothing
+        // they could have confirmed. Without this, a caller passing
+        // `{ privateKey, backupVerified: true }` would suppress the recovery
+        // warning for an account whose phrase the user has never seen.
+        backupVerified: !!request.mnemonic && request.backupVerified === true,
       };
 
       const secretKey = account.sk;
@@ -993,6 +1009,27 @@ export class MultiAccountWalletService {
     // rewrites to a freshly derived, checksum-valid base32 address obtained
     // from an exactly-32-byte public key; it never weakens validation.
     let modified = false;
+
+    // TASK-45 / DR-10 — `backupVerified` migration. Every STANDARD account
+    // persisted before the field existed is normalized to `false`, NOT derived
+    // from `hasBackup` (which records "a mnemonic was supplied", not "the user
+    // proved they hold it"). Idempotent: after the first pass every standard
+    // account carries a boolean, so `modified` stays false on later reads and no
+    // further write is enqueued. Non-boolean junk (a hand-edited or corrupted
+    // blob) is coerced to `false` rather than trusted. The resulting write is
+    // the existing epoch-guarded read-repair write, so a concurrent wipe/reset
+    // still wins.
+    wallet.accounts = wallet.accounts.map((acc) => {
+      if (acc.type !== AccountType.STANDARD) return acc;
+      if (
+        typeof (acc as StandardAccountMetadata).backupVerified === 'boolean'
+      ) {
+        return acc;
+      }
+      modified = true;
+      return { ...acc, backupVerified: false } as AccountMetadata;
+    });
+
     wallet.accounts = wallet.accounts.map((acc) => {
       const rawAddress = acc.address as unknown;
       const currentAddress = typeof rawAddress === 'string' ? rawAddress : '';
@@ -1206,6 +1243,98 @@ export class MultiAccountWalletService {
     );
 
     return updatedAccount;
+  }
+
+  /**
+   * TASK-45 — record that the user has confirmed this account's recovery phrase
+   * by completing the verification quiz.
+   *
+   * Deliberately narrow: it takes no phrase, no key, and only ever sets the flag
+   * to `true` (there is no "un-verify" — a user who has proven they hold the
+   * phrase cannot un-prove it). STANDARD accounts only; anything else is a
+   * programming error and throws rather than silently no-op'ing.
+   *
+   * Idempotent: re-verifying an already-verified account performs no write.
+   */
+  static async markBackupVerified(
+    accountId: string
+  ): Promise<StandardAccountMetadata> {
+    // TASK-212: guard the write against a reset racing this read.
+    const readEpoch = walletResetEpoch;
+    const wallet = await this.getCurrentWallet();
+    if (!wallet) {
+      throw new Error('No wallet found');
+    }
+
+    const accountIndex = wallet.accounts.findIndex(
+      (acc) => acc.id === accountId
+    );
+    if (accountIndex === -1) {
+      throw new AccountNotFoundError(`Account not found: ${accountId}`);
+    }
+
+    const account = wallet.accounts[accountIndex];
+    if (account.type !== AccountType.STANDARD) {
+      throw new Error(
+        'Only standard accounts have a recovery phrase to verify'
+      );
+    }
+
+    if (account.backupVerified === true) {
+      return account;
+    }
+
+    const backupCreatedAt = account.backupCreatedAt ?? new Date().toISOString();
+
+    // Apply the flag as a SERIALIZED read-modify-write against a fresh read of
+    // the stored blob, rather than persisting the snapshot we read above.
+    // storeWallet() serializes only the write, so a whole-blob write built from
+    // a stale snapshot can silently discard a concurrent mutation (a label edit,
+    // an active-account change) that landed in between — or be discarded by one,
+    // losing a verification the user just earned. Re-reading inside the chain
+    // makes this mutation touch exactly one field of the CURRENT blob.
+    const applied = await this.enqueueWalletWrite(async () => {
+      // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
+      if (readEpoch !== walletResetEpoch) return false;
+      const raw = await storage.getItem(this.WALLET_KEY);
+      // Primary absent = wiped (or never written). Deliberately stricter than
+      // storeWallet: this mutation never (re)creates a wallet blob, and it never
+      // clears the wipe tombstone.
+      if (raw == null) return false;
+
+      const current = JSON.parse(raw) as Wallet;
+      const index = current.accounts.findIndex((acc) => acc.id === accountId);
+      if (index === -1) return false;
+
+      const target = current.accounts[index];
+      if (target.type !== AccountType.STANDARD) return false;
+      // Someone else already recorded it — nothing to do, and no write.
+      if (target.backupVerified === true) return true;
+
+      current.accounts[index] = {
+        ...target,
+        backupVerified: true,
+        backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
+      };
+
+      await storage.setItem(
+        this.WALLET_KEY,
+        JSON.stringify(this.sanitizeWalletForPersistence(current))
+      );
+      return true;
+    });
+
+    if (!applied) {
+      throw new Error(
+        'Could not record backup verification: the wallet changed or was reset'
+      );
+    }
+
+    return {
+      ...account,
+      backupVerified: true,
+      backupCreatedAt,
+    };
   }
 
   static async setActiveAccount(accountId: string): Promise<void> {

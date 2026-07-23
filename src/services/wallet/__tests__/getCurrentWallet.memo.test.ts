@@ -109,6 +109,11 @@ function makeWalletBlob(opts?: { label?: string; mnemonic?: string }): {
         label: opts?.label ?? 'Account 1',
         mnemonic,
         createdAt: '2026-01-01T00:00:00.000Z',
+        // TASK-45: already-migrated fixture. Omitting `backupVerified` would
+        // trigger the one-time backupVerified read-repair write and change the
+        // storage-call counts these caching tests pin. The migration itself has
+        // its own suite (backupVerifiedMigration.test.ts).
+        backupVerified: false,
       },
     ],
     activeAccountId: 'acc-1',

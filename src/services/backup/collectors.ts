@@ -108,6 +108,9 @@ export async function collectAccounts(
               mnemonic,
               derivationPath: standardAccount.derivationPath,
               hasBackup: standardAccount.hasBackup,
+              // TASK-45/DR-11: `backupVerified` is intentionally NOT collected.
+              // It describes what the user of THIS device proved, so it must not
+              // travel inside a portable encrypted backup.
             });
           } catch (error) {
             throw new BackupError(

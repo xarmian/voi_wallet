@@ -58,7 +58,17 @@ export interface BackupAccountData {
   mnemonic?: string;
   /** HD derivation path if applicable */
   derivationPath?: string;
-  /** Whether backup has been verified */
+  /**
+   * LEGACY flag meaning "a mnemonic was supplied for this account" (see
+   * StandardAccountMetadata.hasBackup). Kept for wire compatibility with
+   * existing backup payloads.
+   *
+   * NOTE (TASK-45 / DR-11): `backupVerified` is deliberately NOT part of this
+   * format and must never be added. Recovery-phrase verification is a property
+   * of the device/user that performed it, not of the encrypted payload — a
+   * restore on a new device always starts unverified so the user is prompted to
+   * confirm the phrase there.
+   */
   hasBackup?: boolean;
 
   // Watch account fields (type === 'watch')

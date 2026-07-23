@@ -96,6 +96,7 @@ import { useUpdateStore } from '@/store/updateStore';
 import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
 import AccountInfoScreen from '@/screens/wallet/AccountInfoScreen';
 import AccountSearchScreen from '@/screens/wallet/AccountSearchScreen';
+import VerifyBackupScreen from '@/screens/wallet/VerifyBackupScreen';
 import FriendsScreen from '@/screens/social/FriendsScreen';
 import AddFriendScreen from '@/screens/social/AddFriendScreen';
 import FriendProfileScreen from '@/screens/social/FriendProfileScreen';
@@ -218,6 +219,14 @@ export type RootStackParamList = {
     // TASK-213's cold-boot resume routes here with it as the initial param.
     source?: 'create' | 'qr' | 'watch' | 'mnemonic' | 'ledger' | 'restore';
     accountLabel?: string;
+    /**
+     * TASK-45 / DR-11 carrier #1 — whether the user completed the
+     * recovery-phrase verification quiz on CreateWalletScreen. Consumed by
+     * SecuritySetupScreen at import time. A BOOLEAN, not key material: it does
+     * not widen the DR-9 mnemonic-in-nav-state exposure. Absent/false persists
+     * the account as un-backed-up (the safe default).
+     */
+    backupVerified?: boolean;
   };
   MnemonicImport: { isOnboarding?: boolean } | undefined;
   AddWatchAccount: { isOnboarding?: boolean };
@@ -418,6 +427,13 @@ export type WalletStackParamList = {
     items: SerializableClaimableItem[];
     recipient?: string;
   };
+  /**
+   * TASK-45 — confirm an existing account's recovery phrase, clearing the Home
+   * un-backed-up warning. Carries the ADDRESS only; the screen loads the phrase
+   * itself through the PIN/biometric-gated SecureKeyManager, so no key material
+   * enters navigation state (DR-9).
+   */
+  VerifyBackup: { accountAddress?: string } | undefined;
 };
 
 export type NFTStackParamList = {
@@ -603,6 +619,10 @@ function WalletStackNavigator() {
         <WalletStack.Screen
           name="AccountSearch"
           component={AccountSearchScreen}
+        />
+        <WalletStack.Screen
+          name="VerifyBackup"
+          component={VerifyBackupScreen}
         />
       </WalletStack.Navigator>
     </NFTBackground>
@@ -1175,7 +1195,17 @@ function AppStack() {
       }}
     >
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-      <Stack.Screen name="CreateWallet" component={CreateWalletScreen} />
+      <Stack.Screen
+        name="CreateWallet"
+        component={CreateWalletScreen}
+        // U-10 / TASK-45: this screen holds the ONLY copy of a freshly generated
+        // recovery phrase. It inherits gestureEnabled: true from screenOptions,
+        // and on native-stack a swipe-back cannot be reliably cancelled from a
+        // beforeRemove listener once it has begun — so the gesture is disabled
+        // outright and the screen's beforeRemove listener guards the remaining
+        // pop paths (header back, Android hardware back).
+        options={{ gestureEnabled: false }}
+      />
       <Stack.Screen
         name="SecuritySetup"
         component={SecuritySetupScreen}

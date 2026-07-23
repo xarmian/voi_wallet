@@ -71,6 +71,10 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     accounts,
     source = 'create',
     accountLabel: initialAccountLabel,
+    // TASK-45 / DR-11 carrier #1. Only an explicit `true` counts; any other
+    // value (absent, undefined, or a stale/rehydrated param) persists the
+    // account as un-backed-up.
+    backupVerified: backupVerifiedParam,
   } = route.params;
   const [accountLabel, setAccountLabel] = useState(initialAccountLabel ?? '');
 
@@ -161,6 +165,10 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
             type: AccountType.STANDARD,
             mnemonic,
             label: normalizedLabel || 'Main Account',
+            // Only the 'create' flow runs the verification quiz; a plain
+            // mnemonic import is someone typing in a phrase they already hold
+            // elsewhere, which is not a confirmation performed on this device.
+            backupVerified: source === 'create' && backupVerifiedParam === true,
           });
         console.log('Successfully created account:', importedAccount.address);
       } else if ((source === 'qr' || source === 'watch') && accounts) {
