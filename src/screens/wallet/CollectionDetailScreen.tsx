@@ -184,7 +184,9 @@ export default function CollectionDetailScreen() {
   const displayTokens = activeTab === 'my-nfts' ? myTokens : allTokens;
 
   const renderTabs = () => (
-    <View style={styles.tabContainer}>
+    <View
+      style={[styles.tabContainer, { borderBottomColor: theme.colors.border }]}
+    >
       <TouchableOpacity
         style={[
           styles.tab,
@@ -398,7 +400,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     paddingHorizontal: 4,
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    // borderBottomColor supplied from the theme at the call site
   },
   tab: {
     flex: 1,

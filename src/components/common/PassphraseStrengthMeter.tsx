@@ -43,11 +43,11 @@ export function PassphraseStrengthMeter({ secret, minLength }: Props) {
       case 1:
         return theme.colors.error;
       case 2:
-        return theme.colors.warning ?? '#E0A100';
+        return theme.colors.warning;
       case 3:
         return theme.colors.primary;
       default:
-        return theme.colors.success ?? '#22A06B';
+        return theme.colors.success;
     }
   };
 

@@ -44,10 +44,15 @@ type LedgerStatusMap = Record<string, LedgerSigningInfo | null>;
 type StatusIntent = 'connected' | 'available' | 'unavailable';
 type StatusIconName = 'radio-button-on' | 'alert-circle' | 'close-circle';
 
-const statusIntentColors: Record<StatusIntent, string> = {
-  connected: '#10B981',
-  available: '#F59E0B',
-  unavailable: '#EF4444',
+// Semantic theme-colour keys per status intent. Resolved against the active
+// theme so NFT-generated palettes stay consistent.
+const statusIntentColorKeys: Record<
+  StatusIntent,
+  'success' | 'warning' | 'error'
+> = {
+  connected: 'success',
+  available: 'warning',
+  unavailable: 'error',
 };
 
 const statusIntentIcons: Record<StatusIntent, StatusIconName> = {
@@ -241,7 +246,7 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
     (account: LedgerAccountMetadata) => {
       const status = statusMap[account.id];
       const intent = resolveStatusIntent(status);
-      const color = statusIntentColors[intent];
+      const color = colors[statusIntentColorKeys[intent]];
       const icon = statusIntentIcons[intent];
 
       let label = 'Device unavailable';
@@ -261,7 +266,7 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
         </View>
       );
     },
-    [resolveStatusIntent, statusMap, styles, theme.colors.surface]
+    [colors, resolveStatusIntent, statusMap, styles, theme.colors.surface]
   );
 
   if (ledgerAccounts.length === 0) {
@@ -401,7 +406,9 @@ const RekeyToLedger: React.FC<RekeyToLedgerProps> = ({
                   <View
                     style={[
                       styles.intentDot,
-                      { backgroundColor: statusIntentColors[intent] },
+                      {
+                        backgroundColor: colors[statusIntentColorKeys[intent]],
+                      },
                     ]}
                   />
                   <Text

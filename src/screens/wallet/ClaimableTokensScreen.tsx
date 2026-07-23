@@ -239,7 +239,11 @@ export default function ClaimableTokensScreen() {
         <TouchableOpacity
           style={[
             styles.swipeAction,
-            { backgroundColor: isHidden ? theme.colors.primary : '#DC2626' },
+            {
+              backgroundColor: isHidden
+                ? theme.colors.primary
+                : theme.colors.error,
+            },
           ]}
           onPress={() => {
             if (isHidden) {
@@ -266,6 +270,7 @@ export default function ClaimableTokensScreen() {
       unhideApproval,
       styles,
       theme.colors.primary,
+      theme.colors.error,
     ]
   );
 

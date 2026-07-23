@@ -1574,7 +1574,10 @@ export default function HomeScreen() {
                     <View style={styles.addressDetails}>
                       {isEnvoiLoading ? (
                         <View style={styles.envoiLoading}>
-                          <ActivityIndicator size="small" color="#3B82F6" />
+                          <ActivityIndicator
+                            size="small"
+                            color={theme.colors.info}
+                          />
                           <Text style={styles.loadingText}>
                             Looking up name...
                           </Text>
@@ -1614,7 +1617,7 @@ export default function HomeScreen() {
                   label="Send"
                   onPress={handleSend}
                   style={styles.actionButton}
-                  tint="#007AFF"
+                  tint={theme.colors.primary}
                   pill
                 />
                 <GlassButton
@@ -1624,7 +1627,7 @@ export default function HomeScreen() {
                   label="Receive"
                   onPress={handleReceive}
                   style={styles.actionButton}
-                  tint="#30D158"
+                  tint={theme.colors.success}
                   pill
                 />
                 <GlassButton
@@ -1634,6 +1637,7 @@ export default function HomeScreen() {
                   label="History"
                   onPress={handleHistory}
                   style={styles.actionButton}
+                  // Accent purple: no semantic theme role maps to it
                   tint="#AF52DE"
                   pill
                 />
@@ -1721,7 +1725,10 @@ export default function HomeScreen() {
                     // Multi-network view
                     isMultiNetworkBalanceLoading && !multiNetworkBalance ? (
                       <View style={styles.loadingAssets}>
-                        <ActivityIndicator size="small" color="#007AFF" />
+                        <ActivityIndicator
+                          size="small"
+                          color={theme.colors.primary}
+                        />
                         <Text style={styles.loadingText}>
                           Loading assets...
                         </Text>
@@ -2178,6 +2185,6 @@ const createStyles = (theme: Theme) =>
     emptyStateButtonText: {
       fontSize: theme.typography.body.fontSize,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
     },
   });

@@ -518,17 +518,17 @@ const createStyles = (theme: Theme) =>
     noticeTitle: {
       fontSize: 16,
       fontWeight: '600',
-      color: '#333',
+      color: theme.colors.text,
       marginBottom: 10,
     },
     noticeText: {
       fontSize: 14,
-      color: '#666',
+      color: theme.colors.textSecondary,
       lineHeight: 20,
     },
     warningText: {
       fontSize: 14,
-      color: '#FF9500',
+      color: theme.colors.warning,
       marginTop: 10,
       lineHeight: 20,
     },

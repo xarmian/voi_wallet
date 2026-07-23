@@ -681,7 +681,7 @@ export default function MultiNetworkAssetScreen() {
               size="md"
               icon="send"
               label="Send"
-              tint="#007AFF"
+              tint={theme.colors.primary}
               onPress={handleSend}
               style={styles.actionButton}
             />
@@ -692,6 +692,7 @@ export default function MultiNetworkAssetScreen() {
                 size="md"
                 icon="swap-horizontal"
                 label="Swap"
+                // Accent purple: no semantic theme role maps to it
                 tint="#AF52DE"
                 onPress={handleSwap}
                 style={styles.actionButton}
@@ -703,7 +704,7 @@ export default function MultiNetworkAssetScreen() {
               size="md"
               icon="download"
               label="Receive"
-              tint="#30D158"
+              tint={theme.colors.success}
               onPress={handleReceive}
               style={styles.actionButton}
             />

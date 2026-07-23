@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import * as Application from 'expo-application';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useUpdateStore } from '@/store/updateStore';
@@ -38,6 +38,7 @@ const getUpdateInfo = () => {
 export default function AboutScreen() {
   const navigation = useNavigation();
   const styles = useThemedStyles(createStyles);
+  const colors = useThemeColors();
   const updateInfo = getUpdateInfo();
   const { checkForUpdate, isChecking } = useUpdateStore();
 
@@ -138,6 +139,7 @@ export default function AboutScreen() {
             style={styles.linkItem}
             onPress={handleTwitterPress}
           >
+            {/* Brand colour, deliberately not theme-derived. */}
             <Ionicons name="logo-twitter" size={24} color="#1DA1F2" />
             <View style={styles.linkTextContainer}>
               <Text style={styles.linkTitle}>Follow us on Twitter</Text>
@@ -154,7 +156,7 @@ export default function AboutScreen() {
             style={styles.linkItem}
             onPress={handleWebsitePress}
           >
-            <Ionicons name="globe-outline" size={24} color="#007AFF" />
+            <Ionicons name="globe-outline" size={24} color={colors.primary} />
             <View style={styles.linkTextContainer}>
               <Text style={styles.linkTitle}>Visit our website</Text>
               <Text style={styles.linkSubtitle}>getvoi.app</Text>
@@ -174,7 +176,11 @@ export default function AboutScreen() {
             style={styles.linkItem}
             onPress={handleCompanyPress}
           >
-            <Ionicons name="business-outline" size={24} color="#6B7280" />
+            <Ionicons
+              name="business-outline"
+              size={24}
+              color={colors.textSecondary}
+            />
             <View style={styles.linkTextContainer}>
               <Text style={styles.linkTitle}>Perpetual Software, LLC</Text>
               <Text style={styles.linkSubtitle}>perpetualsoftware.org</Text>

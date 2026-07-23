@@ -75,9 +75,16 @@ export default function BackupProgressModal({
                     ]}
                   >
                     {isCompleted ? (
-                      <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                      <Ionicons
+                        name="checkmark"
+                        size={14}
+                        color={colors.buttonText}
+                      />
                     ) : isCurrent ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
+                      <ActivityIndicator
+                        size="small"
+                        color={colors.buttonText}
+                      />
                     ) : (
                       <Text style={styles.stepNumber}>{index + 1}</Text>
                     )}

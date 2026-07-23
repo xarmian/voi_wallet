@@ -40,6 +40,8 @@ export default function AccountListItem({
   shouldLoadBalance = true,
   hideBalance = false,
 }: AccountListItemProps) {
+  const styles = useThemedStyles(createStyles);
+  const colors = useThemeColors();
   const setActiveAccount = useWalletStore((state) => state.setActiveAccount);
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
   const accountBalanceData = useAccountBalance(account.id);
@@ -121,13 +123,13 @@ export default function AccountListItem({
     if (rekeyedAccount.canSign) {
       return {
         name: 'key' as const,
-        color: '#10B981', // Green - we can sign
+        color: colors.success, // We have signing authority
         tooltip: 'Rekeyed account - you have signing authority',
       };
     } else {
       return {
         name: 'lock-closed' as const,
-        color: '#F59E0B', // Amber - we cannot sign
+        color: colors.warning, // We do not have signing authority
         tooltip: 'Rekeyed account - you do not have signing authority',
       };
     }
@@ -180,8 +182,6 @@ export default function AccountListItem({
 
   const typeLabel = getAccountTypeLabel(account);
   const rekeyIcon = getRekeyStatusIcon(account);
-  const styles = useThemedStyles(createStyles);
-  const colors = useThemeColors();
 
   return (
     <TouchableOpacity
@@ -278,10 +278,7 @@ const createStyles = (theme: Theme) =>
       marginVertical: theme.spacing.xs,
     },
     activeContainer: {
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(59, 130, 246, 0.1)'
-          : 'rgba(10, 132, 255, 0.15)',
+      backgroundColor: theme.colors.primaryLight,
       borderLeftWidth: 3,
       borderLeftColor: theme.colors.primary,
     },

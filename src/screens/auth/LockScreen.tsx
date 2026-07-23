@@ -620,11 +620,10 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
       paddingVertical: theme.spacing.md,
       paddingHorizontal: theme.spacing.lg,
-      backgroundColor:
-        theme.mode === 'light' ? '#FFF5F5' : theme.colors.surface,
+      backgroundColor: theme.colors.errorLight,
       borderRadius: theme.borderRadius.lg,
       borderWidth: 1,
-      borderColor: theme.mode === 'light' ? '#FFE5E5' : theme.colors.error,
+      borderColor: theme.colors.error,
     },
     resetButtonText: {
       fontSize: 14,

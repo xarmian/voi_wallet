@@ -249,6 +249,7 @@ export default function QRAccountImportScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView
+      // Camera viewfinder chrome is fixed black/white regardless of theme
       style={[styles.container, { backgroundColor: '#000000' }]}
       edges={['top', 'bottom']}
     >

@@ -324,7 +324,7 @@ export default function RestoreWalletScreen() {
           style={styles.selectButton}
           onPress={handleSelectFile}
         >
-          <Ionicons name="folder-open" size={20} color="#FFFFFF" />
+          <Ionicons name="folder-open" size={20} color={colors.buttonText} />
           <Text style={styles.selectButtonText}>Select Backup File</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -421,8 +421,7 @@ const createStyles = (theme: Theme) =>
     warningContainer: {
       flexDirection: 'row',
       alignItems: 'flex-start',
-      backgroundColor:
-        theme.mode === 'dark' ? 'rgba(239, 68, 68, 0.1)' : '#FEE2E2',
+      backgroundColor: theme.colors.errorLight,
       padding: theme.spacing.md,
       borderRadius: theme.borderRadius.lg,
       marginBottom: theme.spacing.lg,
@@ -433,7 +432,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
       marginLeft: theme.spacing.sm,
       fontSize: 13,
-      color: theme.mode === 'dark' ? theme.colors.error : '#991B1B',
+      color: theme.colors.text,
       lineHeight: 18,
     },
     fileCard: {
@@ -483,7 +482,7 @@ const createStyles = (theme: Theme) =>
     stepNumberText: {
       fontSize: 12,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
     },
     stepText: {
       flex: 1,
@@ -500,7 +499,7 @@ const createStyles = (theme: Theme) =>
       borderRadius: theme.borderRadius.lg,
     },
     selectButtonText: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontSize: 16,
       fontWeight: '600',
       marginLeft: theme.spacing.sm,

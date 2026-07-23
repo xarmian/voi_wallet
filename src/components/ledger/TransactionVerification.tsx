@@ -338,17 +338,11 @@ const createStyles = (theme: Theme) =>
       borderRadius: theme.borderRadius.sm,
     },
     signingBadgeReady: {
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(52, 199, 89, 0.12)'
-          : 'rgba(48, 209, 88, 0.24)',
+      backgroundColor: theme.colors.successLight,
       color: theme.colors.success,
     },
     signingBadgeWarning: {
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(255, 149, 0, 0.12)'
-          : 'rgba(255, 159, 10, 0.24)',
+      backgroundColor: theme.colors.warningLight,
       color: theme.colors.warning,
     },
     totalRow: {
@@ -378,10 +372,7 @@ const createStyles = (theme: Theme) =>
       lineHeight: 18,
     },
     ledgerHint: {
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(0, 122, 255, 0.08)'
-          : 'rgba(10, 132, 255, 0.18)',
+      backgroundColor: theme.colors.primaryLight,
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
     },

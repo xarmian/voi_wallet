@@ -324,7 +324,7 @@ export default function AddWatchAccountScreen() {
             disabled={!isAddressValid || isLoading}
           >
             {isLoading ? (
-              <ActivityIndicator color="#FFF" />
+              <ActivityIndicator color={theme.colors.buttonText} />
             ) : (
               <>
                 <Ionicons

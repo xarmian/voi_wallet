@@ -177,6 +177,7 @@ export default function ReceiveScreen() {
                   value={activeAccount.address}
                   size={180}
                   backgroundColor="white"
+                  // QR modules must stay pure black on white to scan
                   color="#000000"
                 />
               </GlassCard>

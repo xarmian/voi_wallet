@@ -90,7 +90,9 @@ const createStyles = (theme: Theme) =>
       backgroundColor: 'transparent',
     },
 
-    // Text styles by variant
+    // Text styles by variant.
+    // Fixed white ink: the filled variant is painted with the network's brand
+    // colour (networkConfig.color), not a theme surface.
     textFilled: {
       color: '#FFFFFF',
       fontWeight: '600',

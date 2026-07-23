@@ -347,10 +347,7 @@ const createStyles = (theme: Theme) =>
       lineHeight: 20,
     },
     permissionBanner: {
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(255, 149, 0, 0.1)'
-          : 'rgba(255, 159, 10, 0.22)',
+      backgroundColor: theme.colors.warningLight,
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginBottom: theme.spacing.md,
@@ -369,10 +366,7 @@ const createStyles = (theme: Theme) =>
       marginTop: theme.spacing.md,
       padding: theme.spacing.md,
       borderRadius: theme.borderRadius.md,
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(255, 59, 48, 0.1)'
-          : 'rgba(255, 69, 58, 0.22)',
+      backgroundColor: theme.colors.errorLight,
     },
     errorText: {
       color: theme.colors.error,
@@ -409,11 +403,11 @@ const createStyles = (theme: Theme) =>
     debugButton: {
       backgroundColor: theme.colors.background,
       borderWidth: 1,
-      borderColor: '#007AFF',
+      borderColor: theme.colors.primary,
       flex: 0.7, // Make debug button smaller
     },
     debugButtonText: {
-      color: '#007AFF',
+      color: theme.colors.primary,
       fontWeight: '500',
       fontSize: 14,
     },

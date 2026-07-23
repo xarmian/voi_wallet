@@ -279,7 +279,7 @@ export default function AccountSearchScreen() {
                 color={
                   isCurrentlyFriend
                     ? styles.friendButtonRemoveText.color
-                    : '#FFFFFF'
+                    : styles.friendButtonText.color
                 }
               />
               <Text
@@ -500,7 +500,7 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
     },
     searchButtonText: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontSize: 16,
       fontWeight: '600',
     },
@@ -603,7 +603,7 @@ const createStyles = (theme: Theme) =>
     friendButtonText: {
       fontSize: 14,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
     },
     friendButtonRemove: {
       backgroundColor: 'transparent',

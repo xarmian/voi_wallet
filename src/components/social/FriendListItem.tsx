@@ -82,6 +82,8 @@ export default function FriendListItem({
           )}
           {friend.isFavorite && (
             <View style={styles.favoriteBadge}>
+              {/* Favourite gold — not a semantic theme role; kept literal so an
+                  NFT-generated palette cannot recolour the star. */}
               <Ionicons name="star" size={12} color="#FFA500" />
             </View>
           )}

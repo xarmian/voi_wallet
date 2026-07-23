@@ -287,6 +287,7 @@ export default function FriendProfileScreen() {
               <Ionicons
                 name={friend.isFavorite ? 'star' : 'star-outline'}
                 size={24}
+                // Favourite gold is not a semantic theme role; kept literal.
                 color={friend.isFavorite ? '#FFA500' : theme.colors.text}
               />
             </TouchableOpacity>

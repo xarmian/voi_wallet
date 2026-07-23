@@ -152,8 +152,7 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
       paddingHorizontal: theme.spacing.sm,
       paddingVertical: 6,
-      backgroundColor:
-        theme.mode === 'dark' ? 'rgba(10, 132, 255, 0.1)' : '#F0F9FF',
+      backgroundColor: theme.colors.primaryLight,
       borderRadius: theme.borderRadius.md,
     },
     revealButtonText: {

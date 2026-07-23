@@ -381,7 +381,7 @@ const createStyles = (theme: Theme) =>
       // No extra margin needed with gap
     },
     compactAddText: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontSize: 14,
       fontWeight: '600',
     },

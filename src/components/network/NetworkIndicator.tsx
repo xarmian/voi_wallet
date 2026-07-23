@@ -137,6 +137,7 @@ const createStyles = (theme: Theme) =>
     networkPill: {
       // Size and color set dynamically
     },
+    // Fixed white ink: pills are filled with the network's brand colour.
     pillText: {
       color: '#FFFFFF',
       fontWeight: '600',

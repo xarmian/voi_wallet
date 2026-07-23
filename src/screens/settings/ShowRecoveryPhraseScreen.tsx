@@ -348,8 +348,7 @@ const createStyles = (theme: Theme) =>
     warningContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor:
-        theme.mode === 'dark' ? 'rgba(255, 159, 10, 0.1)' : '#FFF3CD',
+      backgroundColor: theme.colors.warningLight,
       padding: theme.spacing.md,
       borderRadius: theme.borderRadius.lg,
       marginBottom: theme.spacing.lg,
@@ -360,7 +359,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
       marginLeft: theme.spacing.sm,
       fontSize: 14,
-      color: theme.mode === 'dark' ? theme.colors.warning : '#856404',
+      color: theme.colors.text,
       fontWeight: '500',
     },
     loadingContainer: {

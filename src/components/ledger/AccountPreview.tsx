@@ -263,10 +263,7 @@ const createStyles = (theme: Theme) =>
     },
     deviceInfo: {
       borderRadius: theme.borderRadius.md,
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(0, 122, 255, 0.08)'
-          : 'rgba(10, 132, 255, 0.18)',
+      backgroundColor: theme.colors.primaryLight,
       padding: theme.spacing.md,
     },
     devicesLabel: {

@@ -243,8 +243,7 @@ const createStyles = (theme: Theme) =>
       width: 40,
       height: 40,
       borderRadius: 20,
-      backgroundColor:
-        theme.mode === 'light' ? '#EBF4FF' : 'rgba(10, 132, 255, 0.2)',
+      backgroundColor: theme.colors.primaryLight,
       justifyContent: 'center',
       alignItems: 'center',
       marginRight: theme.spacing.md,
