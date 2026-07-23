@@ -1,0 +1,1405 @@
+{
+  "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
+  "totals": {
+    "errors": 0,
+    "warnings": 682,
+    "filesLinted": 433,
+    "filesWithFindings": 176
+  },
+  "rules": {
+    "@typescript-eslint/no-redeclare": 1,
+    "@typescript-eslint/no-require-imports": 68,
+    "@typescript-eslint/no-unused-vars": 308,
+    "import/no-named-as-default": 41,
+    "react-hooks/exhaustive-deps": 64,
+    "react-hooks/immutability": 103,
+    "react-hooks/preserve-manual-memoization": 25,
+    "react-hooks/purity": 5,
+    "react-hooks/refs": 7,
+    "react-hooks/set-state-in-effect": 60
+  },
+  "files": {
+    "src/components/UnifiedAuthModal.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 2,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/UnifiedTransactionAuthModal.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 3
+      }
+    },
+    "src/components/account/AccountAvatar.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/account/AccountImportItem.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/account/AccountListItem.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 6
+      }
+    },
+    "src/components/account/AccountRecipientModal.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1
+      }
+    },
+    "src/components/account/AccountSelector.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/components/account/AddAccountModal.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/exhaustive-deps": 1
+      }
+    },
+    "src/components/account/RenameAccountModal.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/assets/AssetFilterModal.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/assets/AssetOptInModal.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/assets/MultiNetworkAssetItem.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/auth-account/AuthAccountDiscovery.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "import/no-named-as-default": 1,
+        "react-hooks/immutability": 2
+      }
+    },
+    "src/components/backup/PasswordInputModal.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "react-hooks/preserve-manual-memoization": 2,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/common/AnimatedNumber.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/components/common/BlurredContainer.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/components/common/GlassButton.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "react-hooks/immutability": 4
+      }
+    },
+    "src/components/common/GlassCard.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/immutability": 4
+      }
+    },
+    "src/components/common/GlassInput.tsx": {
+      "errors": 0,
+      "warnings": 8,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/immutability": 4
+      }
+    },
+    "src/components/common/NFTBackground.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3
+      }
+    },
+    "src/components/common/NFTThemeSelector.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/components/common/ThemedWebView.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 2,
+        "@typescript-eslint/no-unused-vars": 4
+      }
+    },
+    "src/components/common/UniversalHeader.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3,
+        "react-hooks/immutability": 2
+      }
+    },
+    "src/components/debug/DebugLogsModal.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/envoi/EnvoiProfileCard.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/ledger/ConnectionModal.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/ledger/DeviceDiscovery.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/purity": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/ledger/RekeyToLedger.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/ledger/SimpleLedgerTransactionModal.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/components/ledger/UnifiedLedgerSigningModal.tsx": {
+      "errors": 0,
+      "warnings": 10,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 3,
+        "react-hooks/immutability": 5,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/navigation/FABRadialMenu.tsx": {
+      "errors": 0,
+      "warnings": 10,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/immutability": 6
+      }
+    },
+    "src/components/network/NetworkIndicator.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3
+      }
+    },
+    "src/components/network/NetworkSwitcher.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/components/nft/CollectionBrowser.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/preserve-manual-memoization": 1
+      }
+    },
+    "src/components/rekey/AirgapVerificationFlow.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/exhaustive-deps": 2
+      }
+    },
+    "src/components/remoteSigner/AnimatedQRCode.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/remoteSigner/AnimatedQRScanner.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/remoteSigner/SignerAuthModal.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/purity": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/components/social/FriendListItem.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/purity": 1
+      }
+    },
+    "src/components/social/MessageBubble.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/social/MessageInput.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/swap/RouteDetailModal.tsx": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/swap/SlippageSettingsModal.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/swap/TokenSelector.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/components/transaction/TransactionAddressDisplay.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/components/transaction/TransactionListItem.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/wallet/MnemonicBackupFlow.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/walletconnect/DAppInfo.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/components/walletconnect/QRScanner.tsx": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/contexts/AuthContext.tsx": {
+      "errors": 0,
+      "warnings": 8,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 3,
+        "react-hooks/purity": 1,
+        "react-hooks/refs": 1
+      }
+    },
+    "src/contexts/ThemeContext.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/hooks/__tests__/useSecureScreen.test.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 3
+      }
+    },
+    "src/hooks/useThemedStyles.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/navigation/AppNavigator.tsx": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 6,
+        "react-hooks/exhaustive-deps": 1
+      }
+    },
+    "src/platform/detection.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/platform/extension/chrome.d.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-redeclare": 1
+      }
+    },
+    "src/platform/index.ts": {
+      "errors": 0,
+      "warnings": 18,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 16,
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/platform/mobile/__tests__/secureStorageFailClosed.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/screens/account/AccountImportPreviewScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/screens/account/AddWatchAccountScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/screens/account/CreateAccountScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/screens/account/LedgerAccountImportScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "import/no-named-as-default": 1,
+        "react-hooks/set-state-in-effect": 3
+      }
+    },
+    "src/screens/account/MnemonicImportScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/preserve-manual-memoization": 1
+      }
+    },
+    "src/screens/app/AppInfoModal.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/screens/auth/LockScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/screens/auth/SecureStorageUnavailableScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/screens/onboarding/CreateWalletScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/onboarding/OnboardingScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "react-hooks/immutability": 4
+      }
+    },
+    "src/screens/onboarding/SecuritySetupScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/screens/remoteSigner/AirgapHomeScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/screens/remoteSigner/ExportAccountsScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/screens/remoteSigner/ImportFromOnlineWalletScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/remoteSigner/ImportRemoteSignerScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/screens/remoteSigner/RemoteSignerSettingsScreen.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/remoteSigner/SignRequestScannerScreen.tsx": {
+      "errors": 0,
+      "warnings": 9,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 5,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/remoteSigner/SignatureDisplayScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/remoteSigner/TransactionReviewScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/screens/settings/AboutScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/screens/settings/BackupWalletScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3,
+        "react-hooks/exhaustive-deps": 1
+      }
+    },
+    "src/screens/settings/ChangePinScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/screens/settings/NotificationSettingsScreen.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/settings/RestoreWalletScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4
+      }
+    },
+    "src/screens/settings/SecuritySettingsScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/immutability": 2
+      }
+    },
+    "src/screens/settings/SettingsScreen.tsx": {
+      "errors": 0,
+      "warnings": 8,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 5,
+        "react-hooks/immutability": 3
+      }
+    },
+    "src/screens/settings/ShowRecoveryPhraseScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/social/AddFriendScreen.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "import/no-named-as-default": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/social/ChatScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "import/no-named-as-default": 1,
+        "react-hooks/preserve-manual-memoization": 3
+      }
+    },
+    "src/screens/social/FriendProfileScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/preserve-manual-memoization": 2,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/social/MessagesInboxScreen.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/preserve-manual-memoization": 3,
+        "react-hooks/purity": 1
+      }
+    },
+    "src/screens/social/MyProfileScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "react-hooks/preserve-manual-memoization": 3
+      }
+    },
+    "src/screens/social/NewMessageScreen.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/preserve-manual-memoization": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/transaction/AppCallConfirmScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/screens/transaction/KeyregConfirmScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4
+      }
+    },
+    "src/screens/wallet/AccountInfoScreen.tsx": {
+      "errors": 0,
+      "warnings": 9,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 6,
+        "import/no-named-as-default": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/wallet/AccountSearchScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/wallet/AssetDetailScreen.tsx": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/wallet/BuyScreen.tsx": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4
+      }
+    },
+    "src/screens/wallet/ClaimAllConfirmationScreen.tsx": {
+      "errors": 0,
+      "warnings": 8,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "import/no-named-as-default": 2,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/wallet/ClaimTokenScreen.tsx": {
+      "errors": 0,
+      "warnings": 10,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 6,
+        "import/no-named-as-default": 2,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/wallet/ClaimableTokensScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "react-hooks/immutability": 2,
+        "react-hooks/preserve-manual-memoization": 1
+      }
+    },
+    "src/screens/wallet/CollectionDetailScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/screens/wallet/DiscoverScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1
+      }
+    },
+    "src/screens/wallet/HomeScreen.tsx": {
+      "errors": 0,
+      "warnings": 23,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 14,
+        "import/no-named-as-default": 1,
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 3,
+        "react-hooks/preserve-manual-memoization": 3
+      }
+    },
+    "src/screens/wallet/MultiNetworkAssetScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1
+      }
+    },
+    "src/screens/wallet/NFTScreen.tsx": {
+      "errors": 0,
+      "warnings": 15,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 7,
+        "react-hooks/exhaustive-deps": 3,
+        "react-hooks/immutability": 2,
+        "react-hooks/preserve-manual-memoization": 2,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/wallet/ReceiveScreen.tsx": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 5
+      }
+    },
+    "src/screens/wallet/RekeyAccountScreen.tsx": {
+      "errors": 0,
+      "warnings": 9,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "import/no-named-as-default": 1,
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/set-state-in-effect": 2
+      }
+    },
+    "src/screens/wallet/SendScreen.tsx": {
+      "errors": 0,
+      "warnings": 33,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 18,
+        "import/no-named-as-default": 2,
+        "react-hooks/exhaustive-deps": 8,
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 4
+      }
+    },
+    "src/screens/wallet/SwapScreen.tsx": {
+      "errors": 0,
+      "warnings": 14,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 3,
+        "react-hooks/refs": 4,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/wallet/TransactionConfirmationScreen.tsx": {
+      "errors": 0,
+      "warnings": 13,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 7,
+        "import/no-named-as-default": 2,
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 2
+      }
+    },
+    "src/screens/wallet/TransactionDetailScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/screens/wallet/TransactionHistoryScreen.tsx": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "react-hooks/exhaustive-deps": 4,
+        "react-hooks/immutability": 1,
+        "react-hooks/preserve-manual-memoization": 2
+      }
+    },
+    "src/screens/wallet/UniversalTransactionSigningScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/screens/wallet/VerifyBackupScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/refs": 2
+      }
+    },
+    "src/screens/walletconnect/SessionProposalScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2,
+        "react-hooks/immutability": 1
+      }
+    },
+    "src/screens/walletconnect/SessionsScreen.tsx": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/immutability": 1,
+        "react-hooks/preserve-manual-memoization": 1
+      }
+    },
+    "src/screens/walletconnect/TransactionRequestScreen.tsx": {
+      "errors": 0,
+      "warnings": 13,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 9,
+        "react-hooks/exhaustive-deps": 2,
+        "react-hooks/immutability": 2
+      }
+    },
+    "src/services/auth-account-discovery/index.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/auth/simpleLedgerAuthController.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/auth/transactionAuthController.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/services/backup/__tests__/createBackup.policy.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/backup/__tests__/encryption.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/debug/logger.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3
+      }
+    },
+    "src/services/deeplink/index.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/services/ledger/__tests__/transport.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/ledger/simpleLedgerManager.ts": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4
+      }
+    },
+    "src/services/ledger/simpleLedgerSigner.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3
+      }
+    },
+    "src/services/messaging/index.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/network/index.ts": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "import/no-named-as-default": 3
+      }
+    },
+    "src/services/nft.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/remoteSigner/animatedQR.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/remoteSigner/signingRouter.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/secure/AccountSecureStorage.ts": {
+      "errors": 0,
+      "warnings": 11,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 11
+      }
+    },
+    "src/services/secure/__tests__/biometricConvenience.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/biometricUnlock.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/crossStoreResetHardening.test.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 2
+      }
+    },
+    "src/services/secure/__tests__/envelopeV2.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/getPrivateKey.reader.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/getPrivateKey.vault.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/hasPinStrict.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/keyWriterChangePin.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/migrationEngine.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/passphrase.test.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 3
+      }
+    },
+    "src/services/secure/__tests__/pinThrottle.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/__tests__/reconcilePrimitives.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/services/secure/keyManager.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/services/secure/simplifiedKeyManager.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 2
+      }
+    },
+    "src/services/secure/transactionManager.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/services/swap/index.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/services/swap/types.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/theme/themeGenerator.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3
+      }
+    },
+    "src/services/token-mapping/index.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 3
+      }
+    },
+    "src/services/transactions/arc200.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "import/no-named-as-default": 2
+      }
+    },
+    "src/services/transactions/arc72.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 2
+      }
+    },
+    "src/services/transactions/index.ts": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 6,
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/services/transactions/unifiedSigner.ts": {
+      "errors": 0,
+      "warnings": 7,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 7
+      }
+    },
+    "src/services/wallet/index.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/services/wallet/rekeyManager.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/services/walletconnect/client.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/services/walletconnect/index.ts": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 2,
+        "@typescript-eslint/no-unused-vars": 4
+      }
+    },
+    "src/services/walletconnect/types.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/services/walletconnect/utils.ts": {
+      "errors": 0,
+      "warnings": 6,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 6
+      }
+    },
+    "src/services/walletconnect/v1/client.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/services/walletconnect/v1/crypto.ts": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 3,
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/store/__tests__/remoteSignerStore.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/store/claimableStore.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "import/no-named-as-default": 2
+      }
+    },
+    "src/store/friendsStore.ts": {
+      "errors": 0,
+      "warnings": 3,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2,
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/store/messagesStore.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1,
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/store/walletStore.ts": {
+      "errors": 0,
+      "warnings": 5,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 4,
+        "import/no-named-as-default": 1
+      }
+    },
+    "src/utils/__tests__/splashController.test.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1
+      }
+    },
+    "src/utils/accountQRParser.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/utils/address.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "import/no-named-as-default": 2
+      }
+    },
+    "src/utils/animations.ts": {
+      "errors": 0,
+      "warnings": 29,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 1,
+        "react-hooks/immutability": 28
+      }
+    },
+    "src/utils/assetImages.ts": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 1
+      }
+    },
+    "src/utils/formatting.ts": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "@typescript-eslint/no-unused-vars": 2
+      }
+    },
+    "src/utils/polyfills.ts": {
+      "errors": 0,
+      "warnings": 4,
+      "rules": {
+        "@typescript-eslint/no-require-imports": 4
+      }
+    }
+  }
+}
