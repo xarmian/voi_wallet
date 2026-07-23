@@ -182,14 +182,17 @@ const LedgerAccountList: React.FC<LedgerAccountListProps> = ({
             }}
             activeOpacity={0.8}
             accessible
-            accessibilityRole="checkbox"
+            // An already-imported row is not a selectable checkbox — it is
+            // still actionable (it opens the account preview), so it must not
+            // be announced as disabled or a screen reader cannot activate it.
+            accessibilityRole={isImported ? 'button' : 'checkbox'}
             accessibilityLabel={`Account number ${item.derivationIndex}, ${item.address}${
               isImported ? ', already imported' : ''
             }`}
-            accessibilityState={{
-              checked: isSelected && !isImported,
-              disabled: isImported,
-            }}
+            accessibilityHint={isImported ? 'Opens this account' : undefined}
+            accessibilityState={
+              isImported ? undefined : { checked: isSelected }
+            }
           >
             <View style={styles.accountRowLeft}>
               <View
