@@ -30,18 +30,25 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # The ratchet: the ceiling may fall but never rise. Compares this branch's
-      # committed baseline with the base branch's and checks that --max-warnings
+      # The ratchet: the ceiling may fall but never rise. Compares this ref's
+      # committed baseline with the previous one and checks that --max-warnings
       # still equals it, so the pin cannot be inflated to admit new warnings.
-      # Artifact-to-artifact only — no second ESLint run.
+      # Artifact-to-artifact only — no second ESLint run. Runs on pushes too, so
+      # a direct push to main is gated the same way a PR is.
       - name: Lint ratchet
-        if: github.event_name == 'pull_request'
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # PRs compare against the base branch; pushes against whatever was at
+          # the tip beforehand.
+          RATCHET_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.before }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          # Empty file when the base branch predates the baseline; the script
-          # then skips rather than failing.
+          if [ -z "$RATCHET_BASE" ] || [ -z "${RATCHET_BASE//0/}" ]; then
+            echo "No previous commit to compare against (new ref) — skipping."
+            exit 0
+          fi
+          # Fail open on an unreachable base (e.g. a force-pushed or GC'd SHA):
+          # git show then finds nothing, writes an empty file, and the script
+          # skips instead of failing.
+          git fetch --no-tags --depth=1 origin "$RATCHET_BASE" || true
           git show "FETCH_HEAD:lint-baseline.json" > "$RUNNER_TEMP/base-lint-baseline.json" || true
           node scripts/lint-baseline.mjs --against="$RUNNER_TEMP/base-lint-baseline.json"
 
