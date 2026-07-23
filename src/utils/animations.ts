@@ -320,16 +320,6 @@ export const interpolations = {
 };
 
 /**
- * Utility to create a delayed animation
- */
-export function withDelay<T>(delay: number, animation: T): T {
-  // Note: react-native-reanimated has its own withDelay, but this wrapper
-  // provides consistent typing
-  const { withDelay: reanimatedWithDelay } = require('react-native-reanimated');
-  return reanimatedWithDelay(delay, animation);
-}
-
-/**
  * Simple fade in hook - auto-triggers on mount
  */
 export function useFadeIn(delay: number = 0, duration: number = 300) {
