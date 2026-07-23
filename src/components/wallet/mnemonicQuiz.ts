@@ -66,7 +66,7 @@
  * ## Attempts are NOT capped — a deliberate decision
  *
  * There is no permanent lockout, no persisted failure counter and no cooldown.
- * A blind guesser can therefore keep starting new attempts, at ~2.9% each, and
+ * A blind guesser can therefore keep starting new attempts, at ~0.78% each, and
  * will eventually pass. That is accepted, for three reasons:
  *
  *   1. A user holding a correct written phrase must ALWAYS be able to pass. Any
