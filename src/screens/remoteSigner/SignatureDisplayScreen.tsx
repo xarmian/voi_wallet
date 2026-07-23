@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -39,7 +40,11 @@ import algosdk from 'algosdk';
 const showAlert = (
   title: string,
   message: string,
-  buttons?: { text: string; onPress?: () => void; style?: string }[]
+  buttons?: {
+    text: string;
+    onPress?: () => void;
+    style?: 'default' | 'cancel' | 'destructive';
+  }[]
 ) => {
   if (Platform.OS === 'web') {
     if (buttons && buttons.length > 1) {
@@ -57,7 +62,6 @@ const showAlert = (
       buttons?.[0]?.onPress?.();
     }
   } else {
-    const { Alert } = require('react-native');
     Alert.alert(title, message, buttons);
   }
 };

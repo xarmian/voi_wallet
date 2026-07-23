@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
+  Alert,
   Modal,
   View,
   Text,
@@ -29,7 +30,6 @@ const showAlert = (
     window.alert(`${title}\n\n${message}`);
     buttons?.[0]?.onPress?.();
   } else {
-    const { Alert } = require('react-native');
     Alert.alert(title, message, buttons);
   }
 };
