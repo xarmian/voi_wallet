@@ -397,6 +397,44 @@ describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
   });
 });
 
+describe('MAX_MISTAKES — the security lever', () => {
+  it('stays small enough that elimination does not make the challenge cheap', () => {
+    // Because a position's option set is stable, every tolerated mistake is a
+    // free elimination. Per-attempt pass probability is
+    // C(MAX_MISTAKES + 3, 3) / candidates ** 3, and the relevant guesser is not
+    // the blind one but someone who remembers the phrase's WORDS but not their
+    // ORDER — they can spot the ~4 phrase words on each board. At 3 tolerated
+    // mistakes that is 20/64 ≈ 31% per attempt; at 1 it is 4/64 ≈ 6%.
+    // Raising this constant re-opens that shortcut, so pin it.
+    expect(MAX_MISTAKES).toBeLessThanOrEqual(1);
+
+    const compositions = (budget: number) =>
+      ((budget + 3) * (budget + 2) * (budget + 1)) / 6;
+    const setMemoriserCandidates = 1 + PHRASE_DECOY_COUNT;
+    const perAttempt = compositions(MAX_MISTAKES) / setMemoriserCandidates ** 3;
+    expect(perAttempt).toBeLessThan(0.1);
+  });
+
+  it('still forgives a mistake — a legitimate user is never restarted for one slip', () => {
+    const optionsFor = providerFor(LONG_WORDS);
+    let attempt = startQuizAttempt(LONG_WORDS, optionsFor);
+
+    const slip = answerWrongly(attempt, LONG_WORDS, optionsFor);
+    expect(slip.status).toBe('retry');
+    attempt = (slip as { attempt: QuizAttempt }).attempt;
+
+    for (let question = 0; question < VERIFICATION_WORD_COUNT; question++) {
+      const result = answerCorrectly(attempt, LONG_WORDS, optionsFor);
+      if (question < VERIFICATION_WORD_COUNT - 1) {
+        expect(result.status).toBe('advanced');
+        attempt = (result as { attempt: QuizAttempt }).attempt;
+      } else {
+        expect(result.status).toBe('verified');
+      }
+    }
+  });
+});
+
 describe('createOptionProvider — the cross-board intersection oracle', () => {
   it('returns the SAME set for a position, every time it is asked', () => {
     // THE DEFECT THIS PINS: the first cut of this challenge rebuilt a fresh

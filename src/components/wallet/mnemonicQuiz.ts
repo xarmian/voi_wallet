@@ -77,8 +77,10 @@
  *      it only silences a "you have not backed this up" warning. The only person
  *      who benefits from faking it is the device owner, who is defeating their
  *      own safety net, and who already has a one-tap "Skip for now".
- *   3. Grinding is strictly more work than complying. ~34 attempts, each several
- *      taps plus a bounce back to the phrase they are pretending to have copied.
+ *   3. Grinding is strictly more work than complying. ~128 attempts blind, or
+ *      ~16 for someone who has memorised the words but not their order — each
+ *      several taps plus a bounce back to the phrase they are pretending to have
+ *      copied. See {@link MAX_MISTAKES} for the arithmetic.
  *
  * A cooldown would also not survive the failure path as designed: `onFailed`
  * unmounts the challenge by design, so any in-memory counter resets, and making
@@ -120,8 +122,27 @@ export const PHRASE_DECOY_COUNT = 3;
 /**
  * Wrong picks tolerated within one attempt. The NEXT wrong pick after this many
  * discards the attempt and starts over with fresh positions.
+ *
+ * This is the dominant security lever, so the value is not arbitrary. Because
+ * the option set for a position is stable (see {@link createOptionProvider}),
+ * every tolerated mistake is an elimination, and a guesser needs
+ * {@link VERIFICATION_WORD_COUNT} correct picks with at most this many failures
+ * anywhere in the run. Drawing without replacement makes each pick worth exactly
+ * `1 / candidates`, so the per-attempt pass probability is
+ * `C(MAX_MISTAKES + 3, 3) / candidates ** 3`:
+ *
+ * | tolerated | blind (8 candidates) | knows the word set (4 candidates) |
+ * | --------- | -------------------- | --------------------------------- |
+ * | 3         | 3.9%  (~26 attempts) | 31.3% (~3 attempts)               |
+ * | 1         | 0.78% (~128 attempts)| 6.3%  (~16 attempts)              |
+ *
+ * Three tolerated mistakes made the challenge cheap for someone who remembers
+ * the phrase's words but not their order — exactly the user it must stop, since
+ * word order is what makes a phrase recoverable. One tolerated mistake still
+ * forgives a fat-finger, and the penalty for a second is a restart, never a
+ * lockout.
  */
-export const MAX_MISTAKES = 3;
+export const MAX_MISTAKES = 1;
 
 /** Source of randomness, injectable so tests can be deterministic. */
 export type Rng = () => number;
@@ -269,11 +290,11 @@ export type OptionProvider = (position: number) => string[];
  * already see. Only the display ORDER is reshuffled between presentations, and a
  * uniform shuffle of an unchanged set carries no information.
  *
- * Elimination within the mistake budget is then the residual, and it is bounded
- * and cheap: drawing without replacement from a fixed set of
- * {@link CHALLENGE_OPTION_COUNT} makes every guess worth exactly
- * `1 / CHALLENGE_OPTION_COUNT` no matter how many chips have already been ruled
- * out, so a blind guesser gains nothing per question by spending mistakes.
+ * Elimination within the mistake budget is then the residual. Drawing without
+ * replacement from a fixed set makes every guess worth exactly `1 / candidates`
+ * no matter how many chips have already been ruled out, so spending a mistake
+ * buys a guesser nothing per question — but it does buy them another guess, so
+ * the budget itself is what has to be small. See {@link MAX_MISTAKES}.
  *
  * The cache lives as long as the caller holds the provider — one component
  * mount. It holds only words that are already on screen.

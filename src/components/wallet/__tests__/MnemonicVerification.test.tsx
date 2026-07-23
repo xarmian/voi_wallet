@@ -298,9 +298,10 @@ describe('MnemonicVerification — directed challenge (TASK-226)', () => {
     expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
       `Question 1 of ${VERIFICATION_WORD_COUNT}`
     );
-    // Exactly ONE mistake was charged for the whole burst.
+    // Exactly ONE mistake was charged for the whole burst: the message counts
+    // down from the full budget.
     expect(screen.getByTestId(`${PREFIX}-error`)).toHaveTextContent(
-      new RegExp(`${MAX_MISTAKES} more wrong answers`)
+      new RegExp(`${MAX_MISTAKES} more wrong answers?`)
     );
   });
 

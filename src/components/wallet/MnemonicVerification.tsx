@@ -36,11 +36,13 @@
  * There is deliberately no permanent lockout: a user holding a correct written
  * phrase must ALWAYS be able to pass, and "Skip for now" already exists as a
  * first-class escape that records `backupVerified: false`. So blind guessing is
- * bounded by friction rather than refusal — with 8 options, 3 questions and 3
- * tolerated mistakes, a user who knows nothing passes an attempt with
- * probability ~2.9%, i.e. ~34 attempts on average, each one bouncing them back
+ * bounded by friction rather than refusal — with 8 options, 3 questions and one
+ * tolerated mistake, a user who knows nothing passes an attempt with probability
+ * ~0.78% (~128 attempts), and one who has memorised the phrase's words but not
+ * their order with ~6.3% (~16 attempts) — each attempt bouncing them back
  * through the phrase they are pretending to have written down. That is strictly
- * more work than reading it, which is the whole point.
+ * more work than reading it, which is the whole point. `MAX_MISTAKES` carries
+ * the arithmetic and is the lever that sets those numbers.
  *
  * ## Residuals, knowingly accepted
  *
