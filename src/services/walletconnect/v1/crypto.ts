@@ -44,29 +44,6 @@ function uint8ArrayToString(bytes: Uint8Array): string {
 }
 
 /**
- * Convert base64 to Uint8Array
- */
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/**
- * Convert Uint8Array to base64
- */
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binaryString = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binaryString += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binaryString);
-}
-
-/**
  * Generate random IV (Initialization Vector) for AES
  */
 async function generateIV(): Promise<Uint8Array> {

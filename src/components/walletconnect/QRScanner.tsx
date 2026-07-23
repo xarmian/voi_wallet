@@ -5,7 +5,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
   Platform,
   ActivityIndicator,
 } from 'react-native';
@@ -62,15 +61,12 @@ interface Props {
   onSuccess?: (uri: string) => void;
 }
 
-const { width, height } = Dimensions.get('window');
-
 export default function QRScanner({ onClose, onSuccess }: Props) {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
 

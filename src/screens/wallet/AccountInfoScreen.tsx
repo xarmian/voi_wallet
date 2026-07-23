@@ -8,13 +8,11 @@ import {
   ActivityIndicator,
   Dimensions,
   TouchableOpacity,
-  Alert,
 } from 'react-native';
 import { useNavigation, RouteProp, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Clipboard from 'expo-clipboard';
 import { PieChart } from 'react-native-chart-kit';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -69,7 +67,6 @@ export default function AccountInfoScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [voiAccountInfo, setVoiAccountInfo] = useState<any>(null);
   const [algoAccountInfo, setAlgoAccountInfo] = useState<any>(null);
-  const [isLoadingAccountInfo, setIsLoadingAccountInfo] = useState(true);
   const [accountAge, setAccountAge] = useState<string>('Loading...');
   const route = useRoute<AccountInfoScreenRouteProp>();
   const navigation =
@@ -201,8 +198,6 @@ export default function AccountInfoScreen() {
   const loadAccountInfo = useCallback(async () => {
     if (!displayAddress) return;
 
-    setIsLoadingAccountInfo(true);
-
     // Load account info from both networks
     const loadVoi = async () => {
       try {
@@ -248,7 +243,6 @@ export default function AccountInfoScreen() {
     };
 
     await Promise.allSettled([loadVoi(), loadAlgo()]);
-    setIsLoadingAccountInfo(false);
   }, [displayAddress]);
 
   // Calculate total USD value for a mapped asset
@@ -364,8 +358,6 @@ export default function AccountInfoScreen() {
     // Voi Network
     const voiAmount =
       multiNetworkBalance.perNetworkAmounts[NetworkId.VOI_MAINNET];
-    const voiPrice =
-      multiNetworkBalance.perNetworkPrices[NetworkId.VOI_MAINNET];
     if (voiAmount !== undefined) {
       // Calculate value ONLY from balances on this specific network
       let voiValue = 0;
@@ -402,8 +394,6 @@ export default function AccountInfoScreen() {
     // Algorand Network
     const algoAmount =
       multiNetworkBalance.perNetworkAmounts[NetworkId.ALGORAND_MAINNET];
-    const algoPrice =
-      multiNetworkBalance.perNetworkPrices[NetworkId.ALGORAND_MAINNET];
     if (algoAmount !== undefined) {
       // Calculate value ONLY from balances on this specific network
       let algoValue = 0;
@@ -439,18 +429,6 @@ export default function AccountInfoScreen() {
 
     return stats;
   }, [multiNetworkBalance]);
-
-  const copyAddressToClipboard = async () => {
-    if (displayAddress) {
-      try {
-        await Clipboard.setStringAsync(displayAddress);
-        Alert.alert('Copied', 'Address copied to clipboard');
-      } catch (error) {
-        console.error('Failed to copy address:', error);
-        Alert.alert('Error', 'Failed to copy address');
-      }
-    }
-  };
 
   const navigateToMyAccount = () => {
     navigation.navigate('AccountInfo', {});
@@ -542,7 +520,6 @@ export default function AccountInfoScreen() {
     ? multiNetworkBalance.assets.length
     : 0;
   const networksActive = multiNetworkBalance?.sourceNetworks.length || 0;
-  const totalMinBalance = multiNetworkBalance?.minBalance || 0n;
 
   if (!displayAddress) {
     return (

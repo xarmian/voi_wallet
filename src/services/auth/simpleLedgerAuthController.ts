@@ -294,8 +294,6 @@ export class SimpleLedgerAuthController {
    * Handle Ledger manager state changes
    */
   private handleLedgerStateChange(stateChange: LedgerStateChange): void {
-    const deviceConnected =
-      stateChange.state === 'ready' || stateChange.state === 'signing';
     const deviceName = stateChange.device?.name;
 
     // Map ledger manager states to our simplified states

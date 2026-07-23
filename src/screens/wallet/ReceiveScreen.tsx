@@ -64,7 +64,6 @@ export default function ReceiveScreen() {
   const route = useRoute();
   const routeParams = route.params as ReceiveScreenRouteParams | undefined;
   const contextAssetName = routeParams?.assetName;
-  const contextAssetId = routeParams?.assetId;
 
   const activeAccount = useActiveAccount();
   const activeAccountBalance = useActiveAccountBalance();
@@ -72,7 +71,6 @@ export default function ReceiveScreen() {
   // Extract values without destructuring to avoid infinite loops
   const accountBalance = activeAccountBalance.balance;
   const isLoading = activeAccountBalance.isLoading;
-  const reloadBalance = activeAccountBalance.reload;
 
   // Removed problematic useEffect that was causing infinite balance reloading
 

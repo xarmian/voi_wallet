@@ -91,10 +91,8 @@ function convertAramidMappingsToTokenMappings(): TokenMapping[] {
   }
 
   // Process ARC200 token mappings from VOI_ARC200_TOKEN_MAPPINGS
-  for (const [chainId, chainData] of Object.entries(
-    VOI_ARC200_TOKEN_MAPPINGS
-  )) {
-    for (const [tokenId, tokenData] of Object.entries(chainData.tokens)) {
+  for (const chainData of Object.values(VOI_ARC200_TOKEN_MAPPINGS)) {
+    for (const tokenData of Object.values(chainData.tokens)) {
       // Only process tokens that have an arc200TokenId
       if ('arc200TokenId' in tokenData && tokenData.arc200TokenId) {
         // Find the corresponding mapping group for this token
@@ -153,92 +151,6 @@ function convertAramidMappingsToTokenMappings(): TokenMapping[] {
  * Converted token mappings from ARAMID_TOKEN_MAPPINGS
  */
 const CONVERTED_TOKEN_MAPPINGS = convertAramidMappingsToTokenMappings();
-
-/**
- * Mock token mappings for development
- * TODO: Replace with actual API data once endpoint is available
- */
-const MOCK_TOKEN_MAPPINGS: TokenMapping[] = [
-  {
-    mappingId: 'algo',
-    name: 'ALGO',
-    tokens: [
-      {
-        networkId: NetworkId.ALGORAND_MAINNET,
-        assetId: 0,
-        symbol: 'ALGO',
-        decimals: 6,
-      },
-      {
-        networkId: NetworkId.VOI_MAINNET,
-        assetId: 302189,
-        symbol: 'aALGO',
-        decimals: 6,
-      },
-      {
-        networkId: NetworkId.VOI_MAINNET,
-        assetId: 413153,
-        symbol: 'aALGO',
-        decimals: 6,
-      },
-    ],
-    verified: true,
-    metadata: {
-      description:
-        'Algorand native token and its bridged equivalent on Voi Network',
-    },
-  },
-  {
-    mappingId: 'voi',
-    name: 'VOI',
-    tokens: [
-      {
-        networkId: NetworkId.VOI_MAINNET,
-        assetId: 0,
-        symbol: 'VOI',
-        decimals: 6,
-      },
-      {
-        networkId: NetworkId.ALGORAND_MAINNET,
-        assetId: 2320775407,
-        symbol: 'aVOI',
-        decimals: 6,
-      },
-    ],
-    verified: true,
-    metadata: {
-      description: 'VOI native token and its bridged equivalent on Algorand',
-    },
-  },
-  {
-    mappingId: 'usdc',
-    name: 'USDC',
-    tokens: [
-      {
-        networkId: NetworkId.VOI_MAINNET,
-        assetId: 302190,
-        symbol: 'aUSDC',
-        decimals: 6,
-      },
-      {
-        networkId: NetworkId.VOI_MAINNET,
-        assetId: 395614,
-        symbol: 'aUSDC',
-        decimals: 6,
-      },
-      {
-        networkId: NetworkId.ALGORAND_MAINNET,
-        assetId: 31566704,
-        symbol: 'USDC',
-        decimals: 6,
-      },
-    ],
-    verified: true,
-    metadata: {
-      description: 'USDC stablecoin across networks',
-    },
-  },
-];
 
 console.log(
   `[TokenMappingService] CONVERTED_TOKEN_MAPPINGS defined with ${CONVERTED_TOKEN_MAPPINGS.length} mappings:`,

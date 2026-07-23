@@ -149,7 +149,6 @@ export default function AccountAvatar({
   const themeColors = useThemeColors();
   const [envoiAvatarUrl, setEnvoiAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const safeAddress = address || 'default';
   const colors = generateColors(safeAddress);
@@ -170,7 +169,6 @@ export default function AccountAvatar({
     if (account?.avatarUrl) {
       initialUrl = account.avatarUrl;
       setEnvoiAvatarUrl(account.avatarUrl);
-      setIsLoading(false);
       setAvatarError(false);
       avatarUrlCache.set(address, account.avatarUrl);
     }
@@ -190,14 +188,12 @@ export default function AccountAvatar({
     if (persistedAvatar && persistedAvatar !== initialUrl) {
       initialUrl = persistedAvatar;
       setEnvoiAvatarUrl(persistedAvatar);
-      setIsLoading(false);
       setAvatarError(false);
       avatarUrlCache.set(address, persistedAvatar);
     } else if (avatarUrlCache.has(address)) {
       const cachedUrl = avatarUrlCache.get(address);
       initialUrl = cachedUrl || null;
       setEnvoiAvatarUrl(initialUrl);
-      setIsLoading(false);
       if (cachedUrl) {
         setAvatarError(false);
       }
@@ -206,7 +202,6 @@ export default function AccountAvatar({
     // Register callback for this instance
     const updateCallback = (url: string | null) => {
       setEnvoiAvatarUrl(url);
-      setIsLoading(false);
       if (url) {
         setAvatarError(false);
       }
@@ -225,7 +220,6 @@ export default function AccountAvatar({
 
     // Check if already loading
     if (avatarLoadingState.get(address)) {
-      setIsLoading(true);
       return () => {
         avatarCallbacks.get(address)?.delete(updateCallback);
       };
@@ -233,7 +227,6 @@ export default function AccountAvatar({
 
     // Start loading
     avatarLoadingState.set(address, true);
-    setIsLoading(true);
 
     const loadEnvoiAvatar = async () => {
       try {

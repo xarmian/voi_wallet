@@ -1,10 +1,8 @@
 import React, { useMemo } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '@/contexts/ThemeContext';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface NFTBackgroundProps {
   children: React.ReactNode;

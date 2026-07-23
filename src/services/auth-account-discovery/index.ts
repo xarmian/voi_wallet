@@ -134,7 +134,6 @@ export class AuthAccountDiscoveryService {
   ): Promise<NetworkAuthAccount[]> {
     const networkService = NetworkService.getInstance(networkId);
     const indexerClient = networkService.getIndexerClient();
-    const networkConfig = getNetworkConfig(networkId);
     const networkName = getNetworkDisplayName(networkId);
 
     const allAuthAccounts: NetworkAuthAccount[] = [];

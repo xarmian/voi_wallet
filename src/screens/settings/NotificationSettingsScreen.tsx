@@ -17,7 +17,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import Slider from '@react-native-community/slider';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
@@ -116,114 +115,6 @@ function SettingToggle({
     </View>
   );
 }
-
-interface SliderSettingProps {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  description?: string;
-  value: number;
-  onValueChange: (value: number) => void;
-  minimumValue: number;
-  maximumValue: number;
-  step?: number;
-  formatValue: (value: number) => string;
-  disabled?: boolean;
-}
-
-function SliderSetting({
-  icon,
-  label,
-  description,
-  value,
-  onValueChange,
-  minimumValue,
-  maximumValue,
-  step = 1,
-  formatValue,
-  disabled = false,
-}: SliderSettingProps) {
-  const { theme } = useTheme();
-  const themeColors = useThemeColors();
-
-  return (
-    <View
-      style={{
-        paddingVertical: theme.spacing.md,
-        paddingHorizontal: theme.spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.colors.glassBorder,
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          marginBottom: theme.spacing.sm,
-        }}
-      >
-        <View
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: theme.borderRadius.sm,
-            backgroundColor: `${theme.colors.primary}15`,
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginRight: theme.spacing.md,
-          }}
-        >
-          <Ionicons name={icon} size={18} color={theme.colors.primary} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text
-            style={{
-              fontSize: theme.typography.body.fontSize,
-              fontWeight: '600',
-              color: themeColors.text,
-            }}
-          >
-            {label}
-          </Text>
-          {description && (
-            <Text
-              style={{
-                fontSize: theme.typography.caption.fontSize,
-                color: themeColors.textMuted,
-                marginTop: 2,
-              }}
-            >
-              {description}
-            </Text>
-          )}
-        </View>
-        <Text
-          style={{
-            fontSize: theme.typography.body.fontSize,
-            color: themeColors.textMuted,
-            minWidth: 60,
-            textAlign: 'right',
-          }}
-        >
-          {formatValue(value)}
-        </Text>
-      </View>
-      <Slider
-        style={{ width: '100%', height: 40 }}
-        minimumValue={minimumValue}
-        maximumValue={maximumValue}
-        step={step}
-        value={value}
-        onValueChange={onValueChange}
-        disabled={disabled}
-        minimumTrackTintColor={theme.colors.primary}
-        maximumTrackTintColor={theme.colors.glassBorder}
-        thumbTintColor={theme.colors.primary}
-      />
-    </View>
-  );
-}
-
 interface NumberInputSettingProps {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;

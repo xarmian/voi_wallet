@@ -53,7 +53,7 @@ export class SimpleLedgerSigner {
   ): Promise<SimpleLedgerSigningResult> {
     try {
       // Ensure device is connected and ready
-      const transport = await this.ensureDeviceReady(callbacks);
+      await this.ensureDeviceReady(callbacks);
 
       callbacks?.onSigningStarted?.();
       simpleLedgerManager.setSigningInProgress(true);

@@ -34,7 +34,7 @@ export default function NFTThemeSelector({
 }: NFTThemeSelectorProps) {
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
-  const { setNFTTheme, nftThemeData } = useTheme();
+  const { setNFTTheme } = useTheme();
   const activeAccount = useActiveAccount();
 
   // State management
@@ -204,14 +204,6 @@ export default function NFTThemeSelector({
     } finally {
       setProcessingNFT(null);
     }
-  };
-
-  const isNFTSelected = (nft: NFTToken): boolean => {
-    if (!nftThemeData) return false;
-    return (
-      nftThemeData.contractId === nft.contractId &&
-      nftThemeData.tokenId === nft.tokenId
-    );
   };
 
   const handleLoadMore = () => {

@@ -12,11 +12,9 @@ import EnvoiService from '@/services/envoi';
 
 const STORAGE_KEYS = {
   FRIENDS_LIST: '@friends/list',
-  PROFILES_CACHE: '@friends/profiles_cache',
 } as const;
 
 const MAX_FRIENDS = 500;
-const PROFILE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 interface FriendsState {
   // State

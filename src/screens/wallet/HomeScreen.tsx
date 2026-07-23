@@ -33,20 +33,16 @@ import { AssetBalance, needsBackupVerification } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
-  useAccounts,
   useWalletStore,
   useActiveAccountBalance,
   useAccountEnvoiName,
-  useViewMode,
   useIsMultiNetworkView,
   useMultiNetworkBalance,
   useAssetNetworkFilter,
 } from '@/store/walletStore';
 import VoiNetworkService, { NetworkStatus } from '@/services/network';
-import { formatNativeBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
-import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 import AccountListModal from '@/components/account/AccountListModal';
 import UniversalHeader from '@/components/common/UniversalHeader';
@@ -82,8 +78,6 @@ import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { toErrorAlert } from '@/utils/errorMapping';
 import { useConnectivity } from '@/hooks/useConnectivity';
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export default function HomeScreen() {
   // `networkStatus` used to be written twice and read nowhere (TASK-40 / R-03).
@@ -220,7 +214,6 @@ export default function HomeScreen() {
   }, []);
 
   const initialize = useWalletStore((state) => state.initialize);
-  const wallet = useWalletStore((state) => state.wallet);
   // Wallet-store hydration flag (F-48, TASK-182). This is the SAME signal the
   // splash readiness owner (AppStack) gates on, so the "Loading wallet..."
   // placeholder and the splash hide stay in lockstep. Once the store is
@@ -233,7 +226,6 @@ export default function HomeScreen() {
   const loadAccountTransactions = useWalletStore(
     (state) => state.loadAccountTransactions
   );
-  const allAccounts = useAccounts();
   const {
     balance: accountBalance,
     isLoading: isBalanceLoading,
@@ -251,7 +243,6 @@ export default function HomeScreen() {
   const loadEnvoiName = useWalletStore((state) => state.loadEnvoiName);
 
   // Multi-network view mode
-  const viewMode = useViewMode();
   const isMultiNetworkView = useIsMultiNetworkView();
   const assetNetworkFilter = useAssetNetworkFilter();
   const {
@@ -1150,10 +1141,6 @@ export default function HomeScreen() {
     return `${address.slice(0, 6)}...${address.slice(-6)}`;
   };
 
-  const formatBalance = (amount: number | bigint) => {
-    return formatNativeBalance(amount, currentNetworkConfig.nativeToken);
-  };
-
   const calculateTotalUsdValue = React.useMemo(() => {
     if (isMultiNetworkView && multiNetworkBalance) {
       // Multi-network calculation - ALWAYS show combined total regardless of filter
@@ -1283,88 +1270,6 @@ export default function HomeScreen() {
   const algorandNetworkUsdValue = React.useMemo(() => {
     return calculateNetworkUsdValue(NetworkId.ALGORAND_MAINNET);
   }, [calculateNetworkUsdValue]);
-
-  const calculateNativeTokenEquivalent = React.useMemo(() => {
-    if (isMultiNetworkView && multiNetworkBalance) {
-      // Multi-network: Show breakdown by network, filtered by assetNetworkFilter
-      const parts: string[] = [];
-
-      // Determine which networks to include based on filter
-      const shouldIncludeNetwork = (networkId: NetworkId) => {
-        if (assetNetworkFilter === 'all') return true;
-        if (assetNetworkFilter === 'voi')
-          return networkId === NetworkId.VOI_MAINNET;
-        if (assetNetworkFilter === 'algorand')
-          return networkId === NetworkId.ALGORAND_MAINNET;
-        return true;
-      };
-
-      Object.entries(multiNetworkBalance.perNetworkAmounts).forEach(
-        ([networkId, amount]) => {
-          // Skip if this network is filtered out
-          if (!shouldIncludeNetwork(networkId as NetworkId)) {
-            return;
-          }
-
-          const config = getNetworkConfig(networkId as NetworkId);
-          const amountNum =
-            typeof amount === 'bigint' ? Number(amount) : amount;
-          const formatted = formatNativeBalance(amountNum, config.nativeToken);
-          parts.push(`${formatted} ${config.nativeToken}`);
-        }
-      );
-
-      return parts.length > 0
-        ? parts.join(' + ')
-        : formatNativeBalance(0, 'VOI');
-    }
-
-    // Single-network calculation (existing logic)
-    const nativePrice = accountBalance?.voiPrice || accountBalance?.algoPrice;
-    if (!nativePrice)
-      return formatNativeBalance(0, currentNetworkConfig.nativeToken);
-
-    // Get total USD value without formatting
-    let totalUsdValue = 0;
-
-    // Add native token value
-    if (nativePrice && accountBalance.amount) {
-      const amount =
-        typeof accountBalance.amount === 'bigint'
-          ? Number(accountBalance.amount)
-          : accountBalance.amount;
-      const nativeValue = amount / 1_000_000; // Convert micro-units to whole units
-      totalUsdValue += nativeValue * nativePrice;
-    }
-
-    // Add asset values
-    if (accountBalance.assets) {
-      accountBalance.assets.forEach((asset) => {
-        if (asset.usdValue && asset.amount) {
-          const unitPrice = parseFloat(asset.usdValue);
-          const amount =
-            typeof asset.amount === 'bigint'
-              ? Number(asset.amount)
-              : asset.amount;
-          const normalizedBalance = amount / 10 ** asset.decimals;
-          totalUsdValue += normalizedBalance * unitPrice;
-        }
-      });
-    }
-
-    const nativeTokenEquivalent = totalUsdValue / nativePrice;
-    // Convert to micro-units for formatting
-    return formatNativeBalance(
-      nativeTokenEquivalent * 1_000_000,
-      currentNetworkConfig.nativeToken
-    );
-  }, [
-    isMultiNetworkView,
-    multiNetworkBalance,
-    assetNetworkFilter,
-    accountBalance,
-    currentNetworkConfig,
-  ]);
 
   // Show the placeholder only while the wallet store has NOT yet hydrated its
   // cached balances. Once `isWalletInitialized` is true the cached balances are

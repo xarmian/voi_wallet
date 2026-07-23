@@ -45,7 +45,6 @@ export default function AccountListItem({
   // Extract values without destructuring to avoid infinite loops
   const centralizedBalance = accountBalanceData.balance;
   const isBalanceLoading = accountBalanceData.isLoading;
-  const reloadAccountBalance = accountBalanceData.reload;
 
   // Don't load individual balances - the modal will batch load all balances
   // This prevents each item from triggering separate state updates
@@ -109,27 +108,6 @@ export default function AccountListItem({
     }
   };
 
-  const getRekeyStatusIcon = (account: AccountMetadata) => {
-    if (account.type !== AccountType.REKEYED) {
-      return null;
-    }
-
-    const rekeyedAccount = account as RekeyedAccountMetadata;
-    if (rekeyedAccount.canSign) {
-      return {
-        name: 'key' as const,
-        color: colors.success, // We have signing authority
-        tooltip: 'Rekeyed account - you have signing authority',
-      };
-    } else {
-      return {
-        name: 'lock-closed' as const,
-        color: colors.warning, // We do not have signing authority
-        tooltip: 'Rekeyed account - you do not have signing authority',
-      };
-    }
-  };
-
   const handleSelect = async () => {
     try {
       if (!isActive) {
@@ -176,7 +154,6 @@ export default function AccountListItem({
   };
 
   const typeLabel = getAccountTypeLabel(account);
-  const rekeyIcon = getRekeyStatusIcon(account);
 
   return (
     <TouchableOpacity

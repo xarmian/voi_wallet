@@ -216,8 +216,6 @@ const EMOJI_CATEGORIES = [
   },
 ];
 
-const RECENT_EMOJIS_KEY = '@recent_emojis';
-
 interface MessageInputProps {
   onSend: (content: string) => Promise<void>;
   isSending: boolean;

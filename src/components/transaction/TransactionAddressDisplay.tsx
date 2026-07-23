@@ -21,7 +21,6 @@ export default function TransactionAddressDisplay({
   showDirection = true,
 }: TransactionAddressDisplayProps) {
   const [nameInfo, setNameInfo] = useState<EnvoiNameInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -30,7 +29,6 @@ export default function TransactionAddressDisplay({
       if (!address) return;
 
       try {
-        setIsLoading(true);
         const envoiService = EnvoiService.getInstance();
         const result = await envoiService.getName(address);
 
@@ -41,10 +39,6 @@ export default function TransactionAddressDisplay({
         console.warn('Failed to load Envoi name:', error);
         if (mounted) {
           setNameInfo(null);
-        }
-      } finally {
-        if (mounted) {
-          setIsLoading(false);
         }
       }
     };

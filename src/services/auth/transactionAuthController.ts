@@ -1746,10 +1746,7 @@ export class TransactionAuthController {
       };
 
       // Execute the signing
-      const result = await this.unifiedSigner.signTransaction(
-        this.currentRequest,
-        callbacks
-      );
+      await this.unifiedSigner.signTransaction(this.currentRequest, callbacks);
     } catch (error) {
       this.isSigningInProgress = false;
       const message = this.sanitizeLedgerError(error);

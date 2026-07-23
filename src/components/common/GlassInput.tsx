@@ -5,7 +5,7 @@
  * and optional floating labels. Works seamlessly with NFT background theming.
  */
 
-import React, { useMemo, useCallback, useState, useRef } from 'react';
+import React, { useMemo, useCallback, useRef } from 'react';
 import {
   View,
   TextInput,
@@ -62,7 +62,6 @@ interface GlassInputProps extends Omit<TextInputProps, 'style'> {
 
 const AnimatedView = Animated.View;
 const AnimatedText = Animated.Text;
-const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
 
 export const GlassInput: React.FC<GlassInputProps> = ({
   size = 'md',
@@ -90,7 +89,6 @@ export const GlassInput: React.FC<GlassInputProps> = ({
   const inputRef = useRef<TextInput>(null);
 
   // State
-  const [isFocused, setIsFocused] = useState(false);
 
   // Animation values
   const focusProgress = useSharedValue(0);
@@ -132,7 +130,6 @@ export const GlassInput: React.FC<GlassInputProps> = ({
   // Handle focus
   const handleFocus = useCallback(
     (e: any) => {
-      setIsFocused(true);
       focusProgress.value = withSpring(1, springConfigs.snappy);
       if (floatingLabel) {
         labelProgress.value = withSpring(1, springConfigs.smooth);
@@ -145,7 +142,6 @@ export const GlassInput: React.FC<GlassInputProps> = ({
   // Handle blur
   const handleBlur = useCallback(
     (e: any) => {
-      setIsFocused(false);
       focusProgress.value = withSpring(0, springConfigs.snappy);
       if (floatingLabel && !value) {
         labelProgress.value = withSpring(0, springConfigs.smooth);
@@ -160,13 +156,6 @@ export const GlassInput: React.FC<GlassInputProps> = ({
     onChangeText?.('');
     inputRef.current?.focus();
   }, [onChangeText]);
-
-  // Border color based on state
-  const getBorderColor = useCallback(() => {
-    if (error) return theme.colors.error;
-    if (isFocused) return theme.colors.primary;
-    return theme.colors.glassBorder;
-  }, [error, isFocused, theme.colors]);
 
   // Animated container style
   const animatedContainerStyle = useAnimatedStyle(() => {

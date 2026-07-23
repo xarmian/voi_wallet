@@ -2,19 +2,19 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 404,
+    "warnings": 297,
     "filesLinted": 432,
-    "filesWithFindings": 126
+    "filesWithFindings": 98
   },
   "rules": {
-    "@typescript-eslint/no-unused-vars": 114,
+    "@typescript-eslint/no-unused-vars": 9,
     "import/no-named-as-default": 37,
     "react-hooks/exhaustive-deps": 61,
-    "react-hooks/immutability": 98,
+    "react-hooks/immutability": 97,
     "react-hooks/preserve-manual-memoization": 25,
     "react-hooks/purity": 5,
     "react-hooks/refs": 7,
-    "react-hooks/set-state-in-effect": 57
+    "react-hooks/set-state-in-effect": 56
   },
   "files": {
     "src/components/UnifiedAuthModal.tsx": {
@@ -37,19 +37,11 @@
     },
     "src/components/account/AccountAvatar.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/components/account/AccountListItem.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
       }
     },
     "src/components/account/AccountRecipientModal.tsx": {
@@ -59,18 +51,10 @@
         "react-hooks/exhaustive-deps": 1
       }
     },
-    "src/components/account/AccountSelector.tsx": {
+    "src/components/account/AddAccountModal.tsx": {
       "errors": 0,
       "warnings": 1,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
-    "src/components/account/AddAccountModal.tsx": {
-      "errors": 0,
-      "warnings": 4,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 3,
         "react-hooks/exhaustive-deps": 1
       }
     },
@@ -118,13 +102,6 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/components/common/BlurredContainer.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
     "src/components/common/GlassButton.tsx": {
       "errors": 0,
       "warnings": 4,
@@ -141,34 +118,18 @@
     },
     "src/components/common/GlassInput.tsx": {
       "errors": 0,
-      "warnings": 6,
+      "warnings": 4,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 2,
         "react-hooks/immutability": 4
-      }
-    },
-    "src/components/common/NFTBackground.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
       }
     },
     "src/components/common/NFTThemeSelector.tsx": {
       "errors": 0,
-      "warnings": 6,
+      "warnings": 5,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/exhaustive-deps": 2,
         "react-hooks/immutability": 1,
         "react-hooks/set-state-in-effect": 2
-      }
-    },
-    "src/components/common/ThemedWebView.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
       }
     },
     "src/components/common/UniversalHeader.tsx": {
@@ -185,18 +146,10 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/components/envoi/EnvoiProfileCard.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
     "src/components/ledger/ConnectionModal.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 1
       }
@@ -221,13 +174,6 @@
       "warnings": 6,
       "rules": {
         "react-hooks/immutability": 6
-      }
-    },
-    "src/components/network/NetworkIndicator.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
       }
     },
     "src/components/network/NetworkSwitcher.tsx": {
@@ -285,18 +231,10 @@
         "react-hooks/purity": 1
       }
     },
-    "src/components/social/MessageInput.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
     "src/components/swap/RouteDetailModal.tsx": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 3,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 2,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/immutability": 1,
         "react-hooks/set-state-in-effect": 1
@@ -321,40 +259,23 @@
     },
     "src/components/transaction/TransactionAddressDisplay.tsx": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1
-      }
-    },
-    "src/components/transaction/TransactionListItem.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
-    "src/components/walletconnect/DAppInfo.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
       }
     },
     "src/components/walletconnect/QRScanner.tsx": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 3,
         "react-hooks/immutability": 1,
         "react-hooks/set-state-in-effect": 1
       }
     },
     "src/contexts/AuthContext.tsx": {
       "errors": 0,
-      "warnings": 7,
+      "warnings": 6,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/immutability": 3,
         "react-hooks/purity": 1,
@@ -371,24 +292,9 @@
     },
     "src/navigation/AppNavigator.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 1,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 2,
         "react-hooks/exhaustive-deps": 1
-      }
-    },
-    "src/screens/account/AccountImportPreviewScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
-    "src/screens/account/AddWatchAccountScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
       }
     },
     "src/screens/account/LedgerAccountImportScreen.tsx": {
@@ -401,9 +307,8 @@
     },
     "src/screens/account/MnemonicImportScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/preserve-manual-memoization": 1
       }
@@ -445,13 +350,6 @@
         "react-hooks/immutability": 1
       }
     },
-    "src/screens/remoteSigner/AirgapHomeScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
     "src/screens/remoteSigner/ImportFromOnlineWalletScreen.tsx": {
       "errors": 0,
       "warnings": 2,
@@ -469,59 +367,33 @@
     },
     "src/screens/remoteSigner/SignRequestScannerScreen.tsx": {
       "errors": 0,
-      "warnings": 6,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 3,
         "react-hooks/exhaustive-deps": 1,
-        "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 1
+        "react-hooks/immutability": 1
       }
     },
     "src/screens/remoteSigner/SignatureDisplayScreen.tsx": {
       "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/screens/remoteSigner/TransactionReviewScreen.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
-      }
-    },
-    "src/screens/settings/AboutScreen.tsx": {
-      "errors": 0,
       "warnings": 1,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1
+        "react-hooks/set-state-in-effect": 1
       }
     },
     "src/screens/settings/BackupWalletScreen.tsx": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/exhaustive-deps": 1
       }
     },
     "src/screens/settings/NotificationSettingsScreen.tsx": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 4,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/immutability": 1,
         "react-hooks/set-state-in-effect": 2
-      }
-    },
-    "src/screens/settings/RestoreWalletScreen.tsx": {
-      "errors": 0,
-      "warnings": 3,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 3
       }
     },
     "src/screens/settings/SecuritySettingsScreen.tsx": {
@@ -533,10 +405,9 @@
     },
     "src/screens/settings/SettingsScreen.tsx": {
       "errors": 0,
-      "warnings": 8,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 5,
-        "react-hooks/immutability": 3
+        "react-hooks/immutability": 2
       }
     },
     "src/screens/settings/ShowRecoveryPhraseScreen.tsx": {
@@ -567,18 +438,16 @@
     },
     "src/screens/social/FriendProfileScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/preserve-manual-memoization": 2,
         "react-hooks/set-state-in-effect": 1
       }
     },
     "src/screens/social/MessagesInboxScreen.tsx": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 4,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/preserve-manual-memoization": 3,
         "react-hooks/purity": 1
       }
@@ -592,9 +461,8 @@
     },
     "src/screens/social/NewMessageScreen.tsx": {
       "errors": 0,
-      "warnings": 6,
+      "warnings": 5,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/immutability": 1,
@@ -602,18 +470,10 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/screens/transaction/KeyregConfirmScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
     "src/screens/wallet/AccountInfoScreen.tsx": {
       "errors": 0,
-      "warnings": 8,
+      "warnings": 3,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 5,
         "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 2
       }
@@ -628,18 +488,10 @@
     },
     "src/screens/wallet/AssetDetailScreen.tsx": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 3,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 2,
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/set-state-in-effect": 2
-      }
-    },
-    "src/screens/wallet/BuyScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
       }
     },
     "src/screens/wallet/ClaimAllConfirmationScreen.tsx": {
@@ -683,9 +535,8 @@
     },
     "src/screens/wallet/HomeScreen.tsx": {
       "errors": 0,
-      "warnings": 15,
+      "warnings": 9,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 6,
         "import/no-named-as-default": 1,
         "react-hooks/exhaustive-deps": 2,
         "react-hooks/immutability": 3,
@@ -701,20 +552,12 @@
     },
     "src/screens/wallet/NFTScreen.tsx": {
       "errors": 0,
-      "warnings": 9,
+      "warnings": 8,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "react-hooks/exhaustive-deps": 3,
         "react-hooks/immutability": 2,
         "react-hooks/preserve-manual-memoization": 2,
         "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/screens/wallet/ReceiveScreen.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
       }
     },
     "src/screens/wallet/RekeyAccountScreen.tsx": {
@@ -729,9 +572,9 @@
     },
     "src/screens/wallet/SendScreen.tsx": {
       "errors": 0,
-      "warnings": 26,
+      "warnings": 15,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 12,
+        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1,
         "react-hooks/exhaustive-deps": 8,
         "react-hooks/immutability": 1,
@@ -750,9 +593,8 @@
     },
     "src/screens/wallet/TransactionConfirmationScreen.tsx": {
       "errors": 0,
-      "warnings": 7,
+      "warnings": 5,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 2,
         "import/no-named-as-default": 1,
         "react-hooks/exhaustive-deps": 2,
         "react-hooks/immutability": 2
@@ -807,46 +649,11 @@
     },
     "src/screens/walletconnect/TransactionRequestScreen.tsx": {
       "errors": 0,
-      "warnings": 9,
+      "warnings": 6,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 5,
+        "@typescript-eslint/no-unused-vars": 2,
         "react-hooks/exhaustive-deps": 2,
         "react-hooks/immutability": 2
-      }
-    },
-    "src/services/auth-account-discovery/index.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
-    "src/services/auth/simpleLedgerAuthController.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
-    "src/services/auth/transactionAuthController.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
-      }
-    },
-    "src/services/deeplink/index.ts": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
-      }
-    },
-    "src/services/ledger/simpleLedgerSigner.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
       }
     },
     "src/services/network/index.ts": {
@@ -854,13 +661,6 @@
       "warnings": 3,
       "rules": {
         "import/no-named-as-default": 3
-      }
-    },
-    "src/services/remoteSigner/animatedQR.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1
       }
     },
     "src/services/secure/keyManager.ts": {
@@ -884,13 +684,6 @@
         "import/no-named-as-default": 1
       }
     },
-    "src/services/token-mapping/index.ts": {
-      "errors": 0,
-      "warnings": 3,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 3
-      }
-    },
     "src/services/transactions/arc200.ts": {
       "errors": 0,
       "warnings": 2,
@@ -900,9 +693,8 @@
     },
     "src/services/transactions/arc72.ts": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 2
       }
     },
@@ -911,13 +703,6 @@
       "warnings": 1,
       "rules": {
         "import/no-named-as-default": 1
-      }
-    },
-    "src/services/transactions/unifiedSigner.ts": {
-      "errors": 0,
-      "warnings": 3,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 3
       }
     },
     "src/services/wallet/index.ts": {
@@ -955,13 +740,6 @@
         "@typescript-eslint/no-unused-vars": 1
       }
     },
-    "src/services/walletconnect/v1/crypto.ts": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 2
-      }
-    },
     "src/store/claimableStore.ts": {
       "errors": 0,
       "warnings": 2,
@@ -971,9 +749,8 @@
     },
     "src/store/friendsStore.ts": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1
       }
     },

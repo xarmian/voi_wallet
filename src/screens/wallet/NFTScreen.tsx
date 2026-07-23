@@ -21,7 +21,6 @@ import type {
   MainTabParamList,
   RootStackParamList,
 } from '@/navigation/AppNavigator';
-import Animated from 'react-native-reanimated';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
 import { ARC72Collection, NFTToken } from '@/types/nft';
@@ -35,8 +34,6 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type TabType = 'my-nfts' | 'browse-collections';
 type ViewMode = 'my-nfts' | 'browse-collections' | 'collection-tokens';

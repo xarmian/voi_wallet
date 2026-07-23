@@ -62,7 +62,7 @@ export default function NewMessageScreen() {
 
   const activeAccount = useActiveAccount();
   const allAccounts = useAccounts();
-  const { isKeyRegistered, checkKeyRegistration } = useMessagesStore();
+  const { checkKeyRegistration } = useMessagesStore();
   const friends = useFriendsStore((state) => state.friends);
   const friendsInitialize = useFriendsStore((state) => state.initialize);
   const friendsIsInitialized = useFriendsStore((state) => state.isInitialized);

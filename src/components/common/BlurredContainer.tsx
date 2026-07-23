@@ -107,7 +107,6 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
       alignSelf,
       flexWrap,
       gap,
-      ...rest
     } = styleObj;
     return {
       flexDirection,

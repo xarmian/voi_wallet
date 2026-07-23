@@ -40,11 +40,6 @@ type AddWatchAccountScreenRouteProp = RouteProp<
   'AddWatchAccount'
 >;
 
-interface Props {
-  navigation: AddWatchAccountScreenNavigationProp;
-  route: AddWatchAccountScreenRouteProp;
-}
-
 export default function AddWatchAccountScreen() {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);

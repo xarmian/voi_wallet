@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
@@ -36,7 +35,6 @@ const getUpdateInfo = () => {
 };
 
 export default function AboutScreen() {
-  const navigation = useNavigation();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
   const updateInfo = getUpdateInfo();

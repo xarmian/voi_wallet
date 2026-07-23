@@ -89,7 +89,6 @@ export default function TransactionConfirmationScreen() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
-  const [isSending, setIsSending] = useState(false);
   const [fallbackImageUrl, setFallbackImageUrl] = useState<string | undefined>(
     undefined
   );

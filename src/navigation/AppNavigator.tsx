@@ -855,7 +855,6 @@ function MainTabNavigator() {
   const isSignerMode = appMode === 'signer';
 
   // Extract theme values to stable variables to avoid context issues in callbacks
-  const primaryColor = theme.colors.primary;
   const tabIconActive = theme.colors.tabIconActive;
   const tabIconInactive = theme.colors.tabIconInactive;
   // Use solid background when no NFT background, semi-transparent when NFT is enabled
@@ -1362,9 +1361,6 @@ export default function AppNavigator() {
   const navigationRef = useRef<any>(null);
   const initializationRef = useRef<boolean>(false);
   const { initializeNetwork } = useNetworkStore();
-
-  // Disable URL-based linking for Chrome extensions to prevent "file couldn't be accessed" errors
-  const isExtension = Platform.OS === 'web' && detectPlatform() === 'extension';
 
   // For extensions, don't use any linking config - this completely disables URL-based navigation
   // which prevents full page reloads when switching tabs

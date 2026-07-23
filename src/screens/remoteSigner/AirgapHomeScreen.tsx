@@ -36,7 +36,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useTheme } from '@/contexts/ThemeContext';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import { NFTBackground } from '@/components/common/NFTBackground';
@@ -62,7 +61,6 @@ export default function AirgapHomeScreen() {
   const navigation = useNavigation<NavigationProp>();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
-  const { theme } = useTheme();
 
   // State
   const [isAccountListVisible, setIsAccountListVisible] = useState(false);

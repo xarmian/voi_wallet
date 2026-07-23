@@ -324,24 +324,6 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
     accountLabel,
   ]);
 
-  const handleClear = useCallback(() => {
-    Alert.alert(
-      'Clear All Words',
-      'Are you sure you want to clear all entered words?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: () => {
-            clearImportState();
-            inputRefs.current[0]?.focus();
-          },
-        },
-      ]
-    );
-  }, [clearImportState]);
-
   const renderWordInput = useCallback(
     ({ item: index }: { item: number }) => {
       const word = words[index];

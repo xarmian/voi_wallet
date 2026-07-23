@@ -11,14 +11,13 @@ import ThemedWebView, {
   ThemedWebViewRef,
 } from '@/components/common/ThemedWebView';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useRoute } from '@react-navigation/native';
 import { useWalletStore, useActiveAccount } from '@/store/walletStore';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import { useTheme } from '@/contexts/ThemeContext';
 
 export default function BuyScreen() {
-  const navigation = useNavigation();
   const route = useRoute();
   const reloadTimestamp = (route.params as { reload?: number } | undefined)
     ?.reload;

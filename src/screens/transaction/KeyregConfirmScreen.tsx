@@ -19,7 +19,7 @@ import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModa
 import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
 import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import { formatAddress } from '@/utils/address';
-import { useWalletStore, useActiveAccount } from '@/store/walletStore';
+import { useWalletStore } from '@/store/walletStore';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { getNetworkConfig } from '@/services/network/config';
@@ -44,7 +44,6 @@ export default function KeyregConfirmScreen() {
   const colors = useThemeColors();
 
   const { wallet } = useWalletStore();
-  const activeAccount = useActiveAccount();
   const authController = useTransactionAuthController();
 
   const [showAuthModal, setShowAuthModal] = useState(false);

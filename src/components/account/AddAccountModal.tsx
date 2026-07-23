@@ -9,7 +9,6 @@ import {
   BottomSheetView,
 } from '@gorhom/bottom-sheet';
 import { BottomSheetDefaultBackdropProps } from '@gorhom/bottom-sheet/lib/typescript/components/bottomSheetBackdrop/types';
-import { useWalletStore } from '@/store/walletStore';
 
 interface AddAccountModalProps {
   isVisible: boolean;
@@ -34,9 +33,6 @@ export default function AddAccountModal({
   airgapMode = false,
 }: AddAccountModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
-  const createAccount = useWalletStore((state) => state.createAccount);
-  const importAccount = useWalletStore((state) => state.importAccount);
-  const addWatchAccount = useWalletStore((state) => state.addWatchAccount);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(

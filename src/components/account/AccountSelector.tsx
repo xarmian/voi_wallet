@@ -1,11 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  useActiveAccount,
-  useAccounts,
-  useActiveAccountBalance,
-} from '@/store/walletStore';
+import { useActiveAccount, useActiveAccountBalance } from '@/store/walletStore';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import AccountAvatar from './AccountAvatar';
 import { formatVoiBalance, getCurrencySymbol } from '@/utils/bigint';
@@ -34,7 +30,6 @@ export default function AccountSelector({
   const { theme } = useTheme();
   const colors = createColors(theme);
   const activeAccount = useActiveAccount();
-  const allAccounts = useAccounts();
   const { balance: centralizedBalance, isLoading: isBalanceLoading } =
     useActiveAccountBalance();
   const currentNetworkConfig = useCurrentNetworkConfig();
@@ -68,8 +63,6 @@ export default function AccountSelector({
     }
     return formatVoiBalance(amount);
   };
-
-  const hasMultipleAccounts = allAccounts.length > 1;
 
   return (
     <TouchableOpacity
