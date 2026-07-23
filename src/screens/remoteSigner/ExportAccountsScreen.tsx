@@ -346,7 +346,13 @@ export default function ExportAccountsScreen() {
               onPress={() => toggleAccount(account.id)}
               accessible
               accessibilityRole="checkbox"
-              accessibilityLabel={`${account.label || formatAddress(account.address)}, ${formatAddress(account.address)}`}
+              // The row renders the label above the address, but falls back to
+              // the address for both when unlabeled — announce it once.
+              accessibilityLabel={
+                account.label
+                  ? `${account.label}, ${formatAddress(account.address)}`
+                  : formatAddress(account.address)
+              }
               accessibilityState={{
                 checked: selectedAccountIds.has(account.id),
               }}
