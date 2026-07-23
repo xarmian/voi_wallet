@@ -23,6 +23,7 @@ import {
   formatSessionExpiry,
   truncateAddress,
   sanitizeMetadata,
+  normalizeV1Metadata,
   getNetworkByChainId,
   getChainDataByChainId,
   getNetworkNameByChainId,
@@ -883,6 +884,58 @@ describe('sanitizeMetadata', () => {
     });
     expect(out.icons).toEqual([]);
     expect(out.name).toBe('X');
+  });
+});
+
+// ===========================================================================
+// normalizeV1Metadata
+// ===========================================================================
+
+describe('normalizeV1Metadata', () => {
+  const fallback = {
+    name: 'Fallback dApp',
+    description: 'fallback description',
+    url: 'https://fallback.example',
+    icons: ['https://fallback.example/icon.png'],
+  };
+
+  it('returns the fallback verbatim when metadata is null', () => {
+    expect(normalizeV1Metadata(null, fallback)).toBe(fallback);
+  });
+
+  it('preserves all fields when the description is a non-null string', () => {
+    const meta = {
+      name: 'Real dApp',
+      description: 'a real description',
+      url: 'https://dapp.example',
+      icons: ['https://dapp.example/icon.png'],
+    };
+    expect(normalizeV1Metadata(meta, fallback)).toEqual(meta);
+  });
+
+  it('coerces a null description to an empty string (not the fallback)', () => {
+    const meta = {
+      name: 'No-desc dApp',
+      description: null,
+      url: 'https://dapp.example',
+      icons: [],
+    };
+    expect(normalizeV1Metadata(meta, fallback)).toEqual({
+      name: 'No-desc dApp',
+      description: '',
+      url: 'https://dapp.example',
+      icons: [],
+    });
+  });
+
+  it('preserves an empty-string description without substituting a fallback', () => {
+    const meta = {
+      name: 'Empty-desc dApp',
+      description: '',
+      url: 'https://dapp.example',
+      icons: [],
+    };
+    expect(normalizeV1Metadata(meta, fallback).description).toBe('');
   });
 });
 

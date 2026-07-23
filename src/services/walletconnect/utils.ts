@@ -3,8 +3,10 @@ import { isValidAddress } from 'algosdk';
 import {
   WalletTransaction,
   WalletConnectSession,
+  WalletConnectMetadata,
   SessionProposal,
 } from './types';
+import type { WalletConnectV1PeerMeta } from './v1/types';
 import {
   AccountType,
   AccountMetadata,
@@ -412,6 +414,20 @@ export function sanitizeMetadata(metadata: any) {
     url: metadata?.url || '',
     icons: Array.isArray(metadata?.icons) ? metadata.icons : [],
   };
+}
+
+/**
+ * Normalize WalletConnect v1 peer/client metadata to the display
+ * `WalletConnectMetadata` shape. v1 metadata permits a `null` description, but
+ * the display type requires a string, so a null description is coerced to ''.
+ * When the v1 metadata is absent (`null`), the caller-provided fallback is
+ * returned unchanged. All other fields are preserved verbatim.
+ */
+export function normalizeV1Metadata(
+  meta: WalletConnectV1PeerMeta | null,
+  fallback: WalletConnectMetadata
+): WalletConnectMetadata {
+  return meta ? { ...meta, description: meta.description ?? '' } : fallback;
 }
 
 /**

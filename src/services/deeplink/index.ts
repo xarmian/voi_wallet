@@ -1,5 +1,5 @@
 import { Alert, Platform, Linking } from 'react-native';
-import { NavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainerRef, StackActions } from '@react-navigation/native';
 import { WalletConnectService } from '@/services/walletconnect';
 import {
   parseWalletConnectUri,
@@ -1176,7 +1176,6 @@ export class DeepLinkService {
       // Use type assertion to handle React Navigation's complex generic types
       if (options?.replace) {
         // Use StackActions.replace to replace current screen in stack
-        const { StackActions } = require('@react-navigation/native');
         this.navigationRef.dispatch(
           StackActions.replace(route.screen, route.params)
         );

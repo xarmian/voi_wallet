@@ -3,6 +3,7 @@
  * Uses AES-256-CBC with HMAC-SHA256 for message security
  */
 
+import CryptoJS from 'crypto-js';
 import * as Crypto from 'expo-crypto';
 import { WalletConnectV1EncryptedPayload } from './types';
 
@@ -79,8 +80,6 @@ async function generateIV(): Promise<Uint8Array> {
  * WalletConnect v1 uses proper HMAC, not simple hash(key + data)
  */
 function computeHMAC(key: Uint8Array, data: Uint8Array): Uint8Array {
-  const CryptoJS = require('crypto-js');
-
   // Convert Uint8Arrays to hex strings first, then to WordArrays
   // This ensures proper byte representation
   const keyHex = uint8ArrayToHex(key);
@@ -105,8 +104,6 @@ async function aesEncrypt(
   key: Uint8Array,
   iv: Uint8Array
 ): Promise<Uint8Array> {
-  const CryptoJS = require('crypto-js');
-
   // Convert to WordArray format using hex encoding (consistent with decrypt)
   const keyHex = uint8ArrayToHex(key);
   const ivHex = uint8ArrayToHex(iv);
@@ -143,8 +140,6 @@ async function aesDecrypt(
   key: Uint8Array,
   iv: Uint8Array
 ): Promise<Uint8Array> {
-  const CryptoJS = require('crypto-js');
-
   // Convert to WordArray format using hex encoding (same as HMAC)
   const keyHex = uint8ArrayToHex(key);
   const ivHex = uint8ArrayToHex(iv);

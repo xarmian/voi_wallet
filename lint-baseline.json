@@ -2,12 +2,11 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 410,
-    "filesLinted": 431,
+    "warnings": 404,
+    "filesLinted": 432,
     "filesWithFindings": 126
   },
   "rules": {
-    "@typescript-eslint/no-require-imports": 6,
     "@typescript-eslint/no-unused-vars": 114,
     "import/no-named-as-default": 37,
     "react-hooks/exhaustive-deps": 61,
@@ -838,9 +837,8 @@
     },
     "src/services/deeplink/index.ts": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-require-imports": 1,
         "@typescript-eslint/no-unused-vars": 2
       }
     },
@@ -945,9 +943,8 @@
     },
     "src/services/walletconnect/index.ts": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-require-imports": 1,
         "@typescript-eslint/no-unused-vars": 2
       }
     },
@@ -960,9 +957,8 @@
     },
     "src/services/walletconnect/v1/crypto.ts": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 2,
       "rules": {
-        "@typescript-eslint/no-require-imports": 3,
         "@typescript-eslint/no-unused-vars": 2
       }
     },
@@ -1004,9 +1000,8 @@
     },
     "src/utils/animations.ts": {
       "errors": 0,
-      "warnings": 29,
+      "warnings": 28,
       "rules": {
-        "@typescript-eslint/no-require-imports": 1,
         "react-hooks/immutability": 28
       }
     }

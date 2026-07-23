@@ -25,6 +25,7 @@ import {
   detectRequestedChains,
   areRequiredChainsSupported,
   truncateAddress,
+  normalizeV1Metadata,
 } from './utils';
 import {
   DEFAULT_NAMESPACES,
@@ -459,8 +460,6 @@ export class WalletConnectService extends EventEmitter {
 
   private getV1Sessions(): WalletConnectSession[] {
     try {
-      // Dynamically import v1 client to avoid circular dependencies
-      const { WalletConnectV1Client } = require('@/services/walletconnect/v1');
       const v1Client = WalletConnectV1Client.getInstance();
       const v1SessionData = v1Client.getSessionData();
 
@@ -468,15 +467,20 @@ export class WalletConnectService extends EventEmitter {
         return [];
       }
 
+      // v1 peer/client metadata permits a null description, but the display
+      // session type requires a string; `normalizeV1Metadata` coerces null ->
+      // '' at the boundary (and returns the fallback when metadata is absent).
+      // This null-safety gap was previously masked by the removed
+      // `require('@/services/walletconnect/v1')` resolving to `any`.
       // Convert v1 session format to v2 session format for display
       const v1Session: WalletConnectSession = {
         topic: v1SessionData.handshakeTopic,
-        peerMetadata: v1SessionData.peerMeta || {
+        peerMetadata: normalizeV1Metadata(v1SessionData.peerMeta, {
           name: 'Unknown dApp',
           description: '',
           url: '',
           icons: [],
-        },
+        }),
         namespaces: {
           algorand: {
             accounts: v1SessionData.accounts.map(
@@ -492,7 +496,7 @@ export class WalletConnectService extends EventEmitter {
         controller: v1SessionData.clientId,
         self: {
           publicKey: v1SessionData.clientId,
-          metadata: v1SessionData.clientMeta || {
+          metadata: normalizeV1Metadata(v1SessionData.clientMeta, {
             name: 'Voi Wallet',
             description: 'Mobile wallet for Voi Network',
             url: 'https://getvoi.app',
@@ -500,16 +504,16 @@ export class WalletConnectService extends EventEmitter {
               'https://getvoi.app/android-chrome-192x192.png',
               'https://getvoi.app/android-chrome-512x512.png',
             ],
-          },
+          }),
         },
         peer: {
           publicKey: v1SessionData.peerId,
-          metadata: v1SessionData.peerMeta || {
+          metadata: normalizeV1Metadata(v1SessionData.peerMeta, {
             name: 'Unknown dApp',
             description: '',
             url: '',
             icons: [],
-          },
+          }),
         },
       };
 
