@@ -49,6 +49,7 @@ import {
   useClaimableLoading,
 } from '@/store/claimableStore';
 import { useActiveAccount } from '@/store/walletStore';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { ClaimableItem, toSerializableClaimableItem } from '@/types/claimable';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
 
@@ -82,6 +83,7 @@ export default function ClaimableTokensScreen() {
   const isLoading = useClaimableLoading();
 
   // Animation for pending refresh indicator
+  const reducedMotion = useReducedMotion();
   const pulseOpacity = useSharedValue(1);
   const pulseAnimatedStyle = useAnimatedStyle(() => ({
     opacity: pulseOpacity.value,
@@ -108,12 +110,16 @@ export default function ClaimableTokensScreen() {
       pendingRefreshHandled.current = true;
       setIsPendingRefresh(true);
 
-      // Start pulsing animation
-      pulseOpacity.value = withRepeat(
-        withTiming(0.4, { duration: 800 }),
-        -1,
-        true
-      );
+      // Start pulsing animation. DR-13: skipped entirely under Reduce Motion —
+      // `isPendingRefresh` still drives the visible "refreshing" copy, so the
+      // state remains conveyed without the loop.
+      if (!reducedMotion) {
+        pulseOpacity.value = withRepeat(
+          withTiming(0.4, { duration: 800 }),
+          -1,
+          true
+        );
+      }
 
       // Clear the params immediately to prevent re-triggering
       navigation.setParams({
@@ -155,6 +161,7 @@ export default function ClaimableTokensScreen() {
     fetchApprovals,
     navigation,
     pulseOpacity,
+    reducedMotion,
   ]);
 
   // Cleanup timeout on unmount only (separate effect with empty deps)

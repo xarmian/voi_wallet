@@ -360,6 +360,10 @@ export default function MessagesInboxScreen() {
               hideThread(friendAddress);
             }
           }}
+          accessibilityRole="button"
+          accessibilityLabel={
+            isHidden ? 'Unhide conversation' : 'Hide conversation'
+          }
         >
           <Ionicons
             name={isHidden ? 'eye-outline' : 'eye-off-outline'}
@@ -403,6 +407,14 @@ export default function MessagesInboxScreen() {
             onLongPress={() => handleThreadLongPress(thread)}
             activeOpacity={0.7}
             delayLongPress={500}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={`Conversation with ${friendInfo.name}${
+              hasUnread
+                ? `, ${thread.unreadCount} unread message${thread.unreadCount === 1 ? '' : 's'}`
+                : ''
+            }`}
+            accessibilityHint="Opens the conversation. Long press for more options"
           >
             <View style={styles.avatarContainer}>
               {friendInfo.avatar ? (
@@ -644,6 +656,13 @@ export default function MessagesInboxScreen() {
                   <TouchableOpacity
                     style={styles.headerActionButton}
                     onPress={toggleShowHiddenThreads}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      showHiddenThreads
+                        ? 'Hide hidden conversations'
+                        : 'Show hidden conversations'
+                    }
+                    accessibilityState={{ selected: showHiddenThreads }}
                   >
                     <Ionicons
                       name={
@@ -673,6 +692,8 @@ export default function MessagesInboxScreen() {
                 <TouchableOpacity
                   style={styles.headerActionButton}
                   onPress={handleNewMessage}
+                  accessibilityRole="button"
+                  accessibilityLabel="New message"
                 >
                   <Ionicons
                     name="create-outline"
@@ -704,7 +725,11 @@ export default function MessagesInboxScreen() {
                 autoCorrect={false}
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
                   <Ionicons
                     name="close-circle"
                     size={20}

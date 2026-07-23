@@ -1695,6 +1695,9 @@ export default function SendScreen() {
                     style={styles.inputButton}
                     onPress={handleAccountRecipientModalOpen}
                     disabled={isSending}
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose recipient from accounts and contacts"
+                    accessibilityState={{ disabled: isSending }}
                   >
                     <Ionicons
                       name="people"
@@ -1706,6 +1709,9 @@ export default function SendScreen() {
                     style={styles.inputButton}
                     onPress={handleQRScan}
                     disabled={isSending}
+                    accessibilityRole="button"
+                    accessibilityLabel="Scan recipient QR code"
+                    accessibilityState={{ disabled: isSending }}
                   >
                     <Ionicons
                       name="qr-code"
@@ -1758,6 +1764,10 @@ export default function SendScreen() {
                       ]}
                       onPress={() => handleSearchResultSelect(result)}
                       activeOpacity={0.8}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel={`${result.name}, ${result.address}`}
+                      accessibilityHint="Selects this address as the recipient"
                     >
                       {result.avatar ? (
                         <Image
@@ -1826,6 +1836,9 @@ export default function SendScreen() {
                       )
                     }
                     disabled={isSending}
+                    accessibilityRole="button"
+                    accessibilityLabel="Send maximum spendable amount"
+                    accessibilityState={{ disabled: isSending }}
                   >
                     <Text style={styles.maxButton}>
                       Max:{' '}
@@ -2026,6 +2039,8 @@ export default function SendScreen() {
                   onPress={() => setShowAssetSelector(false)}
                   style={styles.modalCloseButton}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close asset selector"
                 >
                   <Ionicons
                     name="close"
@@ -2045,6 +2060,12 @@ export default function SendScreen() {
                         styles.assetOptionSelected,
                     ]}
                     onPress={() => handleAssetSelect(Number(asset.id))}
+                    accessible
+                    accessibilityRole="radio"
+                    accessibilityLabel={`${asset.name}, ${asset.symbol}`}
+                    accessibilityState={{
+                      selected: effectiveAssetId === asset.id,
+                    }}
                   >
                     <View style={styles.assetOptionContent}>
                       <Text style={styles.assetOptionName}>{asset.name}</Text>

@@ -13,10 +13,27 @@ import {
   withRepeat,
   interpolate,
   Easing,
+  ReduceMotion,
   SharedValue,
   WithSpringConfig,
   WithTimingConfig,
 } from 'react-native-reanimated';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+
+/**
+ * Reduce Motion policy for the shared configs (PLAN-12 DR-13, item 2).
+ *
+ * `ReduceMotion.System` makes Reanimated consult the OS accessibility setting
+ * and skip the animation (jumping straight to the target value) when it is on.
+ * It is Reanimated's default, but every shared config states it explicitly so
+ * that the policy is visible at the choke point rather than implied — and so a
+ * future config never silently opts out by omission.
+ *
+ * NOTE: this only covers animations that *flow through* these configs. Direct
+ * `withRepeat` loops with inline durations bypass them entirely and must gate
+ * themselves on `useReducedMotion()` — see DR-13 item 3.
+ */
+const REDUCE_MOTION_POLICY = ReduceMotion.System;
 
 // Spring configurations for different interaction types
 export const springConfigs = {
@@ -25,24 +42,28 @@ export const springConfigs = {
     damping: 20,
     stiffness: 400,
     mass: 0.8,
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithSpringConfig,
   // Smooth movement for cards and modals
   smooth: {
     damping: 25,
     stiffness: 200,
     mass: 1,
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithSpringConfig,
   // Bouncy for playful interactions
   bouncy: {
     damping: 12,
     stiffness: 180,
     mass: 0.8,
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithSpringConfig,
   // Gentle for subtle movements
   gentle: {
     damping: 30,
     stiffness: 150,
     mass: 1.2,
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithSpringConfig,
 };
 
@@ -51,23 +72,28 @@ export const timingConfigs = {
   instant: {
     duration: 100,
     easing: Easing.ease,
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithTimingConfig,
   fast: {
     duration: 150,
     easing: Easing.out(Easing.ease),
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithTimingConfig,
   normal: {
     duration: 250,
     easing: Easing.inOut(Easing.ease),
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithTimingConfig,
   slow: {
     duration: 400,
     easing: Easing.inOut(Easing.cubic),
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithTimingConfig,
   // For shimmer effects
   shimmer: {
     duration: 1500,
     easing: Easing.linear,
+    reduceMotion: REDUCE_MOTION_POLICY,
   } as WithTimingConfig,
 };
 
@@ -118,23 +144,34 @@ export function useGlowPulse(
   duration: number = 2000
 ) {
   const glowOpacity = useSharedValue(minOpacity);
+  const reducedMotion = useReducedMotion();
 
   const startPulse = useCallback(() => {
+    // DR-13: an infinite pulse must not start at all under Reduce Motion —
+    // park the value at its resting opacity instead.
+    if (reducedMotion) {
+      glowOpacity.value = minOpacity;
+      return;
+    }
     glowOpacity.value = withRepeat(
       withSequence(
         withTiming(maxOpacity, {
           duration: duration / 2,
           easing: Easing.inOut(Easing.ease),
+          reduceMotion: REDUCE_MOTION_POLICY,
         }),
         withTiming(minOpacity, {
           duration: duration / 2,
           easing: Easing.inOut(Easing.ease),
+          reduceMotion: REDUCE_MOTION_POLICY,
         })
       ),
       -1, // Repeat infinitely
-      false // Don't reverse
+      false, // Don't reverse
+      undefined,
+      REDUCE_MOTION_POLICY
     );
-  }, [glowOpacity, minOpacity, maxOpacity, duration]);
+  }, [glowOpacity, minOpacity, maxOpacity, duration, reducedMotion]);
 
   const stopPulse = useCallback(() => {
     glowOpacity.value = withTiming(minOpacity, timingConfigs.normal);
@@ -226,14 +263,26 @@ export function useNumberTransition(
  */
 export function useShimmer(duration: number = 1500) {
   const shimmerPosition = useSharedValue(-1);
+  const reducedMotion = useReducedMotion();
 
   const startShimmer = useCallback(() => {
+    // DR-13: skip the infinite sweep entirely under Reduce Motion.
+    if (reducedMotion) {
+      shimmerPosition.value = -1;
+      return;
+    }
     shimmerPosition.value = withRepeat(
-      withTiming(1, { duration, easing: Easing.linear }),
+      withTiming(1, {
+        duration,
+        easing: Easing.linear,
+        reduceMotion: REDUCE_MOTION_POLICY,
+      }),
       -1,
-      false
+      false,
+      undefined,
+      REDUCE_MOTION_POLICY
     );
-  }, [shimmerPosition, duration]);
+  }, [shimmerPosition, duration, reducedMotion]);
 
   const stopShimmer = useCallback(() => {
     shimmerPosition.value = -1;

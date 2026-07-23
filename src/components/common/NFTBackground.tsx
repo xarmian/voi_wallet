@@ -82,9 +82,18 @@ export const NFTBackground: React.FC<NFTBackgroundProps> = ({
     <View
       style={[styles.container, { backgroundColor: theme.colors.background }]}
     >
-      {/* NFT Background Image - only render if enabled and available */}
+      {/* NFT Background Image - only render if enabled and available.
+          Purely decorative chrome: the image and every gradient/vignette layer
+          are grouped in one a11y-hidden, non-interactive layer so VoiceOver /
+          TalkBack never stop on them (they carry no information and are already
+          `pointerEvents="none"`). The `content` sibling below is untouched. */}
       {hasNFTBackground && (
-        <>
+        <View
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
           <Image
             source={{ uri: theme.backgroundImageUrl }}
             style={styles.backgroundImage}
@@ -172,7 +181,7 @@ export const NFTBackground: React.FC<NFTBackgroundProps> = ({
               />
             </>
           )}
-        </>
+        </View>
       )}
 
       {/* Content */}

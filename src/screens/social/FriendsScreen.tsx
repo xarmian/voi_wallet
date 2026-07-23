@@ -178,6 +178,8 @@ export default function FriendsScreen() {
             <TouchableOpacity
               style={styles.profileButton}
               onPress={handleMyProfile}
+              accessibilityRole="button"
+              accessibilityLabel="My profile"
             >
               <Ionicons
                 name="person-circle-outline"
@@ -202,7 +204,11 @@ export default function FriendsScreen() {
               autoCorrect={false}
             />
             {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <TouchableOpacity
+                onPress={() => setSearchQuery('')}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+              >
                 <Ionicons
                   name="close-circle"
                   size={20}
@@ -219,6 +225,8 @@ export default function FriendsScreen() {
                   initialQuery: searchQuery.trim(),
                 })
               }
+              accessibilityRole="button"
+              accessibilityLabel={`Search Envoi for ${searchQuery.trim()}`}
             >
               <Ionicons
                 name="person-add-outline"
@@ -266,6 +274,8 @@ export default function FriendsScreen() {
           style={styles.fab}
           onPress={handleAddFriend}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Add contact"
         >
           <Ionicons name="person-add" size={24} color="#FFFFFF" />
         </TouchableOpacity>

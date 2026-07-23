@@ -16,6 +16,7 @@ import Animated, {
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 interface ClaimableBannerProps {
   /** Number of claimable tokens */
@@ -30,9 +31,15 @@ export default function ClaimableBanner({
 }: ClaimableBannerProps) {
   const styles = useThemedStyles(createStyles);
   const iconScale = useSharedValue(1);
+  const reducedMotion = useReducedMotion();
 
   // Subtle pulsing animation on the icon
   useEffect(() => {
+    // DR-13: the loop must stop entirely under Reduce Motion, not just shorten.
+    if (reducedMotion) {
+      iconScale.value = 1;
+      return;
+    }
     iconScale.value = withRepeat(
       withSequence(
         withTiming(1.1, { duration: 800 }),
@@ -41,7 +48,7 @@ export default function ClaimableBanner({
       -1, // Repeat indefinitely
       true // Reverse each cycle
     );
-  }, [iconScale]);
+  }, [iconScale, reducedMotion]);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: iconScale.value }],
@@ -65,6 +72,8 @@ export default function ClaimableBanner({
         borderGlow
         glowColor={styles.glowColor.color}
         padding="md"
+        accessibilityLabel={getMessage()}
+        accessibilityHint="Opens the claimable tokens list"
       >
         <View style={styles.content}>
           <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>

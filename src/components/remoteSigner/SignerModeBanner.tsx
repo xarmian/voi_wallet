@@ -19,6 +19,7 @@ import Animated, {
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 interface SignerModeBannerProps {
   /** Called when scan button is pressed */
@@ -30,9 +31,15 @@ export default function SignerModeBanner({
 }: SignerModeBannerProps) {
   const styles = useThemedStyles(createStyles);
   const iconPulse = useSharedValue(1);
+  const reducedMotion = useReducedMotion();
 
   // Subtle pulsing animation on the shield icon
   useEffect(() => {
+    // DR-13: no infinite pulse under Reduce Motion — park at rest scale.
+    if (reducedMotion) {
+      iconPulse.value = 1;
+      return;
+    }
     iconPulse.value = withRepeat(
       withSequence(
         withTiming(1.05, { duration: 1200 }),
@@ -41,7 +48,7 @@ export default function SignerModeBanner({
       -1,
       true
     );
-  }, [iconPulse]);
+  }, [iconPulse, reducedMotion]);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: iconPulse.value }],
@@ -81,6 +88,9 @@ export default function SignerModeBanner({
             style={styles.scanButton}
             onPress={onScanPress}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Scan signing request"
+            accessibilityHint="Opens the camera to scan an air-gapped signing request"
           >
             <Ionicons
               name="scan-outline"

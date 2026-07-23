@@ -14,6 +14,8 @@ import {
   Pressable,
   ViewStyle,
   StyleProp,
+  AccessibilityRole,
+  AccessibilityState,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
@@ -27,6 +29,17 @@ import { SafeBlurView } from './SafeBlurView';
 import { springConfigs, timingConfigs } from '@/utils/animations';
 
 export type GlassVariant = 'light' | 'medium' | 'heavy' | 'chromatic';
+
+/**
+ * Decorative glass layers (tint overlay, top highlight, inner edge) carry no
+ * information and are non-interactive, so they are removed from the a11y tree
+ * (TASK-42). The `content` wrapper holding the caller's children is untouched.
+ */
+const DECORATIVE_LAYER_PROPS = {
+  pointerEvents: 'none' as const,
+  accessibilityElementsHidden: true,
+  importantForAccessibility: 'no-hide-descendants' as const,
+};
 
 interface GlassCardProps {
   /** Glass intensity variant */
@@ -55,6 +68,27 @@ interface GlassCardProps {
   borderColor?: string;
   /** Test ID for testing */
   testID?: string;
+  /**
+   * Groups the card's children into a single accessibility element. Defaults to
+   * `true` for the pressable variant (a tappable card should be one target) and
+   * is left unset for the static variant so its inner text stays individually
+   * navigable.
+   */
+  accessible?: boolean;
+  /**
+   * Accessible name. Strongly recommended whenever `onPress`/`onLongPress` is
+   * given — without it a pressable card is an unlabeled leaf.
+   */
+  accessibilityLabel?: string;
+  /** Describes the outcome of activating the card. */
+  accessibilityHint?: string;
+  /**
+   * Defaults to `button` when the card is pressable, and is unset otherwise.
+   * Override for e.g. `link`, `checkbox` or `radio` semantics.
+   */
+  accessibilityRole?: AccessibilityRole;
+  /** e.g. `{ selected: true }` / `{ disabled: true }` for stateful cards. */
+  accessibilityState?: AccessibilityState;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -73,6 +107,11 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   noHighlight = false,
   borderColor,
   testID,
+  accessible,
+  accessibilityLabel,
+  accessibilityHint,
+  accessibilityRole,
+  accessibilityState,
 }) => {
   const { theme } = useTheme();
   const hasNFTBackground = !!theme.backgroundImageUrl;
@@ -193,7 +232,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({
       {/* Semi-transparent overlay for consistent glass effect */}
       <View
         style={[styles.overlay, { backgroundColor: overlayBackgroundColor }]}
-        pointerEvents="none"
+        {...DECORATIVE_LAYER_PROPS}
       />
 
       {/* Top highlight gradient for glass depth effect */}
@@ -208,7 +247,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({
         ]}
         start={{ x: 0, y: 0 }}
         end={{ x: 0, y: 1 }}
-        pointerEvents="none"
+        {...DECORATIVE_LAYER_PROPS}
       />
 
       {/* Inner border highlight for glass edge effect */}
@@ -219,7 +258,7 @@ export const GlassCard: React.FC<GlassCardProps> = ({
             borderColor: theme.colors.glassHighlight,
           },
         ]}
-        pointerEvents="none"
+        {...DECORATIVE_LAYER_PROPS}
       />
 
       {/* Content */}
@@ -239,18 +278,31 @@ export const GlassCard: React.FC<GlassCardProps> = ({
         onPressOut={handlePressOut}
         style={[containerStyles, animatedContainerStyle]}
         testID={testID}
+        // A tappable card is a single target: group its children so a screen
+        // reader announces one control instead of walking loose text nodes.
+        accessible={accessible ?? true}
+        accessibilityRole={accessibilityRole ?? 'button'}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={accessibilityState}
       >
         {renderContent()}
       </AnimatedPressable>
     );
   }
 
-  // Non-pressable version
+  // Non-pressable version — a static card is a container, so it stays
+  // transparent to the a11y tree unless a caller opts into grouping/labelling.
   if (animated) {
     return (
       <Animated.View
         style={[containerStyles, animatedContainerStyle]}
         testID={testID}
+        accessible={accessible}
+        accessibilityRole={accessibilityRole}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={accessibilityState}
       >
         {renderContent()}
       </Animated.View>
@@ -258,7 +310,15 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   }
 
   return (
-    <View style={containerStyles} testID={testID}>
+    <View
+      style={containerStyles}
+      testID={testID}
+      accessible={accessible}
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={accessibilityState}
+    >
       {renderContent()}
     </View>
   );

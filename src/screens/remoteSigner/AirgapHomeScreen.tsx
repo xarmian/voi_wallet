@@ -49,6 +49,7 @@ import {
   useWalletStore,
 } from '@/store/walletStore';
 import { AccountMetadata, AccountType } from '@/types/wallet';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 // AirgapHomeScreen is the AirgapHome route of the Airgap stack, and can also
 // navigate up to the parent tab navigator (e.g. the Settings tab).
@@ -82,8 +83,15 @@ export default function AirgapHomeScreen() {
 
   // Animation for the shield icon
   const iconPulse = useSharedValue(1);
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    // DR-13: this is a resting screen with a permanent pulse — under Reduce
+    // Motion it must not run at all.
+    if (reducedMotion) {
+      iconPulse.value = 1;
+      return;
+    }
     iconPulse.value = withRepeat(
       withSequence(
         withTiming(1.08, { duration: 1500 }),
@@ -92,7 +100,7 @@ export default function AirgapHomeScreen() {
       -1,
       true
     );
-  }, [iconPulse]);
+  }, [iconPulse, reducedMotion]);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: iconPulse.value }],

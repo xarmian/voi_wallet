@@ -72,6 +72,9 @@ const RangeControls: React.FC<RangeControlsProps> = ({
             style={styles.rangeButton}
             onPress={() => handleIncrement(onChangeStart, startIndex, -5)}
             disabled={startIndex === 0 || isScanning}
+            accessibilityRole="button"
+            accessibilityLabel="Decrease start index by 5"
+            accessibilityState={{ disabled: startIndex === 0 || isScanning }}
           >
             <Ionicons name="remove" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -80,6 +83,9 @@ const RangeControls: React.FC<RangeControlsProps> = ({
             style={styles.rangeButton}
             onPress={() => handleIncrement(onChangeStart, startIndex, 5)}
             disabled={isScanning}
+            accessibilityRole="button"
+            accessibilityLabel="Increase start index by 5"
+            accessibilityState={{ disabled: isScanning }}
           >
             <Ionicons name="add" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -92,6 +98,9 @@ const RangeControls: React.FC<RangeControlsProps> = ({
             style={styles.rangeButton}
             onPress={() => handleIncrement(onChangeCount, count, -1)}
             disabled={count <= 1 || isScanning}
+            accessibilityRole="button"
+            accessibilityLabel="Decrease account count by 1"
+            accessibilityState={{ disabled: count <= 1 || isScanning }}
           >
             <Ionicons name="remove" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -100,6 +109,9 @@ const RangeControls: React.FC<RangeControlsProps> = ({
             style={styles.rangeButton}
             onPress={() => handleIncrement(onChangeCount, count, 1)}
             disabled={isScanning}
+            accessibilityRole="button"
+            accessibilityLabel="Increase account count by 1"
+            accessibilityState={{ disabled: isScanning }}
           >
             <Ionicons name="add" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -109,6 +121,9 @@ const RangeControls: React.FC<RangeControlsProps> = ({
         style={[styles.scanButton, isScanning && styles.scanButtonDisabled]}
         onPress={onScan}
         disabled={isScanning}
+        accessibilityRole="button"
+        accessibilityLabel={isScanning ? 'Scanning accounts' : 'Scan accounts'}
+        accessibilityState={{ disabled: isScanning, busy: isScanning }}
       >
         {isScanning ? (
           <ActivityIndicator size="small" color={colors.buttonText} />
@@ -166,6 +181,15 @@ const LedgerAccountList: React.FC<LedgerAccountListProps> = ({
               onPreviewAccount?.(item);
             }}
             activeOpacity={0.8}
+            accessible
+            accessibilityRole="checkbox"
+            accessibilityLabel={`Account number ${item.derivationIndex}, ${item.address}${
+              isImported ? ', already imported' : ''
+            }`}
+            accessibilityState={{
+              checked: isSelected && !isImported,
+              disabled: isImported,
+            }}
           >
             <View style={styles.accountRowLeft}>
               <View

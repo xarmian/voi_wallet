@@ -7,6 +7,20 @@ import { GlassEffect } from '@/constants/themes';
 
 export type BlurVariant = 'light' | 'medium' | 'heavy' | 'chromatic';
 
+/**
+ * Props for the purely decorative glass layers (overlay tint, top highlight,
+ * inner border). They carry no information and are already non-interactive, so
+ * they are removed from the accessibility tree rather than left as stray
+ * focusable/announceable nodes (TASK-42). The `content` wrapper that holds the
+ * caller's children is deliberately NOT marked — hiding it would hide the whole
+ * subtree on all ~20 call sites.
+ */
+const DECORATIVE_LAYER_PROPS = {
+  pointerEvents: 'none' as const,
+  accessibilityElementsHidden: true,
+  importantForAccessibility: 'no-hide-descendants' as const,
+};
+
 interface BlurredContainerProps {
   children: React.ReactNode;
   /** Glass intensity variant - uses theme presets */
@@ -186,13 +200,13 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
             ]}
             start={{ x: 0, y: 0 }}
             end={{ x: 0, y: 1 }}
-            pointerEvents="none"
+            {...DECORATIVE_LAYER_PROPS}
           />
         )}
 
         {/* Inner border */}
         {innerBorderStyle && (
-          <View style={innerBorderStyle} pointerEvents="none" />
+          <View style={innerBorderStyle} {...DECORATIVE_LAYER_PROPS} />
         )}
 
         {/* Content */}
@@ -223,7 +237,7 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
             backgroundColor: overlayBackgroundColor,
           },
         ]}
-        pointerEvents="none"
+        {...DECORATIVE_LAYER_PROPS}
       />
 
       {/* Top highlight gradient for glass depth effect */}
@@ -239,13 +253,13 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
           ]}
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
-          pointerEvents="none"
+          {...DECORATIVE_LAYER_PROPS}
         />
       )}
 
       {/* Inner border for glass edge effect */}
       {innerBorderStyle && (
-        <View style={innerBorderStyle} pointerEvents="none" />
+        <View style={innerBorderStyle} {...DECORATIVE_LAYER_PROPS} />
       )}
 
       {/* Content - positioned above overlay */}
