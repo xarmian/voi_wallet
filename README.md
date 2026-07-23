@@ -98,11 +98,15 @@ Build profiles:
 ### Code Quality
 
 ```bash
-# Lint TypeScript code
+# Lint TypeScript code (fails if warnings exceed the committed baseline)
 npm run lint
 
 # Auto-fix linting issues
 npm run lint:fix
+
+# Regenerate the lint baseline after clearing warnings
+# (then lower --max-warnings in package.json to match — see CONTRIBUTING.md)
+npm run lint:baseline
 
 # Format code with Prettier
 npm run format

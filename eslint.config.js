@@ -36,6 +36,11 @@ module.exports = [
       // these back toward `error` per-rule — the cheap wins first (purity,
       // set-state-in-effect where genuinely derivable), leaving immutability at
       // warn for as long as Reanimated `.value` writes trip it.
+      //
+      // These are `warn`, not `off`, because `npm run lint` runs under a
+      // ratchet: `--max-warnings` is pinned to the count in lint-baseline.json,
+      // so a new warning fails CI and the ceiling only ever moves down. Counts
+      // are regenerated with `npm run lint:baseline` — see CONTRIBUTING.md.
       'react-hooks/immutability': 'warn',
       'react-hooks/set-state-in-effect': 'warn',
       'react-hooks/preserve-manual-memoization': 'warn',

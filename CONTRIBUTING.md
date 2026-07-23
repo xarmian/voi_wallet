@@ -57,11 +57,33 @@ npm start                # Launch Expo dev server
 npm run ios              # Start iOS simulator
 npm run android          # Start Android emulator
 npm run web              # Start web version
-npm run lint             # Lint TypeScript with ESLint
+npm run lint             # Lint TypeScript with ESLint (fails above the warning baseline)
 npm run lint:fix         # Auto-fix linting issues
+npm run lint:baseline    # Regenerate lint-baseline.json (per-rule/per-file counts)
+npm run lint:baseline:check  # Verify the committed baseline still matches
 npm run format           # Format code with Prettier
 npm run typecheck        # TypeScript type checking
 ```
+
+### The lint ratchet
+
+`npm run lint` runs with `--max-warnings <N>`, where `N` is the warning count
+recorded in `lint-baseline.json`. There is a backlog of pre-existing warnings;
+the ratchet exists so it can only ever shrink.
+
+- **Adding a warning fails CI.** Fix it rather than raising the ceiling.
+- **Clearing warnings is a three-part change in one commit:** fix the code, run
+  `npm run lint:baseline`, and lower `--max-warnings` in `package.json` to the
+  new total. `npm run lint:baseline:check` verifies all three agree.
+- **The number never goes up.** If you genuinely cannot fix a warning, use a
+  scoped `eslint-disable` with a comment explaining why — a raised ceiling is
+  not an option. CI enforces this: the `Lint ratchet` step compares your
+  branch's baseline against the base branch's and fails if it rose, or if
+  `--max-warnings` no longer matches the artifact.
+
+`lint-baseline.json` also carries per-rule and per-file counts. Cleanup work is
+tracked against those numbers, so regenerate them with the script rather than
+editing the file by hand.
 
 ### Before Committing
 

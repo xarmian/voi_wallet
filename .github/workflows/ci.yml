@@ -25,8 +25,53 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fails above the warning ceiling pinned in package.json (--max-warnings),
+      # which is the total recorded in lint-baseline.json.
       - name: Lint
         run: npm run lint
+
+      # Absolute (not relative) integrity of what this commit ships, independent
+      # of any base to compare against: re-lints and fails unless the committed
+      # lint-baseline.json matches the live counts AND exactly one --max-warnings
+      # pin equals that total. This is the check that carries the gate when there
+      # is no base artifact to ratchet against — including the rollout PR itself —
+      # so a malformed or inflated first baseline cannot land, and clearing
+      # warnings without regenerating the baseline (leaving budget for a later
+      # regression) fails here. Runs after Lint; if a regression already tripped
+      # Lint this is skipped, which is harmless — the job has already failed.
+      - name: Lint baseline integrity
+        run: npm run lint:baseline:check
+
+      # The ratchet: the ceiling may fall but never rise. Compares this ref's
+      # committed baseline with the previous one and checks that --max-warnings
+      # still equals it, so the pin cannot be inflated to admit new warnings.
+      # Artifact-to-artifact only — no second ESLint run. Runs on pushes too, so
+      # a direct push to main is gated the same way a PR is.
+      - name: Lint ratchet
+        env:
+          # PRs compare against the base branch; pushes against whatever was at
+          # the tip beforehand.
+          RATCHET_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.before }}
+        run: |
+          if [ -z "$RATCHET_BASE" ] || [ -z "${RATCHET_BASE//0/}" ]; then
+            echo "No previous commit to compare against (new ref) — skipping."
+            exit 0
+          fi
+          # Hard-fail if the base can't be fetched: swallowing the error would
+          # leave a stale FETCH_HEAD (possibly the current commit) and compare
+          # the baseline to itself, silently defeating the gate. A base.ref
+          # branch is always reachable and a fast-forward push's `before` SHA
+          # is too, so a failure here is a real anomaly, not routine.
+          git fetch --no-tags --depth=1 origin "$RATCHET_BASE"
+          # Only a base that genuinely predates the baseline is allowed to skip.
+          # Probe the blob explicitly rather than inferring absence from an empty
+          # file, so a fetch/show glitch can never masquerade as "no baseline".
+          if git cat-file -e "FETCH_HEAD:lint-baseline.json" 2>/dev/null; then
+            git show "FETCH_HEAD:lint-baseline.json" > "$RUNNER_TEMP/base-lint-baseline.json"
+            node scripts/lint-baseline.mjs --against="$RUNNER_TEMP/base-lint-baseline.json"
+          else
+            echo "Base $RATCHET_BASE has no lint-baseline.json — nothing to ratchet against. Skipping."
+          fi
 
       - name: Unit tests
         run: npm test -- --ci
