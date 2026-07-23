@@ -662,7 +662,10 @@ export default function MessagesInboxScreen() {
                         ? 'Hide hidden conversations'
                         : 'Show hidden conversations'
                     }
-                    accessibilityState={{ selected: showHiddenThreads }}
+                    // A disclosure toggle: it reveals/collapses the hidden
+                    // threads rather than selecting anything, so `expanded` is
+                    // the state a screen reader should announce.
+                    accessibilityState={{ expanded: showHiddenThreads }}
                   >
                     <Ionicons
                       name={
