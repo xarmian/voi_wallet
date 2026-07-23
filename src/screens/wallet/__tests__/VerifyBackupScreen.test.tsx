@@ -226,21 +226,27 @@ describe('VerifyBackupScreen', () => {
   it('never marks the account verified on wrong answers (TASK-226)', async () => {
     const screen = await renderLoaded();
 
-    // Exhaust the mistake budget and then some — this used to be a silent no-op
-    // on an auto-routing board, so the account could be marked backed-up
-    // without the user ever knowing the phrase.
-    for (let mistake = 0; mistake <= MAX_MISTAKES + 2; mistake++) {
+    // Exhaust the mistake budget — this used to be a silent no-op on an
+    // auto-routing board, so the account could be marked backed-up without the
+    // user ever knowing the phrase.
+    for (let mistake = 0; mistake <= MAX_MISTAKES; mistake++) {
       pressWrongQuizOption(screen, 'verify-backup', MOCK_WORDS);
     }
-    expect(mockMarkBackupVerified).not.toHaveBeenCalled();
 
-    // A user who does know the phrase is still never locked out.
-    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
-    // Success kicks off an async store write which then clears the phrase from
-    // screen state, and the challenge rebuilds itself in response. Flush that
-    // continuation inside act() so the rebuild is not an unwrapped update.
-    await act(async () => {});
-    await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
-    expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a');
+    expect(mockMarkBackupVerified).not.toHaveBeenCalled();
+    // This screen has no phrase step to fall back to, so it bounces the user out
+    // rather than letting them grind attempts in place. Friction, not a lockout:
+    // the Settings entry point is still there and re-entering re-reads the
+    // phrase from the gated key store.
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Too many incorrect answers',
+      expect.any(String),
+      expect.any(Array)
+    );
+
+    const calls = (Alert.alert as unknown as jest.Mock).mock.calls;
+    const buttons = calls[calls.length - 1][2] as { onPress?: () => void }[];
+    act(() => buttons[0].onPress?.());
+    expect(mockNavigation.goBack).toHaveBeenCalled();
   });
 });

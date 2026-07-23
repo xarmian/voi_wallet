@@ -28,6 +28,7 @@ import { BIP39Utils } from '@/utils/bip39';
 import {
   answerCurrentChallenge,
   buildChallengeOptions,
+  createOptionProvider,
   CHALLENGE_OPTION_COUNT,
   currentPosition,
   MAX_MISTAKES,
@@ -75,19 +76,41 @@ const LONG_WORDS = [
   'adapt',
 ];
 
+/**
+ * A memoised board provider, as the component holds one per mount. Boards for a
+ * position must be STABLE across presentations — see the intersection-oracle
+ * suite below.
+ */
+function providerFor(words: string[]) {
+  return createOptionProvider(words);
+}
+
 /** Answer the live question correctly; asserts the attempt is still coherent. */
-function answerCorrectly(attempt: QuizAttempt, words: string[]) {
+function answerCorrectly(
+  attempt: QuizAttempt,
+  words: string[],
+  optionsFor = providerFor(words)
+) {
   const position = currentPosition(attempt);
   expect(position).not.toBeNull();
-  return answerCurrentChallenge(attempt, words, words[position as number]);
+  return answerCurrentChallenge(
+    attempt,
+    words,
+    words[position as number],
+    optionsFor
+  );
 }
 
 /** Answer the live question with some chip that is NOT the right one. */
-function answerWrongly(attempt: QuizAttempt, words: string[]) {
+function answerWrongly(
+  attempt: QuizAttempt,
+  words: string[],
+  optionsFor = providerFor(words)
+) {
   const position = currentPosition(attempt) as number;
   const wrong = attempt.options.find((word) => word !== words[position]);
   expect(wrong).toBeDefined();
-  return answerCurrentChallenge(attempt, words, wrong as string);
+  return answerCurrentChallenge(attempt, words, wrong as string, optionsFor);
 }
 
 describe('splitMnemonic', () => {
@@ -231,7 +254,7 @@ describe('buildChallengeOptions — TASK-226 decoys', () => {
 describe('startQuizAttempt', () => {
   it('opens on the first question with a full board and no mistakes', () => {
     for (let run = 0; run < 50; run++) {
-      const attempt = startQuizAttempt(LONG_WORDS);
+      const attempt = startQuizAttempt(LONG_WORDS, providerFor(LONG_WORDS));
       expect(attempt.positions).toHaveLength(VERIFICATION_WORD_COUNT);
       expect(attempt.currentIndex).toBe(0);
       expect(attempt.mistakes).toBe(0);
@@ -242,7 +265,7 @@ describe('startQuizAttempt', () => {
   });
 
   it('has no live question for an empty phrase', () => {
-    const attempt = startQuizAttempt([]);
+    const attempt = startQuizAttempt([], providerFor([]));
     expect(currentPosition(attempt)).toBeNull();
     expect(attempt.options).toEqual([]);
   });
@@ -250,26 +273,30 @@ describe('startQuizAttempt', () => {
 
 describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
   it('advances on a correct pick and verifies on the last one', () => {
-    let attempt = startQuizAttempt(LONG_WORDS);
+    const optionsFor = providerFor(LONG_WORDS);
+    let attempt = startQuizAttempt(LONG_WORDS, optionsFor);
 
-    const first = answerCorrectly(attempt, LONG_WORDS);
+    const first = answerCorrectly(attempt, LONG_WORDS, optionsFor);
     expect(first.status).toBe('advanced');
     attempt = (first as { attempt: QuizAttempt }).attempt;
     expect(attempt.currentIndex).toBe(1);
     expect(attempt.mistakes).toBe(0);
 
-    const second = answerCorrectly(attempt, LONG_WORDS);
+    const second = answerCorrectly(attempt, LONG_WORDS, optionsFor);
     expect(second.status).toBe('advanced');
     attempt = (second as { attempt: QuizAttempt }).attempt;
 
-    expect(answerCorrectly(attempt, LONG_WORDS).status).toBe('verified');
+    expect(answerCorrectly(attempt, LONG_WORDS, optionsFor).status).toBe(
+      'verified'
+    );
   });
 
-  it('counts a wrong pick, keeps the position, and re-rolls the board', () => {
-    const attempt = startQuizAttempt(LONG_WORDS);
+  it('counts a wrong pick and keeps the position, with the SAME option set', () => {
+    const optionsFor = providerFor(LONG_WORDS);
+    const attempt = startQuizAttempt(LONG_WORDS, optionsFor);
     const before = attempt.options;
 
-    const result = answerWrongly(attempt, LONG_WORDS);
+    const result = answerWrongly(attempt, LONG_WORDS, optionsFor);
     expect(result.status).toBe('retry');
     const next = (result as { attempt: QuizAttempt }).attempt;
 
@@ -279,38 +306,43 @@ describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
     // ...one mistake spent...
     expect(next.mistakes).toBe(1);
     expect(remainingMistakes(next)).toBe(MAX_MISTAKES - 1);
-    // ...and a freshly built board, so the previous set cannot be eliminated
-    // one chip at a time.
-    expect(next.options).toHaveLength(CHALLENGE_OPTION_COUNT);
+    // ...and the SAME set of chips. Rebuilding it would leak the answer by
+    // intersection (see the oracle suite below); the answer is still there, so
+    // this is never a dead end.
+    expect([...next.options].sort()).toEqual([...before].sort());
     expect(next.options).toContain(LONG_WORDS[currentPosition(next) as number]);
-    expect(next.options).not.toBe(before);
   });
 
   it('keeps correct progress when a later question is answered wrongly', () => {
     // A fat-finger must not throw away a correct run — that would punish the
     // legitimate user this challenge exists to protect.
-    let attempt = startQuizAttempt(LONG_WORDS);
-    attempt = (answerCorrectly(attempt, LONG_WORDS) as { attempt: QuizAttempt })
-      .attempt;
+    const optionsFor = providerFor(LONG_WORDS);
+    let attempt = startQuizAttempt(LONG_WORDS, optionsFor);
+    attempt = (
+      answerCorrectly(attempt, LONG_WORDS, optionsFor) as {
+        attempt: QuizAttempt;
+      }
+    ).attempt;
     expect(attempt.currentIndex).toBe(1);
 
-    const wrong = answerWrongly(attempt, LONG_WORDS);
+    const wrong = answerWrongly(attempt, LONG_WORDS, optionsFor);
     expect(wrong.status).toBe('retry');
     expect((wrong as { attempt: QuizAttempt }).attempt.currentIndex).toBe(1);
   });
 
   it('discards the whole attempt once the mistake budget is exhausted', () => {
-    let attempt = startQuizAttempt(LONG_WORDS);
+    const optionsFor = providerFor(LONG_WORDS);
+    let attempt = startQuizAttempt(LONG_WORDS, optionsFor);
 
     for (let mistake = 1; mistake <= MAX_MISTAKES; mistake++) {
-      const result = answerWrongly(attempt, LONG_WORDS);
+      const result = answerWrongly(attempt, LONG_WORDS, optionsFor);
       expect(result.status).toBe('retry');
       attempt = (result as { attempt: QuizAttempt }).attempt;
       expect(attempt.mistakes).toBe(mistake);
     }
     expect(remainingMistakes(attempt)).toBe(0);
 
-    const final = answerWrongly(attempt, LONG_WORDS);
+    const final = answerWrongly(attempt, LONG_WORDS, optionsFor);
     expect(final.status).toBe('reset');
     const fresh = (final as { attempt: QuizAttempt }).attempt;
     expect(fresh.mistakes).toBe(0);
@@ -320,18 +352,24 @@ describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
 
   it('cannot be passed by a word that is not on the board', () => {
     // No off-board path to a pass: anything not presented is a wrong answer.
-    const attempt = startQuizAttempt(LONG_WORDS);
+    const attempt = startQuizAttempt(LONG_WORDS, providerFor(LONG_WORDS));
     const result = answerCurrentChallenge(
       attempt,
       LONG_WORDS,
-      'zoo-not-a-chip'
+      'zoo-not-a-chip',
+      providerFor(LONG_WORDS)
     );
     expect(result.status).toBe('retry');
   });
 
   it('rebuilds instead of passing when there is no live question', () => {
-    const attempt = startQuizAttempt([]);
-    const result = answerCurrentChallenge(attempt, [], 'anything');
+    const attempt = startQuizAttempt([], providerFor([]));
+    const result = answerCurrentChallenge(
+      attempt,
+      [],
+      'anything',
+      providerFor([])
+    );
     expect(result.status).toBe('reset');
   });
 
@@ -339,13 +377,14 @@ describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
     // Exhaustive-ish: for every question index, a wrong pick at that point can
     // only ever produce retry/reset, never verified.
     for (let run = 0; run < 100; run++) {
-      let attempt = startQuizAttempt(LONG_WORDS);
+      const optionsFor = providerFor(LONG_WORDS);
+      let attempt = startQuizAttempt(LONG_WORDS, optionsFor);
       const wrongAt = run % VERIFICATION_WORD_COUNT;
       for (let question = 0; question < VERIFICATION_WORD_COUNT; question++) {
         const result =
           question === wrongAt
-            ? answerWrongly(attempt, LONG_WORDS)
-            : answerCorrectly(attempt, LONG_WORDS);
+            ? answerWrongly(attempt, LONG_WORDS, optionsFor)
+            : answerCorrectly(attempt, LONG_WORDS, optionsFor);
         if (question === wrongAt) {
           expect(result.status).not.toBe('verified');
           expect(result.status).not.toBe('advanced');
@@ -355,6 +394,71 @@ describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
         attempt = (result as { attempt: QuizAttempt }).attempt;
       }
     }
+  });
+});
+
+describe('createOptionProvider — the cross-board intersection oracle', () => {
+  it('returns the SAME set for a position, every time it is asked', () => {
+    // THE DEFECT THIS PINS: the first cut of this challenge rebuilt a fresh
+    // board on every retry. Only the answer is guaranteed to survive a rebuild —
+    // the four BIP-39 decoys are resampled from 2048 words and essentially never
+    // recur — so intersecting two boards for one position yields the answer.
+    // A user could answer wrong ON PURPOSE, intersect, and then answer
+    // correctly, inside the mistake budget, for all three questions.
+    for (let run = 0; run < 25; run++) {
+      const optionsFor = providerFor(LONG_WORDS);
+      for (let position = 0; position < LONG_WORDS.length; position++) {
+        const first = optionsFor(position);
+        for (let repeat = 0; repeat < 5; repeat++) {
+          expect(optionsFor(position)).toEqual(first);
+        }
+      }
+    }
+  });
+
+  it('gives a retry board that intersects the previous one in ALL its chips', () => {
+    // The observable form of the same property: an attacker who intersects the
+    // board before and after a wrong answer learns nothing, because the
+    // intersection is the whole board.
+    for (let run = 0; run < 50; run++) {
+      const optionsFor = providerFor(LONG_WORDS);
+      const attempt = startQuizAttempt(LONG_WORDS, optionsFor);
+      const before = new Set(attempt.options);
+
+      const result = answerWrongly(attempt, LONG_WORDS, optionsFor);
+      const after = (result as { attempt: QuizAttempt }).attempt.options;
+
+      const intersection = after.filter((word) => before.has(word));
+      expect(intersection).toHaveLength(CHALLENGE_OPTION_COUNT);
+    }
+  });
+
+  it('keeps a position stable across an attempt restart too', () => {
+    // The restart rebuilds POSITIONS, not boards. If it rebuilt boards, the same
+    // intersection attack would work across attempts instead of across retries.
+    const optionsFor = providerFor(LONG_WORDS);
+    const boards = LONG_WORDS.map((_, position) => optionsFor(position));
+
+    let attempt = startQuizAttempt(LONG_WORDS, optionsFor);
+    for (let mistake = 0; mistake <= MAX_MISTAKES; mistake++) {
+      attempt = (
+        answerWrongly(attempt, LONG_WORDS, optionsFor) as {
+          attempt: QuizAttempt;
+        }
+      ).attempt;
+    }
+
+    LONG_WORDS.forEach((_, position) => {
+      expect(optionsFor(position)).toEqual(boards[position]);
+    });
+  });
+
+  it('gives DIFFERENT phrases different boards', () => {
+    // The cache is per provider (i.e. per component mount), keyed by position
+    // only — it must never be shared across phrases.
+    const a = providerFor(LONG_WORDS)(4);
+    const b = providerFor(REPEATED_WORDS)(4);
+    expect(a).not.toEqual(b);
   });
 });
 
@@ -383,7 +487,8 @@ describe('DR-12 end-to-end: every repeated-word phrase stays answerable', () => 
           answerCurrentChallenge(
             attempt,
             REPEATED_WORDS,
-            REPEATED_WORDS[position]
+            REPEATED_WORDS[position],
+            providerFor(REPEATED_WORDS)
           ).status
         ).toBe('verified');
       }
@@ -398,10 +503,11 @@ describe('DR-12 end-to-end: every repeated-word phrase stays answerable', () => 
     for (let a = 0; a < words.length; a++) {
       for (let b = a + 1; b < words.length; b++) {
         for (let c = b + 1; c < words.length; c++) {
+          const optionsFor = providerFor(words);
           let attempt: QuizAttempt = {
             positions: [a, b, c],
             currentIndex: 0,
-            options: buildChallengeOptions(words, a),
+            options: optionsFor(a),
             mistakes: 0,
           };
 
@@ -411,7 +517,8 @@ describe('DR-12 end-to-end: every repeated-word phrase stays answerable', () => 
             const result = answerCurrentChallenge(
               attempt,
               words,
-              words[position]
+              words[position],
+              optionsFor
             );
             if (question < 2) {
               expect(result.status).toBe('advanced');
@@ -427,15 +534,21 @@ describe('DR-12 end-to-end: every repeated-word phrase stays answerable', () => 
 
   it('a repeated word is accepted at each of its positions, in one run', () => {
     // "abandon" sits at 0, 3 and 6 — ask all three in a single attempt.
+    const repeatedProvider = providerFor(REPEATED_WORDS);
     let attempt: QuizAttempt = {
       positions: [0, 3, 6],
       currentIndex: 0,
-      options: buildChallengeOptions(REPEATED_WORDS, 0),
+      options: repeatedProvider(0),
       mistakes: 0,
     };
     for (const expected of [0, 3, 6]) {
       expect(currentPosition(attempt)).toBe(expected);
-      const result = answerCurrentChallenge(attempt, REPEATED_WORDS, 'abandon');
+      const result = answerCurrentChallenge(
+        attempt,
+        REPEATED_WORDS,
+        'abandon',
+        repeatedProvider
+      );
       if (expected === 6) {
         expect(result.status).toBe('verified');
       } else {

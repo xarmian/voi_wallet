@@ -148,7 +148,10 @@ describe('MnemonicVerification — directed challenge (TASK-226)', () => {
     );
   });
 
-  it('re-presents a failed question with a freshly built board', () => {
+  it('re-presents a failed question with the SAME chips, not a new set', () => {
+    // Rebuilding the board on retry would leak the answer: it is the only chip
+    // guaranteed to survive a rebuild, so intersecting the two boards names it.
+    // See the intersection-oracle suite in `mnemonicQuiz.test.ts`.
     const { screen } = renderQuiz(LONG);
 
     const readBoard = () =>
@@ -160,13 +163,42 @@ describe('MnemonicVerification — directed challenge (TASK-226)', () => {
       );
 
     const before = readBoard();
+    const position = currentQuizPosition(screen, PREFIX);
     pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
     const after = readBoard();
 
-    // A stable board would let the user eliminate one chip at a time.
-    expect(after).not.toEqual(before);
+    expect(currentQuizPosition(screen, PREFIX)).toBe(position);
+    expect([...after].sort()).toEqual([...before].sort());
     // The answer is still reachable — never a dead end.
-    expect(after).toContain(LONG_WORDS[currentQuizPosition(screen, PREFIX)]);
+    expect(after).toContain(LONG_WORDS[position]);
+  });
+
+  it('keeps a position’s chips stable across a full restart', () => {
+    // Same oracle, across attempts instead of across retries.
+    const { screen } = renderQuiz(LONG);
+
+    const readBoard = () =>
+      Array.from({ length: CHALLENGE_OPTION_COUNT }, (_, slot) =>
+        String(
+          screen.getByTestId(`${PREFIX}-option-${slot}`).props
+            .accessibilityLabel
+        )
+      );
+
+    const boards = new Map<number, string[]>();
+    for (let pick = 0; pick < 12; pick++) {
+      const position = currentQuizPosition(screen, PREFIX);
+      const board = [...readBoard()].sort();
+      const seen = boards.get(position);
+      if (seen) {
+        expect(board).toEqual(seen);
+      } else {
+        boards.set(position, board);
+      }
+      pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+    }
+    // The walk really did span more than one attempt.
+    expect(boards.size).toBeGreaterThan(1);
   });
 
   it('restarts the whole challenge once the mistake budget runs out', () => {

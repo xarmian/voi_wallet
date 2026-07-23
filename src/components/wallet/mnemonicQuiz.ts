@@ -37,10 +37,12 @@
  *
  * ## Retry policy
  *
- * A wrong pick costs a mistake and re-presents the SAME position with a FRESH
- * option set — re-presenting the same set would let the user eliminate their way
- * to the answer. Progress on already-answered positions is kept, so a fat-finger
- * does not throw away a correct run.
+ * A wrong pick costs a mistake and re-presents the SAME position with the SAME
+ * option set in a reshuffled order. The set is deliberately stable — see
+ * {@link createOptionProvider} for the cross-board intersection oracle that
+ * rebuilding it would open, and for why elimination inside the mistake budget
+ * gains a blind guesser nothing. Progress on already-answered positions is kept,
+ * so a fat-finger does not throw away a correct run.
  *
  * After {@link MAX_MISTAKES} tolerated mistakes the next wrong pick discards the
  * whole attempt: brand-new positions, brand-new option sets, mistake counter
@@ -206,9 +208,66 @@ export function buildChallengeOptions(
   return shuffle([...chosen], rng);
 }
 
-/** Start a fresh attempt: new positions, new options, no mistakes. */
+/**
+ * Returns the canonical option SET for a phrase position.
+ *
+ * Every presentation of a given position must draw from the SAME set — see
+ * {@link createOptionProvider} for why that is a security property and not an
+ * optimisation.
+ */
+export type OptionProvider = (position: number) => string[];
+
+/**
+ * Build an option provider that memoises each position's board.
+ *
+ * ## Why this exists — the cross-board intersection oracle
+ *
+ * The first cut of this challenge rebuilt a FRESH board every time a position
+ * was re-asked, on the theory that a stable board could be eliminated one chip
+ * at a time. That was backwards: the right answer is the one word GUARANTEED to
+ * appear on every board for a position, while the decoys are resampled (the
+ * BIP-39 ones from 2048 words, so they essentially never recur). Intersecting
+ * two boards for the same position therefore yields the answer directly. An
+ * attacker could deliberately answer wrong once, intersect, and then answer
+ * correctly — inside the mistake budget, for all three questions.
+ *
+ * Memoising the set closes that channel completely: intersecting two
+ * presentations returns the set itself, which is exactly what the user could
+ * already see. Only the display ORDER is reshuffled between presentations, and a
+ * uniform shuffle of an unchanged set carries no information.
+ *
+ * Elimination within the mistake budget is then the residual, and it is bounded
+ * and cheap: drawing without replacement from a fixed set of
+ * {@link CHALLENGE_OPTION_COUNT} makes every guess worth exactly
+ * `1 / CHALLENGE_OPTION_COUNT` no matter how many chips have already been ruled
+ * out, so a blind guesser gains nothing per question by spending mistakes.
+ *
+ * The cache lives as long as the caller holds the provider — one component
+ * mount. It holds only words that are already on screen.
+ */
+export function createOptionProvider(
+  words: string[],
+  rng: Rng = Math.random
+): OptionProvider {
+  const cache = new Map<number, string[]>();
+  return (position: number) => {
+    const cached = cache.get(position);
+    if (cached) return cached;
+    const options = buildChallengeOptions(
+      words,
+      position,
+      CHALLENGE_OPTION_COUNT,
+      rng
+    );
+    cache.set(position, options);
+    return options;
+  };
+}
+
+/** Start a fresh attempt: new positions, no mistakes. */
 export function startQuizAttempt(
   words: string[],
+  optionsFor: OptionProvider,
   rng: Rng = Math.random
 ): QuizAttempt {
   const positions = pickVerificationPositions(
@@ -219,15 +278,7 @@ export function startQuizAttempt(
   return {
     positions,
     currentIndex: 0,
-    options:
-      positions.length > 0
-        ? buildChallengeOptions(
-            words,
-            positions[0],
-            CHALLENGE_OPTION_COUNT,
-            rng
-          )
-        : [],
+    options: positions.length > 0 ? shuffle(optionsFor(positions[0]), rng) : [],
     mistakes: 0,
   };
 }
@@ -256,12 +307,16 @@ export function answerCurrentChallenge(
   attempt: QuizAttempt,
   words: string[],
   picked: string,
+  optionsFor: OptionProvider,
   rng: Rng = Math.random
 ): QuizAnswer {
   const position = currentPosition(attempt);
   if (position === null) {
     // No question is live — never a pass; rebuild rather than dead-end.
-    return { status: 'reset', attempt: startQuizAttempt(words, rng) };
+    return {
+      status: 'reset',
+      attempt: startQuizAttempt(words, optionsFor, rng),
+    };
   }
 
   const isCorrect =
@@ -277,34 +332,28 @@ export function answerCurrentChallenge(
       attempt: {
         ...attempt,
         currentIndex: nextIndex,
-        options: buildChallengeOptions(
-          words,
-          attempt.positions[nextIndex],
-          CHALLENGE_OPTION_COUNT,
-          rng
-        ),
+        options: shuffle(optionsFor(attempt.positions[nextIndex]), rng),
       },
     };
   }
 
   const mistakes = attempt.mistakes + 1;
   if (mistakes > MAX_MISTAKES) {
-    return { status: 'reset', attempt: startQuizAttempt(words, rng) };
+    return {
+      status: 'reset',
+      attempt: startQuizAttempt(words, optionsFor, rng),
+    };
   }
 
-  // Same position, FRESH options — re-presenting the same set would let the user
-  // eliminate their way to the answer.
+  // Same position, same SET, reshuffled order. The set must not be rebuilt: the
+  // answer is the only word guaranteed to survive a rebuild, so two boards for
+  // one position would intersect to it. See createOptionProvider.
   return {
     status: 'retry',
     attempt: {
       ...attempt,
       mistakes,
-      options: buildChallengeOptions(
-        words,
-        position,
-        CHALLENGE_OPTION_COUNT,
-        rng
-      ),
+      options: shuffle(optionsFor(position), rng),
     },
   };
 }

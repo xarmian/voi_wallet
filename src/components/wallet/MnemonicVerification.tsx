@@ -63,11 +63,13 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
   answerCurrentChallenge,
+  createOptionProvider,
   currentPosition,
   remainingMistakes,
   splitMnemonic,
   startQuizAttempt,
   VERIFICATION_WORD_COUNT,
+  type OptionProvider,
   type QuizAttempt,
 } from './mnemonicQuiz';
 
@@ -100,9 +102,19 @@ export default function MnemonicVerification({
 }: MnemonicVerificationProps) {
   const { theme } = useTheme();
 
-  const [attempt, setAttempt] = useState<QuizAttempt>(() =>
-    startQuizAttempt(splitMnemonic(mnemonic))
-  );
+  // One memoised option provider per mount. Each position's board is built once
+  // and then re-presented (reshuffled) for the whole mount, including across a
+  // restart — rebuilding it would let a user intersect two boards for the same
+  // position and read off the answer, since only the answer is guaranteed to
+  // survive a rebuild. See `createOptionProvider`.
+  const [initial] = useState(() => {
+    const words = splitMnemonic(mnemonic);
+    const optionsFor = createOptionProvider(words);
+    return { optionsFor, attempt: startQuizAttempt(words, optionsFor) };
+  });
+  const optionsForRef = useRef<OptionProvider>(initial.optionsFor);
+
+  const [attempt, setAttempt] = useState<QuizAttempt>(initial.attempt);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // `attempt` is also mirrored in a ref so a burst of taps is resolved against
@@ -126,7 +138,10 @@ export default function MnemonicVerification({
       isFirstRun.current = false;
       return;
     }
-    applyAttempt(startQuizAttempt(splitMnemonic(mnemonic)));
+    const words = splitMnemonic(mnemonic);
+    // A different phrase means every cached board is stale.
+    optionsForRef.current = createOptionProvider(words);
+    applyAttempt(startQuizAttempt(words, optionsForRef.current));
     setErrorMessage(null);
     // `applyAttempt` is recreated every render by design; the phrase is the only
     // input that should re-run this.
@@ -179,7 +194,12 @@ export default function MnemonicVerification({
     if (askedPosition === null) return;
 
     const words = splitMnemonic(mnemonic);
-    const result = answerCurrentChallenge(board, words, word);
+    const result = answerCurrentChallenge(
+      board,
+      words,
+      word,
+      optionsForRef.current
+    );
 
     switch (result.status) {
       case 'verified':
@@ -187,7 +207,7 @@ export default function MnemonicVerification({
         // cannot fire twice), and a host that keeps this mounted after success —
         // e.g. the user dismisses the confirmation alert — gets a live challenge
         // back instead of an inert board.
-        applyAttempt(startQuizAttempt(words));
+        applyAttempt(startQuizAttempt(words, optionsForRef.current));
         setErrorMessage(null);
         onVerified();
         return;
