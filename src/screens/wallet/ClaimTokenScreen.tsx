@@ -15,7 +15,6 @@ import {
   Alert,
   ActivityIndicator,
   Switch,
-  ScrollView,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -38,12 +37,9 @@ import { GlassButton } from '@/components/common/GlassButton';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import AccountRecipientModal from '@/components/account/AccountRecipientModal';
 import { useActiveAccount } from '@/store/walletStore';
-import {
-  ClaimableItem,
-  fromSerializableClaimableItem,
-} from '@/types/claimable';
+import { fromSerializableClaimableItem } from '@/types/claimable';
 import { Arc200TransactionService } from '@/services/transactions/arc200';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
 import {
@@ -54,10 +50,7 @@ import {
 import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
-import type {
-  WalletStackParamList,
-  RootStackParamList,
-} from '@/navigation/AppNavigator';
+import type { WalletStackParamList } from '@/navigation/AppNavigator';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
@@ -164,7 +157,7 @@ export default function ClaimTokenScreen() {
           setNameResolutionError('Invalid address');
           setRecipientAddress('');
         }
-      } catch (error) {
+      } catch {
         setNameResolutionError('Failed to resolve address');
         setRecipientAddress('');
       } finally {
@@ -286,7 +279,7 @@ export default function ClaimTokenScreen() {
             CLAIM_NETWORK_ID
           );
           setEstimatedFee(costEstimate.total);
-        } catch (error) {
+        } catch {
           setEstimatedFee(1000);
         }
         return;

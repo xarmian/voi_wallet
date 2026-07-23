@@ -1,8 +1,4 @@
-import {
-  SessionTypes,
-  SignClientTypes,
-  ProposalTypes,
-} from '@walletconnect/types';
+import { ProposalTypes } from '@walletconnect/types';
 
 export interface WalletConnectMetadata {
   name: string;

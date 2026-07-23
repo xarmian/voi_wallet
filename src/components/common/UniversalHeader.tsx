@@ -1,19 +1,18 @@
 import React, { useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 import AccountSelector from '../account/AccountSelector';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SafeBlurView } from './SafeBlurView';
-import { springConfigs, timingConfigs } from '@/utils/animations';
+import { springConfigs } from '@/utils/animations';
 
 interface UniversalHeaderProps {
   title: string;

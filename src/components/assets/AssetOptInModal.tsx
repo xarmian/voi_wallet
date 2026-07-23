@@ -24,10 +24,7 @@ import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NetworkId } from '@/types/network';
-import {
-  getNetworkConfig,
-  NETWORK_CONFIGURATIONS,
-} from '@/services/network/config';
+import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 
 interface AssetInfo {
   assetId: number;

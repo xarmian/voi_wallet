@@ -1,4 +1,4 @@
-import algosdk, { Transaction } from 'algosdk';
+import { Transaction } from 'algosdk';
 import { ledgerAlgorandService } from './algorand';
 import { simpleLedgerManager } from './simpleLedgerManager';
 import {
@@ -187,7 +187,7 @@ export class SimpleLedgerSigner {
       if (!transport) return false;
 
       return await simpleLedgerManager.verifyDeviceReady();
-    } catch (error) {
+    } catch {
       return false;
     }
   }

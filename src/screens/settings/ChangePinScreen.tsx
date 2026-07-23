@@ -177,7 +177,7 @@ export default function ChangePinScreen() {
             );
           }
         }
-      } catch (error) {
+      } catch {
         Alert.alert('Error', 'Failed to verify. Please try again.');
         setCurrentPin('');
       } finally {

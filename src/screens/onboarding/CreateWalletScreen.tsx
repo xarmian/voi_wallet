@@ -76,7 +76,7 @@ export default function CreateWalletScreen({ navigation }: Props) {
     try {
       const wallet = WalletService.generateWallet();
       setMnemonic(wallet.mnemonic);
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to generate wallet');
     }
   }, []);

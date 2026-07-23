@@ -9,7 +9,6 @@ import {
   Share,
   Alert,
   SafeAreaView,
-  Dimensions,
   Platform,
   StatusBar,
 } from 'react-native';
@@ -66,7 +65,7 @@ export const DebugLogsModal: React.FC<DebugLogsModalProps> = ({
         message: logText,
         title: 'Ledger Debug Logs',
       });
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to share logs');
     }
   };

@@ -151,7 +151,7 @@ export default function BackupWalletScreen() {
       try {
         await BackupService.shareBackup(backupResult.fileUri);
         setBackupSaved(true);
-      } catch (err) {
+      } catch {
         Alert.alert(
           'Save Failed',
           'Could not save the backup file. Please try again.'
@@ -165,7 +165,7 @@ export default function BackupWalletScreen() {
     try {
       await BackupService.shareBackup(backupResult.fileUri);
       setBackupSaved(true);
-    } catch (err) {
+    } catch {
       Alert.alert(
         'Share Failed',
         'Could not share the backup file. Please try again.'

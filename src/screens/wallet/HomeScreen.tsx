@@ -29,11 +29,7 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import {
-  TransactionInfo,
-  AssetBalance,
-  needsBackupVerification,
-} from '@/types/wallet';
+import { AssetBalance, needsBackupVerification } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
@@ -45,16 +41,13 @@ import {
   useIsMultiNetworkView,
   useMultiNetworkBalance,
   useAssetNetworkFilter,
-  useAssetFilterSettings,
 } from '@/store/walletStore';
 import VoiNetworkService, { NetworkStatus } from '@/services/network';
-import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
+import { formatNativeBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
-import { formatAddressSync } from '@/utils/address';
-import { useCurrentNetworkConfig, useNetworkStore } from '@/store/networkStore';
+import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
-import AccountSelector from '@/components/account/AccountSelector';
 import AccountListModal from '@/components/account/AccountListModal';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import AddAccountModal from '@/components/account/AddAccountModal';
@@ -71,10 +64,9 @@ import type { AssetFilterSettings } from '@/components/assets/AssetFilterModal';
 import { MappedAsset } from '@/services/token-mapping/types';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
-import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
-import { springConfigs, getStaggerDelay } from '@/utils/animations';
+import { springConfigs } from '@/utils/animations';
 import ClaimableBanner from '@/components/claimable/ClaimableBanner';
 import {
   useClaimableStore,

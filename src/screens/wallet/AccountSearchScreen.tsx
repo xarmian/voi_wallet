@@ -20,7 +20,7 @@ import algosdk from 'algosdk';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { EnvoiService, EnvoiNameInfo } from '@/services/envoi';
+import { EnvoiService } from '@/services/envoi';
 import { formatAddress } from '@/utils/address';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import { useFriendsStore } from '@/store/friendsStore';

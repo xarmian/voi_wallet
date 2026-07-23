@@ -99,7 +99,7 @@ export default function RestoreWalletScreen() {
 
       // Show password modal to decrypt and validate
       setShowPasswordModal(true);
-    } catch (err) {
+    } catch {
       Alert.alert('Error', 'Failed to select file. Please try again.', [
         { text: 'OK' },
       ]);

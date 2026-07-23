@@ -624,7 +624,7 @@ export class TransactionAuthController {
           isLedgerFlow = true;
           this.ledgerSigningInfo = ledgerInfo;
         }
-      } catch (ledgerError) {
+      } catch {
         // Ledger info not available, continue with regular flow
       }
 

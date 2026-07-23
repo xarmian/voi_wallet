@@ -189,7 +189,7 @@ export default function ImportRemoteSignerScreen() {
       if (text) {
         handleSingleFrame(text.trim());
       }
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to read from clipboard');
     }
   };
@@ -231,7 +231,7 @@ export default function ImportRemoteSignerScreen() {
         image.src = e.target?.result as string;
       };
       reader.readAsDataURL(file);
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to process the image file.');
     }
   };

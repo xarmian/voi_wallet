@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import algosdk from 'algosdk';
 import {
   View,
@@ -6,7 +6,6 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  Pressable,
   Alert,
   ActivityIndicator,
   ScrollView,
@@ -26,12 +25,11 @@ import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
 import { TransactionService } from '@/services/transactions';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import { NetworkService } from '@/services/network';
 import tokenMappingService from '@/services/token-mapping';
 import type { TokenMapping } from '@/services/token-mapping/types';
 import {
   useActiveAccount,
-  useActiveAccountBalance,
   useWalletStore,
   useMultiNetworkBalance,
 } from '@/store/walletStore';
@@ -62,7 +60,6 @@ import {
 import { isAlgorandPaymentUri, parseAlgorandUri } from '@/utils/algorandUri';
 import { toErrorAlert } from '@/utils/errorMapping';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
-import AccountSelector from '@/components/account/AccountSelector';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import AccountRecipientModal from '@/components/account/AccountRecipientModal';
@@ -71,7 +68,6 @@ import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import NetworkAssetSelector from '@/components/send/NetworkAssetSelector';
 import { NFTBackground } from '@/components/common/NFTBackground';
-import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 

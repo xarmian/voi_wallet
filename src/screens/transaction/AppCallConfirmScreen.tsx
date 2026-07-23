@@ -108,7 +108,7 @@ export default function AppCallConfirmScreen() {
             return new Uint8Array(Buffer.from(arg));
           }
         });
-      } catch (err) {
+      } catch {
         Alert.alert('Invalid Arguments', 'Failed to decode app arguments.');
         return;
       }
@@ -122,7 +122,7 @@ export default function AppCallConfirmScreen() {
           appIndex: params.appId,
           name: decodeBase64Url(box),
         }));
-      } catch (err) {
+      } catch {
         Alert.alert(
           'Invalid Box References',
           'Failed to decode box references.'

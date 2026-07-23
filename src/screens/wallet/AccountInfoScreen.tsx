@@ -9,7 +9,6 @@ import {
   Dimensions,
   TouchableOpacity,
   Alert,
-  Linking,
 } from 'react-native';
 import { useNavigation, RouteProp, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';

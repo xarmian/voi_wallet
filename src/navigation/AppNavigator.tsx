@@ -1,9 +1,7 @@
-import React, { useEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useEffect, useRef, Suspense } from 'react';
 import {
   NavigationContainer,
   StackActions,
-  useFocusEffect,
-  useNavigation,
   NavigatorScreenParams,
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -89,7 +87,6 @@ import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
-import { useUpdates } from 'expo-updates';
 import { useUpdateStore } from '@/store/updateStore';
 
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds

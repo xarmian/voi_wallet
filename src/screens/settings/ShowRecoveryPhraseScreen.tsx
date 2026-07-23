@@ -154,7 +154,7 @@ export default function ShowRecoveryPhraseScreen() {
 
           // Reset the copied state after 3 seconds
           timeoutRef.current = setTimeout(() => setHasCopied(false), 3000);
-        } catch (error) {
+        } catch {
           Alert.alert('Error', 'Failed to copy to clipboard');
         }
       });

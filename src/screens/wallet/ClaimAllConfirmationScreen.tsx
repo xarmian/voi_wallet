@@ -37,15 +37,12 @@ import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useActiveAccount } from '@/store/walletStore';
-import {
-  ClaimableItem,
-  fromSerializableClaimableItem,
-} from '@/types/claimable';
+import { fromSerializableClaimableItem } from '@/types/claimable';
 import {
   Arc200TransactionService,
   Arc200ClaimParams,
 } from '@/services/transactions/arc200';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
 import { toErrorAlert } from '@/utils/errorMapping';
@@ -164,7 +161,7 @@ export default function ClaimAllConfirmationScreen() {
           setNameResolutionError('Invalid address');
           setRecipientAddress('');
         }
-      } catch (error) {
+      } catch {
         setNameResolutionError('Failed to resolve address');
         setRecipientAddress('');
       } finally {
@@ -286,7 +283,7 @@ export default function ClaimAllConfirmationScreen() {
             CLAIM_NETWORK_ID
           );
           setEstimatedFee(costEstimate.total);
-        } catch (error) {
+        } catch {
           setEstimatedFee(1000 * items.length);
         }
         return;

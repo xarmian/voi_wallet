@@ -6,7 +6,6 @@ import {
   NFTMetadata,
   NFTCollectionsIndexerResponse,
   NFTCollectionsResponse,
-  ARC72Collection,
 } from '@/types/nft';
 import { NFT_CONSTANTS, NFT_ERROR_MESSAGES } from '@/constants/nft';
 

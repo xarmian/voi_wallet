@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
@@ -9,14 +9,9 @@ import {
   AccountType,
   RekeyedAccountMetadata,
 } from '@/types/wallet';
-import {
-  useWalletStore,
-  useAccountBalance,
-  useAccountEnvoiName,
-} from '@/store/walletStore';
+import { useWalletStore, useAccountBalance } from '@/store/walletStore';
 import AccountAvatar from './AccountAvatar';
 import { formatNativeBalance } from '@/utils/bigint';
-import { formatAddressSync } from '@/utils/address';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 
 interface AccountListItemProps {

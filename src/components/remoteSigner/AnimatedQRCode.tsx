@@ -14,7 +14,6 @@ import {
   AnimatedQRService,
   AnimatedQREncodeResult,
 } from '@/services/remoteSigner/animatedQR';
-import { REMOTE_SIGNER_CONSTANTS } from '@/types/remoteSigner';
 
 interface AnimatedQRCodeProps {
   /** The data to encode in the QR code(s) */

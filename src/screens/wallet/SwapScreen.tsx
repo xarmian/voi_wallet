@@ -11,8 +11,6 @@ import {
   TextInput,
   TouchableOpacity,
   Alert,
-  ActivityIndicator,
-  ScrollView,
   Linking,
   BackHandler,
   Animated,
@@ -47,7 +45,6 @@ import { SwapService, SwapToken, UnifiedSwapQuote } from '@/services/swap';
 import { NetworkId } from '@/types/network';
 import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
-import algosdk from 'algosdk';
 import { getTokenImageSource } from '@/utils/tokenImages';
 import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
 import {
@@ -642,7 +639,7 @@ export default function SwapScreen() {
       } else {
         Alert.alert('Error', 'Cannot open this URL');
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to open URL');
     }
   };

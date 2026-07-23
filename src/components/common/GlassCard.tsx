@@ -10,7 +10,6 @@ import React, { useMemo, useCallback } from 'react';
 import {
   View,
   StyleSheet,
-  Platform,
   Pressable,
   ViewStyle,
   StyleProp,

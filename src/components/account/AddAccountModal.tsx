@@ -10,7 +10,6 @@ import {
 } from '@gorhom/bottom-sheet';
 import { BottomSheetDefaultBackdropProps } from '@gorhom/bottom-sheet/lib/typescript/components/bottomSheetBackdrop/types';
 import { useWalletStore } from '@/store/walletStore';
-import { AccountType } from '@/types/wallet';
 
 interface AddAccountModalProps {
   isVisible: boolean;

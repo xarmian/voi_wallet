@@ -27,7 +27,6 @@ import {
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { NetworkId } from '@/types/network';
 import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
 import {
   detectTransactionDangers,

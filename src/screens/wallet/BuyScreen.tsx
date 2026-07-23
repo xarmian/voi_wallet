@@ -5,15 +5,7 @@ import React, {
   useCallback,
   useEffect,
 } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Alert,
-  Linking,
-  Platform,
-  RefreshControl,
-} from 'react-native';
+import { View, Text, StyleSheet, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ThemedWebView, {
   ThemedWebViewRef,

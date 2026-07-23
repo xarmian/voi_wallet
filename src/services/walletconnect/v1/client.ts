@@ -9,10 +9,8 @@ import {
   WalletConnectV1SessionConfig,
   WalletConnectV1SessionData,
   WalletConnectV1SessionRequest,
-  WalletConnectV1Request,
   WalletConnectV1Event,
   AlgoSignTxnRequest,
-  WalletConnectV1PeerMeta,
   WalletConnectV1StoredSession,
 } from './types';
 import { WalletConnectV1WebSocket } from './websocket';

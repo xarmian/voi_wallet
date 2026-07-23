@@ -18,10 +18,7 @@ import {
   getArc0090UriType,
   isLegacyVoiUri,
 } from '@/utils/arc0090Uri';
-import {
-  parseArc0300AccountImportUri,
-  Arc0300AccountImportResult,
-} from '@/utils/arc0300';
+import { parseArc0300AccountImportUri } from '@/utils/arc0300';
 import algosdk from 'algosdk';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';

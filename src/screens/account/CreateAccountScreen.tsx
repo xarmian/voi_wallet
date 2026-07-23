@@ -73,7 +73,7 @@ export default function CreateAccountScreen() {
       const wallet = WalletService.generateWallet();
       setMnemonic(wallet.mnemonic);
       setStep('backup');
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to generate wallet');
     }
   };

@@ -22,17 +22,11 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
-import {
-  WalletConnectV1Client,
-  DEFAULT_CHAIN_ID,
-} from '@/services/walletconnect/v1';
+import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import {
-  getSignableAccounts,
-  truncateAddress,
-} from '@/services/walletconnect/utils';
+import { getSignableAccounts } from '@/services/walletconnect/utils';
 import AccountSelectionItem from '@/components/walletconnect/AccountSelectionItem';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';

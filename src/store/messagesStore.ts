@@ -18,7 +18,6 @@ import {
   Message,
   MessageThread,
   MessageStatus,
-  MessagingKeyPair,
 } from '@/services/messaging/types';
 import MessagingService from '@/services/messaging';
 import { computeSyncCursor } from '@/services/messaging/syncCursor';

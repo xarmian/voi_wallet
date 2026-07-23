@@ -36,11 +36,7 @@ import {
 } from '@/store/remoteSignerStore';
 import { useAccounts, useWalletStore } from '@/store/walletStore';
 import { AppMode } from '@/types/remoteSigner';
-import {
-  AccountType,
-  StandardAccountMetadata,
-  AccountMetadata,
-} from '@/types/wallet';
+import { AccountType, StandardAccountMetadata } from '@/types/wallet';
 import * as Updates from 'expo-updates';
 import AccountListModal from '@/components/account/AccountListModal';
 import { TransferToAirgapFlow } from '@/components/remoteSigner/TransferToAirgapFlow';
@@ -158,7 +154,7 @@ export default function RemoteSignerSettingsScreen() {
               } else {
                 await Updates.reloadAsync();
               }
-            } catch (error) {
+            } catch {
               showAlert('Error', 'Failed to switch mode. Please try again.');
               setIsModeSwitching(false);
             }
@@ -189,7 +185,7 @@ export default function RemoteSignerSettingsScreen() {
       } else {
         await Updates.reloadAsync();
       }
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to set up signer mode. Please try again.');
       setIsModeSwitching(false);
     }
@@ -205,7 +201,7 @@ export default function RemoteSignerSettingsScreen() {
       await updateSignerDeviceName(deviceName.trim());
       setIsEditingName(false);
       showAlert('Success', 'Device name updated');
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to update device name');
     }
   };

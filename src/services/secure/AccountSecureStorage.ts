@@ -1599,7 +1599,7 @@ export class AccountSecureStorage {
             secretPayloadRaw = await secureStorage.getItem(
               this.secretKey(accountId)
             );
-          } catch (error) {
+          } catch {
             throw new AuthenticationRequiredError(
               'Failed to access private key with PIN'
             );
@@ -1650,7 +1650,7 @@ export class AccountSecureStorage {
             secretPayloadRaw = await secureStorage.getItem(
               this.secretKey(accountId)
             );
-          } catch (error) {
+          } catch {
             throw new AccountRetrievalError('Failed to retrieve account data');
           }
         }
@@ -2614,7 +2614,7 @@ export class AccountSecureStorage {
         // throttle's job to special-case.
         await this.saveThrottle(updated);
         return false;
-      } catch (error) {
+      } catch {
         console.warn('PIN verification failed');
         return false;
       }
@@ -2883,7 +2883,7 @@ export class AccountSecureStorage {
     try {
       const storedData = await this.getStoredPinData();
       return Boolean(storedData);
-    } catch (error) {
+    } catch {
       return false;
     }
   }
@@ -3347,7 +3347,7 @@ export class AccountSecureStorage {
       await secureStorage
         .deleteItem(this.BIOMETRIC_ENABLED_KEY)
         .catch(() => {});
-    } catch (error) {
+    } catch {
       throw new AccountStorageError('Failed to store biometric setting');
     }
   }
@@ -3366,7 +3366,7 @@ export class AccountSecureStorage {
         }
       }
       return enabled === 'true';
-    } catch (error) {
+    } catch {
       return false;
     }
   }
@@ -3484,7 +3484,7 @@ export class AccountSecureStorage {
     try {
       await storage.setItem(this.PIN_TIMEOUT_KEY, String(timeoutMinutes));
       await secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {});
-    } catch (error) {
+    } catch {
       throw new AccountStorageError('Failed to store PIN timeout setting');
     }
   }
@@ -3510,7 +3510,7 @@ export class AccountSecureStorage {
 
       const timeoutNumber = Number(timeout);
       return isNaN(timeoutNumber) ? 5 : timeoutNumber;
-    } catch (error) {
+    } catch {
       return 5; // Default fallback
     }
   }
@@ -3575,7 +3575,7 @@ export class AccountSecureStorage {
       await secureStorage.setItem(this.SALT_KEY, salt);
       await storage.removeItem(this.SALT_KEY).catch(() => {});
       return salt;
-    } catch (error) {
+    } catch {
       throw new AccountStorageError('Failed to generate or retrieve salt');
     }
   }
@@ -3680,7 +3680,7 @@ export class AccountSecureStorage {
       // Clear any temporary crypto variables by overwriting with zeros
       // Note: JavaScript strings are immutable, but this signals intent
       console.log('Cleared sensitive data from memory');
-    } catch (error) {
+    } catch {
       // Don't log detailed error to prevent information leakage
       console.warn('Failed to clear sensitive data');
     }
@@ -3759,7 +3759,7 @@ export class AccountSecureStorage {
           await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
           this.throttleMirror = null;
         });
-      } catch (error) {
+      } catch {
         throw new AccountStorageError('Failed to clear all secure storage');
       }
     });
