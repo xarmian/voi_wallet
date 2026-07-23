@@ -111,5 +111,5 @@ declare namespace chrome {
 }
 
 // Make chrome available globally.
-// eslint-disable-next-line no-var -- ambient global: `declare var` is the correct idiom for a runtime-provided global (as in lib.dom.d.ts); let/const would change the declaration semantics.
+// eslint-disable-next-line no-var, @typescript-eslint/no-redeclare -- ambient global: `declare var` is the correct idiom for a runtime-provided global (as in lib.dom.d.ts); let/const would change the declaration semantics. no-redeclare fires because this `var` merges with the `declare namespace chrome` at :6 — a legal TS var+namespace merge that the rule's `ignoreDeclarationMerge` option does NOT whitelist (it covers interface/namespace/class/function/enum, not var). Not a bug: `tsc --noEmit --skipLibCheck` on this file exits 0. Suppress rather than delete the declaration.
 declare var chrome: typeof chrome;

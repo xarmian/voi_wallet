@@ -46,6 +46,40 @@ module.exports = [
       'react-hooks/preserve-manual-memoization': 'warn',
       'react-hooks/purity': 'warn',
       'react-hooks/refs': 'warn',
+
+      // Unused-variable hygiene. eslint-config-expo/flat/utils/typescript.js
+      // already configures this rule as { vars:'all', args:'none',
+      // ignoreRestSiblings:true, caughtErrors:'all' }; ESLint replaces rule
+      // options wholesale rather than merging, so those four are repeated here
+      // verbatim and MUST stay in sync with the preset.
+      //
+      // Added: the `^_` escape-hatch patterns, as a FORWARD-LOOKING convention.
+      // They clear ZERO warnings today — the codebase currently has no
+      // `_`-prefixed unused variable, caught error, or destructured-array
+      // element (verified by regenerating lint-baseline.json: no-unused-vars is
+      // unchanged by this block). They exist so new code can opt a genuinely
+      // unused binding out of the rule — `catch (_e)`, `const [_unused, setX]`,
+      // `const _throwaway = …` — instead of accreting one-off inline disables.
+      //
+      // Deliberately NO `argsIgnorePattern`. The preset sets `args: 'none'`, so
+      // unused PARAMETERS are already invisible to the rule; an argsIgnorePattern
+      // would match nothing and clear 0 warnings, while giving the false
+      // impression that parameter hygiene is enforced. WARNING: anyone who later
+      // flips `args` to `'after-used'` to "tighten" this would unmask an entire
+      // unmeasured wave of unused-parameter warnings across every callback in the
+      // codebase — re-baseline first, do not treat it as a no-op tweak.
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        {
+          vars: 'all',
+          args: 'none',
+          ignoreRestSiblings: true,
+          caughtErrors: 'all',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          destructuredArrayIgnorePattern: '^_',
+        },
+      ],
     },
   },
   {
@@ -69,6 +103,37 @@ module.exports = [
       'import/first': 'off',
       // Tests import default exports (services/stores) to jest.mock them.
       'import/no-named-as-default': 'off',
+      // Tests legitimately use require(): jest hoists jest.mock() factories above
+      // the import block and forbids them from closing over out-of-scope imports,
+      // so require() inside a factory is the only legal form; other specs stub or
+      // late-bind a module with require() to control load order. Turning the rule
+      // off here (rather than a `src/services/secure/**` carve-out) covers ALL of
+      // those — including every no-require-imports hit under
+      // src/services/secure/__tests__/, where the ONLY require sites live —
+      // without disarming the rule over production key/mnemonic/signing code,
+      // which has zero require sites of its own.
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
+    // Platform-adapter require()s (PLAN-12 DR-7). These three modules bridge the
+    // React Native app and the browser-extension build and pick an implementation
+    // at RUNTIME behind a platform guard —
+    // `isMobile() ? require('./mobile/X') : require('./extension/X')`. The two
+    // sides pull in mutually exclusive host deps (e.g. platform/mobile/
+    // secureStorage.ts imports expo-secure-store, while platform/extension/
+    // secureStorage.ts uses chrome.storage), so a static `import` of both would
+    // eagerly load a module that cannot resolve on the other platform. require()
+    // behind the guard is the intended pattern here, not debt — scope the rule
+    // off to exactly these files (polyfills.ts likewise late-requires its
+    // ponyfills so a native/global-present environment can skip them).
+    files: [
+      'src/platform/index.ts',
+      'src/platform/detection.ts',
+      'src/utils/polyfills.ts',
+    ],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
   {

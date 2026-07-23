@@ -44,7 +44,6 @@ jest.mock('@/platform', () => ({
 }));
 
 jest.mock('@/contexts/ThemeContext', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 

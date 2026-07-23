@@ -68,7 +68,6 @@ jest.mock('@/services/mimir', () => ({
 // library's official jest mock so the graph loads. None of the constructors
 // under test touch storage.
 jest.mock('@react-native-async-storage/async-storage', () =>
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- require is required inside a hoisted jest.mock factory
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 

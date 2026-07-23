@@ -31,6 +31,7 @@ const checkBiometricAvailability = async (): Promise<{
     return { hasHardware: false, isEnrolled: false };
   }
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- platform-guarded (Platform.OS === 'web' returns above): expo-local-authentication is native-only; require() keeps it out of the web bundle.
     const LocalAuthentication = require('expo-local-authentication');
     // hasHardwareAsync and isEnrolledAsync are independent native reads — run
     // them concurrently (F-03) instead of serially. A rejection in either still
