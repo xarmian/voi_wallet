@@ -238,16 +238,17 @@ function compareAgainst(previousPath) {
   const current = readBaseline();
   const previousTotal = previous?.totals?.warnings;
   const currentTotal = current?.totals?.warnings;
-  const pinned = maxWarningsInPackageJson();
+  const pin = lintPin();
 
   if (typeof previousTotal !== 'number' || typeof currentTotal !== 'number') {
     console.error('Both baselines must record totals.warnings as a number.');
     return 2;
   }
 
+  const pinLabel = pin.count === 1 ? pin.value : pin.count === 0 ? 'unset' : `${pin.count}×`;
   console.log('ESLint ratchet — committed baseline vs. base branch');
   console.log(`  base branch:  ${previousTotal} warnings`);
-  console.log(`  this branch:  ${currentTotal} warnings (--max-warnings ${pinned ?? 'unset'})`);
+  console.log(`  this branch:  ${currentTotal} warnings (--max-warnings ${pinLabel})`);
 
   const problems = [];
 
@@ -258,15 +259,9 @@ function compareAgainst(previousPath) {
     );
   }
 
-  if (pinned === null) {
-    problems.push('The `lint` script has no --max-warnings, so the CI lint gate is decorative.');
-  } else if (pinned !== currentTotal) {
-    // Without this the pin could be inflated while the artifact stayed put.
-    problems.push(
-      `package.json pins --max-warnings ${pinned} but ${BASELINE_REL} records ${currentTotal}. ` +
-        'They must match — regenerate with `npm run lint:baseline`.'
-    );
-  }
+  // Without this the pin could be inflated while the artifact stayed put.
+  const pinIssue = pinProblem(pin, currentTotal);
+  if (pinIssue) problems.push(pinIssue);
 
   // Per-rule movement is reported but never enforced: a legitimate refactor can
   // trade one rule for another (e.g. adding memoization moves warnings into
@@ -301,15 +296,50 @@ function compareAgainst(previousPath) {
   return 0;
 }
 
-/** The --max-warnings value currently wired into the `lint` npm script. */
-function maxWarningsInPackageJson() {
+/**
+ * The --max-warnings pin in the `lint` npm script.
+ *   { count: 0 }            → not pinned
+ *   { count: 1, value: N }  → pinned to N
+ *   { count: >1 }           → pinned more than once (ambiguous)
+ *
+ * `count` matters as much as `value`: ESLint honours the LAST occurrence of a
+ * repeated flag, so `--max-warnings 682 … --max-warnings 1000` would satisfy a
+ * naive "first match === total" check while ESLint quietly admitted new
+ * warnings. Any count other than exactly one is rejected by the callers.
+ */
+function lintPin() {
   try {
     const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'package.json'), 'utf8'));
-    const match = /--max-warnings[= ](\d+)/.exec(pkg.scripts?.lint ?? '');
-    return match ? Number.parseInt(match[1], 10) : null;
+    const matches = [...(pkg.scripts?.lint ?? '').matchAll(/--max-warnings(?:[= ])(\d+)/g)];
+    if (matches.length === 0) return { count: 0, value: null };
+    // Report the last value (what ESLint would use) for messaging.
+    return { count: matches.length, value: Number.parseInt(matches.at(-1)[1], 10) };
   } catch {
-    return null;
+    return { count: 0, value: null };
   }
+}
+
+/**
+ * Validate the pin against an expected total, returning a problem string or
+ * null. Shared by --check, --against and --write so the rule is defined once.
+ */
+function pinProblem(pin, expectedTotal) {
+  if (pin.count === 0) {
+    return 'The `lint` script has no --max-warnings, so the CI lint gate is decorative.';
+  }
+  if (pin.count > 1) {
+    return (
+      `The \`lint\` script has ${pin.count} --max-warnings flags. ESLint honours the last, ` +
+      'so a stale earlier one would hide new warnings — keep exactly one.'
+    );
+  }
+  if (pin.value !== expectedTotal) {
+    return (
+      `package.json pins --max-warnings ${pin.value} but the baseline records ${expectedTotal}. ` +
+      'They must match — regenerate with `npm run lint:baseline`.'
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,18 +451,9 @@ function printCheck(summary, baseline) {
     problems.push('ESLint reported errors. Errors are never baselined.');
   }
 
-  const pinned = maxWarningsInPackageJson();
-  if (pinned === null) {
-    problems.push(
-      'The `lint` script has no --max-warnings. Without it the CI lint gate passes ' +
-        'on any number of warnings.'
-    );
-  } else if (pinned !== summary.totals.warnings) {
-    problems.push(
-      `package.json pins --max-warnings ${pinned} but the current run has ` +
-        `${summary.totals.warnings} warnings. They must match.`
-    );
-  }
+  const pin = lintPin();
+  const pinIssue = pinProblem(pin, summary.totals.warnings);
+  if (pinIssue) problems.push(pinIssue);
 
   if (problems.length > 0) {
     console.log('');
@@ -440,7 +461,7 @@ function printCheck(summary, baseline) {
     return 1;
   }
 
-  console.log(`\nOK: matches ${BASELINE_REL}, and package.json pins --max-warnings ${pinned}.`);
+  console.log(`\nOK: matches ${BASELINE_REL}, and package.json pins --max-warnings ${pin.value}.`);
   return 0;
 }
 
@@ -459,11 +480,12 @@ if (mode === 'write') {
   writeFileSync(BASELINE_PATH, serialise(summary), 'utf8');
   printReport(summary);
   console.log(`\nWrote ${BASELINE_REL}.`);
-  const pinned = maxWarningsInPackageJson();
-  if (pinned !== summary.totals.warnings) {
+  const pin = lintPin();
+  if (pin.count !== 1 || pin.value !== summary.totals.warnings) {
+    const shown = pin.count === 0 ? '(none)' : pin.count > 1 ? `${pin.count} flags` : pin.value;
     console.log(
-      `NOTE: package.json pins --max-warnings ${pinned ?? '(none)'}; ` +
-        `set it to ${summary.totals.warnings} in this same commit.`
+      `NOTE: package.json pins --max-warnings ${shown}; ` +
+        `set it to exactly ${summary.totals.warnings} in this same commit.`
     );
   }
   process.exit(0);
