@@ -53,6 +53,7 @@ export default function CollectionDetailScreen() {
 
   useEffect(() => {
     loadInitialData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount; loadInitialData is read at the mount commit.
   }, []);
 
   const loadInitialData = async () => {

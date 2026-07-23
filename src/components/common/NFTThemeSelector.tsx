@@ -62,6 +62,7 @@ export default function NFTThemeSelector({
     if (visible && viewMode === 'my-nfts' && activeAccount) {
       loadMyNFTs();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load on open, keyed on visible/account-address/viewMode; activeAccount is tracked via its stable .address slice and loadMyNFTs is read at that commit, so neither should re-trigger on object/function identity.
   }, [visible, activeAccount?.address, viewMode]);
 
   // Reset view when tab changes

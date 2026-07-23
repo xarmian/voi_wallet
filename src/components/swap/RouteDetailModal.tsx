@@ -83,6 +83,7 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       setLoading(true);
       setRouteSteps([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation + load, keyed on visible/route; slideAnim is a stable Animated ref and loadRouteDetails is read at that commit.
   }, [visible, route]);
 
   const loadRouteDetails = async () => {

@@ -918,7 +918,7 @@ export default function SendScreen() {
     } catch {
       return 'Enter a valid amount';
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps hand-mirror the inputs of the helpers this memo calls (getCurrentAssetOption / getAssetDecimals / getSpendableBase): amount, accountBalance, estimatedFee, effectiveAssetId, selectedAsset, assetOptions. Those helpers are read at the current commit; mirror any new read they gain here.
   }, [
     amount,
     accountBalance,

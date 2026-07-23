@@ -67,6 +67,7 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
         useNativeDriver: true,
       }).start();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation keyed on visible/currentSlippage; slideAnim is a stable Animated ref that never changes identity.
   }, [visible, currentSlippage]);
 
   const handlePresetSelect = (slippage: number) => {

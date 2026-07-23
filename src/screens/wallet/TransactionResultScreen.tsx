@@ -64,8 +64,7 @@ export default function TransactionResultScreen() {
   // (params.isSuccess drives the icon/title/color below). Fire-and-forget.
   useEffect(() => {
     hapticNotify(params.isSuccess ? 'success' : 'error');
-    // Result params are fixed for a given screen instance; fire once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once on mount; result params are fixed for a given screen instance, so params.isSuccess never changes under this instance.
   }, []);
 
   const handleViewInExplorer = async () => {

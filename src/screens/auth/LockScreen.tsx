@@ -158,6 +158,7 @@ export default function LockScreen() {
     if (authState.biometricEnabled) {
       promptBiometric();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric prompt when biometrics become enabled, keyed on authState.biometricEnabled; promptBiometric is read at that commit and must not re-fire on its own identity.
   }, [authState.biometricEnabled]);
 
   const promptBiometric = async () => {

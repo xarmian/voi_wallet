@@ -44,6 +44,7 @@ export default function SessionsScreen({ navigation }: Props) {
 
   useEffect(() => {
     loadSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount; loadSessions is a stable useCallback([]) read at the mount commit.
   }, []);
 
   const loadSessions = useCallback(async () => {

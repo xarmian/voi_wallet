@@ -60,6 +60,7 @@ export default function AccountRecipientModal({
     if (!friendsStore.isInitialized) {
       friendsStore.initialize();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init-once when uninitialized; friendsStore is a stable store handle, only its .isInitialized slice should re-trigger this.
   }, [friendsStore.isInitialized]);
 
   // Use percentage-based snap point for better compatibility with BottomSheetModal

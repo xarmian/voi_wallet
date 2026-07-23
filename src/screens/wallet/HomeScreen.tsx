@@ -154,8 +154,7 @@ export default function HomeScreen() {
     if (!__DEV__) {
       checkForUpdate({ silent: true });
     }
-    // Only run once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- silent startup update check; run once on mount, checkForUpdate is read at the mount commit.
   }, []);
 
   // Entrance animations
@@ -211,6 +210,7 @@ export default function HomeScreen() {
     };
 
     animateEntrance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- entrance animation runs once on mount; the *Opacity/*TranslateY are stable useSharedValue handles that never change identity.
   }, []);
 
   const initialize = useWalletStore((state) => state.initialize);
@@ -373,6 +373,7 @@ export default function HomeScreen() {
   useEffect(() => {
     initializeWallet();
     updateActivity();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load wallet data + mark activity once on mount (see comment above: kept separate so the remote-signer store init does not re-trigger initialize()); both are read at the mount commit.
   }, []);
 
   // Initialize the remote-signer store (used to resolve app mode) once it is not
@@ -526,7 +527,7 @@ export default function HomeScreen() {
     };
 
     loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload keyed on activeAccount.id / isMultiNetworkView; the store loader fns are deliberately omitted (their identity churn would loop) and loadData re-checks activeAccountIdRef/viewModeRef after every await, so a stale closure can never write to the wrong account.
   }, [
     activeAccount?.id,
     isMultiNetworkView,

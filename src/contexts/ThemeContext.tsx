@@ -110,6 +110,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
       backgroundUrl,
       selectedPalette
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps hand-mirror getCurrentBaseThemeMode()'s reads (themeMode, systemColorScheme), both already listed below; the helper is a plain component-scope fn read at the current commit. Mirror any new read it gains here.
   }, [
     nftThemeData,
     nftExtractedColors,
