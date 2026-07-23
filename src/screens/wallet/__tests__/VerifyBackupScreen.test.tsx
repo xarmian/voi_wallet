@@ -12,7 +12,7 @@
  */
 
 import React from 'react';
-import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
+import { render, waitFor, act } from '@testing-library/react-native';
 
 const MOCK_MNEMONIC =
   'abandon ability able abandon absent absorb abandon abstract';
@@ -79,16 +79,13 @@ jest.mock('@/components/common/UniversalHeader', () => {
 
 import { Alert } from 'react-native';
 import VerifyBackupScreen from '../VerifyBackupScreen';
+import {
+  completeQuiz,
+  pressWrongQuizOption,
+} from '@/__tests__/fixtures/mnemonicQuiz';
+import { MAX_MISTAKES } from '@/components/wallet/mnemonicQuiz';
 
-const QUIZ_TARGETS = [1, 4, 6];
-const PHRASE_LENGTH = MOCK_MNEMONIC.split(' ').length;
-
-function installDeterministicQuiz() {
-  const queue = QUIZ_TARGETS.map((pos) => pos / PHRASE_LENGTH);
-  jest
-    .spyOn(Math, 'random')
-    .mockImplementation(() => (queue.length > 0 ? queue.shift()! : 0));
-}
+const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
 beforeEach(() => {
   mockAccounts = [
@@ -98,7 +95,6 @@ beforeEach(() => {
   mockActiveAccountId = 'acc-a';
   mockRouteParams = { accountAddress: 'ADDRESS_A' };
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  installDeterministicQuiz();
 });
 
 afterEach(() => {
@@ -122,10 +118,11 @@ describe('VerifyBackupScreen', () => {
   it('marks the account whose phrase was actually shown', async () => {
     const screen = await renderLoaded();
 
-    for (const index of QUIZ_TARGETS) {
-      fireEvent.press(screen.getByTestId(`verify-backup-option-${index}`));
-    }
-    fireEvent.press(screen.getByTestId('verify-backup-verify'));
+    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+    // Success kicks off an async store write which then clears the phrase from
+    // screen state, and the challenge rebuilds itself in response. Flush that
+    // continuation inside act() so the rebuild is not an unwrapped update.
+    await act(async () => {});
 
     await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
     expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a');
@@ -149,10 +146,11 @@ describe('VerifyBackupScreen', () => {
     expect(mockGetMnemonic).toHaveBeenCalledTimes(1);
     expect(mockGetMnemonic).not.toHaveBeenCalledWith('ADDRESS_B');
 
-    for (const index of QUIZ_TARGETS) {
-      fireEvent.press(screen.getByTestId(`verify-backup-option-${index}`));
-    }
-    fireEvent.press(screen.getByTestId('verify-backup-verify'));
+    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+    // Success kicks off an async store write which then clears the phrase from
+    // screen state, and the challenge rebuilds itself in response. Flush that
+    // continuation inside act() so the rebuild is not an unwrapped update.
+    await act(async () => {});
 
     await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
     // Still account A — the one whose phrase is on screen.
@@ -210,10 +208,11 @@ describe('VerifyBackupScreen', () => {
     mockMarkBackupVerified.mockRejectedValueOnce(new Error('write failed'));
     const screen = await renderLoaded();
 
-    for (const index of QUIZ_TARGETS) {
-      fireEvent.press(screen.getByTestId(`verify-backup-option-${index}`));
-    }
-    fireEvent.press(screen.getByTestId('verify-backup-verify'));
+    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+    // Success kicks off an async store write which then clears the phrase from
+    // screen state, and the challenge rebuilds itself in response. Flush that
+    // continuation inside act() so the rebuild is not an unwrapped update.
+    await act(async () => {});
 
     await waitFor(() =>
       expect(Alert.alert).toHaveBeenCalledWith(
@@ -222,5 +221,26 @@ describe('VerifyBackupScreen', () => {
       )
     );
     expect(mockNavigation.goBack).not.toHaveBeenCalled();
+  });
+
+  it('never marks the account verified on wrong answers (TASK-226)', async () => {
+    const screen = await renderLoaded();
+
+    // Exhaust the mistake budget and then some — this used to be a silent no-op
+    // on an auto-routing board, so the account could be marked backed-up
+    // without the user ever knowing the phrase.
+    for (let mistake = 0; mistake <= MAX_MISTAKES + 2; mistake++) {
+      pressWrongQuizOption(screen, 'verify-backup', MOCK_WORDS);
+    }
+    expect(mockMarkBackupVerified).not.toHaveBeenCalled();
+
+    // A user who does know the phrase is still never locked out.
+    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+    // Success kicks off an async store write which then clears the phrase from
+    // screen state, and the challenge rebuilds itself in response. Flush that
+    // continuation inside act() so the rebuild is not an unwrapped update.
+    await act(async () => {});
+    await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
+    expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a');
   });
 });

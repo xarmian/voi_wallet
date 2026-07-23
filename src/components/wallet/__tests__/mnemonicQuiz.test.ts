@@ -1,39 +1,94 @@
 /**
- * TASK-45 / DR-12 — regression tests for the recovery-phrase verification quiz.
+ * TASK-45 / DR-12 + TASK-226 — regression tests for the recovery-phrase
+ * verification challenge.
  *
- * The defect this pins: the quiz used to resolve a tapped word with
- * `mnemonicWords.indexOf(word)` (always the FIRST occurrence) and disable chips
- * by word VALUE. About 14% of 25-word Algorand phrases repeat a word, so when a
- * repeated word's LATER position was one of the verification targets the tap
- * resolved to a non-target position, no selection happened, and the user was
- * HARD-STUCK in onboarding with no way forward.
+ * Two defects are pinned here, and neither may come back:
  *
- * These tests deliberately use phrases with repeated words.
+ * 1. DR-12 — ONBOARDING LOCKOUT. The original quiz resolved a tapped word with
+ *    `mnemonicWords.indexOf(word)` (always the FIRST occurrence) and disabled
+ *    chips by word VALUE. About 14% of 25-word Algorand phrases repeat a word,
+ *    so when a repeated word's LATER position was a target the tap resolved to a
+ *    non-target position, nothing happened, and the user was HARD-STUCK in
+ *    onboarding with no way forward. The exhaustive suite at the bottom of this
+ *    file walks every position of a deliberately repeated-word phrase and proves
+ *    each one is answerable.
+ *
+ * 2. TASK-226 — PASSABLE WITHOUT THE PHRASE. Taps auto-routed to the slot they
+ *    belonged to (so a wrong tap was a silent no-op) and the chip bank held only
+ *    the phrase's own words, so the board could be filled by tapping at random.
+ *    The tests here pin that a wrong pick is a real, counted failure and that
+ *    decoys come from the wider BIP-39 wordlist.
  *
  * SECURITY NOTE: the phrases below are made-up word lists used purely as
  * position/value fixtures. They are not valid BIP-39/Algorand mnemonics and no
  * key material is derived from them anywhere in this file.
  */
 
+import { BIP39Utils } from '@/utils/bip39';
 import {
-  buildWordOptions,
-  clearWordSelection,
-  isVerificationComplete,
+  answerCurrentChallenge,
+  buildChallengeOptions,
+  CHALLENGE_OPTION_COUNT,
+  currentPosition,
+  MAX_MISTAKES,
+  PHRASE_DECOY_COUNT,
   pickVerificationPositions,
-  resolveVerificationTarget,
-  selectWordOption,
-  shuffleWordOptions,
+  remainingMistakes,
+  shuffle,
   splitMnemonic,
-  usedOptionIndices,
-  verifySelections,
+  startQuizAttempt,
   VERIFICATION_WORD_COUNT,
-  type WordSelections,
+  type QuizAttempt,
 } from '../mnemonicQuiz';
 
 // "abandon" appears at positions 0, 3 and 6 — the exact shape that used to lock
 // a user out.
 const REPEATED = 'abandon ability able abandon absent absorb abandon abstract';
 const REPEATED_WORDS = REPEATED.split(' ');
+
+/** A 25-word-shaped fixture of distinct BIP-39 words. */
+const LONG_WORDS = [
+  'abandon',
+  'ability',
+  'able',
+  'about',
+  'above',
+  'absent',
+  'absorb',
+  'abstract',
+  'absurd',
+  'abuse',
+  'access',
+  'accident',
+  'account',
+  'accuse',
+  'achieve',
+  'acid',
+  'acoustic',
+  'acquire',
+  'across',
+  'act',
+  'action',
+  'actor',
+  'actress',
+  'actual',
+  'adapt',
+];
+
+/** Answer the live question correctly; asserts the attempt is still coherent. */
+function answerCorrectly(attempt: QuizAttempt, words: string[]) {
+  const position = currentPosition(attempt);
+  expect(position).not.toBeNull();
+  return answerCurrentChallenge(attempt, words, words[position as number]);
+}
+
+/** Answer the live question with some chip that is NOT the right one. */
+function answerWrongly(attempt: QuizAttempt, words: string[]) {
+  const position = currentPosition(attempt) as number;
+  const wrong = attempt.options.find((word) => word !== words[position]);
+  expect(wrong).toBeDefined();
+  return answerCurrentChallenge(attempt, words, wrong as string);
+}
 
 describe('splitMnemonic', () => {
   it('collapses stray whitespace and trims', () => {
@@ -45,26 +100,14 @@ describe('splitMnemonic', () => {
   });
 });
 
-describe('buildWordOptions', () => {
-  it('carries the ORIGINAL position of every word, duplicates included', () => {
-    const options = buildWordOptions(REPEATED);
-    expect(options).toHaveLength(8);
-    expect(options.map((o) => o.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    // Each occurrence of "abandon" is a distinct, independently addressable chip.
-    expect(
-      options.filter((o) => o.word === 'abandon').map((o) => o.index)
-    ).toEqual([0, 3, 6]);
-  });
-});
+describe('shuffle', () => {
+  it('preserves every element and does not mutate the input', () => {
+    const items = [...REPEATED_WORDS];
+    const snapshot = JSON.stringify(items);
+    const shuffled = shuffle(items);
 
-describe('shuffleWordOptions', () => {
-  it('preserves every (word, index) pair and does not mutate the input', () => {
-    const options = buildWordOptions(REPEATED);
-    const snapshot = JSON.stringify(options);
-    const shuffled = shuffleWordOptions(options);
-
-    expect(JSON.stringify(options)).toBe(snapshot);
-    expect([...shuffled].sort((a, b) => a.index - b.index)).toEqual(options);
+    expect(JSON.stringify(items)).toBe(snapshot);
+    expect([...shuffled].sort()).toEqual([...items].sort());
   });
 });
 
@@ -88,173 +131,316 @@ describe('pickVerificationPositions', () => {
   });
 });
 
-describe('resolveVerificationTarget — DR-12 duplicate words', () => {
-  it('resolves a LATER occurrence of a repeated word to its own position', () => {
-    // Target is position 6 — the THIRD "abandon". The old indexOf() logic
-    // resolved this tap to position 0, which is not a target, so the tap was a
-    // silent no-op and the user could never complete the quiz.
-    const target = resolveVerificationTarget(
-      { word: 'abandon', index: 6 },
-      [1, 4, 6],
-      {},
-      REPEATED_WORDS
-    );
-    expect(target).toBe(6);
+describe('buildChallengeOptions — TASK-226 decoys', () => {
+  it('always presents exactly one correct chip and no duplicates', () => {
+    for (let position = 0; position < LONG_WORDS.length; position++) {
+      for (let run = 0; run < 20; run++) {
+        const options = buildChallengeOptions(LONG_WORDS, position);
+        expect(options).toHaveLength(CHALLENGE_OPTION_COUNT);
+        expect(new Set(options).size).toBe(CHALLENGE_OPTION_COUNT);
+        expect(
+          options.filter((word) => word === LONG_WORDS[position])
+        ).toHaveLength(1);
+      }
+    }
   });
 
-  it('lets a non-target duplicate chip fill an equivalent empty target slot', () => {
-    // The user taps the chip at position 0; only position 6 is a target. Both
-    // chips read "abandon" and are visually indistinguishable, so the tap must
-    // still land rather than doing nothing.
-    const target = resolveVerificationTarget(
-      { word: 'abandon', index: 0 },
-      [1, 4, 6],
-      {},
-      REPEATED_WORDS
-    );
-    expect(target).toBe(6);
+  it('draws decoys the phrase does not contain (not just its own words)', () => {
+    // The whole point of TASK-226's decoy change: a bank of only the phrase's
+    // own words tells the user which words are real.
+    let sawForeignDecoy = false;
+    for (let run = 0; run < 50 && !sawForeignDecoy; run++) {
+      const options = buildChallengeOptions(LONG_WORDS, 4);
+      sawForeignDecoy = options.some((word) => !LONG_WORDS.includes(word));
+    }
+    expect(sawForeignDecoy).toBe(true);
   });
 
-  it('never reuses a chip that already filled a slot', () => {
-    const selections: WordSelections = {
-      6: { word: 'abandon', optionIndex: 6 },
-    };
-    expect(
-      resolveVerificationTarget(
-        { word: 'abandon', index: 6 },
-        [1, 4, 6],
-        selections,
-        REPEATED_WORDS
-      )
-    ).toBeNull();
+  it('draws every chip from the BIP-39 English wordlist', () => {
+    // Decoys must be presentationally indistinguishable from the answer: same
+    // lowercase BIP-39 vocabulary, rendered by the same chip.
+    for (let run = 0; run < 50; run++) {
+      const options = buildChallengeOptions(LONG_WORDS, run % 25);
+      options.forEach((word) => {
+        expect(BIP39Utils.isValidWord(word)).toBe(true);
+        expect(word).toBe(word.toLowerCase());
+      });
+    }
   });
 
-  it('returns null when no empty target slot expects this word', () => {
-    expect(
-      resolveVerificationTarget(
-        { word: 'absorb', index: 5 },
-        [1, 4, 6],
-        {},
-        REPEATED_WORDS
-      )
-    ).toBeNull();
-  });
-
-  it('fills a second target slot from the second duplicate chip', () => {
-    // Both position 0 and position 6 are targets and both hold "abandon".
-    const first = selectWordOption(
-      { word: 'abandon', index: 0 },
-      [0, 4, 6],
-      {},
-      REPEATED_WORDS
-    );
-    const second = selectWordOption(
-      { word: 'abandon', index: 6 },
-      [0, 4, 6],
-      first,
-      REPEATED_WORDS
-    );
-    expect(Object.keys(second).sort()).toEqual(['0', '6']);
-    expect(second[0].optionIndex).toBe(0);
-    expect(second[6].optionIndex).toBe(6);
-  });
-});
-
-describe('selectWordOption / clearWordSelection', () => {
-  it('is a no-op (same object) when the tap resolves to nothing', () => {
-    const selections: WordSelections = {};
-    expect(
-      selectWordOption(
-        { word: 'absorb', index: 5 },
-        [1, 4, 6],
-        selections,
-        REPEATED_WORDS
-      )
-    ).toBe(selections);
-  });
-
-  it('clearing a slot frees its chip for reuse', () => {
-    const filled = selectWordOption(
-      { word: 'abandon', index: 6 },
-      [1, 4, 6],
-      {},
-      REPEATED_WORDS
-    );
-    expect(usedOptionIndices(filled).has(6)).toBe(true);
-
-    const cleared = clearWordSelection(6, filled);
-    expect(usedOptionIndices(cleared).has(6)).toBe(false);
-    expect(
-      resolveVerificationTarget(
-        { word: 'abandon', index: 6 },
-        [1, 4, 6],
-        cleared,
-        REPEATED_WORDS
-      )
-    ).toBe(6);
-  });
-});
-
-describe('verifySelections', () => {
-  const targets = [1, 4, 6];
-
-  it('accepts a fully correct board containing a repeated word', () => {
-    let selections: WordSelections = {};
-    for (const index of targets) {
-      selections = selectWordOption(
-        { word: REPEATED_WORDS[index], index },
-        targets,
-        selections,
-        REPEATED_WORDS
+  it('mixes in some of the phrase’s own words as decoys', () => {
+    // Without these, the answer would be the only option belonging to the
+    // phrase and anyone who remembers the word SET could pass every question.
+    let sawPhraseDecoy = false;
+    for (let run = 0; run < 50 && !sawPhraseDecoy; run++) {
+      const options = buildChallengeOptions(LONG_WORDS, 4);
+      sawPhraseDecoy = options.some(
+        (word) => word !== LONG_WORDS[4] && LONG_WORDS.includes(word)
       );
     }
-    expect(isVerificationComplete(targets, selections)).toBe(true);
-    expect(verifySelections(targets, selections, REPEATED_WORDS)).toBe(true);
+    expect(sawPhraseDecoy).toBe(true);
   });
 
-  it('rejects an incomplete board', () => {
-    const selections = selectWordOption(
-      { word: REPEATED_WORDS[1], index: 1 },
-      targets,
-      {},
-      REPEATED_WORDS
+  it('keeps the number of phrase words on the board at its budget', () => {
+    // A board made mostly of the phrase's own words would show a shoulder-surfer
+    // the phrase's whole vocabulary; a board with none of them would let a
+    // set-memoriser pick "the familiar one". The budget is the answer plus
+    // PHRASE_DECOY_COUNT, and the only excess is the rare wordlist sample that
+    // happens to collide with the phrase (~0.05 per board for 25 words).
+    const runs = 500;
+    let total = 0;
+    for (let run = 0; run < runs; run++) {
+      const options = buildChallengeOptions(LONG_WORDS, 11);
+      total += options.filter((word) => LONG_WORDS.includes(word)).length;
+    }
+    const mean = total / runs;
+    expect(mean).toBeGreaterThanOrEqual(1 + PHRASE_DECOY_COUNT);
+    expect(mean).toBeLessThan(1 + PHRASE_DECOY_COUNT + 0.5);
+  });
+
+  it('puts the answer in a uniformly random slot', () => {
+    const counts = new Array(CHALLENGE_OPTION_COUNT).fill(0);
+    for (let run = 0; run < 2000; run++) {
+      const options = buildChallengeOptions(LONG_WORDS, 7);
+      counts[options.indexOf(LONG_WORDS[7])] += 1;
+    }
+    // Loose bound: no slot may be starved or dominant (uniform would be 250).
+    counts.forEach((count) => {
+      expect(count).toBeGreaterThan(120);
+      expect(count).toBeLessThan(400);
+    });
+  });
+
+  it('still fills the board when the rng is degenerate', () => {
+    const options = buildChallengeOptions(
+      LONG_WORDS,
+      3,
+      CHALLENGE_OPTION_COUNT,
+      () => 0
     );
-    expect(isVerificationComplete(targets, selections)).toBe(false);
-    expect(verifySelections(targets, selections, REPEATED_WORDS)).toBe(false);
+    expect(options).toHaveLength(CHALLENGE_OPTION_COUNT);
+    expect(new Set(options).size).toBe(CHALLENGE_OPTION_COUNT);
+    expect(options).toContain(LONG_WORDS[3]);
   });
 
-  it('rejects a board with a wrong word in a slot', () => {
-    const selections: WordSelections = {
-      1: { word: 'wrong', optionIndex: 99 },
-      4: { word: REPEATED_WORDS[4], optionIndex: 4 },
-      6: { word: REPEATED_WORDS[6], optionIndex: 6 },
-    };
-    expect(verifySelections(targets, selections, REPEATED_WORDS)).toBe(false);
+  it('returns nothing for a position that does not exist', () => {
+    expect(buildChallengeOptions(LONG_WORDS, 99)).toEqual([]);
   });
 });
 
-describe('DR-12 end-to-end: every repeated-word phrase stays completable', () => {
-  it('can always be finished, for every possible target triple', () => {
+describe('startQuizAttempt', () => {
+  it('opens on the first question with a full board and no mistakes', () => {
+    for (let run = 0; run < 50; run++) {
+      const attempt = startQuizAttempt(LONG_WORDS);
+      expect(attempt.positions).toHaveLength(VERIFICATION_WORD_COUNT);
+      expect(attempt.currentIndex).toBe(0);
+      expect(attempt.mistakes).toBe(0);
+      expect(attempt.options).toHaveLength(CHALLENGE_OPTION_COUNT);
+      expect(attempt.options).toContain(LONG_WORDS[attempt.positions[0]]);
+      expect(remainingMistakes(attempt)).toBe(MAX_MISTAKES);
+    }
+  });
+
+  it('has no live question for an empty phrase', () => {
+    const attempt = startQuizAttempt([]);
+    expect(currentPosition(attempt)).toBeNull();
+    expect(attempt.options).toEqual([]);
+  });
+});
+
+describe('answerCurrentChallenge — TASK-226 wrong picks really fail', () => {
+  it('advances on a correct pick and verifies on the last one', () => {
+    let attempt = startQuizAttempt(LONG_WORDS);
+
+    const first = answerCorrectly(attempt, LONG_WORDS);
+    expect(first.status).toBe('advanced');
+    attempt = (first as { attempt: QuizAttempt }).attempt;
+    expect(attempt.currentIndex).toBe(1);
+    expect(attempt.mistakes).toBe(0);
+
+    const second = answerCorrectly(attempt, LONG_WORDS);
+    expect(second.status).toBe('advanced');
+    attempt = (second as { attempt: QuizAttempt }).attempt;
+
+    expect(answerCorrectly(attempt, LONG_WORDS).status).toBe('verified');
+  });
+
+  it('counts a wrong pick, keeps the position, and re-rolls the board', () => {
+    const attempt = startQuizAttempt(LONG_WORDS);
+    const before = attempt.options;
+
+    const result = answerWrongly(attempt, LONG_WORDS);
+    expect(result.status).toBe('retry');
+    const next = (result as { attempt: QuizAttempt }).attempt;
+
+    // Same question...
+    expect(currentPosition(next)).toBe(currentPosition(attempt));
+    expect(next.currentIndex).toBe(attempt.currentIndex);
+    // ...one mistake spent...
+    expect(next.mistakes).toBe(1);
+    expect(remainingMistakes(next)).toBe(MAX_MISTAKES - 1);
+    // ...and a freshly built board, so the previous set cannot be eliminated
+    // one chip at a time.
+    expect(next.options).toHaveLength(CHALLENGE_OPTION_COUNT);
+    expect(next.options).toContain(LONG_WORDS[currentPosition(next) as number]);
+    expect(next.options).not.toBe(before);
+  });
+
+  it('keeps correct progress when a later question is answered wrongly', () => {
+    // A fat-finger must not throw away a correct run — that would punish the
+    // legitimate user this challenge exists to protect.
+    let attempt = startQuizAttempt(LONG_WORDS);
+    attempt = (answerCorrectly(attempt, LONG_WORDS) as { attempt: QuizAttempt })
+      .attempt;
+    expect(attempt.currentIndex).toBe(1);
+
+    const wrong = answerWrongly(attempt, LONG_WORDS);
+    expect(wrong.status).toBe('retry');
+    expect((wrong as { attempt: QuizAttempt }).attempt.currentIndex).toBe(1);
+  });
+
+  it('discards the whole attempt once the mistake budget is exhausted', () => {
+    let attempt = startQuizAttempt(LONG_WORDS);
+
+    for (let mistake = 1; mistake <= MAX_MISTAKES; mistake++) {
+      const result = answerWrongly(attempt, LONG_WORDS);
+      expect(result.status).toBe('retry');
+      attempt = (result as { attempt: QuizAttempt }).attempt;
+      expect(attempt.mistakes).toBe(mistake);
+    }
+    expect(remainingMistakes(attempt)).toBe(0);
+
+    const final = answerWrongly(attempt, LONG_WORDS);
+    expect(final.status).toBe('reset');
+    const fresh = (final as { attempt: QuizAttempt }).attempt;
+    expect(fresh.mistakes).toBe(0);
+    expect(fresh.currentIndex).toBe(0);
+    expect(fresh.options).toHaveLength(CHALLENGE_OPTION_COUNT);
+  });
+
+  it('cannot be passed by a word that is not on the board', () => {
+    // No off-board path to a pass: anything not presented is a wrong answer.
+    const attempt = startQuizAttempt(LONG_WORDS);
+    const result = answerCurrentChallenge(
+      attempt,
+      LONG_WORDS,
+      'zoo-not-a-chip'
+    );
+    expect(result.status).toBe('retry');
+  });
+
+  it('rebuilds instead of passing when there is no live question', () => {
+    const attempt = startQuizAttempt([]);
+    const result = answerCurrentChallenge(attempt, [], 'anything');
+    expect(result.status).toBe('reset');
+  });
+
+  it('never verifies a run that contains a wrong pick', () => {
+    // Exhaustive-ish: for every question index, a wrong pick at that point can
+    // only ever produce retry/reset, never verified.
+    for (let run = 0; run < 100; run++) {
+      let attempt = startQuizAttempt(LONG_WORDS);
+      const wrongAt = run % VERIFICATION_WORD_COUNT;
+      for (let question = 0; question < VERIFICATION_WORD_COUNT; question++) {
+        const result =
+          question === wrongAt
+            ? answerWrongly(attempt, LONG_WORDS)
+            : answerCorrectly(attempt, LONG_WORDS);
+        if (question === wrongAt) {
+          expect(result.status).not.toBe('verified');
+          expect(result.status).not.toBe('advanced');
+          break;
+        }
+        expect(result.status).toBe('advanced');
+        attempt = (result as { attempt: QuizAttempt }).attempt;
+      }
+    }
+  });
+});
+
+describe('DR-12 end-to-end: every repeated-word phrase stays answerable', () => {
+  it('builds an unambiguous, solvable board for EVERY position, duplicates included', () => {
+    for (let position = 0; position < REPEATED_WORDS.length; position++) {
+      for (let run = 0; run < 50; run++) {
+        const options = buildChallengeOptions(REPEATED_WORDS, position);
+        // Exactly one chip is right — a repeated word never yields two chips
+        // that are both "correct", which is the ambiguity DR-12 outlawed.
+        expect(
+          options.filter((word) => word === REPEATED_WORDS[position])
+        ).toHaveLength(1);
+        expect(new Set(options).size).toBe(options.length);
+
+        // And answering it is accepted, at EVERY one of the repeated word's
+        // positions — under the old value-indexed logic this silently did
+        // nothing and the user was hard-stuck in onboarding.
+        const attempt: QuizAttempt = {
+          positions: [position],
+          currentIndex: 0,
+          options,
+          mistakes: 0,
+        };
+        expect(
+          answerCurrentChallenge(
+            attempt,
+            REPEATED_WORDS,
+            REPEATED_WORDS[position]
+          ).status
+        ).toBe('verified');
+      }
+    }
+  });
+
+  it('can always be finished, for every possible question triple', () => {
     const words = REPEATED_WORDS;
-    // Exhaustively enumerate every 3-position target set for the repeated-word
-    // phrase. Under the old value-indexed logic many of these were unwinnable.
+    // Exhaustively enumerate every 3-position question set for the
+    // repeated-word phrase. Under the old value-indexed logic many of these
+    // were unwinnable.
     for (let a = 0; a < words.length; a++) {
       for (let b = a + 1; b < words.length; b++) {
         for (let c = b + 1; c < words.length; c++) {
-          const targets = [a, b, c];
-          let selections: WordSelections = {};
-          // Simulate the user tapping the chip at each target position.
-          for (const index of targets) {
-            selections = selectWordOption(
-              { word: words[index], index },
-              targets,
-              selections,
-              words
+          let attempt: QuizAttempt = {
+            positions: [a, b, c],
+            currentIndex: 0,
+            options: buildChallengeOptions(words, a),
+            mistakes: 0,
+          };
+
+          for (let question = 0; question < 3; question++) {
+            const position = currentPosition(attempt) as number;
+            expect(attempt.options).toContain(words[position]);
+            const result = answerCurrentChallenge(
+              attempt,
+              words,
+              words[position]
             );
+            if (question < 2) {
+              expect(result.status).toBe('advanced');
+              attempt = (result as { attempt: QuizAttempt }).attempt;
+            } else {
+              expect(result.status).toBe('verified');
+            }
           }
-          expect(isVerificationComplete(targets, selections)).toBe(true);
-          expect(verifySelections(targets, selections, words)).toBe(true);
         }
+      }
+    }
+  });
+
+  it('a repeated word is accepted at each of its positions, in one run', () => {
+    // "abandon" sits at 0, 3 and 6 — ask all three in a single attempt.
+    let attempt: QuizAttempt = {
+      positions: [0, 3, 6],
+      currentIndex: 0,
+      options: buildChallengeOptions(REPEATED_WORDS, 0),
+      mistakes: 0,
+    };
+    for (const expected of [0, 3, 6]) {
+      expect(currentPosition(attempt)).toBe(expected);
+      const result = answerCurrentChallenge(attempt, REPEATED_WORDS, 'abandon');
+      if (expected === 6) {
+        expect(result.status).toBe('verified');
+      } else {
+        expect(result.status).toBe('advanced');
+        attempt = (result as { attempt: QuizAttempt }).attempt;
       }
     }
   });

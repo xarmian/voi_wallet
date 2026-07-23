@@ -1,214 +1,372 @@
 /**
- * TASK-45 / DR-12 — component-level regression test for the verification quiz.
+ * TASK-45 / DR-12 + TASK-226 — component-level tests for the recovery-phrase
+ * challenge.
  *
- * `mnemonicQuiz.test.ts` pins the pure logic; this pins the WIRING, which is
- * where the original defect lived: chips were keyed/disabled by word value and
- * resolved with `indexOf`, so tapping the second occurrence of a repeated word
- * did nothing at all and the user could not leave onboarding.
+ * `mnemonicQuiz.test.ts` pins the pure logic; this pins the WIRING:
+ *
+ * - TASK-226: one DIRECTED question at a time, and a wrong pick is a real,
+ *   counted failure. The old board auto-routed taps to the slot they belonged
+ *   to, so a wrong tap did nothing and the quiz could be completed by tapping at
+ *   random without ever having written the phrase down.
+ * - DR-12: a phrase with a repeated word stays answerable at every one of that
+ *   word's positions. The original defect lived exactly here — chips were keyed
+ *   and disabled by word value and resolved with `indexOf`, so tapping the
+ *   second occurrence did nothing and the user could not leave onboarding.
  *
  * SECURITY NOTE: the phrases here are made-up fixtures, not real mnemonics; no
  * key material is derived from them.
  */
 
 import React from 'react';
-import { render, fireEvent } from '@testing-library/react-native';
+import { TouchableOpacity } from 'react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
 
 import MnemonicVerification from '../MnemonicVerification';
+import {
+  CHALLENGE_OPTION_COUNT,
+  MAX_MISTAKES,
+  VERIFICATION_WORD_COUNT,
+} from '../mnemonicQuiz';
+import {
+  completeQuiz,
+  currentQuizPosition,
+  pressQuizOption,
+  pressWrongQuizOption,
+} from '@/__tests__/fixtures/mnemonicQuiz';
 
 jest.mock('@/contexts/ThemeContext', () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 
+const PREFIX = 'mnemonic-verification';
+
 // "abandon" occupies positions 0, 3 and 6.
 const REPEATED = 'abandon ability able abandon absent absorb abandon abstract';
-const WORDS = REPEATED.split(' ');
+const REPEATED_WORDS = REPEATED.split(' ');
 
-/**
- * Force the quiz onto a known target triple by pinning Math.random. The
- * component picks positions via `Math.floor(Math.random() * total)`, so feeding
- * it `pos / total` yields exactly `pos`. The shuffle consumes the remaining
- * values; any leftovers just produce some deterministic chip order.
- */
-function withTargets<T>(targets: number[], total: number, run: () => T): T {
-  const queue = targets.map((pos) => pos / total);
-  const spy = jest
-    .spyOn(Math, 'random')
-    .mockImplementation(() => (queue.length > 0 ? queue.shift()! : 0));
-  try {
-    return run();
-  } finally {
-    spy.mockRestore();
-  }
+const LONG = [
+  'abandon',
+  'ability',
+  'able',
+  'about',
+  'above',
+  'absent',
+  'absorb',
+  'abstract',
+  'absurd',
+  'abuse',
+  'access',
+  'accident',
+  'account',
+  'accuse',
+  'achieve',
+  'acid',
+  'acoustic',
+  'acquire',
+  'across',
+  'act',
+  'action',
+  'actor',
+  'actress',
+  'actual',
+  'adapt',
+].join(' ');
+const LONG_WORDS = LONG.split(' ');
+
+/** Shares no word with LONG — used to prove a phrase swap really rebuilds. */
+const DISJOINT =
+  'zone zero youth young yellow year wrong write world work wolf wisdom';
+const DISJOINT_WORDS = DISJOINT.split(' ');
+
+function renderQuiz(
+  mnemonic: string,
+  props: Partial<React.ComponentProps<typeof MnemonicVerification>> = {}
+) {
+  const onVerified = props.onVerified ?? jest.fn();
+  const screen = render(
+    <MnemonicVerification
+      mnemonic={mnemonic}
+      {...props}
+      onVerified={onVerified}
+    />
+  );
+  return { screen, onVerified };
 }
 
-describe('MnemonicVerification — repeated words (DR-12)', () => {
-  it("completes when a repeated word's LATER position is a target", () => {
-    const onVerified = jest.fn();
+describe('MnemonicVerification — directed challenge (TASK-226)', () => {
+  it('asks one position at a time and passes only when all are right', () => {
+    const { screen, onVerified } = renderQuiz(LONG);
 
-    // Targets 1, 4, 6 — position 6 is the THIRD "abandon". Under the old
-    // indexOf() resolution this tap computed position 0, which is not a target,
-    // so nothing was selected and "Verify Words" stayed permanently disabled.
-    const screen = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={onVerified} />
-      )
+    expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
+      `Question 1 of ${VERIFICATION_WORD_COUNT}`
+    );
+    expect(screen.getByTestId(`${PREFIX}-prompt`)).toHaveTextContent(
+      /Which word is #\d+\?/
     );
 
-    for (const index of [1, 4, 6]) {
-      fireEvent.press(
-        screen.getByTestId(`mnemonic-verification-option-${index}`)
+    const asked = completeQuiz(screen, PREFIX, LONG_WORDS);
+    expect(asked).toHaveLength(VERIFICATION_WORD_COUNT);
+    expect(new Set(asked).size).toBe(VERIFICATION_WORD_COUNT);
+    expect(onVerified).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows exactly one correct chip among BIP-39 decoys', () => {
+    const { screen } = renderQuiz(LONG);
+    const position = currentQuizPosition(screen, PREFIX);
+
+    const labels: string[] = [];
+    for (let slot = 0; slot < CHALLENGE_OPTION_COUNT; slot++) {
+      labels.push(
+        String(
+          screen.getByTestId(`${PREFIX}-option-${slot}`).props
+            .accessibilityLabel
+        )
       );
     }
 
-    // Each slot shows the right word, including the duplicate.
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-6')
-    ).toHaveTextContent('abandon');
-
-    fireEvent.press(screen.getByTestId('mnemonic-verification-verify'));
-    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(labels).toHaveLength(CHALLENGE_OPTION_COUNT);
+    expect(new Set(labels).size).toBe(CHALLENGE_OPTION_COUNT);
+    expect(labels.filter((w) => w === LONG_WORDS[position])).toHaveLength(1);
+    // Decoys are not restricted to the phrase's own words.
+    expect(labels.some((w) => !LONG_WORDS.includes(w))).toBe(true);
   });
 
-  it('accepts the OTHER duplicate chip for the same slot', () => {
+  it('a wrong pick FAILS — it does not silently fill the slot', () => {
     const onVerified = jest.fn();
+    const { screen } = renderQuiz(LONG, { onVerified });
 
-    // Only position 6 holds a target "abandon", but the user taps the chip at
-    // position 0. The chips are visually identical, so that tap must land.
-    const screen = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={onVerified} />
-      )
+    const position = currentQuizPosition(screen, PREFIX);
+    pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`${PREFIX}-error`)).toBeTruthy();
+    // Same question, still question 1 of N — no progress was made.
+    expect(currentQuizPosition(screen, PREFIX)).toBe(position);
+    expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
+      `Question 1 of ${VERIFICATION_WORD_COUNT}`
     );
+  });
 
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-1'));
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-4'));
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-0'));
+  it('re-presents a failed question with a freshly built board', () => {
+    const { screen } = renderQuiz(LONG);
 
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-6')
-    ).toHaveTextContent('abandon');
+    const readBoard = () =>
+      Array.from({ length: CHALLENGE_OPTION_COUNT }, (_, slot) =>
+        String(
+          screen.getByTestId(`${PREFIX}-option-${slot}`).props
+            .accessibilityLabel
+        )
+      );
 
-    fireEvent.press(screen.getByTestId('mnemonic-verification-verify'));
+    const before = readBoard();
+    pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+    const after = readBoard();
+
+    // A stable board would let the user eliminate one chip at a time.
+    expect(after).not.toEqual(before);
+    // The answer is still reachable — never a dead end.
+    expect(after).toContain(LONG_WORDS[currentQuizPosition(screen, PREFIX)]);
+  });
+
+  it('restarts the whole challenge once the mistake budget runs out', () => {
+    const onFailed = jest.fn();
+    const onVerified = jest.fn();
+    const { screen } = renderQuiz(LONG, { onFailed, onVerified });
+
+    for (let mistake = 0; mistake < MAX_MISTAKES; mistake++) {
+      pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+      expect(onFailed).not.toHaveBeenCalled();
+    }
+
+    pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`${PREFIX}-error`)).toHaveTextContent(
+      /started over/i
+    );
+    expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
+      `Question 1 of ${VERIFICATION_WORD_COUNT}`
+    );
+  });
+
+  it('a restarted challenge is still winnable by someone with the phrase', () => {
+    // The lockout guard: friction, never refusal.
+    const onVerified = jest.fn();
+    const { screen } = renderQuiz(LONG, { onVerified });
+
+    for (let mistake = 0; mistake <= MAX_MISTAKES; mistake++) {
+      pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+    }
+    expect(onVerified).not.toHaveBeenCalled();
+
+    completeQuiz(screen, PREFIX, LONG_WORDS);
     expect(onVerified).toHaveBeenCalledTimes(1);
   });
 
-  it('disables only the CONSUMED chip, not every chip with the same word', () => {
-    const screen = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={jest.fn()} />
-      )
+  it('keeps correct progress when a later question is missed', () => {
+    const { screen } = renderQuiz(LONG);
+
+    pressQuizOption(
+      screen,
+      PREFIX,
+      LONG_WORDS[currentQuizPosition(screen, PREFIX)]
+    );
+    expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
+      `Question 2 of ${VERIFICATION_WORD_COUNT}`
     );
 
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-6'));
-
-    expect(
-      screen.getByTestId('mnemonic-verification-option-6').props
-        .accessibilityState
-    ).toEqual(expect.objectContaining({ disabled: true }));
-    // The other "abandon" chips remain live.
-    expect(
-      screen.getByTestId('mnemonic-verification-option-0').props
-        .accessibilityState
-    ).toEqual(expect.objectContaining({ disabled: false }));
-    expect(
-      screen.getByTestId('mnemonic-verification-option-3').props
-        .accessibilityState
-    ).toEqual(expect.objectContaining({ disabled: false }));
+    pressWrongQuizOption(screen, PREFIX, LONG_WORDS);
+    // Still on question 2 — a fat-finger does not discard a correct run.
+    expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
+      `Question 2 of ${VERIFICATION_WORD_COUNT}`
+    );
   });
 
-  it('lets the user clear a slot and re-answer', () => {
-    const screen = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={jest.fn()} />
-      )
+  it('cannot be brute-forced by tapping every chip faster than a re-render', () => {
+    // The burst attack: fire every chip on the painted board before React can
+    // repaint. Only the FIRST tap may be scored; the rest belong to a board that
+    // has already been superseded. Without that guard a user could try all eight
+    // options for the cost of a single mistake.
+    const onVerified = jest.fn();
+    const { screen } = renderQuiz(LONG, { onVerified });
+
+    const answer = LONG_WORDS[currentQuizPosition(screen, PREFIX)];
+    // Reach for the composite instances so we can invoke the raw handlers
+    // together inside ONE act() — `fireEvent.press` flushes React between taps,
+    // which is precisely the repaint a burst outruns.
+    const chips = screen
+      .UNSAFE_getAllByType(TouchableOpacity)
+      .filter((node) =>
+        String(node.props.testID ?? '').startsWith(`${PREFIX}-option-`)
+      );
+    expect(chips).toHaveLength(CHALLENGE_OPTION_COUNT);
+
+    const wrongPresses: (() => void)[] = [];
+    let correctPress: (() => void) | null = null;
+    for (const chip of chips) {
+      const press = chip.props.onPress as () => void;
+      if (chip.props.accessibilityLabel === answer) {
+        correctPress = press;
+      } else {
+        wrongPresses.push(press);
+      }
+    }
+    expect(correctPress).not.toBeNull();
+
+    act(() => {
+      // One wrong tap lands; everything after it — including the right answer —
+      // is a stale board and must be ignored.
+      wrongPresses.forEach((press) => press());
+      (correctPress as () => void)();
+    });
+
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`${PREFIX}-progress`)).toHaveTextContent(
+      `Question 1 of ${VERIFICATION_WORD_COUNT}`
     );
+    // Exactly ONE mistake was charged for the whole burst.
+    expect(screen.getByTestId(`${PREFIX}-error`)).toHaveTextContent(
+      new RegExp(`${MAX_MISTAKES} more wrong answers`)
+    );
+  });
 
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-1'));
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-1')
-    ).toHaveTextContent(WORDS[1]);
-
-    fireEvent.press(screen.getByTestId('mnemonic-verification-slot-1'));
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-1')
-    ).toHaveTextContent('Tap a word below');
+  it('never leaks which phrase position a chip came from', () => {
+    // testIDs address the chip's slot on screen only; a testID carrying the
+    // phrase index would put the answer in the view tree.
+    const { screen } = renderQuiz(LONG);
+    for (let slot = 0; slot < CHALLENGE_OPTION_COUNT; slot++) {
+      expect(screen.getByTestId(`${PREFIX}-option-${slot}`)).toBeTruthy();
+    }
+    expect(screen.queryByTestId(`${PREFIX}-option-24`)).toBeNull();
   });
 });
 
-describe('MnemonicVerification — outcomes', () => {
-  it('cannot report success until every slot is filled', () => {
-    const onVerified = jest.fn();
-
-    const screen = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={onVerified} />
-      )
-    );
-
-    expect(
-      screen.getByTestId('mnemonic-verification-verify').props
-        .accessibilityState
-    ).toEqual(expect.objectContaining({ disabled: true }));
-    fireEvent.press(screen.getByTestId('mnemonic-verification-verify'));
-    expect(onVerified).not.toHaveBeenCalled();
-
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-1'));
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-4'));
-    expect(
-      screen.getByTestId('mnemonic-verification-verify').props
-        .accessibilityState
-    ).toEqual(expect.objectContaining({ disabled: true }));
-    fireEvent.press(screen.getByTestId('mnemonic-verification-verify'));
-    expect(onVerified).not.toHaveBeenCalled();
-
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-6'));
-    fireEvent.press(screen.getByTestId('mnemonic-verification-verify'));
+describe('MnemonicVerification — repeated words (DR-12)', () => {
+  it('is completable for a phrase with a repeated word', () => {
+    const { screen, onVerified } = renderQuiz(REPEATED);
+    completeQuiz(screen, PREFIX, REPEATED_WORDS);
     expect(onVerified).toHaveBeenCalledTimes(1);
   });
 
-  it('tapping a word that belongs to no target slot does nothing', () => {
-    // Documents the auto-routing contract: a non-target chip is inert rather
-    // than filling a slot with a wrong answer. See the KNOWN LIMITATION note on
-    // the component — this is why `verified` is weaker than a pick-for-slot
-    // challenge, and is preserved deliberately per DR-12.
-    const screen = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={jest.fn()} />
-      )
-    );
+  it('offers exactly one chip for a repeated word, at every position it occupies', () => {
+    // Mount repeatedly until every position of the 8-word fixture has been
+    // asked — including 0, 3 and 6, the three "abandon" positions that used to
+    // be unanswerable. Every question in every run must be unambiguous and
+    // answerable, so this is the wiring-level form of the exhaustive
+    // DR-12 regression in `mnemonicQuiz.test.ts`.
+    const seen = new Set<number>();
+    for (let run = 0; run < 300 && seen.size < REPEATED_WORDS.length; run++) {
+      const { screen, onVerified } = renderQuiz(REPEATED);
 
-    fireEvent.press(screen.getByTestId('mnemonic-verification-option-5'));
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-1')
-    ).toHaveTextContent('Tap a word below');
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-4')
-    ).toHaveTextContent('Tap a word below');
-    expect(
-      screen.getByTestId('mnemonic-verification-slot-6')
-    ).toHaveTextContent('Tap a word below');
+      for (let question = 0; question < VERIFICATION_WORD_COUNT; question++) {
+        const position = currentQuizPosition(screen, PREFIX);
+        seen.add(position);
+
+        const labels = Array.from(
+          { length: CHALLENGE_OPTION_COUNT },
+          (_, slot) =>
+            String(
+              screen.getByTestId(`${PREFIX}-option-${slot}`).props
+                .accessibilityLabel
+            )
+        );
+        expect(
+          labels.filter((w) => w === REPEATED_WORDS[position])
+        ).toHaveLength(1);
+
+        // The answer is accepted at that position, duplicate or not.
+        pressQuizOption(screen, PREFIX, REPEATED_WORDS[position]);
+      }
+
+      expect(onVerified).toHaveBeenCalledTimes(1);
+      screen.unmount();
+    }
+
+    expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   });
+});
 
+describe('MnemonicVerification — escapes and edge cases', () => {
   it('renders a skip control only when onSkip is supplied', () => {
-    const withoutSkip = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification mnemonic={REPEATED} onVerified={jest.fn()} />
-      )
-    );
-    expect(withoutSkip.queryByTestId('mnemonic-verification-skip')).toBeNull();
+    const { screen: withoutSkip } = renderQuiz(REPEATED);
+    expect(withoutSkip.queryByTestId(`${PREFIX}-skip`)).toBeNull();
 
     const onSkip = jest.fn();
-    const withSkip = withTargets([1, 4, 6], WORDS.length, () =>
-      render(
-        <MnemonicVerification
-          mnemonic={REPEATED}
-          onVerified={jest.fn()}
-          onSkip={onSkip}
-        />
-      )
-    );
-    fireEvent.press(withSkip.getByTestId('mnemonic-verification-skip'));
+    const { screen: withSkip } = renderQuiz(REPEATED, { onSkip });
+    fireEvent.press(withSkip.getByTestId(`${PREFIX}-skip`));
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('never auto-passes when there is no phrase to ask about', () => {
+    const onVerified = jest.fn();
+    const onSkip = jest.fn();
+    const { screen } = renderQuiz('', { onVerified, onSkip });
+
+    expect(screen.getByTestId(`${PREFIX}-unavailable`)).toBeTruthy();
+    expect(screen.queryByTestId(`${PREFIX}-prompt`)).toBeNull();
+    expect(onVerified).not.toHaveBeenCalled();
+    // The escape hatch is still reachable, so this is not a dead end.
+    expect(screen.getByTestId(`${PREFIX}-skip`)).toBeTruthy();
+  });
+
+  it('rebuilds the challenge if the host swaps the phrase', () => {
+    // Otherwise the board would keep asking about a phrase that is no longer on
+    // screen — an unwinnable challenge, i.e. exactly the lockout class DR-12
+    // exists to prevent.
+    const onVerified = jest.fn();
+    const screen = render(
+      <MnemonicVerification mnemonic={LONG} onVerified={onVerified} />
+    );
+
+    screen.rerender(
+      <MnemonicVerification mnemonic={DISJOINT} onVerified={onVerified} />
+    );
+
+    // DISJOINT shares no word with LONG, so this only passes if the challenge
+    // was actually rebuilt around the new phrase.
+    completeQuiz(screen, PREFIX, DISJOINT_WORDS);
+    expect(onVerified).toHaveBeenCalledTimes(1);
   });
 });

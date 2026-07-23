@@ -1,57 +1,85 @@
 /**
- * MnemonicVerification — the "confirm 3 words" recovery-phrase quiz (TASK-45).
+ * MnemonicVerification — the recovery-phrase confirmation challenge
+ * (TASK-45, strengthened by TASK-226).
  *
  * Renders CONTENT ONLY (no SafeAreaView / header / background) so it can be
- * embedded by both hosts:
- *   - `MnemonicBackupFlow` (add-account), inside its own header + ScrollView
+ * embedded by all three hosts:
  *   - `CreateWalletScreen` (first-wallet onboarding), inside NFTBackground
+ *   - `MnemonicBackupFlow` (add-account), inside its own header + ScrollView
+ *   - `VerifyBackupScreen` (post-hoc "verify my backup"), from the Home banner
  *
- * All selection logic lives in `./mnemonicQuiz` and is position-indexed
- * per DR-12 — see that module for why a value-indexed quiz could hard-lock a
- * user out of onboarding.
+ * ## The challenge
+ *
+ * One DIRECTED question at a time — "which word is #7?" — answered from
+ * {@link CHALLENGE_OPTION_COUNT} chips, exactly one of which is right. Decoys
+ * come from the BIP-39 wordlist, some of them from the phrase's own other words
+ * so a shoulder-surfer cannot tell real words from filler and someone who only
+ * remembers the phrase's word set cannot pick "the familiar one". All selection
+ * and option-building logic lives in `./mnemonicQuiz`; see that module for the
+ * full rationale, including how the DR-12 duplicate-word lockout is now
+ * structurally impossible.
+ *
+ * This replaces the original auto-routing board (fixed in TASK-226): a tapped
+ * chip used to be routed to whichever slot it belonged to, so a wrong tap was a
+ * silent no-op and the bank held only the phrase's own words — meaning the quiz
+ * could be completed by tapping chips at random, without ever having written the
+ * phrase down. `backupVerified` is load-bearing for a fund-loss guarantee, so it
+ * must not be obtainable that way.
+ *
+ * ## Wrong answers, and why there is no lockout
+ *
+ * A wrong pick costs a mistake and re-presents the same position with a fresh
+ * option set. After `MAX_MISTAKES` tolerated mistakes the next wrong pick throws
+ * the whole attempt away and calls `onFailed`, which onboarding uses to send the
+ * user back to re-read the phrase.
+ *
+ * There is deliberately no permanent lockout: a user holding a correct written
+ * phrase must ALWAYS be able to pass, and "Skip for now" already exists as a
+ * first-class escape that records `backupVerified: false`. So blind guessing is
+ * bounded by friction rather than refusal — with 8 options, 3 questions and 3
+ * tolerated mistakes, a user who knows nothing passes an attempt with
+ * probability ~2.9%, i.e. ~34 attempts on average, each one bouncing them back
+ * through the phrase they are pretending to have written down. That is strictly
+ * more work than reading it, which is the whole point.
+ *
+ * ## Residual, knowingly accepted
+ *
+ * A lucky guess teaches the guesser one (word, position) pair, and a long
+ * grinding session accumulates those pairs, so repeated attempts are not fully
+ * independent. Every challenge of this shape — Pera's and MetaMask's included —
+ * has that property: telling the user whether they were right is the whole
+ * mechanism. Closing it would require a permanent lockout, which is explicitly
+ * ruled out above, and it is not worth much anyway: the grinder is bounced back
+ * to the phrase on every reset, and "Skip for now" is a free, honest way to
+ * decline the check without pretending to have passed it.
  *
  * The phrase is only ever held in this component's props (it is already on
- * screen in the host). Nothing here logs, persists, or navigates with it.
- *
- * ## KNOWN LIMITATION — the quiz auto-routes taps
- *
- * A tapped chip is routed to the slot it belongs to, so a wrong tap is a no-op
- * rather than a wrong answer. That means the quiz is passable by tapping chips
- * until the slots fill, WITHOUT having written the phrase down — `verified` is
- * therefore weaker evidence than a Pera/MetaMask-style "pick the word for slot
- * N" challenge, where a wrong pick actually fails.
- *
- * This behaviour is inherited from the pre-existing quiz and is preserved
- * deliberately: DR-12 prescribes exactly "carry {word, index} through selection
- * and disable by index, not value", i.e. keep the auto-routing and fix the
- * duplicate-word lockout. Strengthening the challenge is a separate UX/security
- * decision and is raised as a follow-up rather than taken unilaterally here.
+ * screen in the host). Nothing here logs, persists, or navigates with it, and no
+ * testID or accessibility label exposes which phrase position a chip came from.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
-  buildWordOptions,
-  clearWordSelection,
-  isVerificationComplete,
-  pickVerificationPositions,
-  selectWordOption,
-  shuffleWordOptions,
+  answerCurrentChallenge,
+  currentPosition,
+  remainingMistakes,
   splitMnemonic,
-  usedOptionIndices,
-  verifySelections,
-  type WordSelections,
+  startQuizAttempt,
+  VERIFICATION_WORD_COUNT,
+  type QuizAttempt,
 } from './mnemonicQuiz';
 
 export interface MnemonicVerificationProps {
   /** The phrase being verified. Display-only; never persisted or logged. */
   mnemonic: string;
-  /** Called once the user selects all target words correctly. */
+  /** Called once the user answers every question correctly. */
   onVerified: () => void;
   /**
-   * Called on a wrong answer. When omitted the component just clears the
-   * selections and lets the user retry in place.
+   * Called when the mistake budget is exhausted and the challenge restarts.
+   * Hosts that can show the phrase again should do so — the component has
+   * already rebuilt itself either way, so this is never a dead end.
    */
   onFailed?: () => void;
   /** When provided, renders a "Skip for now" escape (DR-2). */
@@ -72,42 +100,121 @@ export default function MnemonicVerification({
 }: MnemonicVerificationProps) {
   const { theme } = useTheme();
 
-  const mnemonicWords = useMemo(() => splitMnemonic(mnemonic), [mnemonic]);
-
-  // Both the target positions and the chip order are impure (Math.random), so
-  // they must be memoized on the stable `mnemonic` string — otherwise they would
-  // be recomputed on every render and the quiz would reshuffle under the user's
-  // finger as soon as they tapped a word.
-  const verificationWords = useMemo(
-    () => pickVerificationPositions(mnemonicWords.length),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mnemonic]
+  const [attempt, setAttempt] = useState<QuizAttempt>(() =>
+    startQuizAttempt(splitMnemonic(mnemonic))
   );
-  const shuffledOptions = useMemo(
-    () => shuffleWordOptions(buildWordOptions(mnemonic)),
-    [mnemonic]
-  );
-
-  const [selections, setSelections] = useState<WordSelections>({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const used = usedOptionIndices(selections);
-  const complete = isVerificationComplete(verificationWords, selections);
+  // `attempt` is also mirrored in a ref so a burst of taps is resolved against
+  // the LATEST board rather than the one React last painted. Without this, a
+  // user could tap several chips faster than a re-render and have every one of
+  // them scored against the same board — i.e. try multiple options for a single
+  // question at the cost of one mistake. The ref holds only what is already on
+  // screen; the phrase itself is never stored.
+  const attemptRef = useRef(attempt);
+  const applyAttempt = (next: QuizAttempt) => {
+    attemptRef.current = next;
+    setAttempt(next);
+  };
 
-  const handleVerify = () => {
-    if (verifySelections(verificationWords, selections, mnemonicWords)) {
-      setErrorMessage(null);
-      onVerified();
+  // If the host swaps the phrase under us, rebuild rather than keep asking about
+  // a phrase that is no longer on screen — that would be an unwinnable board.
+  // The ref only skips the initial run.
+  const isFirstRun = useRef(true);
+  useEffect(() => {
+    if (isFirstRun.current) {
+      isFirstRun.current = false;
       return;
     }
-    // Wrong answer: always clear so the user gets a clean retry rather than
-    // being stuck staring at a full, rejected board.
-    setSelections({});
-    setErrorMessage(
-      'That does not match your recovery phrase. Check your written copy and try again.'
+    applyAttempt(startQuizAttempt(splitMnemonic(mnemonic)));
+    setErrorMessage(null);
+    // `applyAttempt` is recreated every render by design; the phrase is the only
+    // input that should re-run this.
+  }, [mnemonic]);
+
+  const position = currentPosition(attempt);
+
+  const renderSkip = () =>
+    onSkip ? (
+      <TouchableOpacity
+        testID={`${testIDPrefix}-skip`}
+        accessibilityRole="button"
+        accessibilityLabel={skipLabel}
+        style={styles.skipButton}
+        onPress={onSkip}
+      >
+        <Text style={[styles.skipButtonText, { color: theme.colors.primary }]}>
+          {skipLabel}
+        </Text>
+      </TouchableOpacity>
+    ) : null;
+
+  if (position === null) {
+    // No phrase to ask about. Never silently "pass" — say so and leave the skip
+    // escape available so the user is not stuck.
+    return (
+      <View testID={`${testIDPrefix}-root`}>
+        <Text
+          testID={`${testIDPrefix}-unavailable`}
+          accessibilityRole="alert"
+          style={[styles.error, { color: theme.colors.error }]}
+        >
+          Your recovery phrase is not available to confirm right now.
+        </Text>
+        {renderSkip()}
+      </View>
     );
-    onFailed?.();
+  }
+
+  /**
+   * `board` is the attempt object the pressed chip was rendered from. A chip
+   * belonging to a superseded board is ignored — that is a stale render, not an
+   * answer, and it can never be a correct one (the answer always exists on the
+   * live board). This is the double-tap / burst-tap guard, not an answer path.
+   */
+  const handlePick = (board: QuizAttempt, word: string) => {
+    if (board !== attemptRef.current) return;
+
+    const askedPosition = currentPosition(board);
+    if (askedPosition === null) return;
+
+    const words = splitMnemonic(mnemonic);
+    const result = answerCurrentChallenge(board, words, word);
+
+    switch (result.status) {
+      case 'verified':
+        // Rebuild first: the ref move makes any queued tap stale (so `onVerified`
+        // cannot fire twice), and a host that keeps this mounted after success —
+        // e.g. the user dismisses the confirmation alert — gets a live challenge
+        // back instead of an inert board.
+        applyAttempt(startQuizAttempt(words));
+        setErrorMessage(null);
+        onVerified();
+        return;
+      case 'advanced':
+        setErrorMessage(null);
+        applyAttempt(result.attempt);
+        return;
+      case 'retry': {
+        const untilRestart = remainingMistakes(result.attempt) + 1;
+        applyAttempt(result.attempt);
+        setErrorMessage(
+          `That is not word #${askedPosition + 1}. Check your written copy — ${untilRestart} more wrong ${untilRestart === 1 ? 'answer' : 'answers'} will restart this check.`
+        );
+        return;
+      }
+      case 'reset':
+        applyAttempt(result.attempt);
+        setErrorMessage(
+          'Too many incorrect answers. Check your written recovery phrase — the check has started over.'
+        );
+        onFailed?.();
+        return;
+    }
   };
+
+  const questionNumber = attempt.currentIndex + 1;
+  const totalQuestions = attempt.positions.length || VERIFICATION_WORD_COUNT;
 
   return (
     <View testID={`${testIDPrefix}-root`}>
@@ -115,107 +222,49 @@ export default function MnemonicVerification({
         Confirm your recovery phrase
       </Text>
       <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-        Tap the words below to fill in the missing positions from your written
-        copy.
+        Using your written copy, pick the word that belongs at each position. A
+        wrong answer does not count.
       </Text>
 
-      <View style={styles.slotsContainer}>
-        {verificationWords.map((position) => {
-          const selection = selections[position];
-          return (
-            <View key={position} style={styles.slotRow}>
-              <Text style={[styles.slotLabel, { color: theme.colors.text }]}>
-                Word #{position + 1}
-              </Text>
-              <TouchableOpacity
-                testID={`${testIDPrefix}-slot-${position}`}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  selection
-                    ? `Word ${position + 1}, ${selection.word}. Tap to clear.`
-                    : `Word ${position + 1}, empty. Select a word below.`
-                }
-                style={[
-                  styles.slot,
-                  {
-                    backgroundColor: theme.colors.card,
-                    borderColor: theme.colors.border,
-                  },
-                  selection !== undefined && {
-                    borderColor: theme.colors.primary,
-                    backgroundColor: theme.colors.primaryLight,
-                  },
-                ]}
-                // Tapping a filled slot clears it — without this, a mis-tap on a
-                // duplicate word would leave the user unable to change an answer.
-                onPress={() =>
-                  setSelections((prev) => clearWordSelection(position, prev))
-                }
-                disabled={selection === undefined}
-              >
-                <Text
-                  style={[
-                    styles.slotText,
-                    { color: theme.colors.textSecondary },
-                    selection !== undefined && { color: theme.colors.primary },
-                  ]}
-                >
-                  {selection?.word ?? 'Tap a word below'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          );
-        })}
-      </View>
+      <Text
+        testID={`${testIDPrefix}-progress`}
+        style={[styles.progress, { color: theme.colors.textSecondary }]}
+      >
+        {`Question ${questionNumber} of ${totalQuestions}`}
+      </Text>
+
+      <Text
+        testID={`${testIDPrefix}-prompt`}
+        accessibilityRole="header"
+        style={[styles.prompt, { color: theme.colors.text }]}
+      >
+        {`Which word is #${position + 1}?`}
+      </Text>
 
       <View style={styles.optionsContainer}>
-        {shuffledOptions.map((option) => {
-          const isUsed = used.has(option.index);
-          return (
-            <TouchableOpacity
-              // DR-12: keyed and disabled by POSITION, never by word value, so a
-              // repeated word yields two independently addressable chips.
-              key={option.index}
-              testID={`${testIDPrefix}-option-${option.index}`}
-              accessibilityRole="button"
-              accessibilityLabel={option.word}
-              accessibilityState={{ disabled: isUsed }}
-              style={[
-                styles.option,
-                {
-                  backgroundColor: theme.colors.card,
-                  borderColor: theme.colors.border,
-                },
-                isUsed && {
-                  backgroundColor: theme.colors.surface,
-                  borderColor: theme.colors.disabled,
-                },
-              ]}
-              onPress={() => {
-                setErrorMessage(null);
-                setSelections((prev) =>
-                  selectWordOption(
-                    option,
-                    verificationWords,
-                    prev,
-                    mnemonicWords
-                  )
-                );
-              }}
-              disabled={isUsed}
-            >
-              <Text
-                style={[
-                  styles.optionText,
-                  { color: theme.colors.text },
-                  isUsed && { color: theme.colors.textSecondary },
-                ]}
-              >
-                {option.word}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+        {attempt.options.map((word, slot) => (
+          <TouchableOpacity
+            // Keyed and identified by the chip's slot on screen, never by the
+            // word or by its position in the phrase — a testID or key carrying
+            // the phrase index would leak the answer into the view tree.
+            key={`${attempt.currentIndex}-${attempt.mistakes}-${slot}`}
+            testID={`${testIDPrefix}-option-${slot}`}
+            accessibilityRole="button"
+            accessibilityLabel={word}
+            style={[
+              styles.option,
+              {
+                backgroundColor: theme.colors.card,
+                borderColor: theme.colors.border,
+              },
+            ]}
+            onPress={() => handlePick(attempt, word)}
+          >
+            <Text style={[styles.optionText, { color: theme.colors.text }]}>
+              {word}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {errorMessage !== null && (
@@ -228,44 +277,7 @@ export default function MnemonicVerification({
         </Text>
       )}
 
-      <TouchableOpacity
-        testID={`${testIDPrefix}-verify`}
-        accessibilityRole="button"
-        accessibilityLabel="Verify words"
-        accessibilityState={{ disabled: !complete }}
-        style={[
-          styles.verifyButton,
-          {
-            backgroundColor: complete
-              ? theme.colors.primary
-              : theme.colors.disabled,
-          },
-        ]}
-        onPress={handleVerify}
-        disabled={!complete}
-      >
-        <Text
-          style={[styles.verifyButtonText, { color: theme.colors.background }]}
-        >
-          Verify Words
-        </Text>
-      </TouchableOpacity>
-
-      {onSkip && (
-        <TouchableOpacity
-          testID={`${testIDPrefix}-skip`}
-          accessibilityRole="button"
-          accessibilityLabel={skipLabel}
-          style={styles.skipButton}
-          onPress={onSkip}
-        >
-          <Text
-            style={[styles.skipButtonText, { color: theme.colors.primary }]}
-          >
-            {skipLabel}
-          </Text>
-        </TouchableOpacity>
-      )}
+      {renderSkip()}
     </View>
   );
 }
@@ -279,31 +291,21 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 16,
-    marginBottom: 30,
+    marginBottom: 24,
     textAlign: 'center',
     lineHeight: 22,
   },
-  slotsContainer: {
-    marginBottom: 30,
-  },
-  slotRow: {
-    marginBottom: 15,
-  },
-  slotLabel: {
+  progress: {
     fontSize: 14,
     fontWeight: '600',
+    textAlign: 'center',
     marginBottom: 8,
   },
-  slot: {
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderRadius: 10,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  slotText: {
-    fontSize: 16,
+  prompt: {
+    fontSize: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 24,
   },
   optionsContainer: {
     flexDirection: 'row',
@@ -312,16 +314,16 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   option: {
-    width: '30%',
+    width: '48%',
     borderRadius: 8,
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 10,
-    marginBottom: 10,
+    marginBottom: 12,
     alignItems: 'center',
     borderWidth: 1,
   },
   optionText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '500',
   },
   error: {
@@ -329,16 +331,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
     lineHeight: 20,
-  },
-  verifyButton: {
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 10,
-  },
-  verifyButtonText: {
-    fontSize: 18,
-    fontWeight: '600',
-    textAlign: 'center',
   },
   skipButton: {
     paddingVertical: 14,
