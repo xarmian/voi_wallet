@@ -74,7 +74,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const { requestEvent } = route.params;
   const version = (route.params as any)?.version as number | undefined;
   const autoRetry = (route.params as any)?.autoRetry as boolean | undefined;
-  const [isLoading, setIsLoading] = useState(false);
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -89,7 +88,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   >([]);
   const [selectedAccount, setSelectedAccount] =
     useState<AccountMetadata | null>(null);
-  const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
   const [networkCurrency, setNetworkCurrency] = useState<string>('TOKEN');
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
@@ -136,7 +134,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     try {
       // Load accounts
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
-      setAccounts(allAccounts);
 
       const eventParams = (requestEvent as any).params;
       if (!eventParams) {

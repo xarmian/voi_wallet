@@ -167,17 +167,6 @@ const TransactionListItem = React.memo(
       return 'confirmed';
     };
 
-    const getStatusColor = (status: string) => {
-      switch (status) {
-        case 'pending':
-          return 'warning';
-        case 'failed':
-          return 'error';
-        default:
-          return isOutgoing ? 'error' : 'success';
-      }
-    };
-
     const renderAssetIcon = () => {
       // For native token, use network-specific image
       if (
@@ -251,7 +240,6 @@ const TransactionListItem = React.memo(
     };
 
     const status = getTransactionStatus();
-    const statusColor = getStatusColor(status);
 
     const containerStyle = [
       styles.container,

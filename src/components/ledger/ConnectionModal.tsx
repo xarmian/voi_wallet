@@ -10,7 +10,6 @@ import {
 
 import DeviceDiscovery from './DeviceDiscovery';
 import { DebugLogsModal } from '@/components/debug/DebugLogsModal';
-import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import {
@@ -41,7 +40,6 @@ const LedgerConnectionModal: React.FC<LedgerConnectionModalProps> = ({
   title = 'Connect Ledger Device',
   description = 'Select your Ledger device to pair with Voi Wallet. Make sure the device is unlocked and the Algorand app is open.',
 }) => {
-  const { theme } = useTheme();
   const colors = useThemeColors();
   const styles = useThemedStyles(createStyles);
 

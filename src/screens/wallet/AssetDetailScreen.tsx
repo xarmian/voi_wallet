@@ -75,7 +75,6 @@ export default function AssetDetailScreen() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [optingOut, setOptingOut] = useState(false);
   const [isSwappable, setIsSwappable] = useState(false);
-  const [checkingSwappable, setCheckingSwappable] = useState(true);
   const loadMoreInFlightRef = React.useRef(false);
   const route = useRoute();
   const navigation = useNavigation<StackNavigationProp<any>>();
@@ -266,7 +265,6 @@ export default function AssetDetailScreen() {
   // Check if token is swappable (VOI via SnowballSwap, Algorand via Deflex)
   useEffect(() => {
     const checkSwappable = async () => {
-      setCheckingSwappable(true);
       try {
         const effectiveNetworkId =
           (networkId as NetworkId) || NetworkId.VOI_MAINNET;
@@ -291,8 +289,6 @@ export default function AssetDetailScreen() {
       } catch (error) {
         console.error('Error checking token swappability:', error);
         setIsSwappable(false);
-      } finally {
-        setCheckingSwappable(false);
       }
     };
 
@@ -604,10 +600,6 @@ export default function AssetDetailScreen() {
 
   const formatTimestamp = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString();
-  };
-
-  const formatAddress = (address: string) => {
-    return `${address.slice(0, 6)}...${address.slice(-6)}`;
   };
 
   const formatBalance = (amount: number | bigint) => {

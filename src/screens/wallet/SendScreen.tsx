@@ -28,11 +28,7 @@ import { TransactionService } from '@/services/transactions';
 import { NetworkService } from '@/services/network';
 import tokenMappingService from '@/services/token-mapping';
 import type { TokenMapping } from '@/services/token-mapping/types';
-import {
-  useActiveAccount,
-  useWalletStore,
-  useMultiNetworkBalance,
-} from '@/store/walletStore';
+import { useActiveAccount, useMultiNetworkBalance } from '@/store/walletStore';
 import {
   formatNativeBalance,
   formatAssetBalance,
@@ -132,8 +128,6 @@ export default function SendScreen() {
   const [isSearchingNames, setIsSearchingNames] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const [showAssetSelector, setShowAssetSelector] = useState(false);
-  const [qrScannerVisible, setQrScannerVisible] = useState(false);
-  const [canSignFromActive, setCanSignFromActive] = useState(false);
   const [hasLedgerSigner, setHasLedgerSigner] = useState(false);
 
   const contextAssetName = routeParams?.assetName;
@@ -202,17 +196,8 @@ export default function SendScreen() {
     }
   }, [hasNoContext, selectedAssetId]);
 
-  // Handle network change
-  const handleNetworkChange = (networkId: NetworkId) => {
-    setSelectedNetworkId(networkId);
-    setAmount(''); // Clear amount when network changes
-    setEstimatedFee(0);
-  };
-
   // Track if note is non-modifiable (xnote from ARC-0090)
   const [isNoteReadOnly, setIsNoteReadOnly] = useState(false);
-  // Track if fee was specified in URI
-  const [uriFee, setUriFee] = useState<number | null>(null);
 
   // Pre-fill form fields from payment request parameters
   useEffect(() => {
@@ -295,7 +280,6 @@ export default function SendScreen() {
         const feeInMicrounits = parseInt(routeParams.fee);
         if (feeInMicrounits >= 1000) {
           // Minimum fee is 1000 microunits
-          setUriFee(feeInMicrounits);
           setEstimatedFee(feeInMicrounits);
         }
       }
@@ -306,9 +290,6 @@ export default function SendScreen() {
   }, [routeParams]);
 
   const activeAccount = useActiveAccount();
-  const refreshAllBalances = useWalletStore(
-    (state) => state.refreshAllBalances
-  );
 
   // State for all available versions of this asset across networks
   const [assetOptions, setAssetOptions] = useState<
@@ -324,7 +305,6 @@ export default function SendScreen() {
       imageUrl?: string;
     }[]
   >([]);
-  const [isLoadingOptions, setIsLoadingOptions] = useState(false);
 
   // Selected asset state
   const [selectedAsset, setSelectedAsset] = useState<{
@@ -334,7 +314,6 @@ export default function SendScreen() {
 
   // Balance for the selected asset
   const [accountBalance, setAccountBalance] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(false);
 
   const { balance: multiNetworkBalance } = useMultiNetworkBalance(
     activeAccount?.id || ''
@@ -467,15 +446,9 @@ export default function SendScreen() {
 
     const fetchAssetOptions = async () => {
       if (!activeAccount) {
-        // Clear the spinner even though we build no options: a superseded
-        // (now-cancelled) earlier run may have left it on, and its guarded
-        // finally won't clear it. Clearing is always safe — only *overwriting
-        // options* must stay behind the cancelled guard.
-        setIsLoadingOptions(false);
         return;
       }
 
-      setIsLoadingOptions(true);
       try {
         // Same mappings the narrowing memo used (see relevantMappedAssets), so
         // the mapping lookup below stays consistent with the pre-narrowed slice.
@@ -682,10 +655,6 @@ export default function SendScreen() {
         }
       } catch (error) {
         console.error('Failed to fetch asset options:', error);
-      } finally {
-        // Only the current run should clear the spinner; a superseded run
-        // clearing it would race the fresher run that's still loading.
-        if (!cancelled) setIsLoadingOptions(false);
       }
     };
 
@@ -751,7 +720,6 @@ export default function SendScreen() {
       try {
         if (!activeAccount) {
           if (!isCancelled) {
-            setCanSignFromActive(false);
             setHasLedgerSigner(false);
           }
           return;
@@ -761,7 +729,6 @@ export default function SendScreen() {
           activeAccount.address
         );
         if (isCancelled) return;
-        setCanSignFromActive(Boolean(info?.canSign));
 
         // Probe for a Ledger signer via id, then signing address, then the account address
         let ledgerFound = false;
@@ -802,7 +769,6 @@ export default function SendScreen() {
         }
       } catch {
         if (!isCancelled) {
-          setCanSignFromActive(false);
           setHasLedgerSigner(false);
         }
       }
@@ -902,27 +868,6 @@ export default function SendScreen() {
 
     const asset = getCurrentAsset();
     return asset?.decimals || 0;
-  };
-
-  const getAssetName = () => {
-    // Use selectedAsset if available
-    const option = getCurrentAssetOption();
-    if (option) {
-      return option.name;
-    }
-
-    // Fallback to legacy logic
-    if (effectiveAssetId === 0 || !effectiveAssetId) {
-      return selectedNetworkConfig.nativeToken;
-    }
-
-    const asset = getCurrentAsset();
-    return (
-      asset?.name ||
-      asset?.symbol ||
-      contextAssetName ||
-      `Asset ${effectiveAssetId}`
-    );
   };
 
   const convertAmountToBaseUnits = (amount: string): bigint => {
@@ -1514,14 +1459,6 @@ export default function SendScreen() {
     } finally {
       setIsSending(false);
     }
-  };
-
-  const resetForm = async () => {
-    setRecipientAddress('');
-    setAmount('');
-    setNote('');
-    setEstimatedFee(0);
-    // Balance will auto-refresh via the useEffect watching selectedNetworkId
   };
 
   const formatBalance = (amount: number | bigint) => {

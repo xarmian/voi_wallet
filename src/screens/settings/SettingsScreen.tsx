@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -24,7 +24,6 @@ import {
   useWalletStore,
   useWalletSettings,
 } from '@/store/walletStore';
-import { useAuth } from '@/contexts/AuthContext';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
@@ -34,13 +33,9 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher';
 import NFTThemeSelector from '@/components/common/NFTThemeSelector';
 import { formatAddress } from '@/utils/address';
 import { AccountMetadata, AccountType } from '@/types/wallet';
-import {
-  useCurrentNetworkConfig,
-  useIsCurrentNetworkHealthy,
-} from '@/store/networkStore';
+import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
 import NetworkSwitcher from '@/components/network/NetworkSwitcher';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
-import * as LocalAuthentication from 'expo-local-authentication';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme, ThemeMode } from '@/constants/themes';
@@ -246,8 +241,6 @@ export default function SettingsScreen() {
     (state) => state.updateWalletSettings
   );
   const walletSettings = useWalletSettings();
-  const { authState, enableBiometrics } = useAuth();
-  const currentNetworkConfig = useCurrentNetworkConfig();
   const isNetworkHealthy = useIsCurrentNetworkHealthy();
   const {
     theme,
@@ -266,8 +259,6 @@ export default function SettingsScreen() {
   const [accountToRename, setAccountToRename] =
     useState<AccountMetadata | null>(null);
   const [isRenamingAccount, setIsRenamingAccount] = useState(false);
-  const [isBiometricAvailable, setIsBiometricAvailable] = useState(false);
-  const [isTogglingBiometric, setIsTogglingBiometric] = useState(false);
   const [isNetworkSwitcherVisible, setIsNetworkSwitcherVisible] =
     useState(false);
   const [isLocaleModalVisible, setIsLocaleModalVisible] = useState(false);
@@ -292,21 +283,6 @@ export default function SettingsScreen() {
 
   const getAccountDisplayName = (account: AccountMetadata) =>
     account.label?.trim() || formatAddress(account.address);
-
-  useEffect(() => {
-    checkBiometricAvailability();
-  }, []);
-
-  const checkBiometricAvailability = async () => {
-    try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
-      setIsBiometricAvailable(hasHardware && isEnrolled);
-    } catch (error) {
-      console.warn('Failed to check biometric availability:', error);
-      setIsBiometricAvailable(false);
-    }
-  };
 
   const handleAccountSelectorPress = () => {
     setIsAccountModalVisible(true);
@@ -419,42 +395,8 @@ export default function SettingsScreen() {
     );
   };
 
-  const handleChangePin = () => {
-    navigation.navigate('ChangePin');
-  };
-
   const handleSecuritySettings = () => {
     navigation.navigate('SecuritySettings');
-  };
-
-  const handleBiometricToggle = async (enabled: boolean) => {
-    if (!isBiometricAvailable) {
-      Alert.alert(
-        'Biometric Authentication Unavailable',
-        'Biometric authentication is not available on this device or no biometric data is enrolled. Please set up biometric authentication in your device settings.'
-      );
-      return;
-    }
-
-    setIsTogglingBiometric(true);
-
-    try {
-      await enableBiometrics(enabled);
-
-      const message = enabled
-        ? 'Biometric authentication has been enabled'
-        : 'Biometric authentication has been disabled';
-
-      Alert.alert('Success', message);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'Failed to update biometric setting';
-      Alert.alert('Error', errorMessage);
-    } finally {
-      setIsTogglingBiometric(false);
-    }
   };
 
   const handleWalletConnectSessions = () => {

@@ -54,7 +54,7 @@ export default function AccountImportPreviewScreen({
   navigation,
   route,
 }: Props) {
-  const { accounts: initialAccounts, source } = route.params;
+  const { accounts: initialAccounts } = route.params;
   const { theme } = useTheme();
 
   const [accounts, setAccounts] = useState<ScannedAccount[]>(initialAccounts);

@@ -100,7 +100,6 @@ export interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEFAULT_SESSION_TIMEOUT = 5 * 60 * 1000; // 5 minutes default
 const ACTIVITY_CHECK_INTERVAL = 30 * 1000; // 30 seconds
 const BACKGROUND_GRACE_PERIOD = 60 * 1000; // 60 seconds
 

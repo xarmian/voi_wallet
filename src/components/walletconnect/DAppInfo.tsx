@@ -2,7 +2,6 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { WalletConnectMetadata } from '@/services/walletconnect/types';
-import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 
@@ -19,7 +18,6 @@ export default function DAppInfo({
 }: Props) {
   const iconSize = compact ? 32 : 48;
   const nameSize = compact ? 14 : 16;
-  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
 
   return (

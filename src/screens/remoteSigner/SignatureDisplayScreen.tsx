@@ -8,7 +8,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Alert,
   View,
   Text,
   StyleSheet,
@@ -35,36 +34,6 @@ import {
 import { AccountType, AccountMetadata } from '@/types/wallet';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
-
-// Cross-platform alert helper
-const showAlert = (
-  title: string,
-  message: string,
-  buttons?: {
-    text: string;
-    onPress?: () => void;
-    style?: 'default' | 'cancel' | 'destructive';
-  }[]
-) => {
-  if (Platform.OS === 'web') {
-    if (buttons && buttons.length > 1) {
-      const confirmed = window.confirm(`${title}\n\n${message}`);
-      if (confirmed) {
-        const confirmButton =
-          buttons.find((b) => b.style !== 'cancel') || buttons[0];
-        confirmButton?.onPress?.();
-      } else {
-        const cancelButton = buttons.find((b) => b.style === 'cancel');
-        cancelButton?.onPress?.();
-      }
-    } else {
-      window.alert(`${title}\n\n${message}`);
-      buttons?.[0]?.onPress?.();
-    }
-  } else {
-    Alert.alert(title, message, buttons);
-  }
-};
 
 type RouteParams = {
   SignatureDisplay: {

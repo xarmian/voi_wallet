@@ -8,11 +8,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  useNavigation,
-  useRoute,
-  CommonActions,
-} from '@react-navigation/native';
+import { useNavigation, CommonActions } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -29,15 +25,9 @@ import {
   BackupError,
 } from '@/services/backup';
 
-interface RouteParams {
-  isOnboarding?: boolean;
-}
-
 export default function RestoreWalletScreen() {
   const navigation = useNavigation();
-  const route = useRoute();
-  const { isOnboarding } = (route.params as RouteParams) || {};
-  const { theme, reloadTheme } = useTheme();
+  const { reloadTheme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
 
@@ -54,7 +44,6 @@ export default function RestoreWalletScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [isValidating, setIsValidating] = useState(false);
-  const [isRestoring, setIsRestoring] = useState(false);
 
   // Set up progress callback
   useEffect(() => {
@@ -146,7 +135,6 @@ export default function RestoreWalletScreen() {
 
     setShowConfirmationModal(false);
     setShowProgressModal(true);
-    setIsRestoring(true);
 
     try {
       const result = await BackupService.restoreBackup(
@@ -201,7 +189,6 @@ export default function RestoreWalletScreen() {
           : 'Failed to restore backup. Please try again.';
       Alert.alert('Restore Failed', message, [{ text: 'OK' }]);
     } finally {
-      setIsRestoring(false);
       setPassword('');
     }
   }, [selectedFile, password, navigation, reloadTheme]);

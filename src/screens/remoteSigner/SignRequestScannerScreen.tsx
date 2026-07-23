@@ -24,10 +24,7 @@ import jsQR from 'jsqr';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
-import {
-  useRemoteSignerStore,
-  useSignerConfig,
-} from '@/store/remoteSignerStore';
+import { useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { useWalletStore } from '@/store/walletStore';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { isRemoteSignerRequest } from '@/types/remoteSigner';
@@ -72,7 +69,6 @@ export default function SignRequestScannerScreen() {
   const styles = useThemedStyles(createStyles);
   const navigation = useNavigation<any>();
 
-  const signerConfig = useSignerConfig();
   const accounts = useWalletStore((state) => state.wallet?.accounts ?? []);
   const validateRequest = useRemoteSignerStore(
     (state) => state.validateRequest
@@ -81,8 +77,6 @@ export default function SignRequestScannerScreen() {
     (state) => state.setPendingRequest
   );
 
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -98,18 +92,14 @@ export default function SignRequestScannerScreen() {
   useEffect(() => {
     if (Platform.OS !== 'web') {
       requestCameraPermission();
-    } else {
-      setHasPermission(true);
     }
   }, []);
 
   const requestCameraPermission = async () => {
     try {
-      const { status } = await Camera.requestCameraPermissionsAsync();
-      setHasPermission(status === 'granted');
+      await Camera.requestCameraPermissionsAsync();
     } catch (error) {
       console.error('Camera permission error:', error);
-      setHasPermission(false);
     }
   };
 
@@ -128,7 +118,6 @@ export default function SignRequestScannerScreen() {
             'Invalid QR Code',
             'This QR code is not a transaction signing request.'
           );
-          setScanned(false);
           setIsProcessing(false);
           return;
         }
@@ -140,7 +129,6 @@ export default function SignRequestScannerScreen() {
             'Invalid Request',
             validation.error || 'Request validation failed'
           );
-          setScanned(false);
           setIsProcessing(false);
           return;
         }
@@ -159,7 +147,6 @@ export default function SignRequestScannerScreen() {
             'Missing Keys',
             `This device does not have the signing keys for:\n${missingSigners.slice(0, 3).join('\n')}${missingSigners.length > 3 ? `\n...and ${missingSigners.length - 3} more` : ''}`
           );
-          setScanned(false);
           setIsProcessing(false);
           return;
         }
@@ -175,7 +162,6 @@ export default function SignRequestScannerScreen() {
           'Invalid QR Code',
           'Could not read the QR code. Make sure you are scanning a transaction signing request.'
         );
-        setScanned(false);
       } finally {
         setIsProcessing(false);
       }
@@ -187,15 +173,6 @@ export default function SignRequestScannerScreen() {
       setPendingRequest,
       navigation,
     ]
-  );
-
-  const handleBarCodeScanned = useCallback(
-    ({ data }: { data: string }) => {
-      if (scanned || isProcessing) return;
-      setScanned(true);
-      processQRData(data);
-    },
-    [scanned, isProcessing, processQRData]
   );
 
   const handlePasteFromClipboard = async () => {
@@ -304,7 +281,6 @@ export default function SignRequestScannerScreen() {
   const handleAnimatedScan = useCallback(
     (data: string) => {
       if (isProcessing) return;
-      setScanned(true);
       processQRData(data);
     },
     [isProcessing, processQRData]

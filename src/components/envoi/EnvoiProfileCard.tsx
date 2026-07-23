@@ -16,7 +16,6 @@ import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import { GlassCard } from '@/components/common/GlassCard';
-import { useTheme } from '@/contexts/ThemeContext';
 
 interface EnvoiProfileCardProps {
   address: string;
@@ -210,7 +209,6 @@ export default function EnvoiProfileCard({
 }: EnvoiProfileCardProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const { theme } = useTheme();
   const displayName = envoiProfile?.name || name;
   const bio = envoiProfile?.bio;
   const socialLinks = envoiProfile?.socialLinks;

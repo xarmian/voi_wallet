@@ -237,9 +237,6 @@ export class Arc72TransactionService {
       // Simulate the transaction to get box references
       const algodClient = networkService.getAlgodClient();
 
-      // Create the simulation request using the correct algosdk format
-      const encodedTxn = algosdk.encodeUnsignedTransaction(simulationTxn);
-
       // Create a mock signed transaction with a 64-byte signature
       const mockSignedTxn = new algosdk.SignedTransaction({
         txn: simulationTxn,

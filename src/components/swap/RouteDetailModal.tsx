@@ -24,7 +24,6 @@ import {
   UnifiedRoute,
   UnifiedRoutePool,
 } from '../../services/swap/types';
-import { SwapService } from '../../services/swap';
 import { useNetworkStore } from '../../store/networkStore';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { getTokenImageSource } from '../../utils/tokenImages';
@@ -63,9 +62,6 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
   const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [slideAnim] = useState(new Animated.Value(0));
-  const [intermediateTokens, setIntermediateTokens] = useState<
-    Map<string, SwapToken>
-  >(new Map());
 
   useEffect(() => {
     if (visible) {
@@ -100,28 +96,6 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       }
 
       let steps: RouteStep[] = [];
-      const tokenMap = new Map<string, SwapToken>();
-      const provider = SwapService.getProvider(currentNetwork);
-
-      // Fetch intermediate tokens for multi-hop routes
-      // In UnifiedRoute, hops may have inputToken/outputToken as SwapToken | null
-      if (
-        route.type === 'multi-hop' &&
-        route.hops &&
-        Array.isArray(route.hops)
-      ) {
-        // Collect intermediate tokens from hops that have them
-        for (const hop of route.hops) {
-          if (hop.inputToken) {
-            tokenMap.set(String(hop.inputToken.id), hop.inputToken);
-          }
-          if (hop.outputToken) {
-            tokenMap.set(String(hop.outputToken.id), hop.outputToken);
-          }
-        }
-      }
-
-      setIntermediateTokens(tokenMap);
 
       // Handle direct routes with pools array
       if (

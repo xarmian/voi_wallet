@@ -107,11 +107,7 @@ export default function TransactionReviewScreen() {
   const setPendingRequest = useRemoteSignerStore(
     (state) => state.setPendingRequest
   );
-  const markRequestProcessed = useRemoteSignerStore(
-    (state) => state.markRequestProcessed
-  );
-
-  const [currentTxnIndex, setCurrentTxnIndex] = useState(0);
+  const [currentTxnIndex] = useState(0);
   const [showFullDetails, setShowFullDetails] = useState(false);
   const [isSigning, setIsSigning] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);

@@ -60,11 +60,6 @@ export interface AnimatedQRDecodeState {
 }
 
 /**
- * UR type identifier for our remote signer payloads
- */
-const UR_TYPE = 'bytes';
-
-/**
  * Animated QR Code Service
  *
  * Provides encoding and decoding of large payloads using fountain codes

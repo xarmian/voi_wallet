@@ -72,7 +72,6 @@ export default function MessagesInboxScreen() {
   const {
     initialize,
     isInitialized,
-    isLoading,
     isKeyRegistered,
     checkKeyRegistration,
     fetchAllThreads,

@@ -1,9 +1,6 @@
 import algosdk from 'algosdk';
 import { TransactionService, TransactionParams } from '@/services/transactions';
-import {
-  WalletConnectService,
-  WalletTransaction,
-} from '@/services/walletconnect';
+import { WalletTransaction } from '@/services/walletconnect';
 import {
   WalletAccount,
   AccountMetadata,
@@ -351,8 +348,6 @@ export class UnifiedTransactionSigner {
     }
 
     try {
-      // Use WalletConnect service but with unified progress tracking
-      const wcService = WalletConnectService.getInstance();
       const total = request.walletConnectParams.transactions.length;
 
       // Track signing progress for each transaction
@@ -443,8 +438,6 @@ export class UnifiedTransactionSigner {
             signedTxns.push(Buffer.from(signedTxnBlob).toString('base64'));
             callbacks?.onLedgerSigned?.({ index: i + 1, total });
           } catch (error) {
-            const errorObj =
-              error instanceof Error ? error : new Error(String(error));
             const sanitizedError = this.sanitizeBLEError(error);
             callbacks?.onLedgerRejected?.({
               index: i + 1,
@@ -516,8 +509,6 @@ export class UnifiedTransactionSigner {
 
               return Buffer.from(signedTxnBlob).toString('base64');
             } catch (error) {
-              const errorObj =
-                error instanceof Error ? error : new Error(String(error));
               const sanitizedError = this.sanitizeBLEError(error);
               callbacks?.onLedgerRejected?.({
                 index: i + 1,

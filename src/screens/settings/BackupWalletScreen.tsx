@@ -12,7 +12,6 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -29,7 +28,6 @@ import {
 
 export default function BackupWalletScreen() {
   const navigation = useNavigation();
-  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
   const accounts = useAccounts();

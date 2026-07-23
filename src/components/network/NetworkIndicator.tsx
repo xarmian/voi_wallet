@@ -2,12 +2,10 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { getNetworkConfig } from '@/services/network/config';
 import {
-  useCurrentNetwork,
   useCurrentNetworkConfig,
   useAvailableNetworks,
 } from '@/store/networkStore';
 import { useIsMultiNetworkView } from '@/store/walletStore';
-import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 
@@ -24,11 +22,9 @@ export default function NetworkIndicator({
   size = 'medium',
   viewMode,
 }: NetworkIndicatorProps) {
-  const currentNetwork = useCurrentNetwork();
   const networkConfig = useCurrentNetworkConfig();
   const availableNetworks = useAvailableNetworks();
   const isMultiNetworkView = useIsMultiNetworkView();
-  const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
 
   // Use prop override or global state

@@ -6,7 +6,6 @@ import {
   isWalletConnectUri,
   isWalletConnectPairingUri,
   isWalletConnectRequestUri,
-  parseWalletConnectRequestUri,
   isVoiUri,
   detectWalletConnectVersion,
   parseWalletConnectV1Uri,
@@ -544,10 +543,8 @@ export class DeepLinkService {
     try {
       // Determine URI type (pairing vs. request)
       if (isWalletConnectRequestUri(url)) {
-        // This is a request deep link used to wake the app; do not call pair()
-        const { requestId, sessionTopic } = parseWalletConnectRequestUri(url);
-
-        // Let the pending session_request event drive navigation
+        // This is a request deep link used to wake the app; do not call pair().
+        // Let the pending session_request event drive navigation.
         return true;
       }
 
