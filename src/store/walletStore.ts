@@ -114,6 +114,13 @@ interface AccountUIState {
   isBackgroundRefreshing: boolean;
   balanceLastUpdated: number;
   isTransactionsLoading: boolean;
+  /**
+   * Which resource the in-flight transaction load is fetching. The skip guard
+   * dedupes IDENTICAL requests; skipping a request for a DIFFERENT resource
+   * would silently never fetch it, leaving that screen showing another scope's
+   * (filtered-out) rows as an empty list forever.
+   */
+  transactionsLoadScope: string | null;
   envoiName?: EnvoiNameInfo | null;
   isEnvoiLoading: boolean;
   // Pagination state for transactions
@@ -287,6 +294,7 @@ const createInitialAccountState = (): AccountUIState => ({
   isBackgroundRefreshing: false,
   balanceLastUpdated: 0,
   isTransactionsLoading: false,
+  transactionsLoadScope: null,
   envoiName: null,
   isEnvoiLoading: false,
   transactionsPagination: {
@@ -1279,8 +1287,11 @@ export const useWalletStore = create<WalletState>()(
 
         console.log(`Loading transactions for account: ${accountId}`);
 
-        // Skip if already loading transactions for this account
-        if (accountState.isTransactionsLoading) {
+        // Skip only a duplicate of the SAME scope — see transactionsLoadScope.
+        if (
+          accountState.isTransactionsLoading &&
+          accountState.transactionsLoadScope === ALL_TRANSACTIONS_SCOPE
+        ) {
           console.log(
             `Transactions already loading for account: ${accountId}, skipping`
           );
@@ -1296,6 +1307,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...accountState,
               isTransactionsLoading: true,
+              transactionsLoadScope: ALL_TRANSACTIONS_SCOPE,
               lastError: null,
               transactionsError: null,
             },
@@ -1356,8 +1368,12 @@ export const useWalletStore = create<WalletState>()(
           `Loading asset transactions for account: ${accountId}, assetId: ${assetId}, isArc200: ${isArc200}`
         );
 
-        // Skip if already loading transactions for this account
-        if (accountState.isTransactionsLoading) {
+        // Skip only a duplicate of the SAME scope — see transactionsLoadScope.
+        if (
+          accountState.isTransactionsLoading &&
+          accountState.transactionsLoadScope ===
+            assetTransactionsScope(assetId, isArc200)
+        ) {
           console.log(
             `Transactions already loading for account: ${accountId}, skipping`
           );
@@ -1373,6 +1389,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...accountState,
               isTransactionsLoading: true,
+              transactionsLoadScope: assetTransactionsScope(assetId, isArc200),
               lastError: null,
               transactionsError: null,
             },
@@ -1560,8 +1577,11 @@ export const useWalletStore = create<WalletState>()(
 
         console.log(`Loading all transactions for account: ${accountId}`);
 
-        // Skip if already loading transactions for this account
-        if (accountState.isTransactionsLoading) {
+        // Skip only a duplicate of the SAME scope — see transactionsLoadScope.
+        if (
+          accountState.isTransactionsLoading &&
+          accountState.transactionsLoadScope === ALL_TRANSACTIONS_SCOPE
+        ) {
           console.log(
             `Transactions already loading for account: ${accountId}, skipping`
           );
@@ -1577,6 +1597,7 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...accountState,
               isTransactionsLoading: true,
+              transactionsLoadScope: ALL_TRANSACTIONS_SCOPE,
               lastError: null,
               transactionsError: null,
             },
@@ -2804,6 +2825,7 @@ const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   isBackgroundRefreshing: false,
   balanceLastUpdated: 0,
   isTransactionsLoading: false,
+  transactionsLoadScope: null,
   envoiName: null,
   isEnvoiLoading: false,
   multiNetworkBalance: undefined,

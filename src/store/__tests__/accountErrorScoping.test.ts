@@ -196,6 +196,40 @@ describe('operation-scoped account errors (TASK-40)', () => {
     );
   });
 
+  it('does not skip a load for a DIFFERENT resource that is already in flight', async () => {
+    // The skip guard dedupes identical requests. Skipping a different scope
+    // would mean that screen never fetches at all, and — since the shared array
+    // is scope-gated on read — it would sit on a permanent false empty state.
+    let resolveAsset!: (value: unknown) => void;
+    mockGetAssetTransactionHistory.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAsset = resolve as (value: unknown) => void;
+        })
+    );
+    mockGetAllTransactionHistory.mockResolvedValue({
+      transactions: [],
+      nextToken: undefined,
+    });
+
+    const assetLoad = useWalletStore
+      .getState()
+      .loadAssetTransactions('acc-1', 42, false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(accountState('acc-1').isTransactionsLoading).toBe(true);
+
+    await useWalletStore.getState().loadAllTransactions('acc-1');
+
+    // The account-wide request actually ran instead of being swallowed.
+    expect(mockGetAllTransactionHistory).toHaveBeenCalledTimes(1);
+    expect(accountState('acc-1').recentTransactionsScope).toBe(
+      ALL_TRANSACTIONS_SCOPE
+    );
+
+    resolveAsset({ transactions: [], nextToken: undefined, hasMore: false });
+    await assetLoad;
+  });
+
   it('clearAccountError clears every scoped field', async () => {
     mockGetAccountBalance.mockRejectedValue(new Error('algod is down'));
     mockGetTransactionHistory.mockRejectedValue(new Error('indexer is down'));
