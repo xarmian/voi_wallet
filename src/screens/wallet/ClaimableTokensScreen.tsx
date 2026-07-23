@@ -164,6 +164,16 @@ export default function ClaimableTokensScreen() {
     reducedMotion,
   ]);
 
+  // DR-13: the effect above is short-circuited by `pendingRefreshHandled`, so a
+  // pulse that was already running when the user switched Reduce Motion ON
+  // would otherwise keep looping until the delayed refresh finishes. Stop it
+  // from its own effect, which has no such guard.
+  useEffect(() => {
+    if (!reducedMotion) return;
+    cancelAnimation(pulseOpacity);
+    pulseOpacity.value = 1;
+  }, [reducedMotion, pulseOpacity]);
+
   // Cleanup timeout on unmount only (separate effect with empty deps)
   useEffect(() => {
     return () => {
