@@ -218,7 +218,11 @@ export default function AssetDetailScreen() {
   // activity". The scope gate below starts the list empty, and the store only
   // flips `isTransactionsLoading` after an await, so without this the
   // definitive empty state would flash before the fetch even registers.
-  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false);
+  //
+  // Stored as the resource that was attempted rather than a boolean, and
+  // compared during render: resetting a boolean from an effect would leave one
+  // frame in which a newly-selected asset still looked "already loaded".
+  const [attemptedLoadKey, setAttemptedLoadKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!networkId) {
@@ -387,6 +391,10 @@ export default function AssetDetailScreen() {
     return undefined;
   }, [networkId, isMultiNetworkView, multiNetworkBalance, mappingId, assetId]);
 
+  // Identity of what this screen is currently showing.
+  const loadKey = `${accountId}|${assetId}|${networkId ?? ''}`;
+  const hasAttemptedLoad = attemptedLoadKey === loadKey;
+
   const loadTransactions = React.useCallback(async () => {
     try {
       // Determine if this is an ARC-200 token
@@ -437,7 +445,7 @@ export default function AssetDetailScreen() {
       setNetworkTransactionsError(error);
     } finally {
       // Always set, even on failure, so a spinner can never wedge.
-      setHasAttemptedLoad(true);
+      setAttemptedLoadKey(loadKey);
     }
   }, [
     accountId,
@@ -446,6 +454,7 @@ export default function AssetDetailScreen() {
     networkId,
     currentAccount,
     loadAssetTransactions,
+    loadKey,
   ]);
 
   useEffect(() => {

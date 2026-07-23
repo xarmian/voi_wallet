@@ -42,7 +42,13 @@ export default function TransactionHistoryScreen() {
   // transactions". Needed because the scope gate below starts the list empty
   // and the store only flips `isTransactionsLoading` after an await, leaving a
   // window in which the definitive empty state would otherwise be shown.
-  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false);
+  //
+  // Stored as the account that was attempted rather than a boolean, and
+  // compared during render, so switching accounts cannot leave a frame in
+  // which the new account looks "already loaded".
+  const [attemptedAccountId, setAttemptedAccountId] = useState<string | null>(
+    null
+  );
   const loadMoreInFlightRef = useRef(false);
   const navigation = useNavigation<StackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
@@ -125,13 +131,14 @@ export default function TransactionHistoryScreen() {
   const loadTransactions = useCallback(async () => {
     if (!activeAccount) return;
 
+    const accountId = activeAccount.id;
     try {
-      await loadAllTransactions(activeAccount.id);
+      await loadAllTransactions(accountId);
     } catch (error) {
       console.error('Failed to load transaction history:', error);
     } finally {
       // Always set, even on failure/early-return, so a spinner can never wedge.
-      setHasAttemptedLoad(true);
+      setAttemptedAccountId(accountId);
     }
   }, [activeAccount, loadAllTransactions]);
 
@@ -311,7 +318,10 @@ export default function TransactionHistoryScreen() {
       );
     }
 
-    if (!hasAttemptedLoad || accountState.isTransactionsLoading) {
+    if (
+      attemptedAccountId !== activeAccount?.id ||
+      accountState.isTransactionsLoading
+    ) {
       return (
         <ListFooterSpinner
           text="Loading transactions..."
@@ -331,7 +341,8 @@ export default function TransactionHistoryScreen() {
     );
   }, [
     transactionsError,
-    hasAttemptedLoad,
+    attemptedAccountId,
+    activeAccount?.id,
     accountState.isTransactionsLoading,
     loadTransactions,
     styles.emptyContainer,

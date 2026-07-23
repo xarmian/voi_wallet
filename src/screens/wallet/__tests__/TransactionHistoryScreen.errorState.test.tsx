@@ -18,10 +18,11 @@ const mockLoadAllTransactions = jest.fn(async () => {});
 
 // Mutable account UI state driven per test.
 let mockAccountState: Record<string, unknown> = {};
+let mockActiveAccountId = 'acct-1';
 
 jest.mock('@/store/walletStore', () => ({
   ALL_TRANSACTIONS_SCOPE: 'all',
-  useActiveAccount: () => ({ id: 'acct-1', address: 'ADDR1' }),
+  useActiveAccount: () => ({ id: mockActiveAccountId, address: 'ADDR1' }),
   useAccountState: () => mockAccountState,
   useWalletStore: (selector: (s: any) => unknown) =>
     selector({
@@ -110,6 +111,7 @@ const baseState = {
 
 beforeEach(() => {
   mockLoadAllTransactions.mockClear();
+  mockActiveAccountId = 'acct-1';
   mockAccountState = { ...baseState };
   // Keep the theme import referenced so the mock factory's require resolves the
   // same module instance the screen renders against.
@@ -137,6 +139,20 @@ describe('TransactionHistoryScreen error surfacing', () => {
     expect(queryByText('No Transactions')).toBeNull();
     expect(getByText('Loading transactions...')).toBeTruthy();
 
+    await settle();
+  });
+
+  it('goes back to loading when the active account changes', async () => {
+    // The "already attempted" marker is keyed by account, so a newly selected
+    // account cannot inherit the previous one's "definitely empty" verdict.
+    const { getByText, rerender } = render(<TransactionHistoryScreen />);
+    await settle();
+    expect(getByText('No Transactions')).toBeTruthy();
+
+    mockActiveAccountId = 'acct-2';
+    rerender(<TransactionHistoryScreen />);
+
+    expect(getByText('Loading transactions...')).toBeTruthy();
     await settle();
   });
 
