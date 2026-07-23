@@ -144,6 +144,20 @@ export default function VerifyBackupScreen() {
     }
   }, [markBackupVerified, navigation, target]);
 
+  // TASK-226: the challenge restarts itself after too many wrong answers. The
+  // onboarding hosts send the user back to the phrase at that point; this screen
+  // has no phrase step to return to, so it leaves instead. That is friction, not
+  // a lockout — the entry point is still there, and re-entering re-reads the
+  // phrase from the gated key store.
+  const handleFailed = useCallback(() => {
+    setMnemonic('');
+    Alert.alert(
+      'Too many incorrect answers',
+      'Check your written recovery phrase and try again from Settings.',
+      [{ text: 'OK', onPress: () => navigation.goBack() }]
+    );
+  }, [navigation]);
+
   return (
     <NFTBackground>
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -178,6 +192,7 @@ export default function VerifyBackupScreen() {
             <MnemonicVerification
               mnemonic={mnemonic}
               onVerified={handleVerified}
+              onFailed={handleFailed}
               testIDPrefix="verify-backup"
             />
           )}

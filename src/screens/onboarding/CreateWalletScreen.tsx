@@ -198,6 +198,10 @@ export default function CreateWalletScreen({ navigation }: Props) {
             <MnemonicVerification
               mnemonic={mnemonic}
               onVerified={() => goToSecuritySetup(true)}
+              // TASK-226: the challenge restarts itself after too many wrong
+              // answers; put the phrase back on screen so the user can actually
+              // write it down rather than grinding guesses against the board.
+              onFailed={() => setStep('display')}
               onSkip={handleSkipVerification}
               testIDPrefix="create-wallet-verification"
             />

@@ -75,16 +75,9 @@ jest.mock('@/components/wallet/MnemonicDisplay', () => {
 
 import { Alert } from 'react-native';
 import CreateAccountScreen from '../CreateAccountScreen';
+import { completeQuiz } from '@/__tests__/fixtures/mnemonicQuiz';
 
-const QUIZ_TARGETS = [1, 4, 6];
-const PHRASE_LENGTH = MOCK_MNEMONIC.split(' ').length;
-
-function installDeterministicQuiz() {
-  const queue = QUIZ_TARGETS.map((pos) => pos / PHRASE_LENGTH);
-  jest
-    .spyOn(Math, 'random')
-    .mockImplementation(() => (queue.length > 0 ? queue.shift()! : 0));
-}
+const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
 function pressAlertButton(label: string) {
   const spy = Alert.alert as unknown as jest.Mock;
@@ -102,7 +95,6 @@ function pressAlertButton(label: string) {
 
 beforeEach(() => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  installDeterministicQuiz();
 });
 
 afterEach(() => {
@@ -133,12 +125,7 @@ describe('CreateAccountScreen — backupVerified carrier (DR-11)', () => {
     const screen = renderAtBackupStep();
     fireEvent.press(screen.getByTestId('backup-continue'));
 
-    for (const index of QUIZ_TARGETS) {
-      fireEvent.press(
-        screen.getByTestId(`backup-verification-option-${index}`)
-      );
-    }
-    fireEvent.press(screen.getByTestId('backup-verification-verify'));
+    completeQuiz(screen, 'backup-verification', MOCK_WORDS);
 
     // Success is confirmed through an alert before the import runs.
     pressAlertButton('Continue');

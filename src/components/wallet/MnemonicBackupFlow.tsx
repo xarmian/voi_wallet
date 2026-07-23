@@ -203,8 +203,10 @@ export default function MnemonicBackupFlow({
   };
 
   if (isVerificationStep) {
-    // DR-12: the quiz body lives in MnemonicVerification, whose selection logic
-    // is position-indexed so a phrase with a repeated word stays completable.
+    // The challenge body lives in MnemonicVerification: one directed question at
+    // a time ("which word is #7?") answered from BIP-39 decoys, so a wrong pick
+    // is a real failure (TASK-226). DR-12 still holds — a repeated word is
+    // answerable at every one of its positions.
     return (
       <SafeAreaView
         style={[styles.container, { backgroundColor: theme.colors.background }]}
@@ -245,6 +247,9 @@ export default function MnemonicBackupFlow({
           <MnemonicVerification
             mnemonic={mnemonic}
             onVerified={handleVerified}
+            // TASK-226: too many wrong answers restarts the challenge; send the
+            // user back to the phrase instead of letting them grind guesses.
+            onFailed={() => setIsVerificationStep(false)}
             onSkip={allowSkipVerification ? handleSkipVerification : undefined}
             testIDPrefix="backup-verification"
           />

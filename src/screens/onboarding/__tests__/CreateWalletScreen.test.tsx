@@ -94,6 +94,11 @@ jest.mock('@/components/common/GlassButton', () => {
 
 import { Alert } from 'react-native';
 import CreateWalletScreen from '../CreateWalletScreen';
+import {
+  completeQuiz,
+  pressWrongQuizOption,
+} from '@/__tests__/fixtures/mnemonicQuiz';
+import { MAX_MISTAKES } from '@/components/wallet/mnemonicQuiz';
 
 type Listener = (event: {
   preventDefault: () => void;
@@ -134,21 +139,7 @@ function makeNavigation() {
   };
 }
 
-/**
- * Force the quiz onto a known target triple. `pickVerificationPositions` calls
- * `Math.floor(Math.random() * total)`, so feeding `pos / total` yields exactly
- * `pos`; the shuffle consumes whatever is left. The spy stays installed for the
- * whole test because the quiz only mounts after a press, well after render().
- */
-const QUIZ_TARGETS = [1, 4, 6];
-const PHRASE_LENGTH = MOCK_MNEMONIC.split(' ').length;
-
-function installDeterministicQuiz() {
-  const queue = QUIZ_TARGETS.map((pos) => pos / PHRASE_LENGTH);
-  jest
-    .spyOn(Math, 'random')
-    .mockImplementation(() => (queue.length > 0 ? queue.shift()! : 0));
-}
+const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
 /** Press the button with the given text in the most recent Alert.alert call. */
 function pressAlertButton(label: string) {
@@ -167,7 +158,6 @@ function pressAlertButton(label: string) {
 
 beforeEach(() => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  installDeterministicQuiz();
 });
 
 afterEach(() => {
@@ -191,12 +181,9 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
     fireEvent.press(screen.getByTestId('saved-phrase-button'));
     expect(navigation.navigate).not.toHaveBeenCalled();
 
-    for (const index of QUIZ_TARGETS) {
-      fireEvent.press(
-        screen.getByTestId(`create-wallet-verification-option-${index}`)
-      );
-    }
-    fireEvent.press(screen.getByTestId('create-wallet-verification-verify'));
+    // Answer the directed challenge the way a user with a written copy would
+    // (TASK-226: there is no "fill any slot from any chip" board any more).
+    completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
 
     expect(navigation.navigate).toHaveBeenCalledTimes(1);
     expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
@@ -239,6 +226,37 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
     pressAlertButton('Cancel');
 
     expect(navigation.navigate).not.toHaveBeenCalled();
+  });
+
+  it('never navigates on wrong answers, and sends the user back to the phrase', () => {
+    // TASK-226: a wrong pick is a real failure. Exhausting the mistake budget
+    // returns the user to the phrase rather than letting them grind guesses,
+    // and nothing is ever marked verified along the way.
+    const navigation = makeNavigation();
+    const screen = render(
+      <CreateWalletScreen navigation={navigation as never} />
+    );
+
+    fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    for (let mistake = 0; mistake <= MAX_MISTAKES; mistake++) {
+      pressWrongQuizOption(screen, 'create-wallet-verification', MOCK_WORDS);
+    }
+
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    // Back on the phrase step, with the quiz gone.
+    expect(screen.queryByTestId('create-wallet-verification-root')).toBeNull();
+    expect(screen.getByTestId('mnemonic-display')).toHaveTextContent(
+      MOCK_MNEMONIC
+    );
+
+    // ...and the legitimate user can still get through afterwards.
+    fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
+    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
+      mnemonic: MOCK_MNEMONIC,
+      source: 'create',
+      backupVerified: true,
+    });
   });
 });
 
