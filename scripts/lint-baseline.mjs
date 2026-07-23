@@ -9,10 +9,11 @@
  * hand — regenerate them.
  *
  * Usage:
- *   node scripts/lint-baseline.mjs            # report current counts, exit 0
- *   node scripts/lint-baseline.mjs --write    # regenerate lint-baseline.json
- *   node scripts/lint-baseline.mjs --check    # diff current vs. committed baseline
- *   node scripts/lint-baseline.mjs --top=0    # report: show every file, not just the top 20
+ *   node scripts/lint-baseline.mjs                 # report current counts, exit 0
+ *   node scripts/lint-baseline.mjs --write         # regenerate lint-baseline.json
+ *   node scripts/lint-baseline.mjs --check         # diff current lint run vs. committed baseline
+ *   node scripts/lint-baseline.mjs --against=FILE  # CI: ceiling never rose vs. a previous artifact
+ *   node scripts/lint-baseline.mjs --top=0         # report: every file, not just the top 20
  *
  * The artifact is written deterministically — repo-relative POSIX paths,
  * alphabetically sorted keys, no timestamps, no machine-specific data — so the
@@ -23,10 +24,21 @@
  * number never goes up. `--check` fails on drift in either direction: an
  * increase breaks the ratchet, and a decrease means a PR cleared warnings
  * without re-committing the artifact.
+ *
+ * How "never goes up" is actually enforced, rather than merely documented —
+ * three cheap facts that compose (see .github/workflows/ci.yml):
+ *   1. `npm run lint` proves  actual warnings <= package.json's --max-warnings.
+ *   2. `--against` proves     --max-warnings === this branch's artifact total
+ *                             (so the pin cannot be inflated past the artifact),
+ *      and                    this branch's artifact total <= the base branch's.
+ *   3. Therefore              actual warnings <= the base branch's total, and a
+ *                             PR cannot raise the ceiling without failing CI.
+ * `--against` reads two committed artifacts and never runs ESLint, so it adds
+ * no time to CI.
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,23 +51,41 @@ const LINT_TARGET = 'src/';
 // args
 // ---------------------------------------------------------------------------
 
+const USAGE =
+  'Usage: node scripts/lint-baseline.mjs [--write | --check | --against=FILE] [--top=N]';
+
 const argv = process.argv.slice(2);
-const has = (flag) => argv.includes(flag);
-const mode = has('--write') ? 'write' : has('--check') ? 'check' : 'report';
+const againstArg = argv.find((a) => a.startsWith('--against='));
+
+const unknown = argv.filter(
+  (a) => !['--write', '--check'].includes(a) && !a.startsWith('--top=') && a !== againstArg
+);
+if (unknown.length > 0) {
+  console.error(`Unknown argument(s): ${unknown.join(', ')}`);
+  console.error(USAGE);
+  process.exit(2);
+}
+
+// The three modes are mutually exclusive: --write mutates the artifact and the
+// other two must not, so silently letting one win would let a command meant as
+// a read-only check overwrite the committed baseline.
+const selected = [
+  argv.includes('--write') && 'write',
+  argv.includes('--check') && 'check',
+  againstArg && 'against',
+].filter(Boolean);
+if (selected.length > 1) {
+  console.error(`Mutually exclusive options: ${selected.map((m) => `--${m}`).join(', ')}`);
+  console.error(USAGE);
+  process.exit(2);
+}
+const mode = selected[0] ?? 'report';
+const AGAINST_PATH = againstArg ? resolve(againstArg.slice('--against='.length)) : null;
 
 const topArg = argv.find((a) => a.startsWith('--top='));
 // --top=0 (or --top=all) prints every file with findings.
 const rawTop = topArg ? topArg.slice('--top='.length) : '20';
 const TOP_FILES = rawTop === 'all' ? Infinity : Number.parseInt(rawTop, 10) || Infinity;
-
-const unknown = argv.filter(
-  (a) => !['--write', '--check'].includes(a) && !a.startsWith('--top=')
-);
-if (unknown.length > 0) {
-  console.error(`Unknown argument(s): ${unknown.join(', ')}`);
-  console.error('Usage: node scripts/lint-baseline.mjs [--write | --check] [--top=N]');
-  process.exit(2);
-}
 
 // ---------------------------------------------------------------------------
 // run eslint
@@ -183,6 +213,94 @@ function readBaseline() {
   }
 }
 
+/**
+ * Compare the committed artifact against the base branch's copy. No ESLint run:
+ * this is an artifact-to-artifact comparison plus a package.json consistency
+ * check, which is what makes it cheap enough to sit in the required CI job.
+ */
+function compareAgainst(previousPath) {
+  // Fail open when there is no previous artifact — a PR branched from a commit
+  // that predates the baseline has nothing to ratchet against, and CI writes an
+  // empty file when `git show` finds no baseline on the base branch.
+  if (!existsSync(previousPath) || readFileSync(previousPath, 'utf8').trim() === '') {
+    console.log(`No previous baseline at ${previousPath} — nothing to compare. Skipping.`);
+    return 0;
+  }
+
+  let previous;
+  try {
+    previous = JSON.parse(readFileSync(previousPath, 'utf8'));
+  } catch (err) {
+    console.error(`Previous baseline ${previousPath} is not valid JSON: ${err.message}`);
+    return 2;
+  }
+
+  const current = readBaseline();
+  const previousTotal = previous?.totals?.warnings;
+  const currentTotal = current?.totals?.warnings;
+  const pinned = maxWarningsInPackageJson();
+
+  if (typeof previousTotal !== 'number' || typeof currentTotal !== 'number') {
+    console.error('Both baselines must record totals.warnings as a number.');
+    return 2;
+  }
+
+  console.log('ESLint ratchet — committed baseline vs. base branch');
+  console.log(`  base branch:  ${previousTotal} warnings`);
+  console.log(`  this branch:  ${currentTotal} warnings (--max-warnings ${pinned ?? 'unset'})`);
+
+  const problems = [];
+
+  if (currentTotal > previousTotal) {
+    problems.push(
+      `The baseline rose from ${previousTotal} to ${currentTotal}. The ratchet only turns ` +
+        'one way — fix the new warnings instead of raising the ceiling.'
+    );
+  }
+
+  if (pinned === null) {
+    problems.push('The `lint` script has no --max-warnings, so the CI lint gate is decorative.');
+  } else if (pinned !== currentTotal) {
+    // Without this the pin could be inflated while the artifact stayed put.
+    problems.push(
+      `package.json pins --max-warnings ${pinned} but ${BASELINE_REL} records ${currentTotal}. ` +
+        'They must match — regenerate with `npm run lint:baseline`.'
+    );
+  }
+
+  // Per-rule movement is reported but never enforced: a legitimate refactor can
+  // trade one rule for another (e.g. adding memoization moves warnings into
+  // react-hooks/preserve-manual-memoization), so the total is the gate.
+  const ruleNames = [
+    ...new Set([...Object.keys(previous.rules ?? {}), ...Object.keys(current.rules ?? {})]),
+  ].sort();
+  const ruleDrift = ruleNames
+    .map((rule) => [rule, previous.rules?.[rule] ?? 0, current.rules?.[rule] ?? 0])
+    .filter(([, before, after]) => before !== after);
+
+  if (ruleDrift.length > 0) {
+    console.log('\nPer-rule change (informational — only the total is gated):');
+    for (const [rule, before, after] of ruleDrift) {
+      console.log(
+        `  ${String(before).padStart(5)} → ${String(after).padEnd(5)} (${delta(before, after)})  ${rule}`
+      );
+    }
+  }
+
+  if (problems.length > 0) {
+    console.log('');
+    for (const problem of problems) console.error(`FAIL: ${problem}`);
+    return 1;
+  }
+
+  console.log(
+    currentTotal < previousTotal
+      ? `\nOK: ceiling lowered by ${previousTotal - currentTotal}.`
+      : '\nOK: ceiling unchanged.'
+  );
+  return 0;
+}
+
 /** The --max-warnings value currently wired into the `lint` npm script. */
 function maxWarningsInPackageJson() {
   try {
@@ -228,10 +346,10 @@ function printReport(summary) {
 }
 
 /** Render a +N / -N delta, or null when nothing changed. */
-const delta = (before, after) => {
+function delta(before, after) {
   const diff = after - before;
   return diff === 0 ? null : `${diff > 0 ? '+' : ''}${diff}`;
-};
+}
 
 function printCheck(summary, baseline) {
   const base = { rules: {}, files: {}, totals: {}, ...baseline };
@@ -329,6 +447,11 @@ function printCheck(summary, baseline) {
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
+
+// --against compares two committed artifacts, so it must not run ESLint.
+if (mode === 'against') {
+  process.exit(compareAgainst(AGAINST_PATH));
+}
 
 const summary = summarise(runEslint());
 

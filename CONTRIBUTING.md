@@ -77,7 +77,9 @@ the ratchet exists so it can only ever shrink.
   new total. `npm run lint:baseline:check` verifies all three agree.
 - **The number never goes up.** If you genuinely cannot fix a warning, use a
   scoped `eslint-disable` with a comment explaining why — a raised ceiling is
-  not an option.
+  not an option. CI enforces this: the `Lint ratchet` step compares your
+  branch's baseline against the base branch's and fails if it rose, or if
+  `--max-warnings` no longer matches the artifact.
 
 `lint-baseline.json` also carries per-rule and per-file counts. Cleanup work is
 tracked against those numbers, so regenerate them with the script rather than

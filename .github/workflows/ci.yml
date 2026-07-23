@@ -25,8 +25,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fails above the warning ceiling pinned in package.json (--max-warnings),
+      # which is the total recorded in lint-baseline.json.
       - name: Lint
         run: npm run lint
+
+      # The ratchet: the ceiling may fall but never rise. Compares this branch's
+      # committed baseline with the base branch's and checks that --max-warnings
+      # still equals it, so the pin cannot be inflated to admit new warnings.
+      # Artifact-to-artifact only — no second ESLint run.
+      - name: Lint ratchet
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          # Empty file when the base branch predates the baseline; the script
+          # then skips rather than failing.
+          git show "FETCH_HEAD:lint-baseline.json" > "$RUNNER_TEMP/base-lint-baseline.json" || true
+          node scripts/lint-baseline.mjs --against="$RUNNER_TEMP/base-lint-baseline.json"
 
       - name: Unit tests
         run: npm test -- --ci
