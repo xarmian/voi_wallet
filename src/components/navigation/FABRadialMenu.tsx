@@ -145,6 +145,7 @@ const FABMenuItem: React.FC<FABMenuItemProps> = ({
         variant="medium"
         padding="sm"
         onPress={onPress}
+        accessibilityLabel={item.label}
         borderRadius={16}
         style={styles.menuItemCard}
         borderColor={theme.colors.border}
