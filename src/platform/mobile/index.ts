@@ -13,3 +13,4 @@ export { MobileBiometricAdapter, mobileBiometrics } from './biometrics';
 export { MobileDeviceIdAdapter, mobileDeviceId } from './deviceId';
 export { MobileClipboardAdapter, mobileClipboard } from './clipboard';
 export { MobileAlertAdapter, mobileAlert } from './alert';
+export { MobileConnectivityAdapter, mobileConnectivity } from './connectivity';

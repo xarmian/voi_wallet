@@ -7,6 +7,7 @@ import ErrorBoundary from './src/components/ErrorBoundary';
 import { ThemeProvider, useTheme } from './src/contexts/ThemeContext';
 import { debugLogger } from './src/services/debug/logger';
 import { createToastConfig } from './src/config/toastConfig';
+import OfflineBanner from './src/components/common/OfflineBanner';
 
 function AppContent() {
   const { theme, themeMode, isDark } = useTheme();
@@ -55,6 +56,11 @@ function AppContent() {
         translucent={false}
       />
       <AppNavigator />
+      {/* Above the navigator so it survives every navigation (including the
+          pre-auth screens) and below the Toast so transient toasts still win
+          the top of the stack. Consumes connectivity only — no auth state,
+          which is why it can live outside AuthProvider. */}
+      <OfflineBanner />
       <Toast config={toastConfig} />
     </View>
   );

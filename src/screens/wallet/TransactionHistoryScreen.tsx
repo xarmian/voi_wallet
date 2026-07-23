@@ -16,6 +16,7 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { TransactionInfo } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
+  ALL_TRANSACTIONS_SCOPE,
   useActiveAccount,
   useAccountState,
   useWalletStore,
@@ -27,12 +28,27 @@ import { serializeTransactionForNavigation } from '@/utils/navigationParams';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
 import { ListEmptyState } from '@/components/common/ListEmptyState';
 import { ListFooterSpinner } from '@/components/common/ListFooterSpinner';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetwork } from '@/store/networkStore';
 
+// Stable empty reference so a scope mismatch does not churn list identity.
+const EMPTY_TRANSACTIONS: TransactionInfo[] = [];
+
 export default function TransactionHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
+  // Distinguishes "this screen has not fetched yet" from "the account has no
+  // transactions". Needed because the scope gate below starts the list empty
+  // and the store only flips `isTransactionsLoading` after an await, leaving a
+  // window in which the definitive empty state would otherwise be shown.
+  //
+  // Stored as the account that was attempted rather than a boolean, and
+  // compared during render, so switching accounts cannot leave a frame in
+  // which the new account looks "already loaded".
+  const [attemptedAccountId, setAttemptedAccountId] = useState<string | null>(
+    null
+  );
   const loadMoreInFlightRef = useRef(false);
   const navigation = useNavigation<StackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
@@ -58,6 +74,22 @@ export default function TransactionHistoryScreen() {
     (state) => state.assetMetadataCache
   );
 
+  // Read the shared `recentTransactions` array only while it holds the
+  // ACCOUNT-WIDE history — AssetDetailScreen loads a single asset's history
+  // into the same array, and rendering that here would be the wrong list.
+  const allTransactions =
+    accountState.recentTransactionsScope === ALL_TRANSACTIONS_SCOPE
+      ? accountState.recentTransactions || []
+      : EMPTY_TRANSACTIONS;
+  // Not the shared `lastError` (every other loader clears it) and not any
+  // transaction error either — only an ACCOUNT-WIDE one. AssetDetailScreen
+  // writes asset-scoped failures into the same field, and rendering those here
+  // would blame the wrong list (TASK-40).
+  const transactionsError =
+    accountState.transactionsError?.scope === ALL_TRANSACTIONS_SCOPE
+      ? accountState.transactionsError.message
+      : null;
+
   useEffect(() => {
     if (activeAccount) {
       loadTransactions();
@@ -67,7 +99,7 @@ export default function TransactionHistoryScreen() {
 
   // Load token metadata for ARC-200 transactions
   useEffect(() => {
-    const transactions = accountState.recentTransactions || [];
+    const transactions = allTransactions;
     const arc200ContractIds = transactions
       .filter((tx) => tx.isArc200 && tx.contractId)
       .map((tx) => tx.contractId!)
@@ -76,12 +108,12 @@ export default function TransactionHistoryScreen() {
     if (arc200ContractIds.length > 0) {
       loadTokenMetadata(arc200ContractIds);
     }
-  }, [accountState.recentTransactions, loadTokenMetadata]);
+  }, [allTransactions, loadTokenMetadata]);
 
   // Resolve ASA params for transactions whose asset isn't in current holdings,
   // so amounts render with correct decimals instead of a 0-decimals fallback.
   useEffect(() => {
-    const transactions = accountState.recentTransactions || [];
+    const transactions = allTransactions;
     const asaAssetIds = transactions
       .filter((tx) => !tx.isArc200 && tx.assetId && tx.assetId !== 0)
       .map((tx) => tx.assetId!)
@@ -92,17 +124,23 @@ export default function TransactionHistoryScreen() {
     }
     // currentNetwork: re-resolve for the new network after a switch even if the
     // transaction list reference hasn't changed (cache is network-scoped).
-  }, [accountState.recentTransactions, loadAssetMetadata, currentNetwork]);
+  }, [allTransactions, loadAssetMetadata, currentNetwork]);
 
-  const loadTransactions = async () => {
+  // Stable identity: it is a dependency of the memoized empty/error component,
+  // and an unstable one would remount that subtree on every render.
+  const loadTransactions = useCallback(async () => {
     if (!activeAccount) return;
 
+    const accountId = activeAccount.id;
     try {
-      await loadAllTransactions(activeAccount.id);
+      await loadAllTransactions(accountId);
     } catch (error) {
       console.error('Failed to load transaction history:', error);
+    } finally {
+      // Always set, even on failure/early-return, so a spinner can never wedge.
+      setAttemptedAccountId(accountId);
     }
-  };
+  }, [activeAccount, loadAllTransactions]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -234,18 +272,65 @@ export default function TransactionHistoryScreen() {
     ]
   );
 
-  const renderFooter = useCallback(
-    () => (
+  const renderFooter = useCallback(() => {
+    // A page that failed to load used to just stop pagination silently.
+    if (transactionsError && allTransactions.length > 0) {
+      return (
+        <ErrorStateView
+          variant="inline"
+          error={transactionsError}
+          fallbackMessage="Couldn't load more transactions."
+          onRetry={handleLoadMore}
+          style={styles.footerError}
+          testID="transactions-footer-error"
+        />
+      );
+    }
+
+    return (
       <ListFooterSpinner
         visible={!!accountState.transactionsPagination?.isLoadingMore}
         text="Loading more transactions..."
       />
-    ),
-    [accountState.transactionsPagination?.isLoadingMore]
-  );
+    );
+  }, [
+    accountState.transactionsPagination?.isLoadingMore,
+    transactionsError,
+    allTransactions.length,
+    handleLoadMore,
+    styles.footerError,
+  ]);
 
-  const renderEmptyState = useCallback(
-    () => (
+  // The core audit finding (U-03): a FAILED fetch used to fall through to the
+  // "No Transactions" empty state, which is indistinguishable from a genuinely
+  // empty account and reads as lost history. An error must look like an error
+  // and must offer a retry.
+  const renderEmptyState = useCallback(() => {
+    if (transactionsError) {
+      return (
+        <ErrorStateView
+          error={transactionsError}
+          fallbackMessage="Couldn't load your transaction history."
+          onRetry={loadTransactions}
+          style={styles.emptyContainer}
+          testID="transactions-error"
+        />
+      );
+    }
+
+    if (
+      attemptedAccountId !== activeAccount?.id ||
+      accountState.isTransactionsLoading
+    ) {
+      return (
+        <ListFooterSpinner
+          text="Loading transactions..."
+          style={styles.emptyContainer}
+        />
+      );
+    }
+
+    return (
       <ListEmptyState
         icon="receipt-outline"
         iconColor={styles.emptyIcon.color}
@@ -253,16 +338,21 @@ export default function TransactionHistoryScreen() {
         subtitle="Your transaction history will appear here when you start using your wallet."
         style={styles.emptyContainer}
       />
-    ),
-    [styles.emptyContainer, styles.emptyIcon.color]
-  );
+    );
+  }, [
+    transactionsError,
+    attemptedAccountId,
+    activeAccount?.id,
+    accountState.isTransactionsLoading,
+    loadTransactions,
+    styles.emptyContainer,
+    styles.emptyIcon.color,
+  ]);
 
   const keyExtractor = useCallback(
     (item: TransactionInfo, index: number) => `${item.id}-${index}`,
     []
   );
-
-  const allTransactions = accountState.recentTransactions || [];
 
   if (!activeAccount) {
     return (
@@ -398,5 +488,9 @@ const createStyles = (theme: Theme) =>
     },
     emptyIcon: {
       color: theme.colors.textSecondary,
+    },
+    footerError: {
+      marginHorizontal: theme.spacing.md,
+      marginVertical: theme.spacing.sm,
     },
   });

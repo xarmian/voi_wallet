@@ -82,13 +82,19 @@ import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
+import { toErrorAlert } from '@/utils/errorMapping';
+import { useConnectivity } from '@/hooks/useConnectivity';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export default function HomeScreen() {
+  // `networkStatus` used to be written twice and read nowhere (TASK-40 / R-03).
+  // It, and the health-check failure below, now drive the network notice.
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(
     null
   );
+  const [networkStatusError, setNetworkStatusError] = useState<unknown>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
@@ -235,6 +241,9 @@ export default function HomeScreen() {
     balance: accountBalance,
     isLoading: isBalanceLoading,
     isBackgroundRefreshing,
+    // Exposed by the store since forever but destructured by no consumer, so
+    // balance failures rendered as "no balance" (TASK-40 / U-03).
+    error: balanceError,
     reload: reloadBalance,
   } = useActiveAccountBalance();
   const {
@@ -251,9 +260,17 @@ export default function HomeScreen() {
   const {
     balance: multiNetworkBalance,
     isLoading: isMultiNetworkBalanceLoading,
+    error: multiNetworkBalanceError,
+    reload: reloadMultiNetworkBalance,
   } = useMultiNetworkBalance(activeAccount?.id || '');
   const loadMultiNetworkBalance = useWalletStore(
     (state) => state.loadMultiNetworkBalance
+  );
+  // Retry must FORCE: the hook's `reload` is unforced and `loadAccountBalance`
+  // returns early on a fresh cached balance, so after a failed forced refresh
+  // (e.g. post-transaction) an unforced retry would be a silent no-op.
+  const loadAccountBalance = useWalletStore(
+    (state) => state.loadAccountBalance
   );
   const loadTokenMappings = useWalletStore((state) => state.loadTokenMappings);
 
@@ -301,6 +318,64 @@ export default function HomeScreen() {
       assetNativeTokensFirst,
     ]
   );
+
+  // Connectivity (TASK-40). The app-wide OfflineBanner already owns the "you
+  // are offline" message, so Home only uses this to avoid stacking a redundant
+  // second notice for the same condition.
+  const { isOffline } = useConnectivity();
+
+  // The node/indexer being down while the device is online is a distinct
+  // failure from being offline, and was previously invisible: `networkStatus`
+  // was written twice and read nowhere.
+  //
+  // `fallbackMessage` carries the wording for the derived (non-thrown) cases —
+  // the mapper owns the phrasing whenever there is a real error to classify,
+  // and falls back to this sentence when there is nothing to classify.
+  const networkNotice = React.useMemo((): {
+    error: unknown;
+    fallbackMessage: string;
+  } | null => {
+    if (isOffline) return null;
+    if (networkStatusError) {
+      return {
+        error: networkStatusError,
+        fallbackMessage: "Can't reach the Voi network right now.",
+      };
+    }
+    if (!networkStatus) return null;
+    if (!networkStatus.isConnected) {
+      const message = "Can't reach the Voi network right now.";
+      return { error: message, fallbackMessage: message };
+    }
+    if (!networkStatus.indexerHealth) {
+      const message =
+        'The transaction indexer is unavailable, so balances and history may be out of date.';
+      return { error: message, fallbackMessage: message };
+    }
+    return null;
+  }, [isOffline, networkStatus, networkStatusError]);
+
+  // The balance card and assets card render different sources depending on view
+  // mode, so resolve which error / data / retry applies to what is on screen.
+  const activeBalanceError = isMultiNetworkView
+    ? multiNetworkBalanceError
+    : balanceError;
+  const hasBalanceData = isMultiNetworkView
+    ? !!multiNetworkBalance
+    : !!accountBalance;
+  const retryBalance = React.useCallback(() => {
+    if (isMultiNetworkView) {
+      // The multi-network hook's reload already forces.
+      void reloadMultiNetworkBalance();
+    } else if (activeAccount?.id) {
+      void loadAccountBalance(activeAccount.id, true);
+    }
+  }, [
+    isMultiNetworkView,
+    reloadMultiNetworkBalance,
+    loadAccountBalance,
+    activeAccount?.id,
+  ]);
 
   // Load wallet data and mark activity once when Home mounts. Kept separate from
   // the remote-signer effect below so that the remote-signer store flipping
@@ -385,10 +460,17 @@ export default function HomeScreen() {
               activeAccountIdRef.current === accountId
             ) {
               setNetworkStatus(status);
+              setNetworkStatusError(null);
             }
           })
           .catch((error) => {
             console.warn('[HomeScreen] Network health check failed:', error);
+            if (
+              viewModeRef.current === currentViewMode &&
+              activeAccountIdRef.current === accountId
+            ) {
+              setNetworkStatusError(error);
+            }
           });
 
         // Check if view mode or account changed while loading
@@ -442,7 +524,16 @@ export default function HomeScreen() {
           networkHealthPromise,
         ]);
       } catch (error) {
+        // The store loaders record their own per-account error, so this outer
+        // catch only ever sees failures outside them (e.g. loadTokenMappings).
+        // It used to be console-only; surface it so the screen is never silent.
         console.error('Failed to load account data:', error);
+        if (
+          viewModeRef.current === currentViewMode &&
+          activeAccountIdRef.current === accountId
+        ) {
+          setNetworkStatusError(error);
+        }
       }
     };
 
@@ -891,7 +982,13 @@ export default function HomeScreen() {
       await initialize();
     } catch (error) {
       console.error('Failed to initialize wallet:', error);
-      Alert.alert('Error', 'Failed to load wallet data');
+      // Was a hardcoded generic alert; now routed through the central mapper
+      // (TASK-41) so the user gets a real reason and a next step.
+      const { title, message } = toErrorAlert(error, {
+        fallbackMessage: 'Failed to load wallet data.',
+        fallbackTitle: 'Error',
+      });
+      Alert.alert(title, message);
     } finally {
       setLoading(false);
     }
@@ -909,6 +1006,15 @@ export default function HomeScreen() {
 
       if (networkHealth.status === 'fulfilled') {
         setNetworkStatus(networkHealth.value);
+        setNetworkStatusError(null);
+      } else {
+        // Previously there was no else branch at all, so a failed health probe
+        // during pull-to-refresh was discarded entirely (TASK-40 / U-03).
+        console.warn(
+          '[HomeScreen] Network health refresh failed:',
+          networkHealth.reason
+        );
+        setNetworkStatusError(networkHealth.reason);
       }
 
       // Load balance and transactions through the store
@@ -916,9 +1022,16 @@ export default function HomeScreen() {
       await Promise.all([
         loadAccountTransactions(activeAccount.id),
         loadEnvoiName(activeAccount.id),
+        // Multi-network aggregate is what the assets card renders in
+        // multi-network view; refreshing it here keeps pull-to-refresh honest
+        // in both view modes.
+        isMultiNetworkView
+          ? loadMultiNetworkBalance(activeAccount.id, true)
+          : Promise.resolve(),
       ]);
     } catch (error) {
       console.error('Failed to load account data:', error);
+      setNetworkStatusError(error);
     }
   };
 
@@ -1294,6 +1407,20 @@ export default function HomeScreen() {
                 />
               )}
 
+              {/* Network health notice — the device is online but the node or
+                  indexer is not answering. Suppressed while offline, where the
+                  app-wide OfflineBanner already says it better. */}
+              {!!networkNotice && (
+                <ErrorStateView
+                  variant="inline"
+                  error={networkNotice.error}
+                  fallbackMessage={networkNotice.fallbackMessage}
+                  onRetry={onRefresh}
+                  style={styles.networkNotice}
+                  testID="home-network-notice"
+                />
+              )}
+
               <Animated.View
                 style={[styles.balanceContainerWrapper, balanceAnimatedStyle]}
               >
@@ -1324,7 +1451,17 @@ export default function HomeScreen() {
                       )}
                     </View>
                   </View>
-                  {isBalanceLoading && !accountBalance ? (
+                  {activeBalanceError && !hasBalanceData ? (
+                    // A failed balance load used to render as a plain "$0.00",
+                    // which in a wallet reads as lost funds (TASK-40 / U-03).
+                    <ErrorStateView
+                      error={activeBalanceError}
+                      fallbackMessage="Couldn't load your balance."
+                      onRetry={retryBalance}
+                      style={styles.balanceErrorState}
+                      testID="home-balance-error"
+                    />
+                  ) : isBalanceLoading && !accountBalance ? (
                     appMode === 'signer' ? (
                       // In signer mode, show offline fallback instead of spinner
                       <View style={styles.loadingBalance}>
@@ -1369,6 +1506,18 @@ export default function HomeScreen() {
                             </Text>
                           </View>
                         </View>
+                      )}
+                      {!!activeBalanceError && (
+                        // Data on screen is cached and a refresh failed — say
+                        // so rather than presenting stale numbers as current.
+                        <ErrorStateView
+                          variant="inline"
+                          error={activeBalanceError}
+                          fallbackMessage="Couldn't refresh your balance."
+                          onRetry={retryBalance}
+                          style={styles.balanceStaleNotice}
+                          testID="home-balance-stale"
+                        />
                       )}
                     </>
                   )}
@@ -1531,7 +1680,16 @@ export default function HomeScreen() {
                     </View>
                   </View>
 
-                  {isMultiNetworkView ? (
+                  {activeBalanceError && !hasBalanceData ? (
+                    // Never show "No assets found" for a FAILED load — that is
+                    // indistinguishable from an empty account (TASK-40 / U-03).
+                    <ErrorStateView
+                      error={activeBalanceError}
+                      fallbackMessage="Couldn't load your assets."
+                      onRetry={retryBalance}
+                      testID="home-assets-error"
+                    />
+                  ) : isMultiNetworkView ? (
                     // Multi-network view
                     isMultiNetworkBalanceLoading && !multiNetworkBalance ? (
                       <View style={styles.loadingAssets}>
@@ -1738,6 +1896,16 @@ const createStyles = (theme: Theme) =>
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: theme.spacing.xl,
+    },
+    // Error / degraded-network surfaces (TASK-40)
+    networkNotice: {
+      marginBottom: theme.spacing.md,
+    },
+    balanceErrorState: {
+      paddingVertical: theme.spacing.md,
+    },
+    balanceStaleNotice: {
+      marginTop: theme.spacing.md,
     },
     // Balance Section
     balanceContainerWrapper: {
