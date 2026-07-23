@@ -191,7 +191,6 @@ describe('MobileConnectivityAdapter', () => {
   });
 
   const loadAdapter = () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { MobileConnectivityAdapter } = require('../mobile/connectivity');
     return new MobileConnectivityAdapter();
   };

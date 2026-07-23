@@ -10,7 +10,6 @@ import { resolve } from 'path';
 
 // Plain-CJS module shared with metro.config.js. require() keeps tsc from needing
 // a declaration file for the root config module.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const inlineRequiresConfig = require('../../../metro.inlineRequires') as {
   NON_INLINED_REQUIRES: string[];
   METRO_BASE_NON_INLINED: string[];

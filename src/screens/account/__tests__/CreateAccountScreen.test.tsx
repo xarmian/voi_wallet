@@ -50,7 +50,6 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('@/hooks/useSecureScreen', () => ({ useSecureScreen: () => {} }));
 
 jest.mock('@/contexts/ThemeContext', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 
@@ -63,7 +62,6 @@ jest.mock(
 );
 
 jest.mock('@/components/wallet/MnemonicDisplay', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Text } = require('react-native');
   return {
     __esModule: true,

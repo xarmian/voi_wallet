@@ -209,6 +209,7 @@ export default function UnifiedAuthModal({
     }
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- platform-guarded: expo-local-authentication is native-only and this branch is unreachable on web (the function returns earlier there); require() keeps it out of the web bundle.
       const LocalAuthentication = require('expo-local-authentication');
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();

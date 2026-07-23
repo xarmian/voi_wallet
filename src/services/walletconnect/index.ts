@@ -215,6 +215,7 @@ export class WalletConnectService extends EventEmitter {
 
       // Set up call_request listener on DeepLinkService
       // This ensures navigation works the same way as during initial URI connection
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- breaks a REAL require cycle: @/services/deeplink imports this module, so a static import here would form a load-time circular dependency. (Contrast :463, whose "avoid circular dependencies" note is stale — WalletConnectV1Client is already statically imported at line 36.)
       const DeepLinkService = require('@/services/deeplink').DeepLinkService;
       const deepLinkService = DeepLinkService.getInstance();
 

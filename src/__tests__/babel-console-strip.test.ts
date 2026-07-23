@@ -8,7 +8,6 @@ import * as path from 'path';
 
 // @babel/core is available transitively via babel-preset-expo. Use require so
 // the test still resolves it if the ESM import shape ever changes.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const babel = require('@babel/core');
 
 const CONFIG_FILE = path.resolve(__dirname, '..', '..', 'babel.config.js');

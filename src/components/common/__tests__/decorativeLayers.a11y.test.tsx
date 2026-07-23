@@ -29,7 +29,6 @@ jest.mock('@/contexts/ThemeContext', () => ({
 const mockThemeValue = jest.fn(() => mockTheme);
 
 jest.mock('expo-image', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   Image: require('react-native').View,
 }));
 

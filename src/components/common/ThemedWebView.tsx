@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 let WebView: any = null;
 let WebViewProps: any = {};
 if (Platform.OS !== 'web') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- platform-guarded (Platform.OS !== 'web'): react-native-webview has no web build, so a static import would break the web bundle. require() defers the load to native only.
   const webviewModule = require('react-native-webview');
   WebView = webviewModule.WebView;
   WebViewProps = webviewModule.WebViewProps;

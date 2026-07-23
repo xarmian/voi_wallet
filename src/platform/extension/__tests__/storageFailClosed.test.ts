@@ -28,7 +28,6 @@ let currentLastError: { message: string } | undefined;
   },
 };
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { ExtensionStorageAdapter } = require('../storage');
 
 describe('ExtensionStorageAdapter.getItem — failure vs absence (TASK-213)', () => {

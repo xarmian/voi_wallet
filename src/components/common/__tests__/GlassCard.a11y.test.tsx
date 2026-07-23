@@ -16,7 +16,6 @@ import { render } from '@testing-library/react-native';
 import { GlassCard } from '../GlassCard';
 
 jest.mock('@/contexts/ThemeContext', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 

@@ -14,7 +14,6 @@ import { render } from '@testing-library/react-native';
 import UpdateBanner from '../UpdateBanner';
 
 jest.mock('@/contexts/ThemeContext', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 

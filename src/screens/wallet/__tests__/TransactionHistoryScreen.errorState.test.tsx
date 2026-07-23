@@ -45,7 +45,6 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 
 jest.mock('@/contexts/ThemeContext', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 
@@ -71,7 +70,6 @@ jest.mock('@/components/common/NFTBackground', () => ({
 }));
 
 jest.mock('@/components/common/BlurredContainer', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { View } = require('react-native');
   return {
     BlurredContainer: ({ children }: { children: React.ReactNode }) => (
@@ -81,7 +79,6 @@ jest.mock('@/components/common/BlurredContainer', () => {
 });
 
 jest.mock('@/components/transaction/TransactionListItem', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Text } = require('react-native');
   return {
     __esModule: true,
