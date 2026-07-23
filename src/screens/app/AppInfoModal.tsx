@@ -258,7 +258,7 @@ export default function AppInfoModal() {
           showAccountSelector={false}
         />
         <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle" size={48} color="#EF4444" />
+          <Ionicons name="alert-circle" size={48} color={colors.error} />
           <Text style={styles.errorTitle}>Failed to Load</Text>
           <Text style={styles.errorMessage}>{error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadAppInfo}>
@@ -482,7 +482,7 @@ const createStyles = (theme: Theme) =>
       marginTop: 8,
     },
     retryButtonText: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontWeight: '600',
     },
     scrollView: {
@@ -624,6 +624,6 @@ const createStyles = (theme: Theme) =>
     closeButtonText: {
       fontSize: 16,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
     },
   });

@@ -1213,7 +1213,7 @@ export default function AssetDetailScreen() {
           size="md"
           icon="send"
           label="Send"
-          tint="#007AFF"
+          tint={themeColors.primary}
           onPress={() =>
             navigation.navigate('Send', {
               assetName,
@@ -1232,6 +1232,7 @@ export default function AssetDetailScreen() {
             size="md"
             icon="swap-horizontal"
             label="Swap"
+            // Accent purple: no semantic theme role maps to it
             tint="#AF52DE"
             onPress={() =>
               navigation.navigate('Swap', {
@@ -1250,7 +1251,7 @@ export default function AssetDetailScreen() {
           size="md"
           icon="download"
           label="Receive"
-          tint="#30D158"
+          tint={themeColors.success}
           onPress={() =>
             navigation.navigate('Receive', {
               assetName,
@@ -1268,7 +1269,11 @@ export default function AssetDetailScreen() {
           onPress={handleOptOut}
           disabled={optingOut}
         >
-          <Ionicons name="remove-circle-outline" size={20} color="#EF4444" />
+          <Ionicons
+            name="remove-circle-outline"
+            size={20}
+            color={themeColors.error}
+          />
           <Text style={styles.optOutButtonText}>
             {optingOut ? 'Removing...' : 'Remove Asset'}
           </Text>
@@ -1539,7 +1544,7 @@ const createStyles = (theme: Theme) =>
     },
     optOutButton: {
       backgroundColor: theme.colors.card,
-      borderColor: '#EF4444',
+      borderColor: theme.colors.error,
       borderWidth: 1,
       flexDirection: 'row',
       alignItems: 'center',
@@ -1552,7 +1557,7 @@ const createStyles = (theme: Theme) =>
       gap: theme.spacing.xs,
     },
     optOutButtonText: {
-      color: '#EF4444',
+      color: theme.colors.error,
       fontSize: 16,
       fontWeight: '600',
     },

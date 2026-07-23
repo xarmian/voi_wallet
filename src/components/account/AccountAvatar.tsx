@@ -9,7 +9,7 @@ import {
   AccountType,
   RekeyedAccountMetadata,
 } from '@/types/wallet';
-import { useThemedStyles } from '@/hooks/useThemedStyles';
+import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
 
@@ -117,6 +117,9 @@ const generatePattern = (safeAddress: string, size: number) => {
   return patterns;
 };
 
+// Not theme-derived on purpose: picks a contrasting ink for the deterministic
+// identicon background generated from the address, which is independent of the
+// active theme palette.
 const getReadableTextColor = (color: string): string => {
   const hslMatch = color.match(
     /hsl\(\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)%,\s*(-?\d+(?:\.\d+)?)%\s*\)/i
@@ -143,6 +146,7 @@ export default function AccountAvatar({
   style,
 }: AccountAvatarProps) {
   const styles = useThemedStyles(createStyles);
+  const themeColors = useThemeColors();
   const [envoiAvatarUrl, setEnvoiAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -295,7 +299,8 @@ export default function AccountAvatar({
     const rekeyedAccount = account as RekeyedAccountMetadata;
     return {
       iconName: rekeyedAccount.canSign ? 'key' : 'lock-closed',
-      color: rekeyedAccount.canSign ? '#10B981' : '#F59E0B', // Green if we can sign, amber if we can't
+      // Success if we hold signing authority, warning if we do not
+      color: rekeyedAccount.canSign ? themeColors.success : themeColors.warning,
     };
   };
 
@@ -414,6 +419,8 @@ export default function AccountAvatar({
             },
           ]}
         >
+          {/* Fixed white glyph: sits on the semantic success/warning badge
+              fill, not on a theme surface, so buttonText is the wrong ink. */}
           <Ionicons
             name={rekeyIndicator.iconName as any}
             size={size * 0.2}
@@ -461,7 +468,7 @@ const createStyles = (theme: Theme) =>
       borderColor: theme.colors.card,
     },
     checkmark: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontWeight: 'bold',
     },
     rekeyIndicator: {

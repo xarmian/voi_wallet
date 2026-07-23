@@ -151,6 +151,8 @@ const SocialLinkButton: React.FC<SocialLinkProps> = ({ platform, url }) => {
     return 'link';
   };
 
+  // Social-network brand colours below are deliberately literal: they identify
+  // third-party services and must not shift with the app/NFT palette.
   const getColor = () => {
     const normalizedPlatform = platform.toLowerCase();
 
@@ -185,7 +187,7 @@ const SocialLinkButton: React.FC<SocialLinkProps> = ({ platform, url }) => {
       return '#1877F2';
     }
 
-    return '#007AFF';
+    return themeColors.primary;
   };
 
   return (

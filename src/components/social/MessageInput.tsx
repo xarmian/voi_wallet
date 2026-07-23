@@ -329,7 +329,7 @@ export default function MessageInput({
             <Text
               style={[
                 styles.charCounter,
-                isOverLimit && { color: theme.colors.error || '#EF4444' },
+                isOverLimit && { color: theme.colors.error },
               ]}
             >
               {message.length}/{MAX_MESSAGE_LENGTH}
@@ -477,7 +477,7 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
     },
     inputContainerError: {
-      borderColor: theme.colors.error || '#EF4444',
+      borderColor: theme.colors.error,
     },
     input: {
       fontSize: 15,

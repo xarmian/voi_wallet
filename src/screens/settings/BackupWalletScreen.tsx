@@ -286,7 +286,7 @@ export default function BackupWalletScreen() {
                 style={styles.createButton}
                 onPress={handleSaveLocal}
               >
-                <Ionicons name="folder" size={20} color="#FFFFFF" />
+                <Ionicons name="folder" size={20} color={colors.buttonText} />
                 <Text style={styles.createButtonText}>
                   {backupSaved ? 'Save Another Copy' : 'Save to Device'}
                 </Text>
@@ -314,7 +314,11 @@ export default function BackupWalletScreen() {
                 style={styles.createButton}
                 onPress={handleSaveLocal}
               >
-                <Ionicons name="share-outline" size={20} color="#FFFFFF" />
+                <Ionicons
+                  name="share-outline"
+                  size={20}
+                  color={colors.buttonText}
+                />
                 <Text style={styles.createButtonText}>
                   {backupSaved ? 'Export Another Copy' : 'Export Backup'}
                 </Text>
@@ -462,7 +466,7 @@ export default function BackupWalletScreen() {
           onPress={handleStartBackup}
           disabled={accounts.length === 0}
         >
-          <Ionicons name="download" size={20} color="#FFFFFF" />
+          <Ionicons name="download" size={20} color={colors.buttonText} />
           <Text style={styles.createButtonText}>Create Backup</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -586,8 +590,7 @@ const createStyles = (theme: Theme) =>
     warningContainer: {
       flexDirection: 'row',
       alignItems: 'flex-start',
-      backgroundColor:
-        theme.mode === 'dark' ? 'rgba(255, 159, 10, 0.1)' : '#FFF3CD',
+      backgroundColor: theme.colors.warningLight,
       padding: theme.spacing.md,
       borderRadius: theme.borderRadius.lg,
       marginBottom: theme.spacing.xl,
@@ -598,7 +601,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
       marginLeft: theme.spacing.sm,
       fontSize: 13,
-      color: theme.mode === 'dark' ? theme.colors.warning : '#856404',
+      color: theme.colors.text,
       lineHeight: 18,
     },
     createButton: {
@@ -610,7 +613,7 @@ const createStyles = (theme: Theme) =>
       borderRadius: theme.borderRadius.lg,
     },
     createButtonText: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontSize: 16,
       fontWeight: '600',
       marginLeft: theme.spacing.sm,

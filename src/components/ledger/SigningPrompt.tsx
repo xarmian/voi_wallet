@@ -220,10 +220,7 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.error,
     },
     errorContainer: {
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(255, 59, 48, 0.1)'
-          : 'rgba(255, 69, 58, 0.22)',
+      backgroundColor: theme.colors.errorLight,
       borderRadius: theme.borderRadius.md,
       padding: theme.spacing.md,
       marginVertical: theme.spacing.sm,

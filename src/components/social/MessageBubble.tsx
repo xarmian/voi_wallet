@@ -40,7 +40,7 @@ export default function MessageBubble({
   const isFailed = message.status === 'failed';
   const isPending = message.status === 'pending';
   const isConfirmed = message.status === 'confirmed';
-  const errorColor = theme.colors.error || '#EF4444';
+  const errorColor = theme.colors.error;
 
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp);

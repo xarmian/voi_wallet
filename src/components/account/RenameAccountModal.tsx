@@ -125,7 +125,10 @@ export default function RenameAccountModal({
                 disabled={!isNameValid || isSubmitting}
               >
                 {isSubmitting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.buttonText}
+                  />
                 ) : (
                   <Text style={styles.confirmButtonText}>Save</Text>
                 )}

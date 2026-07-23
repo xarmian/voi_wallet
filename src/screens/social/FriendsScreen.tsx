@@ -277,7 +277,11 @@ export default function FriendsScreen() {
           accessibilityRole="button"
           accessibilityLabel="Add contact"
         >
-          <Ionicons name="person-add" size={24} color="#FFFFFF" />
+          <Ionicons
+            name="person-add"
+            size={24}
+            color={theme.colors.buttonText}
+          />
         </TouchableOpacity>
       </SafeAreaView>
     </NFTBackground>

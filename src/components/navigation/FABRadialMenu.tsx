@@ -356,7 +356,7 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
             <View
               style={[
                 styles.unreadBadge,
-                { backgroundColor: theme.colors.error || '#EF4444' },
+                { backgroundColor: theme.colors.error },
               ]}
             >
               <Text style={styles.unreadBadgeText}>

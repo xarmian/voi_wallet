@@ -229,18 +229,18 @@ const TransactionListItem = React.memo(
 
       // Fallback icons based on asset type
       let iconName: keyof typeof Ionicons.glyphMap;
-      let iconColor = '#007AFF';
+      let iconColor = themeColors.primary;
 
       if (transaction.isArc200) {
         iconName = 'contract';
         iconColor = '#8B5CF6'; // Purple for ARC-200
       } else if (transaction.assetId && transaction.assetId !== 0) {
         iconName = 'diamond';
-        iconColor = '#F59E0B'; // Amber for ASA
+        iconColor = themeColors.warning; // Amber for ASA
       } else {
         // This shouldn't happen for VOI since we have the image above
         iconName = 'logo-bitcoin';
-        iconColor = '#007AFF';
+        iconColor = themeColors.primary;
       }
 
       return (

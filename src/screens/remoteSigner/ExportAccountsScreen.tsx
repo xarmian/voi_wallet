@@ -442,6 +442,7 @@ export default function ExportAccountsScreen() {
                   value={session.encoded}
                   size={220}
                   backgroundColor="white"
+                  // QR modules must stay pure black on white to scan
                   color="#000000"
                 />
               )}

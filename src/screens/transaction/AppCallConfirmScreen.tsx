@@ -324,7 +324,11 @@ export default function AppCallConfirmScreen() {
           </View>
           {isTemplateUri && (
             <View style={styles.infoBanner}>
-              <Ionicons name="information-circle" size={16} color="#3B82F6" />
+              <Ionicons
+                name="information-circle"
+                size={16}
+                color={colors.info}
+              />
               <Text style={styles.infoText}>
                 Using your active account as sender
               </Text>
@@ -332,7 +336,7 @@ export default function AppCallConfirmScreen() {
           )}
           {!account && senderAddress && (
             <View style={styles.warningBanner}>
-              <Ionicons name="warning" size={16} color="#F59E0B" />
+              <Ionicons name="warning" size={16} color={colors.warning} />
               <Text style={styles.warningText}>
                 This address is not in your wallet
               </Text>
@@ -364,7 +368,7 @@ export default function AppCallConfirmScreen() {
 
         {/* Warning */}
         <View style={styles.warningCard}>
-          <Ionicons name="alert-triangle" size={24} color="#F59E0B" />
+          <Ionicons name="alert-triangle" size={24} color={colors.warning} />
           <Text style={styles.warningCardText}>
             Application calls can execute smart contract code. Only proceed if
             you trust the source of this request.
@@ -373,7 +377,7 @@ export default function AppCallConfirmScreen() {
 
         {error && (
           <View style={styles.errorBanner}>
-            <Ionicons name="alert-circle" size={20} color="#EF4444" />
+            <Ionicons name="alert-circle" size={20} color={colors.error} />
             <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
@@ -517,42 +521,42 @@ const createStyles = (theme: Theme) =>
     infoBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(59, 130, 246, 0.15)',
+      backgroundColor: theme.colors.infoLight,
       padding: 12,
       borderRadius: 8,
       marginTop: 12,
       gap: 8,
     },
     infoText: {
-      color: '#3B82F6',
+      color: theme.colors.info,
       fontSize: 13,
       flex: 1,
     },
     warningBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(245, 158, 11, 0.15)',
+      backgroundColor: theme.colors.warningLight,
       padding: 12,
       borderRadius: 8,
       marginTop: 12,
       gap: 8,
     },
     warningText: {
-      color: '#F59E0B',
+      color: theme.colors.warning,
       fontSize: 13,
       flex: 1,
     },
     warningCard: {
       flexDirection: 'row',
       alignItems: 'flex-start',
-      backgroundColor: 'rgba(245, 158, 11, 0.1)',
+      backgroundColor: theme.colors.warningLight,
       padding: 16,
       borderRadius: 12,
       marginBottom: 16,
       gap: 12,
     },
     warningCardText: {
-      color: '#F59E0B',
+      color: theme.colors.warning,
       fontSize: 14,
       flex: 1,
       lineHeight: 20,
@@ -560,14 +564,14 @@ const createStyles = (theme: Theme) =>
     errorBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(239, 68, 68, 0.15)',
+      backgroundColor: theme.colors.errorLight,
       padding: 12,
       borderRadius: 8,
       marginTop: 8,
       gap: 8,
     },
     errorText: {
-      color: '#EF4444',
+      color: theme.colors.error,
       fontSize: 13,
       flex: 1,
     },
@@ -602,7 +606,7 @@ const createStyles = (theme: Theme) =>
     confirmButtonText: {
       fontSize: 16,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
     },
     disabledButton: {
       opacity: 0.5,

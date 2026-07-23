@@ -258,10 +258,7 @@ const createStyles = (theme: Theme) =>
     },
     infoBox: {
       flexDirection: 'row',
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(0, 122, 255, 0.08)'
-          : 'rgba(10, 132, 255, 0.18)',
+      backgroundColor: theme.colors.primaryLight,
       borderRadius: theme.borderRadius.lg,
       padding: theme.spacing.md,
       gap: theme.spacing.sm,

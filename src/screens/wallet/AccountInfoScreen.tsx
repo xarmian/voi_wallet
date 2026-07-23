@@ -276,6 +276,8 @@ export default function AccountInfoScreen() {
     if (!multiNetworkBalance) return [];
 
     const data: AssetDistribution[] = [];
+    // Categorical chart palette: these encode series identity, not a semantic
+    // theme role, so they stay independent of the active palette.
     const colors = [
       '#FF6384',
       '#36A2EB',
@@ -1095,7 +1097,7 @@ const createStyles = (theme: Theme) =>
       marginRight: theme.spacing.sm,
     },
     networkBadgeText: {
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
       fontSize: 12,
       fontWeight: '600',
     },

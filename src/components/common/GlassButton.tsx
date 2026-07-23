@@ -57,7 +57,7 @@ interface GlassButtonProps {
   fullWidth?: boolean;
   /** Use pill shape (full rounded) */
   pill?: boolean;
-  /** Color tint for secondary buttons (e.g., '#007AFF' or 'rgba(0, 122, 255, 0.15)') */
+  /** Color tint for secondary buttons (e.g. theme.colors.primary, or an rgba tint) */
   tint?: string;
   /** Press handler */
   onPress: () => void;
@@ -204,7 +204,7 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
     const configs = {
       primary: {
         backgroundColor: theme.colors.primary,
-        textColor: '#FFFFFF',
+        textColor: theme.colors.buttonText,
         borderColor: 'transparent',
         glowColor: theme.colors.glowPrimary,
         gradientColors: theme.gradients.primary as [string, string],
@@ -234,9 +234,15 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
       },
       danger: {
         backgroundColor: theme.colors.error,
+        // Fixed white ink: this sits on the error fill, and buttonText is
+        // contrast-checked against primary, so it is the wrong reference here.
         textColor: '#FFFFFF',
         borderColor: 'transparent',
         glowColor: theme.colors.glowError,
+        // Pre-existing: the second stop is a fixed dark red and is NOT derived
+        // from theme.colors.error, so under an NFT theme whose generated error
+        // is not red the two stops can disagree. Left as-is — there is no
+        // errorDark token and no darken helper available here (see TASK-228).
         gradientColors: [theme.colors.error, '#CC3629'] as [string, string],
         useGradient: true,
         tintGradient: null as [string, string] | null,

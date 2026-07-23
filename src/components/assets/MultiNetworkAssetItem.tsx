@@ -334,6 +334,7 @@ const createStyles = (theme: Theme) =>
       paddingVertical: 2,
       borderRadius: 10,
     },
+    // Fixed white ink: the pill is filled with the network's brand colour.
     networkBadgeText: {
       fontSize: 10,
       fontWeight: '600',

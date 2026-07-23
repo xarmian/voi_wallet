@@ -87,7 +87,7 @@ export default function MessagingInfoModal({
                   icon="lock-closed"
                   title="End-to-End Encrypted"
                   description="Messages are encrypted before being sent. Only you and the recipient can read them."
-                  iconColor={theme.colors.success || '#10B981'}
+                  iconColor={theme.colors.success}
                 />
 
                 <InfoItem
@@ -100,7 +100,7 @@ export default function MessagingInfoModal({
                   icon="wallet-outline"
                   title={`Transaction Fee: ${MESSAGE_FEE_DISPLAY}`}
                   description="A small network fee is charged for each message you send. This fee goes to network validators."
-                  iconColor={theme.colors.warning || '#F59E0B'}
+                  iconColor={theme.colors.warning}
                 />
 
                 <InfoItem

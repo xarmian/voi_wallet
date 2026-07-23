@@ -208,7 +208,7 @@ export default function KeyregConfirmScreen() {
             <Ionicons
               name={params.isOnline ? 'cloud-upload' : 'cloud-offline'}
               size={20}
-              color={params.isOnline ? '#10B981' : '#EF4444'}
+              color={params.isOnline ? colors.success : colors.error}
             />
             <Text
               style={[
@@ -247,7 +247,7 @@ export default function KeyregConfirmScreen() {
           </View>
           {!account && (
             <View style={styles.warningBanner}>
-              <Ionicons name="warning" size={16} color="#F59E0B" />
+              <Ionicons name="warning" size={16} color={colors.warning} />
               <Text style={styles.warningText}>
                 This address is not in your wallet
               </Text>
@@ -319,7 +319,7 @@ export default function KeyregConfirmScreen() {
 
         {error && (
           <View style={styles.errorBanner}>
-            <Ionicons name="alert-circle" size={20} color="#EF4444" />
+            <Ionicons name="alert-circle" size={20} color={colors.error} />
             <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
@@ -382,20 +382,20 @@ const createStyles = (theme: Theme) =>
       gap: 8,
     },
     onlineBadge: {
-      backgroundColor: 'rgba(16, 185, 129, 0.15)',
+      backgroundColor: theme.colors.successLight,
     },
     offlineBadge: {
-      backgroundColor: 'rgba(239, 68, 68, 0.15)',
+      backgroundColor: theme.colors.errorLight,
     },
     statusText: {
       fontSize: 16,
       fontWeight: '600',
     },
     onlineStatusText: {
-      color: '#10B981',
+      color: theme.colors.success,
     },
     offlineStatusText: {
-      color: '#EF4444',
+      color: theme.colors.error,
     },
     card: {
       marginBottom: 16,
@@ -437,28 +437,28 @@ const createStyles = (theme: Theme) =>
     warningBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(245, 158, 11, 0.15)',
+      backgroundColor: theme.colors.warningLight,
       padding: 12,
       borderRadius: 8,
       marginTop: 12,
       gap: 8,
     },
     warningText: {
-      color: '#F59E0B',
+      color: theme.colors.warning,
       fontSize: 13,
       flex: 1,
     },
     errorBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(239, 68, 68, 0.15)',
+      backgroundColor: theme.colors.errorLight,
       padding: 12,
       borderRadius: 8,
       marginTop: 8,
       gap: 8,
     },
     errorText: {
-      color: '#EF4444',
+      color: theme.colors.error,
       fontSize: 13,
       flex: 1,
     },
@@ -493,7 +493,7 @@ const createStyles = (theme: Theme) =>
     confirmButtonText: {
       fontSize: 16,
       fontWeight: '600',
-      color: '#FFFFFF',
+      color: theme.colors.buttonText,
     },
     disabledButton: {
       opacity: 0.5,

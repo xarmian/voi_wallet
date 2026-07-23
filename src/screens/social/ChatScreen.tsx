@@ -519,7 +519,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     warningBanner: {
-      backgroundColor: '#DC2626',
+      backgroundColor: theme.colors.error,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',

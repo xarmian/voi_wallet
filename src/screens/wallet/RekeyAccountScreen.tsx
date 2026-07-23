@@ -764,7 +764,11 @@ export default function RekeyAccountScreen() {
                   <Ionicons
                     name={canReverseRekey ? 'key' : 'lock-closed'}
                     size={14}
-                    color={canReverseRekey ? '#10B981' : '#F59E0B'}
+                    color={
+                      canReverseRekey
+                        ? theme.colors.success
+                        : theme.colors.warning
+                    }
                   />
                   <Text
                     style={[
@@ -866,7 +870,9 @@ export default function RekeyAccountScreen() {
                 name="swap-horizontal"
                 size={20}
                 color={
-                  rekeyFlow === 'standard' ? theme.colors.primary : '#6B7280'
+                  rekeyFlow === 'standard'
+                    ? theme.colors.primary
+                    : theme.colors.textSecondary
                 }
               />
               <Text
@@ -902,7 +908,9 @@ export default function RekeyAccountScreen() {
                 name="hardware-chip-outline"
                 size={20}
                 color={
-                  rekeyFlow === 'ledger' ? theme.colors.primary : '#6B7280'
+                  rekeyFlow === 'ledger'
+                    ? theme.colors.primary
+                    : theme.colors.textSecondary
                 }
               />
               <Text
@@ -939,7 +947,9 @@ export default function RekeyAccountScreen() {
                   name="phone-portrait-outline"
                   size={20}
                   color={
-                    rekeyFlow === 'airgap' ? theme.colors.primary : '#6B7280'
+                    rekeyFlow === 'airgap'
+                      ? theme.colors.primary
+                      : theme.colors.textSecondary
                   }
                 />
                 <Text
@@ -977,7 +987,9 @@ export default function RekeyAccountScreen() {
                   name="return-up-back"
                   size={20}
                   color={
-                    rekeyFlow === 'reverse' ? theme.colors.primary : '#6B7280'
+                    rekeyFlow === 'reverse'
+                      ? theme.colors.primary
+                      : theme.colors.textSecondary
                   }
                 />
                 <Text
@@ -1076,7 +1088,7 @@ export default function RekeyAccountScreen() {
                     <Ionicons
                       name="checkmark-circle"
                       size={24}
-                      color="#10B981"
+                      color={theme.colors.success}
                     />
                   )}
                 </TouchableOpacity>

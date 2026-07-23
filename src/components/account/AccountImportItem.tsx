@@ -99,21 +99,29 @@ export default function AccountImportItem({
                   styles.typeBadge,
                   {
                     backgroundColor:
-                      account.type === 'standard' ? '#EBF4FF' : '#F0FDF4',
+                      account.type === 'standard'
+                        ? theme.colors.infoLight
+                        : theme.colors.successLight,
                   },
                 ]}
               >
                 <Ionicons
                   name={getTypeIcon()}
                   size={12}
-                  color={account.type === 'standard' ? '#3B82F6' : '#10B981'}
+                  color={
+                    account.type === 'standard'
+                      ? colors.infoColor
+                      : colors.successColor
+                  }
                 />
                 <Text
                   style={[
                     styles.typeText,
                     {
                       color:
-                        account.type === 'standard' ? '#3B82F6' : '#10B981',
+                        account.type === 'standard'
+                          ? colors.infoColor
+                          : colors.successColor,
                     },
                   ]}
                 >

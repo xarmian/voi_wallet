@@ -374,10 +374,7 @@ const createStyles = (theme: Theme) =>
     },
     deviceRowSelected: {
       borderColor: theme.colors.primary,
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(0, 122, 255, 0.08)'
-          : 'rgba(10, 132, 255, 0.2)',
+      backgroundColor: theme.colors.primaryLight,
     },
     deviceInfo: {
       flex: 1,
@@ -420,10 +417,7 @@ const createStyles = (theme: Theme) =>
       marginTop: theme.spacing.md,
       padding: theme.spacing.md,
       borderRadius: theme.borderRadius.md,
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(255, 59, 48, 0.08)'
-          : 'rgba(255, 69, 58, 0.18)',
+      backgroundColor: theme.colors.errorLight,
     },
     errorText: {
       color: theme.colors.error,
