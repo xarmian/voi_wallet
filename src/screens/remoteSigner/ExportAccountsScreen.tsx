@@ -8,6 +8,7 @@
 
 import React, { useState, useMemo } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -200,7 +201,6 @@ export default function ExportAccountsScreen() {
     if (Platform.OS === 'web') {
       window.alert(`${title}\n\n${message}`);
     } else {
-      const { Alert } = require('react-native');
       Alert.alert(title, message);
     }
   };

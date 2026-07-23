@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { Alert, View, Text, StyleSheet, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -45,7 +45,11 @@ export default function CreateWalletScreen({ navigation }: Props) {
   const showAlert = (
     title: string,
     message: string,
-    buttons?: { text: string; onPress?: () => void; style?: string }[]
+    buttons?: {
+      text: string;
+      onPress?: () => void;
+      style?: 'default' | 'cancel' | 'destructive';
+    }[]
   ) => {
     if (Platform.OS === 'web') {
       if (buttons && buttons.length > 1) {
@@ -63,7 +67,6 @@ export default function CreateWalletScreen({ navigation }: Props) {
         buttons?.[0]?.onPress?.();
       }
     } else {
-      const { Alert } = require('react-native');
       Alert.alert(title, message, buttons);
     }
   };
@@ -129,8 +132,6 @@ export default function CreateWalletScreen({ navigation }: Props) {
       }
       return;
     }
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Alert } = require('react-native');
     Alert.alert(title, message, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Go Back', style: 'destructive', onPress: onConfirm },

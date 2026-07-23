@@ -6,7 +6,7 @@ import React, {
   useMemo,
   useCallback,
 } from 'react';
-import { View, Text, StyleSheet, Platform, Linking } from 'react-native';
+import { Alert, View, Text, StyleSheet, Platform, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,7 +26,6 @@ const showAlert = (title: string, message: string) => {
   if (Platform.OS === 'web') {
     window.alert(`${title}\n\n${message}`);
   } else {
-    const { Alert } = require('react-native');
     Alert.alert(title, message, [{ text: 'OK' }]);
   }
 };

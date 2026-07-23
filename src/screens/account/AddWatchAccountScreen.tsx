@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -66,7 +67,6 @@ export default function AddWatchAccountScreen() {
       window.alert(`${title}\n\n${message}`);
       buttons?.[0]?.onPress?.();
     } else {
-      const { Alert } = require('react-native');
       Alert.alert(title, message, buttons);
     }
   };
