@@ -61,7 +61,7 @@ export default function AboutScreen() {
       } else {
         Alert.alert('Error', `Cannot open ${label}`);
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Error', `Failed to open ${label}`);
     }
   };

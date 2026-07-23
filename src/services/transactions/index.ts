@@ -10,10 +10,8 @@ import {
 } from '@/types/wallet';
 import { isSoftwareAuthError } from '@/services/secure/authErrors';
 import {
-  toBigIntSafeNumber,
   compareBigIntSafe,
   compareBigInt,
-  addBigIntSafe,
   subtractBigIntSafe,
 } from '@/utils/bigint';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
@@ -864,7 +862,7 @@ export class TransactionService {
               'Insufficient VOI balance for ARC-200 transfer fees and MBR'
             );
           }
-        } catch (error) {
+        } catch {
           errors.push('Failed to estimate ARC-200 transfer cost');
         }
       } else if (assetType === 'arc72') {
@@ -903,7 +901,7 @@ export class TransactionService {
               );
             }
           }
-        } catch (error) {
+        } catch {
           errors.push('Failed to estimate ARC-72 transfer cost');
         }
       } else if (assetType === 'asa') {
@@ -1393,7 +1391,7 @@ export class TransactionService {
                 'Ledger device for the target account is not available. Connect it before rekeying.'
               );
             }
-          } catch (error) {
+          } catch {
             errors.push(
               'Unable to verify Ledger device availability for the target account.'
             );
@@ -1455,7 +1453,7 @@ export class TransactionService {
                 'Ledger device for the controlling account is not available. Connect it before rekeying.'
               );
             }
-          } catch (error) {
+          } catch {
             errors.push(
               'Unable to verify Ledger device availability for the controlling account.'
             );

@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
   ScrollView,
   Alert,
 } from 'react-native';
@@ -15,14 +14,8 @@ import { formatAddress } from '@/utils/address';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
 import TransactionVerification from '@/components/ledger/TransactionVerification';
-import {
-  useTransactionAuthController,
-  TransactionAuthController,
-} from '@/services/auth/transactionAuthController';
-import {
-  unifiedSigner,
-  UnifiedTransactionRequest,
-} from '@/services/transactions/unifiedSigner';
+import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
+import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
 import { AccountMetadata } from '@/types/wallet';
@@ -37,7 +30,7 @@ import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import tokenMappingService from '@/services/token-mapping';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import { NetworkService } from '@/services/network';
 import { useMultiNetworkBalance } from '@/store/walletStore';
 
 type TransactionConfirmationScreenRouteProp = RouteProp<

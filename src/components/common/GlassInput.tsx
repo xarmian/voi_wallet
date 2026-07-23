@@ -22,13 +22,12 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  withTiming,
   interpolate,
   interpolateColor,
 } from 'react-native-reanimated';
 import { useTheme } from '@/contexts/ThemeContext';
 import { SafeBlurView } from './SafeBlurView';
-import { springConfigs, timingConfigs } from '@/utils/animations';
+import { springConfigs } from '@/utils/animations';
 
 export type InputSize = 'sm' | 'md' | 'lg';
 

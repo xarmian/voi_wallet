@@ -16,14 +16,11 @@ import {
   TouchableWithoutFeedback,
   TouchableOpacity,
   Text,
-  Dimensions,
 } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  withTiming,
-  withDelay,
   interpolate,
   runOnJS,
   type SharedValue,
@@ -31,7 +28,7 @@ import Animated, {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '@/contexts/ThemeContext';
-import { springConfigs, timingConfigs } from '@/utils/animations';
+import { springConfigs } from '@/utils/animations';
 import { GlassCard } from '@/components/common/GlassCard';
 import { useActiveAccount } from '@/store/walletStore';
 import { useTotalUnreadCount } from '@/store/messagesStore';

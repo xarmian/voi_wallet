@@ -97,7 +97,7 @@ export const normalizeAssetImageUrl = (
       parsed.hash = '';
       return parsed.toString();
     }
-  } catch (error) {
+  } catch {
     // Ignore invalid URLs and fall through to undefined
   }
 

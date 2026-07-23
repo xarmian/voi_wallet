@@ -1,4 +1,3 @@
-import algosdk from 'algosdk';
 import { MultiAccountWalletService } from '@/services/wallet';
 import {
   parseArc0300AccountImportUri,
@@ -476,7 +475,7 @@ export class AccountQRParser {
           address = walletAccount.address;
           type = 'standard';
           isValid = true;
-        } catch (error) {
+        } catch {
           errorMessage = 'Invalid private key';
         }
       } else if (accountData.address) {

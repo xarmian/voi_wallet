@@ -8,11 +8,7 @@ import {
 } from '@/store/walletStore';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import AccountAvatar from './AccountAvatar';
-import {
-  formatVoiBalance,
-  formatNativeBalance,
-  getCurrencySymbol,
-} from '@/utils/bigint';
+import { formatVoiBalance, getCurrencySymbol } from '@/utils/bigint';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';

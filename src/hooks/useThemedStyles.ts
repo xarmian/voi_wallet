@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { StyleSheet, ViewStyle, TextStyle } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
-import { Theme, GlassEffect, TypographyStyle } from '../constants/themes';
+import { Theme, GlassEffect } from '../constants/themes';
 
 export const useThemedStyles = <T extends StyleSheet.NamedStyles<T>>(
   styleFactory: (theme: Theme) => T
@@ -11,7 +11,7 @@ export const useThemedStyles = <T extends StyleSheet.NamedStyles<T>>(
   return useMemo(() => {
     try {
       return styleFactory(theme);
-    } catch (error) {
+    } catch {
       console.warn(
         'useThemedStyles: Error creating styles, using empty styles'
       );

@@ -10,14 +10,9 @@ import {
   NetworkConfiguration,
   NetworkStatus,
   NetworkError,
-  NetworkUnavailableError,
 } from '@/types/network';
-import {
-  getNetworkConfig,
-  DEFAULT_NETWORK_ID,
-  isFeatureAvailable,
-} from './config';
-import { MimirApiService, MimirAsset, Arc200Transfer } from '@/services/mimir';
+import { getNetworkConfig, DEFAULT_NETWORK_ID } from './config';
+import { MimirApiService, MimirAsset } from '@/services/mimir';
 import VoiPriceService from '@/services/price';
 import AlgorandPriceService from '@/services/algorand-price';
 import EnvoiService from '@/services/envoi';
@@ -233,7 +228,7 @@ export class NetworkService {
       NetworkService.activeNetworkId = networkId;
 
       console.log(`Switched to network: ${newConfig.name} (${networkId})`);
-    } catch (error) {
+    } catch {
       // Restore previous network configuration on failure
       this.currentNetworkId = previousNetworkId;
       this.config = getNetworkConfig(previousNetworkId);

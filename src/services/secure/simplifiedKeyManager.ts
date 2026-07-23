@@ -5,7 +5,6 @@ import {
   RekeyedAccountMetadata,
   LedgerAccountMetadata,
   LedgerSigningInfo,
-  LedgerDeviceNotConnectedError,
   LedgerAccountError,
 } from '@/types/wallet';
 import RekeyManager from '@/services/wallet/rekeyManager';

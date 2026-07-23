@@ -204,7 +204,7 @@ export default function SignRequestScannerScreen() {
       if (text) {
         processQRData(text.trim());
       }
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to read from clipboard');
     }
   };
@@ -246,7 +246,7 @@ export default function SignRequestScannerScreen() {
         image.src = e.target?.result as string;
       };
       reader.readAsDataURL(file);
-    } catch (error) {
+    } catch {
       showAlert('Error', 'Failed to process the image file.');
     }
   };

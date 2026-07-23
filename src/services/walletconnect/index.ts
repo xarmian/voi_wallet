@@ -1,4 +1,4 @@
-import { SignClientTypes, SessionTypes } from '@walletconnect/types';
+import { SignClientTypes } from '@walletconnect/types';
 import { getSdkError, buildApprovedNamespaces } from '@walletconnect/utils';
 import { EventEmitter } from 'events';
 import algosdk from 'algosdk';
@@ -14,7 +14,6 @@ import {
   WalletConnectSession,
   SessionProposal,
   WalletTransaction,
-  WalletConnectEventListener,
   WalletConnectRequestEvent,
 } from './types';
 import {

@@ -21,12 +21,7 @@ import type {
   MainTabParamList,
   RootStackParamList,
 } from '@/navigation/AppNavigator';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated from 'react-native-reanimated';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
 import { ARC72Collection, NFTToken } from '@/types/nft';
@@ -40,8 +35,6 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
-import { BlurredContainer } from '@/components/common/BlurredContainer';
-import { springConfigs } from '@/utils/animations';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 

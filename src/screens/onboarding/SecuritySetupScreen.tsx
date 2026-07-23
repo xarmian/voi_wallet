@@ -14,7 +14,6 @@ import {
   AddWatchAccountRequest,
 } from '@/types/wallet';
 import {
-  ScannedAccount,
   getAccountSecret,
   clearAccountSecret,
   clearAccountSecrets,

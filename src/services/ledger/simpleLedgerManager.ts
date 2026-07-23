@@ -1,15 +1,11 @@
 import { Platform, PermissionsAndroid } from 'react-native';
-import type { Permission, PermissionStatus } from 'react-native';
+import type { Permission } from 'react-native';
 import TransportBLE from '@ledgerhq/react-native-hw-transport-ble';
 import TransportHID from '@ledgerhq/react-native-hid';
 import Transport from '@ledgerhq/hw-transport';
-import type { Device as BleDevice } from 'react-native-ble-plx';
 import type { DeviceModelId } from '@ledgerhq/devices';
 
-import {
-  LedgerDeviceNotConnectedError,
-  LedgerAccountError,
-} from '@/types/wallet';
+import { LedgerDeviceNotConnectedError } from '@/types/wallet';
 
 export interface SimpleLedgerDevice {
   id: string;
@@ -119,7 +115,7 @@ export class SimpleLedgerManager {
     if (this.connectionPromise) {
       try {
         return await this.connectionPromise;
-      } catch (error) {
+      } catch {
         // Continue with new connection attempt
       }
     }

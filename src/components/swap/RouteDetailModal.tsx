@@ -23,10 +23,8 @@ import {
   SwapToken,
   UnifiedRoute,
   UnifiedRoutePool,
-  UnifiedRouteHop,
 } from '../../services/swap/types';
 import { SwapService } from '../../services/swap';
-import { NetworkId } from '../../types/network';
 import { useNetworkStore } from '../../store/networkStore';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { getTokenImageSource } from '../../utils/tokenImages';

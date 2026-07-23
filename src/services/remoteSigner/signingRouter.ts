@@ -13,7 +13,6 @@ import {
 } from '@/types/wallet';
 import { RemoteSignerService } from './index';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
-import { NetworkService } from '@/services/network';
 
 /**
  * Result of checking if an account needs remote signing

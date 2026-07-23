@@ -166,7 +166,7 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(
         if (Platform.OS === 'web') {
           try {
             iframeRef.current?.contentWindow?.history.back();
-          } catch (e) {
+          } catch {
             // Cross-origin restrictions may prevent this
           }
         } else {
@@ -177,7 +177,7 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(
         if (Platform.OS === 'web') {
           try {
             iframeRef.current?.contentWindow?.history.forward();
-          } catch (e) {
+          } catch {
             // Cross-origin restrictions may prevent this
           }
         } else {
@@ -188,7 +188,7 @@ const ThemedWebView = forwardRef<ThemedWebViewRef, ThemedWebViewProps>(
         if (Platform.OS === 'web') {
           try {
             (iframeRef.current?.contentWindow as any)?.eval(script);
-          } catch (e) {
+          } catch {
             // Cross-origin restrictions may prevent this
             console.warn(
               'Cannot inject JavaScript into iframe due to cross-origin restrictions'

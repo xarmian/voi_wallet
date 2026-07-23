@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import {
   useCurrentNetwork,

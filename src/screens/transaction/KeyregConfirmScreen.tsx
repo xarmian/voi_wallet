@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -17,10 +16,7 @@ import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
-import {
-  useTransactionAuthController,
-  TransactionAuthController,
-} from '@/services/auth/transactionAuthController';
+import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
 import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
 import { formatAddress } from '@/utils/address';
 import { useWalletStore, useActiveAccount } from '@/store/walletStore';
@@ -94,7 +90,7 @@ export default function KeyregConfirmScreen() {
       if (params.sprfkey) {
         stateProofKey = decodeBase64Url(params.sprfkey);
       }
-    } catch (err) {
+    } catch {
       Alert.alert('Invalid Keys', 'Failed to decode participation keys.');
       return;
     }

@@ -77,7 +77,7 @@ class DebugLogger {
       this.listeners.forEach((listener) => {
         try {
           listener(this.logs);
-        } catch (error) {
+        } catch {
           // Don't let listener errors break logging
         }
       });
@@ -93,7 +93,7 @@ class DebugLogger {
     this.listeners.forEach((listener) => {
       try {
         listener(this.logs);
-      } catch (error) {
+      } catch {
         // Don't let listener errors break logging
       }
     });
@@ -124,7 +124,7 @@ class DebugLogger {
     this.listeners.forEach((listener) => {
       try {
         listener(this.logs);
-      } catch (error) {
+      } catch {
         // Don't let listener errors break logging
       }
     });

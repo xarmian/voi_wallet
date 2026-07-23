@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Alert,
   Share,
   ActivityIndicator,
@@ -31,7 +30,6 @@ import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useActiveAccount, useActiveAccountBalance } from '@/store/walletStore';
 import { formatVoiBalance } from '@/utils/bigint';
-import AccountSelector from '@/components/account/AccountSelector';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import UniversalHeader from '@/components/common/UniversalHeader';

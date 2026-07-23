@@ -18,11 +18,9 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   useDerivedValue,
-  useAnimatedProps,
   runOnJS,
 } from 'react-native-reanimated';
 import { useTheme } from '@/contexts/ThemeContext';
-import { timingConfigs } from '@/utils/animations';
 
 interface AnimatedNumberProps {
   /** The number value to display */

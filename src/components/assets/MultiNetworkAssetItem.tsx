@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { MappedAsset } from '@/services/token-mapping/types';
-import { formatAssetBalance, formatNativeBalance } from '@/utils/bigint';
+import { formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
 import { getNetworkConfig } from '@/services/network/config';
 import { useThemedStyles } from '@/hooks/useThemedStyles';

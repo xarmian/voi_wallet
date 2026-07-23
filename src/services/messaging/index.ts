@@ -24,7 +24,6 @@ import {
   SendMessageRequest,
   SendMessageResult,
   MESSAGE_FEE_MICRO,
-  EncryptedMessagePayloadV2,
   MessagingKeyPair,
 } from './types';
 import {

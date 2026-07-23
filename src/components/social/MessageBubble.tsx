@@ -15,11 +15,7 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
-import {
-  Message,
-  MessageStatus,
-  MESSAGE_FEE_MICRO,
-} from '@/services/messaging/types';
+import { Message, MESSAGE_FEE_MICRO } from '@/services/messaging/types';
 
 interface MessageBubbleProps {
   message: Message;

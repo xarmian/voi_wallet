@@ -1,12 +1,5 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Switch,
-} from 'react-native';
+import { View, Text, StyleSheet, TextInput, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ScannedAccount } from '@/utils/accountQRParser';
 import AccountAvatar from '@/components/account/AccountAvatar';

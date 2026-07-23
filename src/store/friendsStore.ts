@@ -3,7 +3,6 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Friend,
-  FriendTransaction,
   FriendAlreadyExistsError,
   FriendNotFoundError,
   InvalidEnvoiNameError,

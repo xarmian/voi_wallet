@@ -54,7 +54,7 @@ export function parseWalletConnectUri(uri: string): {
     }
 
     return { topic, version, params };
-  } catch (error) {
+  } catch {
     return {};
   }
 }
@@ -85,7 +85,7 @@ export function detectWalletConnectVersion(uri: string): 1 | 2 | null {
     if (parsed.params?.['relay-protocol'] || parsed.params?.symKey) return 2;
 
     return null;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -140,7 +140,7 @@ export function parseWalletConnectRequestUri(uri: string): {
     const sessionTopic = params.get('sessionTopic') || undefined;
     const requestId = requestIdStr ? Number(requestIdStr) : undefined;
     return { requestId, sessionTopic };
-  } catch (e) {
+  } catch {
     return {};
   }
 }
@@ -229,7 +229,7 @@ export function validateAlgorandTransaction(txn: WalletTransaction): boolean {
     }
 
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -279,7 +279,7 @@ export function getTransactionSigningInfo(
     // This is a simplified extraction - in practice you'd use algosdk to decode
     // For now, assume the sender is provided via authAddr or signers
     senderAddress = transaction.authAddr || transaction.signers?.[0] || '';
-  } catch (error) {
+  } catch {
     return { canSign: false, isRekeyed: false };
   }
 

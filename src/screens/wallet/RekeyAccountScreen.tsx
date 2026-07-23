@@ -18,7 +18,6 @@ import {
   AccountMetadata,
   AccountType,
   StandardAccountMetadata,
-  RekeyedAccountMetadata,
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
   LedgerSigningInfo,
@@ -36,11 +35,8 @@ import RekeyToLedger from '@/components/ledger/RekeyToLedger';
 import AirgapVerificationFlow from '@/components/rekey/AirgapVerificationFlow';
 import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
-import {
-  getNetworkConfig,
-  NETWORK_CONFIGURATIONS,
-} from '@/services/network/config';
-import { NetworkService, RekeyInfo } from '@/services/network';
+import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
+import { NetworkService } from '@/services/network';
 
 type RekeyAccountScreenRouteProp = RouteProp<
   SettingsStackParamList,

@@ -19,18 +19,14 @@ import {
   AccountBalance,
   AssetParams,
   TransactionInfo,
-  AccountNotFoundError,
-  AccountExistsError,
 } from '../types/wallet';
 import { MultiAccountWalletService } from '../services/wallet';
 import rekeyManager from '@/services/wallet/rekeyManager';
-import { NetworkService, VoiNetworkService } from '../services/network';
+import { NetworkService } from '../services/network';
 import { NetworkId } from '../types/network';
 import EnvoiService, { EnvoiNameInfo } from '../services/envoi';
 import { MimirApiService, Arc200TokenMetadata } from '../services/mimir';
-import tokenMappingService, {
-  TokenMappingService,
-} from '../services/token-mapping';
+import tokenMappingService from '../services/token-mapping';
 import { MultiNetworkBalanceService } from '../services/network/multi-network';
 import {
   TokenMapping,

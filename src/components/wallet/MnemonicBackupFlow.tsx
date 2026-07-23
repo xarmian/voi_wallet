@@ -145,7 +145,7 @@ export default function MnemonicBackupFlow({
             () => setHasCopied(false),
             3000
           );
-        } catch (error) {
+        } catch {
           Alert.alert('Error', 'Failed to copy to clipboard');
         }
       });

@@ -1,8 +1,6 @@
 import {
   TransactionService,
   TransactionParams,
-  UnsignedTransaction,
-  UnsignedTransactionGroup,
   SignProgressCallbacks,
 } from '@/services/transactions';
 import { WalletAccount } from '@/types/wallet';

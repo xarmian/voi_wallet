@@ -1,10 +1,5 @@
 import algosdk from 'algosdk';
-import {
-  TransactionService,
-  TransactionParams,
-  UnsignedTransaction,
-  UnsignedTransactionGroup,
-} from '@/services/transactions';
+import { TransactionService, TransactionParams } from '@/services/transactions';
 import {
   WalletConnectService,
   WalletTransaction,
@@ -401,7 +396,7 @@ export class UnifiedTransactionSigner {
               } else {
                 txn = algosdk.decodeUnsignedTransaction(txnBytes);
               }
-            } catch (decodeError) {
+            } catch {
               // Transaction is already signed (logic sig, etc.) - pass through as-is
               signedTxns.push(wtxn.txn);
               callbacks?.onLedgerSigned?.({ index: i + 1, total });
@@ -480,7 +475,7 @@ export class UnifiedTransactionSigner {
                 } else {
                   txn = algosdk.decodeUnsignedTransaction(txnBytes);
                 }
-              } catch (decodeError) {
+              } catch {
                 // Transaction is already signed (logic sig, etc.) - pass through as-is
                 return wtxn.txn;
               }

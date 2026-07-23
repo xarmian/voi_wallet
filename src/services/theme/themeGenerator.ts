@@ -1,9 +1,4 @@
-import {
-  Theme,
-  GlassEffect,
-  ShadowStyle,
-  TypographyStyle,
-} from '@/constants/themes';
+import { Theme } from '@/constants/themes';
 import { ExtractedColors, ColorPalette } from './colorExtraction';
 
 /**

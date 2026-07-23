@@ -14,7 +14,7 @@
  * ```
  */
 
-import { isMobile, isExtension, getCachedPlatform } from './detection';
+import { isMobile } from './detection';
 import type {
   CryptoAdapter,
   SecureStorageAdapter,

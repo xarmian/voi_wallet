@@ -207,7 +207,7 @@ export const formatNumber = (
     }
 
     return formatted;
-  } catch (error) {
+  } catch {
     // Fallback to basic formatting
     return value.toFixed(decimalPlaces);
   }
@@ -271,7 +271,7 @@ export const formatCurrency = (
     }
 
     return formatter.format(value);
-  } catch (error) {
+  } catch {
     // Fallback formatting
     const formatted = value.toFixed(2);
     return showCurrencySymbol ? `$${formatted}` : formatted;

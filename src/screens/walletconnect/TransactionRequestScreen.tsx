@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -18,16 +17,10 @@ import Toast from 'react-native-toast-message';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import {
   WalletConnectService,
-  WalletConnectRequestEvent,
   WalletTransaction,
 } from '@/services/walletconnect';
 import { MultiAccountWalletService } from '@/services/wallet';
-import {
-  AccountMetadata,
-  AccountType,
-  LedgerAccountMetadata,
-  WalletAccount,
-} from '@/types/wallet';
+import { AccountMetadata, WalletAccount } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
 import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
