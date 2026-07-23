@@ -304,6 +304,46 @@ describe('operation-scoped account errors (TASK-40)', () => {
     expect(accountState('acc-1').multiNetworkBalance).toBeDefined();
   });
 
+  it('does not strand the spinner when a superseded request resumes late', async () => {
+    // A stale request that re-raises `isTransactionsLoading` after a newer one
+    // finished would leave the list spinning forever, because its own response
+    // is (correctly) discarded further down.
+    let releaseAccount!: () => void;
+    mockGetAccount.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseAccount = () =>
+            resolve({ id: 'acc-1', address: 'ADDR-acc-1', type: 'standard' });
+        })
+    );
+    mockGetAssetTransactionHistory.mockResolvedValue({
+      transactions: [{ id: 'asset-1' }],
+      nextToken: undefined,
+      hasMore: false,
+    });
+    mockGetAllTransactionHistory.mockResolvedValue({
+      transactions: [],
+      nextToken: undefined,
+    });
+
+    // Account-wide request is parked inside getAccount...
+    const allLoad = useWalletStore.getState().loadAllTransactions('acc-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // ...a newer asset request supersedes it and completes.
+    await useWalletStore.getState().loadAssetTransactions('acc-1', 42, false);
+    expect(accountState('acc-1').isTransactionsLoading).toBe(false);
+
+    // The stale request resumes and must write nothing at all.
+    releaseAccount();
+    await allLoad;
+
+    expect(accountState('acc-1').isTransactionsLoading).toBe(false);
+    expect(accountState('acc-1').recentTransactionsScope).toBe(
+      assetTransactionsScope(42, false)
+    );
+  });
+
   it('clearAccountError clears every scoped field', async () => {
     mockGetAccountBalance.mockRejectedValue(new Error('algod is down'));
     mockGetTransactionHistory.mockRejectedValue(new Error('indexer is down'));

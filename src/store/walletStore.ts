@@ -1352,11 +1352,18 @@ export const useWalletStore = create<WalletState>()(
         // Resolve account fresh from service (repairs missing addresses if needed)
         const account = await MultiAccountWalletService.getAccount(accountId);
 
+        // Freshness must be re-checked BEFORE any write: a newer scope may have
+        // completed during the await above, and re-raising the loading flag from
+        // this stale snapshot would strand the UI in a spinner (this request's
+        // own response is dropped by the guard further down).
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+        const currentState = get().accountStates[accountId] ?? accountState;
+
         set({
           accountStates: {
-            ...accountStates,
+            ...get().accountStates,
             [accountId]: {
-              ...accountState,
+              ...currentState,
               isTransactionsLoading: true,
               transactionsLoadScope: ALL_TRANSACTIONS_SCOPE,
               lastError: null,
@@ -1448,11 +1455,18 @@ export const useWalletStore = create<WalletState>()(
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
 
+        // Freshness must be re-checked BEFORE any write: a newer scope may have
+        // completed during the await above, and re-raising the loading flag from
+        // this stale snapshot would strand the UI in a spinner (this request's
+        // own response is dropped by the guard further down).
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+        const currentState = get().accountStates[accountId] ?? accountState;
+
         set({
           accountStates: {
-            ...accountStates,
+            ...get().accountStates,
             [accountId]: {
-              ...accountState,
+              ...currentState,
               isTransactionsLoading: true,
               transactionsLoadScope: assetTransactionsScope(assetId, isArc200),
               lastError: null,
@@ -1555,12 +1569,14 @@ export const useWalletStore = create<WalletState>()(
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         // Set loading more state
         set({
           accountStates: {
-            ...accountStates,
+            ...get().accountStates,
             [accountId]: {
-              ...accountState,
+              ...(get().accountStates[accountId] ?? accountState),
               transactionsError: null,
               assetTransactionsPagination: {
                 ...accountState.assetTransactionsPagination,
@@ -1684,11 +1700,18 @@ export const useWalletStore = create<WalletState>()(
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
 
+        // Freshness must be re-checked BEFORE any write: a newer scope may have
+        // completed during the await above, and re-raising the loading flag from
+        // this stale snapshot would strand the UI in a spinner (this request's
+        // own response is dropped by the guard further down).
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+        const currentState = get().accountStates[accountId] ?? accountState;
+
         set({
           accountStates: {
-            ...accountStates,
+            ...get().accountStates,
             [accountId]: {
-              ...accountState,
+              ...currentState,
               isTransactionsLoading: true,
               transactionsLoadScope: ALL_TRANSACTIONS_SCOPE,
               lastError: null,
@@ -1776,12 +1799,14 @@ export const useWalletStore = create<WalletState>()(
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         // Set loading more state
         set({
           accountStates: {
-            ...accountStates,
+            ...get().accountStates,
             [accountId]: {
-              ...accountState,
+              ...(get().accountStates[accountId] ?? accountState),
               transactionsError: null,
               transactionsPagination: {
                 ...accountState.transactionsPagination,
@@ -2554,15 +2579,20 @@ export const useWalletStore = create<WalletState>()(
         // Get account address
         const account = await MultiAccountWalletService.getAccount(accountId);
 
+        // Same reasoning as the transaction loaders: re-check freshness before
+        // any write, or a stale request re-raises the loading flag and its own
+        // response is then discarded, stranding the UI in a spinner.
+        if (!isLatestMultiNetworkRequest(accountId, requestToken)) return;
+
         // Determine loading state based on cache availability
         const shouldShowLoading = !hasExistingBalance || forceRefresh;
 
         // Set loading state
         set({
           accountStates: {
-            ...accountStates,
+            ...get().accountStates,
             [accountId]: {
-              ...accountState,
+              ...(get().accountStates[accountId] ?? accountState),
               isMultiNetworkBalanceLoading: shouldShowLoading,
               lastError: null,
               multiNetworkBalanceError: null,
