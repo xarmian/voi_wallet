@@ -30,7 +30,29 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
   type: AccountType.STANDARD;
   mnemonic: string; // 25-word recovery phrase
   derivationPath?: string; // HD derivation path if applicable
-  hasBackup: boolean; // Whether backup has been verified
+  /**
+   * LEGACY. Despite the historical name this means "a mnemonic was supplied for
+   * this account", NOT "the user proved they have it" — `importStandardAccount`
+   * assigns `!!request.mnemonic`. Semantics are deliberately left untouched
+   * (DR-10); nothing in the app reads it today. Use `backupVerified` for any
+   * "is this account safely backed up?" decision.
+   */
+  hasBackup: boolean;
+  /**
+   * TASK-45 / DR-10 / DR-11 — whether the user has demonstrably confirmed this
+   * account's recovery phrase by completing the word-verification quiz.
+   *
+   * - `true` ONLY on quiz success. Plain creation, import, rekey conversion,
+   *   restore-from-backup, and the "Skip for now" escape all leave it `false`.
+   * - Pre-existing accounts (persisted before this field existed) migrate to
+   *   `false`; it is NOT derived from `hasBackup`, which means something else.
+   * - Deliberately EXCLUDED from the encrypted backup format: verification is a
+   *   property of this device's user, not of the backup payload.
+   *
+   * Read it through `isBackupVerified()` so a legacy record that has not yet
+   * been through the read-time migration can never be treated as verified.
+   */
+  backupVerified: boolean;
   backupCreatedAt?: string; // Backup creation timestamp
 }
 
@@ -97,6 +119,34 @@ export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
    * 'v1-unsigned' at EVERY read site (`authLevel ?? 'v1-unsigned'`).
    */
   authLevel?: RemoteSignerAuthLevel;
+}
+
+/**
+ * TASK-45 — the ONLY sanctioned read of `backupVerified`.
+ *
+ * Fails closed in every ambiguous case: non-standard accounts (no phrase to
+ * back up), and legacy standard records persisted before the field existed
+ * (`undefined` at runtime even though the type declares it required, until the
+ * read-time migration in MultiAccountWalletService rewrites them). Anything but
+ * a literal `true` means "not verified", so the Home warning banner can never
+ * be wrongly suppressed.
+ */
+export function isBackupVerified(
+  account: Pick<AccountMetadata, 'type'> | null | undefined
+): boolean {
+  if (!account || account.type !== AccountType.STANDARD) return false;
+  return (account as Partial<StandardAccountMetadata>).backupVerified === true;
+}
+
+/**
+ * True when an account still needs its recovery phrase confirmed — i.e. it is a
+ * key-bearing STANDARD account whose phrase the user has not proven they hold.
+ */
+export function needsBackupVerification(
+  account: Pick<AccountMetadata, 'type'> | null | undefined
+): boolean {
+  if (!account || account.type !== AccountType.STANDARD) return false;
+  return !isBackupVerified(account);
 }
 
 // Union type for all account metadata types
@@ -227,6 +277,13 @@ export interface ImportAccountRequest {
   privateKey?: string;
   label?: string;
   color?: string;
+  /**
+   * TASK-45 / DR-11 — carrier for the add-account flow, which imports directly
+   * instead of routing through SecuritySetup. Set true ONLY when the caller
+   * observed the user complete the verification quiz for THIS phrase. Absent or
+   * false persists the account as un-backed-up (the safe default).
+   */
+  backupVerified?: boolean;
 }
 
 export interface ImportLedgerAccountRequest {

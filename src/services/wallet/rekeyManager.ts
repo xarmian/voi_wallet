@@ -220,6 +220,9 @@ export class RekeyManager {
               // Backup is unverified; the private key is confirmed present in
               // secure storage (checked above) but that is not a mnemonic backup.
               hasBackup: false,
+              // TASK-45/DR-11: a rekey conversion is not a user confirmation of
+              // the recovery phrase, so the account stays un-backed-up.
+              backupVerified: false,
             };
             return standardAccount;
           } else {

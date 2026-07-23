@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import MnemonicDisplay from './MnemonicDisplay';
+import MnemonicVerification from './MnemonicVerification';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useSecureScreen } from '@/hooks/useSecureScreen';
 import {
@@ -18,13 +19,30 @@ import {
   ClipboardClearHandle,
 } from '@/utils/clipboardAutoClear';
 
+/**
+ * Outcome of the backup step, handed to the host so it can persist
+ * `backupVerified` correctly (DR-11).
+ *
+ * `verified` is true ONLY when the user completed the word quiz. Skipping, or
+ * a plain "I've saved it" acknowledgement, reports false — the host must then
+ * persist the account as un-backed-up and surface the Home warning banner.
+ */
+export interface MnemonicBackupResult {
+  verified: boolean;
+}
+
 interface MnemonicBackupFlowProps {
   mnemonic: string;
-  onBackupConfirmed: () => void;
+  onBackupConfirmed: (result: MnemonicBackupResult) => void;
   title?: string;
   subtitle?: string;
   showCopyOption?: boolean;
   requireVerification?: boolean;
+  /**
+   * When verification is required, also offer a "Skip for now" escape (DR-2).
+   * Skipping still completes the flow, but reports `verified: false`.
+   */
+  allowSkipVerification?: boolean;
   onBack?: () => void;
 }
 
@@ -35,14 +53,11 @@ export default function MnemonicBackupFlow({
   subtitle = 'Your recovery phrase is the key to your wallet. Keep it safe and secure.',
   showCopyOption = false,
   requireVerification = false,
+  allowSkipVerification = true,
   onBack,
 }: MnemonicBackupFlowProps) {
   const [hasCopied, setHasCopied] = useState(false);
   const [isVerificationStep, setIsVerificationStep] = useState(false);
-  const [verificationWords, setVerificationWords] = useState<number[]>([]);
-  const [selectedWords, setSelectedWords] = useState<{ [key: number]: string }>(
-    {}
-  );
   const { theme } = useTheme();
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
   const mountedRef = useRef(true);
@@ -78,18 +93,6 @@ export default function MnemonicBackupFlow({
       }
     };
   }, []);
-
-  const mnemonicWords = mnemonic.split(' ');
-
-  // Shuffle the verification word bank ONCE per mnemonic. The shuffle uses
-  // Math.random() (impure), so it must be explicitly stabilized — otherwise it
-  // re-runs on every render and the word buttons jump around each time the user
-  // taps one (setSelectedWords triggers a re-render). Keyed on the stable
-  // `mnemonic` string, not the per-render mnemonicWords array.
-  const shuffledWords = useMemo(
-    () => mnemonic.split(' ').sort(() => Math.random() - 0.5),
-    [mnemonic]
-  );
 
   const handleCopy = async () => {
     // Assign this tap's generation synchronously (before the serialized body
@@ -152,69 +155,56 @@ export default function MnemonicBackupFlow({
     await clipboardOpLock.current;
   };
 
-  const startVerification = () => {
-    // Select 3 random word positions for verification
-    const positions: number[] = [];
-    while (positions.length < 3) {
-      const randomPos = Math.floor(Math.random() * mnemonicWords.length);
-      if (!positions.includes(randomPos)) {
-        positions.push(randomPos);
-      }
-    }
-    setVerificationWords(positions.sort((a, b) => a - b));
-    setSelectedWords({});
-    setIsVerificationStep(true);
+  const handleVerified = () => {
+    Alert.alert(
+      'Verification Successful!',
+      'You have successfully backed up your recovery phrase.',
+      [
+        {
+          text: 'Continue',
+          onPress: () => onBackupConfirmed({ verified: true }),
+        },
+      ]
+    );
   };
 
-  const handleWordSelection = (position: number, word: string) => {
-    setSelectedWords((prev) => ({
-      ...prev,
-      [position]: word,
-    }));
-  };
-
-  const verifyWords = () => {
-    let allCorrect = true;
-    for (const position of verificationWords) {
-      if (selectedWords[position] !== mnemonicWords[position]) {
-        allCorrect = false;
-        break;
-      }
-    }
-
-    if (allCorrect) {
-      Alert.alert(
-        'Verification Successful!',
-        'You have successfully backed up your recovery phrase.',
-        [{ text: 'Continue', onPress: onBackupConfirmed }]
-      );
-    } else {
-      Alert.alert(
-        'Verification Failed',
-        'Some words are incorrect. Please try again.',
-        [{ text: 'Try Again', onPress: () => setIsVerificationStep(false) }]
-      );
-    }
+  const handleSkipVerification = () => {
+    Alert.alert(
+      'Skip verification?',
+      'Your account will be marked as not backed up until you confirm your recovery phrase. Anyone who loses this device without the phrase written down loses the funds in this account.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Skip for now',
+          style: 'destructive',
+          onPress: () => onBackupConfirmed({ verified: false }),
+        },
+      ]
+    );
   };
 
   const handleContinue = () => {
     if (requireVerification) {
-      startVerification();
+      setIsVerificationStep(true);
     } else {
       Alert.alert(
         'Backup Confirmation',
         'Have you safely written down your recovery phrase? You will need it to recover your wallet if you lose access to this device.',
         [
           { text: 'Not Yet', style: 'cancel' },
-          { text: "Yes, I've Saved It", onPress: onBackupConfirmed },
+          {
+            text: "Yes, I've Saved It",
+            // Self-attestation is NOT verification (DR-11).
+            onPress: () => onBackupConfirmed({ verified: false }),
+          },
         ]
       );
     }
   };
 
   if (isVerificationStep) {
-    // Verification step UI (shuffledWords is memoized above so it stays stable
-    // as the user taps words)
+    // DR-12: the quiz body lives in MnemonicVerification, whose selection logic
+    // is position-indexed so a phrase with a repeated word stays completable.
     return (
       <SafeAreaView
         style={[styles.container, { backgroundColor: theme.colors.background }]}
@@ -229,18 +219,19 @@ export default function MnemonicBackupFlow({
             },
           ]}
         >
-          {onBack && (
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => setIsVerificationStep(false)}
-            >
-              <Ionicons
-                name="arrow-back"
-                size={24}
-                color={theme.colors.primary}
-              />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.backButton}
+            accessibilityRole="button"
+            accessibilityLabel="Back to recovery phrase"
+            testID="backup-verification-back"
+            onPress={() => setIsVerificationStep(false)}
+          >
+            <Ionicons
+              name="arrow-back"
+              size={24}
+              color={theme.colors.primary}
+            />
+          </TouchableOpacity>
           <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
             Verify Backup
           </Text>
@@ -251,122 +242,12 @@ export default function MnemonicBackupFlow({
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         >
-          <Text
-            style={[styles.verificationTitle, { color: theme.colors.text }]}
-          >
-            Select the correct words to verify your backup
-          </Text>
-          <Text
-            style={[
-              styles.verificationSubtitle,
-              { color: theme.colors.textSecondary },
-            ]}
-          >
-            Tap the words below to complete your recovery phrase verification
-          </Text>
-
-          <View style={styles.verificationContainer}>
-            {verificationWords.map((position, index) => (
-              <View key={position} style={styles.verificationWordContainer}>
-                <Text
-                  style={[
-                    styles.verificationLabel,
-                    { color: theme.colors.text },
-                  ]}
-                >
-                  Word #{position + 1}
-                </Text>
-                <TouchableOpacity
-                  style={[
-                    styles.verificationSlot,
-                    {
-                      backgroundColor: theme.colors.card,
-                      borderColor: theme.colors.border,
-                    },
-                    selectedWords[position] && {
-                      borderColor: theme.colors.primary,
-                      backgroundColor: theme.colors.primaryLight,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.verificationSlotText,
-                      { color: theme.colors.textSecondary },
-                      selectedWords[position] && {
-                        color: theme.colors.primary,
-                      },
-                    ]}
-                  >
-                    {selectedWords[position] || 'Tap to select'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.wordOptionsContainer}>
-            {shuffledWords.map((word, index) => (
-              <TouchableOpacity
-                key={`${word}-${index}`}
-                style={[
-                  styles.wordOption,
-                  {
-                    backgroundColor: theme.colors.card,
-                    borderColor: theme.colors.border,
-                  },
-                  Object.values(selectedWords).includes(word) && {
-                    backgroundColor: theme.colors.surface,
-                    borderColor: theme.colors.disabled,
-                  },
-                ]}
-                onPress={() => {
-                  // Find which position this word should fill
-                  const correctPosition = mnemonicWords.indexOf(word);
-                  if (verificationWords.includes(correctPosition)) {
-                    handleWordSelection(correctPosition, word);
-                  }
-                }}
-                disabled={Object.values(selectedWords).includes(word)}
-              >
-                <Text
-                  style={[
-                    styles.wordOptionText,
-                    { color: theme.colors.text },
-                    Object.values(selectedWords).includes(word) && {
-                      color: theme.colors.textSecondary,
-                    },
-                  ]}
-                >
-                  {word}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[
-              styles.verifyButton,
-              {
-                backgroundColor: verificationWords.every(
-                  (pos) => selectedWords[pos]
-                )
-                  ? theme.colors.primary
-                  : theme.colors.disabled,
-              },
-            ]}
-            onPress={verifyWords}
-            disabled={!verificationWords.every((pos) => selectedWords[pos])}
-          >
-            <Text
-              style={[
-                styles.verifyButtonText,
-                { color: theme.colors.background },
-              ]}
-            >
-              Verify Words
-            </Text>
-          </TouchableOpacity>
+          <MnemonicVerification
+            mnemonic={mnemonic}
+            onVerified={handleVerified}
+            onSkip={allowSkipVerification ? handleSkipVerification : undefined}
+            testIDPrefix="backup-verification"
+          />
         </ScrollView>
       </SafeAreaView>
     );
@@ -468,6 +349,8 @@ export default function MnemonicBackupFlow({
         </View>
 
         <TouchableOpacity
+          testID="backup-continue"
+          accessibilityRole="button"
           style={[
             styles.continueButton,
             { backgroundColor: theme.colors.success },
@@ -559,70 +442,6 @@ const styles = StyleSheet.create({
     marginTop: 30,
   },
   continueButtonText: {
-    fontSize: 18,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  // Verification step styles
-  verificationTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  verificationSubtitle: {
-    fontSize: 16,
-    marginBottom: 30,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  verificationContainer: {
-    marginBottom: 30,
-  },
-  verificationWordContainer: {
-    marginBottom: 15,
-  },
-  verificationLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  verificationSlot: {
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderRadius: 10,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  verificationSlotText: {
-    fontSize: 16,
-  },
-  wordOptionsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 30,
-  },
-  wordOption: {
-    width: '30%',
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    marginBottom: 10,
-    alignItems: 'center',
-    borderWidth: 1,
-  },
-  wordOptionText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  verifyButton: {
-    paddingVertical: 15,
-    paddingHorizontal: 30,
-    borderRadius: 10,
-  },
-  verifyButtonText: {
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',

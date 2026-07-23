@@ -223,7 +223,16 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             // sk on demand, so Show-Recovery-Phrase still works.
             mnemonic: '',
             derivationPath: backupAccount.derivationPath,
-            hasBackup: backupAccount.hasBackup || true, // Restored = backed up
+            // TASK-45: was `backupAccount.hasBackup || true`, which is
+            // unconditionally truthy — every restored account was marked backed
+            // up regardless of what the payload said. Honour the payload, and
+            // fail closed when the field is absent (older payloads predate it).
+            hasBackup: backupAccount.hasBackup ?? false,
+            // TASK-45/DR-11: `backupVerified` is deliberately NOT part of the
+            // backup format. Verification is a property of THIS device's user,
+            // not of the encrypted payload, so a restore always starts at false
+            // and the Home banner asks the user to confirm on this device.
+            backupVerified: false,
           };
 
           // Store account securely (this encrypts the private key). TASK-220:

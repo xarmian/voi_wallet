@@ -1500,6 +1500,10 @@ export class AccountSecureStorage {
             type: AccountType.STANDARD,
             mnemonic: '', // Will be loaded separately for security
             hasBackup: false, // Will be loaded from metadata
+            // TASK-45/DR-11: this per-account secure record does not carry
+            // verification state (the wallet metadata blob is authoritative), so
+            // fail closed here rather than inventing a verified account.
+            backupVerified: false,
           } as StandardAccountMetadata;
 
         case AccountType.WATCH:

@@ -116,6 +116,7 @@ function standardAccount(
     // ever inspects the address + type, not the mnemonic.
     mnemonic: '',
     hasBackup: false,
+    backupVerified: false,
   };
 }
 

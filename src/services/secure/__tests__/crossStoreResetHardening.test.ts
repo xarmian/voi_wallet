@@ -95,6 +95,7 @@ function standardAccount(id: string): StandardAccountMetadata {
     createdAt: '2026-01-01T00:00:00.000Z',
     mnemonic: '',
     hasBackup: true,
+    backupVerified: false,
   } as StandardAccountMetadata;
 }
 

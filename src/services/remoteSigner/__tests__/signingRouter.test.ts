@@ -113,6 +113,7 @@ function makeStandard(): AccountMetadata {
     type: AccountType.STANDARD,
     mnemonic: '', // never real key material; unused by the router
     hasBackup: true,
+    backupVerified: false,
   };
 }
 

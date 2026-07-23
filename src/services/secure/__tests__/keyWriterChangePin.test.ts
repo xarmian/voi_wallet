@@ -313,6 +313,7 @@ function makeStandardMeta(
     lastUsed: new Date().toISOString(),
     mnemonic: '',
     hasBackup: false,
+    backupVerified: false,
   };
 }
 
