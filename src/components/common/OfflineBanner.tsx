@@ -93,8 +93,9 @@ const createStyles = (theme: Theme) =>
       justifyContent: 'center',
       gap: theme.spacing.xs,
     },
-    // Fixed dark ink: this banner is filled with theme.colors.warning (amber in
-    // every palette), where a theme text colour would lose contrast.
+    // Fixed dark ink: this banner is filled with theme.colors.warning, which is
+    // a mid-lightness hue in the static palettes and in generated NFT themes
+    // alike, so a theme text colour would lose contrast against it.
     icon: {
       color: '#1C1C1E',
     },
