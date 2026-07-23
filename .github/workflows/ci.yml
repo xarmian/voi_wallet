@@ -30,6 +30,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Absolute (not relative) integrity of what this commit ships: re-lints and
+      # fails unless the committed lint-baseline.json matches the live counts AND
+      # exactly one --max-warnings pin equals that total. This is the only check
+      # that runs when there is no base artifact to ratchet against — including
+      # the rollout PR itself — so a malformed or inflated first baseline cannot
+      # land, and clearing warnings without regenerating the baseline (leaving
+      # budget for a later regression) fails here.
+      - name: Lint baseline integrity
+        run: npm run lint:baseline:check
+
       # The ratchet: the ceiling may fall but never rise. Compares this ref's
       # committed baseline with the previous one and checks that --max-warnings
       # still equals it, so the pin cannot be inflated to admit new warnings.
