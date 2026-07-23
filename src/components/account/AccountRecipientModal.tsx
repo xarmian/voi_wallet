@@ -156,6 +156,10 @@ export default function AccountRecipientModal({
         style={styles.accountItem}
         onPress={() => handleAccountSelect(item)}
         activeOpacity={0.7}
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={`${item.label || `Account ${item.address.slice(0, 6)}`}, ${formatAddress(item.address)}`}
+        accessibilityHint="Selects this account as the recipient"
       >
         <AccountAvatar address={item.address} account={item} size={40} />
         <View style={styles.accountInfo}>
@@ -183,6 +187,10 @@ export default function AccountRecipientModal({
         style={styles.accountItem}
         onPress={() => handleFriendSelect(item)}
         activeOpacity={0.7}
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={`${item.envoiName}${item.isFavorite ? ', favorite' : ''}, ${formatAddress(item.address)}`}
+        accessibilityHint="Selects this contact as the recipient"
       >
         {item.avatar ? (
           <Image
@@ -273,6 +281,8 @@ export default function AccountRecipientModal({
                 onPress={onClose}
                 style={styles.closeButton}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Close recipient picker"
               >
                 <Ionicons
                   name="close"
@@ -287,6 +297,9 @@ export default function AccountRecipientModal({
                 style={[styles.tab, isAccountsTab && styles.tabActive]}
                 onPress={() => setActiveTab('accounts')}
                 activeOpacity={0.7}
+                accessibilityRole="tab"
+                accessibilityLabel="My accounts"
+                accessibilityState={{ selected: isAccountsTab }}
               >
                 <Ionicons
                   name="wallet-outline"
@@ -311,6 +324,9 @@ export default function AccountRecipientModal({
                 style={[styles.tab, !isAccountsTab && styles.tabActive]}
                 onPress={() => setActiveTab('friends')}
                 activeOpacity={0.7}
+                accessibilityRole="tab"
+                accessibilityLabel="Contacts"
+                accessibilityState={{ selected: !isAccountsTab }}
               >
                 <Ionicons
                   name="people-outline"
@@ -355,6 +371,8 @@ export default function AccountRecipientModal({
                     onPress={() => setSearchQuery('')}
                     style={styles.clearButton}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear search"
                   >
                     <Ionicons
                       name="close-circle"

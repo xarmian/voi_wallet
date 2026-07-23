@@ -49,6 +49,7 @@ import {
   useClaimableLoading,
 } from '@/store/claimableStore';
 import { useActiveAccount } from '@/store/walletStore';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { ClaimableItem, toSerializableClaimableItem } from '@/types/claimable';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
 
@@ -82,6 +83,7 @@ export default function ClaimableTokensScreen() {
   const isLoading = useClaimableLoading();
 
   // Animation for pending refresh indicator
+  const reducedMotion = useReducedMotion();
   const pulseOpacity = useSharedValue(1);
   const pulseAnimatedStyle = useAnimatedStyle(() => ({
     opacity: pulseOpacity.value,
@@ -108,12 +110,16 @@ export default function ClaimableTokensScreen() {
       pendingRefreshHandled.current = true;
       setIsPendingRefresh(true);
 
-      // Start pulsing animation
-      pulseOpacity.value = withRepeat(
-        withTiming(0.4, { duration: 800 }),
-        -1,
-        true
-      );
+      // Start pulsing animation. DR-13: skipped entirely under Reduce Motion —
+      // `isPendingRefresh` still drives the visible "refreshing" copy, so the
+      // state remains conveyed without the loop.
+      if (!reducedMotion) {
+        pulseOpacity.value = withRepeat(
+          withTiming(0.4, { duration: 800 }),
+          -1,
+          true
+        );
+      }
 
       // Clear the params immediately to prevent re-triggering
       navigation.setParams({
@@ -155,7 +161,18 @@ export default function ClaimableTokensScreen() {
     fetchApprovals,
     navigation,
     pulseOpacity,
+    reducedMotion,
   ]);
+
+  // DR-13: the effect above is short-circuited by `pendingRefreshHandled`, so a
+  // pulse that was already running when the user switched Reduce Motion ON
+  // would otherwise keep looping until the delayed refresh finishes. Stop it
+  // from its own effect, which has no such guard.
+  useEffect(() => {
+    if (!reducedMotion) return;
+    cancelAnimation(pulseOpacity);
+    pulseOpacity.value = 1;
+  }, [reducedMotion, pulseOpacity]);
 
   // Cleanup timeout on unmount only (separate effect with empty deps)
   useEffect(() => {

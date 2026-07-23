@@ -171,7 +171,12 @@ export default function NFTDetailScreen() {
           },
         ]}
       >
-        <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={handleBackPress}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="arrow-back" size={24} color={theme.colors.primary} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
@@ -183,6 +188,12 @@ export default function NFTDetailScreen() {
               style={styles.actionButton}
               onPress={handleSetAsTheme}
               disabled={isSettingTheme}
+              accessibilityRole="button"
+              accessibilityLabel="Set this NFT as app theme"
+              accessibilityState={{
+                disabled: isSettingTheme,
+                busy: isSettingTheme,
+              }}
             >
               {isSettingTheme ? (
                 <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -195,7 +206,12 @@ export default function NFTDetailScreen() {
               )}
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.actionButton} onPress={handleSend}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleSend}
+            accessibilityRole="button"
+            accessibilityLabel="Send this NFT"
+          >
             <Ionicons
               name="send-outline"
               size={22}
@@ -205,6 +221,8 @@ export default function NFTDetailScreen() {
           <TouchableOpacity
             style={styles.actionButton}
             onPress={handleShareNFT}
+            accessibilityRole="button"
+            accessibilityLabel="Share this NFT"
           >
             <Ionicons
               name="share-outline"
@@ -287,7 +305,11 @@ export default function NFTDetailScreen() {
               >
                 Contract ID:
               </Text>
-              <TouchableOpacity onPress={handleCopyContractId}>
+              <TouchableOpacity
+                onPress={handleCopyContractId}
+                accessibilityRole="button"
+                accessibilityLabel={`Copy contract ID ${nft.contractId}`}
+              >
                 <Text
                   style={[styles.infoValue, { color: theme.colors.primary }]}
                 >
@@ -305,7 +327,11 @@ export default function NFTDetailScreen() {
               >
                 Token ID:
               </Text>
-              <TouchableOpacity onPress={handleCopyTokenId}>
+              <TouchableOpacity
+                onPress={handleCopyTokenId}
+                accessibilityRole="button"
+                accessibilityLabel={`Copy token ID ${nft.tokenId}`}
+              >
                 <Text
                   style={[styles.infoValue, { color: theme.colors.primary }]}
                 >

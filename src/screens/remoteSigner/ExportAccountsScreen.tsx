@@ -212,6 +212,8 @@ export default function ExportAccountsScreen() {
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
@@ -239,6 +241,8 @@ export default function ExportAccountsScreen() {
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
@@ -266,6 +270,8 @@ export default function ExportAccountsScreen() {
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
@@ -310,12 +316,19 @@ export default function ExportAccountsScreen() {
               {signableAccounts.length})
             </Text>
             <View style={styles.selectButtons}>
-              <TouchableOpacity onPress={selectAll} style={styles.selectButton}>
+              <TouchableOpacity
+                onPress={selectAll}
+                style={styles.selectButton}
+                accessibilityRole="button"
+                accessibilityLabel="Select all accounts"
+              >
                 <Text style={styles.selectButtonText}>All</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={selectNone}
                 style={styles.selectButton}
+                accessibilityRole="button"
+                accessibilityLabel="Deselect all accounts"
               >
                 <Text style={styles.selectButtonText}>None</Text>
               </TouchableOpacity>
@@ -331,6 +344,18 @@ export default function ExportAccountsScreen() {
                   styles.accountItemSelected,
               ]}
               onPress={() => toggleAccount(account.id)}
+              accessible
+              accessibilityRole="checkbox"
+              // The row renders the label above the address, but falls back to
+              // the address for both when unlabeled — announce it once.
+              accessibilityLabel={
+                account.label
+                  ? `${account.label}, ${formatAddress(account.address)}`
+                  : formatAddress(account.address)
+              }
+              accessibilityState={{
+                checked: selectedAccountIds.has(account.id),
+              }}
             >
               <View style={styles.accountCheckbox}>
                 {selectedAccountIds.has(account.id) ? (
@@ -369,6 +394,11 @@ export default function ExportAccountsScreen() {
             ]}
             onPress={handleGeneratePress}
             disabled={isGenerating}
+            accessibilityRole="button"
+            accessibilityLabel={
+              isGenerating ? 'Generating pairing QR' : 'Generate pairing QR'
+            }
+            accessibilityState={{ disabled: isGenerating, busy: isGenerating }}
           >
             {isGenerating ? (
               <ActivityIndicator size="small" color={theme.colors.buttonText} />

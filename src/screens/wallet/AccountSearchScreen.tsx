@@ -234,6 +234,10 @@ export default function AccountSearchScreen() {
             style={styles.resultItem}
             onPress={() => handleResultPress(item)}
             activeOpacity={0.7}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={`${item.name ? `${item.name}, ` : ''}${formatAddress(item.address)}`}
+            accessibilityHint="Opens this account's profile"
           >
             {renderAvatar(item)}
             <View style={styles.resultInfo}>
@@ -262,6 +266,12 @@ export default function AccountSearchScreen() {
               ]}
               onPress={() => handleToggleFriend(item)}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isCurrentlyFriend
+                  ? `Remove ${item.name || formatAddress(item.address)} from contacts`
+                  : `Add ${item.name || formatAddress(item.address)} to contacts`
+              }
             >
               <Ionicons
                 name={isCurrentlyFriend ? 'person-remove' : 'person-add'}
@@ -336,6 +346,8 @@ export default function AccountSearchScreen() {
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <Ionicons
               name="chevron-back"
@@ -370,6 +382,8 @@ export default function AccountSearchScreen() {
                   setSearchResults([]);
                   setHasSearched(false);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
               >
                 <Ionicons
                   name="close-circle"
@@ -383,6 +397,12 @@ export default function AccountSearchScreen() {
             style={styles.searchButton}
             onPress={handleSearchSubmit}
             disabled={isLoading || searchQuery.trim().length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Search accounts"
+            accessibilityState={{
+              disabled: isLoading || searchQuery.trim().length === 0,
+              busy: isLoading,
+            }}
           >
             <Text style={styles.searchButtonText}>Search</Text>
           </TouchableOpacity>

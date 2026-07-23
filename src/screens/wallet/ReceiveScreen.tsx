@@ -191,6 +191,8 @@ export default function ReceiveScreen() {
                   variant="light"
                   style={styles.addressBox}
                   onPress={copyAddress}
+                  accessibilityLabel={`Your address, ${activeAccount.address}`}
+                  accessibilityHint="Copies the address to the clipboard"
                 >
                   <Text style={[styles.address, { color: theme.colors.text }]}>
                     {activeAccount.address}

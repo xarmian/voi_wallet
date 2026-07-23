@@ -29,6 +29,17 @@ interface UniversalHeaderProps {
   showBorder?: boolean;
   /** Large title style */
   largeTitle?: boolean;
+  /** Test ID for the header container */
+  testID?: string;
+  /**
+   * Accessible name for the back button. Defaults to "Go back" — override when
+   * the destination is worth naming (e.g. "Back to accounts").
+   */
+  backAccessibilityLabel?: string;
+  /** Hint for the back button. */
+  backAccessibilityHint?: string;
+  /** Test ID for the back button. */
+  backButtonTestID?: string;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -44,6 +55,10 @@ export default function UniversalHeader({
   floating = false,
   showBorder = false,
   largeTitle = false,
+  testID,
+  backAccessibilityLabel = 'Go back',
+  backAccessibilityHint,
+  backButtonTestID,
 }: UniversalHeaderProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
@@ -91,6 +106,13 @@ export default function UniversalHeader({
           onPressIn={handleBackPressIn}
           onPressOut={handleBackPressOut}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          // Icon-only control: without an explicit name this is an unlabeled
+          // leaf on every one of the ~40 screens that mount this header.
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={backAccessibilityLabel}
+          accessibilityHint={backAccessibilityHint}
+          testID={backButtonTestID}
         >
           <View
             style={[
@@ -114,6 +136,7 @@ export default function UniversalHeader({
             { color: themeColors.text },
           ]}
           numberOfLines={1}
+          accessibilityRole="header"
         >
           {title}
         </Text>
@@ -165,6 +188,7 @@ export default function UniversalHeader({
             borderBottomWidth: showBorder ? 1 : 0,
           },
         ]}
+        testID={testID}
       >
         {/* Glass overlay */}
         <View
@@ -201,6 +225,7 @@ export default function UniversalHeader({
           borderBottomWidth: showBorder ? 1 : 0,
         },
       ]}
+      testID={testID}
     >
       {headerContent}
     </View>

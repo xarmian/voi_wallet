@@ -1525,6 +1525,7 @@ export default function HomeScreen() {
                 <GlassCard
                   variant="light"
                   onPress={handleQRScan}
+                  accessibilityLabel="Scan QR code"
                   style={styles.qrButtonTopRight}
                   borderRadius={theme.borderRadius.md}
                   padding="none"
@@ -1644,6 +1645,7 @@ export default function HomeScreen() {
                       <GlassCard
                         variant="light"
                         onPress={handleOpenAssetFilter}
+                        accessibilityLabel="Filter assets"
                         style={styles.headerIconButton}
                         borderRadius={theme.borderRadius.md}
                         padding="none"
@@ -1662,6 +1664,7 @@ export default function HomeScreen() {
                       <GlassCard
                         variant="light"
                         onPress={handleAddAsset}
+                        accessibilityLabel="Add asset"
                         style={styles.headerIconButton}
                         borderRadius={theme.borderRadius.md}
                         padding="none"

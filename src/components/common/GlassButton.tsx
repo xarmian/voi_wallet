@@ -14,6 +14,7 @@ import {
   ViewStyle,
   TextStyle,
   StyleProp,
+  AccessibilityRole,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,6 +31,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { SafeBlurView } from './SafeBlurView';
 import { springConfigs, timingConfigs } from '@/utils/animations';
 import { hapticImpact } from '@/utils/haptics';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -67,6 +69,15 @@ interface GlassButtonProps {
   labelStyle?: StyleProp<TextStyle>;
   /** Test ID */
   testID?: string;
+  /**
+   * Accessible name. Defaults to `label`; override when the visible text is an
+   * abbreviation or otherwise reads poorly to a screen reader.
+   */
+  accessibilityLabel?: string;
+  /** Describes the outcome of activating the button. */
+  accessibilityHint?: string;
+  /** Defaults to `button`; override for e.g. `link` or `tab` semantics. */
+  accessibilityRole?: AccessibilityRole;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -89,9 +100,13 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
   style,
   labelStyle,
   testID,
+  accessibilityLabel,
+  accessibilityHint,
+  accessibilityRole = 'button',
 }) => {
   const { theme } = useTheme();
   const hasNFTBackground = !!theme.backgroundImageUrl;
+  const reducedMotion = useReducedMotion();
 
   // Animation values
   const scale = useSharedValue(1);
@@ -100,7 +115,7 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
 
   // Start glow pulse if enabled
   useEffect(() => {
-    if (glow && !disabled && !loading) {
+    if (glow && !disabled && !loading && !reducedMotion) {
       glowOpacity.value = withRepeat(
         withSequence(
           withTiming(0.6, {
@@ -112,10 +127,14 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
         -1,
         false
       );
+    } else if (glow && !disabled && !loading) {
+      // DR-13: under Reduce Motion the glow stays on, but static — the infinite
+      // pulse never starts, so it costs nothing and never animates.
+      glowOpacity.value = 0.4;
     } else {
       glowOpacity.value = withTiming(0, timingConfigs.normal);
     }
-  }, [glow, disabled, loading, glowOpacity]);
+  }, [glow, disabled, loading, reducedMotion, glowOpacity]);
 
   // Size configurations
   const sizeConfig = useMemo(() => {
@@ -408,6 +427,13 @@ export const GlassButton: React.FC<GlassButtonProps> = ({
       disabled={disabled || loading}
       style={[containerStyles, animatedContainerStyle]}
       testID={testID}
+      accessible
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityHint={accessibilityHint}
+      // `loading` swaps the label for a spinner and blocks presses, so it must
+      // be announced as both busy and unavailable — not silently inert.
+      accessibilityState={{ disabled: disabled || loading, busy: loading }}
     >
       {renderContent()}
     </AnimatedPressable>

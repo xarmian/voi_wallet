@@ -9,6 +9,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  type AccessibilityActionEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -23,6 +24,7 @@ import Animated, {
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 interface UpdateBannerProps {
   /** Called when user taps to download and install the update */
@@ -43,12 +45,14 @@ export default function UpdateBanner({
 }: UpdateBannerProps) {
   const styles = useThemedStyles(createStyles);
   const iconScale = useSharedValue(1);
+  const reducedMotion = useReducedMotion();
 
   const isBusy = isDownloading || isInstalling;
 
-  // Subtle pulsing animation on the icon (only when not busy)
+  // Subtle pulsing animation on the icon (only when not busy).
+  // DR-13: Reduce Motion suppresses the infinite loop entirely.
   useEffect(() => {
-    if (!isBusy) {
+    if (!isBusy && !reducedMotion) {
       iconScale.value = withRepeat(
         withSequence(
           withTiming(1.1, { duration: 800 }),
@@ -60,7 +64,7 @@ export default function UpdateBanner({
     } else {
       iconScale.value = 1;
     }
-  }, [iconScale, isBusy]);
+  }, [iconScale, isBusy, reducedMotion]);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: iconScale.value }],
@@ -76,6 +80,18 @@ export default function UpdateBanner({
     if (!isBusy) {
       onDismiss();
     }
+  };
+
+  // The whole banner is one accessibility group (a pressable GlassCard), which
+  // makes the nested dismiss button unreachable to a screen reader. Expose it
+  // as a custom action on the group instead, so "Dismiss" is available from the
+  // rotor / actions menu without changing the visual layout.
+  const accessibilityActions = isBusy
+    ? undefined
+    : [{ name: 'dismiss', label: 'Dismiss update' }];
+
+  const handleAccessibilityAction = (event: AccessibilityActionEvent): void => {
+    if (event.nativeEvent.actionName === 'dismiss') handleDismiss();
   };
 
   // Determine title and subtitle based on state
@@ -103,6 +119,10 @@ export default function UpdateBanner({
         borderGlow
         glowColor={styles.glowColor.color}
         padding="md"
+        accessibilityLabel={`${getTitle()}. ${getSubtitle()}`}
+        accessibilityState={{ disabled: isBusy, busy: isBusy }}
+        accessibilityActions={accessibilityActions}
+        onAccessibilityAction={handleAccessibilityAction}
       >
         <View style={styles.content}>
           <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>
@@ -121,6 +141,10 @@ export default function UpdateBanner({
               onPress={handleDismiss}
               style={styles.dismissButton}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              // Unreachable inside the grouped card; the equivalent screen
+              // reader path is the `dismiss` accessibility action above.
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
             >
               <Ionicons
                 name="close"
