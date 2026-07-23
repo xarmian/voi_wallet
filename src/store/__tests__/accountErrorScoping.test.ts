@@ -15,6 +15,7 @@ const mockGetAccountBalance = jest.fn();
 const mockGetTransactionHistory = jest.fn();
 const mockGetAllTransactionHistory = jest.fn();
 const mockGetAssetTransactionHistory = jest.fn();
+const mockGetAggregatedBalance = jest.fn();
 const mockGetCurrentNetworkId = jest.fn(() => 'voi-mainnet');
 const mockGetAccount = jest.fn(async (id: string) => ({
   id,
@@ -58,7 +59,10 @@ jest.mock('@/services/token-mapping', () => ({
   TokenMappingService: {},
 }));
 jest.mock('@/services/network/multi-network', () => ({
-  MultiNetworkBalanceService: {},
+  MultiNetworkBalanceService: {
+    getAggregatedBalance: (...args: unknown[]) =>
+      mockGetAggregatedBalance(...args),
+  },
 }));
 jest.mock('@/services/notifications', () => ({
   notificationService: {},
@@ -92,6 +96,7 @@ describe('operation-scoped account errors (TASK-40)', () => {
     mockGetTransactionHistory.mockReset();
     mockGetAllTransactionHistory.mockReset();
     mockGetAssetTransactionHistory.mockReset();
+    mockGetAggregatedBalance.mockReset();
     mockGetAccount.mockClear();
     mockGetCurrentNetworkId.mockReset();
     mockGetCurrentNetworkId.mockReturnValue('voi-mainnet');
@@ -266,6 +271,37 @@ describe('operation-scoped account errors (TASK-40)', () => {
     expect(accountState('acc-1').recentTransactions).toEqual([
       { id: 'asset-1' },
     ]);
+  });
+
+  it('does not let a stale multi-network failure overwrite a newer success', async () => {
+    // Retry and pull-to-refresh both force a load, so two can overlap. An older
+    // failure landing last must not replace fresh balances with an error banner.
+    let rejectFirst!: (reason: unknown) => void;
+    mockGetAggregatedBalance
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+          })
+      )
+      .mockResolvedValueOnce({ address: 'ADDR-acc-1', assets: [] });
+
+    // Non-empty so the loader does not detour through loadTokenMappings.
+    useWalletStore.setState({ tokenMappings: [{} as never] });
+
+    const first = useWalletStore
+      .getState()
+      .loadMultiNetworkBalance('acc-1', true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await useWalletStore.getState().loadMultiNetworkBalance('acc-1', true);
+    expect(accountState('acc-1').multiNetworkBalance).toBeDefined();
+
+    rejectFirst(new Error('aggregate 500'));
+    await first;
+
+    expect(accountState('acc-1').multiNetworkBalanceError).toBeNull();
+    expect(accountState('acc-1').multiNetworkBalance).toBeDefined();
   });
 
   it('clearAccountError clears every scoped field', async () => {

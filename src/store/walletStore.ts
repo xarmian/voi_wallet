@@ -94,6 +94,25 @@ const isLatestTransactionsRequest = (
   token: number
 ): boolean => transactionsRequestSeq.get(accountId) === token;
 
+/**
+ * Same generation guard as `transactionsRequestSeq`, for the aggregate
+ * multi-network balance. Retry and pull-to-refresh both force a load, so two
+ * can overlap; without this an older failure landing after a newer success
+ * would replace fresh balances with a stale error banner.
+ */
+const multiNetworkRequestSeq = new Map<string, number>();
+
+const nextMultiNetworkRequest = (accountId: string): number => {
+  const next = (multiNetworkRequestSeq.get(accountId) ?? 0) + 1;
+  multiNetworkRequestSeq.set(accountId, next);
+  return next;
+};
+
+const isLatestMultiNetworkRequest = (
+  accountId: string,
+  token: number
+): boolean => multiNetworkRequestSeq.get(accountId) === token;
+
 const toTransactionsError = (
   error: unknown,
   scope: string,
@@ -2511,6 +2530,8 @@ export const useWalletStore = create<WalletState>()(
       accountId: string,
       forceRefresh = false
     ) => {
+      // 0 = not yet issued; see nextMultiNetworkRequest.
+      let requestToken = 0;
       try {
         const { accountStates, tokenMappings } = get();
         const accountState =
@@ -2527,6 +2548,8 @@ export const useWalletStore = create<WalletState>()(
         if (!forceRefresh && hasExistingBalance && !isCacheExpired) {
           return;
         }
+
+        requestToken = nextMultiNetworkRequest(accountId);
 
         // Get account address
         const account = await MultiAccountWalletService.getAccount(accountId);
@@ -2558,6 +2581,8 @@ export const useWalletStore = create<WalletState>()(
             account.address
           );
 
+        if (!isLatestMultiNetworkRequest(accountId, requestToken)) return;
+
         set({
           accountStates: {
             ...get().accountStates,
@@ -2579,6 +2604,17 @@ export const useWalletStore = create<WalletState>()(
           );
         }, 0);
       } catch (error) {
+        // A superseded request must not replace a newer success with an error.
+        if (
+          requestToken &&
+          !isLatestMultiNetworkRequest(accountId, requestToken)
+        ) {
+          console.error(
+            '[WalletStore] Stale multi-network balance load failed:',
+            error
+          );
+          return;
+        }
         const { accountStates } = get();
         const accountState =
           accountStates[accountId] || createInitialAccountState();
