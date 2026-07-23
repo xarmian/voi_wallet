@@ -30,13 +30,15 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # Absolute (not relative) integrity of what this commit ships: re-lints and
-      # fails unless the committed lint-baseline.json matches the live counts AND
-      # exactly one --max-warnings pin equals that total. This is the only check
-      # that runs when there is no base artifact to ratchet against — including
-      # the rollout PR itself — so a malformed or inflated first baseline cannot
-      # land, and clearing warnings without regenerating the baseline (leaving
-      # budget for a later regression) fails here.
+      # Absolute (not relative) integrity of what this commit ships, independent
+      # of any base to compare against: re-lints and fails unless the committed
+      # lint-baseline.json matches the live counts AND exactly one --max-warnings
+      # pin equals that total. This is the check that carries the gate when there
+      # is no base artifact to ratchet against — including the rollout PR itself —
+      # so a malformed or inflated first baseline cannot land, and clearing
+      # warnings without regenerating the baseline (leaving budget for a later
+      # regression) fails here. Runs after Lint; if a regression already tripped
+      # Lint this is skipped, which is harmless — the job has already failed.
       - name: Lint baseline integrity
         run: npm run lint:baseline:check
 
