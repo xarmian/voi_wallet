@@ -9,6 +9,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  type AccessibilityActionEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -81,6 +82,18 @@ export default function UpdateBanner({
     }
   };
 
+  // The whole banner is one accessibility group (a pressable GlassCard), which
+  // makes the nested dismiss button unreachable to a screen reader. Expose it
+  // as a custom action on the group instead, so "Dismiss" is available from the
+  // rotor / actions menu without changing the visual layout.
+  const accessibilityActions = isBusy
+    ? undefined
+    : [{ name: 'dismiss', label: 'Dismiss update' }];
+
+  const handleAccessibilityAction = (event: AccessibilityActionEvent): void => {
+    if (event.nativeEvent.actionName === 'dismiss') handleDismiss();
+  };
+
   // Determine title and subtitle based on state
   const getTitle = () => {
     if (isDownloading) return 'Downloading update...';
@@ -108,6 +121,8 @@ export default function UpdateBanner({
         padding="md"
         accessibilityLabel={`${getTitle()}. ${getSubtitle()}`}
         accessibilityState={{ disabled: isBusy, busy: isBusy }}
+        accessibilityActions={accessibilityActions}
+        onAccessibilityAction={handleAccessibilityAction}
       >
         <View style={styles.content}>
           <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>
@@ -126,8 +141,10 @@ export default function UpdateBanner({
               onPress={handleDismiss}
               style={styles.dismissButton}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss update banner"
+              // Unreachable inside the grouped card; the equivalent screen
+              // reader path is the `dismiss` accessibility action above.
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
             >
               <Ionicons
                 name="close"

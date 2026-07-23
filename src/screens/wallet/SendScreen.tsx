@@ -2063,8 +2063,11 @@ export default function SendScreen() {
                     accessible
                     accessibilityRole="radio"
                     accessibilityLabel={`${asset.name}, ${asset.symbol}`}
+                    // A radio reports its chosen state through `checked`;
+                    // `selected` is for tabs/list selection and is not
+                    // announced for this role.
                     accessibilityState={{
-                      selected: effectiveAssetId === asset.id,
+                      checked: effectiveAssetId === asset.id,
                     }}
                   >
                     <View style={styles.assetOptionContent}>

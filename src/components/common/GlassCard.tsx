@@ -14,6 +14,8 @@ import {
   Pressable,
   ViewStyle,
   StyleProp,
+  AccessibilityActionEvent,
+  AccessibilityActionInfo,
   AccessibilityRole,
   AccessibilityState,
 } from 'react-native';
@@ -70,9 +72,13 @@ interface GlassCardProps {
   testID?: string;
   /**
    * Groups the card's children into a single accessibility element. Defaults to
-   * `true` for the pressable variant (a tappable card should be one target) and
-   * is left unset for the static variant so its inner text stays individually
-   * navigable.
+   * `true` for the pressable variant (a tappable card should be one target;
+   * this also matches RN `Pressable`'s own default) and is left unset for the
+   * static variant so its inner text stays individually navigable.
+   *
+   * NOTE: a grouped card makes nested controls unreachable to a screen reader.
+   * If the card contains a secondary action, expose it through
+   * `accessibilityActions` rather than relying on the nested touchable.
    */
   accessible?: boolean;
   /**
@@ -89,6 +95,14 @@ interface GlassCardProps {
   accessibilityRole?: AccessibilityRole;
   /** e.g. `{ selected: true }` / `{ disabled: true }` for stateful cards. */
   accessibilityState?: AccessibilityState;
+  /**
+   * Secondary actions the card offers (e.g. dismiss). Required whenever a
+   * pressable card visually nests another control, because grouping makes that
+   * nested control unreachable via a screen reader.
+   */
+  accessibilityActions?: AccessibilityActionInfo[];
+  /** Handles the actions declared in `accessibilityActions`. */
+  onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -112,6 +126,8 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   accessibilityHint,
   accessibilityRole,
   accessibilityState,
+  accessibilityActions,
+  onAccessibilityAction,
 }) => {
   const { theme } = useTheme();
   const hasNFTBackground = !!theme.backgroundImageUrl;
@@ -285,6 +301,8 @@ export const GlassCard: React.FC<GlassCardProps> = ({
         accessibilityLabel={accessibilityLabel}
         accessibilityHint={accessibilityHint}
         accessibilityState={accessibilityState}
+        accessibilityActions={accessibilityActions}
+        onAccessibilityAction={onAccessibilityAction}
       >
         {renderContent()}
       </AnimatedPressable>

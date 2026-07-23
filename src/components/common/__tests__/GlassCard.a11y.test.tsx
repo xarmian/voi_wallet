@@ -76,6 +76,31 @@ describe('GlassCard accessibility', () => {
     expect(card.props.accessibilityState).toEqual({ checked: true });
   });
 
+  it('forwards custom accessibility actions, the escape hatch for nested controls', () => {
+    const onAction = jest.fn();
+    const { getByTestId } = render(
+      <GlassCard
+        onPress={() => {}}
+        testID="card"
+        accessibilityLabel="Update available"
+        accessibilityActions={[{ name: 'dismiss', label: 'Dismiss update' }]}
+        onAccessibilityAction={onAction}
+      >
+        {child}
+      </GlassCard>
+    );
+
+    const card = getByTestId('card');
+    expect(card.props.accessibilityActions).toEqual([
+      { name: 'dismiss', label: 'Dismiss update' },
+    ]);
+
+    card.props.onAccessibilityAction({
+      nativeEvent: { actionName: 'dismiss' },
+    });
+    expect(onAction).toHaveBeenCalled();
+  });
+
   it('lets a caller opt out of grouping on a pressable card', () => {
     const { getByTestId } = render(
       <GlassCard onPress={() => {}} testID="card" accessible={false}>
