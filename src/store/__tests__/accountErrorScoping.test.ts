@@ -230,6 +230,44 @@ describe('operation-scoped account errors (TASK-40)', () => {
     await assetLoad;
   });
 
+  it('drops a stale response so it cannot overwrite a newer scope', async () => {
+    // Both scopes write the SAME array, so the last response used to win
+    // regardless of which view the user is actually on.
+    let resolveAll!: (value: unknown) => void;
+    mockGetAllTransactionHistory.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAll = resolve as (value: unknown) => void;
+        })
+    );
+    mockGetAssetTransactionHistory.mockResolvedValue({
+      transactions: [{ id: 'asset-1' }],
+      nextToken: undefined,
+      hasMore: false,
+    });
+
+    // Account-wide load starts first and is still in flight...
+    const allLoad = useWalletStore.getState().loadAllTransactions('acc-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // ...then the user opens an asset, whose load supersedes it and completes.
+    await useWalletStore.getState().loadAssetTransactions('acc-1', 42, false);
+    expect(accountState('acc-1').recentTransactionsScope).toBe(
+      assetTransactionsScope(42, false)
+    );
+
+    // The older account-wide response lands last and must be discarded.
+    resolveAll({ transactions: [{ id: 'all-1' }], nextToken: undefined });
+    await allLoad;
+
+    expect(accountState('acc-1').recentTransactionsScope).toBe(
+      assetTransactionsScope(42, false)
+    );
+    expect(accountState('acc-1').recentTransactions).toEqual([
+      { id: 'asset-1' },
+    ]);
+  });
+
   it('clearAccountError clears every scoped field', async () => {
     mockGetAccountBalance.mockRejectedValue(new Error('algod is down'));
     mockGetTransactionHistory.mockRejectedValue(new Error('indexer is down'));

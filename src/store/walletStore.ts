@@ -67,6 +67,33 @@ export const assetTransactionsScope = (
   isArc200: boolean
 ): string => `${assetId}_${isArc200 ? 'arc200' : 'asa'}`;
 
+/**
+ * Monotonic per-account request counter for transaction loads.
+ *
+ * `recentTransactions` is a single array shared by the account-wide and
+ * per-asset loaders, so two loads of DIFFERENT scopes can be in flight at once
+ * (they must be — deduping them away means a screen never fetches at all).
+ * Whichever response landed last used to win, which could leave the newest
+ * requested view showing another scope's result. Every load takes a token and
+ * applies its result only while that token is still the newest, so a stale
+ * response can never overwrite a fresher one.
+ *
+ * This mirrors the generation counter already used for network health probes
+ * in `services/network`.
+ */
+const transactionsRequestSeq = new Map<string, number>();
+
+const nextTransactionsRequest = (accountId: string): number => {
+  const next = (transactionsRequestSeq.get(accountId) ?? 0) + 1;
+  transactionsRequestSeq.set(accountId, next);
+  return next;
+};
+
+const isLatestTransactionsRequest = (
+  accountId: string,
+  token: number
+): boolean => transactionsRequestSeq.get(accountId) === token;
+
 const toTransactionsError = (
   error: unknown,
   scope: string,
@@ -1280,6 +1307,9 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadAccountTransactions: async (accountId: string) => {
+      // 0 = not yet issued, so a failure before the request was taken out
+      // (e.g. account resolution) still reports against the current view.
+      let requestToken = 0;
       try {
         const { accountStates } = get();
         const accountState =
@@ -1297,6 +1327,8 @@ export const useWalletStore = create<WalletState>()(
           );
           return;
         }
+
+        requestToken = nextTransactionsRequest(accountId);
 
         // Resolve account fresh from service (repairs missing addresses if needed)
         const account = await MultiAccountWalletService.getAccount(accountId);
@@ -1320,6 +1352,8 @@ export const useWalletStore = create<WalletState>()(
         );
         const dedupedTransactions = dedupeTransactions(transactions);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         set({
           accountStates: {
             ...get().accountStates,
@@ -1332,6 +1366,13 @@ export const useWalletStore = create<WalletState>()(
           },
         });
       } catch (error) {
+        // A superseded request must not blame the view that replaced it.
+        if (
+          requestToken &&
+          !isLatestTransactionsRequest(accountId, requestToken)
+        ) {
+          return;
+        }
         const { accountStates } = get();
         set({
           accountStates: {
@@ -1359,6 +1400,9 @@ export const useWalletStore = create<WalletState>()(
       assetId: number,
       isArc200: boolean = false
     ) => {
+      // 0 = not yet issued, so a failure before the request was taken out
+      // (e.g. account resolution) still reports against the current view.
+      let requestToken = 0;
       try {
         const { accountStates } = get();
         const accountState =
@@ -1379,6 +1423,8 @@ export const useWalletStore = create<WalletState>()(
           );
           return;
         }
+
+        requestToken = nextTransactionsRequest(accountId);
 
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
@@ -1411,6 +1457,8 @@ export const useWalletStore = create<WalletState>()(
         // Deduplicate transactions by ID (in case API returns duplicates)
         const uniqueTransactions = dedupeTransactions(result.transactions);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         set({
           accountStates: {
             ...get().accountStates,
@@ -1431,6 +1479,13 @@ export const useWalletStore = create<WalletState>()(
           },
         });
       } catch (error) {
+        // A superseded request must not blame the view that replaced it.
+        if (
+          requestToken &&
+          !isLatestTransactionsRequest(accountId, requestToken)
+        ) {
+          return;
+        }
         const { accountStates } = get();
         set({
           accountStates: {
@@ -1458,6 +1513,8 @@ export const useWalletStore = create<WalletState>()(
       assetId: number,
       isArc200: boolean = false
     ) => {
+      // 0 = not yet issued; see nextTransactionsRequest.
+      let requestToken = 0;
       try {
         const { accountStates } = get();
         const accountState =
@@ -1470,6 +1527,11 @@ export const useWalletStore = create<WalletState>()(
         if (!pagination?.hasMore || pagination?.isLoadingMore) {
           return;
         }
+
+        // This appends into the shared array, so it takes a request token too:
+        // a page that lands after the view has switched scope must be dropped
+        // rather than mixed into the new scope's list.
+        requestToken = nextTransactionsRequest(accountId);
 
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
@@ -1516,6 +1578,8 @@ export const useWalletStore = create<WalletState>()(
           ...newTransactions,
         ]);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         set({
           accountStates: {
             ...get().accountStates,
@@ -1543,12 +1607,17 @@ export const useWalletStore = create<WalletState>()(
             [accountId]: {
               ...accountStates[accountId],
               // See loadMoreTransactions: a failed page is surfaced as a
-              // retryable footer instead of silently ending pagination.
-              transactionsError: toTransactionsError(
-                error,
-                assetKey,
-                'Failed to load more asset transactions'
-              ),
+              // retryable footer instead of silently ending pagination — but
+              // only while this is still the request the view is waiting on.
+              ...(isLatestTransactionsRequest(accountId, requestToken)
+                ? {
+                    transactionsError: toTransactionsError(
+                      error,
+                      assetKey,
+                      'Failed to load more asset transactions'
+                    ),
+                  }
+                : {}),
               assetTransactionsPagination: {
                 ...accountStates[accountId]?.assetTransactionsPagination,
                 [assetKey]: {
@@ -1570,6 +1639,9 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadAllTransactions: async (accountId: string) => {
+      // 0 = not yet issued, so a failure before the request was taken out
+      // (e.g. account resolution) still reports against the current view.
+      let requestToken = 0;
       try {
         const { accountStates } = get();
         const accountState =
@@ -1587,6 +1659,8 @@ export const useWalletStore = create<WalletState>()(
           );
           return;
         }
+
+        requestToken = nextTransactionsRequest(accountId);
 
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
@@ -1612,6 +1686,8 @@ export const useWalletStore = create<WalletState>()(
 
         const uniqueTransactions = dedupeTransactions(result.transactions);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         set({
           accountStates: {
             ...get().accountStates,
@@ -1629,6 +1705,13 @@ export const useWalletStore = create<WalletState>()(
           },
         });
       } catch (error) {
+        // A superseded request must not blame the view that replaced it.
+        if (
+          requestToken &&
+          !isLatestTransactionsRequest(accountId, requestToken)
+        ) {
+          return;
+        }
         const { accountStates } = get();
         set({
           accountStates: {
@@ -1652,6 +1735,8 @@ export const useWalletStore = create<WalletState>()(
     },
 
     loadMoreTransactions: async (accountId: string) => {
+      // 0 = not yet issued; see nextTransactionsRequest.
+      let requestToken = 0;
       try {
         const { accountStates } = get();
         const accountState =
@@ -1664,6 +1749,10 @@ export const useWalletStore = create<WalletState>()(
         ) {
           return;
         }
+
+        // See loadMoreAssetTransactions: appends into the shared array, so a
+        // page landing after a scope switch must be dropped.
+        requestToken = nextTransactionsRequest(accountId);
 
         // Resolve account fresh from service
         const account = await MultiAccountWalletService.getAccount(accountId);
@@ -1704,6 +1793,8 @@ export const useWalletStore = create<WalletState>()(
           ...newTransactions,
         ]);
 
+        if (!isLatestTransactionsRequest(accountId, requestToken)) return;
+
         set({
           accountStates: {
             ...get().accountStates,
@@ -1729,12 +1820,16 @@ export const useWalletStore = create<WalletState>()(
               // Surfaced as a retryable list footer rather than a whole-screen
               // error: the already-loaded page is still valid, only the next
               // page failed. Previously this was console-only, so pagination
-              // just silently stopped.
-              transactionsError: toTransactionsError(
-                error,
-                ALL_TRANSACTIONS_SCOPE,
-                'Failed to load more transactions'
-              ),
+              // just silently stopped. Only blame the current view.
+              ...(isLatestTransactionsRequest(accountId, requestToken)
+                ? {
+                    transactionsError: toTransactionsError(
+                      error,
+                      ALL_TRANSACTIONS_SCOPE,
+                      'Failed to load more transactions'
+                    ),
+                  }
+                : {}),
               transactionsPagination: {
                 hasMore: true,
                 ...accountStates[accountId]?.transactionsPagination,
