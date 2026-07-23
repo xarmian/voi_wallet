@@ -33,6 +33,7 @@ export default function DiscoverScreen() {
         `window.location.href = '${getDiscoverUrl()}';`
       );
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload handler keyed on route.params.reload/theme.mode; getDiscoverUrl is read at that commit.
   }, [route.params?.reload, theme.mode]);
 
   return (

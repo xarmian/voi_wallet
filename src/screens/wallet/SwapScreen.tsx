@@ -196,6 +196,7 @@ export default function SwapScreen() {
   useEffect(() => {
     loadInitialTokens();
     loadStoredSlippage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount (comment above: NOT on network change — handleNetworkChange owns that); both loaders are read at the mount commit.
   }, []);
 
   useEffect(() => {

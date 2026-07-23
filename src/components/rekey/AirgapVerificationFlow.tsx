@@ -248,6 +248,7 @@ export function AirgapVerificationFlow({
   const handleRetry = useCallback(() => {
     setError(null);
     buildVerificationTransaction();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps hand-mirror buildVerificationTransaction's inputs (targetAccount.address, networkId), both listed here. A future read added there must be mirrored here, or this airgap-rekey retry would silently re-run with stale input.
   }, [targetAccount.address, networkId]);
 
   const handleBackToQR = useCallback(() => {

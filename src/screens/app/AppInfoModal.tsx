@@ -76,6 +76,7 @@ export default function AppInfoModal() {
 
   useEffect(() => {
     loadAppInfo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load the modal's subject, keyed on params.appId/networkId; loadAppInfo is read at that commit.
   }, [params.appId, networkId]);
 
   const loadAppInfo = async () => {

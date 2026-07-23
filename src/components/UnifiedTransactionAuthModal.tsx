@@ -133,6 +133,7 @@ export default function UnifiedTransactionAuthModal({
       setBiometricAttempted(true);
       handleBiometricAuth();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt, once per open (guarded by biometricAttempted); fires on the visible/authState gates, handleBiometricAuth is read at that commit and must not re-fire on its own identity.
   }, [
     visible,
     authState.state,

@@ -105,6 +105,7 @@ export default function UnifiedAuthModal({
     if (visible && shouldUseBiometrics && !biometricAttempted) {
       promptBiometric();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; fires on the visible/biometric/attempted gates, promptBiometric is read at that commit and must not re-fire on its own identity.
   }, [visible, shouldUseBiometrics, biometricAttempted]);
 
   // Reset state when modal opens

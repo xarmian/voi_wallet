@@ -84,7 +84,7 @@ export default function MultiNetworkAssetScreen() {
 
   useEffect(() => {
     updateActivity();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-time activity ping on mount; updateActivity is read at the mount commit and should not re-run on its identity.
   }, []);
 
   const onRefresh = useCallback(async () => {

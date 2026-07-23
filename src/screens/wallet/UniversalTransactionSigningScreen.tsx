@@ -111,6 +111,7 @@ export default function UniversalTransactionSigningScreen({
       // Clean up callback registry when unmounting
       clearNavigationCallbacks(callbackId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once: parseTransactions runs once; the cleanup captures authController (a stable useState(() => new TransactionAuthController()) handle) and callbackId (stable route param), so the one-per-mount teardown targets the right instance.
   }, []);
 
   // Network display info, derived from the (stable) route params. Previously a

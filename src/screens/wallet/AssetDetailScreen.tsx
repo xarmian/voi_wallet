@@ -455,7 +455,7 @@ export default function AssetDetailScreen() {
   useEffect(() => {
     loadTransactions();
     updateActivity();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps hand-mirror loadTransactions' inputs (accountId, assetId, effectiveBalance, networkId) plus currentAccount; loadTransactions & updateActivity are read at the current commit, so listing them would only re-run on their identity. Mirror any new read added to loadTransactions here.
   }, [accountId, assetId, effectiveBalance, networkId, currentAccount]);
 
   const onRefresh = async () => {

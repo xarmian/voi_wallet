@@ -129,6 +129,7 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
       }).start();
       setSearchQuery('');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation keyed on visible; slideAnim is a stable Animated ref that never changes identity.
   }, [visible]);
 
   // Load tokens when modal opens and balance is available

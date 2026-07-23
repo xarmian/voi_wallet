@@ -1710,6 +1710,7 @@ export default function AppNavigator() {
     };
 
     initializeServices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- whole-app service boot; runs once (guarded by initializationRef) and initializeNetwork is read at the mount commit. Re-running on its identity would re-boot services.
   }, []);
 
   // Load dismissed update ID from storage on mount

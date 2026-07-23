@@ -261,6 +261,7 @@ export default function TransactionHistoryScreen() {
         />
       );
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- assetMetadataCache is a DELIBERATE recompute trigger: getAssetMetadata reads it internally, so ESLint calls it "unnecessary" for not appearing in the body. Removing it would stop rows re-rendering when resolved ASA params land and freeze transaction amounts at the 0-decimals fallback.
     [
       activeAccount?.address,
       accountState.balance?.assets,

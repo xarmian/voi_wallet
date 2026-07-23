@@ -223,6 +223,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (backgroundTimer.current) clearTimeout(backgroundTimer.current);
       removeAppStateListener();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once boot: checkInitialAuthState() + setupAppStateListener() run once per launch. The AppState handler reads backgroundedAtRef.current (not closed-over state) by design (see ref comment above), so this must NOT re-subscribe on render; the cleanup captured here is the correct one-per-mount teardown.
   }, []);
 
   // Sync auth state to DeepLinkService for pending notification handling, and to

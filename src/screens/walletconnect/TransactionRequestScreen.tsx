@@ -115,6 +115,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     loadAccountsAndTransactions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount; loadAccountsAndTransactions is read at the mount commit.
   }, []);
 
   useEffect(() => {
@@ -128,6 +129,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     if (autoRetry && selectedAccount) {
       handleApprove();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot auto-retry trigger keyed on autoRetry/selectedAccount; handleApprove is read at that commit and must not re-fire on its own identity.
   }, [autoRetry, selectedAccount]);
 
   const loadAccountsAndTransactions = async () => {

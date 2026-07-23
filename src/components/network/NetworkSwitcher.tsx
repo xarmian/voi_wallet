@@ -143,6 +143,7 @@ export default function NetworkSwitcher({
       // Refresh network statuses when modal opens
       handleRefresh();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh on open, keyed on visible; handleRefresh is read at that commit.
   }, [visible]);
 
   const handleRefresh = async () => {
