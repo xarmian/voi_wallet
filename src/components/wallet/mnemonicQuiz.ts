@@ -37,14 +37,13 @@
  *
  * The counter-risk — an observer separating real words from filler by noticing
  * that phrase words recur across boards while wordlist samples (1 in 2048) do
- * not — is bounded by scope: boards are memoised per component MOUNT
- * ({@link createOptionProvider}), an attempt only ever exposes
- * {@link VERIFICATION_WORD_COUNT} distinct boards, and the failure path unmounts
- * the challenge (onboarding returns to the phrase, post-hoc verification
- * leaves). So one mount leaks at most 3 boards' worth of draws, in which
- * recurrence is too rare to separate. Aggregating enough mounts to run that
- * frequency analysis costs many deliberate failures — and yields the phrase's
- * word SET, not its ORDER, which is what the challenge actually asks for.
+ * not — is bounded by determinism: a position's board is a pure function of the
+ * phrase ({@link createOptionProvider}), so repeat observations of the SAME
+ * question return the identical eight words and reveal nothing. Recurrence
+ * across DIFFERENT questions can still, over enough boards, hint at which words
+ * belong to the phrase — but that yields the phrase's word SET, never its ORDER,
+ * which is what the challenge actually asks for and what makes a phrase
+ * recoverable.
  *
  * Every option is a plain lowercase BIP-39 word rendered by the same chip
  * component, so decoys are presentationally indistinguishable from the answer,
@@ -107,6 +106,9 @@
  * is adequate for presentation ordering and decoy sampling — it is not used to
  * generate, derive, or protect key material.
  */
+
+import { sha256 } from '@noble/hashes/sha256';
+import { utf8ToBytes } from '@noble/hashes/utils';
 
 import { BIP39Utils } from '@/utils/bip39';
 
@@ -271,38 +273,94 @@ export function buildChallengeOptions(
  */
 export type OptionProvider = (position: number) => string[];
 
+/** Domain separator, so this digest can never be confused with anything else. */
+const BOARD_SEED_DOMAIN = 'voi-wallet/mnemonic-quiz/board/v1';
+
 /**
- * Build an option provider that memoises each position's board.
+ * sfc32 — a small, fast, well-distributed counter PRNG. Not cryptographic, and
+ * it does not need to be: it only decides which decoy words appear and in what
+ * order. Its ONLY job is to be reproducible.
+ */
+function sfc32(a: number, b: number, c: number, d: number): Rng {
+  return () => {
+    a >>>= 0;
+    b >>>= 0;
+    c >>>= 0;
+    d >>>= 0;
+    const t = (((a + b) | 0) + d) | 0;
+    d = (d + 1) | 0;
+    a = b ^ (b >>> 9);
+    b = (c + (c << 3)) | 0;
+    c = (c << 21) | (c >>> 11);
+    c = (c + t) | 0;
+    return (t >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * A reproducible rng for one (phrase, position) board.
  *
- * ## Why this exists — the cross-board intersection oracle
+ * The digest is a ONE-WAY function of the phrase, computed in memory and thrown
+ * away with the rng. It is never stored, logged, transmitted, or used as key
+ * material — it is not a derivation, it just makes the decoy draw deterministic
+ * so the same position always yields the same board. Nothing about the phrase is
+ * recoverable from the board: the decoys are wordlist entries, and SHA-256 is
+ * preimage-resistant.
+ *
+ * The alternative — a per-mount random draw — is what made the board
+ * intersectable across remounts; see {@link createOptionProvider}.
+ */
+function createBoardRng(words: string[], position: number): Rng {
+  const digest = sha256(
+    utf8ToBytes(`${BOARD_SEED_DOMAIN}:${position}:${words.join(' ')}`)
+  );
+  const seed = (offset: number) =>
+    ((digest[offset] << 24) |
+      (digest[offset + 1] << 16) |
+      (digest[offset + 2] << 8) |
+      digest[offset + 3]) >>>
+    0;
+  return sfc32(seed(0), seed(4), seed(8), seed(12));
+}
+
+/**
+ * Build an option provider: the canonical board for each phrase position.
+ *
+ * ## Why this exists — the option-set intersection oracle
  *
  * The first cut of this challenge rebuilt a FRESH board every time a position
  * was re-asked, on the theory that a stable board could be eliminated one chip
- * at a time. That was backwards: the right answer is the one word GUARANTEED to
+ * at a time. That was backwards. The right answer is the one word GUARANTEED to
  * appear on every board for a position, while the decoys are resampled (the
  * BIP-39 ones from 2048 words, so they essentially never recur). Intersecting
- * two boards for the same position therefore yields the answer directly. An
- * attacker could deliberately answer wrong once, intersect, and then answer
- * correctly — inside the mistake budget, for all three questions.
+ * two boards for the same position therefore names the answer. An attacker could
+ * answer wrong on purpose, intersect, and then answer correctly.
  *
- * Memoising the set closes that channel completely: intersecting two
- * presentations returns the set itself, which is exactly what the user could
- * already see. Only the display ORDER is reshuffled between presentations, and a
- * uniform shuffle of an unchanged set carries no information.
+ * Memoising per component mount closed that within a mount but not across them:
+ * the failure path deliberately unmounts the challenge, so re-entering re-rolled
+ * every board, and a "which word is #7?" prompt observed across a handful of
+ * re-entries could be intersected just the same — an ORDER-recovery oracle,
+ * which is precisely what the challenge is supposed to test.
  *
- * Elimination within the mistake budget is then the residual. Drawing without
+ * So the board is DERIVED, not drawn: `sha256(domain : position : phrase)` seeds
+ * the decoy selection, making the set for a position a pure function of the
+ * phrase. Every observation of position 7 — this mount, the next one, next week
+ * — returns the identical eight words, so intersecting any number of them
+ * returns the set the user could already see, and frequency analysis has nothing
+ * to bite on. The Map is then only a cache; correctness comes from determinism.
+ * See {@link createBoardRng} for why hashing the phrase here is not a
+ * derivation of key material.
+ *
+ * Only the display ORDER is reshuffled between presentations, and a uniform
+ * shuffle of an unchanged set carries no information.
+ *
+ * Elimination within the mistake budget is the residual. Drawing without
  * replacement from a fixed set makes every guess worth exactly `1 / candidates`
  * no matter how many chips have already been ruled out, so spending a mistake
  * buys a guesser nothing per question — but it does buy them another guess, so
  * the budget itself is what has to be small. See {@link MAX_MISTAKES}.
- *
- * The cache lives as long as the caller holds the provider — one component
- * mount. It holds only words that are already on screen.
  */
-export function createOptionProvider(
-  words: string[],
-  rng: Rng = Math.random
-): OptionProvider {
+export function createOptionProvider(words: string[]): OptionProvider {
   const cache = new Map<number, string[]>();
   return (position: number) => {
     const cached = cache.get(position);
@@ -311,7 +369,7 @@ export function createOptionProvider(
       words,
       position,
       CHALLENGE_OPTION_COUNT,
-      rng
+      createBoardRng(words, position)
     );
     cache.set(position, options);
     return options;

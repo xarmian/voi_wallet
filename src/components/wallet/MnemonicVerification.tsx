@@ -103,11 +103,11 @@ export default function MnemonicVerification({
 }: MnemonicVerificationProps) {
   const { theme } = useTheme();
 
-  // One memoised option provider per mount. Each position's board is built once
-  // and then re-presented (reshuffled) for the whole mount, including across a
-  // restart — rebuilding it would let a user intersect two boards for the same
-  // position and read off the answer, since only the answer is guaranteed to
-  // survive a rebuild. See `createOptionProvider`.
+  // A position's board is DERIVED from the phrase, so it is identical on every
+  // presentation — this retry, the next attempt, the next mount. Re-rolling it
+  // would let a user intersect two boards for the same position and read off the
+  // answer, since only the answer is guaranteed to survive a re-roll. Only the
+  // display order is reshuffled. See `createOptionProvider`.
   const [initial] = useState(() => {
     const words = splitMnemonic(mnemonic);
     const optionsFor = createOptionProvider(words);

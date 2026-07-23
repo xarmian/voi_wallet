@@ -435,7 +435,42 @@ describe('MAX_MISTAKES — the security lever', () => {
   });
 });
 
-describe('createOptionProvider — the cross-board intersection oracle', () => {
+describe('createOptionProvider — the option-set intersection oracle', () => {
+  it('derives the SAME board for a position across INDEPENDENT providers', () => {
+    // THE SECOND HALF OF THE DEFECT: memoising per component mount closed the
+    // oracle within a mount, but the failure path deliberately UNMOUNTS the
+    // challenge, so re-entering re-rolled every board. Someone could note the
+    // "which word is #7?" prompt, fail out, re-enter until #7 came round again,
+    // and intersect — an ORDER-recovery oracle, i.e. exactly what the challenge
+    // is meant to test. A board must be a pure function of the phrase, never of
+    // the mount.
+    for (let position = 0; position < LONG_WORDS.length; position++) {
+      const boards = Array.from({ length: 4 }, () =>
+        providerFor(LONG_WORDS)(position)
+      );
+      boards.forEach((board) => expect(board).toEqual(boards[0]));
+    }
+  });
+
+  it('derives the same board from an equal phrase built independently', () => {
+    // Determinism must come from the phrase's VALUE, not from array identity.
+    const copy = LONG_WORDS.join(' ').split(' ');
+    expect(copy).not.toBe(LONG_WORDS);
+    for (let position = 0; position < LONG_WORDS.length; position++) {
+      expect(providerFor(copy)(position)).toEqual(
+        providerFor(LONG_WORDS)(position)
+      );
+    }
+  });
+
+  it('gives different positions different boards', () => {
+    const optionsFor = providerFor(LONG_WORDS);
+    const seen = new Set(
+      LONG_WORDS.map((_, position) => optionsFor(position).join('|'))
+    );
+    expect(seen.size).toBe(LONG_WORDS.length);
+  });
+
   it('returns the SAME set for a position, every time it is asked', () => {
     // THE DEFECT THIS PINS: the first cut of this challenge rebuilt a fresh
     // board on every retry. Only the answer is guaranteed to survive a rebuild —
@@ -492,11 +527,17 @@ describe('createOptionProvider — the cross-board intersection oracle', () => {
   });
 
   it('gives DIFFERENT phrases different boards', () => {
-    // The cache is per provider (i.e. per component mount), keyed by position
-    // only — it must never be shared across phrases.
+    // The derivation is domain-separated per (phrase, position); a board must
+    // never carry over between phrases.
     const a = providerFor(LONG_WORDS)(4);
     const b = providerFor(REPEATED_WORDS)(4);
     expect(a).not.toEqual(b);
+
+    // A one-word edit must change the board, or the derivation would not really
+    // be a function of the phrase.
+    const edited = [...LONG_WORDS];
+    edited[20] = 'zebra';
+    expect(providerFor(edited)(4)).not.toEqual(a);
   });
 });
 
