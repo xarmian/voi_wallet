@@ -2,21 +2,21 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 682,
-    "filesLinted": 433,
-    "filesWithFindings": 176
+    "warnings": 669,
+    "filesLinted": 431,
+    "filesWithFindings": 174
   },
   "rules": {
     "@typescript-eslint/no-redeclare": 1,
     "@typescript-eslint/no-require-imports": 68,
-    "@typescript-eslint/no-unused-vars": 308,
+    "@typescript-eslint/no-unused-vars": 306,
     "import/no-named-as-default": 41,
-    "react-hooks/exhaustive-deps": 64,
-    "react-hooks/immutability": 103,
+    "react-hooks/exhaustive-deps": 61,
+    "react-hooks/immutability": 98,
     "react-hooks/preserve-manual-memoization": 25,
     "react-hooks/purity": 5,
     "react-hooks/refs": 7,
-    "react-hooks/set-state-in-effect": 60
+    "react-hooks/set-state-in-effect": 57
   },
   "files": {
     "src/components/UnifiedAuthModal.tsx": {
@@ -236,24 +236,6 @@
       "errors": 0,
       "warnings": 1,
       "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/components/ledger/SimpleLedgerTransactionModal.tsx": {
-      "errors": 0,
-      "warnings": 3,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
-        "react-hooks/set-state-in-effect": 2
-      }
-    },
-    "src/components/ledger/UnifiedLedgerSigningModal.tsx": {
-      "errors": 0,
-      "warnings": 10,
-      "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
-        "react-hooks/exhaustive-deps": 3,
-        "react-hooks/immutability": 5,
         "react-hooks/set-state-in-effect": 1
       }
     },

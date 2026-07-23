@@ -23,10 +23,6 @@ export { SimpleLedgerSigner, simpleLedgerSigner } from './simpleLedgerSigner';
 // Authentication & State Management
 export { SimpleLedgerAuthController } from '../auth/simpleLedgerAuthController';
 
-// UI Components
-export { default as UnifiedLedgerSigningModal } from '../../components/ledger/UnifiedLedgerSigningModal';
-export { default as SimpleLedgerTransactionModal } from '../../components/ledger/SimpleLedgerTransactionModal';
-
 // Key Management
 export { SimplifiedKeyManager } from '../secure/simplifiedKeyManager';
 
@@ -66,17 +62,10 @@ export { ledgerAlgorandService } from './algorand';
  *
  * NEW SYSTEM (Simple):
  * ```typescript
- * import { simpleLedgerSigner, UnifiedLedgerSigningModal } from '@/services/ledger';
+ * import { simpleLedgerSigner } from '@/services/ledger';
  *
  * // Simple one-line signing:
  * const result = await simpleLedgerSigner.signTransaction(request);
- *
- * // Or with UI:
- * <UnifiedLedgerSigningModal
- *   visible={showModal}
- *   onSuccess={handleSuccess}
- *   onCancel={handleCancel}
- * />
  * ```
  *
  * Key Improvements:
