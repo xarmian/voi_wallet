@@ -29,7 +29,22 @@
  *     never saw the display step.
  *
  * Mixing gives a shoulder-surfer no way to tell real words from decoys, while
- * still denying the "pick the familiar one" shortcut.
+ * still denying the "pick the familiar one" shortcut. Note that the answer chip
+ * is a real phrase word by necessity, so a correct pick reveals one (word,
+ * position) pair to anyone watching NO MATTER what the decoy policy is; the
+ * phrase decoys only remove the certainty an observer would otherwise have about
+ * the seven chips that were NOT picked.
+ *
+ * The counter-risk — an observer separating real words from filler by noticing
+ * that phrase words recur across boards while wordlist samples (1 in 2048) do
+ * not — is bounded by scope: boards are memoised per component MOUNT
+ * ({@link createOptionProvider}), an attempt only ever exposes
+ * {@link VERIFICATION_WORD_COUNT} distinct boards, and the failure path unmounts
+ * the challenge (onboarding returns to the phrase, post-hoc verification
+ * leaves). So one mount leaks at most 3 boards' worth of draws, in which
+ * recurrence is too rare to separate. Aggregating enough mounts to run that
+ * frequency analysis costs many deliberate failures — and yields the phrase's
+ * word SET, not its ORDER, which is what the challenge actually asks for.
  *
  * Every option is a plain lowercase BIP-39 word rendered by the same chip
  * component, so decoys are presentationally indistinguishable from the answer,
@@ -45,12 +60,30 @@
  * so a fat-finger does not throw away a correct run.
  *
  * After {@link MAX_MISTAKES} tolerated mistakes the next wrong pick discards the
- * whole attempt: brand-new positions, brand-new option sets, mistake counter
- * back to zero, and the host is told via `onFailed` so onboarding can send the
- * user back to re-read the phrase. There is deliberately NO permanent lockout —
- * a user holding a correct written phrase must always be able to pass — so the
- * bound on blind guessing is friction, not refusal. See MnemonicVerification for
- * the numbers.
+ * whole attempt: brand-new positions, mistake counter back to zero, and the host
+ * is told via `onFailed` so onboarding can send the user back to re-read the
+ * phrase.
+ *
+ * ## Attempts are NOT capped — a deliberate decision
+ *
+ * There is no permanent lockout, no persisted failure counter and no cooldown.
+ * A blind guesser can therefore keep starting new attempts, at ~2.9% each, and
+ * will eventually pass. That is accepted, for three reasons:
+ *
+ *   1. A user holding a correct written phrase must ALWAYS be able to pass. Any
+ *      hard cap risks locking a legitimate user out of the one signal that says
+ *      their funds are recoverable — a worse failure than a weak signal.
+ *   2. There is no third-party adversary. `backupVerified` authorises nothing;
+ *      it only silences a "you have not backed this up" warning. The only person
+ *      who benefits from faking it is the device owner, who is defeating their
+ *      own safety net, and who already has a one-tap "Skip for now".
+ *   3. Grinding is strictly more work than complying. ~34 attempts, each several
+ *      taps plus a bounce back to the phrase they are pretending to have copied.
+ *
+ * A cooldown would also not survive the failure path as designed: `onFailed`
+ * unmounts the challenge by design, so any in-memory counter resets, and making
+ * it stick would mean new persisted state on a security path. Flagged by Codex
+ * across two review rounds and knowingly retained.
  *
  * ## Duplicate words (DR-12) — still preserved
  *

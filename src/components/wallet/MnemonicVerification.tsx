@@ -42,16 +42,15 @@
  * through the phrase they are pretending to have written down. That is strictly
  * more work than reading it, which is the whole point.
  *
- * ## Residual, knowingly accepted
+ * ## Residuals, knowingly accepted
  *
- * A lucky guess teaches the guesser one (word, position) pair, and a long
- * grinding session accumulates those pairs, so repeated attempts are not fully
- * independent. Every challenge of this shape — Pera's and MetaMask's included —
- * has that property: telling the user whether they were right is the whole
- * mechanism. Closing it would require a permanent lockout, which is explicitly
- * ruled out above, and it is not worth much anyway: the grinder is bounced back
- * to the phrase on every reset, and "Skip for now" is a free, honest way to
- * decline the check without pretending to have passed it.
+ * Attempts are not capped, and a lucky guess teaches the guesser one (word,
+ * position) pair, so repeated attempts are not fully independent. Every
+ * challenge of this shape — Pera's and MetaMask's included — has that property:
+ * telling the user whether they were right is the whole mechanism. Both were
+ * raised by Codex across two review rounds and are retained deliberately; see
+ * "Attempts are NOT capped" in `./mnemonicQuiz` for the full reasoning and for
+ * why a cooldown does not survive this failure path.
  *
  * The phrase is only ever held in this component's props (it is already on
  * screen in the host). Nothing here logs, persists, or navigates with it, and no
