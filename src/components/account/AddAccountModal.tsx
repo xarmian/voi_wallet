@@ -58,10 +58,10 @@ export default function AddAccountModal({
   );
 
   // Handle account creation - navigate to proper backup flow
-  const handleCreateAccount = async () => {
+  const handleCreateAccount = useCallback(async () => {
     onClose();
     onCreateAccount(); // This will navigate to CreateAccountScreen
-  };
+  }, [onClose, onCreateAccount]);
 
   // Open/close the bottom sheet based on visibility
   React.useEffect(() => {

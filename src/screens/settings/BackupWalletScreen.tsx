@@ -75,31 +75,28 @@ export default function BackupWalletScreen() {
     setShowPasswordModal(true);
   }, [accounts.length]);
 
-  const handlePasswordConfirm = useCallback(
-    async (password: string) => {
-      setShowPasswordModal(false);
-      setShowProgressModal(true);
-      setIsCreatingBackup(true);
-      setError(undefined);
+  const handlePasswordConfirm = useCallback(async (password: string) => {
+    setShowPasswordModal(false);
+    setShowProgressModal(true);
+    setIsCreatingBackup(true);
+    setError(undefined);
 
-      try {
-        const result = await BackupService.createBackup(password);
-        setBackupResult(result);
-        setShowProgressModal(false);
-        // Show success state - user will see save/share options in the UI
-      } catch (err) {
-        setShowProgressModal(false);
-        const message =
-          err instanceof BackupError
-            ? err.message
-            : 'Failed to create backup. Please try again.';
-        Alert.alert('Backup Failed', message, [{ text: 'OK' }]);
-      } finally {
-        setIsCreatingBackup(false);
-      }
-    },
-    [navigation]
-  );
+    try {
+      const result = await BackupService.createBackup(password);
+      setBackupResult(result);
+      setShowProgressModal(false);
+      // Show success state - user will see save/share options in the UI
+    } catch (err) {
+      setShowProgressModal(false);
+      const message =
+        err instanceof BackupError
+          ? err.message
+          : 'Failed to create backup. Please try again.';
+      Alert.alert('Backup Failed', message, [{ text: 'OK' }]);
+    } finally {
+      setIsCreatingBackup(false);
+    }
+  }, []);
 
   const handleCancel = useCallback(() => {
     setShowPasswordModal(false);

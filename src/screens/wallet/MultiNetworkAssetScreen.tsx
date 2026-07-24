@@ -54,6 +54,11 @@ type NetworkRowItem =
   | { type: 'balance'; source: NetworkBalanceSource }
   | { type: 'opt-in'; token: TokenReference };
 
+// Voi tokens the user could opt into. Limited to a hardcoded whitelist:
+// aALGO (302189) and aUSDC (302190). Module-scope so it keeps a stable
+// identity across renders.
+const ALLOWED_VOI_OPT_IN_ASSET_IDS = [302189, 302190];
+
 export default function MultiNetworkAssetScreen() {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
@@ -141,8 +146,6 @@ export default function MultiNetworkAssetScreen() {
 
   // Compute Voi tokens that user could opt into (but hasn't yet)
   // Limited to specific whitelisted tokens: aALGO (302189) and aUSDC (302190)
-  const ALLOWED_VOI_OPT_IN_ASSET_IDS = [302189, 302190];
-
   const missingVoiOptIns = useMemo(() => {
     if (!mappedAsset || !mappedAsset.mappingId) return [];
 

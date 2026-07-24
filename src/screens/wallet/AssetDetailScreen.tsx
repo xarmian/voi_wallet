@@ -198,7 +198,6 @@ export default function AssetDetailScreen() {
     currentAccount?.address,
     mappingId,
     assetId,
-    specificNetworkConfig.nativeToken,
   ]);
 
   // If networkId is provided, we need to get the balance from that specific network
