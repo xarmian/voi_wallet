@@ -2,19 +2,19 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 256,
+    "warnings": 249,
     "filesLinted": 437,
     "filesWithFindings": 91
   },
   "rules": {
     "@typescript-eslint/no-unused-vars": 5,
     "import/no-named-as-default": 37,
-    "react-hooks/exhaustive-deps": 24,
-    "react-hooks/immutability": 97,
+    "react-hooks/exhaustive-deps": 19,
+    "react-hooks/immutability": 96,
     "react-hooks/preserve-manual-memoization": 25,
     "react-hooks/purity": 5,
     "react-hooks/refs": 7,
-    "react-hooks/set-state-in-effect": 56
+    "react-hooks/set-state-in-effect": 55
   },
   "files": {
     "src/components/UnifiedAuthModal.tsx": {
@@ -512,12 +512,11 @@
     },
     "src/screens/wallet/SendScreen.tsx": {
       "errors": 0,
-      "warnings": 14,
+      "warnings": 7,
       "rules": {
         "import/no-named-as-default": 1,
-        "react-hooks/exhaustive-deps": 8,
-        "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 4
+        "react-hooks/exhaustive-deps": 3,
+        "react-hooks/set-state-in-effect": 3
       }
     },
     "src/screens/wallet/SwapScreen.tsx": {

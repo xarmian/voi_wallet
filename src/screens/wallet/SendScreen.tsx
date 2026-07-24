@@ -96,17 +96,19 @@ export default function SendScreen() {
   const route = useRoute();
   const routeParams = route.params as SendScreenRouteParams | undefined;
 
-  // Network selection state - defaults to route param or current network
-  const [selectedNetworkId, setSelectedNetworkId] = useState<NetworkId>(
-    (routeParams?.networkId as NetworkId) || currentNetwork
-  );
-
-  // Update selected network when route params change
-  useEffect(() => {
-    if (routeParams?.networkId) {
-      setSelectedNetworkId(routeParams.networkId as NetworkId);
-    }
-  }, [routeParams?.networkId]);
+  // The screen's base/default network — the network used when no asset override
+  // is active. DERIVED (not state) straight from the route param, falling back
+  // to the global current network. TASK-245 item 2: this used to be state
+  // seeded by an initializer AND mirrored from `routeParams.networkId` via a
+  // set-state-in-effect. That mirror committed the new network one render LATE,
+  // which created the item-1 ordering hazard — a sibling effect reading
+  // `selectedNetworkId` in the same commit as a route change saw the PREVIOUS
+  // value. Deriving makes the route network visible in the SAME render and
+  // removes the mirror effect. Safe to derive because the UI never mutates this
+  // base network directly: the asset selector sets `selectedAsset` (whose
+  // networkId feeds `effectiveNetworkId` at :340), never `selectedNetworkId`.
+  const selectedNetworkId: NetworkId =
+    (routeParams?.networkId as NetworkId) || currentNetwork;
 
   const [recipientInput, setRecipientInput] = useState('');
   const [recipientAddress, setRecipientAddress] = useState('');
@@ -219,6 +221,19 @@ export default function SendScreen() {
           : undefined;
         const rawAmount = BigInt(routeParams.amount);
 
+        // TASK-245 item 1: resolve the asset's decimals against the network the
+        // DEEP LINK names — read from `routeParams` DIRECTLY, never from
+        // `selectedNetworkId`. On an already-mounted Send screen the route
+        // change and this effect commit in the same pass; the base network is
+        // now derived (so it is already fresh), but reading the raw route param
+        // here makes the decimals lookup provably independent of any render/
+        // effect ordering. Resolving against the wrong (previous) network is the
+        // magnitude bug this fixes: e.g. asset 12345 at 6 decimals on the
+        // link's network vs 2 on the stale one turns a "1" into "10000". Falls
+        // back to the global current network only when the link omits one.
+        const prefillNetworkId: NetworkId =
+          (routeParams.networkId as NetworkId) || currentNetwork;
+
         (async () => {
           let decimals: number;
           if (assetIdRaw === undefined || assetIdRaw === 0) {
@@ -226,9 +241,9 @@ export default function SendScreen() {
           } else {
             try {
               const info =
-                await NetworkService.getInstance(
-                  selectedNetworkId
-                ).getAssetInfo(assetIdRaw);
+                await NetworkService.getInstance(prefillNetworkId).getAssetInfo(
+                  assetIdRaw
+                );
               const rawDecimals = info?.params?.decimals;
               if (rawDecimals === undefined || rawDecimals === null) {
                 // Params unavailable (e.g. a 404 resolves to null): don't
@@ -288,7 +303,10 @@ export default function SendScreen() {
     return () => {
       cancelled = true;
     };
-  }, [routeParams]);
+    // `currentNetwork` is the fallback network for the decimals lookup when the
+    // deep link omits one (see prefillNetworkId above); it must be a dependency
+    // so the prefill re-resolves if that fallback changes.
+  }, [routeParams, currentNetwork]);
 
   const activeAccount = useActiveAccount();
 
@@ -1027,20 +1045,59 @@ export default function SendScreen() {
 
   // Removed problematic useEffect that was causing infinite balance reloading
 
+  // TASK-245 item 3 — DECISION: the fee is NOT re-estimated on a bare
+  // selectedAsset / selectedNetworkId change; it is keyed on `amount` only.
+  // Rationale (recorded, not a silent omission): every user path that changes
+  // the asset or the effective network — NetworkAssetSelector.onSelect and
+  // handleAssetSelect — CLEARS `amount` to '' and resets `estimatedFee` to 0.
+  // So a network/asset switch never leaves a stale fee sitting next to a live
+  // amount: the fee shows 0 until the user re-enters an amount, and THAT entry
+  // re-runs this effect, at which point `updateFeeEstimate` reads the current
+  // `effectiveNetworkId` / `effectiveAssetId` (fresh closure values) and
+  // estimates against the new network/asset. Re-estimating on the selection
+  // change alone would be a no-op (no amount to price). `updateFeeEstimate` is a
+  // fresh closure each render and is declared below by design; adding it to the
+  // deps would re-run this effect every render.
   useEffect(() => {
     if (amount && parseFloat(amount) > 0) {
+      // eslint-disable-next-line react-hooks/immutability -- updateFeeEstimate is declared later (see note above); the effect runs post-commit when the binding exists.
       updateFeeEstimate();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: keyed on `amount` only (see the item-3 note above); updateFeeEstimate omitted on purpose.
   }, [amount]);
 
-  // Fee estimation for NFT transfers
+  // Fee estimation for NFT transfers. Same item-3 decision: keyed on the token +
+  // recipient (an NFT transfer has no user-entered amount), not on the asset/
+  // network selection, and updateFeeEstimate reads the token's own network.
   useEffect(() => {
     if (contextNftToken && recipientAddress) {
       updateFeeEstimate();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: updateFeeEstimate omitted on purpose (see the item-3 note above).
   }, [contextNftToken, recipientAddress]);
 
-  // Name resolution effect with debouncing
+  // Name resolution effect with debouncing.
+  //
+  // TASK-245 item 4 — DECISION (recorded, not a silent disable): `isEnvoiEnabled`
+  // is read here but intentionally OMITTED from the dependency array, so a
+  // network switch after a name is typed does NOT re-run resolution and a
+  // previously-resolved name -> address pair persists across the switch. This is
+  // safe — it cannot misdirect funds — for reasons verified against the code:
+  //   1. Envoi is a SINGLE GLOBAL registry (services/envoi hits one host,
+  //      api.envoi.sh, with NO network parameter), so a given name maps to the
+  //      same concrete address regardless of the selected network.
+  //   2. The actual resolution (`resolveAddressOrName`) and name/address
+  //      classification (`isLikelyEnvoiName`) gate on the GLOBAL
+  //      `VoiNetworkService.isFeatureAvailable('envoi')` flag — NOT on this
+  //      screen's `isEnvoiEnabled`. `isEnvoiEnabled` (derived from
+  //      selectedNetworkId) only decides whether to STORE the name for DISPLAY
+  //      and whether to run the type-ahead search below; it never changes the
+  //      address that gets sent.
+  //   3. The resolved CONCRETE address is shown on this screen and re-shown on
+  //      the TransactionConfirmation screen before signing, so the user always
+  //      sees the real destination.
+  // Adding `isEnvoiEnabled` to the deps would only re-trigger identical
+  // resolutions (churn) without any correctness benefit, so it is left out.
   useEffect(() => {
     const resolveRecipient = async () => {
       if (!recipientInput.trim()) {
@@ -1105,6 +1162,7 @@ export default function SendScreen() {
     return () => {
       clearTimeout(timeoutId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `isEnvoiEnabled` intentionally omitted; see the item-4 decision note above this effect.
   }, [recipientInput, recipientAddress, resolvedName]);
 
   useEffect(() => {
@@ -1175,6 +1233,7 @@ export default function SendScreen() {
       cancelled = true;
       clearTimeout(timeoutId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `isEnvoiEnabled` intentionally omitted (item-4 decision above the name-resolution effect): a network switch does not re-run the type-ahead search, but Envoi is a single global registry so a stale search/resolution never changes the sent address.
   }, [recipientInput, resolvedName]);
 
   const handleSearchResultSelect = (result: EnvoiSearchResult) => {

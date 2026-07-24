@@ -47,6 +47,9 @@ let mockTokenMappings: unknown[];
 
 const mockGetAccountBalance = jest.fn();
 const mockEstimateTransactionCost = jest.fn();
+// Shared spy so a test can assert which NETWORK the ARC-0090 prefill resolved
+// the asset's decimals against (getInstance(networkId).getAssetInfo(assetId)).
+const mockGetAssetInfo = jest.fn();
 
 const mockNetworkConfigs: Record<
   string,
@@ -64,7 +67,7 @@ jest.mock('@/services/network', () => ({
     getInstance: (networkId: string) => ({
       getAccountBalance: (address: string) =>
         mockGetAccountBalance(networkId, address),
-      getAssetInfo: jest.fn(async () => null),
+      getAssetInfo: (assetId: number) => mockGetAssetInfo(networkId, assetId),
       getSingleAssetBalance: jest.fn(async () => null),
       getAlgodClient: () => ({
         accountInformation: () => ({
@@ -324,6 +327,9 @@ beforeEach(() => {
 
   mockEstimateTransactionCost.mockReset();
   mockEstimateTransactionCost.mockResolvedValue({ fee: 1000 });
+
+  mockGetAssetInfo.mockReset();
+  mockGetAssetInfo.mockResolvedValue(null);
 });
 
 // Flush pending promises/effects (balance fetch, asset options, mappings).
@@ -499,6 +505,67 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     });
     expect(screen.getByLabelText(MAX_LABEL)).toBeTruthy();
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeNull();
+    await settle();
+  });
+});
+
+describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () => {
+  it('resolves the prefill decimals against the deep-link networkId, not the previously-mounted network', async () => {
+    // Asset 12345 carries DIFFERENT decimals per network: 6 on VOI, 2 on ALGO.
+    // The prefill converts the URI's RAW base-unit amount to a display amount
+    // using those decimals, so the network it looks them up on decides the
+    // magnitude the user sees.
+    mockGetAssetInfo.mockImplementation((networkId: string) =>
+      Promise.resolve({ params: { decimals: networkId === VOI ? 6 : 2 } })
+    );
+
+    // The screen is ALREADY MOUNTED sitting on ALGORAND (no route network yet).
+    mockCurrentNetwork = ALGO;
+    mockRouteParams = undefined;
+    const screen = render(<SendScreen />);
+    await settle();
+
+    // A deep link now arrives on the already-mounted screen, naming VOI + asset
+    // 12345 + a raw base-unit amount of 1_000_000. On an already-mounted screen
+    // the sibling network-setter has not committed VOI yet when the prefill
+    // runs — the bug resolved decimals against the STALE ALGORAND network.
+    mockRouteParams = { networkId: VOI, asset: '12345', amount: '1000000' };
+    await act(async () => {
+      screen.rerender(<SendScreen />);
+    });
+    await settle();
+
+    // The decimals lookup MUST have gone to VOI (the link's network), never to
+    // the stale ALGORAND network the screen was previously on.
+    const assetInfoNetworks = mockGetAssetInfo.mock.calls.map((c) => c[0]);
+    expect(assetInfoNetworks).toContain(VOI);
+    expect(assetInfoNetworks).not.toContain(ALGO);
+    // And it looked up the asset the link named.
+    expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 12345);
+
+    // Magnitude proof: 1_000_000 raw / 10^6 (VOI decimals) = "1". The stale
+    // network (ALGO, 2 decimals) would have prefilled "10000" — a 100x error.
+    expect(screen.getByDisplayValue('1')).toBeTruthy();
+    expect(screen.queryByDisplayValue('10000')).toBeNull();
+    await settle();
+  });
+
+  it('resolves against the route network even when the global current network differs', async () => {
+    // Cold-start equivalent: mounted directly with the deep link. Global network
+    // is ALGO, but the link names VOI — the prefill must still use VOI.
+    mockGetAssetInfo.mockImplementation((networkId: string) =>
+      Promise.resolve({ params: { decimals: networkId === VOI ? 6 : 2 } })
+    );
+    mockCurrentNetwork = ALGO;
+    mockRouteParams = { networkId: VOI, asset: '12345', amount: '1000000' };
+
+    const screen = render(<SendScreen />);
+    await settle();
+
+    expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 12345);
+    const assetInfoNetworks = mockGetAssetInfo.mock.calls.map((c) => c[0]);
+    expect(assetInfoNetworks).not.toContain(ALGO);
+    expect(screen.getByDisplayValue('1')).toBeTruthy();
     await settle();
   });
 });
