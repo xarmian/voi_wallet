@@ -284,6 +284,17 @@ export default function RekeyAccountScreen() {
     selectedNetworkId,
   ]);
 
+  // Auto-select the sole Ledger / airgap target account when exactly one is
+  // available (a pure UI convenience). This deliberately stays an effect rather
+  // than being converted to a render-time state adjustment (TASK-247): this is
+  // key-authority-adjacent code whose committed selection feeds the rekey
+  // validation and submission paths, so we keep its post-commit timing exactly
+  // as-is rather than perturb when the selection lands. The set-state-in-effect
+  // hint is suppressed for the whole effect on purpose — the effect is correct
+  // and behaviour must remain byte-identical (see TASK-247 stop-and-ask
+  // boundary). It never touches rekeyManager, submission, or authority
+  // resolution; it only pre-selects a target account in the UI.
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional: key-authority-adjacent auto-select kept in an effect to preserve exact commit timing (TASK-247). */
   useEffect(() => {
     if (
       rekeyFlow === 'ledger' &&
@@ -307,6 +318,7 @@ export default function RekeyAccountScreen() {
     selectedLedgerAccount,
     selectedAirgapAccount,
   ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleStandardAccountSelect = (account: StandardAccountMetadata) => {
     setSelectedStandardAccount(account);

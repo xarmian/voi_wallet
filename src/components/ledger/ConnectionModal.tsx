@@ -56,15 +56,35 @@ const LedgerConnectionModal: React.FC<LedgerConnectionModalProps> = ({
 
   const connectedDevice = ledgerTransportService.getConnectedDevice();
 
-  useEffect(() => {
+  // Reset transient status on close / pre-select a device on open, at render
+  // time off the tracked previous [visible, initialDeviceId, connectedDevice]
+  // tuple — the React-canonical replacement for the old reset/init effect,
+  // firing on exactly the same input changes (connectedDevice compared by
+  // identity, matching the effect's dep array) without the extra post-paint
+  // render pass. This adjusts UI selection + status only; it never initiates a
+  // Ledger connection (connectToDevice) or any signing. The live
+  // connect/disconnect event subscription stays in its own effect below.
+  // prevVisible seeds to false (not the current `visible`) so a first mount with
+  // visible already true still runs the open-branch pre-selection, matching the
+  // old effect's post-mount behaviour.
+  const [prevVisible, setPrevVisible] = useState(false);
+  const [prevInitialDeviceId, setPrevInitialDeviceId] =
+    useState(initialDeviceId);
+  const [prevConnectedDevice, setPrevConnectedDevice] =
+    useState(connectedDevice);
+  if (
+    visible !== prevVisible ||
+    initialDeviceId !== prevInitialDeviceId ||
+    connectedDevice !== prevConnectedDevice
+  ) {
+    setPrevVisible(visible);
+    setPrevInitialDeviceId(initialDeviceId);
+    setPrevConnectedDevice(connectedDevice);
     if (!visible) {
       setConnectionStatus('idle');
       setStatusMessage('');
       setError(null);
-      return;
-    }
-
-    if (initialDeviceId) {
+    } else if (initialDeviceId) {
       const initial = ledgerTransportService
         .getDevices()
         .find((device) => device.id === initialDeviceId);
@@ -75,7 +95,7 @@ const LedgerConnectionModal: React.FC<LedgerConnectionModalProps> = ({
       setSelectedDevice(connectedDevice);
       setConnectionStatus('connected');
     }
-  }, [visible, initialDeviceId, connectedDevice]);
+  }
 
   useEffect(() => {
     if (!visible) {

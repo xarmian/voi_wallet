@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Modal,
   View,
@@ -47,8 +47,14 @@ export default function PasswordInputModal({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [hasEdited, setHasEdited] = useState(false);
 
-  // Reset state when modal becomes visible
-  useEffect(() => {
+  // Reset the editable fields the moment the modal transitions to visible by
+  // adjusting state during render off a tracked previous value — the
+  // React-canonical replacement for the old reset-in-effect. Resets at the
+  // exact same logical moment the effect did (visible going true), without the
+  // extra post-paint render pass and without altering the modal's fade timing.
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
     if (visible) {
       setPassword('');
       setConfirmPassword('');
@@ -56,7 +62,7 @@ export default function PasswordInputModal({
       setShowConfirmPassword(false);
       setHasEdited(false);
     }
-  }, [visible]);
+  }
 
   const passwordStrength = validatePasswordStrength(password);
   const passwordsMatch = password === confirmPassword;

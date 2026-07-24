@@ -200,9 +200,16 @@ export default function AssetDetailScreen() {
     assetId,
   ]);
 
-  // If networkId is provided, we need to get the balance from that specific network
+  // If networkId is provided, we need to get the balance from that specific
+  // network. Seed from the store-derived balance at mount (the old effect's
+  // synchronous mirror ran post-mount) so that if the derived balance later
+  // disappears before a refetch completes, this retains the last-known value as
+  // a fallback — exactly as before. The render-time mirror below keeps it in
+  // sync on subsequent networkId / derived-balance changes.
   const [networkSpecificBalance, setNetworkSpecificBalance] =
-    useState<AccountBalance | null>(null);
+    useState<AccountBalance | null>(() =>
+      networkId && derivedNetworkBalance ? derivedNetworkBalance : null
+    );
   const [networkSpecificTransactions, setNetworkSpecificTransactions] =
     useState<TransactionInfo[]>([]);
   const [isLoadingNetworkTransactions, setIsLoadingNetworkTransactions] =
@@ -221,18 +228,36 @@ export default function AssetDetailScreen() {
   // frame in which a newly-selected asset still looked "already loaded".
   const [attemptedLoadKey, setAttemptedLoadKey] = useState<string | null>(null);
 
-  useEffect(() => {
+  // The two synchronous branches of the old effect — clear the fetched balance
+  // when there is no network context, and mirror the store-derived balance when
+  // one is available — are adjusted during render off the tracked
+  // [networkId, derivedNetworkBalance] inputs the effect keyed on (TASK-247).
+  // This keeps networkSpecificBalance's value identical to before (still tracks
+  // derivedNetworkBalance) while dropping the extra post-paint render pass, in
+  // line with this screen's existing derive-during-render approach to avoid
+  // stale frames. Only the async network fetch stays in the effect below.
+  const [prevBalanceNetworkId, setPrevBalanceNetworkId] = useState(networkId);
+  const [prevDerivedNetworkBalance, setPrevDerivedNetworkBalance] = useState(
+    derivedNetworkBalance
+  );
+  if (
+    networkId !== prevBalanceNetworkId ||
+    derivedNetworkBalance !== prevDerivedNetworkBalance
+  ) {
+    setPrevBalanceNetworkId(networkId);
+    setPrevDerivedNetworkBalance(derivedNetworkBalance);
     if (!networkId) {
       setNetworkSpecificBalance(null);
-      return;
-    }
-
-    if (derivedNetworkBalance) {
+    } else if (derivedNetworkBalance) {
       setNetworkSpecificBalance(derivedNetworkBalance);
-      return;
     }
+    // else (network context, no derived balance): the effect below fetches it.
+  }
 
-    if (!currentAccount) {
+  useEffect(() => {
+    // Only the async network fetch remains here; fetch when we have a network
+    // context, no store-derived balance to use, and an account.
+    if (!networkId || derivedNetworkBalance || !currentAccount) {
       return;
     }
 

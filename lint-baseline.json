@@ -2,9 +2,9 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 242,
+    "warnings": 227,
     "filesLinted": 437,
-    "filesWithFindings": 89
+    "filesWithFindings": 83
   },
   "rules": {
     "@typescript-eslint/no-unused-vars": 5,
@@ -14,7 +14,7 @@
     "react-hooks/preserve-manual-memoization": 25,
     "react-hooks/purity": 5,
     "react-hooks/refs": 7,
-    "react-hooks/set-state-in-effect": 55
+    "react-hooks/set-state-in-effect": 40
   },
   "files": {
     "src/components/UnifiedAuthModal.tsx": {
@@ -42,28 +42,7 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/components/account/RenameAccountModal.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/components/assets/AssetFilterModal.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
     "src/components/assets/AssetOptInModal.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/components/assets/MultiNetworkAssetItem.tsx": {
       "errors": 0,
       "warnings": 1,
       "rules": {
@@ -80,10 +59,9 @@
     },
     "src/components/backup/PasswordInputModal.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "react-hooks/preserve-manual-memoization": 2,
-        "react-hooks/set-state-in-effect": 1
+        "react-hooks/preserve-manual-memoization": 2
       }
     },
     "src/components/common/GlassButton.tsx": {
@@ -109,11 +87,11 @@
     },
     "src/components/common/NFTThemeSelector.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
         "react-hooks/exhaustive-deps": 1,
         "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 2
+        "react-hooks/set-state-in-effect": 1
       }
     },
     "src/components/common/UniversalHeader.tsx": {
@@ -123,19 +101,11 @@
         "react-hooks/immutability": 2
       }
     },
-    "src/components/debug/DebugLogsModal.tsx": {
+    "src/components/ledger/ConnectionModal.tsx": {
       "errors": 0,
       "warnings": 1,
       "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
-    "src/components/ledger/ConnectionModal.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "import/no-named-as-default": 1,
-        "react-hooks/set-state-in-effect": 1
+        "import/no-named-as-default": 1
       }
     },
     "src/components/ledger/DeviceDiscovery.tsx": {
@@ -221,20 +191,12 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/components/swap/SlippageSettingsModal.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
     "src/components/swap/TokenSelector.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
         "react-hooks/exhaustive-deps": 1,
-        "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 1
+        "react-hooks/immutability": 1
       }
     },
     "src/components/transaction/TransactionAddressDisplay.tsx": {
@@ -327,13 +289,6 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/screens/remoteSigner/RemoteSignerSettingsScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
     "src/screens/remoteSigner/SignRequestScannerScreen.tsx": {
       "errors": 0,
       "warnings": 1,
@@ -350,11 +305,10 @@
     },
     "src/screens/settings/NotificationSettingsScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 2,
       "rules": {
         "react-hooks/exhaustive-deps": 1,
-        "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 2
+        "react-hooks/immutability": 1
       }
     },
     "src/screens/settings/SecuritySettingsScreen.tsx": {
@@ -398,10 +352,9 @@
     },
     "src/screens/social/FriendProfileScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "react-hooks/preserve-manual-memoization": 2,
-        "react-hooks/set-state-in-effect": 1
+        "react-hooks/preserve-manual-memoization": 2
       }
     },
     "src/screens/social/MessagesInboxScreen.tsx": {
@@ -447,9 +400,9 @@
     },
     "src/screens/wallet/AssetDetailScreen.tsx": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "react-hooks/set-state-in-effect": 2
+        "react-hooks/set-state-in-effect": 1
       }
     },
     "src/screens/wallet/ClaimAllConfirmationScreen.tsx": {
@@ -503,10 +456,10 @@
     },
     "src/screens/wallet/RekeyAccountScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
         "import/no-named-as-default": 1,
-        "react-hooks/set-state-in-effect": 2
+        "react-hooks/set-state-in-effect": 1
       }
     },
     "src/screens/wallet/SendScreen.tsx": {

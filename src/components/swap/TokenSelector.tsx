@@ -113,6 +113,19 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
   // Use network-specific balance or fallback to single network balance
   const accountBalance = networkBalance || singleNetworkBalance;
 
+  // Clear the search box the moment the modal transitions to hidden by
+  // adjusting state during render off the tracked previous visibility — the
+  // React-canonical replacement for the old clear-in-effect. Clears at the same
+  // logical moment the effect did, without the extra post-paint render pass.
+  // The open/close animation stays in the effect below (imperative).
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (!visible) {
+      setSearchQuery('');
+    }
+  }
+
   useEffect(() => {
     if (visible) {
       Animated.spring(slideAnim, {
@@ -127,7 +140,6 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
         duration: 200,
         useNativeDriver: true,
       }).start();
-      setSearchQuery('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation keyed on visible; slideAnim is a stable Animated ref that never changes identity.
   }, [visible]);

@@ -72,9 +72,17 @@ export default function FriendProfileScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [notesDraft, setNotesDraft] = useState(friend?.notes ?? '');
 
-  useEffect(() => {
-    setNotesDraft(friend?.notes ?? '');
-  }, [friend?.notes]);
+  // Mirror the stored notes into the editable draft whenever they change, by
+  // adjusting state during render off the tracked previous value — the
+  // React-canonical replacement for the old mirror-in-effect. Syncs at the same
+  // logical moment (friend.notes change) without the extra post-paint render
+  // pass; the draft stays user-editable between changes.
+  const friendNotes = friend?.notes ?? '';
+  const [prevFriendNotes, setPrevFriendNotes] = useState(friendNotes);
+  if (friendNotes !== prevFriendNotes) {
+    setPrevFriendNotes(friendNotes);
+    setNotesDraft(friendNotes);
+  }
 
   // Save notes on unmount using ref to avoid dependency issues
   const notesRef = useRef({ envoiName: '', notes: '', draft: '' });
