@@ -1,6 +1,6 @@
 import algosdk from 'algosdk';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
-import VoiNetworkService from '@/services/network';
+import { networkService } from '@/services/network';
 
 // Cache for formatted address results to maintain stable references
 const formatCache = new Map<
@@ -48,7 +48,7 @@ export const formatAddressWithName = async (
 
   // Try to get name from Envoi if it's enabled on current network
   let nameInfo: EnvoiNameInfo | null = null;
-  if (VoiNetworkService.isFeatureAvailable('envoi')) {
+  if (networkService.isFeatureAvailable('envoi')) {
     const envoiService = EnvoiService.getInstance();
     nameInfo = await envoiService.getName(address);
   }
@@ -169,7 +169,7 @@ export const resolveAddressOrName = async (
   // If it looks like an Envoi name and Envoi is enabled, try to resolve it
   if (
     EnvoiService.isValidNameFormat(trimmed) &&
-    VoiNetworkService.isFeatureAvailable('envoi')
+    networkService.isFeatureAvailable('envoi')
   ) {
     const envoiService = EnvoiService.getInstance();
     const nameInfo = await envoiService.getAddress(trimmed);
@@ -189,7 +189,7 @@ export const isLikelyEnvoiName = (input: string): boolean => {
   }
 
   // If Envoi is not enabled on current network, no input can be an Envoi name
-  if (!VoiNetworkService.isFeatureAvailable('envoi')) {
+  if (!networkService.isFeatureAvailable('envoi')) {
     return false;
   }
 

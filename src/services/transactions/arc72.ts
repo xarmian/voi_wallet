@@ -1,5 +1,8 @@
 import algosdk from 'algosdk';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import {
+  networkService as defaultNetworkService,
+  NetworkService,
+} from '@/services/network';
 import MimirApiService from '@/services/mimir';
 
 // ARC-72 transfer ABI definition
@@ -104,10 +107,10 @@ export class Arc72TransactionService {
     params: Arc72TransferParams
   ): Promise<Arc72TransactionGroup> {
     try {
-      // Use the networkId from params, or default to VoiNetworkService for backwards compatibility
+      // Use the networkId from params, or default to defaultNetworkService for backwards compatibility
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.from)) {
@@ -321,10 +324,10 @@ export class Arc72TransactionService {
     needsMbrPayment: boolean;
   }> {
     try {
-      // Use the networkId from params, or default to VoiNetworkService for backwards compatibility
+      // Use the networkId from params, or default to defaultNetworkService for backwards compatibility
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
-        : VoiNetworkService;
+        : defaultNetworkService;
 
       const baseFee = await networkService.estimateTransactionFee();
       const hasTokens = await this.checkRecipientBalance(

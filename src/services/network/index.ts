@@ -1822,7 +1822,8 @@ export class NetworkService {
   }
 }
 
-export default NetworkService.getInstance();
-
-// Backwards compatibility exports
-export const VoiNetworkService = NetworkService;
+// Singleton NetworkService instance for the currently selected network.
+// Lowercase name = the instance (matching the `rekeyManager` convention);
+// the `NetworkService` class is exported by name above for callers that need
+// a per-network instance via `NetworkService.getInstance(networkId)`.
+export const networkService = NetworkService.getInstance();

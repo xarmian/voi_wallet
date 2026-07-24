@@ -6,7 +6,7 @@ import algosdk from 'algosdk';
 // getName/getAddress resolvers exist but we never exercise real resolution.
 jest.mock('@/services/network', () => ({
   __esModule: true,
-  default: { isFeatureAvailable: jest.fn(() => false) },
+  networkService: { isFeatureAvailable: jest.fn(() => false) },
 }));
 
 jest.mock('@/services/envoi', () => {
@@ -28,10 +28,10 @@ import {
   isLikelyEnvoiName,
   clearFormatCache,
 } from '../address';
-import VoiNetworkService from '@/services/network';
+import { networkService } from '@/services/network';
 import EnvoiService from '@/services/envoi';
 
-const mockNetwork = VoiNetworkService as unknown as {
+const mockNetwork = networkService as unknown as {
   isFeatureAvailable: jest.Mock;
 };
 const mockEnvoi = EnvoiService as unknown as {

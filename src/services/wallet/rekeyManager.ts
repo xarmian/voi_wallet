@@ -11,7 +11,7 @@ import {
   LedgerTransportMedium,
   LedgerAccountError,
 } from '@/types/wallet';
-import VoiNetworkService, { RekeyInfo } from '@/services/network';
+import { networkService, RekeyInfo } from '@/services/network';
 import { ledgerTransportService } from '@/services/ledger/transport';
 
 export interface SigningAuthorityCheck {
@@ -139,7 +139,7 @@ export class RekeyManager {
 
       // Get rekey info for all accounts
       const rekeyInfoMap =
-        await VoiNetworkService.getMultipleAccountRekeyInfo(allAddresses);
+        await networkService.getMultipleAccountRekeyInfo(allAddresses);
 
       const rekeyedAccounts: string[] = [];
       const signingAuthorities: Record<string, SigningAuthorityCheck> = {};

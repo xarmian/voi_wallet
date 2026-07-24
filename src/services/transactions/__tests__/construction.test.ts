@@ -49,7 +49,7 @@ jest.mock('@/services/network', () => {
   };
   return {
     __esModule: true,
-    default: svc, // VoiNetworkService (default import in the services)
+    networkService: svc, // default-network singleton (named import in the services)
     NetworkService: { getInstance: () => svc },
   };
 });

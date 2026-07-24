@@ -54,7 +54,7 @@ jest.mock('@/services/ledger/transport', () => ({
 const mockGetMultipleAccountRekeyInfo = jest.fn();
 jest.mock('@/services/network', () => ({
   __esModule: true,
-  default: {
+  networkService: {
     getMultipleAccountRekeyInfo: (addresses: string[]) =>
       mockGetMultipleAccountRekeyInfo(addresses),
   },
