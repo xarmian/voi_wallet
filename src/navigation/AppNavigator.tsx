@@ -13,9 +13,7 @@ import {
   TouchableOpacity,
   TouchableOpacityProps,
   StyleSheet,
-  Platform,
 } from 'react-native';
-import { detectPlatform } from '@/platform/detection';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -57,11 +55,7 @@ import CreateWalletScreen from '@/screens/onboarding/CreateWalletScreen';
 import KeyregConfirmScreen from '@/screens/transaction/KeyregConfirmScreen';
 import AppCallConfirmScreen from '@/screens/transaction/AppCallConfirmScreen';
 import AppInfoModal from '@/screens/app/AppInfoModal';
-import {
-  useAppMode,
-  getAppModeEarly,
-  useRemoteSignerStore,
-} from '@/store/remoteSignerStore';
+import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { useWalletStore } from '@/store/walletStore';
 import {
   hideSplashScreen,
@@ -71,23 +65,16 @@ import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { MultiAccountWalletService } from '@/services/wallet';
-import { WalletConnectService } from '@/services/walletconnect';
-import { DeepLinkService } from '@/services/deeplink';
-import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
-import { ledgerTransportService } from '@/services/ledger/transport';
-import { isWalletConnectUri } from '@/services/walletconnect/utils';
 import { useNetworkStore } from '@/store/networkStore';
-import { notificationService } from '@/services/notifications';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
 import { ScannedAccount } from '@/utils/accountQRParser';
 import { NFTToken, ARC72Collection } from '@/types/nft';
 import { SerializableClaimableItem } from '@/types/claimable';
 import { NFTBackground } from '@/components/common/NFTBackground';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
 import { FABRadialMenu } from '@/components/navigation/FABRadialMenu';
 import { useUpdateStore } from '@/store/updateStore';
+import { initializeServices } from './serviceBootstrap';
 
 // Import TransactionHistoryScreen directly to avoid async-require issues in EAS builds
 import TransactionHistoryScreen from '@/screens/wallet/TransactionHistoryScreen';
@@ -1360,6 +1347,17 @@ function NavigationActivityWrapper() {
 export default function AppNavigator() {
   const navigationRef = useRef<any>(null);
   const initializationRef = useRef<boolean>(false);
+  // Holds the teardown produced by the async initializeServices() below. The
+  // effect boots services asynchronously, so its own synchronous return can't
+  // capture the closure directly (awaiting it would wrap it in a Promise and
+  // discard it). initializeServices assigns the teardown here; the effect's
+  // synchronous cleanup invokes it on unmount. See TASK-243.
+  const cleanupRef = useRef<(() => void) | undefined>(undefined);
+  // Tracks whether the mount effect has torn down. It is reset at the START of
+  // every effect run (including StrictMode's second pass, where the guard below
+  // skips re-init) so a boot that finishes while the component is LIVE is never
+  // mistaken for one that finished after unmount. See TASK-243.
+  const disposedRef = useRef<boolean>(false);
   const { initializeNetwork } = useNetworkStore();
 
   // For extensions, don't use any linking config - this completely disables URL-based navigation
@@ -1367,349 +1365,41 @@ export default function AppNavigator() {
   const linkingConfig = undefined;
 
   useEffect(() => {
-    // Prevent double initialization (can happen with StrictMode or fast remounts)
+    disposedRef.current = false;
+
+    // Synchronous teardown. initializeServices assigns the real teardown to
+    // cleanupRef once its async boot reaches the WalletConnect/notification
+    // wiring; on unmount we invoke whatever is there (undefined if boot hasn't
+    // gotten that far yet — in which case the boot tears itself down via
+    // isDisposed). This restores the WalletConnect handler unregister and
+    // extensionDeepLinkHandler/notificationService cleanup on unmount.
+    const runCleanup = () => {
+      disposedRef.current = true;
+      // Reading cleanupRef.current at cleanup time is INTENTIONAL and the whole
+      // point (TASK-243): the async boot assigns the teardown AFTER this effect
+      // body returns, so we must read the latest value on unmount. Copying
+      // .current into a variable in the effect body would capture undefined
+      // (boot hasn't completed) and defeat the teardown.
+      cleanupRef.current?.();
+    };
+
+    // Prevent double initialization (can happen with StrictMode or fast
+    // remounts). Even when the guard skips re-init we STILL return the teardown
+    // wiring, so under StrictMode the live (second) effect tears services down
+    // on the real unmount instead of leaving the discarded first pass to do it.
     if (initializationRef.current) {
-      return;
+      return runCleanup;
     }
     initializationRef.current = true;
 
-    const initializeServices = async () => {
-      try {
-        // Kick off remote-signer store hydration EARLY (F-03 cross-stage
-        // parallelization). Previously it started only once MainTabNavigator
-        // mounted (behind the AppStack render gate), daisy-chaining it after the
-        // first frame. Starting it here runs it concurrently with AppStack's
-        // checkInitialRoute and the service init below. It reuses the same
-        // getAppModeEarly() promise awaited just below, and its initialize() is
-        // coalesced, so the later MainTabNavigator mount-effect call dedupes onto
-        // this in-flight pass rather than starting a second one. Fire-and-forget:
-        // it must not block service init.
-        void useRemoteSignerStore.getState().initialize();
+    initializeServices({
+      navigationRef,
+      initializeNetwork,
+      cleanupRef,
+      isDisposed: () => disposedRef.current,
+    });
 
-        // Get app mode BEFORE initializing network services
-        // This avoids a race condition with store hydration
-        const appMode = await getAppModeEarly();
-        const isSignerMode = appMode === 'signer';
-
-        // Initialize Network store (needed in both modes for basic config)
-        await initializeNetwork();
-
-        // Kick off wallet store hydration EARLY too (F-03). It previously started
-        // only when HomeScreen/AirgapHomeScreen mounted — the last of three
-        // render gates. Starting it here (well ahead of that gate) lets the
-        // wallet/account list + persisted balance cache load during startup.
-        // It is kept AFTER initializeNetwork() on purpose: walletStore.initialize
-        // reads the ACTIVE network to key the balance cache, matching where the
-        // Home mount effect ran it (always post-network-init). Its initialize()
-        // coalescer dedupes the later Home mount-effect call. Fire-and-forget.
-        void useWalletStore.getState().initialize();
-
-        // Variables for cleanup - only defined if services are initialized
-        let wcService: WalletConnectService | null = null;
-        let onProposal: ((proposal: any) => void) | null = null;
-        let onRequest: ((requestEvent: any) => Promise<void>) | null = null;
-
-        // Whether the deferred (off-critical-path) per-account subscribe should
-        // run. Set once the notification service is initialized and a push token
-        // is registered; the actual subscribe is scheduled after startup.
-        let shouldSubscribeAccounts = false;
-
-        // Independent service inits run in parallel via Promise.allSettled, each
-        // with its own try/catch so one failure never blocks the others or app
-        // startup. Ordering constraints are preserved WITHIN each branch.
-        const parallelInits: Promise<unknown>[] = [];
-
-        // Skip internet-dependent services in signer mode (air-gapped device)
-        if (!isSignerMode) {
-          // --- Branch: WalletConnect (init + handler attach kept ATOMIC) ---
-          // WalletConnect installs its own handlers during initialize(); the
-          // AppNavigator navigation handlers must attach to that same initialized
-          // instance, so init and .on(...) stay together in one unit.
-          const initWalletConnect = async () => {
-            try {
-              wcService = WalletConnectService.getInstance();
-              await wcService.initialize();
-
-              // Listen for WalletConnect session proposals and navigate to approval screen
-              onProposal = (proposal: any) => {
-                try {
-                  if (navigationRef.current?.isReady?.()) {
-                    // Close any open QR scanner first when possible
-                    if (navigationRef.current.canGoBack?.()) {
-                      navigationRef.current.goBack();
-                    }
-                    // Then navigate to session proposal
-                    navigationRef.current.navigate(
-                      'WalletConnectSessionProposal',
-                      {
-                        proposal,
-                      }
-                    );
-                  }
-                } catch (err) {
-                  console.error(
-                    'Failed to navigate to WalletConnectSessionProposal:',
-                    err
-                  );
-                }
-              };
-              wcService.on('session_proposal', onProposal);
-
-              onRequest = async (requestEvent: any) => {
-                try {
-                  if (navigationRef.current?.isReady?.()) {
-                    // Get current route name
-                    const currentRoute =
-                      navigationRef.current.getCurrentRoute();
-
-                    // Check if we're already on the TransactionRequestScreen
-                    if (
-                      currentRoute?.name === 'WalletConnectTransactionRequest'
-                    ) {
-                      // Enqueue the request instead of navigating immediately
-                      console.log(
-                        '[AppNavigator] Currently on transaction screen, enqueueing request'
-                      );
-                      await TransactionRequestQueue.enqueue({
-                        id: requestEvent.id,
-                        topic: requestEvent.topic,
-                        params: requestEvent.params,
-                      });
-                    } else {
-                      // Navigate immediately if not on transaction screen
-                      navigationRef.current.navigate(
-                        'WalletConnectTransactionRequest',
-                        { requestEvent }
-                      );
-                    }
-                  }
-                } catch (err) {
-                  console.error(
-                    'Failed to handle WalletConnect transaction request:',
-                    err
-                  );
-                }
-              };
-              wcService.on('session_request', onRequest);
-
-              console.log('WalletConnect service initialized');
-            } catch (error) {
-              console.warn(
-                'Failed to initialize WalletConnect service:',
-                error
-              );
-              // Don't block app startup for WalletConnect initialization failures
-            }
-          };
-
-          // --- Branch: DeepLink -> Notifications (ordered, NOT raced) ---
-          // DeepLink.initialize() installs the notification-tap handler, so it
-          // must run BEFORE notificationService.initialize() to avoid racing
-          // cold-start notification routing; they share one sequential branch.
-          const initDeepLinkAndNotifications = async () => {
-            // DeepLink.initialize() installs the notification-tap handler. It
-            // MUST complete before notificationService.initialize() processes a
-            // cold-start notification response: notification init marks the
-            // initial notification as handled and, if no tap handler is set,
-            // buffers it in memory with nothing to route it — permanently
-            // dropping it. Track success so a DeepLink failure GATES (skips)
-            // notification init rather than silently consuming that response.
-            let deepLinkTapHandlerReady = false;
-            try {
-              const deepLinkService = DeepLinkService.getInstance();
-              if (navigationRef.current) {
-                deepLinkService.setNavigationRef(navigationRef.current);
-              }
-              await deepLinkService.initialize();
-              // initialize() installs the notification-tap handler on success
-              deepLinkTapHandlerReady = true;
-
-              // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
-              if (Platform.OS === 'web' && detectPlatform() === 'extension') {
-                extensionDeepLinkHandler.initialize(async (uri: string) => {
-                  console.log('[AppNavigator] Extension received WC URI:', uri);
-                  if (isWalletConnectUri(uri)) {
-                    await deepLinkService.testDeepLink(uri);
-                  }
-                });
-              }
-
-              console.log('DeepLink service initialized');
-            } catch (error) {
-              console.warn('Failed to initialize DeepLink service:', error);
-              // Don't block app startup for DeepLink initialization failures
-            }
-
-            // Only initialize notifications once the notification-tap handler is
-            // installed. If DeepLink init failed, skip notification init so a
-            // cold-start notification response is not consumed and dropped with
-            // no handler to route it (matches the original serial behavior,
-            // where a DeepLink failure short-circuited notification init).
-            if (!deepLinkTapHandlerReady) {
-              console.warn(
-                '[AppNavigator] Skipping notification init: DeepLink notification-tap handler not installed (would drop cold-start notification)'
-              );
-              return;
-            }
-
-            // Initialize push notification service (after DeepLink so the
-            // notification-tap handler is installed before cold-start routing)
-            try {
-              await notificationService.initialize();
-              console.log('Notification service initialized');
-
-              // Check if user has a wallet, then register the push token
-              const wallet = await MultiAccountWalletService.getCurrentWallet();
-              if (wallet && wallet.accounts.length > 0) {
-                // Register push token if permissions granted
-                const token = await notificationService.registerPushToken();
-                if (token) {
-                  // Defer the expensive per-account subscribe (N sequential
-                  // Supabase round-trips) off the critical path; it re-reads the
-                  // wallet at run time so startup-created accounts are included.
-                  shouldSubscribeAccounts = true;
-                }
-              }
-            } catch (error) {
-              console.warn(
-                'Failed to initialize notification services:',
-                error
-              );
-              // Don't block app startup for notification initialization failures
-            }
-          };
-
-          parallelInits.push(
-            initWalletConnect(),
-            initDeepLinkAndNotifications()
-          );
-        } else {
-          console.log(
-            '[AppNavigator] Signer mode: skipping network services (WalletConnect, DeepLink, Notifications)'
-          );
-        }
-
-        // --- Branch: Ledger transport (useful in BOTH modes) ---
-        // F-24: only eagerly initialize the Ledger transport at boot when the
-        // user has a previously paired Ledger persisted. This loads that
-        // device's metadata into the in-memory map so rekey/signing
-        // getDevices() consumers (keyManager) see it, WITHOUT pulling
-        // ble-plx/rxjs into the cold-boot eval graph or starting a permanent
-        // 15s health-check interval for the ~100% of users who never use a
-        // Ledger. Users with no persisted device defer init to the first Ledger
-        // screen (DeviceDiscovery) / first signing attempt (keyManager), which
-        // call initialize() themselves.
-        const initLedger = async () => {
-          try {
-            const initialized =
-              await ledgerTransportService.initializeIfPersistedDevices({
-                enableBle: true,
-                enableUsb: true,
-              });
-            console.log(
-              initialized
-                ? 'Ledger transport service initialized'
-                : 'Ledger transport init deferred (no persisted devices)'
-            );
-          } catch (error) {
-            console.warn(
-              'Failed to initialize Ledger transport service:',
-              error
-            );
-            // Don't block app startup for Ledger initialization failures
-          }
-        };
-        parallelInits.push(initLedger());
-
-        // Run the independent inits concurrently; allSettled + per-branch
-        // try/catch guarantees a single failure cannot block the others.
-        await Promise.allSettled(parallelInits);
-
-        // Reset + process the TransactionRequestQueue on the critical path (NOT
-        // a deferred sibling) so stale processing state is cleared and any
-        // persisted request is handled before we accept new startup requests.
-        // Runs after WalletConnect init so queued requests can be serviced.
-        if (!isSignerMode) {
-          // Reset stale processing state from previous session (prevents deadlock after crash)
-          await TransactionRequestQueue.setProcessing(false);
-
-          // Process any pending transaction requests from the queue
-          try {
-            const hasQueuedRequests =
-              !(await TransactionRequestQueue.isEmpty());
-            if (hasQueuedRequests) {
-              console.log(
-                '[AppNavigator] Processing queued transaction requests on startup'
-              );
-              const nextRequest = await TransactionRequestQueue.peek();
-              if (nextRequest && navigationRef.current) {
-                // Dequeue and navigate to the first request
-                await TransactionRequestQueue.dequeue();
-                navigationRef.current.navigate(
-                  'WalletConnectTransactionRequest',
-                  {
-                    requestEvent: nextRequest,
-                    version: nextRequest.version,
-                  }
-                );
-              }
-            }
-          } catch (error) {
-            console.error(
-              '[AppNavigator] Failed to process queued requests:',
-              error
-            );
-          }
-        }
-
-        // Defer per-account notification subscribe OFF the critical path.
-        // Re-read the wallet here so accounts created during startup are
-        // included (constraint: defer only AFTER re-reading the wallet). This is
-        // fire-and-forget so it never delays time-to-interactive.
-        if (shouldSubscribeAccounts) {
-          void (async () => {
-            try {
-              const wallet = await MultiAccountWalletService.getCurrentWallet();
-              if (wallet && wallet.accounts.length > 0) {
-                // Subscribe ALL accounts to notifications (not just active one)
-                // Watch accounts will have message notifications disabled by default
-                await notificationService.subscribeAllAccounts(wallet.accounts);
-
-                // TODO: Re-enable realtime subscription when needed
-                // Currently disabled to reduce server load - using polling instead
-                // const allAddresses = wallet.accounts.map(a => a.address);
-                // await realtimeService.subscribeToAddresses(allAddresses);
-              }
-            } catch (error) {
-              console.warn(
-                'Failed to subscribe accounts to notifications:',
-                error
-              );
-            }
-          })();
-        }
-
-        return () => {
-          try {
-            if (wcService && onProposal) {
-              wcService.off?.('session_proposal', onProposal);
-            }
-            if (wcService && onRequest) {
-              wcService.off?.('session_request', onRequest);
-            }
-            if (!isSignerMode) {
-              extensionDeepLinkHandler.cleanup();
-              notificationService.cleanup();
-            }
-            // realtimeService.cleanup(); // Disabled - realtime subscription not active
-          } catch {}
-        };
-      } catch (error) {
-        console.error('Failed to initialize services:', error);
-      }
-    };
-
-    initializeServices();
+    return runCleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- whole-app service boot; runs once (guarded by initializationRef) and initializeNetwork is read at the mount commit. Re-running on its identity would re-boot services.
   }, []);
 

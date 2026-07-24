@@ -3,7 +3,7 @@
   "totals": {
     "errors": 0,
     "warnings": 260,
-    "filesLinted": 432,
+    "filesLinted": 434,
     "filesWithFindings": 92
   },
   "rules": {
