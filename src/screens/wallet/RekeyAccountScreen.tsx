@@ -550,137 +550,164 @@ export default function RekeyAccountScreen() {
     };
 
     setCurrentRequest(request);
+    // Mark the rekey as in-flight BEFORE the auth/signing modal opens. The
+    // signing window is [here .. handleAuthComplete/handleAuthCancel], and the
+    // guards below (network-selector `disabled`, Ledger picker `isBusy`) exist
+    // to lock that window — setting it in handleAuthComplete would flip it true
+    // only after signing already finished, leaving both guards inert.
+    setIsProcessing(true);
     setShowAuthModal(true);
   };
 
   const handleAuthComplete = async (success: boolean, result?: any) => {
-    setShowAuthModal(false);
-    setCurrentRequest(null);
+    // Wrap the whole completion path so isProcessing is cleared on EVERY exit
+    // (success, each metadata-update catch, the failure Alert, or any throw
+    // between them). A permanently-true flag would wedge the screen.
+    try {
+      setShowAuthModal(false);
+      setCurrentRequest(null);
 
-    if (success && result?.transactionId) {
-      // Apply Ledger metadata update if needed
-      if (rekeyFlow === 'ledger' && selectedLedgerAccount && sourceAccount) {
-        try {
-          await applyLedgerMetadataUpdate(sourceAccount, selectedLedgerAccount);
-        } catch (metadataError) {
-          console.warn(
-            'Failed to update Ledger rekey metadata:',
-            metadataError
-          );
-        }
-      }
-
-      // Apply Airgap metadata update if needed
-      if (rekeyFlow === 'airgap' && selectedAirgapAccount && sourceAccount) {
-        try {
-          await applyAirgapMetadataUpdate(sourceAccount, selectedAirgapAccount);
-        } catch (metadataError) {
-          console.warn(
-            'Failed to update airgap rekey metadata:',
-            metadataError
-          );
-        }
-      }
-
-      // Apply reverse rekey metadata update - convert back to standard account
-      if (rekeyFlow === 'reverse' && sourceAccount) {
-        try {
-          // Convert the rekeyed account back to standard
-          const rekeyInfo = { isRekeyed: false, authAddress: undefined };
-          const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
-            sourceAccount,
-            rekeyInfo,
-            wallet!
-          );
-
-          if (updatedAccount.type !== sourceAccount.type) {
-            await MultiAccountWalletService.updateAccountMetadata(
-              updatedAccount
-            );
-
-            const currentState = useWalletStore.getState();
-            if (currentState.wallet) {
-              useWalletStore.setState({
-                wallet: {
-                  ...currentState.wallet,
-                  accounts: currentState.wallet.accounts.map((candidate) =>
-                    candidate.id === updatedAccount.id
-                      ? updatedAccount
-                      : candidate
-                  ),
-                },
-              });
-            }
-          }
-        } catch (metadataError) {
-          console.warn(
-            'Failed to update reverse rekey metadata:',
-            metadataError
-          );
-        }
-      }
-
-      // Refresh account data
-      if (sourceAccount) {
-        setTimeout(async () => {
+      if (success && result?.transactionId) {
+        // Apply Ledger metadata update if needed
+        if (rekeyFlow === 'ledger' && selectedLedgerAccount && sourceAccount) {
           try {
-            await loadAccountBalance(sourceAccount.id, true); // Force refresh after rekey
-          } catch (refreshError) {
-            console.warn('Failed to refresh account data:', refreshError);
+            await applyLedgerMetadataUpdate(
+              sourceAccount,
+              selectedLedgerAccount
+            );
+          } catch (metadataError) {
+            console.warn(
+              'Failed to update Ledger rekey metadata:',
+              metadataError
+            );
           }
-        }, 3000);
-      }
-
-      const title =
-        rekeyFlow === 'reverse'
-          ? 'Rekey Removed'
-          : rekeyFlow === 'ledger'
-            ? 'Ledger Rekey Successful'
-            : rekeyFlow === 'airgap'
-              ? 'Airgap Rekey Successful'
-              : 'Rekey Successful';
-
-      const message =
-        rekeyFlow === 'reverse'
-          ? `Account rekey has been removed successfully!\n\nYou now have full control of this account again.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
-          : rekeyFlow === 'ledger'
-            ? `Account has been rekeyed to your Ledger device successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
-            : rekeyFlow === 'airgap'
-              ? `Account has been rekeyed to your airgap signer successfully!\n\nFuture transactions will require signing via QR code.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
-              : `Account has been rekeyed successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`;
-
-      Alert.alert(title, message, [
-        {
-          text: 'OK',
-          onPress: () => navigation.goBack(),
-        },
-      ]);
-    } else {
-      // Handle error
-      let errorMessage =
-        result instanceof Error ? result.message : 'Unknown error occurred';
-
-      if (rekeyFlow === 'reverse') {
-        if (errorMessage.includes('auth')) {
-          errorMessage +=
-            '\n\nTip: Make sure you have signing authority for this account.';
-        } else if (errorMessage.includes('insufficient funds')) {
-          errorMessage +=
-            '\n\nTip: You need a small amount of VOI to pay for the transaction fee.';
         }
-      }
 
-      Alert.alert(
-        rekeyFlow === 'reverse' ? 'Remove Rekey Failed' : 'Rekey Failed',
-        errorMessage
-      );
+        // Apply Airgap metadata update if needed
+        if (rekeyFlow === 'airgap' && selectedAirgapAccount && sourceAccount) {
+          try {
+            await applyAirgapMetadataUpdate(
+              sourceAccount,
+              selectedAirgapAccount
+            );
+          } catch (metadataError) {
+            console.warn(
+              'Failed to update airgap rekey metadata:',
+              metadataError
+            );
+          }
+        }
+
+        // Apply reverse rekey metadata update - convert back to standard account
+        if (rekeyFlow === 'reverse' && sourceAccount) {
+          try {
+            // Convert the rekeyed account back to standard
+            const rekeyInfo = { isRekeyed: false, authAddress: undefined };
+            const updatedAccount =
+              await rekeyManager.updateAccountWithRekeyInfo(
+                sourceAccount,
+                rekeyInfo,
+                wallet!
+              );
+
+            if (updatedAccount.type !== sourceAccount.type) {
+              await MultiAccountWalletService.updateAccountMetadata(
+                updatedAccount
+              );
+
+              const currentState = useWalletStore.getState();
+              if (currentState.wallet) {
+                useWalletStore.setState({
+                  wallet: {
+                    ...currentState.wallet,
+                    accounts: currentState.wallet.accounts.map((candidate) =>
+                      candidate.id === updatedAccount.id
+                        ? updatedAccount
+                        : candidate
+                    ),
+                  },
+                });
+              }
+            }
+          } catch (metadataError) {
+            console.warn(
+              'Failed to update reverse rekey metadata:',
+              metadataError
+            );
+          }
+        }
+
+        // Refresh account data
+        if (sourceAccount) {
+          setTimeout(async () => {
+            try {
+              await loadAccountBalance(sourceAccount.id, true); // Force refresh after rekey
+            } catch (refreshError) {
+              console.warn('Failed to refresh account data:', refreshError);
+            }
+          }, 3000);
+        }
+
+        const title =
+          rekeyFlow === 'reverse'
+            ? 'Rekey Removed'
+            : rekeyFlow === 'ledger'
+              ? 'Ledger Rekey Successful'
+              : rekeyFlow === 'airgap'
+                ? 'Airgap Rekey Successful'
+                : 'Rekey Successful';
+
+        const message =
+          rekeyFlow === 'reverse'
+            ? `Account rekey has been removed successfully!\n\nYou now have full control of this account again.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
+            : rekeyFlow === 'ledger'
+              ? `Account has been rekeyed to your Ledger device successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
+              : rekeyFlow === 'airgap'
+                ? `Account has been rekeyed to your airgap signer successfully!\n\nFuture transactions will require signing via QR code.\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`
+                : `Account has been rekeyed successfully!\n\nTransaction ID: ${result.transactionId.slice(0, 8)}...`;
+
+        Alert.alert(title, message, [
+          {
+            text: 'OK',
+            onPress: () => navigation.goBack(),
+          },
+        ]);
+      } else {
+        // Handle error
+        let errorMessage =
+          result instanceof Error ? result.message : 'Unknown error occurred';
+
+        if (rekeyFlow === 'reverse') {
+          if (errorMessage.includes('auth')) {
+            errorMessage +=
+              '\n\nTip: Make sure you have signing authority for this account.';
+          } else if (errorMessage.includes('insufficient funds')) {
+            errorMessage +=
+              '\n\nTip: You need a small amount of VOI to pay for the transaction fee.';
+          }
+        }
+
+        Alert.alert(
+          rekeyFlow === 'reverse' ? 'Remove Rekey Failed' : 'Rekey Failed',
+          errorMessage
+        );
+      }
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   const handleAuthCancel = () => {
-    setShowAuthModal(false);
-    authController.resetAfterDismiss();
-    setCurrentRequest(null);
+    // Dismissal is an exit from the in-flight window too. Clear the guard in a
+    // finally so a throw from resetAfterDismiss (the modal is already hidden by
+    // then) can't leave isProcessing stuck true and wedge the screen.
+    try {
+      setShowAuthModal(false);
+      authController.resetAfterDismiss();
+      setCurrentRequest(null);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   if (!sourceAccount) {
