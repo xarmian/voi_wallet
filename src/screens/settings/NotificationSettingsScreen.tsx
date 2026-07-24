@@ -138,10 +138,16 @@ function NumberInputSetting({
   const themeColors = useThemeColors();
   const [localValue, setLocalValue] = useState(value.toString());
 
-  // Update local value when prop changes
-  useEffect(() => {
+  // Mirror the prop into the editable field whenever it changes, by adjusting
+  // state during render off the tracked previous value — the React-canonical
+  // replacement for the old mirror-in-effect. Syncs at the same logical moment
+  // (value prop change) without the extra post-paint render pass; the field
+  // stays user-editable (handleChangeText) between prop changes.
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
     setLocalValue(value.toString());
-  }, [value]);
+  }
 
   const handleChangeText = (text: string) => {
     // Only allow numbers
@@ -312,12 +318,14 @@ export default function NotificationSettingsScreen() {
   // Check if selected account is watch-only
   const isWatchAccount = selectedAccount?.type === AccountType.WATCH;
 
-  // Initialize selected account to active account
-  useEffect(() => {
-    if (!selectedAccount && activeAccount) {
-      setSelectedAccount(activeAccount);
-    }
-  }, [activeAccount, selectedAccount]);
+  // Initialize the selected account to the active account, at render time — the
+  // React-canonical replacement for the old init-in-effect. The guard is
+  // self-limiting (once selectedAccount is set, !selectedAccount is false), so
+  // this settles in one pass without the extra post-paint render the effect
+  // incurred; the account stays user-changeable via the picker afterwards.
+  if (!selectedAccount && activeAccount) {
+    setSelectedAccount(activeAccount);
+  }
 
   // Reload preferences when selected account changes
   useEffect(() => {

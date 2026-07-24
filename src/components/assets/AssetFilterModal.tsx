@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Modal,
   View,
@@ -57,18 +57,25 @@ export default function AssetFilterModal({
     currentSettings.nativeTokensFirst
   );
 
-  // Sync state with currentSettings when modal opens
-  useEffect(() => {
-    if (visible) {
-      setSortBy(currentSettings.sortBy);
-      setSortOrder(currentSettings.sortOrder);
-      setBalanceThresholdText(
-        currentSettings.balanceThreshold?.toString() || ''
-      );
-      setValueThresholdText(currentSettings.valueThreshold?.toString() || '');
-      setNativeTokensFirst(currentSettings.nativeTokensFirst);
-    }
-  }, [visible, currentSettings]);
+  // Sync the editable fields with currentSettings the moment the modal
+  // transitions to visible (or its settings change while open) by adjusting
+  // state during render off a tracked previous value — the React-canonical
+  // replacement for the old reset-in-effect. Resets at the exact same logical
+  // moment the effect did, without the extra post-paint render pass and without
+  // changing the modal's slide-in mount timing.
+  const [prevSyncKey, setPrevSyncKey] = useState<AssetFilterSettings | null>(
+    null
+  );
+  if (visible && currentSettings !== prevSyncKey) {
+    setPrevSyncKey(currentSettings);
+    setSortBy(currentSettings.sortBy);
+    setSortOrder(currentSettings.sortOrder);
+    setBalanceThresholdText(currentSettings.balanceThreshold?.toString() || '');
+    setValueThresholdText(currentSettings.valueThreshold?.toString() || '');
+    setNativeTokensFirst(currentSettings.nativeTokensFirst);
+  } else if (!visible && prevSyncKey !== null) {
+    setPrevSyncKey(null);
+  }
 
   const handleApply = () => {
     const balanceThreshold = balanceThresholdText.trim()

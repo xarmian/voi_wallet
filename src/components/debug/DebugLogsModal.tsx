@@ -23,14 +23,28 @@ export const DebugLogsModal: React.FC<DebugLogsModalProps> = ({
   visible,
   onClose,
 }) => {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  // The initial snapshot is seeded by the lazy initializer (covers a first
+  // mount with visible already true, which the old effect handled post-mount).
+  const [logs, setLogs] = useState<LogEntry[]>(() =>
+    visible ? debugLogger.getLogs() : []
+  );
+
+  // Re-seed the current log snapshot the moment the modal transitions to
+  // visible by adjusting state during render off a tracked previous value — the
+  // React-canonical replacement for the old snapshot-in-effect. This re-seeds
+  // on every open (catching logs that arrived while closed) at the same logical
+  // moment the effect did. Only the live subscription stays in the effect.
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
+    if (visible) {
+      setLogs(debugLogger.getLogs());
+    }
+  }
 
   useEffect(() => {
     if (visible) {
-      // Get initial logs
-      setLogs(debugLogger.getLogs());
-
-      // Listen for new logs
+      // Listen for new logs while open.
       const removeListener = debugLogger.addListener(setLogs);
       return removeListener;
     }

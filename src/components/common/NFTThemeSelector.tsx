@@ -65,16 +65,18 @@ export default function NFTThemeSelector({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load on open, keyed on visible/account-address/viewMode; activeAccount is tracked via its stable .address slice and loadMyNFTs is read at that commit, so neither should re-trigger on object/function identity.
   }, [visible, activeAccount?.address, viewMode]);
 
-  // Reset view when tab changes
-  useEffect(() => {
-    if (activeTab === 'my-nfts') {
-      setViewMode('my-nfts');
-      setSelectedCollection(null);
-    } else {
-      setViewMode('browse-collections');
-      setSelectedCollection(null);
-    }
-  }, [activeTab]);
+  // Reset the view the moment the active tab changes by adjusting state during
+  // render off the tracked previous tab — the React-canonical replacement for
+  // the old reset-in-effect. Resets viewMode/selectedCollection at the same
+  // logical moment the effect did, without the extra post-paint render pass.
+  // (viewMode can't be fully derived from activeTab — handleCollectionPress
+  // moves it to 'collection-tokens' independently.)
+  const [prevActiveTab, setPrevActiveTab] = useState(activeTab);
+  if (activeTab !== prevActiveTab) {
+    setPrevActiveTab(activeTab);
+    setViewMode(activeTab === 'my-nfts' ? 'my-nfts' : 'browse-collections');
+    setSelectedCollection(null);
+  }
 
   const loadMyNFTs = useCallback(async () => {
     if (!activeAccount) return;

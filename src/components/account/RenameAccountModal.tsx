@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Modal,
   View,
@@ -36,12 +36,20 @@ export default function RenameAccountModal({
   const [name, setName] = useState(initialName);
   const [hasEdited, setHasEdited] = useState(false);
 
-  useEffect(() => {
-    if (visible) {
-      setName(initialName);
-      setHasEdited(false);
-    }
-  }, [visible, initialName]);
+  // Reset the editable fields the moment the modal transitions to visible (or
+  // its initialName changes while open) by adjusting state during render off a
+  // tracked previous value — the React-canonical replacement for the old
+  // reset-in-effect. Resets at the exact same logical moment the effect did
+  // (visible/initialName change) without the extra post-paint render pass.
+  const [prevResetKey, setPrevResetKey] = useState<string | null>(null);
+  const resetKey = visible ? `open:${initialName}` : null;
+  if (resetKey !== null && resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
+    setName(initialName);
+    setHasEdited(false);
+  } else if (resetKey === null && prevResetKey !== null) {
+    setPrevResetKey(null);
+  }
 
   const trimmedName = useMemo(() => name.trim(), [name]);
   const isNameValid = trimmedName.length > 0;

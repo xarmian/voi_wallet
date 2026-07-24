@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,9 +30,16 @@ export default function MultiNetworkAssetItem({
   const [imageError, setImageError] = useState(false);
   const styles = useThemedStyles(createStyles);
 
-  useEffect(() => {
+  // Clear the image-load error the moment the item is bound to a different
+  // asset (or image URL) by adjusting state during render off a tracked key —
+  // the React-canonical replacement for the old reset-in-effect, resetting at
+  // the same logical moment without the extra post-paint render pass.
+  const assetImageKey = `${asset.mappingId}:${asset.assetId}:${asset.imageUrl}`;
+  const [prevAssetImageKey, setPrevAssetImageKey] = useState(assetImageKey);
+  if (assetImageKey !== prevAssetImageKey) {
+    setPrevAssetImageKey(assetImageKey);
     setImageError(false);
-  }, [asset.mappingId, asset.assetId, asset.imageUrl]);
+  }
 
   // Filter source balances based on network filter
   const getFilteredSourceBalances = () => {

@@ -45,15 +45,28 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
   const [isCustom, setIsCustom] = useState<boolean>(false);
   const [slideAnim] = useState(new Animated.Value(0));
 
+  // Seed the slippage selection the moment the modal transitions to visible (or
+  // its currentSlippage changes while open) by adjusting state during render off
+  // a tracked previous value — the React-canonical replacement for the old
+  // reset-in-effect. Resets at the same logical moment the effect did, without
+  // the extra post-paint render pass. The open/close animation stays in the
+  // effect below (imperative, not derivable).
+  const [prevSlippageKey, setPrevSlippageKey] = useState<string | null>(null);
+  const slippageKey = visible ? `open:${currentSlippage}` : null;
+  if (slippageKey !== null && slippageKey !== prevSlippageKey) {
+    setPrevSlippageKey(slippageKey);
+    setSelectedSlippage(currentSlippage);
+    const isPreset = PRESET_SLIPPAGES.includes(currentSlippage);
+    setIsCustom(!isPreset);
+    if (!isPreset) {
+      setCustomSlippage(currentSlippage.toString());
+    }
+  } else if (slippageKey === null && prevSlippageKey !== null) {
+    setPrevSlippageKey(null);
+  }
+
   useEffect(() => {
     if (visible) {
-      setSelectedSlippage(currentSlippage);
-      const isPreset = PRESET_SLIPPAGES.includes(currentSlippage);
-      setIsCustom(!isPreset);
-      if (!isPreset) {
-        setCustomSlippage(currentSlippage.toString());
-      }
-
       Animated.spring(slideAnim, {
         toValue: 1,
         useNativeDriver: true,
@@ -67,8 +80,8 @@ export const SlippageSettingsModal: React.FC<SlippageSettingsModalProps> = ({
         useNativeDriver: true,
       }).start();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation keyed on visible/currentSlippage; slideAnim is a stable Animated ref that never changes identity.
-  }, [visible, currentSlippage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation keyed on visible; slideAnim is a stable Animated ref that never changes identity.
+  }, [visible]);
 
   const handlePresetSelect = (slippage: number) => {
     setSelectedSlippage(slippage);

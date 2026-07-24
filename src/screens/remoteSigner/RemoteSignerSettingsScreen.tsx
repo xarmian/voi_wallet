@@ -98,7 +98,10 @@ export default function RemoteSignerSettingsScreen() {
   );
 
   const [isModeSwitching, setIsModeSwitching] = useState(false);
-  const [deviceName, setDeviceName] = useState('');
+  // Seed from the persisted config so a mount with signerConfig already present
+  // shows the stored name (the old effect populated it post-mount); the
+  // render-time mirror below keeps it in sync on later config changes.
+  const [deviceName, setDeviceName] = useState(signerConfig?.deviceName ?? '');
   const [isEditingName, setIsEditingName] = useState(false);
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [setupDeviceName, setSetupDeviceName] = useState('');
@@ -115,11 +118,19 @@ export default function RemoteSignerSettingsScreen() {
     }
   }, [isInitialized, initialize]);
 
-  useEffect(() => {
+  // Mirror the persisted device name into the editable field whenever the
+  // signer config changes, by adjusting state during render off the tracked
+  // previous config — the React-canonical replacement for the old
+  // mirror-in-effect. Fires on the same [signerConfig] change the effect keyed
+  // on (identity), without the extra post-paint render pass. The field stays
+  // user-editable (onChangeText) between config changes.
+  const [prevSignerConfig, setPrevSignerConfig] = useState(signerConfig);
+  if (signerConfig !== prevSignerConfig) {
+    setPrevSignerConfig(signerConfig);
     if (signerConfig?.deviceName) {
       setDeviceName(signerConfig.deviceName);
     }
-  }, [signerConfig]);
+  }
 
   const handleModeSwitch = async (newMode: AppMode) => {
     if (newMode === appMode) return;
