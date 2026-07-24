@@ -2,12 +2,12 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 260,
-    "filesLinted": 434,
+    "warnings": 259,
+    "filesLinted": 435,
     "filesWithFindings": 92
   },
   "rules": {
-    "@typescript-eslint/no-unused-vars": 9,
+    "@typescript-eslint/no-unused-vars": 8,
     "import/no-named-as-default": 37,
     "react-hooks/exhaustive-deps": 24,
     "react-hooks/immutability": 97,
@@ -514,9 +514,8 @@
     },
     "src/screens/wallet/SendScreen.tsx": {
       "errors": 0,
-      "warnings": 15,
+      "warnings": 14,
       "rules": {
-        "@typescript-eslint/no-unused-vars": 1,
         "import/no-named-as-default": 1,
         "react-hooks/exhaustive-deps": 8,
         "react-hooks/immutability": 1,
