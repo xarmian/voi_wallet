@@ -1,5 +1,8 @@
 import algosdk from 'algosdk';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import {
+  networkService as defaultNetworkService,
+  NetworkService,
+} from '@/services/network';
 import { NetworkId } from '@/types/network';
 import {
   WalletAccount,
@@ -294,7 +297,7 @@ export class TransactionService {
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.from)) {
@@ -340,7 +343,7 @@ export class TransactionService {
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.from)) {
@@ -819,7 +822,7 @@ export class TransactionService {
       // Use the network specified in params, or default to Voi mainnet
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
 
       const accountBalance = await networkService.getAccountBalance(
         params.from
@@ -1050,7 +1053,7 @@ export class TransactionService {
       // Use the network specified in params, or default to Voi mainnet
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
 
       const fee = await networkService.estimateTransactionFee();
       const total: number | bigint = params.assetId
@@ -1166,7 +1169,7 @@ export class TransactionService {
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.fromAddress)) {
@@ -1232,7 +1235,7 @@ export class TransactionService {
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.fromAddress)) {
@@ -1283,7 +1286,7 @@ export class TransactionService {
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.signerAddress)) {
@@ -1344,7 +1347,7 @@ export class TransactionService {
       // Get network service and check rekey status
       const networkService = networkId
         ? NetworkService.getInstance(networkId)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const accountBalance =
         await networkService.getAccountBalance(fromAddress);
       const isCurrentlyRekeyed = accountBalance.rekeyInfo?.isRekeyed;
@@ -1772,7 +1775,7 @@ export class TransactionService {
     const baseDelayMs = 500;
     const networkService = networkId
       ? NetworkService.getInstance(networkId)
-      : VoiNetworkService;
+      : defaultNetworkService;
 
     // Compute the expected txId from the signed blob up front so that a commit
     // whose response was lost can still be reported as success (rather than a

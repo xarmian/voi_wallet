@@ -36,7 +36,6 @@ jest.mock('@/services/network', () => ({
       getCurrentNetworkId: () => mockGetCurrentNetworkId(),
     }),
   },
-  VoiNetworkService: {},
 }));
 
 jest.mock('@/services/wallet', () => ({

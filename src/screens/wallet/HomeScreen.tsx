@@ -40,7 +40,7 @@ import {
   useMultiNetworkBalance,
   useAssetNetworkFilter,
 } from '@/store/walletStore';
-import VoiNetworkService, { NetworkStatus } from '@/services/network';
+import { networkService, NetworkStatus } from '@/services/network';
 import { formatCurrency } from '@/utils/formatting';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
@@ -442,7 +442,8 @@ export default function HomeScreen() {
         // within a short TTL, so on cold boot this reuses the status networkStore
         // already fetched during init (or shares its in-flight probe) rather than
         // issuing a duplicate ~15s request, and never delays the first balance.
-        const networkHealthPromise = VoiNetworkService.checkNetworkHealth()
+        const networkHealthPromise = networkService
+          .checkNetworkHealth()
           .then((status) => {
             if (
               viewModeRef.current === currentViewMode &&
@@ -990,7 +991,7 @@ export default function HomeScreen() {
       const [networkHealth] = await Promise.allSettled([
         // Explicit refresh (pull-to-refresh) must reflect current connectivity,
         // so bypass the short-TTL cache.
-        VoiNetworkService.checkNetworkHealth({ force: true }),
+        networkService.checkNetworkHealth({ force: true }),
       ]);
 
       if (networkHealth.status === 'fulfilled') {

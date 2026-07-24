@@ -1,5 +1,8 @@
 import algosdk from 'algosdk';
-import VoiNetworkService, { NetworkService } from '@/services/network';
+import {
+  networkService as defaultNetworkService,
+  NetworkService,
+} from '@/services/network';
 import MimirApiService from '@/services/mimir';
 
 // ARC-200 transfer ABI definition
@@ -149,10 +152,10 @@ export class Arc200TransactionService {
     params: Arc200TransferParams
   ): Promise<Arc200TransactionGroup> {
     try {
-      // Use the networkId from params, or default to VoiNetworkService for backwards compatibility
+      // Use the networkId from params, or default to defaultNetworkService for backwards compatibility
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.from)) {
@@ -374,10 +377,10 @@ export class Arc200TransactionService {
     needsMbrPayment: boolean;
   }> {
     try {
-      // Use the networkId from params, or default to VoiNetworkService for backwards compatibility
+      // Use the networkId from params, or default to defaultNetworkService for backwards compatibility
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
-        : VoiNetworkService;
+        : defaultNetworkService;
 
       const baseFee = await networkService.estimateTransactionFee();
       const hasBalance = await this.checkRecipientBalance(
@@ -422,7 +425,7 @@ export class Arc200TransactionService {
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
-        : VoiNetworkService;
+        : defaultNetworkService;
       const suggestedParams = await networkService.getSuggestedParams();
 
       if (!algosdk.isValidAddress(params.from)) {
@@ -631,7 +634,7 @@ export class Arc200TransactionService {
 
     const networkService = networkId
       ? NetworkService.getInstance(networkId as any)
-      : VoiNetworkService;
+      : defaultNetworkService;
     const suggestedParams = await networkService.getSuggestedParams();
 
     const allTransactions: algosdk.Transaction[] = [];
@@ -712,7 +715,7 @@ export class Arc200TransactionService {
   }> {
     const networkService = networkId
       ? NetworkService.getInstance(networkId as any)
-      : VoiNetworkService;
+      : defaultNetworkService;
 
     const baseFee = await networkService.estimateTransactionFee();
 

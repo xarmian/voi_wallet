@@ -13,7 +13,7 @@ import {
   SimpleLedgerSigningRequest,
 } from '@/services/ledger/simpleLedgerSigner';
 import algosdk, { Transaction } from 'algosdk';
-import VoiNetworkService from '@/services/network';
+import { networkService } from '@/services/network';
 
 /**
  * Simplified Key Manager
@@ -212,8 +212,7 @@ export class SimplifiedKeyManager {
 
           case AccountType.WATCH:
             // For watch accounts, check if they're rekeyed to an account we control
-            const rekeyInfo =
-              await VoiNetworkService.getAccountRekeyInfo(address);
+            const rekeyInfo = await networkService.getAccountRekeyInfo(address);
             if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
               const signerAccount = wallet.accounts.find(
                 (acc) => acc.address === rekeyInfo.authAddress

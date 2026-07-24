@@ -1088,7 +1088,7 @@ export default function SendScreen() {
   //      same concrete address regardless of the selected network.
   //   2. The actual resolution (`resolveAddressOrName`) and name/address
   //      classification (`isLikelyEnvoiName`) gate on the GLOBAL
-  //      `VoiNetworkService.isFeatureAvailable('envoi')` flag — NOT on this
+  //      `networkService.isFeatureAvailable('envoi')` flag — NOT on this
   //      screen's `isEnvoiEnabled`. `isEnvoiEnabled` (derived from
   //      selectedNetworkId) only decides whether to STORE the name for DISPLAY
   //      and whether to run the type-ahead search below; it never changes the
