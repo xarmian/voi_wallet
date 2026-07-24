@@ -71,6 +71,7 @@ export interface RekeyedAccountMetadata extends BaseAccountMetadata {
   originalOwner?: boolean; // Whether this wallet was the original owner
   canSign: boolean; // Whether we have the signing key for the auth address
   rekeyedFrom?: string; // Original account address if we rekeyed it
+  notes?: string; // User notes about this account
 }
 
 // Ledger Account (hardware-controlled)

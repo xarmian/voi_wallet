@@ -1602,6 +1602,7 @@ export class MultiAccountWalletService {
         type: AccountType.REKEYED,
         label: label || `Auth Account (${authAccount.networkName})`,
         color: color || this.generateAccountColor(),
+        notes,
         isHidden: false,
         createdAt: new Date().toISOString(),
         importedAt: new Date().toISOString(),

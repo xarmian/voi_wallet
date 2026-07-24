@@ -44,7 +44,6 @@ export default function ShowRecoveryPhraseScreen() {
   const targetAddress = accountAddress ?? activeAccount?.address;
 
   const [mnemonic, setMnemonic] = useState<string>('');
-  const [mnemonicWords, setMnemonicWords] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isBlurred, setIsBlurred] = useState(true);
   const [hasCopied, setHasCopied] = useState(false);
@@ -70,7 +69,6 @@ export default function ShowRecoveryPhraseScreen() {
       const recoveredMnemonic =
         await SecureKeyManager.getMnemonic(targetAddress);
       setMnemonic(recoveredMnemonic);
-      setMnemonicWords(recoveredMnemonic.split(' '));
     } catch (error) {
       console.error('Failed to load mnemonic:', error);
 
@@ -203,7 +201,6 @@ export default function ShowRecoveryPhraseScreen() {
 
       // Clear sensitive data when component unmounts
       setMnemonic('');
-      setMnemonicWords([]);
 
       // If the recovery phrase is still sitting in the clipboard, wipe it now
       // rather than waiting out the 60s timer (and cancel that timer).
