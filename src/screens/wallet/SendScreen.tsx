@@ -40,6 +40,7 @@ import {
   AccountType,
   type WalletAccount,
   type AssetBalance,
+  type AccountBalance,
 } from '@/types/wallet';
 import {
   useCurrentNetwork,
@@ -312,12 +313,99 @@ export default function SendScreen() {
     assetId: number;
   } | null>(null);
 
-  // Balance for the selected asset
-  const [accountBalance, setAccountBalance] = useState<any>(null);
+  // Single-network AccountBalance for the effective transaction network, stored
+  // WITH the (address, networkId) identity it was loaded for. The native
+  // spendable/Max math must subtract THIS network's minimum-balance reserve;
+  // keying to the wrong network — or reusing a record after the account/network
+  // selection changes — is the money bug TASK-239 exists to fix. The identity is
+  // re-validated during render (see the `accountBalance` derivation below), so a
+  // mismatched or not-yet-loaded record is never used, regardless of when any
+  // async load commits.
+  const [accountBalanceRecord, setAccountBalanceRecord] = useState<{
+    address: string;
+    networkId: NetworkId;
+    balance: AccountBalance;
+  } | null>(null);
 
   const { balance: multiNetworkBalance } = useMultiNetworkBalance(
     activeAccount?.id || ''
   );
+
+  // The network this screen actually SENDS on. `selectedAsset` can point at a
+  // different network than `selectedNetworkId` — NetworkAssetSelector.onSelect
+  // sets the asset without touching selectedNetworkId — so the effective network
+  // is the coalesced value, the same expression used by fee estimation, the
+  // network-config memo and transaction construction. Compute it ONCE and share
+  // it; do not re-derive per call site.
+  const effectiveNetworkId: NetworkId =
+    selectedAsset?.networkId ?? selectedNetworkId;
+
+  // Identity-validated view of the loaded balance: non-null ONLY when the stored
+  // record was loaded for the CURRENT (address, effective network). Any
+  // mismatch — a fetch still in flight after the selection changed, or nothing
+  // loaded yet — yields null, and the native spendable path then treats it as
+  // UNSAFE (0n) rather than as `minBalance = 0`. This check runs during render,
+  // so no stale reserve can survive even a single render after the identity
+  // changes (correctness does not depend on effect ordering).
+  const accountBalance: AccountBalance | null =
+    accountBalanceRecord &&
+    accountBalanceRecord.address === activeAccount?.address &&
+    accountBalanceRecord.networkId === effectiveNetworkId
+      ? accountBalanceRecord.balance
+      : null;
+
+  // Load the single-network AccountBalance for the effective transaction network
+  // so the native spendable/Max math can subtract this network's minimum-balance
+  // reserve (the same single-network `minBalance` SwapScreen and the
+  // transactions service backstop use — NOT the cross-network aggregate from
+  // useMultiNetworkBalance). Keyed on the EFFECTIVE network, not
+  // selectedNetworkId, because selecting an asset on the other network changes
+  // where we send without touching selectedNetworkId. Mirrors the HomeScreen
+  // async-load pattern: the target identity is held in a ref and re-checked
+  // after the await, so a superseded fetch (account or network changed
+  // mid-flight) never writes a stale record. The stored record carries its own
+  // identity and is re-validated during render (above), so a stale record is
+  // never usable even before this effect's replacement commits.
+  const balanceIdentityRef = React.useRef<{
+    address: string | undefined;
+    networkId: NetworkId;
+  }>({ address: activeAccount?.address, networkId: effectiveNetworkId });
+
+  useEffect(() => {
+    const address = activeAccount?.address;
+    const networkId = effectiveNetworkId;
+    balanceIdentityRef.current = { address, networkId };
+    if (!address) return;
+
+    (async () => {
+      try {
+        const balance =
+          await NetworkService.getInstance(networkId).getAccountBalance(
+            address
+          );
+        // Re-check identity after the await (do not trust the dep array): a newer
+        // account/network selection may have superseded this run.
+        if (
+          balanceIdentityRef.current.address !== address ||
+          balanceIdentityRef.current.networkId !== networkId
+        ) {
+          return;
+        }
+        setAccountBalanceRecord({ address, networkId, balance });
+      } catch (error) {
+        if (
+          balanceIdentityRef.current.address !== address ||
+          balanceIdentityRef.current.networkId !== networkId
+        ) {
+          return;
+        }
+        console.error(
+          '[SendScreen] Failed to load account balance for spendable math:',
+          error
+        );
+      }
+    })();
+  }, [activeAccount?.address, effectiveNetworkId]);
 
   // The asset the send flow is scoped to (parsed from the route). Depended on
   // by the option builder below, so keep it memoized (and reactive to BOTH
@@ -787,8 +875,8 @@ export default function SendScreen() {
 
   // Get network config for the asset being sent (may differ from selectedNetworkId for multi-network assets)
   const transactionNetworkConfig = React.useMemo(() => {
-    return getNetworkConfig(selectedAsset?.networkId || selectedNetworkId);
-  }, [selectedAsset?.networkId, selectedNetworkId]);
+    return getNetworkConfig(effectiveNetworkId);
+  }, [effectiveNetworkId]);
 
   // Check if Envoi is available on the selected network
   const isEnvoiEnabled = selectedNetworkConfig.features.envoi;
@@ -885,8 +973,17 @@ export default function SendScreen() {
       : effectiveAssetId === 0 || !effectiveAssetId;
     try {
       if (isNative) {
-        const bal = BigInt(option?.balance ?? accountBalance?.amount ?? 0);
-        const minBal = BigInt(accountBalance?.minBalance ?? 0);
+        // Native spendable = balance - fee - minBalance. BOTH balance and reserve
+        // come from the SAME identity-validated record: `accountBalance` is null
+        // unless its stored (address, network) matches the current effective
+        // identity. When it is null (unloaded, or superseded by an in-flight
+        // fetch after the selection changed) native spendable is UNSAFE — return
+        // 0n (Max disappears; the validator rejects positive amounts) rather than
+        // silently treating the reserve as 0. Do NOT fall back to the older
+        // assetOptions snapshot (`option?.balance`) for the balance term here.
+        if (!accountBalance) return 0n;
+        const bal = BigInt(accountBalance.amount ?? 0);
+        const minBal = BigInt(accountBalance.minBalance ?? 0);
         const fee = BigInt(Math.trunc(estimatedFee || 0));
         const spendable = bal - fee - minBal;
         return spendable > 0n ? spendable : 0n;
@@ -918,7 +1015,7 @@ export default function SendScreen() {
     } catch {
       return 'Enter a valid amount';
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps hand-mirror the inputs of the helpers this memo calls (getCurrentAssetOption / getAssetDecimals / getSpendableBase): amount, accountBalance, estimatedFee, effectiveAssetId, selectedAsset, assetOptions. Those helpers are read at the current commit; mirror any new read they gain here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps hand-mirror the inputs of the helpers this memo calls (getCurrentAssetOption / getAssetDecimals / getSpendableBase): amount, accountBalance, estimatedFee, effectiveAssetId, selectedAsset, assetOptions. `accountBalance` here is the identity-validated DERIVED value (it already folds in accountBalanceRecord, activeAccount.address and effectiveNetworkId), so listing it also covers the effective-network keying. Those helpers are read at the current commit; mirror any new read they gain here.
   }, [
     amount,
     accountBalance,
@@ -1260,7 +1357,7 @@ export default function SendScreen() {
           assetType === 'asa' ? (effectiveAssetId ?? undefined) : undefined,
         assetType,
         contractId,
-        networkId: selectedAsset?.networkId || selectedNetworkId,
+        networkId: effectiveNetworkId,
       });
 
       setEstimatedFee(cost.fee);
