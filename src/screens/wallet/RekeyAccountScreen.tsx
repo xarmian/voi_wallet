@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -95,13 +95,20 @@ export default function RekeyAccountScreen() {
   const standardAccounts = wallet?.accounts.filter(
     (acc) => acc.type === AccountType.STANDARD && acc.id !== params.accountId
   ) as StandardAccountMetadata[];
-  const ledgerAccounts = (wallet?.accounts.filter(
-    (acc) => acc.type === AccountType.LEDGER
-  ) ?? []) as LedgerAccountMetadata[];
-  const airgapAccounts = (wallet?.accounts.filter(
-    (acc) =>
-      acc.type === AccountType.REMOTE_SIGNER && acc.id !== params.accountId
-  ) ?? []) as RemoteSignerAccountMetadata[];
+  const ledgerAccounts = useMemo(
+    () =>
+      (wallet?.accounts.filter((acc) => acc.type === AccountType.LEDGER) ??
+        []) as LedgerAccountMetadata[],
+    [wallet?.accounts]
+  );
+  const airgapAccounts = useMemo(
+    () =>
+      (wallet?.accounts.filter(
+        (acc) =>
+          acc.type === AccountType.REMOTE_SIGNER && acc.id !== params.accountId
+      ) ?? []) as RemoteSignerAccountMetadata[],
+    [wallet?.accounts, params.accountId]
+  );
 
   // Check if source account is rekeyed on the selected network
   const isSourceRekeyed = networkRekeyInfo?.isRekeyed === true;

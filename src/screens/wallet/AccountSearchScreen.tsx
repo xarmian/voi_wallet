@@ -197,31 +197,34 @@ export default function AccountSearchScreen() {
     [addFriend, removeFriend, getFriend]
   );
 
-  const renderAvatar = (item: SearchResult) => {
-    if (item.avatar) {
+  const renderAvatar = useCallback(
+    (item: SearchResult) => {
+      if (item.avatar) {
+        return (
+          <Image
+            source={{ uri: item.avatar }}
+            style={styles.avatar}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={item.avatar}
+          />
+        );
+      }
+
+      // Fallback to AccountAvatar for generated avatars
       return (
-        <Image
-          source={{ uri: item.avatar }}
-          style={styles.avatar}
-          contentFit="cover"
-          cachePolicy="memory-disk"
-          recyclingKey={item.avatar}
+        <AccountAvatar
+          address={item.address}
+          size={48}
+          useEnvoiAvatar={false}
+          fallbackToGenerated={true}
+          showActiveIndicator={false}
+          showRekeyIndicator={false}
         />
       );
-    }
-
-    // Fallback to AccountAvatar for generated avatars
-    return (
-      <AccountAvatar
-        address={item.address}
-        size={48}
-        useEnvoiAvatar={false}
-        fallbackToGenerated={true}
-        showActiveIndicator={false}
-        showRekeyIndicator={false}
-      />
-    );
-  };
+    },
+    [styles]
+  );
 
   const renderSearchResult = useCallback(
     ({ item }: { item: SearchResult }) => {

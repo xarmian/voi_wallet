@@ -5,7 +5,13 @@
  * a transaction signing request from the wallet device.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import {
   Alert,
   View,
@@ -83,10 +89,14 @@ export default function SignRequestScannerScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Get addresses we can sign for (STANDARD accounts only)
-  const signableAddresses = new Set(
-    accounts
-      .filter((acc: AccountMetadata) => acc.type === AccountType.STANDARD)
-      .map((acc: AccountMetadata) => acc.address)
+  const signableAddresses = useMemo(
+    () =>
+      new Set(
+        accounts
+          .filter((acc: AccountMetadata) => acc.type === AccountType.STANDARD)
+          .map((acc: AccountMetadata) => acc.address)
+      ),
+    [accounts]
   );
 
   useEffect(() => {

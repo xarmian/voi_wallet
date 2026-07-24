@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
@@ -77,10 +83,13 @@ export default function TransactionHistoryScreen() {
   // Read the shared `recentTransactions` array only while it holds the
   // ACCOUNT-WIDE history — AssetDetailScreen loads a single asset's history
   // into the same array, and rendering that here would be the wrong list.
-  const allTransactions =
-    accountState.recentTransactionsScope === ALL_TRANSACTIONS_SCOPE
-      ? accountState.recentTransactions || []
-      : EMPTY_TRANSACTIONS;
+  const allTransactions = useMemo(
+    () =>
+      accountState.recentTransactionsScope === ALL_TRANSACTIONS_SCOPE
+        ? accountState.recentTransactions || []
+        : EMPTY_TRANSACTIONS,
+    [accountState.recentTransactionsScope, accountState.recentTransactions]
+  );
   // Not the shared `lastError` (every other loader clears it) and not any
   // transaction error either — only an ACCOUNT-WIDE one. AssetDetailScreen
   // writes asset-scoped failures into the same field, and rendering those here

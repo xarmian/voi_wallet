@@ -198,7 +198,7 @@ export default function UnifiedTransactionAuthModal({
     }
   };
 
-  const handleCancel = () => {
+  const handleCancel = useCallback(() => {
     controller.cancel();
     controller.resetAfterDismiss();
     setPin('');
@@ -206,7 +206,7 @@ export default function UnifiedTransactionAuthModal({
     setBiometricAttempted(false);
     setUserCancelled(true); // Mark that user explicitly cancelled
     onCancel();
-  };
+  }, [controller, onCancel]);
 
   const handleLedgerRetry = () => {
     controller.retryLedgerConnection();

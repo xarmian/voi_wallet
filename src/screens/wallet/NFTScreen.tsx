@@ -397,7 +397,7 @@ export default function NFTScreen() {
         </GlassCard>
       </View>
     ),
-    [styles, theme]
+    [theme]
   );
 
   const renderContent = () => {
