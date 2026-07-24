@@ -3,7 +3,7 @@
  * Allows users to select tokens for swapping
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -70,6 +70,11 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
     null
   );
 
+  // Monotonic id for the token load: a config change starts a newer load, and
+  // only the newest load is allowed to write `tokens` / clear `loading`, so a
+  // slow earlier request can't resolve last and overwrite the fresh list.
+  const loadTokensRequestRef = useRef(0);
+
   // Get account address from store
   const accounts = useWalletStore((state) => state.wallet?.accounts);
   const currentAccount = accounts?.find((acc) => acc.id === accountId);
@@ -79,8 +84,13 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
     (state) => state.accountStates[accountId]?.balance
   );
 
-  // Load balance for the specific network when modal opens
+  // Load balance for the specific network when modal opens. Cancellation-guarded
+  // so that when the account or network changes mid-fetch, the prior fetch cannot
+  // resolve last and write a stale prior-account/prior-network balance into
+  // networkBalance (which would then feed a stale token list via loadTokens).
   useEffect(() => {
+    let cancelled = false;
+
     const loadNetworkBalance = async () => {
       if (!visible || !currentAccount?.address) return;
 
@@ -94,20 +104,26 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
           const balance = await networkService.getAccountBalance(
             currentAccount.address
           );
+          if (cancelled) return;
           setNetworkBalance(balance);
         } else {
           // For VOI network, use the store balance
+          if (cancelled) return;
           setNetworkBalance(singleNetworkBalance || null);
         }
       } catch (error) {
         console.error('Error loading network balance:', error);
-        setNetworkBalance(singleNetworkBalance || null);
+        if (!cancelled) setNetworkBalance(singleNetworkBalance || null);
       } finally {
-        setLoadingBalance(false);
+        if (!cancelled) setLoadingBalance(false);
       }
     };
 
     loadNetworkBalance();
+
+    return () => {
+      cancelled = true;
+    };
   }, [visible, currentAccount?.address, networkId, singleNetworkBalance]);
 
   // Use network-specific balance or fallback to single network balance
@@ -144,14 +160,24 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- open/close animation keyed on visible; slideAnim is a stable Animated ref that never changes identity.
   }, [visible]);
 
-  // Load tokens when modal opens and balance is available
+  // Load tokens when the modal opens, the balance arrives, OR the config that
+  // shapes the list changes while the modal stays open (TASK-246 bug fix):
+  // networkId picks the token universe/provider, excludeTokenId hides the paired
+  // token, and ownedOnly filters to held tokens — a change to any of these must
+  // rebuild the list. loadTokens is intentionally omitted: it is a plain
+  // render-scope function (new identity every render) read at the current commit,
+  // so listing it would re-fire the load on every render. All listed deps are
+  // props / derived-stable values that do not change as a result of the load, so
+  // there is no reload loop.
   useEffect(() => {
     if (visible && accountBalance) {
       loadTokens();
     }
-  }, [visible, accountBalance]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on visible + the config that shapes the list (accountBalance, networkId, excludeTokenId, ownedOnly); loadTokens is a plain render-scope function read at the current commit and omitted on purpose so its per-render identity can't retrigger the load.
+  }, [visible, accountBalance, networkId, excludeTokenId, ownedOnly]);
 
   const loadTokens = async () => {
+    const requestId = ++loadTokensRequestRef.current;
     setLoading(true);
     try {
       const provider = SwapService.getProvider(networkId);
@@ -205,11 +231,17 @@ export const TokenSelector: React.FC<TokenSelectorProps> = ({
         return a.symbol.localeCompare(b.symbol);
       });
 
+      // A newer config load has superseded this one — don't overwrite its list.
+      if (requestId !== loadTokensRequestRef.current) return;
       setTokens(sorted);
     } catch (error) {
       console.error('Error loading tokens:', error);
     } finally {
-      setLoading(false);
+      // Only the newest load owns the spinner, so a bailed stale load can't flip
+      // loading off under the newer one.
+      if (requestId === loadTokensRequestRef.current) {
+        setLoading(false);
+      }
     }
   };
 

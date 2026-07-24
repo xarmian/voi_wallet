@@ -267,7 +267,11 @@ export default function AccountAvatar({
     return () => {
       avatarCallbacks.get(address)?.delete(updateCallback);
     };
-  }, [address, useEnvoiAvatar, size]);
+    // account?.avatarUrl is read to seed the avatar; include it so a prop-level
+    // avatar change re-seeds instead of showing the previous account's avatar.
+    // (The store lookup at getState() stays intentionally non-reactive per the
+    // note above — it would loop.)
+  }, [address, useEnvoiAvatar, size, account?.avatarUrl]);
 
   const handleAvatarError = () => {
     setAvatarError(true);

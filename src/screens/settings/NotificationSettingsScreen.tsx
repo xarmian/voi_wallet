@@ -327,11 +327,17 @@ export default function NotificationSettingsScreen() {
     setSelectedAccount(activeAccount);
   }
 
-  // Reload preferences when selected account changes
+  // Reload preferences when the selected account's address changes. Keyed on
+  // selectedAccount?.address — the content-stable slice that scopes the prefs.
+  // loadPreferences (a plain render-scope function) and the full selectedAccount
+  // object are intentionally omitted: loadPreferences reads selectedAccount fresh
+  // at call time, so listing either would only add identity-churn re-runs. This
+  // display is read-only and the writes read the address fresh.
   useEffect(() => {
     if (selectedAccount) {
       loadPreferences();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on selectedAccount?.address; loadPreferences and the full selectedAccount object are read at the current commit and omitted on purpose to avoid identity-churn re-runs.
   }, [selectedAccount?.address]);
 
   const loadPreferences = async () => {

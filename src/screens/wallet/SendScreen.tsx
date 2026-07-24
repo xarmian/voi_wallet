@@ -769,6 +769,7 @@ export default function SendScreen() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address (the content-stable slice that scopes this asset-options build); the full activeAccount object is read at the current commit and omitted on purpose — its identity churns on every store update while .address is what actually re-runs the builder. This mirrors the hand-mirror dep pattern the file uses at the amountError memo (:1018); no money-path logic changes (TASK-246 documents this deliberate omission owned by the SendScreen PRs).
   }, [
     activeAccount?.address,
     initialAssetId,
@@ -884,6 +885,7 @@ export default function SendScreen() {
     return () => {
       isCancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address (the content-stable slice that scopes the signing-capability probe); the full activeAccount object is read at the current commit and omitted on purpose to avoid identity-churn re-runs, matching the file's hand-mirror pattern (TASK-246; no money-path logic changes).
   }, [activeAccount?.address]);
 
   // Get network config for selected network
@@ -960,6 +962,7 @@ export default function SendScreen() {
     return asset?.symbol || contextAssetName || 'Token';
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the rule reports THIS definition (it attributes an unstable useCallback dep at :1370 to getAssetDecimals itself), so the directive must sit here, not on the hook call. getAssetDecimals is deliberately left un-memoized so the file can hand-mirror its inputs at each call site (see the amountError memo at :1018 and the useFocusEffect at :1370 that lists it) rather than wrapping it in useCallback. It feeds the money path (parseAmountToBaseUnits at :981/:1025, the amount placeholder, and the review payload at :1598); restructuring it is owned by the SendScreen PRs (TASK-239/245), so this pass documents the omission without a logic change (TASK-246).
   const getAssetDecimals = () => {
     // Use selectedAsset if available
     const option = getCurrentAssetOption();

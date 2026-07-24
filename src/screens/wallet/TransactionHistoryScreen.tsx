@@ -99,11 +99,19 @@ export default function TransactionHistoryScreen() {
       ? accountState.transactionsError.message
       : null;
 
+  // Reload transactions when the active account changes. Keyed on
+  // activeAccount?.id — the content-stable slice that scopes the history.
+  // The full activeAccount object and the loadTransactions / updateActivity
+  // helpers are intentionally omitted: they read the current account fresh, so
+  // listing them would only add identity-churn re-runs. (This is the account
+  // effect, distinct from the ARC-200 metadata effect below whose
+  // assetMetadataCache dep is a deliberate recompute trigger and is untouched.)
   useEffect(() => {
     if (activeAccount) {
       loadTransactions();
     }
     updateActivity();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.id; the full activeAccount object and loadTransactions/updateActivity are read at the current commit and omitted on purpose to avoid identity-churn re-runs.
   }, [activeAccount?.id]);
 
   // Load token metadata for ARC-200 transactions

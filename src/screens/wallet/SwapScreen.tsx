@@ -307,6 +307,7 @@ export default function SwapScreen() {
       setQuoteError(null);
       setQuoteLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the quote inputs (inputToken, outputToken, inputAmount, slippage); fetchQuote is a plain render-scope function invoked inside the trailing debounce setTimeout and guarded by quoteRequestIdRef, so it is read at fire time. Listing it (new identity every render) would restart the 400ms debounce on every render, so it is omitted on purpose.
   }, [inputToken, outputToken, inputAmount, slippage]);
 
   const fetchQuote = async (requestId: number) => {
