@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Modal,
   View,
@@ -53,10 +53,31 @@ export default function UnifiedTransactionAuthModal({
     controller.getState()
   );
   const [pin, setPin] = useState('');
-  const [initialized, setInitialized] = useState(false);
-  const [biometricAttempted, setBiometricAttempted] = useState(false);
-  const [userCancelled, setUserCancelled] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+
+  // --- Auth-flow latches (TASK-241) --------------------------------------
+  // initialized / biometricAttempted / userCancelled are REFS, not state, so
+  // the reset logic can never erase them on a stray re-render or when the
+  // controller bounces back to `idle` via resetAfterDismiss(). Invariants they
+  // protect on the shared transaction-signing auth modal:
+  //   • initializeSigningFlow runs EXACTLY ONCE per open (visible false→true) —
+  //     never again while `visible` stays true, even after a cancel/error drives
+  //     the controller back to `idle`.
+  //   • The biometric auto-prompt fires EXACTLY ONCE per open.
+  //   • An explicit-cancel latch (userCancelled) SURVIVES the intervening
+  //     resetAfterDismiss()-driven `idle` until the modal genuinely closes/reopens
+  //     — the bug the old useState + idle-keyed reset effect had (HT-254 Option A).
+  // The visibility-transition effect below is the SOLE owner of these latches:
+  //   initialized/biometricAttempted reset on a genuine close (visible→false)
+  //   AND a genuine open (false→true); userCancelled clears ONLY on a genuine
+  //   open (false→true). Because these are refs (no re-render on write), NOTHING
+  //   that renders may branch on their VALUES — they are control-flow only.
+  const initializedRef = useRef(false);
+  const biometricAttemptedRef = useRef(false);
+  const userCancelledRef = useRef(false);
+  // Tracks previous visibility so the transition effect can distinguish a
+  // genuine open/close from an in-place re-render.
+  const wasVisibleRef = useRef(visible);
 
   // Guard to prevent onComplete from being called multiple times per auth flow
   // This prevents double-submission when the onComplete prop reference changes during re-renders
@@ -68,30 +89,57 @@ export default function UnifiedTransactionAuthModal({
     return unsubscribe;
   }, [controller]);
 
-  // Initialize signing flow when modal becomes visible with a request (only once per open)
-  // Do NOT restart after user rejection/error - only start on first open
+  // Visibility-transition effect — the SOLE owner of the auth-flow latches
+  // (TASK-241). Declared BEFORE the init effect so that on a genuine open the
+  // userCancelled latch is already cleared before init reads it.
+  useEffect(() => {
+    const wasVisible = wasVisibleRef.current;
+    if (!wasVisible && visible) {
+      // Genuine OPEN (false→true): start a fresh flow. Clearing userCancelled
+      // here (and never on close) is exactly what lets an explicit-cancel latch
+      // survive a resetAfterDismiss()-driven `idle` while `visible` stays true.
+      initializedRef.current = false;
+      biometricAttemptedRef.current = false;
+      userCancelledRef.current = false;
+      hasCalledOnComplete.current = false;
+    } else if (wasVisible && !visible) {
+      // Genuine CLOSE (true→false): reset the controller and clear the
+      // init/biometric latches for the next open. userCancelled is left as-is —
+      // it is cleared on the next genuine open, above.
+      controller.resetAfterDismiss();
+      initializedRef.current = false;
+      biometricAttemptedRef.current = false;
+      hasCalledOnComplete.current = false;
+    }
+    wasVisibleRef.current = visible;
+  }, [visible, controller]);
+
+  // Initialize signing flow when modal becomes visible with a request.
+  // Latched via initializedRef so it fires EXACTLY ONCE per open, and via
+  // userCancelledRef so it never restarts after a user cancel/error while
+  // `visible` stays true. The refs are not reactive deps; this effect re-runs on
+  // the visible/request/authState gates and the guards read the latest ref values.
   useEffect(() => {
     if (
       visible &&
       request &&
       authState.state === 'idle' &&
-      !initialized &&
-      !userCancelled &&
+      !initializedRef.current &&
+      !userCancelledRef.current &&
       !authState.error &&
       !authState.ledgerError
     ) {
-      // Don't restart after errors or cancellation
+      // Latch synchronously BEFORE the async initializeSigningFlow so a
+      // re-render inside the determineAuthRequirements window can't double-invoke.
       console.log('UnifiedTransactionAuthModal: initializeSigningFlow');
+      initializedRef.current = true;
       controller.initializeSigningFlow(request);
-      setInitialized(true);
     }
   }, [
     visible,
     request,
     controller,
     authState.state,
-    initialized,
-    userCancelled,
     authState.error,
     authState.ledgerError,
   ]);
@@ -109,17 +157,6 @@ export default function UnifiedTransactionAuthModal({
     }
   }, [authState.state, authState.result, onComplete]);
 
-  // Reset controller when modal is hidden (after parent closes it)
-  // Use a ref to track previous visibility and only reset on transition from visible to hidden
-  const wasVisibleRef = React.useRef(visible);
-  useEffect(() => {
-    if (wasVisibleRef.current && !visible) {
-      // Modal was just hidden - reset controller
-      controller.resetAfterDismiss();
-    }
-    wasVisibleRef.current = visible;
-  }, [visible, controller]);
-
   // Auto-prompt for biometric auth when available (only once per open)
   useEffect(() => {
     if (
@@ -127,31 +164,20 @@ export default function UnifiedTransactionAuthModal({
       authState.state === 'authenticating' &&
       authState.biometricAvailable &&
       !authState.isLocked &&
-      !biometricAttempted &&
+      !biometricAttemptedRef.current &&
       !authState.isLedgerFlow
     ) {
-      setBiometricAttempted(true);
+      biometricAttemptedRef.current = true;
       handleBiometricAuth();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt, once per open (guarded by biometricAttempted); fires on the visible/authState gates, handleBiometricAuth is read at that commit and must not re-fire on its own identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt, once per open (latched via biometricAttemptedRef); fires on the visible/authState gates, handleBiometricAuth is read at that commit and must not re-fire on its own identity.
   }, [
     visible,
     authState.state,
     authState.biometricAvailable,
     authState.isLocked,
-    biometricAttempted,
     authState.isLedgerFlow,
   ]);
-
-  // Reset guards when modal closes or controller resets
-  useEffect(() => {
-    if (!visible || authState.state === 'idle') {
-      setInitialized(false);
-      setBiometricAttempted(false);
-      setUserCancelled(false);
-      hasCalledOnComplete.current = false;
-    }
-  }, [visible, authState.state]);
 
   const handleNumberPress = (number: string) => {
     if (
@@ -202,9 +228,13 @@ export default function UnifiedTransactionAuthModal({
     controller.cancel();
     controller.resetAfterDismiss();
     setPin('');
-    setInitialized(false);
-    setBiometricAttempted(false);
-    setUserCancelled(true); // Mark that user explicitly cancelled
+    initializedRef.current = false;
+    biometricAttemptedRef.current = false;
+    // Latch the explicit cancel. resetAfterDismiss() above drives the controller
+    // back to `idle`, but this ref survives it (the reset effect no longer keys
+    // on `idle`), so the init effect will NOT restart the flow while `visible`
+    // stays true. Cleared on the next genuine open.
+    userCancelledRef.current = true;
     onCancel();
   }, [controller, onCancel]);
 
@@ -823,7 +853,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handleCloseAfterError = () => {
-    setUserCancelled(true);
+    userCancelledRef.current = true;
     controller.resetAfterDismiss();
     onCancel();
   };
@@ -975,7 +1005,7 @@ export default function UnifiedTransactionAuthModal({
       onRequestClose={() => {
         // Only allow closing if not processing
         if (authState.state !== 'processing' && authState.state !== 'signing') {
-          setUserCancelled(true); // Mark as cancelled even if closed via system
+          userCancelledRef.current = true; // Mark as cancelled even if closed via system
           handleCancel();
         }
       }}
