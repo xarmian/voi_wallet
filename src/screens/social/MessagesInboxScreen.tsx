@@ -302,6 +302,7 @@ export default function MessagesInboxScreen() {
 
   // Format timestamp
   const formatTimestamp = (timestamp: number): string => {
+    // eslint-disable-next-line react-hooks/purity -- Relative-time formatter for an inbox thread row. Reading the wall clock during render is intentional; the label ("5m", "2h") is coarse and the inbox re-renders on message polling and screen focus, so any residual staleness until the next render is acceptable for this surface (no ticking clock warranted for a potentially long thread list).
     const now = Date.now();
     const diff = now - timestamp;
 

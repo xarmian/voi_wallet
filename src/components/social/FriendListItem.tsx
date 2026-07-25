@@ -29,6 +29,7 @@ export default function FriendListItem({
   const formatLastInteraction = (timestamp?: number): string => {
     if (!timestamp) return 'No recent activity';
 
+    // eslint-disable-next-line react-hooks/purity -- Relative-time formatter for a friend-list row. Reading the wall clock during render is intentional; the label ("5m ago") is coarse and the list re-renders on friend-data updates and screen focus, so any residual staleness until the next render is acceptable for this surface (no ticking clock warranted for a potentially long list).
     const now = Date.now();
     const diff = now - timestamp;
 

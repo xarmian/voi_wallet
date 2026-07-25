@@ -2,17 +2,15 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 208,
+    "warnings": 196,
     "filesLinted": 440,
-    "filesWithFindings": 82
+    "filesWithFindings": 80
   },
   "rules": {
     "@typescript-eslint/no-unused-vars": 5,
     "import/no-named-as-default": 30,
     "react-hooks/immutability": 96,
     "react-hooks/preserve-manual-memoization": 25,
-    "react-hooks/purity": 5,
-    "react-hooks/refs": 7,
     "react-hooks/set-state-in-effect": 40
   },
   "files": {
@@ -107,9 +105,8 @@
     },
     "src/components/ledger/DeviceDiscovery.tsx": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "react-hooks/purity": 1,
         "react-hooks/set-state-in-effect": 1
       }
     },
@@ -158,18 +155,10 @@
     },
     "src/components/remoteSigner/SignerAuthModal.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
         "react-hooks/immutability": 1,
-        "react-hooks/purity": 1,
         "react-hooks/set-state-in-effect": 2
-      }
-    },
-    "src/components/social/FriendListItem.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/purity": 1
       }
     },
     "src/components/swap/RouteDetailModal.tsx": {
@@ -204,11 +193,9 @@
     },
     "src/contexts/AuthContext.tsx": {
       "errors": 0,
-      "warnings": 5,
+      "warnings": 3,
       "rules": {
-        "react-hooks/immutability": 3,
-        "react-hooks/purity": 1,
-        "react-hooks/refs": 1
+        "react-hooks/immutability": 3
       }
     },
     "src/contexts/ThemeContext.tsx": {
@@ -343,10 +330,9 @@
     },
     "src/screens/social/MessagesInboxScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "react-hooks/preserve-manual-memoization": 3,
-        "react-hooks/purity": 1
+        "react-hooks/preserve-manual-memoization": 3
       }
     },
     "src/screens/social/MyProfileScreen.tsx": {
@@ -454,10 +440,9 @@
     },
     "src/screens/wallet/SwapScreen.tsx": {
       "errors": 0,
-      "warnings": 8,
+      "warnings": 4,
       "rules": {
         "react-hooks/immutability": 3,
-        "react-hooks/refs": 4,
         "react-hooks/set-state-in-effect": 1
       }
     },
@@ -489,13 +474,6 @@
       "warnings": 1,
       "rules": {
         "react-hooks/immutability": 1
-      }
-    },
-    "src/screens/wallet/VerifyBackupScreen.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "react-hooks/refs": 2
       }
     },
     "src/screens/walletconnect/SessionProposalScreen.tsx": {
