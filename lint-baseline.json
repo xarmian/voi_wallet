@@ -2,12 +2,11 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 188,
+    "warnings": 158,
     "filesLinted": 442,
-    "filesWithFindings": 78
+    "filesWithFindings": 63
   },
   "rules": {
-    "import/no-named-as-default": 30,
     "react-hooks/immutability": 96,
     "react-hooks/preserve-manual-memoization": 25,
     "react-hooks/set-state-in-effect": 37
@@ -30,9 +29,8 @@
     },
     "src/components/account/AccountAvatar.tsx": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 1
       }
     },
@@ -45,9 +43,8 @@
     },
     "src/components/auth-account/AuthAccountDiscovery.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/immutability": 2
       }
     },
@@ -92,13 +89,6 @@
       "warnings": 2,
       "rules": {
         "react-hooks/immutability": 2
-      }
-    },
-    "src/components/ledger/ConnectionModal.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
       }
     },
     "src/components/ledger/DeviceDiscovery.tsx": {
@@ -174,13 +164,6 @@
         "react-hooks/immutability": 1
       }
     },
-    "src/components/transaction/TransactionAddressDisplay.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
     "src/components/walletconnect/QRScanner.tsx": {
       "errors": 0,
       "warnings": 2,
@@ -205,9 +188,8 @@
     },
     "src/screens/account/LedgerAccountImportScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 3
       }
     },
@@ -304,18 +286,16 @@
     },
     "src/screens/social/AddFriendScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/immutability": 1,
         "react-hooks/set-state-in-effect": 2
       }
     },
     "src/screens/social/ChatScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/preserve-manual-memoization": 3
       }
     },
@@ -342,9 +322,8 @@
     },
     "src/screens/social/NewMessageScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/immutability": 1,
         "react-hooks/preserve-manual-memoization": 1,
         "react-hooks/set-state-in-effect": 1
@@ -352,9 +331,8 @@
     },
     "src/screens/wallet/AccountInfoScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 2
       }
     },
@@ -374,17 +352,15 @@
     },
     "src/screens/wallet/ClaimAllConfirmationScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 2
       }
     },
     "src/screens/wallet/ClaimTokenScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 2
       }
     },
@@ -422,17 +398,15 @@
     },
     "src/screens/wallet/RekeyAccountScreen.tsx": {
       "errors": 0,
-      "warnings": 2,
+      "warnings": 1,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 1
       }
     },
     "src/screens/wallet/SendScreen.tsx": {
       "errors": 0,
-      "warnings": 4,
+      "warnings": 3,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/set-state-in-effect": 3
       }
     },
@@ -446,17 +420,9 @@
     },
     "src/screens/wallet/TransactionConfirmationScreen.tsx": {
       "errors": 0,
-      "warnings": 3,
+      "warnings": 2,
       "rules": {
-        "import/no-named-as-default": 1,
         "react-hooks/immutability": 2
-      }
-    },
-    "src/screens/wallet/TransactionDetailScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
       }
     },
     "src/screens/wallet/TransactionHistoryScreen.tsx": {
@@ -494,90 +460,6 @@
       "warnings": 2,
       "rules": {
         "react-hooks/immutability": 2
-      }
-    },
-    "src/services/network/index.ts": {
-      "errors": 0,
-      "warnings": 3,
-      "rules": {
-        "import/no-named-as-default": 3
-      }
-    },
-    "src/services/secure/keyManager.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/services/secure/simplifiedKeyManager.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/services/swap/index.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/services/transactions/arc200.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/services/transactions/arc72.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/services/walletconnect/client.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/store/claimableStore.ts": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "import/no-named-as-default": 2
-      }
-    },
-    "src/store/friendsStore.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/store/messagesStore.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/store/walletStore.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
-      }
-    },
-    "src/utils/address.ts": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "import/no-named-as-default": 1
       }
     },
     "src/utils/animations.ts": {
