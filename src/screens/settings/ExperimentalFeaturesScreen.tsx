@@ -149,9 +149,15 @@ export default function ExperimentalFeaturesScreen() {
   const messagingEnabled = useExperimentalStore(
     (state) => state.messagingEnabled
   );
+  const allowUnsupportedNetworks = useExperimentalStore(
+    (state) => state.allowUnsupportedNetworks
+  );
   const setSwapEnabled = useExperimentalStore((state) => state.setSwapEnabled);
   const setMessagingEnabled = useExperimentalStore(
     (state) => state.setMessagingEnabled
+  );
+  const setAllowUnsupportedNetworks = useExperimentalStore(
+    (state) => state.setAllowUnsupportedNetworks
   );
 
   return (
@@ -198,6 +204,13 @@ export default function ExperimentalFeaturesScreen() {
               description="Send and receive end-to-end encrypted messages with other wallet users"
               value={messagingEnabled}
               onValueChange={setMessagingEnabled}
+            />
+            <SettingToggle
+              icon="globe-outline"
+              label="Allow unsupported networks"
+              description="Let WalletConnect connect and sign on networks this wallet doesn't recognize (e.g. a local devnet). For development only; leave off unless you know what you're doing."
+              value={allowUnsupportedNetworks}
+              onValueChange={setAllowUnsupportedNetworks}
             />
           </GlassCard>
 

@@ -23,7 +23,7 @@ import {
   sanitizeMetadata,
   isSessionExpired,
   detectRequestedChains,
-  areRequiredChainsSupported,
+  areAllRequiredChainsSupported,
   truncateAddress,
   normalizeV1Metadata,
 } from './utils';
@@ -32,6 +32,7 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from './config';
+import { useExperimentalStore } from '@/store/experimentalStore';
 import type { WalletConnectV1StoredSession } from '@/services/walletconnect/v1/types';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { WC_V1_SESSION_STORAGE_KEY } from '@/services/walletconnect/v1/config';
@@ -302,30 +303,77 @@ export class WalletConnectService extends EventEmitter {
         throw new Error('No signable accounts available');
       }
 
-      // Get ALL requested chains from the proposal (not just supported ones)
-      // We need to include all of them to satisfy WalletConnect validation
-      const allRequestedChains = new Set<string>();
+      // Config-gated chain policy (HT-249). Read the experimental flag from the
+      // store directly — this is non-React service code, so use getState().
+      // Default is OFF, which gives typical users the strict per-chain policy.
+      const allowUnsupportedNetworks =
+        useExperimentalStore.getState().allowUnsupportedNetworks;
 
-      if (proposal.requiredNamespaces?.algorand?.chains) {
-        proposal.requiredNamespaces.algorand.chains.forEach((chain: string) =>
-          allRequestedChains.add(chain)
-        );
+      // Decide which chains to include in the approved namespaces.
+      const defaultChains = [
+        VOI_CHAIN_DATA.chainId,
+        ALGORAND_MAINNET_CHAIN_DATA.chainId,
+      ];
+      let chainsToInclude: string[];
+
+      if (allowUnsupportedNetworks) {
+        // Developer / permissive mode: union ALL requested chains (required +
+        // optional), including ones we don't recognize (e.g. a local devnet).
+        const allRequestedChains = new Set<string>();
+
+        if (proposal.requiredNamespaces?.algorand?.chains) {
+          proposal.requiredNamespaces.algorand.chains.forEach((chain: string) =>
+            allRequestedChains.add(chain)
+          );
+        }
+
+        if (proposal.optionalNamespaces?.algorand?.chains) {
+          proposal.optionalNamespaces.algorand.chains.forEach((chain: string) =>
+            allRequestedChains.add(chain)
+          );
+        }
+
+        chainsToInclude =
+          allRequestedChains.size > 0
+            ? Array.from(allRequestedChains)
+            : defaultChains;
+      } else {
+        // Default / strict mode: a proposal that REQUIRES any chain this wallet
+        // does not support is rejected outright — approving it would publish the
+        // wallet's addresses as signable on an unrecognized chain. Note this is
+        // the "ALL required supported" predicate, not "at least one".
+        if (!areAllRequiredChainsSupported(proposal)) {
+          // Send the dApp a protocol-level rejection, then surface the failure
+          // to the caller (SessionProposalScreen shows the thrown message).
+          try {
+            await signClient.reject({
+              id: proposal.id,
+              reason: getSdkError('UNSUPPORTED_CHAINS'),
+            });
+          } catch (rejectError) {
+            console.error(
+              'Failed to reject unsupported-chain proposal:',
+              redactError(rejectError)
+            );
+          }
+          this.emit('session_rejected', proposal);
+          throw new Error(
+            'This dApp requires a network this wallet does not support. ' +
+              'To connect on an unrecognized network (e.g. a local devnet), ' +
+              'enable "Allow unsupported networks" in Experimental Features.'
+          );
+        }
+
+        // Required chains are all supported: approve only the SUPPORTED chains,
+        // dropping any unsupported OPTIONAL chains rather than approving them.
+        const supportedRequestedChains = detectRequestedChains(proposal);
+        chainsToInclude =
+          supportedRequestedChains.length > 0
+            ? supportedRequestedChains
+            : defaultChains;
       }
 
-      if (proposal.optionalNamespaces?.algorand?.chains) {
-        proposal.optionalNamespaces.algorand.chains.forEach((chain: string) =>
-          allRequestedChains.add(chain)
-        );
-      }
-
-      // If no chains specified, use our defaults
-      const chainsToInclude =
-        allRequestedChains.size > 0
-          ? Array.from(allRequestedChains)
-          : [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
-
-      // Format accounts for ALL requested chains (even ones we don't recognize)
-      // The dApp will only actually use the chains it needs
+      // Format accounts for the chains we are approving.
       const formattedAccounts: string[] = [];
       for (const chainId of chainsToInclude) {
         for (const account of accounts) {
@@ -335,8 +383,8 @@ export class WalletConnectService extends EventEmitter {
         }
       }
 
-      // Build supported namespaces - include ALL requested chains
-      // This satisfies WalletConnect validation while letting us handle only what we recognize
+      // Build supported namespaces from the chains selected above (all requested
+      // chains when the flag is ON, supported-only when OFF).
       const supportedNamespaces = {
         algorand: {
           chains: chainsToInclude,

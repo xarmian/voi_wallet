@@ -13,8 +13,6 @@ import {
   isVoiUri,
   validateAlgorandTransaction,
   getSignableAccounts,
-  getTransactionSigningInfo,
-  canSignWalletConnectTransaction,
   formatChainId,
   extractGenesisHash,
   formatAccountAddress,
@@ -29,7 +27,7 @@ import {
   getNetworkNameByChainId,
   getNetworkCurrencyByChainId,
   detectRequestedChains,
-  areRequiredChainsSupported,
+  areAllRequiredChainsSupported,
   getChainIdByGenesisHash,
   getNetworkByGenesisHash,
 } from '../utils';
@@ -611,142 +609,6 @@ describe('getSignableAccounts', () => {
 });
 
 // ===========================================================================
-// getTransactionSigningInfo / canSignWalletConnectTransaction
-// ===========================================================================
-
-describe('getTransactionSigningInfo', () => {
-  // Signer selection is driven by the ARC-0001 `authAddr`/`signers` request
-  // metadata (which the wallet is being asked to sign with), NOT by decoding the
-  // transaction's `snd`. This matches the production signing path in
-  // services/walletconnect/index.ts, which likewise resolves the signer from
-  // `authAddr`/`signers[0]`. These tests assert that intended behavior.
-  it('resolves a STANDARD sender (from signers[0]) as signable', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, signers: [ADDR_A] },
-      [standardAccount(ADDR_A)]
-    );
-    expect(info.canSign).toBe(true);
-    expect(info.signingAddress).toBe(ADDR_A);
-    expect(info.isRekeyed).toBe(false);
-    expect(info.accountInfo?.address).toBe(ADDR_A);
-  });
-
-  it('prefers authAddr over signers[0] when extracting the sender', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, authAddr: ADDR_B, signers: [ADDR_A] },
-      [standardAccount(ADDR_A), standardAccount(ADDR_B)]
-    );
-    expect(info.accountInfo?.address).toBe(ADDR_B);
-    expect(info.signingAddress).toBe(ADDR_B);
-  });
-
-  it('reports a rekeyed sender that can sign, signing via the auth address', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, signers: [ADDR_A] },
-      [rekeyedAccount(ADDR_A, true, AUTH_ADDR)]
-    );
-    expect(info.canSign).toBe(true);
-    expect(info.isRekeyed).toBe(true);
-    expect(info.signingAddress).toBe(AUTH_ADDR);
-  });
-
-  it('reports a rekeyed sender that cannot sign with no signing address', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, signers: [ADDR_A] },
-      [rekeyedAccount(ADDR_A, false, AUTH_ADDR)]
-    );
-    expect(info.canSign).toBe(false);
-    expect(info.isRekeyed).toBe(true);
-    expect(info.signingAddress).toBeUndefined();
-  });
-
-  it('reports a WATCH sender as not signable', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, signers: [ADDR_A] },
-      [watchAccount(ADDR_A)]
-    );
-    expect(info.canSign).toBe(false);
-    expect(info.isRekeyed).toBe(false);
-    expect(info.accountInfo?.address).toBe(ADDR_A);
-  });
-
-  it('returns canSign=false when no signer metadata is supplied', () => {
-    // With neither authAddr nor signers, the helper has no ARC-0001 signer to
-    // resolve (it does not fall back to the encoded txn sender), so it reports
-    // not-signable. This documents the metadata-driven contract explicitly.
-    const info = getTransactionSigningInfo({ txn: REAL_TXN_B64 }, [
-      standardAccount(ADDR_A),
-    ]);
-    expect(info.canSign).toBe(false);
-    expect(info.accountInfo).toBeUndefined();
-  });
-
-  it('returns canSign=false when the sender is an invalid address', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, authAddr: INVALID_ADDR },
-      [standardAccount(ADDR_A)]
-    );
-    expect(info.canSign).toBe(false);
-  });
-
-  it('returns canSign=false when the sender is not among known accounts', () => {
-    const info = getTransactionSigningInfo(
-      { txn: REAL_TXN_B64, signers: [ADDR_A] },
-      [standardAccount(ADDR_B)]
-    );
-    expect(info.canSign).toBe(false);
-    expect(info.accountInfo).toBeUndefined();
-  });
-
-  // KNOWN DISCREPANCY (reported, left unfixed): getSignableAccounts treats
-  // LEDGER and REMOTE_SIGNER accounts as signable, but getTransactionSigningInfo
-  // has no case for them and falls through to `default: { canSign: false }`.
-  // The function's own doc says it reports "whether signing is possible", and
-  // for these account types signing IS possible (via device / paired signer),
-  // so the intended result is canSign=true. These `it.failing` tests encode the
-  // intended behavior; they will start passing (and must be converted to `it`)
-  // once the source is fixed.
-  it.failing(
-    'SHOULD report a LEDGER sender as signable (intended behavior)',
-    () => {
-      const info = getTransactionSigningInfo(
-        { txn: REAL_TXN_B64, signers: [ADDR_A] },
-        [ledgerAccount(ADDR_A)]
-      );
-      expect(info.canSign).toBe(true);
-    }
-  );
-
-  it.failing(
-    'SHOULD report a REMOTE_SIGNER sender as signable (intended behavior)',
-    () => {
-      const info = getTransactionSigningInfo(
-        { txn: REAL_TXN_B64, signers: [ADDR_A] },
-        [remoteSignerAccount(ADDR_A)]
-      );
-      expect(info.canSign).toBe(true);
-    }
-  );
-});
-
-describe('canSignWalletConnectTransaction', () => {
-  it('mirrors getTransactionSigningInfo.canSign', () => {
-    expect(
-      canSignWalletConnectTransaction(
-        { txn: REAL_TXN_B64, signers: [ADDR_A] },
-        [standardAccount(ADDR_A)]
-      )
-    ).toBe(true);
-    expect(
-      canSignWalletConnectTransaction(
-        { txn: REAL_TXN_B64, signers: [ADDR_A] },
-        [watchAccount(ADDR_A)]
-      )
-    ).toBe(false);
-  });
-});
-
-// ===========================================================================
 // Chain-id / account-address formatting helpers
 // ===========================================================================
 
@@ -1035,14 +897,13 @@ describe('detectRequestedChains', () => {
   });
 });
 
-describe('areRequiredChainsSupported', () => {
-  // NOTE: this helper intentionally implements "at least ONE supported chain"
-  // semantics (see its doc comment in utils.ts, and the sibling
-  // detectRequestedChains which is documented to connect to dApps that request
-  // some chains we don't support). These tests assert that deliberate product
-  // behavior; whether to instead require ALL requested chains is a source-design
-  // decision, out of scope for this test-only change.
-  it('is true when a required namespace includes at least one supported chain', () => {
+describe('areAllRequiredChainsSupported', () => {
+  // STRICT semantics (TASK-240 / HT-249): the predicate is true only when EVERY
+  // chain across every required namespace is supported. This is deliberately NOT
+  // "at least one supported required chain" — a mixed [supported, unsupported]
+  // required list must be rejected, or the flag-OFF approval policy would still
+  // publish wallet addresses on an unrecognized chain.
+  it('is FALSE when a required namespace mixes a supported and an unsupported chain', () => {
     const proposal = makeProposal({
       requiredNamespaces: {
         algorand: {
@@ -1052,20 +913,28 @@ describe('areRequiredChainsSupported', () => {
         },
       },
     });
-    expect(areRequiredChainsSupported(proposal)).toBe(true);
+    expect(areAllRequiredChainsSupported(proposal)).toBe(false);
+  });
+
+  it('is true when every required chain is supported', () => {
+    const proposal = makeProposal({
+      requiredNamespaces: {
+        algorand: { chains: [VOI, ALGO], methods: [], events: [] },
+      },
+    });
+    expect(areAllRequiredChainsSupported(proposal)).toBe(true);
   });
 
   it('checks all required namespaces, not just the first', () => {
-    // The supported namespace is listed AFTER an unsupported one; an
-    // implementation that inspected only the first namespace would wrongly
-    // return false here.
+    // A supported algorand namespace does NOT rescue an unsupported sibling
+    // namespace: every required chain everywhere must be supported.
     const proposal = makeProposal({
       requiredNamespaces: {
         eip155: { chains: [UNSUPPORTED_CHAIN], methods: [], events: [] },
         algorand: { chains: [VOI], methods: [], events: [] },
       },
     });
-    expect(areRequiredChainsSupported(proposal)).toBe(true);
+    expect(areAllRequiredChainsSupported(proposal)).toBe(false);
   });
 
   it('is false when required chains are all unsupported', () => {
@@ -1074,7 +943,7 @@ describe('areRequiredChainsSupported', () => {
         eip155: { chains: [UNSUPPORTED_CHAIN], methods: [], events: [] },
       },
     });
-    expect(areRequiredChainsSupported(proposal)).toBe(false);
+    expect(areAllRequiredChainsSupported(proposal)).toBe(false);
   });
 
   it('is false across multiple namespaces when none are supported', () => {
@@ -1084,20 +953,20 @@ describe('areRequiredChainsSupported', () => {
         cosmos: { chains: ['cosmos:cosmoshub-4'], methods: [], events: [] },
       },
     });
-    expect(areRequiredChainsSupported(proposal)).toBe(false);
+    expect(areAllRequiredChainsSupported(proposal)).toBe(false);
   });
 
   it('is true when requiredNamespaces is undefined (absent, not empty)', () => {
     // Exercises the explicit `!proposal.requiredNamespaces` early-return branch.
     expect(
-      areRequiredChainsSupported(
+      areAllRequiredChainsSupported(
         makeProposal({ requiredNamespaces: undefined })
       )
     ).toBe(true);
   });
 
   it('is true when requiredNamespaces is an empty object', () => {
-    expect(areRequiredChainsSupported(makeProposal({}))).toBe(true);
+    expect(areAllRequiredChainsSupported(makeProposal({}))).toBe(true);
   });
 
   it('is true when a required namespace specifies no chains', () => {
@@ -1106,7 +975,7 @@ describe('areRequiredChainsSupported', () => {
         algorand: { chains: [], methods: [], events: [] },
       },
     });
-    expect(areRequiredChainsSupported(proposal)).toBe(true);
+    expect(areAllRequiredChainsSupported(proposal)).toBe(true);
   });
 });
 

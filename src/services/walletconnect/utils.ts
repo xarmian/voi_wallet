@@ -259,85 +259,6 @@ export function getSignableAccounts(
   });
 }
 
-/**
- * Get signing information for a WalletConnect transaction
- * Returns the actual address that will sign and whether signing is possible
- */
-export function getTransactionSigningInfo(
-  transaction: WalletTransaction,
-  accounts: AccountMetadata[]
-): {
-  canSign: boolean;
-  signingAddress?: string;
-  accountInfo?: AccountMetadata;
-  isRekeyed: boolean;
-} {
-  // First, extract the sender address from the transaction
-  let senderAddress: string;
-
-  try {
-    // Decode the transaction to get sender
-    const txnBytes = Buffer.from(transaction.txn, 'base64');
-    // This is a simplified extraction - in practice you'd use algosdk to decode
-    // For now, assume the sender is provided via authAddr or signers
-    senderAddress = transaction.authAddr || transaction.signers?.[0] || '';
-  } catch {
-    return { canSign: false, isRekeyed: false };
-  }
-
-  if (!senderAddress || !isValidAddress(senderAddress)) {
-    return { canSign: false, isRekeyed: false };
-  }
-
-  // Find the account
-  const account = accounts.find((acc) => acc.address === senderAddress);
-  if (!account) {
-    return { canSign: false, isRekeyed: false };
-  }
-
-  switch (account.type) {
-    case AccountType.STANDARD:
-      return {
-        canSign: true,
-        signingAddress: account.address,
-        accountInfo: account,
-        isRekeyed: false,
-      };
-
-    case AccountType.REKEYED:
-      const rekeyedAccount = account as RekeyedAccountMetadata;
-      return {
-        canSign: rekeyedAccount.canSign,
-        signingAddress: rekeyedAccount.canSign
-          ? rekeyedAccount.authAddress
-          : undefined,
-        accountInfo: account,
-        isRekeyed: true,
-      };
-
-    case AccountType.WATCH:
-      return {
-        canSign: false,
-        accountInfo: account,
-        isRekeyed: false,
-      };
-
-    default:
-      return { canSign: false, isRekeyed: false };
-  }
-}
-
-/**
- * Validate if a WalletConnect transaction can be signed with available accounts
- */
-export function canSignWalletConnectTransaction(
-  transaction: WalletTransaction,
-  accounts: AccountMetadata[]
-): boolean {
-  const signingInfo = getTransactionSigningInfo(transaction, accounts);
-  return signingInfo.canSign;
-}
-
 export function formatChainId(genesisHash: string): string {
   // Algorand chain ID format: algorand:{genesisHash}
   return `algorand:${genesisHash}`;
@@ -522,42 +443,41 @@ export function detectRequestedChains(proposal: SessionProposal): string[] {
 }
 
 /**
- * Check if we support at least one required chain in a proposal
- * Returns true if there is at least one supported chain, false if none are supported
+ * Strict predicate for session approval: returns true only when EVERY chain
+ * listed across the proposal's required namespaces is one this wallet supports.
+ *
+ * This is deliberately NOT "at least one supported required chain" — a proposal
+ * whose required list is `[voi-mainnet, attacker-chosen-chain]` must be rejected,
+ * because approving it would publish the wallet's addresses as signable on the
+ * unrecognized chain too. A proposal with no required chains (absent, empty, or
+ * a namespace with an empty `chains` array) is trivially satisfied and returns
+ * true. Used by `approveSession` when the `allowUnsupportedNetworks` flag is OFF.
  */
-export function areRequiredChainsSupported(proposal: SessionProposal): boolean {
+export function areAllRequiredChainsSupported(
+  proposal: SessionProposal
+): boolean {
   const supportedChains = [
     VOI_CHAIN_DATA.chainId,
     ALGORAND_MAINNET_CHAIN_DATA.chainId,
   ];
 
-  // If no required namespaces, we can support it
+  // No required namespaces at all -> nothing to disqualify the proposal.
   if (!proposal.requiredNamespaces) {
     return true;
   }
 
-  // Check if there is at least one supported chain in required namespaces
-  let hasAtLeastOneChain = false;
+  // Every chain in every required namespace must be supported.
   for (const namespace of Object.values(proposal.requiredNamespaces)) {
-    if (namespace.chains && namespace.chains.length > 0) {
-      hasAtLeastOneChain = true;
-      // Check if we support at least one chain from this namespace
-      const hasSupportedChain = namespace.chains.some((chain: string) =>
-        supportedChains.includes(chain)
-      );
-      if (hasSupportedChain) {
-        return true;
+    if (namespace.chains) {
+      for (const chain of namespace.chains) {
+        if (!supportedChains.includes(chain)) {
+          return false;
+        }
       }
     }
   }
 
-  // If no chains were specified in required namespaces, we can support it
-  if (!hasAtLeastOneChain) {
-    return true;
-  }
-
-  // We have required chains but none of them are supported
-  return false;
+  return true;
 }
 
 /**

@@ -59,17 +59,6 @@ interface Props {
   route: TransactionRequestScreenRouteProp;
 }
 
-interface ParsedTransaction {
-  from: string;
-  to: string;
-  amount?: number;
-  fee: number;
-  note?: string;
-  assetId?: number;
-  type: string;
-  dangers?: TransactionDangers;
-}
-
 export default function TransactionRequestScreen({ navigation, route }: Props) {
   const { requestEvent } = route.params;
   const version = (route.params as any)?.version as number | undefined;
@@ -80,12 +69,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
-  const [parsedTransactions, setParsedTransactions] = useState<
-    ParsedTransaction[]
-  >([]);
-  const [decodedTransactions, setDecodedTransactions] = useState<
-    algosdk.Transaction[]
-  >([]);
   const [selectedAccount, setSelectedAccount] =
     useState<AccountMetadata | null>(null);
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
@@ -97,7 +80,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
 
   // S-01: derive authority-transfer / balance-sweep dangers directly from the
   // WalletConnect transactions that would be signed on this screen's direct path.
-  // (parsedTransactions/decodedTransactions are not populated in this screen.)
   const aggregatedDangers = useMemo<TransactionDangers>(() => {
     const list: TransactionDangers[] = [];
     for (const wtxn of transactions) {
@@ -251,32 +233,48 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           }
         }
 
-        if (signingAccount) {
-          // Register callbacks in the callback registry to avoid serialization warnings
-          const callbackId = registerNavigationCallbacks({
-            onSuccess: async (result: any) => {
-              await handleWalletConnectSuccess(result);
-            },
-            onReject: async () => {
-              await handleReject();
-            },
-          });
-
-          navigation.replace('UniversalTransactionSigning', {
-            transactions: txns.map((wtxn) => wtxn.txn),
-            // Nav param is typed WalletAccount (legacy); the screen coerces it back
-            // to AccountMetadata at runtime. Matches the existing cast pattern used
-            // by the other callers of this route (e.g. SwapScreen).
-            account: signingAccount as unknown as WalletAccount,
-            chainId: effectiveChainId,
-            title: 'WalletConnect Request',
-            callbackId,
-          });
+        if (!signingAccount) {
+          // No account is available to sign this request (e.g. every account was
+          // removed after the session was approved). Surface an explicit error
+          // rather than stranding the user on an empty review screen.
+          throw new Error('No account available to sign this request');
         }
+
+        // Register callbacks in the callback registry to avoid serialization warnings
+        const callbackId = registerNavigationCallbacks({
+          onSuccess: async (result: any) => {
+            await handleWalletConnectSuccess(result);
+          },
+          onReject: async () => {
+            await handleReject();
+          },
+        });
+
+        navigation.replace('UniversalTransactionSigning', {
+          transactions: txns.map((wtxn) => wtxn.txn),
+          // Nav param is typed WalletAccount (legacy); the screen coerces it back
+          // to AccountMetadata at runtime. Matches the existing cast pattern used
+          // by the other callers of this route (e.g. SwapScreen).
+          account: signingAccount as unknown as WalletAccount,
+          chainId: effectiveChainId,
+          title: 'WalletConnect Request',
+          callbackId,
+        });
+      } else {
+        // The normal path (algo_signTxn) always navigates away to
+        // UniversalTransactionSigning above; any other method has no review UI on
+        // this screen, so fail explicitly instead of leaving a blank screen.
+        throw new Error(`Unsupported request method: ${request.method}`);
       }
     } catch (error) {
       console.error('Failed to load transaction request:', error);
-      Alert.alert('Error', 'Failed to parse transaction request');
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to parse transaction request';
+      // Route to the dedicated error screen (replace, so the user cannot return
+      // to this now-empty screen) rather than showing an alert on a blank page.
+      navigation.replace('WalletConnectError', { error: message });
     }
   };
 
@@ -301,11 +299,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       walletConnectParams: {
         transactions,
         accountAddress: selectedAccount.address,
-        // Pass pre-decoded transactions to avoid double-parsing during signing
-        decodedTransactions:
-          decodedTransactions.length === transactions.length
-            ? decodedTransactions
-            : undefined,
       },
     };
 
@@ -489,50 +482,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     }
   };
 
-  const renderTransactionSummary = () => (
-    <View style={styles.summaryContainer}>
-      <Text style={styles.sectionTitle}>Transaction Summary</Text>
-      {parsedTransactions.map((txn, index) => (
-        <View key={index} style={styles.transactionItem}>
-          <Text style={styles.transactionTitle}>Transaction {index + 1}</Text>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Type:</Text>
-            <Text style={styles.detailValue}>{txn.type}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>From:</Text>
-            <Text style={styles.detailValue}>{truncateAddress(txn.from)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>To:</Text>
-            <Text style={styles.detailValue}>{truncateAddress(txn.to)}</Text>
-          </View>
-          {txn.amount !== undefined && txn.amount > 0 && (
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Amount:</Text>
-              <Text style={styles.detailValue}>
-                {(txn.amount / 1000000).toFixed(6)}{' '}
-                {txn.assetId ? 'ASA' : networkCurrency}
-              </Text>
-            </View>
-          )}
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Fee:</Text>
-            <Text style={styles.detailValue}>
-              {(Number(txn.fee) / 1000000).toFixed(6)} {networkCurrency}
-            </Text>
-          </View>
-          {txn.note && (
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Note:</Text>
-              <Text style={styles.detailValue}>{txn.note}</Text>
-            </View>
-          )}
-        </View>
-      ))}
-    </View>
-  );
-
   const renderAccountSelector = () => (
     <View style={styles.accountContainer}>
       <Text style={styles.sectionTitle}>Sign with Account</Text>
@@ -572,7 +521,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         <View style={styles.dappContainer}>
           <Text style={styles.dappName}>Transaction Request</Text>
           <Text style={styles.requestMethod}>
-            {(requestEvent as any).params.request.method}
+            {(requestEvent as any)?.params?.request?.method ?? 'Unknown'}
           </Text>
         </View>
 
@@ -586,8 +535,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
             Currency: {networkCurrency}
           </Text>
         </View>
-
-        {renderTransactionSummary()}
 
         {hasDanger && (
           <TransactionDangerBanner
@@ -702,47 +649,11 @@ const createStyles = (theme: Theme) =>
       fontSize: 14,
       color: theme.colors.textMuted,
     },
-    summaryContainer: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
-      ...theme.shadows.sm,
-    },
     sectionTitle: {
       fontSize: 16,
       fontWeight: '600',
       color: theme.colors.text,
       marginBottom: 12,
-    },
-    transactionItem: {
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-      paddingBottom: 12,
-      marginBottom: 12,
-    },
-    transactionTitle: {
-      fontSize: 14,
-      fontWeight: '600',
-      color: theme.colors.primary,
-      marginBottom: 8,
-    },
-    detailRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      marginBottom: 4,
-    },
-    detailLabel: {
-      fontSize: 12,
-      color: theme.colors.textMuted,
-      flex: 1,
-    },
-    detailValue: {
-      fontSize: 12,
-      color: theme.colors.text,
-      fontWeight: '500',
-      flex: 2,
-      textAlign: 'right',
     },
     accountContainer: {
       backgroundColor: theme.colors.surface,
