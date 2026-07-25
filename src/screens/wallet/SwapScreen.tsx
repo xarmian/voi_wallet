@@ -933,8 +933,12 @@ export default function SwapScreen() {
     );
   };
 
-  // Skeleton animation for loading state
-  const skeletonAnim = useRef(new Animated.Value(0)).current;
+  // Skeleton animation for loading state. useState factory (not
+  // useRef(new Animated.Value(0)).current) so the Animated.Value is allocated
+  // once and stable across renders — the ref form constructed and discarded a
+  // fresh Animated.Value on every render and read a ref during render. Skeleton
+  // shimmer only; no quote/swap math depends on this.
+  const [skeletonAnim] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     let animation: Animated.CompositeAnimation | null = null;

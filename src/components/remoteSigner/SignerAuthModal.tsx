@@ -179,6 +179,7 @@ export default function SignerAuthModal({
 
         if (attempts >= MAX_ATTEMPTS) {
           setIsLocked(true);
+          // eslint-disable-next-line react-hooks/purity -- False positive: this Date.now() runs inside handlePinSubmit, an async event handler invoked on submit (after `await verifyPin`), NOT during render. Reading the wall clock at call time to stamp the lockout expiry is correct here. No biometric/auth behavior changed.
           setLockUntil(Date.now() + LOCKOUT_DURATION);
           setError('Too many attempts. Try again in 30 seconds.');
         } else {

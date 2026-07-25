@@ -47,12 +47,20 @@ const DeviceItem = ({
   onPress,
   styles,
 }: DeviceItemProps) => {
-  // Determine if this is a recently discovered device (within last 30 seconds)
-  const isRecentlyDiscovered = useMemo(() => {
-    const lastSeenTime = new Date(device.lastSeen).getTime();
-    const now = Date.now();
-    return now - lastSeenTime < 30000; // 30 seconds
-  }, [device.lastSeen]);
+  // Determine if this is a recently discovered device (within last 30 seconds).
+  // The window is relative to the current time, which is NOT a hook dependency:
+  // the previous `useMemo(..., [device.lastSeen])` froze the flag so the
+  // 30-second window could never expire. Drive it off a coarse ticking clock
+  // instead — Date.now() is read in the lazy initializer and the interval
+  // callback (both outside render), never in the render body, so the value is a
+  // real reactive dependency that decays on its own.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 10000);
+    return () => clearInterval(id);
+  }, []);
+  const lastSeenTime = new Date(device.lastSeen).getTime();
+  const isRecentlyDiscovered = nowTick - lastSeenTime < 30000; // 30 seconds
 
   // Format last connected/seen info
   const lastConnectionInfo = useMemo(() => {

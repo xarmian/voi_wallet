@@ -77,6 +77,7 @@ export default function VerifyBackupScreen() {
       targetRef.current = { id: resolved.id, address: resolved.address };
     }
   }
+  // eslint-disable-next-line react-hooks/refs -- Deliberate write-then-read latch (see :59-64). The target is resolved on the FIRST render where resolution is possible and then PINNED for the screen's lifetime. The store is live: a dynamically-resolved target would let a mid-quiz active-account change mark account B as verified using account A's displayed phrase. Reading targetRef.current here is the pin. The naive "correct" refactor is actively dangerous and is guarded by a real test (VerifyBackupScreen.test.tsx). Carve-out per TASK-242; NOT to be rewritten.
   const target = targetRef.current;
 
   const [mnemonic, setMnemonic] = useState<string>('');

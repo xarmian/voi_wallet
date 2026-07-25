@@ -164,7 +164,12 @@ const withTimeout = <T,>(
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [authState, setAuthState] = useState<AuthState>({
+  // Lazy initializer: the seed runs exactly once (React keeps only the first
+  // render's value anyway), so evaluating Date.now() here — instead of in a
+  // plain object literal re-created and discarded every render — is both a
+  // Rules-of-React-clean read (impure call outside render) and zero behavioral
+  // change: lastActivity is still seeded to mount time.
+  const [authState, setAuthState] = useState<AuthState>(() => ({
     isLocked: true,
     isAuthenticated: false,
     sessionId: null,
@@ -177,7 +182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     authChecked: false,
     hasWallet: false,
     pinSetupResume: false,
-  });
+  }));
 
   const activityTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const sessionTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -196,6 +201,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // latest activity/auth flags and route through the single lock() (below)
   // rather than mutating state inline (needed so lock's session teardown runs).
   const authStateRef = useRef(authState);
+  // eslint-disable-next-line react-hooks/refs -- HT-250 (Option A): the mirror is written in the render body ON PURPOSE. This ref is the inactivity-lock source of truth (ACTIVITY_CHECK_INTERVAL reads authStateRef.current). Deferring the write into an effect flushes it AFTER paint, reopening exactly the suspend-before-commit lock-BYPASS window the :186-193 ref comment documents (a commit skipped by the OS suspending the JS runtime would leave the interval reading stale auth flags). Must NOT be relocated to useEffect/useLayoutEffect. TASK-248 carries this one documented refs exception when promoting the rule to error.
   authStateRef.current = authState;
 
   // TASK-222: one-shot latch for the cross-store boot reconcile. checkInitialAuthState
