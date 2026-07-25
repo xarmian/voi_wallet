@@ -45,9 +45,15 @@ export default function CollectionBrowser({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Load collections when search changes
+  // Reload the collection list (reset) whenever the debounced search changes.
+  // loadCollections is intentionally omitted: it is a useCallback whose identity
+  // also tracks `nextToken` (set by the load itself as the user paginates), so
+  // listing it would re-fire the reset load on every page fetch. Keyed on
+  // debouncedSearchQuery — the only input that should reset the list — and
+  // loadCollections is read at the current commit.
   useEffect(() => {
     loadCollections(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on debouncedSearchQuery; loadCollections omitted on purpose (its nextToken-tracking identity would re-fire the reset load during pagination) and is read at the current commit.
   }, [debouncedSearchQuery]);
 
   const loadCollections = useCallback(

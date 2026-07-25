@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+} from 'react';
 import {
   View,
   Text,
@@ -36,6 +42,14 @@ export default function NFTThemeSelector({
   const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
   const { setNFTTheme } = useTheme();
   const activeAccount = useActiveAccount();
+
+  // Track the active account address so an in-flight collection/ownership load
+  // can detect a mid-flight account switch and refuse to write a stale result
+  // (the HomeScreen:546 ref-recheck pattern applied to an account-keyed load).
+  const activeAccountAddressRef = useRef(activeAccount?.address);
+  useEffect(() => {
+    activeAccountAddressRef.current = activeAccount?.address;
+  }, [activeAccount?.address]);
 
   // State management
   const [activeTab, setActiveTab] = useState<TabType>('my-nfts');
@@ -81,24 +95,38 @@ export default function NFTThemeSelector({
   const loadMyNFTs = useCallback(async () => {
     if (!activeAccount) return;
 
+    // Guard against a mid-flight account switch: a slow previous-account fetch
+    // must not overwrite the newer account's list (same race as the collection
+    // load below).
+    const requestAddress = activeAccount.address;
+
     try {
       setIsLoadingMyNFTs(true);
       const response = await NFTService.fetchUserNFTs(activeAccount.address);
+      if (activeAccountAddressRef.current !== requestAddress) return;
       const nftsWithImages = response.tokens.filter((token) =>
         NFTService.hasValidImage(token)
       );
       setMyNFTs(nftsWithImages);
     } catch (error) {
+      if (activeAccountAddressRef.current !== requestAddress) return;
       console.error('Failed to load NFTs:', error);
       Alert.alert('Error', 'Failed to load NFTs. Please try again.');
     } finally {
-      setIsLoadingMyNFTs(false);
+      if (activeAccountAddressRef.current === requestAddress) {
+        setIsLoadingMyNFTs(false);
+      }
     }
   }, [activeAccount]);
 
   const loadCollectionTokens = useCallback(
     async (reset = false) => {
       if (!selectedCollection) return;
+
+      // Address this load is for; compared against the live ref after each await
+      // so a slow previous-account fetch can never overwrite a newer account's
+      // ownership map / token list.
+      const requestAddress = activeAccount?.address;
 
       try {
         if (reset) {
@@ -111,6 +139,7 @@ export default function NFTThemeSelector({
             const userNFTs = await NFTService.fetchUserNFTs(
               activeAccount.address
             );
+            if (activeAccountAddressRef.current !== requestAddress) return;
             const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
             setOwnershipMap(ownership);
           }
@@ -125,6 +154,7 @@ export default function NFTThemeSelector({
             nextToken: reset ? undefined : nextToken,
           }
         );
+        if (activeAccountAddressRef.current !== requestAddress) return;
 
         if (reset) {
           setCollectionTokens(response.tokens);
@@ -141,19 +171,30 @@ export default function NFTThemeSelector({
           'Failed to load collection tokens. Please try again.'
         );
       } finally {
-        setIsLoadingCollectionTokens(false);
-        setLoadingMore(false);
+        // Only the load that still owns the active account clears the spinners,
+        // so a bailed stale load can't flip loading state under the newer one.
+        if (activeAccountAddressRef.current === requestAddress) {
+          setIsLoadingCollectionTokens(false);
+          setLoadingMore(false);
+        }
       }
     },
     [selectedCollection, nextToken, activeAccount]
   );
 
-  // Load collection tokens when collection is selected
+  // Load collection tokens when the collection, the view, OR the active account
+  // changes — keying on activeAccount?.address is the bug fix: switching accounts
+  // with a collection open must rebuild the ownership map for the new account
+  // (TASK-246). loadCollectionTokens is intentionally omitted from the deps: its
+  // identity also tracks `nextToken` (which the load itself sets), so listing it
+  // would double-fire the reset load; it is read at the current commit and the
+  // body re-checks activeAccountAddressRef after each await.
   useEffect(() => {
     if (selectedCollection && viewMode === 'collection-tokens') {
       loadCollectionTokens(true);
     }
-  }, [selectedCollection, viewMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on collection/viewMode/activeAccount?.address so ownership rebuilds on account switch; loadCollectionTokens omitted on purpose (its nextToken-tracking identity would double-fire the reset load) and is read at the current commit.
+  }, [selectedCollection, viewMode, activeAccount?.address]);
 
   const handleCollectionPress = (collection: ARC72Collection) => {
     setSelectedCollection(collection);

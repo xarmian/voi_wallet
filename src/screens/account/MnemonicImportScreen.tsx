@@ -415,6 +415,17 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       handleWordChange,
       handleWordFocus,
       handleWordBlur,
+      // Theme tokens the row reads: listing them re-renders the word rows on a
+      // light/dark switch (previously frozen). Purely visual — no mnemonic-
+      // handling logic depends on these (TASK-246).
+      theme.colors.border,
+      theme.colors.card,
+      theme.colors.error,
+      theme.colors.errorLight,
+      theme.colors.success,
+      theme.colors.text,
+      theme.colors.textSecondary,
+      themeColors.placeholder,
     ]
   );
 

@@ -203,6 +203,7 @@ export default function NewMessageScreen() {
 
       return () => clearTimeout(timeoutId);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- debounced search keyed on searchQuery + friends. handleEnvoiSearch is declared BELOW this effect, so it cannot be listed here without a temporal-dead-zone error; the trailing setTimeout captures it from the scheduling render. handleEnvoiSearch tracks searchQuery + friends, which are exactly the deps this effect re-runs on, so the captured closure is always current for the query being searched.
   }, [searchQuery, friends]);
 
   const handleEnvoiSearch = useCallback(

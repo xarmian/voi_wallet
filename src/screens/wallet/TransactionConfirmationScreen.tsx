@@ -101,17 +101,32 @@ export default function TransactionConfirmationScreen() {
     params.fromAccount?.id || ''
   );
 
+  // Display-only: resolves the recipient's Envoi profile for the header. Does
+  // NOT feed anything that is signed or confirmed (the transaction is built from
+  // route params and signed via the auth controller). Keyed on the one input
+  // loadEnvoiProfile reads (params.recipient); loadEnvoiProfile is a plain
+  // render-scope function read at the current commit and omitted on purpose so
+  // its per-render identity can't re-fire the lookup.
   useEffect(() => {
     loadEnvoiProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- display-only Envoi lookup keyed on params.recipient; loadEnvoiProfile is a render-scope helper read at the current commit and intentionally not listed.
   }, [params.recipient]);
 
+  // Display-only: picks a fallback token image from other networks in the same
+  // mapping. Not part of the signing/confirmation data. Keyed on the params that
+  // select the image AND multiNetworkBalance, so a balance that arrives after the
+  // first run refreshes the image. Only loadFallbackImage — a plain render-scope
+  // function read at the current commit — is omitted, so its per-render identity
+  // can't re-fire the lookup.
   useEffect(() => {
     loadFallbackImage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- display-only fallback-image lookup keyed on the mapping/asset/network params + multiNetworkBalance; only loadFallbackImage (a plain render-scope function read at the current commit) is omitted, and nothing here affects what is signed.
   }, [
     params.mappingId,
     params.assetImageUrl,
     params.assetId,
     selectedNetworkId,
+    multiNetworkBalance,
   ]);
 
   useEffect(() => {

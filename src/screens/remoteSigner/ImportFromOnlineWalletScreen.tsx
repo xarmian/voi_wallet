@@ -240,7 +240,9 @@ export default function ImportFromOnlineWalletScreen() {
         privateKeyBytes?.fill(0);
       }
     },
-    [networkId]
+    // refresh is a stable walletStore action (same instance handleComplete already
+    // depends on); include it so this handler always calls the live refresh.
+    [networkId, refresh]
   );
 
   const handleScanError = useCallback((errorMessage: string) => {

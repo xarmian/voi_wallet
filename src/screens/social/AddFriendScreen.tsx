@@ -85,6 +85,7 @@ export default function AddFriendScreen() {
     return () => {
       clearTimeout(timeoutId);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- debounced search keyed on searchQuery. handleSearch is declared BELOW this effect, so it cannot be listed here without a temporal-dead-zone error; the trailing setTimeout captures it from the scheduling render. It is a stable useCallback over the getFriend store action (a Zustand action, stable identity), so the captured reference never goes stale, and getFriend only annotates isAlreadyFriend on results — it never changes which query is searched.
   }, [searchQuery]);
 
   const handleSearch = useCallback(

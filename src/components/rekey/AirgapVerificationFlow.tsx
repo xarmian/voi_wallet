@@ -237,6 +237,7 @@ export function AirgapVerificationFlow({
         setState('error');
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onVerificationSuccess is NOT invoked in this handler (success is signalled via setState('success'); the parent's handler runs on the user's Continue tap at onPress={onVerificationSuccess}), so keeping it here is behaviour-neutral. It is retained as a defensive hand-mirror (matching handleRetry at :251) so that if a future edit ever calls it inside this airgap-rekey handler the dep is already correct rather than silently stale. Removing it — what the rule suggests — would also change nothing today; we do not rely on the caller passing a stable handler.
     [signingRequest, targetAccount.address, onVerificationSuccess]
   );
 

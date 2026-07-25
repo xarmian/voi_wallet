@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -53,6 +53,14 @@ export default function NFTScreen() {
   const activeAccount = useActiveAccount();
   const { theme, setNFTTheme } = useTheme();
 
+  // Track the active account address so an in-flight collection/ownership load
+  // can detect a mid-flight account switch and refuse to write a stale result
+  // (the HomeScreen:546 ref-recheck pattern applied to an account-keyed load).
+  const activeAccountAddressRef = useRef(activeAccount?.address);
+  useEffect(() => {
+    activeAccountAddressRef.current = activeAccount?.address;
+  }, [activeAccount?.address]);
+
   // Tab and view state
   const [activeTab, setActiveTab] = useState<TabType>('my-nfts');
   const [viewMode, setViewMode] = useState<ViewMode>('my-nfts');
@@ -80,11 +88,16 @@ export default function NFTScreen() {
   const [isAddAccountModalVisible, setIsAddAccountModalVisible] =
     useState(false);
 
-  // Load my NFTs on mount
+  // Load my NFTs on mount / account switch. Keyed on activeAccount?.address +
+  // viewMode; the full activeAccount object and loadMyNFTs are intentionally
+  // omitted — .address is the content-stable slice that actually scopes the
+  // load, and loadMyNFTs (a useCallback that tracks activeAccount identity) is
+  // read at the current commit, so listing either would only add spurious runs.
   useEffect(() => {
     if (activeAccount && viewMode === 'my-nfts') {
       loadMyNFTs();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address + viewMode; the full activeAccount object and loadMyNFTs are read at the current commit and omitted on purpose to avoid identity-churn re-runs.
   }, [activeAccount?.address, viewMode]);
 
   // Reset view when tab changes
@@ -98,35 +111,56 @@ export default function NFTScreen() {
     }
   }, [activeTab]);
 
-  // Load collection tokens when collection is selected
+  // Load collection tokens when the collection, the view, OR the active account
+  // changes — keying on activeAccount?.address is the bug fix: switching accounts
+  // with a collection open must rebuild the ownership map for the new account
+  // (TASK-246). loadCollectionTokens is intentionally omitted: its identity also
+  // tracks `nextTokensToken` (set by the load itself), so listing it would
+  // double-fire the reset load; it is read at the current commit and the body
+  // re-checks activeAccountAddressRef after each await.
   useEffect(() => {
     if (selectedCollection && viewMode === 'collection-tokens') {
       loadCollectionTokens(true);
     }
-  }, [selectedCollection, viewMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on collection/viewMode/activeAccount?.address so ownership rebuilds on account switch; loadCollectionTokens omitted on purpose (its nextTokensToken-tracking identity would double-fire the reset load) and is read at the current commit.
+  }, [selectedCollection, viewMode, activeAccount?.address]);
 
   const loadMyNFTs = useCallback(async () => {
     if (!activeAccount) return;
 
+    // Guard against a mid-flight account switch: a slow previous-account fetch
+    // must not overwrite the newer account's list (same race as the collection
+    // load above).
+    const requestAddress = activeAccount.address;
+
     try {
       setIsLoadingMyNFTs(true);
       const response = await NFTService.fetchUserNFTs(activeAccount.address);
+      if (activeAccountAddressRef.current !== requestAddress) return;
       const tokensWithNetwork = response.tokens.map((token) => ({
         ...token,
         networkId: NetworkId.VOI_MAINNET,
       }));
       setMyNFTs(tokensWithNetwork);
     } catch (error) {
+      if (activeAccountAddressRef.current !== requestAddress) return;
       console.error('Failed to load NFTs:', error);
       Alert.alert('Error', 'Failed to load your NFTs. Please try again.');
     } finally {
-      setIsLoadingMyNFTs(false);
+      if (activeAccountAddressRef.current === requestAddress) {
+        setIsLoadingMyNFTs(false);
+      }
     }
   }, [activeAccount]);
 
   const loadCollectionTokens = useCallback(
     async (reset = false) => {
       if (!selectedCollection) return;
+
+      // Address this load is for; compared against the live ref after each await
+      // so a slow previous-account fetch can never overwrite a newer account's
+      // ownership map / token list.
+      const requestAddress = activeAccount?.address;
 
       try {
         if (reset) {
@@ -139,6 +173,7 @@ export default function NFTScreen() {
             const userNFTs = await NFTService.fetchUserNFTs(
               activeAccount.address
             );
+            if (activeAccountAddressRef.current !== requestAddress) return;
             const ownership = NFTService.createOwnershipMap(userNFTs.tokens);
             setOwnershipMap(ownership);
           }
@@ -153,6 +188,7 @@ export default function NFTScreen() {
             nextToken: reset ? undefined : nextTokensToken,
           }
         );
+        if (activeAccountAddressRef.current !== requestAddress) return;
 
         if (reset) {
           setCollectionTokens(response.tokens);
@@ -169,8 +205,12 @@ export default function NFTScreen() {
           'Failed to load collection tokens. Please try again.'
         );
       } finally {
-        setIsLoadingCollectionTokens(false);
-        setLoadingMoreTokens(false);
+        // Only the load that still owns the active account clears the spinners,
+        // so a bailed stale load can't flip loading state under the newer one.
+        if (activeAccountAddressRef.current === requestAddress) {
+          setIsLoadingCollectionTokens(false);
+          setLoadingMoreTokens(false);
+        }
       }
     },
     [selectedCollection, nextTokensToken, activeAccount]
