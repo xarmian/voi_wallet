@@ -13,10 +13,16 @@ interface ExperimentalState {
   // Feature flags
   swapEnabled: boolean;
   messagingEnabled: boolean;
+  // Developer flag: allow WalletConnect to connect/sign on networks this wallet
+  // does not recognize (e.g. a local devnet). Default OFF so typical users get
+  // the strict per-chain approval policy. TASK-240 (session approval) and
+  // TASK-251 (signing-time genesis binding, PLAN-10) both read THIS flag.
+  allowUnsupportedNetworks: boolean;
 
   // Actions
   setSwapEnabled: (enabled: boolean) => void;
   setMessagingEnabled: (enabled: boolean) => void;
+  setAllowUnsupportedNetworks: (enabled: boolean) => void;
 }
 
 export const useExperimentalStore = create<ExperimentalState>()(
@@ -25,10 +31,13 @@ export const useExperimentalStore = create<ExperimentalState>()(
       // All experimental features default to OFF
       swapEnabled: false,
       messagingEnabled: false,
+      allowUnsupportedNetworks: false,
 
       setSwapEnabled: (enabled: boolean) => set({ swapEnabled: enabled }),
       setMessagingEnabled: (enabled: boolean) =>
         set({ messagingEnabled: enabled }),
+      setAllowUnsupportedNetworks: (enabled: boolean) =>
+        set({ allowUnsupportedNetworks: enabled }),
     }),
     {
       name: 'experimental-features',
@@ -42,3 +51,5 @@ export const useIsSwapEnabled = () =>
   useExperimentalStore((state) => state.swapEnabled);
 export const useIsMessagingEnabled = () =>
   useExperimentalStore((state) => state.messagingEnabled);
+export const useAllowUnsupportedNetworks = () =>
+  useExperimentalStore((state) => state.allowUnsupportedNetworks);
