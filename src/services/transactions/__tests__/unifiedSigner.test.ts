@@ -1044,6 +1044,98 @@ describe('signWalletConnectBatch — session + chain binding', () => {
     expect(blobIsSignedBy(blob, account.address)).toBe(true);
   });
 
+  // Codex diff-review round 3 (P1): `signers` / `authAddr` are attacker-supplied
+  // strings. Unvalidated, a pair of matching junk values would satisfy the
+  // designation rule purely by matching each other.
+  it.each([
+    [
+      'signers',
+      { signers: ['not-an-address'] },
+      /invalid address in "signers"/i,
+    ],
+    [
+      'authAddr',
+      { signers: ['not-an-address'], authAddr: 'not-an-address' },
+      /invalid address in "signers"/i,
+    ],
+  ])(
+    'rejects the request when %s carries an invalid address',
+    async (_label, metadata, pattern) => {
+      const account = accountOf(
+        `bind-bad-meta-${_label}`,
+        AccountType.STANDARD
+      );
+      const txn = payOn(VOI, account.address, 1);
+
+      const result = await signer.signTransaction({
+        type: 'batch_transaction',
+        account,
+        pin: '1234',
+        walletConnectParams: {
+          transactions: [{ txn: unsignedB64(txn), ...metadata }],
+          accountAddress: account.address,
+          sessionBinding: bindingFor(VOI, [account.address]),
+        },
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toMatch(pattern);
+      expect(mockSignTransaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects the request when authAddr alone is an invalid address', async () => {
+    const account = accountOf('bind-bad-authaddr', AccountType.STANDARD);
+    const txn = payOn(VOI, account.address, 1);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(txn), authAddr: 'nope' }],
+        accountAddress: account.address,
+        sessionBinding: bindingFor(VOI, [account.address]),
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/invalid "authAddr" address/i);
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
+  // Codex diff-review round 3 (P1): this wallet has no multisig signing path.
+  // Returning a single-key signature for an `msig` entry would hand the dApp
+  // bytes that can never validate on chain; `null` is the honest answer.
+  it('declines an entry that requests a multisig signature', async () => {
+    const account = accountOf('bind-msig', AccountType.STANDARD);
+    const txn = payOn(VOI, account.address, 1);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [
+          {
+            txn: unsignedB64(txn),
+            msig: {
+              subsig: [{ pk: 'AAAA' }, { pk: 'BBBB' }],
+              thr: 2,
+              v: 1,
+            },
+          },
+        ],
+        accountAddress: account.address,
+        sessionBinding: bindingFor(VOI, [account.address]),
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.signedTransactions as (string | null)[])[0]).toBeNull();
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
   it('declines an entry whose `signers` list excludes the sender', async () => {
     const account = accountOf('bind-excluded', AccountType.STANDARD);
     const someoneElse = makeAccount('bind-excluded-other').addr;

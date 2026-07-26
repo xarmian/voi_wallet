@@ -656,6 +656,11 @@ export class UnifiedTransactionSigner {
   ): BatchEntryPlan {
     const txnBytes = Buffer.from(wtxn.txn, 'base64');
 
+    // ARC-0001 metadata must be well formed before it is allowed to influence
+    // anything. A malformed `signers` / `authAddr` is invalid input, and invalid
+    // input fails the request rather than being interpreted charitably.
+    this.assertWellFormedEntryMetadata(wtxn, index);
+
     // Reuse the caller's pre-decoded transactions ONLY when the cached entry
     // re-encodes to exactly the wire bytes of this entry. The cache is a
     // display-side optimization; an index-alignment check alone would let a
@@ -710,6 +715,47 @@ export class UnifiedTransactionSigner {
     }
 
     return { action: 'sign', txn, sender: txnSender };
+  }
+
+  /**
+   * Validate the ARC-0001 metadata on one entry before it can influence
+   * eligibility (Codex diff-review round 3).
+   *
+   * `signers` and `authAddr` are attacker-supplied strings. Left unvalidated,
+   * `signers: ["not-an-address"], authAddr: "not-an-address"` would satisfy the
+   * designation rule below purely because the two junk values match each other.
+   * ARC-0001 treats invalid addresses as invalid input, so this fails the whole
+   * request rather than interpreting nonsense charitably.
+   */
+  private assertWellFormedEntryMetadata(
+    wtxn: WalletTransaction,
+    index: number
+  ): void {
+    if (wtxn.signers !== undefined) {
+      if (!Array.isArray(wtxn.signers)) {
+        throw new Error(
+          `Transaction ${index + 1} has a malformed "signers" field.`
+        );
+      }
+      for (const signer of wtxn.signers) {
+        if (typeof signer !== 'string' || !algosdk.isValidAddress(signer)) {
+          throw new Error(
+            `Transaction ${index + 1} lists an invalid address in "signers".`
+          );
+        }
+      }
+    }
+
+    if (wtxn.authAddr !== undefined) {
+      if (
+        typeof wtxn.authAddr !== 'string' ||
+        !algosdk.isValidAddress(wtxn.authAddr)
+      ) {
+        throw new Error(
+          `Transaction ${index + 1} has an invalid "authAddr" address.`
+        );
+      }
+    }
   }
 
   /**
@@ -785,6 +831,16 @@ export class UnifiedTransactionSigner {
    * are assembled by our own aggregator integrations and may legitimately carry
    * delegated logic-sigs that `LogicSig.verify` cannot validate offline (it does
    * not track the delegating public key when the sender differs).
+   *
+   * DELIBERATE DEVIATION FROM ARC-0001, per DR-8. The standard says `txn` MUST
+   * hold canonical UNSIGNED bytes and that an already-signed companion belongs
+   * in a separate `stxn` field paired with `signers: []`. In practice both our
+   * own aggregator groups (`services/deflex/index.ts` puts logic-sig blobs
+   * straight into `txn`) and a number of dApps use the `txn` slot for a
+   * pre-signed group member and expect it echoed. Rejecting those outright
+   * would break real groups, so the leniency stays — but it is gated on the
+   * blob being a genuinely, verifiably authorized transaction rather than on it
+   * merely failing to decode as unsigned, which is what used to happen.
    */
   private assertGenuinePreSigned(
     txnBytes: Uint8Array,
@@ -873,6 +929,15 @@ export class UnifiedTransactionSigner {
     wtxn: WalletTransaction,
     binding: WalletConnectSessionBinding | null
   ): boolean {
+    // 0. This wallet has no multisig signing path — SecureKeyManager only ever
+    //    produces a single-key signature. An entry carrying `msig` is asking for
+    //    a partial multisig signature we cannot produce, so the honest ARC-0001
+    //    answer is `null`. Silently returning a single-key signature for it
+    //    would hand the dApp bytes that can never validate on chain.
+    if (wtxn.msig) {
+      return false;
+    }
+
     // 1. Session authorization, chain-scoped (DR-5 / DR-14).
     if (binding) {
       const caipAccount = `${binding.chainId}:${txnSender}`;
