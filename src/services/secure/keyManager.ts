@@ -158,7 +158,18 @@ export class SecureKeyManager {
           rekeyedTo,
         };
       }
-      // If standard account, continue to private key flow below with signingAddress
+
+      // Standard auth account: its key signs, and it returns HERE rather than
+      // falling through to the account-type checks below.
+      //
+      // Falling through used to matter for exactly one case, and it was wrong:
+      // a LEDGER account rekeyed on chain to a standard account we hold reached
+      // the direct-Ledger branch and was signed by its own device as the old
+      // sender. The network requires the CURRENT rekey authority's signature
+      // (emitted with `sgnr`), so those bytes could never validate — and the
+      // review screen would have named the device rather than the real signer.
+      // (Codex diff-review, TASK-259 P1.)
+      return { kind: 'software', signingAddress, rekeyedTo };
     }
 
     // For watch-only accounts that aren't rekeyed, we can't sign
