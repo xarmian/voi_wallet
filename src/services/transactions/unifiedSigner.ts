@@ -464,12 +464,12 @@ export class UnifiedTransactionSigner {
       // mismatched session resolves to an EMPTY approved set. Reject the whole
       // request rather than silently declining every entry — and never
       // substitute the wallet's local accounts for the session's.
-      if (binding && binding.approvedAccounts.length === 0) {
-        throw new Error(
-          'This dApp session has no approved account on the requested network. ' +
-            'Reconnect the session and try again.'
-        );
-      }
+      const effectiveBinding = binding
+        ? {
+            ...binding,
+            approvedAccounts: await this.revalidateBinding(binding),
+          }
+        : null;
 
       // ---------------------------------------------------------------------
       // PREFLIGHT (DR-2/5/7/8/13/14/16). Runs to completion BEFORE a single key
@@ -477,7 +477,13 @@ export class UnifiedTransactionSigner {
       // signatures and no partially-signed response handed back to a dApp.
       // ---------------------------------------------------------------------
       const plans = params.transactions.map((wtxn, index) =>
-        this.planBatchEntry(wtxn, index, params, binding, boundNetworkId)
+        this.planBatchEntry(
+          wtxn,
+          index,
+          params,
+          effectiveBinding,
+          boundNetworkId
+        )
       );
 
       // Track signing progress for each transaction. `null` = declined (DR-1).
@@ -596,6 +602,48 @@ export class UnifiedTransactionSigner {
   }
 
   /**
+   * DR-5 — re-resolve the session's approved accounts against the LIVE session,
+   * immediately before preflight.
+   *
+   * The binding is snapshotted when the request screen loads, but the user then
+   * reviews the group and authenticates, which can take minutes. In that window
+   * the session can be disconnected, expire, or drop an account via
+   * `session_update`. Trusting the snapshot would let the wallet sign against
+   * authorization the dApp no longer holds.
+   *
+   * The result is the INTERSECTION of the snapshot and the live set, so it can
+   * only ever shrink: an account the session gained after the review started was
+   * never reviewed and must not become signable here either. An empty
+   * intersection is a rejection of the whole request.
+   */
+  private async revalidateBinding(
+    binding: WalletConnectSessionBinding
+  ): Promise<string[]> {
+    // Lazy import: keeps the in-app batch path free of the WalletConnect module
+    // graph, and mirrors the existing dynamic-import pattern in this file.
+    const { WalletConnectService } = await import('@/services/walletconnect');
+    const service = WalletConnectService.getInstance();
+
+    const live = service.getApprovedAccountsForChain(
+      binding.topic,
+      binding.chainId
+    );
+
+    const stillApproved = binding.approvedAccounts.filter((caipAccount) =>
+      live.includes(caipAccount)
+    );
+
+    if (stillApproved.length === 0) {
+      throw new Error(
+        'This dApp session no longer approves an account on the requested ' +
+          'network. Reconnect the session and try again.'
+      );
+    }
+
+    return stillApproved;
+  }
+
+  /**
    * Preflight ONE batch entry. Never touches a key; either returns a plan or
    * THROWS, and a throw fails the entire batch (DR-7/DR-8).
    */
@@ -608,16 +656,28 @@ export class UnifiedTransactionSigner {
   ): BatchEntryPlan {
     const txnBytes = Buffer.from(wtxn.txn, 'base64');
 
-    // Reuse the caller's pre-decoded transactions only when the cache is
-    // index-aligned with the request (same fail-closed length check as before).
+    // Reuse the caller's pre-decoded transactions ONLY when the cached entry
+    // re-encodes to exactly the wire bytes of this entry. The cache is a
+    // display-side optimization; an index-alignment check alone would let a
+    // caller show one transaction and get a different one signed, so the bytes
+    // that were reviewed and the object that gets signed are proven identical.
     const cache = params.decodedTransactions;
-    const cacheAligned =
-      !!cache && cache.length === params.transactions.length && !!cache[index];
-
     let txn: algosdk.Transaction | null = null;
-    if (cacheAligned) {
-      txn = cache![index];
-    } else {
+
+    if (cache && cache.length === params.transactions.length && cache[index]) {
+      try {
+        const reEncoded = Buffer.from(
+          algosdk.encodeUnsignedTransaction(cache[index])
+        );
+        if (reEncoded.equals(txnBytes)) {
+          txn = cache[index];
+        }
+      } catch {
+        txn = null;
+      }
+    }
+
+    if (!txn) {
       try {
         txn = algosdk.decodeUnsignedTransaction(txnBytes);
       } catch {

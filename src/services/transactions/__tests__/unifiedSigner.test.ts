@@ -49,8 +49,15 @@ jest.mock('@/services/transactions', () => ({
   },
 }));
 
+// The live-session lookup the signer re-checks the binding against (DR-5). The
+// per-test approved set is driven through `liveApprovedAccounts` below.
+const mockGetApprovedAccountsForChain = jest.fn<string[], [string, string]>();
 jest.mock('@/services/walletconnect', () => ({
-  WalletConnectService: { getInstance: jest.fn(() => ({})) },
+  WalletConnectService: {
+    getInstance: jest.fn(() => ({
+      getApprovedAccountsForChain: mockGetApprovedAccountsForChain,
+    })),
+  },
 }));
 
 jest.mock('@/services/secure/keyManager', () => ({
@@ -177,17 +184,26 @@ function payOn(
 const chainIdOf = (networkId: NetworkId): string =>
   NETWORK_CONFIGURATIONS[networkId].chainId;
 
+/**
+ * What the LIVE session currently approves, as the signer's DR-5 revalidation
+ * would see it. `bindingFor` keeps it in step with the snapshot by default; a
+ * test that wants a session which changed mid-flow overwrites it afterwards.
+ */
+let liveApprovedAccounts: string[] = [];
+
 /** A session binding approving `addresses` on `networkId`'s chain (CAIP-10). */
 function bindingFor(
   networkId: NetworkId,
   addresses: string[]
 ): WalletConnectSessionBinding {
   const chainId = chainIdOf(networkId);
+  const approvedAccounts = addresses.map((address) => `${chainId}:${address}`);
+  liveApprovedAccounts = [...approvedAccounts];
   return {
     topic: 'topic-under-test',
     chainId,
     networkId,
-    approvedAccounts: addresses.map((address) => `${chainId}:${address}`),
+    approvedAccounts,
   };
 }
 
@@ -270,6 +286,10 @@ let signer: UnifiedTransactionSigner;
 beforeEach(() => {
   keyRegistry.clear();
   rekeyRegistry.clear();
+  liveApprovedAccounts = [];
+  mockGetApprovedAccountsForChain.mockImplementation(
+    () => liveApprovedAccounts
+  );
   signer = new UnifiedTransactionSigner();
 
   // Default happy-path leaf behaviour (clearMocks resets call data each test).
@@ -1077,9 +1097,11 @@ describe('signWalletConnectBatch — session + chain binding', () => {
     const account = accountOf('bind-wrong-chain', AccountType.STANDARD);
     const txn = payOn(ALGO, account.address, 1);
 
-    // Request is on Algorand; the approved CAIP account is the Voi one.
+    // Request is on Algorand; the approved CAIP account is the Voi one, so a
+    // bare-address comparison would wrongly authorize it.
     const binding = bindingFor(ALGO, []);
     binding.approvedAccounts = [`${chainIdOf(VOI)}:${account.address}`];
+    liveApprovedAccounts = [...binding.approvedAccounts];
 
     const result = await signer.signTransaction({
       type: 'batch_transaction',
@@ -1113,8 +1135,126 @@ describe('signWalletConnectBatch — session + chain binding', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error?.message).toMatch(/no approved account/i);
+    expect(result.error?.message).toMatch(/no longer approves an account/i);
     expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
+  // DR-5 (Codex diff-review, round 1): the binding is snapshotted when the
+  // request screen loads, but the user then reviews and authenticates. If the
+  // session is disconnected/expires in that window, the snapshot alone would
+  // still authorize a signature the dApp no longer holds authorization for.
+  it('rejects when the session was disconnected between review and signing', async () => {
+    const account = accountOf('bind-stale-session', AccountType.STANDARD);
+    const txn = payOn(VOI, account.address, 1);
+    const binding = bindingFor(VOI, [account.address]);
+
+    // The live session is gone by the time signing starts.
+    liveApprovedAccounts = [];
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(txn) }],
+        accountAddress: account.address,
+        sessionBinding: binding,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/no longer approves an account/i);
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+    // It re-checked the LIVE session for this exact topic + chain.
+    expect(mockGetApprovedAccountsForChain).toHaveBeenCalledWith(
+      binding.topic,
+      binding.chainId
+    );
+  });
+
+  it('declines a sender the session dropped after the review started', async () => {
+    const mine = accountOf('bind-stale-mine', AccountType.STANDARD);
+    const other = accountOf('bind-stale-other', AccountType.STANDARD);
+    const binding = bindingFor(VOI, [mine.address, other.address]);
+
+    // `session_update` removed OUR account; the other one survives, so the
+    // request is not rejected outright — but our entry must not be signed.
+    liveApprovedAccounts = [`${chainIdOf(VOI)}:${other.address}`];
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account: mine,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(payOn(VOI, mine.address, 1)) }],
+        accountAddress: mine.address,
+        sessionBinding: binding,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect((result.signedTransactions as (string | null)[])[0]).toBeNull();
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
+  // Codex diff-review round 1 (medium): the pre-decoded cache is a display-side
+  // optimization. Trusting it on index alignment alone would let a caller show
+  // one transaction and have a DIFFERENT one signed. The signer only uses a
+  // cached entry when it re-encodes to exactly the wire bytes.
+  it('ignores a decoded cache that does not match the wire bytes', async () => {
+    const account = accountOf('bind-cache-swap', AccountType.STANDARD);
+    const shown = payOn(VOI, account.address, 1);
+    const swapped = payOn(VOI, account.address, 999_999);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(shown) }],
+        accountAddress: account.address,
+        // Same length, but a completely different transaction.
+        decodedTransactions: [swapped],
+        sessionBinding: bindingFor(VOI, [account.address]),
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const blob = new Uint8Array(
+      Buffer.from((result.signedTransactions as string[])[0], 'base64')
+    );
+    // The signature covers the transaction the WIRE bytes carried, not the
+    // cached substitute.
+    expect(algosdk.decodeSignedTransaction(blob).txn.txID()).toBe(shown.txID());
+    expect(algosdk.decodeSignedTransaction(blob).txn.txID()).not.toBe(
+      swapped.txID()
+    );
+    expect(mockSignTransaction.mock.calls[0][0].txID()).toBe(shown.txID());
+  });
+
+  it('uses a decoded cache that DOES match the wire bytes', async () => {
+    const account = accountOf('bind-cache-ok', AccountType.STANDARD);
+    const txn = payOn(VOI, account.address, 1);
+    const wire = unsignedB64(txn);
+    const cached = algosdk.decodeUnsignedTransaction(
+      new Uint8Array(Buffer.from(wire, 'base64'))
+    );
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: wire }],
+        accountAddress: account.address,
+        decodedTransactions: [cached],
+        sessionBinding: bindingFor(VOI, [account.address]),
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSignTransaction.mock.calls[0][0]).toBe(cached);
   });
 
   // DR-7 (TASK-251). A single mismatched entry fails the WHOLE batch: a
