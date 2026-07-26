@@ -340,7 +340,12 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       networkId: sessionBinding.networkId,
       walletConnectParams: {
         transactions,
-        accountAddress: selectedAccount.address,
+        // Only the account this screen names. The multi-account signer list
+        // lives on `UniversalTransactionSigningScreen`, which is where the
+        // normal path always ends up (this screen `replace`s itself into it);
+        // this fallback path shows exactly one account, so it may authorize
+        // exactly one.
+        reviewedSigners: [selectedAccount.address],
         sessionBinding,
       },
     };

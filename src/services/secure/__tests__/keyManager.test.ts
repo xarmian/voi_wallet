@@ -615,6 +615,111 @@ describe('SecureKeyManager.signTransaction (Ledger paths)', () => {
 });
 
 // ===========================================================================
+// TASK-259 — resolveSigningRoute is the SAME resolution signTransaction runs.
+//
+// The WalletConnect review screen names the account that will actually sign
+// each batch entry, and its signing method, by calling this. If it drifted from
+// signTransaction, the screen could name one signer while another one signs —
+// so these pin the route against the same scenarios asserted above.
+// ===========================================================================
+
+describe('SecureKeyManager.resolveSigningRoute', () => {
+  it('routes a non-rekeyed standard account to its own software key', async () => {
+    setWallet([standardAccount(OWNER, 'acc-owner')]);
+    mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+
+    await expect(
+      SecureKeyManager.resolveSigningRoute(OWNER.addr)
+    ).resolves.toEqual({
+      kind: 'software',
+      signingAddress: OWNER.addr,
+      rekeyedTo: undefined,
+    });
+  });
+
+  it('routes a rekeyed account to the AUTH account key and reports the rekey', async () => {
+    setWallet([
+      watchAccount(REKEYED, 'acc-rekeyed'),
+      standardAccount(AUTH, 'acc-auth'),
+    ]);
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: AUTH.addr,
+    });
+
+    await expect(
+      SecureKeyManager.resolveSigningRoute(REKEYED.addr)
+    ).resolves.toEqual({
+      kind: 'software',
+      signingAddress: AUTH.addr,
+      rekeyedTo: AUTH.addr,
+    });
+  });
+
+  it('routes to Ledger when the auth account is Ledger-controlled', async () => {
+    setWallet([
+      watchAccount(REKEYED, 'acc-rekeyed'),
+      ledgerAccount(LEDGER, 'acc-ledger'),
+    ]);
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: LEDGER.addr,
+    });
+
+    await expect(
+      SecureKeyManager.resolveSigningRoute(REKEYED.addr)
+    ).resolves.toMatchObject({
+      kind: 'ledger',
+      signerAddress: LEDGER.addr,
+      viaRekey: true,
+      rekeyedTo: LEDGER.addr,
+    });
+  });
+
+  it('reports unavailable — with the reason signTransaction throws — for an unheld authority', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-rekeyed')]);
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: AUTH.addr,
+    });
+
+    const route = await SecureKeyManager.resolveSigningRoute(REKEYED.addr);
+    expect(route.kind).toBe('unavailable');
+
+    // The screen shows exactly the message signing would have failed with.
+    const txn = paymentTxn(REKEYED.addr);
+    await expect(
+      SecureKeyManager.signTransaction(txn, REKEYED.addr)
+    ).rejects.toThrow(
+      route.kind === 'unavailable' ? route.reason : 'unreachable'
+    );
+  });
+
+  it('reports unavailable for a non-rekeyed watch-only account', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-rekeyed')]);
+    mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+
+    await expect(
+      SecureKeyManager.resolveSigningRoute(REKEYED.addr)
+    ).resolves.toMatchObject({
+      kind: 'unavailable',
+      reason: expect.stringMatching(/watch-only/i),
+    });
+  });
+
+  it('reports unavailable for an address the wallet does not hold', async () => {
+    setWallet([standardAccount(OWNER, 'acc-owner')]);
+
+    await expect(
+      SecureKeyManager.resolveSigningRoute(OTHER.addr)
+    ).resolves.toMatchObject({
+      kind: 'unavailable',
+      reason: 'Account not found',
+    });
+  });
+});
+
+// ===========================================================================
 // Key cleanup — the manager must zero handed-out key material after use
 // ===========================================================================
 

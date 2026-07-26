@@ -27,6 +27,35 @@ export interface SecureKeyRequest {
   metadata?: Record<string, any>;
 }
 
+/**
+ * How a signature for one address will actually be produced, as resolved by
+ * {@link SecureKeyManager.resolveSigningRoute}. `rekeyedTo` is the on-chain
+ * auth address whenever the account is rekeyed on the queried network — it is
+ * reported for display even on routes that do not use it.
+ */
+export type SigningRoute =
+  | {
+      kind: 'software';
+      /** Address whose locally-held private key produces the signature. */
+      signingAddress: string;
+      rekeyedTo?: string;
+    }
+  | {
+      kind: 'ledger';
+      ledgerAccount: LedgerAccountMetadata;
+      /** Address the device is asked to sign as. */
+      signerAddress: string;
+      /** True when the device is the account's on-chain rekey authority. */
+      viaRekey: boolean;
+      rekeyedTo?: string;
+    }
+  | {
+      kind: 'unavailable';
+      /** Message `signTransaction` throws for this address. */
+      reason: string;
+      rekeyedTo?: string;
+    };
+
 export class SecureKeyManager {
   /**
    * Get private key for specific address using biometric/PIN authentication
@@ -67,6 +96,101 @@ export class SecureKeyManager {
   }
 
   /**
+   * TASK-259 — the signing route {@link signTransaction} will take for one
+   * address, resolved WITHOUT touching a key.
+   *
+   * It exists so the WalletConnect review screen can name the account that will
+   * actually sign each entry, and its signing method, from the SAME resolution
+   * the signer performs — rather than a second, drifting copy. Displayed signer
+   * and actual signer therefore cannot diverge.
+   */
+  static async resolveSigningRoute(
+    address: string,
+    networkId?: import('@/types/network').NetworkId
+  ): Promise<SigningRoute> {
+    // Find the account by address
+    const wallet = await MultiAccountWalletService.getCurrentWallet();
+    if (!wallet) {
+      return { kind: 'unavailable', reason: 'No wallet found' };
+    }
+
+    const account = wallet.accounts.find((acc) => acc.address === address);
+    if (!account) {
+      return { kind: 'unavailable', reason: 'Account not found' };
+    }
+
+    // Determine which address to use for signing
+    let signingAddress = address;
+
+    // Check network-specific rekey status
+    // Skip timestamp lookup for performance - we only need to know IF rekeyed and the auth address
+    const networkService = NetworkService.getInstance(networkId);
+    const rekeyInfo = await networkService.getAccountRekeyInfo(address, true); // skipTimestamp = true
+    const rekeyedTo = rekeyInfo.isRekeyed ? rekeyInfo.authAddress : undefined;
+
+    // If account is rekeyed on this network, use the auth address for signing
+    if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
+      signingAddress = rekeyInfo.authAddress;
+
+      // Find the signing account in our wallet
+      const signingAccount = wallet.accounts.find(
+        (acc) =>
+          acc.address.toUpperCase() === signingAddress.toUpperCase() &&
+          (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER)
+      );
+
+      if (!signingAccount) {
+        return {
+          kind: 'unavailable',
+          reason:
+            'Cannot sign transactions for this rekeyed account - signing key not available',
+          rekeyedTo,
+        };
+      }
+
+      // If the signing account is a Ledger account, sign using Ledger
+      if (signingAccount.type === AccountType.LEDGER) {
+        return {
+          kind: 'ledger',
+          ledgerAccount: signingAccount as LedgerAccountMetadata,
+          signerAddress: signingAddress,
+          viaRekey: true,
+          rekeyedTo,
+        };
+      }
+      // If standard account, continue to private key flow below with signingAddress
+    }
+
+    // For watch-only accounts that aren't rekeyed, we can't sign
+    if (account.type === AccountType.WATCH && !rekeyInfo.isRekeyed) {
+      return {
+        kind: 'unavailable',
+        reason: 'Cannot sign transactions for watch-only accounts',
+      };
+    }
+
+    // Handle Ledger accounts.
+    //
+    // NOTE the pre-existing ordering this deliberately preserves: a LEDGER
+    // account that is rekeyed on chain to a STANDARD account we hold reaches
+    // here (the rekey branch above only returns early for a Ledger auth
+    // account) and is signed by its own device rather than by the rekey
+    // authority. `rekeyedTo` is reported regardless so the review screen can
+    // surface the rekey even in that case.
+    if (account.type === AccountType.LEDGER) {
+      return {
+        kind: 'ledger',
+        ledgerAccount: account as LedgerAccountMetadata,
+        signerAddress: address,
+        viaRekey: false,
+        rekeyedTo,
+      };
+    }
+
+    return { kind: 'software', signingAddress, rekeyedTo };
+  }
+
+  /**
    * Sign transaction with secure key access
    * Handles rekeyed accounts by using the auth address's private key
    * @param networkId - Optional network ID to check network-specific rekey status
@@ -80,74 +204,33 @@ export class SecureKeyManager {
     let privateKey: Uint8Array | null = null;
 
     try {
-      // Find the account by address
-      const wallet = await MultiAccountWalletService.getCurrentWallet();
-      if (!wallet) {
-        throw new Error('No wallet found');
+      const route = await this.resolveSigningRoute(address, networkId);
+
+      if (route.kind === 'unavailable') {
+        throw new Error(route.reason);
       }
 
-      const account = wallet.accounts.find((acc) => acc.address === address);
-      if (!account) {
-        throw new Error('Account not found');
-      }
+      // Rekeyed to a Ledger auth account.
+      if (route.kind === 'ledger' && route.viaRekey) {
+        await this.ensureLedgerDeviceReady(route.ledgerAccount);
 
-      // Determine which address to use for signing
-      let signingAddress = address;
-
-      // Check network-specific rekey status
-      // Skip timestamp lookup for performance - we only need to know IF rekeyed and the auth address
-      const networkService = NetworkService.getInstance(networkId);
-      const rekeyInfo = await networkService.getAccountRekeyInfo(address, true); // skipTimestamp = true
-
-      // If account is rekeyed on this network, use the auth address for signing
-      if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
-        signingAddress = rekeyInfo.authAddress;
-
-        // Find the signing account in our wallet
-        const signingAccount = wallet.accounts.find(
-          (acc) =>
-            acc.address.toUpperCase() === signingAddress.toUpperCase() &&
-            (acc.type === AccountType.STANDARD ||
-              acc.type === AccountType.LEDGER)
-        );
-
-        if (!signingAccount) {
-          throw new Error(
-            `Cannot sign transactions for this rekeyed account - signing key not available`
-          );
+        if (!transaction) {
+          throw new Error('Transaction is null or undefined');
         }
 
-        // If the signing account is a Ledger account, sign using Ledger
-        if (signingAccount.type === AccountType.LEDGER) {
-          const ledgerAccount = signingAccount as LedgerAccountMetadata;
-          await this.ensureLedgerDeviceReady(ledgerAccount);
-
-          if (!transaction) {
-            throw new Error('Transaction is null or undefined');
-          }
-
-          const result = await ledgerAlgorandService.signTransaction({
-            transaction: transaction as Transaction | Uint8Array,
-            derivationIndex: ledgerAccount.derivationIndex,
-            signerAddress: signingAddress,
-          });
-          return result.signedTransaction;
-        }
-        // If standard account, continue to private key flow below with signingAddress
-      }
-
-      // For watch-only accounts that aren't rekeyed, we can't sign
-      if (account.type === AccountType.WATCH && !rekeyInfo.isRekeyed) {
-        throw new Error('Cannot sign transactions for watch-only accounts');
+        const result = await ledgerAlgorandService.signTransaction({
+          transaction: transaction as Transaction | Uint8Array,
+          derivationIndex: route.ledgerAccount.derivationIndex,
+          signerAddress: route.signerAddress,
+        });
+        return result.signedTransaction;
       }
 
       // Handle Ledger accounts
-      if (account.type === AccountType.LEDGER) {
-        const ledgerAccount = account as LedgerAccountMetadata;
-
+      if (route.kind === 'ledger') {
         try {
           // Attempt to ensure the device is ready; if not connected, this will try to discover and connect.
-          await this.ensureLedgerDeviceReady(ledgerAccount);
+          await this.ensureLedgerDeviceReady(route.ledgerAccount);
 
           if (!transaction) {
             throw new Error('Transaction is null or undefined');
@@ -155,8 +238,8 @@ export class SecureKeyManager {
 
           const result = await ledgerAlgorandService.signTransaction({
             transaction: transaction as Transaction | Uint8Array,
-            derivationIndex: ledgerAccount.derivationIndex,
-            signerAddress: address,
+            derivationIndex: route.ledgerAccount.derivationIndex,
+            signerAddress: route.signerAddress,
           });
 
           return result.signedTransaction;
@@ -179,7 +262,7 @@ export class SecureKeyManager {
       // Get the private key for the signing address
       privateKey = await this.getPrivateKey(
         {
-          address: signingAddress,
+          address: route.signingAddress,
           purpose: 'transaction',
         },
         pin
