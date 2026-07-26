@@ -167,11 +167,16 @@ export function createSessionUpdateMessage(
 }
 
 /**
- * Create transaction signing response
+ * Create transaction signing response.
+ *
+ * DR-12: the array is index-aligned with the request and admits `null` for the
+ * entries the wallet DECLINED to sign, exactly as ARC-0001 requires. Nulls must
+ * be neither filtered nor stringified — `JSON.stringify` preserves them, and the
+ * dApp reassembles its group positionally.
  */
 export function createSignTxnResponse(
   requestId: number,
-  signedTxns: string[]
+  signedTxns: (string | null)[]
 ): WalletConnectV1Response {
   return {
     id: requestId,

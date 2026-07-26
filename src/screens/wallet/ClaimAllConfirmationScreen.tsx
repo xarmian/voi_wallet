@@ -371,8 +371,18 @@ export default function ClaimAllConfirmationScreen() {
           try {
             const networkService = NetworkService.getInstance(CLAIM_NETWORK_ID);
             const algodClient = networkService.getAlgodClient();
-            const signedTxns = result.signedTransactions.map(
-              (txn: string) => new Uint8Array(Buffer.from(txn, 'base64'))
+            // DR-1: a `null` slot means the signer DECLINED that entry
+            // (ARC-0001). `Buffer.from(null, 'base64')` would throw a bare
+            // TypeError here; submitting a hole would corrupt the group. Fail
+            // with an explicit, debuggable message instead.
+            const rawSigned = result.signedTransactions as (string | null)[];
+            if (rawSigned.some((txn) => txn === null || txn === undefined)) {
+              throw new Error(
+                'The wallet declined to sign part of this claim group, so nothing was submitted.'
+              );
+            }
+            const signedTxns = rawSigned.map(
+              (txn) => new Uint8Array(Buffer.from(txn as string, 'base64'))
             );
             await algodClient.sendRawTransaction(signedTxns).do();
 

@@ -1,4 +1,6 @@
 import { WalletConnectV1PeerMeta } from './types';
+import { NetworkId } from '@/types/network';
+import { ALGORAND_MAINNET_CHAIN_DATA } from '../config';
 
 /**
  * PeraWallet peer metadata for v1 compatibility
@@ -48,10 +50,48 @@ export const ALGORAND_CHAIN_IDS = {
 } as const;
 
 /**
- * Default chain ID (Algorand mainnet)
- * Voi Network also uses mainnet ID as it's Algorand-compatible
+ * Default chain ID (Algorand mainnet).
+ *
+ * DR-11: this is Algorand mainnet and ONLY Algorand mainnet. The previous note
+ * here claimed Voi "also uses" the same numeric id because it is
+ * Algorand-compatible — that is exactly the ambiguity that makes a v1 session
+ * impossible to bind securely, so it no longer holds. See `resolveV1Chain`.
  */
 export const DEFAULT_CHAIN_ID = ALGORAND_CHAIN_IDS.MAINNET;
+
+/**
+ * DR-11 — resolve a WalletConnect **v1** numeric chain id to the CAIP-2 chain
+ * and `NetworkId` the wallet will bind signing to.
+ *
+ * v1 carries a numeric chain id while every other layer of this wallet speaks
+ * CAIP-2 (`getNetworkByChainId` only accepts `algorand:<hash>` strings). The
+ * numeric space is also ambiguous: `416001` was historically treated as usable
+ * for BOTH Algorand and Voi, so a v1 session cannot securely identify a Voi
+ * chain at all.
+ *
+ * The mapping is therefore explicit and fail-closed: `416001` / `4160` mean
+ * Algorand mainnet, and everything else — including any v1 request that is
+ * really meant for Voi — resolves to `null` and must be rejected. This keeps
+ * normal Pera v1 `algo_signTxn` interop working while refusing to guess.
+ *
+ * ACCEPTED USER-VISIBLE CONSEQUENCE: a live v1 **Voi** session breaks on
+ * upgrade and must be reconnected. Silently treating it as Algorand would be
+ * the alternative, and that is not an acceptable trade at a signing boundary.
+ */
+export function resolveV1Chain(
+  chainId: number | undefined | null
+): { chainId: string; networkId: NetworkId } | null {
+  if (
+    chainId === ALGORAND_CHAIN_IDS.MAINNET ||
+    chainId === ALGORAND_CHAIN_IDS.MAINNET_LEGACY
+  ) {
+    return {
+      chainId: ALGORAND_MAINNET_CHAIN_DATA.chainId,
+      networkId: NetworkId.ALGORAND_MAINNET,
+    };
+  }
+  return null;
+}
 
 /**
  * WalletConnect v1 protocol version

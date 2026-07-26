@@ -26,6 +26,7 @@ import {
   areAllRequiredChainsSupported,
   truncateAddress,
   normalizeV1Metadata,
+  parseAccountAddress,
 } from './utils';
 import {
   DEFAULT_NAMESPACES,
@@ -35,7 +36,10 @@ import {
 import { useExperimentalStore } from '@/store/experimentalStore';
 import type { WalletConnectV1StoredSession } from '@/services/walletconnect/v1/types';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
-import { WC_V1_SESSION_STORAGE_KEY } from '@/services/walletconnect/v1/config';
+import {
+  WC_V1_SESSION_STORAGE_KEY,
+  resolveV1Chain,
+} from '@/services/walletconnect/v1/config';
 
 // Strip sensitive values from a string before logging (a caught error message
 // or any untrusted value). Redacts, in order:
@@ -574,6 +578,65 @@ export class WalletConnectService extends EventEmitter {
 
   getSession(topic: string): WalletConnectSession | undefined {
     return this.activeSessions.get(topic);
+  }
+
+  /**
+   * DR-5 / DR-14 — the CAIP-10 accounts a LIVE session approved for one
+   * specific chain, used to bind signing to the session that asked.
+   *
+   * Authorization is chain-scoped, not topic-wide: a session can approve
+   * address A on Voi but not on Algorand, so the full
+   * `algorand:<chain>:<address>` strings are returned and callers must compare
+   * whole strings rather than reducing to a bare address set.
+   *
+   * Returns an EMPTY array when the session is absent, expired, disconnected,
+   * topic-mismatched, or simply approved nothing on `chainId`. Callers must
+   * treat empty as a rejection — the wallet's local accounts are never
+   * substituted for the session's.
+   */
+  getApprovedAccountsForChain(topic: string, chainId: string): string[] {
+    if (!topic || !chainId) {
+      return [];
+    }
+
+    try {
+      // v1 first: it keeps a single session whose accounts were retained at
+      // approval time. Its numeric chain id must resolve to the SAME CAIP-2
+      // chain the caller is asking about (DR-11), otherwise it authorizes
+      // nothing here.
+      const v1SessionData =
+        WalletConnectV1Client.getInstance().getSessionData();
+      if (
+        v1SessionData &&
+        v1SessionData.connected &&
+        v1SessionData.handshakeTopic === topic
+      ) {
+        const resolved = resolveV1Chain(v1SessionData.chainId);
+        if (!resolved || resolved.chainId !== chainId) {
+          return [];
+        }
+        return v1SessionData.accounts.map((address) =>
+          formatAccountAddress(chainId, address)
+        );
+      }
+
+      const session = this.activeSessions.get(topic);
+      if (!session || isSessionExpired(session)) {
+        return [];
+      }
+
+      const accounts = session.namespaces?.algorand?.accounts ?? [];
+      return accounts.filter((caipAccount) => {
+        const parsed = parseAccountAddress(caipAccount);
+        return parsed?.chainId === chainId;
+      });
+    } catch (error) {
+      console.error(
+        'Failed to resolve session-approved accounts:',
+        redactError(error)
+      );
+      return [];
+    }
   }
 
   async getSignableAccounts(): Promise<AccountMetadata[]> {
