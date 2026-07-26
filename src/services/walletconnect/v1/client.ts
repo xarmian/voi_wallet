@@ -296,9 +296,17 @@ export class WalletConnectV1Client extends EventEmitter {
   }
 
   /**
-   * Approve transaction signing request
+   * Approve transaction signing request.
+   *
+   * DR-12: `signedTxns` is the ARC-0001 response array and admits `null` in the
+   * slots the wallet declined to sign. Pass it straight through — filtering or
+   * stringifying a null would break the dApp's positional reassembly of the
+   * group (and reintroduce the `apaa` class of failure).
    */
-  async approveRequest(requestId: number, signedTxns: string[]): Promise<void> {
+  async approveRequest(
+    requestId: number,
+    signedTxns: (string | null)[]
+  ): Promise<void> {
     if (!this.config || !this.socket || !this.sessionData) {
       throw new Error('Client not connected');
     }

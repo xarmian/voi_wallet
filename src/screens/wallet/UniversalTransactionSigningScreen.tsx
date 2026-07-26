@@ -76,7 +76,21 @@ export default function UniversalTransactionSigningScreen({
     title = 'Sign Transaction',
     networkId,
     chainId,
+    walletConnect,
   } = route.params;
+
+  // DR-15 — the ARC-0001 entries are the single source of truth for a dApp
+  // request: the wallet must review and sign exactly the bytes the dApp sent,
+  // with its `signers`/`authAddr` intact. `transactions` (bare base64) remains
+  // the shape the in-app callers (swap / claim) use.
+  const walletTransactions = useMemo(
+    () => walletConnect?.transactions ?? transactions.map((txn) => ({ txn })),
+    [walletConnect, transactions]
+  );
+  const transactionBytes = useMemo(
+    () => walletTransactions.map((wtxn) => wtxn.txn),
+    [walletTransactions]
+  );
   // The route param is typed `WalletAccount` (legacy), but callers always pass a
   // full `AccountMetadata` at runtime (see SwapScreen/Claim screens which cast the
   // other direction). Coerce to the real shape so display fields (color/label) and
@@ -142,7 +156,7 @@ export default function UniversalTransactionSigningScreen({
       const parsed: ParsedTransaction[] = [];
       const decoded: algosdk.Transaction[] = [];
 
-      for (const txnBase64 of transactions) {
+      for (const txnBase64 of transactionBytes) {
         try {
           const txnBytes = Buffer.from(txnBase64, 'base64');
           let txn: algosdk.Transaction;
@@ -269,13 +283,12 @@ export default function UniversalTransactionSigningScreen({
       return;
     }
 
-    // Build the transaction list
-    const allTransactions = transactions.map((txn) => ({
-      txn,
-      signers: [account.address],
-    }));
+    // Hand the signer the REAL entries. This screen used to fabricate
+    // `signers: [account.address]` for every transaction, which destroyed the
+    // dApp's own instructions — including `signers: []`, i.e. "do not sign
+    // this one" — before the signer ever saw them.
     const allDecodedTransactions =
-      decodedTransactions.length === transactions.length
+      decodedTransactions.length === walletTransactions.length
         ? [...decodedTransactions]
         : undefined;
 
@@ -283,10 +296,14 @@ export default function UniversalTransactionSigningScreen({
     const request: UnifiedTransactionRequest = {
       type: 'batch_transaction',
       account,
+      networkId: walletConnect?.binding.networkId ?? networkId,
       walletConnectParams: {
-        transactions: allTransactions,
+        transactions: walletTransactions,
         accountAddress: account.address,
         decodedTransactions: allDecodedTransactions,
+        // DR-15: bind a dApp request to its session + chain; `null` declares an
+        // in-app batch the wallet built itself.
+        sessionBinding: walletConnect?.binding ?? null,
       },
     };
 

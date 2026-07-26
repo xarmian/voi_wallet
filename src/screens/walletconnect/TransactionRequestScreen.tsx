@@ -21,16 +21,22 @@ import {
 } from '@/services/walletconnect';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata, WalletAccount } from '@/types/wallet';
+import { NetworkId } from '@/types/network';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
 import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
-import { UnifiedTransactionRequest } from '@/services/transactions/unifiedSigner';
+import {
+  UnifiedTransactionRequest,
+  WalletConnectSessionBinding,
+} from '@/services/transactions/unifiedSigner';
 import {
   truncateAddress,
   getNetworkNameByChainId,
   getNetworkCurrencyByChainId,
-  getChainIdByGenesisHash,
+  getNetworkByChainId,
+  formatAccountAddress,
 } from '@/services/walletconnect/utils';
+import { resolveV1Chain } from '@/services/walletconnect/v1/config';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -73,6 +79,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     useState<AccountMetadata | null>(null);
   const [networkName, setNetworkName] = useState<string>('Unknown Network');
   const [networkCurrency, setNetworkCurrency] = useState<string>('TOKEN');
+  const [sessionBinding, setSessionBinding] =
+    useState<WalletConnectSessionBinding | null>(null);
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
 
   // Use the unified auth controller
@@ -125,9 +133,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       }
 
       const paramsWrapper = eventParams;
-      const initialChainId = paramsWrapper.chainId as string | undefined;
       const { request } = paramsWrapper;
-      let derivedChainId: string | null = null;
 
       if (request.method === 'algo_signTxn') {
         // Support both WC param shapes: { txn: WalletTransaction[] } or [ WalletTransaction[] ]
@@ -142,103 +148,122 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           throw new Error('Malformed request: missing transactions array');
         }
 
-        // Extract chainId from first transaction for network detection
-        if (txns.length > 0) {
-          try {
-            const txnBytes = Buffer.from(txns[0].txn, 'base64');
-            const txn = algosdk.decodeUnsignedTransaction(txnBytes);
-            const txnAny = txn as any;
-            const genesisSource =
-              txnAny.genesisHash || txnAny.gh || txn?.genesisHash;
-            const chainIdFromGenesis = getChainIdByGenesisHash(genesisSource);
-            if (chainIdFromGenesis) {
-              derivedChainId = chainIdFromGenesis;
-            }
-          } catch (error) {
-            console.error('Failed to extract chainId from transaction:', error);
-          }
-        }
-
         setTransactions(txns);
 
-        // Set default account (first account that can sign for the first transaction)
-        if (txns.length > 0) {
-          try {
-            const txnBytes = Buffer.from(txns[0].txn, 'base64');
-            const txn = algosdk.decodeUnsignedTransaction(txnBytes);
-            const txnAny = txn as any;
-            let fromAddress = 'N/A';
-            if (txnAny.sender && txnAny.sender.publicKey) {
-              fromAddress = algosdk.encodeAddress(txnAny.sender.publicKey);
-            }
-            const account = allAccounts.find(
-              (acc) => acc.address === fromAddress
+        // DR-7 / DR-11 / DR-14 — resolve the chain the REQUEST is scoped to.
+        // This is deliberately the chain the dApp/session declares, never one
+        // derived from the transaction bytes: deriving it from the bytes would
+        // make the binding circular, and the signer's job is to verify that the
+        // bytes match this chain.
+        const requestChainId = paramsWrapper.chainId;
+        let chainId: string;
+        let chainNetworkId: NetworkId;
+
+        if (version === 1) {
+          const resolved = resolveV1Chain(Number(requestChainId));
+          if (!resolved) {
+            throw new Error(
+              'This WalletConnect v1 session uses a network this wallet cannot ' +
+                'identify (v1 sessions carry an ambiguous numeric chain id). ' +
+                'Please reconnect the dApp using WalletConnect v2.'
             );
-            if (account) {
-              setSelectedAccount(account);
-            }
-          } catch (error) {
-            console.error('Failed to determine signing account:', error);
           }
-        }
-
-        // Determine effective chainId and navigate to UniversalTransactionSigning
-        const effectiveChainId = derivedChainId || initialChainId;
-        if (effectiveChainId) {
-          setNetworkName(getNetworkNameByChainId(effectiveChainId));
-          setNetworkCurrency(getNetworkCurrencyByChainId(effectiveChainId));
-          // effectiveChainId is passed explicitly to UniversalTransactionSigning
-          // below (navigation param); do NOT mutate the incoming WalletConnect
-          // request's params object in place (Rules of React + shared-object safety).
-        }
-
-        // Navigate to UniversalTransactionSigning screen
-        // Decode the first transaction to get the sender address (signer)
-        let signingAccount = allAccounts[0]; // Default to first account
-        if (txns.length > 0) {
-          try {
-            const txnBytes = Buffer.from(txns[0].txn, 'base64');
-            const txn = algosdk.decodeUnsignedTransaction(txnBytes);
-            const txnAny = txn as any;
-            let senderAddress: string | null = null;
-
-            // Extract sender address from decoded transaction
-            if (txnAny.sender && txnAny.sender.publicKey) {
-              senderAddress = algosdk.encodeAddress(txnAny.sender.publicKey);
-            }
-
-            // Try to find account by sender address, or fall back to signers array if provided
-            if (senderAddress) {
-              signingAccount =
-                allAccounts.find((acc) => acc.address === senderAddress) ||
-                allAccounts[0];
-            } else if (txns[0].signers?.[0]) {
-              signingAccount =
-                allAccounts.find(
-                  (acc) => acc.address === txns[0].signers?.[0]
-                ) || allAccounts[0];
-            }
-          } catch (error) {
-            console.error(
-              'Failed to decode transaction for signing account:',
-              error
+          chainId = resolved.chainId;
+          chainNetworkId = resolved.networkId;
+        } else {
+          if (typeof requestChainId !== 'string' || !requestChainId) {
+            throw new Error('Malformed request: missing chain id');
+          }
+          const resolved = getNetworkByChainId(requestChainId);
+          if (!resolved) {
+            throw new Error(
+              'This request targets a network this wallet does not support.'
             );
-            // Fall back to signers array if decoding fails
-            if (txns[0].signers?.[0]) {
-              signingAccount =
-                allAccounts.find(
-                  (acc) => acc.address === txns[0].signers?.[0]
-                ) || allAccounts[0];
+          }
+          chainId = requestChainId;
+          chainNetworkId = resolved;
+        }
+
+        setNetworkName(getNetworkNameByChainId(chainId));
+        setNetworkCurrency(getNetworkCurrencyByChainId(chainId));
+
+        // DR-5 / DR-14 — the accounts the LIVE session approved for THIS chain,
+        // as full CAIP-10 strings. Empty means absent / expired / disconnected /
+        // topic-mismatched, which is a rejection: local accounts are never
+        // substituted for the session's.
+        const requestTopic = (requestEvent as any).topic as string | undefined;
+        const approvedAccounts = requestTopic
+          ? WalletConnectService.getInstance().getApprovedAccountsForChain(
+              requestTopic,
+              chainId
+            )
+          : [];
+
+        if (approvedAccounts.length === 0) {
+          throw new Error(
+            'This dApp session has no approved account on ' +
+              `${getNetworkNameByChainId(chainId)}. Reconnect the session and try again.`
+          );
+        }
+
+        const binding: WalletConnectSessionBinding = {
+          topic: requestTopic!,
+          chainId,
+          networkId: chainNetworkId,
+          approvedAccounts,
+        };
+        setSessionBinding(binding);
+
+        // Choose the account to review. DR-13 keeps signing eligibility narrow —
+        // only the REVIEWED account signs — so this must pick an account that is
+        // both ours and session-approved for this chain, rather than defaulting
+        // to `allAccounts[0]` (which would review one account and then decline
+        // every entry). The first eligible sender in the group wins; a group
+        // whose first entry is a pool/logic-sig transaction still resolves to
+        // the user's own account further down the list.
+        let signingAccount: AccountMetadata | undefined;
+        for (const wtxn of txns) {
+          let senderAddress: string | null = null;
+          try {
+            const txn = algosdk.decodeUnsignedTransaction(
+              Buffer.from(wtxn.txn, 'base64')
+            );
+            if (txn.sender?.publicKey) {
+              senderAddress = algosdk.encodeAddress(txn.sender.publicKey);
             }
+          } catch {
+            // Pre-signed / undecodable entry — it names no signer of ours.
+            continue;
+          }
+
+          if (!senderAddress) {
+            continue;
+          }
+          if (
+            !approvedAccounts.includes(
+              formatAccountAddress(chainId, senderAddress)
+            )
+          ) {
+            continue;
+          }
+          const match = allAccounts.find(
+            (acc) => acc.address === senderAddress
+          );
+          if (match) {
+            signingAccount = match;
+            break;
           }
         }
 
         if (!signingAccount) {
-          // No account is available to sign this request (e.g. every account was
-          // removed after the session was approved). Surface an explicit error
-          // rather than stranding the user on an empty review screen.
+          // No account this session approved on this chain is available to sign
+          // (e.g. every account was removed after the session was approved).
+          // Surface an explicit error rather than stranding the user on an
+          // empty review screen or reviewing an account that cannot sign.
           throw new Error('No account available to sign this request');
         }
+
+        setSelectedAccount(signingAccount);
 
         // Register callbacks in the callback registry to avoid serialization warnings
         const callbackId = registerNavigationCallbacks({
@@ -251,14 +276,20 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
 
         navigation.replace('UniversalTransactionSigning', {
+          // Display bytes. `walletConnect.transactions` below is the authority
+          // for both review and signing; this stays index-aligned with it.
           transactions: txns.map((wtxn) => wtxn.txn),
           // Nav param is typed WalletAccount (legacy); the screen coerces it back
           // to AccountMetadata at runtime. Matches the existing cast pattern used
           // by the other callers of this route (e.g. SwapScreen).
           account: signingAccount as unknown as WalletAccount,
-          chainId: effectiveChainId,
+          chainId,
+          networkId: chainNetworkId,
           title: 'WalletConnect Request',
           callbackId,
+          // DR-15: the real ARC-0001 entries (signers / authAddr / msig) plus
+          // the session + chain the signer must bind every entry to.
+          walletConnect: { transactions: txns, binding },
         });
       } else {
         // The normal path (algo_signTxn) always navigates away to
@@ -292,13 +323,25 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       return;
     }
 
+    if (!sessionBinding) {
+      // Fail closed: without a resolved session + chain there is nothing to bind
+      // the signature to, so there is no safe way to sign here.
+      Alert.alert(
+        'Error',
+        'This request is not bound to an active session. Reconnect the dApp and try again.'
+      );
+      return;
+    }
+
     // Create unified transaction request for WalletConnect batch
     const request: UnifiedTransactionRequest = {
       type: 'walletconnect_batch',
       account: selectedAccount,
+      networkId: sessionBinding.networkId,
       walletConnectParams: {
         transactions,
         accountAddress: selectedAccount.address,
+        sessionBinding,
       },
     };
 

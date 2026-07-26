@@ -719,15 +719,28 @@ export default function SwapScreen() {
         // Standard flow - need to submit signed transactions
         const networkService = NetworkService.getInstance(selectedNetwork);
 
+        // DR-1: the signer returns ARC-0001 `null` for any entry it DECLINED to
+        // sign. Submitting a group with a hole (or, as before this contract
+        // existed, with raw unsigned bytes in that slot) is what produced the
+        // `apaa` msgpack decode failure at algod. Fail loudly instead.
+        const rawSigned = result.signedTransactions as (
+          | string
+          | Uint8Array
+          | null
+        )[];
+        if (rawSigned.some((txn) => txn === null || txn === undefined)) {
+          throw new Error(
+            'The wallet declined to sign part of this swap group, so nothing was submitted.'
+          );
+        }
+
         // Convert signed transactions from base64 strings to Uint8Array if needed
-        const signedTxns = result.signedTransactions.map(
-          (txn: string | Uint8Array) => {
-            if (typeof txn === 'string') {
-              return new Uint8Array(Buffer.from(txn, 'base64'));
-            }
-            return txn;
+        const signedTxns = rawSigned.map((txn: string | Uint8Array | null) => {
+          if (typeof txn === 'string') {
+            return new Uint8Array(Buffer.from(txn, 'base64'));
           }
-        );
+          return txn as Uint8Array;
+        });
 
         // Submit transaction group
         const submitRes = await networkService.submitTransaction(signedTxns);

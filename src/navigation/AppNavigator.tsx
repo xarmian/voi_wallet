@@ -68,6 +68,8 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { TransactionInfo, WalletAccount } from '@/types/wallet';
+import type { WalletTransaction } from '@/services/walletconnect/types';
+import type { WalletConnectSessionBinding } from '@/services/transactions/unifiedSigner';
 import { ScannedAccount } from '@/utils/accountQRParser';
 import { NFTToken, ARC72Collection } from '@/types/nft';
 import { SerializableClaimableItem } from '@/types/claimable';
@@ -235,6 +237,18 @@ export type RootStackParamList = {
     title?: string;
     networkId?: NetworkId;
     chainId?: string;
+    /**
+     * DR-15 — the dApp handoff. Present ONLY for a WalletConnect request, and
+     * it carries what the signer legally needs: the full ARC-0001 entries
+     * (`signers` / `authAddr` / `msig`, which `transactions: string[]` cannot
+     * express) plus the session + chain the request must be bound to.
+     *
+     * Its absence means "in-app batch", i.e. a group this wallet built itself.
+     */
+    walletConnect?: {
+      transactions: WalletTransaction[];
+      binding: WalletConnectSessionBinding;
+    };
   };
   QRScanner: undefined;
   QRAccountImport: undefined;
