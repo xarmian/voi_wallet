@@ -554,7 +554,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
         pin: '1234',
         walletConnectParams: {
           transactions: txns.map((t) => ({ txn: unsignedB64(t) })),
-          accountAddress: account.address,
+          reviewedSigners: [account.address],
           sessionBinding: null,
         },
       },
@@ -614,7 +614,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
         account,
         walletConnectParams: {
           transactions: txns.map((t) => ({ txn: unsignedB64(t) })),
-          accountAddress: account.address,
+          reviewedSigners: [account.address],
           sessionBinding: null,
         },
       },
@@ -697,7 +697,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
       account,
       walletConnectParams: {
         transactions: [{ txn: wireTxn }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: null,
       },
     });
@@ -729,7 +729,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
         transactions: [
           { txn: unsignedB64(txnFromB), signers: [signerB.address] },
         ],
-        accountAddress: selected.address,
+        reviewedSigners: [selected.address],
         sessionBinding: null,
       },
     });
@@ -763,7 +763,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn), authAddr: authority.address }],
-        accountAddress: rekeyed,
+        reviewedSigners: [rekeyed],
         sessionBinding: null,
       },
     });
@@ -805,7 +805,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
             signers: [authority.address],
           },
         ],
-        accountAddress: rekeyed,
+        reviewedSigners: [rekeyed],
         sessionBinding: null,
       },
     });
@@ -837,7 +837,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
             signers: [authority.address],
           },
         ],
-        accountAddress: rekeyed,
+        reviewedSigners: [rekeyed],
         sessionBinding: null,
       },
     });
@@ -866,7 +866,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
       account,
       walletConnectParams: {
         transactions: [{ txn: opaque }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: null,
       },
     });
@@ -897,7 +897,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: preSigned }, { txn: unsignedB64(mine) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: null,
       },
     });
@@ -930,7 +930,7 @@ describe('signTransaction — batch routing (local vs ledger)', () => {
         account,
         walletConnectParams: {
           transactions: [{ txn: unsignedB64(txn) }],
-          accountAddress: account.address,
+          reviewedSigners: [account.address],
           sessionBinding: null,
         },
       },
@@ -973,7 +973,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [txnA, txnB, txnC].map((t) => ({ txn: unsignedB64(t) })),
-        accountAddress: mine.address,
+        reviewedSigners: [mine.address],
         // BOTH accounts are session-approved; only the reviewed one may sign.
         sessionBinding: bindingFor(VOI, [mine.address, theirs.address]),
       },
@@ -1012,7 +1012,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn), signers: [] }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1032,7 +1032,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1073,7 +1073,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
         pin: '1234',
         walletConnectParams: {
           transactions: [{ txn: unsignedB64(txn), ...metadata }],
-          accountAddress: account.address,
+          reviewedSigners: [account.address],
           sessionBinding: bindingFor(VOI, [account.address]),
         },
       });
@@ -1094,7 +1094,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn), authAddr: 'nope' }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1126,7 +1126,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
             },
           },
         ],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1147,7 +1147,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn), signers: [someoneElse] }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1171,7 +1171,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         // Session approved a DIFFERENT account on this chain.
         sessionBinding: bindingFor(VOI, [makeAccount('bind-other').addr]),
       },
@@ -1201,7 +1201,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: binding,
       },
     });
@@ -1221,7 +1221,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, []),
       },
     });
@@ -1249,7 +1249,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: binding,
       },
     });
@@ -1279,7 +1279,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(payOn(VOI, mine.address, 1)) }],
-        accountAddress: mine.address,
+        reviewedSigners: [mine.address],
         sessionBinding: binding,
       },
     });
@@ -1304,7 +1304,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(shown) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         // Same length, but a completely different transaction.
         decodedTransactions: [swapped],
         sessionBinding: bindingFor(VOI, [account.address]),
@@ -1338,7 +1338,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: wire }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         decodedTransactions: [cached],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
@@ -1362,7 +1362,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [good, wrongChain].map((t) => ({ txn: unsignedB64(t) })),
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1387,7 +1387,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1415,7 +1415,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1438,7 +1438,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: unsignedB64(txn) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(ALGO, [account.address]),
       },
     });
@@ -1471,7 +1471,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: tamperedB64 }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1495,7 +1495,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       pin: '1234',
       walletConnectParams: {
         transactions: [{ txn: preSigned }, { txn: unsignedB64(mine) }],
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -1521,7 +1521,7 @@ describe('signWalletConnectBatch — session + chain binding', () => {
       account,
       walletConnectParams: {
         transactions: txns.map((t) => ({ txn: unsignedB64(t) })),
-        accountAddress: account.address,
+        reviewedSigners: [account.address],
         sessionBinding: bindingFor(VOI, [account.address]),
       },
     });
@@ -2021,5 +2021,203 @@ describe('signTransaction — validation and callback contract', () => {
         transferParams: { toAddress: 'x', amount: 1 } as never,
       })
     ).resolves.toMatchObject({ success: true });
+  });
+});
+
+// ===========================================================================
+// TASK-259 — multi-account signing, gated on the review screen's signer list.
+//
+// PR 1 kept eligibility narrow (DR-13) because the review screen could only
+// name ONE account. TASK-259 widens it to every account the screen NAMES, so
+// these tests pin the new contract from the signer's side: the reviewed-signer
+// list is the authorization boundary, and an entry whose sender is absent from
+// it is answered with ARC-0001 `null` no matter what the dApp asked for.
+// ===========================================================================
+
+describe('signWalletConnectBatch — multi-account signer list (TASK-259)', () => {
+  const VOI = NetworkId.VOI_MAINNET;
+
+  it('signs for EVERY account the review screen named, at the right indexes', async () => {
+    const a = accountOf('multi-a', AccountType.STANDARD);
+    const b = accountOf('multi-b', AccountType.STANDARD);
+
+    const txnA = payOn(VOI, a.address, 1);
+    const txnB = payOn(VOI, b.address, 2);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account: a,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(txnA) }, { txn: unsignedB64(txnB) }],
+        // Both accounts appeared in the screen's signer list.
+        reviewedSigners: [a.address, b.address],
+        sessionBinding: bindingFor(VOI, [a.address, b.address]),
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const signed = result.signedTransactions as (string | null)[];
+    expect(signed).toHaveLength(2);
+
+    const blobA = new Uint8Array(Buffer.from(signed[0] as string, 'base64'));
+    const blobB = new Uint8Array(Buffer.from(signed[1] as string, 'base64'));
+    expect(blobIsSignedBy(blobA, a.address)).toBe(true);
+    expect(blobIsSignedBy(blobB, b.address)).toBe(true);
+    expect(algosdk.decodeSignedTransaction(blobA).txn.txID()).toBe(txnA.txID());
+    expect(algosdk.decodeSignedTransaction(blobB).txn.txID()).toBe(txnB.txID());
+  });
+
+  it('declines a session-approved sender that the signer list did NOT name', async () => {
+    const shown = accountOf('multi-shown', AccountType.STANDARD);
+    const hidden = accountOf('multi-hidden', AccountType.STANDARD);
+
+    const txnShown = payOn(VOI, shown.address, 1);
+    const txnHidden = payOn(VOI, hidden.address, 2);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account: shown,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [
+          { txn: unsignedB64(txnShown) },
+          // The dApp designates `hidden` and the session approves it, but the
+          // review screen never showed it as a signer.
+          { txn: unsignedB64(txnHidden), signers: [hidden.address] },
+        ],
+        reviewedSigners: [shown.address],
+        sessionBinding: bindingFor(VOI, [shown.address, hidden.address]),
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const signed = result.signedTransactions as (string | null)[];
+    expect(signed[1]).toBeNull();
+    expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSignTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      shown.address,
+      '1234',
+      VOI
+    );
+  });
+
+  it('still honours `signers: []` for an account that IS in the signer list', async () => {
+    const a = accountOf('multi-excluded', AccountType.STANDARD);
+    const txn = payOn(VOI, a.address, 1);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account: a,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(txn), signers: [] }],
+        reviewedSigners: [a.address],
+        sessionBinding: bindingFor(VOI, [a.address]),
+      },
+    });
+
+    expect((result.signedTransactions as (string | null)[])[0]).toBeNull();
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
+  it('declines a named signer the LIVE session dropped mid-review (DR-5 intersection)', async () => {
+    const kept = accountOf('multi-kept', AccountType.STANDARD);
+    const dropped = accountOf('multi-dropped', AccountType.STANDARD);
+
+    const txnKept = payOn(VOI, kept.address, 1);
+    const txnDropped = payOn(VOI, dropped.address, 2);
+
+    const binding = bindingFor(VOI, [kept.address, dropped.address]);
+    // The session drops `dropped` while the user is reviewing / authenticating.
+    liveApprovedAccounts = [`${chainIdOf(VOI)}:${kept.address}`];
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account: kept,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [
+          { txn: unsignedB64(txnKept) },
+          { txn: unsignedB64(txnDropped) },
+        ],
+        reviewedSigners: [kept.address, dropped.address],
+        sessionBinding: binding,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    const signed = result.signedTransactions as (string | null)[];
+    // Shown-then-declined is safe; signed-without-being-shown is not.
+    expect(signed[1]).toBeNull();
+    expect(signed[0]).not.toBeNull();
+  });
+
+  it('signs sequentially when the caller flags a device-backed signer', async () => {
+    const a = accountOf('multi-seq', AccountType.STANDARD);
+    const txns = [1, 2, 3].map((n) => payOn(VOI, a.address, n));
+    const { releases } = installGatedSigner();
+
+    const pending = signer.signTransaction({
+      type: 'batch_transaction',
+      account: a,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: txns.map((t) => ({ txn: unsignedB64(t) })),
+        reviewedSigners: [a.address],
+        // The screen resolved a Ledger route for the signer, so the batch must
+        // not fan out concurrently onto one device.
+        sequentialSigning: true,
+        sessionBinding: bindingFor(VOI, [a.address]),
+      },
+    });
+
+    await flushMicrotasks();
+    expect(releases).toHaveLength(1);
+    releases[0]();
+    await flushMicrotasks();
+    expect(releases).toHaveLength(2);
+    releases[1]();
+    await flushMicrotasks();
+    releases[2]();
+
+    await expect(pending).resolves.toMatchObject({ success: true });
+  });
+
+  it('keeps a sparse decoded cache index-aligned (DR-9)', async () => {
+    const a = accountOf('multi-cache', AccountType.STANDARD);
+    const txnA = payOn(VOI, a.address, 1);
+    const txnB = payOn(VOI, a.address, 2);
+
+    const result = await signer.signTransaction({
+      type: 'batch_transaction',
+      account: a,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [{ txn: unsignedB64(txnA) }, { txn: unsignedB64(txnB) }],
+        reviewedSigners: [a.address],
+        // Slot 0 could not be decoded by the caller; the hole must not shift
+        // slot 1's transaction onto slot 0's bytes.
+        decodedTransactions: [undefined, txnB],
+        sessionBinding: bindingFor(VOI, [a.address]),
+      },
+    });
+
+    const signed = result.signedTransactions as string[];
+    expect(
+      algosdk
+        .decodeSignedTransaction(
+          new Uint8Array(Buffer.from(signed[0], 'base64'))
+        )
+        .txn.txID()
+    ).toBe(txnA.txID());
+    expect(
+      algosdk
+        .decodeSignedTransaction(
+          new Uint8Array(Buffer.from(signed[1], 'base64'))
+        )
+        .txn.txID()
+    ).toBe(txnB.txID());
   });
 });

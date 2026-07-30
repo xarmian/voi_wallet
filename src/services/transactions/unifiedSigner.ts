@@ -15,6 +15,10 @@ import {
 import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import {
+  evaluateBatchEntryEligibility,
+  type WalletConnectSessionBinding,
+} from './batchEligibility';
 
 /**
  * Error thrown when attempting to sign with a remote signer account directly.
@@ -62,33 +66,11 @@ function networkFromGenesisHash(
 }
 
 /**
- * DR-5 / DR-7 / DR-14 — the WalletConnect session an incoming dApp batch is
- * bound to.
- *
- * Resolved once at the request boundary (`TransactionRequestScreen`) and
- * threaded through navigation to the signer, which re-checks EVERY entry
- * against it before a key is touched. Authorization is chain-scoped (DR-14): a
- * session may approve address A on Voi but not on Algorand, so membership is
- * tested on the full CAIP-10 string, never on the bare address.
+ * DR-5 / DR-7 / DR-14 — re-exported from `batchEligibility`, where it now lives
+ * alongside the eligibility rule the review screen shares with this signer.
+ * Existing import paths are unchanged.
  */
-export interface WalletConnectSessionBinding {
-  /** Session topic the request arrived on. */
-  topic: string;
-  /** CAIP-2 chain the request is scoped to, e.g. `algorand:<32-char gh>`. */
-  chainId: string;
-  /**
-   * NetworkId resolved from `chainId` at the boundary. Threaded into
-   * `SecureKeyManager.signTransaction` so rekey authority is resolved against
-   * the TRANSACTION's network rather than the app's active one.
-   */
-  networkId: NetworkId;
-  /**
-   * Full CAIP-10 accounts (`algorand:<chain>:<address>`) the live session
-   * approved FOR `chainId`. Never substituted with local accounts: an absent,
-   * disconnected, topic-mismatched or empty set is a rejection.
-   */
-  approvedAccounts: string[];
-}
+export type { WalletConnectSessionBinding };
 
 /**
  * Preflight decision for one batch entry, computed BEFORE any key is touched.
@@ -200,13 +182,37 @@ export interface UnifiedTransactionRequest {
   walletConnectParams?: {
     transactions: WalletTransaction[];
     /**
-     * The account the user actually reviewed and consented to sign with.
-     * DR-13: eligibility never outruns the UI — an entry is only signed when the
-     * DECODED sender IS this account.
+     * Every account the review screen NAMED as a signer for this request.
+     *
+     * TASK-259 replaces DR-13's single `accountAddress` with the full list, so
+     * an ARC-0001 group may legitimately span several session-approved accounts.
+     * Eligibility still never outruns the UI: the screen builds this list from
+     * `evaluateBatchEntryEligibility` and displays exactly it, and the signer
+     * re-runs the same rule against exactly this list, so no entry can be signed
+     * without having been shown. Order is irrelevant; duplicates are harmless.
      */
-    accountAddress: string;
-    // Optional: Pre-decoded transactions to avoid double-parsing
-    decodedTransactions?: algosdk.Transaction[];
+    reviewedSigners: string[];
+    /**
+     * Force sequential (one-at-a-time) signing.
+     *
+     * The parallel path is chosen from `request.account.type`, which only sees
+     * the FIRST reviewed account and misses a sender whose on-chain rekey
+     * authority is a Ledger. A hardware device cannot serve concurrent signature
+     * requests, so the review screen — which has already resolved every signer's
+     * route — sets this when any of them is device-backed. Purely an execution
+     * concern: it can change how signatures are obtained, never which entries
+     * are eligible.
+     */
+    sequentialSigning?: boolean;
+    /**
+     * Optional pre-decoded transactions, index-aligned ONE-TO-ONE with
+     * `transactions`; `undefined` marks an entry the caller could not decode.
+     * DR-9: the array is same-length and index-preserving by construction, so a
+     * decode failure can never shift later entries onto the wrong bytes. A
+     * cached entry is still only trusted when it re-encodes to the exact wire
+     * bytes (see `planBatchEntry`).
+     */
+    decodedTransactions?: (algosdk.Transaction | undefined)[];
     /**
      * REQUIRED, deliberately with NO default.
      *
@@ -489,12 +495,18 @@ export class UnifiedTransactionSigner {
       // Track signing progress for each transaction. `null` = declined (DR-1).
       const signedTxns: (string | null)[] = [];
 
-      // Detect if this is a Ledger account - Ledger requires sequential signing due to hardware constraints
-      const isLedgerAccount = request.account.type === AccountType.LEDGER;
+      // Ledger requires sequential signing (a hardware device cannot serve
+      // concurrent requests). `request.account` only describes the FIRST
+      // reviewed account, so a group whose other signer is rekeyed to a Ledger
+      // would otherwise be signed in parallel: the review screen, which has
+      // already resolved every signer's route, sets `sequentialSigning`.
+      const signSequentially =
+        request.account.type === AccountType.LEDGER ||
+        params.sequentialSigning === true;
 
       // For Ledger accounts: sign sequentially (hardware constraint)
       // For standard accounts: sign in parallel for better performance
-      if (isLedgerAccount) {
+      if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
           callbacks?.onLedgerPrompt?.({ index: i + 1, total });
@@ -703,14 +715,13 @@ export class UnifiedTransactionSigner {
 
     const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
-    if (
-      !this.isEligibleBatchEntry(
-        txnSender,
-        params.accountAddress,
-        wtxn,
-        binding
-      )
-    ) {
+    const eligibility = evaluateBatchEntryEligibility({
+      txnSender,
+      wtxn,
+      binding,
+      reviewedSigners: params.reviewedSigners,
+    });
+    if (!eligibility.eligible) {
       return { action: 'decline' };
     }
 
@@ -898,69 +909,6 @@ export class UnifiedTransactionSigner {
         `Transaction ${index + 1} claims to be pre-signed but its signature does not verify.`
       );
     }
-  }
-
-  /**
-   * Decide whether a WalletConnect batch entry should be signed by this wallet.
-   *
-   * The signing KEY is always the transaction sender's — SecureKeyManager
-   * resolves any on-chain rekey authority itself. This gates ELIGIBILITY only,
-   * from the DECODED sender plus the session's approved accounts and the dApp's
-   * advisory `signers` hint; it never lets request metadata (`authAddr` /
-   * `signers`) select which key signs (TASK-163).
-   *
-   * Evaluated in order, all must pass (DR-2 / DR-5 / DR-13 / DR-14):
-   *  1. the sender is authorized by the SESSION for THIS chain. Membership is
-   *     tested on the full CAIP-10 string, so a Voi-only approval for A cannot
-   *     authorize an Algorand transaction from A.
-   *  2. `signers: []` is an explicit do-not-sign instruction — never signed.
-   *  3. a non-empty `signers` must designate this entry as ours. ARC-0001
-   *     encodes a REKEYED sender as `signers: [authAddr]`, so the entry's own
-   *     advisory `authAddr` also satisfies the designation. That stays advisory:
-   *     the key still comes from the sender via on-chain rekey resolution.
-   *  4. DR-13 — the sender must be the account the user actually reviewed. The
-   *     review screen can only name ONE account, so signing on behalf of any
-   *     other approved account would mean "UI says A, signs B". Widening to true
-   *     multi-account signing lands with the signer-list UI (TASK-259).
-   */
-  private isEligibleBatchEntry(
-    txnSender: string,
-    reviewedAccount: string,
-    wtxn: WalletTransaction,
-    binding: WalletConnectSessionBinding | null
-  ): boolean {
-    // 0. This wallet has no multisig signing path — SecureKeyManager only ever
-    //    produces a single-key signature. An entry carrying `msig` is asking for
-    //    a partial multisig signature we cannot produce, so the honest ARC-0001
-    //    answer is `null`. Silently returning a single-key signature for it
-    //    would hand the dApp bytes that can never validate on chain.
-    if (wtxn.msig) {
-      return false;
-    }
-
-    // 1. Session authorization, chain-scoped (DR-5 / DR-14).
-    if (binding) {
-      const caipAccount = `${binding.chainId}:${txnSender}`;
-      if (!binding.approvedAccounts.includes(caipAccount)) {
-        return false;
-      }
-    }
-
-    // 2/3. ARC-0001 `signers` semantics (DR-2).
-    if (Array.isArray(wtxn.signers)) {
-      if (wtxn.signers.length === 0) {
-        return false;
-      }
-      const designatesSender =
-        wtxn.signers.includes(txnSender) ||
-        (!!wtxn.authAddr && wtxn.signers.includes(wtxn.authAddr));
-      if (!designatesSender) {
-        return false;
-      }
-    }
-
-    // 4. The reviewed account, and only the reviewed account (DR-13).
-    return txnSender === reviewedAccount;
   }
 
   /**
