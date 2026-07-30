@@ -21,7 +21,7 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@expo/cli": "^54.0.8",
+    "@expo/cli": "^57.0.10",
     "@gorhom/bottom-sheet": "^5.2.6",
     "@ledgerhq/errors": "^6.25.0",
     "@ledgerhq/hw-app-algorand": "^6.31.6",
