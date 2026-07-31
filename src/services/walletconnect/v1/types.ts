@@ -160,6 +160,40 @@ export interface WalletConnectV1StoredSession {
 }
 
 /**
+ * What actually gets persisted to AsyncStorage as of PLAN-260 (DR-11).
+ *
+ * This type CANNOT express `key` — that is the point. The symmetric session key
+ * lives in secure storage (`sessionKeyStore.ts`); everything here is routing
+ * metadata and is safe in AsyncStorage. Making it a type rather than a
+ * convention is what stops a future `JSON.stringify(session)` from silently
+ * reintroducing the secret, since nothing would catch that at review time.
+ *
+ * Distinct from the in-memory `WalletConnectV1SessionData` above, which
+ * legitimately holds `key` as runtime state.
+ */
+export interface WalletConnectV1PersistedSession {
+  connected: boolean;
+  accounts: string[];
+  chainId: number;
+  bridge: string;
+  clientId: string;
+  clientMeta: WalletConnectV1PeerMeta | null;
+  peerId: string;
+  peerMeta: WalletConnectV1PeerMeta | null;
+  handshakeId: number;
+  handshakeTopic: string;
+  updatedAt?: number;
+}
+
+/**
+ * Rows written BEFORE PLAN-260 carried the session key inline. This shape exists
+ * solely so the migration reader can recognise and drain them; nothing should
+ * ever WRITE it. `key` is optional because a row may already have been migrated.
+ */
+export type WalletConnectV1LegacyPersistedSession =
+  WalletConnectV1PersistedSession & { key?: string };
+
+/**
  * Event types emitted by WalletConnect v1 client
  */
 export enum WalletConnectV1Event {

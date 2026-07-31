@@ -99,9 +99,22 @@ export function resolveV1Chain(
 export const WALLETCONNECT_V1_VERSION = '1';
 
 /**
- * Session storage key
+ * Session storage key — AsyncStorage prefix for the per-topic session ROUTING
+ * metadata (bridge, accounts, chainId, peer info). Never key material: the
+ * symmetric session key lives in secure storage under WC_V1_SESSION_KEY_SLOT.
  */
 export const WC_V1_SESSION_STORAGE_KEY = '@voiwallet:wc_v1_sessions';
+
+/**
+ * Secure-storage slot holding the v1 symmetric session key (PLAN-260, DR-3).
+ *
+ * A single CONSTANT name, with the owning topic bound into the stored value
+ * rather than into this key. The v1 topic is attacker-controlled and SecureStore
+ * restricts key names to alphanumerics, '.', '-' and '_', so deriving the slot
+ * name from the topic would be both a crash and a collision vector. See
+ * `sessionKeyStore.ts` for the full reasoning.
+ */
+export const WC_V1_SESSION_KEY_SLOT = 'voi_wc_v1_session_key';
 
 /**
  * WebSocket connection timeout (ms)
