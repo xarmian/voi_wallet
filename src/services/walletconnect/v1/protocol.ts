@@ -33,7 +33,7 @@ export function parseEncryptedPayload(
       hmac: payload.hmac,
       iv: payload.iv,
     };
-  } catch (error) {
+  } catch {
     console.error('WC v1 Protocol: Failed to parse encrypted payload');
     return null;
   }
@@ -74,7 +74,7 @@ export async function decryptRequest(
     }
 
     return request;
-  } catch (error) {
+  } catch {
     // Decryption operates directly on the session key, so no error text is
     // reflected here at all (DR-13) — a raw message is not provably key-free.
     // The payload lengths are our own measurements, not peer bytes, and are what
