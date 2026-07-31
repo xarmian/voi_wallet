@@ -224,7 +224,9 @@ export type RootStackParamList = {
   WalletConnectSessions: undefined;
   WalletConnectTransactionRequest: { requestEvent: any; version?: number };
   WalletConnectPairing: { uri: string };
-  WalletConnectError: { error: string; uri?: string };
+  // No `uri` param: a WalletConnect pairing URI carries the session key
+  // (v1 `key=`, v2 `symKey=`) and route params land in navigation state.
+  WalletConnectError: { error: string };
   UniversalTransactionSigning: {
     transactions: string[];
     account: WalletAccount;

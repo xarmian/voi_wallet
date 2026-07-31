@@ -11,7 +11,9 @@ import {
   WalletConnectV1SessionRequest,
   WalletConnectV1Event,
   AlgoSignTxnRequest,
-  WalletConnectV1StoredSession,
+  WalletConnectV1PersistedSession,
+  WalletConnectV1LegacyPersistedSession,
+  isRestorableV1Session,
 } from './types';
 import { WalletConnectV1WebSocket } from './websocket';
 import { generateClientId } from './crypto';
@@ -35,6 +37,18 @@ import {
   DEFAULT_CHAIN_ID,
   WC_V1_SESSION_STORAGE_KEY,
 } from './config';
+import { redactError } from '@/utils/logRedaction';
+import { describePeerMethod } from './peerLabels';
+import {
+  readSessionKey,
+  readSessionKeySlotRaw,
+  writeSessionKey,
+  restoreSessionKeySlot,
+  deleteSessionKeyForTopic,
+  deleteSessionKeySlot,
+  isValidV1SessionKey,
+} from './sessionKeyStore';
+import { deleteV1Session, deleteV1Sessions } from './sessionCleanup';
 
 export class WalletConnectV1Client extends EventEmitter {
   private static instance: WalletConnectV1Client | null = null;
@@ -58,12 +72,11 @@ export class WalletConnectV1Client extends EventEmitter {
   async connect(config: WalletConnectV1SessionConfig): Promise<void> {
     try {
       if (this.sessionData?.connected) {
+        // `peerId` and `topic` are both peer/URI supplied — the topic arrives
+        // straight from a scanned QR or deep link and is never validated — so
+        // neither is echoed at all. The message alone carries the diagnostic.
         console.warn(
-          'WC v1 Client: Replacing active session with new connection request',
-          {
-            existingSession: this.sessionData.peerId,
-            newTopic: config.topic,
-          }
+          'WC v1 Client: Replacing active session with new connection request'
         );
         // Disconnect the old session's WebSocket
         if (this.socket) {
@@ -97,7 +110,7 @@ export class WalletConnectV1Client extends EventEmitter {
       });
 
       this.socket.onError((error) => {
-        console.error('WC v1 Client: WebSocket error', error);
+        console.error('WC v1 Client: WebSocket error', redactError(error));
         // Only emit error if we don't have an active session
         // Reconnection errors during active sessions are handled internally
         if (!this.sessionData?.connected) {
@@ -143,14 +156,17 @@ export class WalletConnectV1Client extends EventEmitter {
             storedSession.chainId
           );
         } catch (error) {
-          console.error('WC v1 Client: Failed to send session update', error);
+          console.error(
+            'WC v1 Client: Failed to send session update',
+            redactError(error)
+          );
         }
       } else {
         // Fresh connection: subscribe to handshake topic
         await this.socket.subscribeToTopic(config.topic);
       }
     } catch (error) {
-      console.error('WC v1 Client: Connection failed', error);
+      console.error('WC v1 Client: Connection failed');
       this.emit(WalletConnectV1Event.ERROR, error);
       throw error;
     }
@@ -218,7 +234,10 @@ export class WalletConnectV1Client extends EventEmitter {
       // Store session
       await this.storeSession();
     } catch (error) {
-      console.error('WC v1 Client: Failed to approve session', error);
+      console.error(
+        'WC v1 Client: Failed to approve session',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -252,7 +271,10 @@ export class WalletConnectV1Client extends EventEmitter {
       // Disconnect
       await this.disconnect();
     } catch (error) {
-      console.error('WC v1 Client: Failed to reject session', error);
+      console.error(
+        'WC v1 Client: Failed to reject session',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -290,7 +312,10 @@ export class WalletConnectV1Client extends EventEmitter {
       // Store updated session
       await this.storeSession();
     } catch (error) {
-      console.error('WC v1 Client: Failed to update session', error);
+      console.error(
+        'WC v1 Client: Failed to update session',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -322,7 +347,10 @@ export class WalletConnectV1Client extends EventEmitter {
       const responseTopic = this.sessionData.peerId || this.config.topic;
       this.socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
-      console.error('WC v1 Client: Failed to approve request', error);
+      console.error(
+        'WC v1 Client: Failed to approve request',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -351,7 +379,10 @@ export class WalletConnectV1Client extends EventEmitter {
       const responseTopic = this.sessionData?.peerId || this.config.topic;
       this.socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
-      console.error('WC v1 Client: Failed to reject request', error);
+      console.error(
+        'WC v1 Client: Failed to reject request',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -429,7 +460,17 @@ export class WalletConnectV1Client extends EventEmitter {
       } else if (isAlgoSignTxnRequest(request)) {
         await this.handleSignTxnRequest(request);
       } else {
-        console.warn('WC v1 Client: Unsupported method', request.method);
+        // `request.method` is arbitrary peer-controlled text. Pattern
+        // redaction is NOT enough here: a peer can set `method` to the bare
+        // session key, and bare hex is deliberately preserved by the redactor
+        // (genesis hashes / txids). Truncation would not help either — a
+        // truncated key is still leaked key material. So the value is only ever
+        // echoed when it matches a KNOWN method name; anything else is reported
+        // by length alone, which is all the diagnostics actually need.
+        console.warn(
+          'WC v1 Client: Unsupported method',
+          describePeerMethod(request.method)
+        );
         // Send error response for unsupported methods
         await this.rejectRequest(
           request.id,
@@ -437,7 +478,10 @@ export class WalletConnectV1Client extends EventEmitter {
         );
       }
     } catch (error) {
-      console.error('WC v1 Client: Failed to handle message', error);
+      console.error(
+        'WC v1 Client: Failed to handle message',
+        redactError(error)
+      );
       this.emit(WalletConnectV1Event.ERROR, error);
     }
   }
@@ -499,50 +543,103 @@ export class WalletConnectV1Client extends EventEmitter {
   }
 
   /**
-   * Store session in AsyncStorage
+   * Persist the session: routing metadata to AsyncStorage, the symmetric key to
+   * secure storage (PLAN-260).
+   *
+   * ORDERING IS LOAD-BEARING (DR-5/DR-5a). The secure key is written FIRST and
+   * the metadata SECOND, so the metadata row is the commit record — a crash
+   * between the two leaves an orphaned key with no pointer, never a pointer to a
+   * key that was never written.
+   *
+   * If the metadata write then FAILS, the secure write is ROLLED BACK to
+   * whatever was there before. Without that rollback this split would be
+   * strictly worse than the old single-blob write: storing session B while
+   * session A is persisted would leave the slot holding B and A's metadata
+   * intact, and A's topic check would then make A permanently unrestorable —
+   * whereas the old code left A fully recoverable with its inline key.
    */
   private async storeSession(): Promise<void> {
     if (!this.sessionData || !this.config) {
       return;
     }
 
-    try {
-      const storedSession: WalletConnectV1StoredSession = {
-        connected: this.sessionData.connected,
-        accounts: this.sessionData.accounts,
-        chainId: this.sessionData.chainId,
-        bridge: this.sessionData.bridge,
-        key: this.sessionData.key,
-        clientId: this.sessionData.clientId,
-        clientMeta: this.sessionData.clientMeta,
-        peerId: this.sessionData.peerId,
-        peerMeta: this.sessionData.peerMeta,
-        handshakeId: this.sessionData.handshakeId,
-        handshakeTopic: this.sessionData.handshakeTopic,
-        updatedAt: Date.now(),
-      };
+    // Capture identity BEFORE any await so a concurrent connect() cannot swap
+    // `this.config` underneath us and make us write one session's key against
+    // another session's topic (DR-12).
+    const topic = this.config.topic;
+    const sessionKey = this.sessionData.key;
 
-      const key = `${WC_V1_SESSION_STORAGE_KEY}:${this.config.topic}`;
-      await AsyncStorage.setItem(key, JSON.stringify(storedSession));
-      await this.removeStaleSessions(key);
-    } catch (error) {
-      console.error('WC v1 Client: Failed to store session', error);
+    const persisted: WalletConnectV1PersistedSession = {
+      connected: this.sessionData.connected,
+      accounts: this.sessionData.accounts,
+      chainId: this.sessionData.chainId,
+      bridge: this.sessionData.bridge,
+      clientId: this.sessionData.clientId,
+      clientMeta: this.sessionData.clientMeta,
+      peerId: this.sessionData.peerId,
+      peerMeta: this.sessionData.peerMeta,
+      handshakeId: this.sessionData.handshakeId,
+      handshakeTopic: this.sessionData.handshakeTopic,
+      updatedAt: Date.now(),
+    };
+
+    const storageKey = `${WC_V1_SESSION_STORAGE_KEY}:${topic}`;
+
+    let priorSlot: string | null = null;
+    let secureWritten = false;
+
+    try {
+      // Capture the prior slot for rollback. An unreadable slot (Android
+      // keystore desync) is treated as "nothing to roll back to" — it was
+      // already unusable.
+      try {
+        priorSlot = await readSessionKeySlotRaw();
+      } catch {
+        priorSlot = null;
+      }
+
+      await writeSessionKey(topic, sessionKey);
+      secureWritten = true;
+
+      await AsyncStorage.setItem(storageKey, JSON.stringify(persisted));
+      await this.removeStaleSessions(storageKey, topic);
+    } catch {
+      console.error('WC v1 Client: Failed to store session');
+      if (secureWritten) {
+        try {
+          await restoreSessionKeySlot(priorSlot);
+        } catch {
+          console.error('WC v1 Client: Failed to roll back session key');
+        }
+      }
     }
   }
 
   /**
-   * Clear session from AsyncStorage
+   * Clear the session: metadata from AsyncStorage, key from secure storage.
+   *
+   * The secure delete is TOPIC-CONDITIONAL (DR-3a), and that is not a nicety.
+   * `connect()` deliberately RETAINS the previous session's persisted storage
+   * when replacing an active connection, but by then `this.config` already
+   * points at the NEW topic. So pairing session B while session A is stored and
+   * then rejecting B routes here with B's topic — an unconditional delete would
+   * destroy A's key while A's metadata survived, leaving A unrestorable.
+   *
+   * Metadata is removed FIRST so it stays the commit record: the worst case is
+   * an orphaned key with no pointer, which the constant slot self-heals on the
+   * next pairing.
    */
   private async clearSession(): Promise<void> {
     if (!this.config) {
       return;
     }
 
+    const topic = this.config.topic;
+
     try {
-      const key = `${WC_V1_SESSION_STORAGE_KEY}:${this.config.topic}`;
-      await AsyncStorage.removeItem(key);
-    } catch (error) {
-      console.error('WC v1 Client: Failed to clear session', error);
+      await deleteV1Session(topic);
+    } catch {
+      console.error('WC v1 Client: Failed to clear session');
     }
   }
 
@@ -551,17 +648,120 @@ export class WalletConnectV1Client extends EventEmitter {
    */
   async loadSession(topic: string): Promise<WalletConnectV1SessionData | null> {
     try {
-      const key = `${WC_V1_SESSION_STORAGE_KEY}:${topic}`;
-      const stored = await AsyncStorage.getItem(key);
+      const stored = await AsyncStorage.getItem(
+        `${WC_V1_SESSION_STORAGE_KEY}:${topic}`
+      );
 
       if (!stored) {
         return null;
       }
 
-      const sessionData = JSON.parse(stored) as WalletConnectV1StoredSession;
-      return sessionData;
-    } catch (error) {
-      console.error('WC v1 Client: Failed to load session', error);
+      const storageKey = `${WC_V1_SESSION_STORAGE_KEY}:${topic}`;
+
+      let persisted: WalletConnectV1LegacyPersistedSession;
+      try {
+        const parsed: unknown = JSON.parse(stored);
+        // Must be a non-null OBJECT: `JSON.parse('null')`, a bare string and an
+        // array all parse cleanly and then throw on the first property access.
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          throw new Error('v1 session entry is not an object');
+        }
+        const candidate = parsed as WalletConnectV1LegacyPersistedSession;
+        // Same admission rule as boot restore — shared so the two paths cannot
+        // drift apart (this one used to skip validation entirely).
+        if (!isRestorableV1Session(candidate)) {
+          throw new Error('v1 session entry is missing required fields');
+        }
+        persisted = candidate;
+      } catch {
+        // Unparseable rows can never restore a session but CAN still hold a
+        // pre-PLAN-260 inline key, so retaining one would leave that key at
+        // rest indefinitely. Delete it — nothing recoverable is lost. Mirrors
+        // the restore path.
+        console.warn('WC v1 Client: Deleting malformed session entry');
+        await deleteV1Session(topic);
+        return null;
+      }
+
+      // The key comes from secure storage. A legacy row may still carry it
+      // inline (pre-PLAN-260); prefer the secure copy and fall back to the
+      // legacy field so an un-migrated row still loads.
+      //
+      // This path MIGRATES AND DRAINS too, rather than leaving that to boot
+      // restore. It is reachable independently — a v1 deep link connects
+      // through here, and boot restore may never run if WalletConnect
+      // initialization failed earlier — so relying on the restore path alone
+      // would let a legacy key sit in AsyncStorage indefinitely.
+      let sessionKey: string | null = null;
+      try {
+        sessionKey = await readSessionKey(topic);
+      } catch {
+        // Android keystore desync: the key is unrecoverable, so the session is
+        // too. Fail closed to "no session" and let the user re-pair (DR-4), and
+        // DELETE the row — otherwise a legacy inline key would stay at rest
+        // forever on a path that can be reached without boot restore ever
+        // running. Mirrors dropV1Session.
+        console.error('WC v1 Client: Failed to load session key');
+        await deleteV1Session(topic);
+        return null;
+      }
+
+      const hasInlineKey =
+        persisted.key !== undefined &&
+        persisted.key !== null &&
+        persisted.key !== '';
+      const seedableKey = isValidV1SessionKey(persisted.key)
+        ? persisted.key
+        : null;
+      let secureKeyConfirmed = sessionKey !== null;
+
+      if (!sessionKey && seedableKey) {
+        try {
+          await writeSessionKey(topic, seedableKey);
+          secureKeyConfirmed = true;
+        } catch {
+          // ACCEPTED RESIDUAL (same trade-off as the failed row-rewrite below):
+          // secure storage is unavailable, so the inline key is the ONLY copy
+          // left and it stays at rest in AsyncStorage until a later attempt
+          // succeeds. The alternative is deleting the row, which would destroy
+          // a perfectly working session because secure storage hiccupped —
+          // strictly worse, and no better than the pre-migration status quo,
+          // where the key lived there anyway.
+          console.error('WC v1 Client: Failed to secure session key');
+        }
+        sessionKey = seedableKey;
+      }
+
+      if (!sessionKey) {
+        // Parsable but unusable: no secure key and no seedable inline key. This
+        // also catches valid JSON of the WRONG SHAPE (a bare string, an array),
+        // which slips past the parse guard above while potentially still
+        // containing key-shaped text. Restore drops such rows via
+        // dropV1Session; do the same here so the two paths stay symmetric and
+        // nothing is left at rest.
+        console.warn('WC v1 Client: Deleting unusable session entry');
+        await deleteV1Session(topic);
+        return null;
+      }
+
+      // Same rule as boot restore: drain whenever the row still carries a key
+      // AND the secure copy is confirmed — never strip the only copy.
+      if (hasInlineKey && secureKeyConfirmed) {
+        try {
+          const { key: _dropped, ...keyless } = persisted;
+          await AsyncStorage.setItem(storageKey, JSON.stringify(keyless));
+        } catch {
+          console.error('WC v1 Client: Failed to strip inline session key');
+        }
+      }
+
+      return { ...persisted, key: sessionKey };
+    } catch {
+      console.error('WC v1 Client: Failed to load session');
       return null;
     }
   }
@@ -569,7 +769,10 @@ export class WalletConnectV1Client extends EventEmitter {
   /**
    * Remove stale v1 sessions from storage to ensure we only track the active one
    */
-  private async removeStaleSessions(activeKey: string): Promise<void> {
+  private async removeStaleSessions(
+    activeKey: string,
+    activeTopic: string
+  ): Promise<void> {
     try {
       const allKeys = await AsyncStorage.getAllKeys();
       const staleKeys = allKeys.filter(
@@ -577,10 +780,30 @@ export class WalletConnectV1Client extends EventEmitter {
       );
 
       if (staleKeys.length > 0) {
-        await AsyncStorage.multiRemove(staleKeys);
+        // Central cleanup so pruned rows take their queued requests with them.
+        // dropSlot is FALSE — the ACTIVE session survives and owns the slot.
+        await deleteV1Sessions(staleKeys, { dropSlot: false });
       }
-    } catch (error) {
-      console.error('WC v1 Client: Failed to remove stale sessions', error);
+
+      // The secure slot holds exactly one key. If it is bound to a topic we
+      // just pruned — i.e. anything other than the surviving active topic — it
+      // is now an orphan and must go too, or it would linger in a store that
+      // cannot be enumerated. Topic-conditional, so the ACTIVE key is never the
+      // one deleted.
+      const slot = await readSessionKeySlotRaw().catch(() => null);
+      if (slot) {
+        try {
+          const bound = JSON.parse(slot) as { topic?: unknown };
+          if (typeof bound.topic === 'string' && bound.topic !== activeTopic) {
+            await deleteSessionKeyForTopic(bound.topic);
+          }
+        } catch {
+          // Unparseable slot is useless to anyone; drop it.
+          await deleteSessionKeySlot();
+        }
+      }
+    } catch {
+      console.error('WC v1 Client: Failed to remove stale sessions');
     }
   }
 }

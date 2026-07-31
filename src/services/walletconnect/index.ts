@@ -24,7 +24,6 @@ import {
   isSessionExpired,
   detectRequestedChains,
   areAllRequiredChainsSupported,
-  truncateAddress,
   normalizeV1Metadata,
   parseAccountAddress,
 } from './utils';
@@ -34,36 +33,26 @@ import {
   ALGORAND_MAINNET_CHAIN_DATA,
 } from './config';
 import { useExperimentalStore } from '@/store/experimentalStore';
-import type { WalletConnectV1StoredSession } from '@/services/walletconnect/v1/types';
+import {
+  isRestorableV1Session,
+  type WalletConnectV1LegacyPersistedSession,
+} from '@/services/walletconnect/v1/types';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import {
   WC_V1_SESSION_STORAGE_KEY,
   resolveV1Chain,
 } from '@/services/walletconnect/v1/config';
-
-// Strip sensitive values from a string before logging (a caught error message
-// or any untrusted value). Redacts, in order:
-//  - raw and percent-encoded WalletConnect URIs (`wc:` / `wc%3A`), whose query
-//    string carries the session symKey;
-//  - any stray `symKey=` / `symKey%3D` token (raw or encoded), belt-and-braces
-//    so a symKey can never survive regardless of surrounding format;
-//  - any scheme://… URL (whole URI including the query string);
-//  - full 58-char Algorand addresses, run LAST on the whole string so an
-//    address used as a pseudo-scheme (ADDR://…) is still truncated.
-// Used only for LOGGED output — thrown errors keep the full value so
-// user-facing messages are unchanged (TASK-33).
-const redactSensitiveForLog = (message: string): string =>
-  message
-    .replace(/wc:\S+/gi, 'wc:[redacted]')
-    .replace(/wc%3[Aa]\S*/g, 'wc:[redacted]')
-    .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
-    .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
-    .replace(/[A-Z2-7]{58}/g, (addr) => truncateAddress(addr));
-
-// Convenience wrapper for the common `catch (error) { console.error(msg, error) }`
-// pattern: derive the message string and redact it before logging.
-const redactError = (error: unknown): string =>
-  redactSensitiveForLog(error instanceof Error ? error.message : String(error));
+import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
+import {
+  readSessionKey,
+  writeSessionKey,
+  isValidV1SessionKey,
+} from '@/services/walletconnect/v1/sessionKeyStore';
+import {
+  deleteV1Session,
+  deleteV1Sessions,
+  topicFromStorageKey,
+} from '@/services/walletconnect/v1/sessionCleanup';
 
 export class WalletConnectService extends EventEmitter {
   private static instance: WalletConnectService;
@@ -110,6 +99,51 @@ export class WalletConnectService extends EventEmitter {
     }
   }
 
+  /**
+   * Drop a v1 session that cannot be restored (PLAN-260, DR-4/DR-14).
+   *
+   * Reached when the session key is unreadable (Android keystore desync), does
+   * not match the stored topic, is malformed, or is simply absent. A v1 bridge
+   * transport key is cheap to re-establish and there is nothing to recover, so
+   * the session is discarded and the user re-pairs by scanning the QR again.
+   *
+   * Also purges the QUEUED transaction requests of every topic it deletes.
+   * Startup dequeues and navigates queued requests unconditionally, so a
+   * request left behind here would land on a screen with no live session,
+   * error, and be lost — it has already been removed from the queue by then.
+   */
+  private async dropV1Session(
+    activeStorageKey: string,
+    topic: string,
+    sessions: { key: string }[]
+  ): Promise<void> {
+    try {
+      const keysToRemove = sessions.map(({ key }) => key);
+      if (!keysToRemove.includes(activeStorageKey)) {
+        keysToRemove.push(activeStorageKey);
+      }
+      if (!keysToRemove.includes(`${WC_V1_SESSION_STORAGE_KEY}:${topic}`)) {
+        keysToRemove.push(`${WC_V1_SESSION_STORAGE_KEY}:${topic}`);
+      }
+
+      // dropSlot is UNCONDITIONAL here: this removes EVERY v1 row, so no
+      // session survives whose key could be destroyed, and a conditional delete
+      // would strand the slot whenever it was bound to a stale row.
+      const dropped = await deleteV1Sessions(keysToRemove, { dropSlot: true });
+      if (dropped > 0) {
+        console.warn(
+          'Dropped queued v1 requests for an unrestorable session:',
+          dropped
+        );
+      }
+    } catch (error) {
+      console.error(
+        'Failed to drop unrestorable v1 session:',
+        redactError(error)
+      );
+    }
+  }
+
   private async loadV1Sessions(): Promise<void> {
     try {
       // Skip v1 session restoration in extension mode - WebSocket connections can be problematic
@@ -124,8 +158,10 @@ export class WalletConnectService extends EventEmitter {
           key.startsWith(WC_V1_SESSION_STORAGE_KEY)
         );
         if (v1SessionKeys.length > 0) {
-          await AsyncStorage.multiRemove(v1SessionKeys);
+          await deleteV1Sessions(v1SessionKeys, { dropSlot: true });
           console.log('Cleared stale v1 sessions in extension mode');
+        } else {
+          await deleteV1Sessions([], { dropSlot: true });
         }
         return;
       }
@@ -151,21 +187,55 @@ export class WalletConnectService extends EventEmitter {
             }
 
             try {
-              const parsed = JSON.parse(raw) as WalletConnectV1StoredSession;
-              return { key, session: parsed };
+              const parsed: unknown = JSON.parse(raw);
+
+              // Must be a non-null OBJECT. `JSON.parse('null')` and a bare
+              // string/array all parse fine, then throw on the first property
+              // access downstream — and that throw happens inside the filter
+              // below, which would abort ALL v1 restoration over one corrupt
+              // row. Treat a wrong shape exactly like unparseable: delete it.
+              if (
+                typeof parsed !== 'object' ||
+                parsed === null ||
+                Array.isArray(parsed)
+              ) {
+                throw new Error('v1 session entry is not an object');
+              }
+
+              // Must also carry the metadata a reconnect actually needs. A
+              // shape-valid but INCOMPLETE row (say `{connected:true,
+              // updatedAt:<now>}`) would otherwise win the freshest-wins
+              // selection below, have no key, and take dropV1Session's
+              // delete-everything path down on top of a perfectly good session.
+              // Reject it here so it is deleted alone and never competes.
+              const candidate = parsed as WalletConnectV1LegacyPersistedSession;
+              if (!isRestorableV1Session(candidate)) {
+                throw new Error('v1 session entry is missing required fields');
+              }
+
+              return { key, session: candidate };
             } catch (error) {
+              // A row we cannot parse can never restore a session, but it CAN
+              // still contain a valid inline key from before PLAN-260 — and
+              // being skipped, it would escape both the migration and the
+              // stale-row prune, leaving that key in AsyncStorage forever.
+              // Delete it outright: there is nothing recoverable to lose.
               console.warn(
-                'Skipping malformed v1 session entry',
+                'Deleting unusable v1 session entry',
                 redactSensitiveForLog(key),
                 redactError(error)
               );
+              // Central cleanup: metadata AND queued requests. This path
+              // bypasses dropV1Session entirely — and when EVERY row is
+              // invalid, dropV1Session never runs at all.
+              await deleteV1Session(topicFromStorageKey(key));
               return null;
             }
           })
         )
       ).filter(Boolean) as {
         key: string;
-        session: WalletConnectV1StoredSession;
+        session: WalletConnectV1LegacyPersistedSession;
       }[];
 
       if (sessions.length === 0) {
@@ -194,15 +264,6 @@ export class WalletConnectService extends EventEmitter {
         return;
       }
 
-      // Remove stale entries (including unconnected ones) to avoid restoring incorrect sessions later
-      const staleKeys = sessions
-        .map(({ key }) => key)
-        .filter((key) => key !== latestEntry.key);
-
-      if (staleKeys.length > 0) {
-        await AsyncStorage.multiRemove(staleKeys);
-      }
-
       const { session } = latestEntry;
 
       // Extract topic from storage key
@@ -211,11 +272,118 @@ export class WalletConnectService extends EventEmitter {
         ''
       );
 
+      // Resolve the session key for the SELECTED session only (DR-7). This is a
+      // selected-session transaction, not a generic migrate-and-delete: the
+      // AsyncStorage row must SURVIVE minus its key, because it carries the
+      // routing metadata reconnection needs.
+      let sessionKey: string | null = null;
+      try {
+        sessionKey = await readSessionKey(topic);
+      } catch {
+        // Android keystore desync (platform/mobile/secureStorage.ts): the guard
+        // throws when a recorded item is present but unreadable. A bridge
+        // transport key is cheap to re-establish and there is nothing to
+        // recover, so drop the session and force a re-pair rather than letting
+        // this escape into app startup (DR-4).
+        console.error('Dropping v1 session: session key unreadable');
+        await this.dropV1Session(latestEntry.key, topic, sessions);
+        return;
+      }
+
+      // Two DIFFERENT questions, deliberately not conflated:
+      //   hasInlineKey — is there a `key` property on the row that must be
+      //     drained? True even for a malformed value: a corrupt or truncated
+      //     key is still key-shaped material sitting in AsyncStorage, and
+      //     leaving it there because it failed validation would be absurd.
+      //   seedableKey  — is that value good enough to seed secure storage and
+      //     restore the session with?
+      const hasInlineKey =
+        session.key !== undefined && session.key !== null && session.key !== '';
+      const seedableKey = isValidV1SessionKey(session.key) ? session.key : null;
+
+      // Whether the SECURE slot is confirmed to hold this topic's key. The
+      // inline key may only be stripped when this is true — see below.
+      let secureKeyConfirmed = sessionKey !== null;
+
+      if (!sessionKey && seedableKey) {
+        // Legacy row still carrying the key inline: copy it into secure storage.
+        try {
+          await writeSessionKey(topic, seedableKey);
+          sessionKey = seedableKey;
+          secureKeyConfirmed = true;
+        } catch {
+          // ACCEPTED RESIDUAL. Could not write secure storage at all, so the
+          // inline key is the only copy and REMAINS AT REST in AsyncStorage
+          // until a later boot succeeds. Deliberate: the row is intact and
+          // carries a usable key, so the session is fully recoverable, and
+          // dropping it would destroy a working session because secure storage
+          // hiccupped. This is the pre-migration status quo, not a new leak.
+          console.error('Failed to write v1 session key to secure storage');
+          sessionKey = seedableKey;
+        }
+      }
+
+      if (!sessionKey) {
+        // No secure key and no usable legacy key: unusable (a topic mismatch, a
+        // malformed envelope, or a row that was left keyless). Restore nothing
+        // and surface no error — the user re-pairs.
+        await this.dropV1Session(latestEntry.key, topic, sessions);
+        return;
+      }
+
+      // Strip the inline key whenever the row still carries one AND the secure
+      // copy is confirmed present. Both halves of that condition are load-bearing.
+      //
+      // Not "did we just migrate?": if a previous boot wrote the secure slot and
+      // died before rewriting the row, this boot's `readSessionKey` SUCCEEDS and
+      // the migration branch above is skipped — a strip conditional on migrating
+      // would leave the key in AsyncStorage forever, defeating the entire point.
+      //
+      // But not unconditional either: if the secure write FAILED just above, the
+      // inline key is the only copy left. Stripping it would leave the next boot
+      // with keyless metadata and no secure key, and the session — which was
+      // perfectly recoverable — would be dropped. Destroying a working session
+      // to tidy up storage is the worse failure.
+      //
+      // Keyed on hasInlineKey, not seedableKey: a MALFORMED inline key must be
+      // drained too. It cannot seed secure storage, but it is still key-shaped
+      // material at rest, and skipping it because it failed validation would
+      // leave it in AsyncStorage forever.
+      if (hasInlineKey && secureKeyConfirmed) {
+        try {
+          const { key: _dropped, ...keyless } = session;
+          await AsyncStorage.setItem(latestEntry.key, JSON.stringify(keyless));
+        } catch {
+          // ACCEPTED RESIDUAL: the key remains at rest in AsyncStorage until a
+          // later boot succeeds in rewriting the row. There is no better move —
+          // the secure copy is already written and the session is usable, and
+          // the only way to remove the key right now would be to delete the row
+          // outright, which would destroy the routing metadata and the session
+          // with it. Retrying beats trading a working session for tidy storage.
+          // Deliberately NOT rolled back: the prior slot may belong to a
+          // different topic, so restoring it would break THIS session too.
+          console.error('Failed to strip inline v1 session key from storage');
+        }
+      }
+
+      // Prune the OTHER rows only after the selected session is safely
+      // migrated, so a failure above cannot destroy a row we might still want.
+      const staleKeys = sessions
+        .map(({ key }) => key)
+        .filter((key) => key !== latestEntry.key);
+
+      if (staleKeys.length > 0) {
+        // Central cleanup so the pruned rows' queued requests go too. dropSlot
+        // is FALSE: the selected session survives and its key must not be
+        // touched — deleteV1Sessions only reaps queues and metadata here.
+        await deleteV1Sessions(staleKeys, { dropSlot: false });
+      }
+
       await v1Client.connect({
         topic,
         version: '1',
         bridge: session.bridge,
-        key: session.key,
+        key: sessionKey,
       });
 
       // Set up call_request listener on DeepLinkService
