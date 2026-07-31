@@ -144,21 +144,6 @@ export interface WalletConnectV1SocketMessage {
 /**
  * Session storage structure
  */
-export interface WalletConnectV1StoredSession {
-  connected: boolean;
-  accounts: string[];
-  chainId: number;
-  bridge: string;
-  key: string;
-  clientId: string;
-  clientMeta: WalletConnectV1PeerMeta | null;
-  peerId: string;
-  peerMeta: WalletConnectV1PeerMeta | null;
-  handshakeId: number;
-  handshakeTopic: string;
-  updatedAt?: number;
-}
-
 /**
  * What actually gets persisted to AsyncStorage as of PLAN-260 (DR-11).
  *
