@@ -402,8 +402,12 @@ export class DeepLinkService {
       await this.navigateToRoute({
         screen: 'WalletConnectError',
         params: {
+          // The pairing URI is NOT passed through. A v2 URI carries `symKey`
+          // and a v1 URI carries `key` — the session key itself — and route
+          // params live in navigation state, which is serialized and inspectable
+          // (same class as TASK-224, mnemonics through route params). Nothing
+          // read it: WalletConnectErrorScreen uses `error` only.
           error: error instanceof Error ? error.message : 'Failed to connect',
-          uri: url,
         },
       });
 
@@ -490,8 +494,9 @@ export class DeepLinkService {
         this.navigateToRoute({
           screen: 'WalletConnectError',
           params: {
+            // See above: the v1 pairing URI carries `key=<hex>`, the symmetric
+            // session key, and must not reach navigation state.
             error: error instanceof Error ? error.message : 'Connection failed',
-            uri: url,
           },
         });
       });
