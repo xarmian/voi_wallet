@@ -370,6 +370,48 @@ class TransactionRequestQueueService {
       }
     });
   }
+
+  /**
+   * Remove every queued request belonging to a topic (PLAN-260, DR-14).
+   *
+   * Called when a WalletConnect session is DROPPED — e.g. a v1 session whose
+   * key is unreadable or no longer matches. Without this, a queued request for
+   * that topic survives, gets dequeued unconditionally at startup, finds no
+   * approved live session, and errors out — having already been removed from
+   * the queue, so the request is simply lost behind a confusing message.
+   *
+   * Returns the number of requests dropped, so callers can log it.
+   */
+  async removeByTopic(topic: string): Promise<number> {
+    return this.withLock(async () => {
+      try {
+        const queue = await this.getAllInternal();
+        const filteredQueue = queue.filter(
+          (request) => request.topic !== topic
+        );
+        const removed = queue.length - filteredQueue.length;
+
+        if (removed > 0) {
+          await AsyncStorage.setItem(
+            QUEUE_STORAGE_KEY,
+            JSON.stringify(filteredQueue)
+          );
+          console.log(
+            '[TransactionRequestQueue] Dropped requests for dead session:',
+            removed
+          );
+        }
+
+        return removed;
+      } catch (error) {
+        console.error(
+          '[TransactionRequestQueue] Failed to remove requests by topic:',
+          error
+        );
+        return 0;
+      }
+    });
+  }
 }
 
 export const TransactionRequestQueue =

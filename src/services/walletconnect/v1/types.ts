@@ -194,6 +194,49 @@ export type WalletConnectV1LegacyPersistedSession =
   WalletConnectV1PersistedSession & { key?: string };
 
 /**
+ * Does a persisted row carry EVERY field a reconnect needs (PLAN-260)?
+ *
+ * Lives beside the type, and is shared by both restore paths, because a
+ * validator that only one caller knows about is how the gap it guards gets
+ * reintroduced — the same scattering problem `sessionCleanup.ts` exists to fix.
+ *
+ * Partial validation is not enough. A row carrying only `bridge`,
+ * `handshakeTopic`, `accounts` and `chainId` passes a shallow check, wins the
+ * freshest-wins selection, and is then restored with an undefined `clientId`
+ * onto a dead handshake topic — an unusable session that looks live, which is
+ * worse than deleting it and asking the user to re-pair.
+ *
+ * `key` is deliberately NOT checked here: it no longer lives on the row.
+ *
+ * `connected` is checked for TYPE but not required to be `true`. The restore
+ * path deliberately falls back to unconnected rows when no connected candidate
+ * exists (`if (candidates.length === 0) candidates = sessions`), and that
+ * selection semantic predates PLAN-260. Whether an unconnected row can actually
+ * reconnect is a v1 lifecycle question, not a key-storage one — see TASK-264.
+ */
+export function isRestorableV1Session(
+  candidate: WalletConnectV1LegacyPersistedSession | null | undefined
+): boolean {
+  if (!candidate || typeof candidate !== 'object') {
+    return false;
+  }
+  return (
+    typeof candidate.connected === 'boolean' &&
+    Array.isArray(candidate.accounts) &&
+    typeof candidate.chainId === 'number' &&
+    typeof candidate.bridge === 'string' &&
+    candidate.bridge.length > 0 &&
+    typeof candidate.clientId === 'string' &&
+    candidate.clientId.length > 0 &&
+    typeof candidate.peerId === 'string' &&
+    candidate.peerId.length > 0 &&
+    typeof candidate.handshakeId === 'number' &&
+    typeof candidate.handshakeTopic === 'string' &&
+    candidate.handshakeTopic.length > 0
+  );
+}
+
+/**
  * Event types emitted by WalletConnect v1 client
  */
 export enum WalletConnectV1Event {
