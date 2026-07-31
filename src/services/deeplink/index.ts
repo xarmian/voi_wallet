@@ -11,6 +11,7 @@ import {
   parseWalletConnectV1Uri,
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
+import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 import {
   isArc0090Uri,
   parseArc0090Uri,
@@ -44,32 +45,6 @@ const redactAddress = (address?: string): string =>
   address && address.length > 6
     ? `${address.slice(0, 6)}…[redacted]`
     : '[redacted]';
-
-// Strip sensitive values from an arbitrary log string — a caught error message
-// OR untrusted deep-link input (scheme/host/path/query/params). Redacts, in
-// order:
-//  - raw and percent-encoded WalletConnect URIs (`wc:` / `wc%3A`), whose query
-//    string carries the session symKey;
-//  - any stray `symKey=` / `symKey%3D` token (raw or encoded), belt-and-braces
-//    so a symKey can never survive regardless of surrounding format;
-//  - any scheme://… URL (voi://, https://, universal links, …) — whole URI
-//    including the query string;
-//  - full 58-char Algorand addresses, run LAST on the whole string so an
-//    address used as a pseudo-scheme (ADDR://…) is still truncated.
-// Used only for LOGGED output — thrown/surfaced errors keep the full value so
-// user-facing messages are unchanged (TASK-33).
-const redactSensitiveForLog = (message: string): string =>
-  message
-    .replace(/wc:\S+/gi, 'wc:[redacted]')
-    .replace(/wc%3[Aa]\S*/g, 'wc:[redacted]')
-    .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
-    .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
-    .replace(/[A-Z2-7]{58}/g, (addr) => redactAddress(addr));
-
-// Convenience wrapper for the common `catch (error) { console.error(msg, error) }`
-// pattern: derive the message string and redact it before logging.
-const redactError = (error: unknown): string =>
-  redactSensitiveForLog(error instanceof Error ? error.message : String(error));
 
 // Summarize a notification for logs: keep non-sensitive routing fields but
 // truncate the sender/receiver addresses and redact the amount.

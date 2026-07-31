@@ -35,6 +35,8 @@ import {
   DEFAULT_CHAIN_ID,
   WC_V1_SESSION_STORAGE_KEY,
 } from './config';
+import { redactError } from '@/utils/logRedaction';
+import { describePeerMethod } from './peerLabels';
 
 export class WalletConnectV1Client extends EventEmitter {
   private static instance: WalletConnectV1Client | null = null;
@@ -58,12 +60,11 @@ export class WalletConnectV1Client extends EventEmitter {
   async connect(config: WalletConnectV1SessionConfig): Promise<void> {
     try {
       if (this.sessionData?.connected) {
+        // `peerId` and `topic` are both peer/URI supplied — the topic arrives
+        // straight from a scanned QR or deep link and is never validated — so
+        // neither is echoed at all. The message alone carries the diagnostic.
         console.warn(
-          'WC v1 Client: Replacing active session with new connection request',
-          {
-            existingSession: this.sessionData.peerId,
-            newTopic: config.topic,
-          }
+          'WC v1 Client: Replacing active session with new connection request'
         );
         // Disconnect the old session's WebSocket
         if (this.socket) {
@@ -97,7 +98,7 @@ export class WalletConnectV1Client extends EventEmitter {
       });
 
       this.socket.onError((error) => {
-        console.error('WC v1 Client: WebSocket error', error);
+        console.error('WC v1 Client: WebSocket error', redactError(error));
         // Only emit error if we don't have an active session
         // Reconnection errors during active sessions are handled internally
         if (!this.sessionData?.connected) {
@@ -143,14 +144,17 @@ export class WalletConnectV1Client extends EventEmitter {
             storedSession.chainId
           );
         } catch (error) {
-          console.error('WC v1 Client: Failed to send session update', error);
+          console.error(
+            'WC v1 Client: Failed to send session update',
+            redactError(error)
+          );
         }
       } else {
         // Fresh connection: subscribe to handshake topic
         await this.socket.subscribeToTopic(config.topic);
       }
     } catch (error) {
-      console.error('WC v1 Client: Connection failed', error);
+      console.error('WC v1 Client: Connection failed');
       this.emit(WalletConnectV1Event.ERROR, error);
       throw error;
     }
@@ -218,7 +222,10 @@ export class WalletConnectV1Client extends EventEmitter {
       // Store session
       await this.storeSession();
     } catch (error) {
-      console.error('WC v1 Client: Failed to approve session', error);
+      console.error(
+        'WC v1 Client: Failed to approve session',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -252,7 +259,10 @@ export class WalletConnectV1Client extends EventEmitter {
       // Disconnect
       await this.disconnect();
     } catch (error) {
-      console.error('WC v1 Client: Failed to reject session', error);
+      console.error(
+        'WC v1 Client: Failed to reject session',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -290,7 +300,10 @@ export class WalletConnectV1Client extends EventEmitter {
       // Store updated session
       await this.storeSession();
     } catch (error) {
-      console.error('WC v1 Client: Failed to update session', error);
+      console.error(
+        'WC v1 Client: Failed to update session',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -322,7 +335,10 @@ export class WalletConnectV1Client extends EventEmitter {
       const responseTopic = this.sessionData.peerId || this.config.topic;
       this.socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
-      console.error('WC v1 Client: Failed to approve request', error);
+      console.error(
+        'WC v1 Client: Failed to approve request',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -351,7 +367,10 @@ export class WalletConnectV1Client extends EventEmitter {
       const responseTopic = this.sessionData?.peerId || this.config.topic;
       this.socket.publishToTopic(responseTopic, encryptedResponse);
     } catch (error) {
-      console.error('WC v1 Client: Failed to reject request', error);
+      console.error(
+        'WC v1 Client: Failed to reject request',
+        redactError(error)
+      );
       throw error;
     }
   }
@@ -429,7 +448,17 @@ export class WalletConnectV1Client extends EventEmitter {
       } else if (isAlgoSignTxnRequest(request)) {
         await this.handleSignTxnRequest(request);
       } else {
-        console.warn('WC v1 Client: Unsupported method', request.method);
+        // `request.method` is arbitrary peer-controlled text. Pattern
+        // redaction is NOT enough here: a peer can set `method` to the bare
+        // session key, and bare hex is deliberately preserved by the redactor
+        // (genesis hashes / txids). Truncation would not help either — a
+        // truncated key is still leaked key material. So the value is only ever
+        // echoed when it matches a KNOWN method name; anything else is reported
+        // by length alone, which is all the diagnostics actually need.
+        console.warn(
+          'WC v1 Client: Unsupported method',
+          describePeerMethod(request.method)
+        );
         // Send error response for unsupported methods
         await this.rejectRequest(
           request.id,
@@ -437,7 +466,10 @@ export class WalletConnectV1Client extends EventEmitter {
         );
       }
     } catch (error) {
-      console.error('WC v1 Client: Failed to handle message', error);
+      console.error(
+        'WC v1 Client: Failed to handle message',
+        redactError(error)
+      );
       this.emit(WalletConnectV1Event.ERROR, error);
     }
   }
@@ -526,7 +558,7 @@ export class WalletConnectV1Client extends EventEmitter {
       await AsyncStorage.setItem(key, JSON.stringify(storedSession));
       await this.removeStaleSessions(key);
     } catch (error) {
-      console.error('WC v1 Client: Failed to store session', error);
+      console.error('WC v1 Client: Failed to store session');
     }
   }
 
@@ -542,7 +574,7 @@ export class WalletConnectV1Client extends EventEmitter {
       const key = `${WC_V1_SESSION_STORAGE_KEY}:${this.config.topic}`;
       await AsyncStorage.removeItem(key);
     } catch (error) {
-      console.error('WC v1 Client: Failed to clear session', error);
+      console.error('WC v1 Client: Failed to clear session');
     }
   }
 
@@ -561,7 +593,7 @@ export class WalletConnectV1Client extends EventEmitter {
       const sessionData = JSON.parse(stored) as WalletConnectV1StoredSession;
       return sessionData;
     } catch (error) {
-      console.error('WC v1 Client: Failed to load session', error);
+      console.error('WC v1 Client: Failed to load session');
       return null;
     }
   }
@@ -580,7 +612,7 @@ export class WalletConnectV1Client extends EventEmitter {
         await AsyncStorage.multiRemove(staleKeys);
       }
     } catch (error) {
-      console.error('WC v1 Client: Failed to remove stale sessions', error);
+      console.error('WC v1 Client: Failed to remove stale sessions');
     }
   }
 }

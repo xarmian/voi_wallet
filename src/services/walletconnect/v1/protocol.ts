@@ -34,7 +34,7 @@ export function parseEncryptedPayload(
       iv: payload.iv,
     };
   } catch (error) {
-    console.error('WC v1 Protocol: Failed to parse encrypted payload', error);
+    console.error('WC v1 Protocol: Failed to parse encrypted payload');
     return null;
   }
 }
@@ -58,20 +58,28 @@ export async function decryptRequest(
         return null;
       }
 
+      // SECURITY (PLAN-260 / TASK-263): this used to echo the first 200 chars of
+      // `decrypted`. That content is entirely PEER-CONTROLLED, and the connected
+      // dApp shares the session key — so it could place the key (or anything
+      // else) into device logs and crash reports simply by sending a malformed
+      // request. `actualFields` is dropped for the same reason: object KEYS are
+      // peer-chosen strings too. The boolean shape flags carry the diagnostic
+      // value without reflecting any peer bytes.
       console.error('WC v1 Protocol: Invalid JSON-RPC request structure', {
-        decryptedMessage: decrypted.substring(0, 200), // First 200 chars
         hasId: !!request.id,
         hasJsonrpc: !!request.jsonrpc,
         hasMethod: !!request.method,
-        actualFields: Object.keys(request),
       });
       return null;
     }
 
     return request;
   } catch (error) {
+    // Decryption operates directly on the session key, so no error text is
+    // reflected here at all (DR-13) — a raw message is not provably key-free.
+    // The payload lengths are our own measurements, not peer bytes, and are what
+    // actually distinguish a truncated payload from a wrong-key HMAC failure.
     console.error('WC v1 Protocol: Failed to decrypt request', {
-      error: error instanceof Error ? error.message : String(error),
       payloadDataLength: encryptedPayload.data.length,
       payloadHmacLength: encryptedPayload.hmac.length,
       payloadIvLength: encryptedPayload.iv.length,
@@ -92,7 +100,7 @@ export async function encryptResponse(
     const encrypted = await encryptMessage(responseJson, key);
     return JSON.stringify(encrypted);
   } catch (error) {
-    console.error('WC v1 Protocol: Failed to encrypt response', error);
+    console.error('WC v1 Protocol: Failed to encrypt response');
     throw error;
   }
 }

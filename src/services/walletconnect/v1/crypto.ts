@@ -186,7 +186,7 @@ export async function encryptMessage(
       iv: ivHex,
     };
   } catch (error) {
-    console.error('WC v1 Crypto: Encryption failed', error);
+    console.error('WC v1 Crypto: Encryption failed');
     throw new Error(
       `Encryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
@@ -238,7 +238,7 @@ export async function decryptMessage(
     // Convert bytes back to string
     return uint8ArrayToString(decrypted);
   } catch (error) {
-    console.error('WC v1 Crypto: Decryption failed', error);
+    console.error('WC v1 Crypto: Decryption failed');
     throw new Error(
       `Decryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     );

@@ -24,7 +24,6 @@ import {
   isSessionExpired,
   detectRequestedChains,
   areAllRequiredChainsSupported,
-  truncateAddress,
   normalizeV1Metadata,
   parseAccountAddress,
 } from './utils';
@@ -40,30 +39,7 @@ import {
   WC_V1_SESSION_STORAGE_KEY,
   resolveV1Chain,
 } from '@/services/walletconnect/v1/config';
-
-// Strip sensitive values from a string before logging (a caught error message
-// or any untrusted value). Redacts, in order:
-//  - raw and percent-encoded WalletConnect URIs (`wc:` / `wc%3A`), whose query
-//    string carries the session symKey;
-//  - any stray `symKey=` / `symKey%3D` token (raw or encoded), belt-and-braces
-//    so a symKey can never survive regardless of surrounding format;
-//  - any scheme://… URL (whole URI including the query string);
-//  - full 58-char Algorand addresses, run LAST on the whole string so an
-//    address used as a pseudo-scheme (ADDR://…) is still truncated.
-// Used only for LOGGED output — thrown errors keep the full value so
-// user-facing messages are unchanged (TASK-33).
-const redactSensitiveForLog = (message: string): string =>
-  message
-    .replace(/wc:\S+/gi, 'wc:[redacted]')
-    .replace(/wc%3[Aa]\S*/g, 'wc:[redacted]')
-    .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
-    .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
-    .replace(/[A-Z2-7]{58}/g, (addr) => truncateAddress(addr));
-
-// Convenience wrapper for the common `catch (error) { console.error(msg, error) }`
-// pattern: derive the message string and redact it before logging.
-const redactError = (error: unknown): string =>
-  redactSensitiveForLog(error instanceof Error ? error.message : String(error));
+import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 
 export class WalletConnectService extends EventEmitter {
   private static instance: WalletConnectService;

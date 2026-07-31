@@ -12,6 +12,7 @@ import {
   WS_RECONNECT_DELAY,
   WS_MAX_RECONNECT_ATTEMPTS,
 } from './config';
+import { redactError } from '@/utils/logRedaction';
 
 export type WebSocketMessageHandler = (payload: string) => void;
 export type WebSocketErrorHandler = (error: Error) => void;
@@ -107,7 +108,7 @@ export class WalletConnectV1WebSocket {
 
           console.error(
             'WC v1 WebSocket: Error establishing connection',
-            error
+            redactError(error)
           );
           this.errorHandler?.(errorObj);
           reject(errorObj);
@@ -129,7 +130,10 @@ export class WalletConnectV1WebSocket {
           }
         };
       } catch (error) {
-        console.error('WC v1 WebSocket: Failed to create socket', error);
+        console.error(
+          'WC v1 WebSocket: Failed to create socket',
+          redactError(error)
+        );
         reject(error);
       }
     });
@@ -312,11 +316,20 @@ export class WalletConnectV1WebSocket {
         if (handler) {
           handler(message.payload);
         } else {
-          console.warn('WC v1 WebSocket: No handler for topic', message.topic);
+          // `message.topic` is peer-supplied and must not be echoed (a peer
+          // can put anything there, including a session key). The number of
+          // registered handlers is the part that actually diagnoses this —
+          // zero means we never subscribed, non-zero means a topic mismatch.
+          console.warn('WC v1 WebSocket: No handler for topic', {
+            registeredHandlers: this.messageHandlers.size,
+          });
         }
       }
     } catch (error) {
-      console.error('WC v1 WebSocket: Failed to parse message', error);
+      console.error(
+        'WC v1 WebSocket: Failed to parse message',
+        redactError(error)
+      );
       this.errorHandler?.(
         error instanceof Error ? error : new Error('Failed to parse message')
       );
@@ -343,7 +356,10 @@ export class WalletConnectV1WebSocket {
 
     this.reconnectTimeout = setTimeout(() => {
       this.connect().catch((error) => {
-        console.error('WC v1 WebSocket: Reconnection failed', error);
+        console.error(
+          'WC v1 WebSocket: Reconnection failed',
+          redactError(error)
+        );
       });
     }, WS_RECONNECT_DELAY * this.reconnectAttempts);
   }
