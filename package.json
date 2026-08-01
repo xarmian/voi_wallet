@@ -21,7 +21,6 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "@expo/cli": "^54.0.8",
     "@gorhom/bottom-sheet": "^5.2.6",
     "@ledgerhq/errors": "^6.25.0",
     "@ledgerhq/hw-app-algorand": "^6.31.6",
@@ -43,7 +42,6 @@
     "@walletconnect/universal-provider": "^2.21.8",
     "@walletconnect/utils": "^2.21.8",
     "algosdk": "^3.4.0",
-    "babel-preset-expo": "~54.0.3",
     "base-64": "1.0.0",
     "buffer": "^6.0.3",
     "crypto-js": "^4.2.0",
@@ -111,6 +109,7 @@
     "@typescript-eslint/parser": "^8.43.0",
     "babel-plugin-react-compiler": "1.0.0",
     "babel-plugin-transform-remove-console": "6.9.4",
+    "babel-preset-expo": "~54.0.3",
     "eslint": "^9.35.0",
     "eslint-config-expo": "57.0.0",
     "eslint-config-prettier": "^10.1.8",
