@@ -13,8 +13,9 @@ import { useNavigation, RouteProp, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { PieChart } from 'react-native-chart-kit';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { WalletStackParamList } from '@/navigation/AppNavigator';
+import { computePieSlices } from '@/utils/pieChartGeometry';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import {
@@ -62,6 +63,78 @@ interface NetworkStats {
 }
 
 const screenWidth = Dimensions.get('window').width;
+
+/**
+ * Categorical chart palette: these encode series identity, not a semantic theme
+ * role, so they stay independent of the active palette. Every entry must be a
+ * distinct hue — index 6 previously repeated index 0's '#FF6384', which
+ * silently gave a seventh slice the first slice's colour.
+ *
+ * Exported so the distinctness invariant can be asserted in a test.
+ */
+export const ASSET_DISTRIBUTION_COLORS = [
+  '#FF6384',
+  '#36A2EB',
+  '#FFCE56',
+  '#4BC0C0',
+  '#9966FF',
+  '#FF9F40',
+  '#2ECC71',
+  '#C9CBCF',
+];
+
+// Asset-distribution pie layout. These reproduce the resolved geometry of the
+// react-native-chart-kit `PieChart` this replaced, measured from its emitted
+// SVG rather than assumed: radius = height / 2.5, and the wedge group is
+// translated to (width / 2 / 2 + paddingLeft, height / 2) — deliberately
+// left-of-centre, because chart-kit reserved the right half for its own legend.
+// Ours stays hand-rolled below the chart, so the offset is kept purely for
+// visual parity.
+const PIE_CHART_WIDTH = screenWidth - 60;
+const PIE_CHART_HEIGHT = 220;
+const PIE_CHART_PADDING_LEFT = 15;
+const PIE_RADIUS = PIE_CHART_HEIGHT / 2.5;
+const PIE_CENTER_X = PIE_CHART_WIDTH / 4 + PIE_CHART_PADDING_LEFT;
+const PIE_CENTER_Y = PIE_CHART_HEIGHT / 2;
+
+/**
+ * Asset-distribution pie. Slice geometry comes from the pure `computePieSlices`
+ * helper; this component only maps descriptors onto SVG elements and colours
+ * them from the distribution, in array order, so the hand-rolled legend below
+ * stays aligned with the wedges.
+ *
+ * Exported for the render smoke test.
+ */
+export function AssetDistributionPie({ data }: { data: AssetDistribution[] }) {
+  const slices = computePieSlices({
+    values: data.map((item) => item.population),
+    radius: PIE_RADIUS,
+    cx: PIE_CENTER_X,
+    cy: PIE_CENTER_Y,
+  });
+
+  return (
+    <Svg width={PIE_CHART_WIDTH} height={PIE_CHART_HEIGHT}>
+      {slices.map((slice) =>
+        slice.isFullCircle ? (
+          <Circle
+            key={slice.index}
+            cx={PIE_CENTER_X}
+            cy={PIE_CENTER_Y}
+            r={PIE_RADIUS}
+            fill={data[slice.index].color}
+          />
+        ) : (
+          <Path
+            key={slice.index}
+            d={slice.path}
+            fill={data[slice.index].color}
+          />
+        )
+      )}
+    </Svg>
+  );
+}
 
 export default function AccountInfoScreen() {
   const [refreshing, setRefreshing] = useState(false);
@@ -269,18 +342,7 @@ export default function AccountInfoScreen() {
     if (!multiNetworkBalance) return [];
 
     const data: AssetDistribution[] = [];
-    // Categorical chart palette: these encode series identity, not a semantic
-    // theme role, so they stay independent of the active palette.
-    const colors = [
-      '#FF6384',
-      '#36A2EB',
-      '#FFCE56',
-      '#4BC0C0',
-      '#9966FF',
-      '#FF9F40',
-      '#FF6384',
-      '#C9CBCF',
-    ];
+    const colors = ASSET_DISTRIBUTION_COLORS;
     let colorIndex = 0;
 
     // Calculate total portfolio value first
@@ -780,22 +842,7 @@ export default function AccountInfoScreen() {
             >
               <Text style={styles.cardTitle}>Asset Distribution</Text>
               <View style={styles.pieChartWrapper}>
-                <PieChart
-                  data={assetDistribution}
-                  width={screenWidth - 60}
-                  height={220}
-                  chartConfig={{
-                    backgroundColor: 'transparent',
-                    backgroundGradientFrom: 'transparent',
-                    backgroundGradientTo: 'transparent',
-                    color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-                  }}
-                  accessor="population"
-                  backgroundColor="transparent"
-                  paddingLeft="15"
-                  hasLegend={false}
-                  absolute
-                />
+                <AssetDistributionPie data={assetDistribution} />
               </View>
               <ScrollView
                 style={styles.legendScrollContainer}
