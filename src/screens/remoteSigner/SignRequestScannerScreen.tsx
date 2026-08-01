@@ -26,7 +26,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Camera } from 'expo-camera';
-import jsQR from 'jsqr';
+import { jsQR } from '@/utils/jsqrLoader';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
@@ -220,7 +220,17 @@ export default function SignRequestScannerScreen() {
           ctx.drawImage(image, 0, 0);
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-          const code = jsQR(imageData.data, imageData.width, imageData.height);
+          // Web-only path (this whole handler is DOM-bound and reachable only
+          // behind the `Platform.OS === 'web'` guards at :53 and in the render
+          // switch below). On native `jsQR` is `null` — jsqr is not bundled
+          // there (TASK-210) — so the optional call yields `undefined` and
+          // falls through to the "no QR code found" branch rather than
+          // throwing.
+          const code = jsQR?.(
+            imageData.data,
+            imageData.width,
+            imageData.height
+          );
           if (code?.data) {
             processQRData(code.data);
           } else {

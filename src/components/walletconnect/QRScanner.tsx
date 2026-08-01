@@ -23,7 +23,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { getFromClipboard } from '@/utils/clipboard';
-import jsQR from 'jsqr';
+import { jsQR } from '@/utils/jsqrLoader';
 import { CameraView, Camera } from 'expo-camera';
 
 // Cross-platform alert helper
@@ -80,11 +80,15 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
     }
   }, []);
 
-  // Scan QR code from image data using jsQR
+  // Scan QR code from image data using jsQR. Web-only: every caller is behind
+  // a `Platform.OS === 'web'` guard (see `handleScreenCapture` below), and on
+  // native `jsQR` is `null` because jsqr is not bundled there (TASK-210) —
+  // native scanning goes through expo-camera's `onBarcodeScanned`. The
+  // optional call therefore yields `undefined`, handled as "no QR code found".
   const scanQRFromImageData = useCallback(
     (imageData: ImageData): string | null => {
       try {
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        const code = jsQR?.(imageData.data, imageData.width, imageData.height);
         return code?.data || null;
       } catch (e) {
         console.error('jsQR error:', e);
