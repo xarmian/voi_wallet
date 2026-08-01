@@ -46,8 +46,6 @@ interface AssetDistribution {
   name: string;
   population: number;
   color: string;
-  legendFontColor: string;
-  legendFontSize: number;
   networkBadge?: string; // Optional network indicator for unmapped assets
   percentage: number; // Percentage of total portfolio
   assetSymbol: string; // Symbol for display in detailed list
@@ -381,8 +379,6 @@ export default function AccountInfoScreen() {
             name: displayName,
             population: Math.round(assetValue * 100) / 100,
             color: colors[colorIndex % colors.length],
-            legendFontColor: styles.chartText.color,
-            legendFontSize: 11,
             networkBadge,
             percentage,
             assetSymbol,
@@ -395,7 +391,7 @@ export default function AccountInfoScreen() {
 
     // Sort by value descending
     return data.sort((a, b) => b.population - a.population);
-  }, [multiNetworkBalance, calculateAssetValue, styles.chartText.color]);
+  }, [multiNetworkBalance, calculateAssetValue]);
 
   const getTotalUsdValue = useCallback((): string => {
     if (!multiNetworkBalance) return formatCurrency(0);
@@ -1027,9 +1023,6 @@ const createStyles = (theme: Theme) =>
     legendValue: {
       fontSize: 13,
       fontWeight: '600',
-      color: theme.colors.text,
-    },
-    chartText: {
       color: theme.colors.text,
     },
     addressContainer: {

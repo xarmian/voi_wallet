@@ -83,8 +83,6 @@ const distribution = (populations: number[]): Distribution =>
     name: `Asset ${i} (${population}%)`,
     population,
     color: ASSET_DISTRIBUTION_COLORS[i % ASSET_DISTRIBUTION_COLORS.length],
-    legendFontColor: '#ffffff',
-    legendFontSize: 11,
     percentage: population,
     assetSymbol: `A${i}`,
   }));
