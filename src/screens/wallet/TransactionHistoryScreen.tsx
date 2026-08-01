@@ -18,7 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { TransactionInfo } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -56,7 +56,7 @@ export default function TransactionHistoryScreen() {
     null
   );
   const loadMoreInFlightRef = useRef(false);
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
   const currentNetwork = useCurrentNetwork();

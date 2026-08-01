@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -109,7 +109,7 @@ function OptionCardWithAnimation({
   );
 }
 
-type OnboardingScreenNavigationProp = StackNavigationProp<
+type OnboardingScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'Onboarding'
 >;

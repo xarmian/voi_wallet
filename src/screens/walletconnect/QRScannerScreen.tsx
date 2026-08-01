@@ -1,5 +1,5 @@
 import React from 'react';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import algosdk from 'algosdk';
 
@@ -8,7 +8,7 @@ import QRScanner from '@/components/walletconnect/QRScanner';
 import { isAlgorandPaymentUri, parseAlgorandUri } from '@/utils/algorandUri';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
 
-type QRScannerScreenNavigationProp = StackNavigationProp<
+type QRScannerScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'QRScanner'
 >;

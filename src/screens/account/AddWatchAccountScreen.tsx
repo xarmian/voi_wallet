@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   RouteProp,
   useRoute,
@@ -30,7 +30,7 @@ import { Theme } from '@/constants/themes';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { getFromClipboard } from '@/utils/clipboard';
 
-type AddWatchAccountScreenNavigationProp = StackNavigationProp<
+type AddWatchAccountScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'AddWatchAccount'
 >;

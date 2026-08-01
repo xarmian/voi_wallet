@@ -10,7 +10,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
   useAnimatedStyle,
@@ -45,7 +45,8 @@ import { springConfigs } from '@/utils/animations';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-type SettingsScreenNavigationProp = StackNavigationProp<SettingsStackParamList>;
+type SettingsScreenNavigationProp =
+  NativeStackNavigationProp<SettingsStackParamList>;
 
 // Reusable settings row component with glass styling
 interface SettingsRowProps {

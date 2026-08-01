@@ -12,7 +12,7 @@ import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { TransactionInfo, AccountBalance, AssetBalance } from '@/types/wallet';
@@ -77,7 +77,7 @@ export default function AssetDetailScreen() {
   const [isSwappable, setIsSwappable] = useState(false);
   const loadMoreInFlightRef = React.useRef(false);
   const route = useRoute();
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const isSwapEnabled = useIsSwapEnabled();
   const { assetName, assetId, accountId, mappingId, networkId } =
     route.params as AssetDetailRouteParams;

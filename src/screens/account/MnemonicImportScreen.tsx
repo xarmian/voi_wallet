@@ -14,7 +14,7 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   CommonActions,
   RouteProp,
@@ -30,7 +30,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
 import { useSecureScreen } from '@/hooks/useSecureScreen';
 
-type MnemonicImportScreenNavigationProp = StackNavigationProp<
+type MnemonicImportScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'MnemonicImport'
 >;
