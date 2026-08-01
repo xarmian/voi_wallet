@@ -12,7 +12,7 @@ import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
@@ -66,7 +66,7 @@ export default function MultiNetworkAssetScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [imageError, setImageError] = useState(false);
   const route = useRoute();
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const isSwapEnabled = useIsSwapEnabled();
   const { assetName, assetId, accountId, mappingId } =
     route.params as MultiNetworkAssetRouteParams;

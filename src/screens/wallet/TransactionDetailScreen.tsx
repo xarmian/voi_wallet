@@ -10,7 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { TransactionInfo } from '@/types/wallet';
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
@@ -40,7 +40,7 @@ interface TransactionDetailRouteParams {
 
 export default function TransactionDetailScreen() {
   const route = useRoute();
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const currentNetwork = useCurrentNetwork();
   const currentNetworkConfig = useCurrentNetworkConfig();
   const { theme } = useTheme();

@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { formatAddress } from '@/utils/address';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
@@ -37,7 +37,7 @@ type TransactionConfirmationScreenRouteProp = RouteProp<
   WalletStackParamList,
   'TransactionConfirmation'
 >;
-type TransactionConfirmationScreenNavigationProp = StackNavigationProp<
+type TransactionConfirmationScreenNavigationProp = NativeStackNavigationProp<
   WalletStackParamList,
   'TransactionConfirmation'
 >;

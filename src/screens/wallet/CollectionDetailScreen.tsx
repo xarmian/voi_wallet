@@ -14,7 +14,7 @@ import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
 import { NFTToken, ARC72Collection } from '@/types/nft';
@@ -33,7 +33,7 @@ interface CollectionDetailRouteParams {
 
 export default function CollectionDetailScreen() {
   const route = useRoute();
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const { collection } = route.params as CollectionDetailRouteParams;
   const activeAccount = useActiveAccount();
   const { theme, setNFTTheme } = useTheme();

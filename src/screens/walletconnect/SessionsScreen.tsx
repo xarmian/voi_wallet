@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 
 import { SettingsStackParamList } from '@/navigation/AppNavigator';
@@ -27,7 +27,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 
-type SessionsScreenNavigationProp = StackNavigationProp<
+type SessionsScreenNavigationProp = NativeStackNavigationProp<
   SettingsStackParamList,
   'WalletConnectSessions'
 >;
