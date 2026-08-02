@@ -7,7 +7,71 @@ const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
 const withAndroidJvmTarget = require('./plugins/withAndroidJvmTarget');
-const withExpoModulesProguard = require('./plugins/withExpoModulesProguard');
+
+// R8 keep rules for Android release builds (TASK-209 / PLAN-267).
+//
+// These live here rather than in a custom config plugin because
+// expo-build-properties purges and rewrites its own tagged block on every
+// prebuild, whereas a plugin that appends behind a string-marker check goes
+// stale silently once the rules are edited.
+//
+// WHY EACH BLOCK EXISTS — do not trim without reading PLAN-267 DR-2. React
+// Native 0.81.5 ships exactly ONE consumer proguard file
+// (ReactAndroid/proguard-rules.pro, wired at ReactAndroid/build.gradle.kts:504).
+// Two further rule files exist in the RN tree — reactnative.pro and fbjni.pro —
+// but are referenced by NO gradle script, so their rules are absent from the
+// build and this app must supply them itself.
+const ANDROID_PROGUARD_RULES = `
+# --- Expo Modules ---
+# Carried over verbatim from the deleted plugins/withExpoModulesProguard.js so
+# that removal is provably lossless. The two kotlin lines are redundant under
+# expo.modules.** (proguard's "class" matches interfaces too); kept for parity.
+-keep class expo.modules.** { *; }
+-keep class expo.modules.kotlin.** { *; }
+-keep interface expo.modules.kotlin.** { *; }
+
+# --- fbjni hybrid pattern ---
+# Mirrors the unreferenced react-native/.../hermes/reactexecutor/fbjni.pro.
+# HybridData is resolved by FIELD NAME from C++; renaming it breaks JNI init.
+# react-native-nitro-modules carries unannotated mHybridData fields
+# (ArrayBuffer.kt:29, AnyValue.kt:25, NitroModules.kt:20).
+-keepclassmembers class * {
+    com.facebook.jni.HybridData *;
+    <init>(com.facebook.jni.HybridData);
+}
+-keepclasseswithmembers class * {
+    com.facebook.jni.HybridData *;
+}
+
+# --- RN annotation-processor generated classes ---
+# Mirrors the unreferenced react-native/.../react/bridge/reactnative.pro:15-18.
+# ViewManagerPropertyUpdater.kt:130 does Class.forName("<cls>$$PropsSetter") —
+# @react-native-community/slider is a SimpleViewManager, NOT a NativeModule, so
+# proguard-rules.pro:44 does not cover it. react-native-gesture-handler
+# (RNGestureHandlerPackage.kt:57) and @react-native-async-storage
+# (AsyncStoragePackage.java:48) do Class.forName("<cls>$$ReactModuleInfoProvider")
+# and fall back to reading @ReactModule reflectively — so a stripped annotation
+# is a STARTUP CRASH, not a degradation. "{ *; }" is stronger than RN's bare
+# -keep because both sites call newInstance(), needing the default constructor.
+-keepnames class * extends com.facebook.react.uimanager.ViewManager
+-keepnames class * extends com.facebook.react.uimanager.ReactShadowNode
+-keep class **$$PropsSetter { *; }
+-keep class **$$ReactModuleInfoProvider { *; }
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-keep @interface com.facebook.react.module.annotations.ReactModule
+
+# --- Nitro (react-native-quick-crypto) ---
+# C++ resolves these by literal JNI descriptor (JAnyMap.hpp:23, JPromise.hpp:20,
+# JHybridObject.hpp:24). No shipped consumer rule covers them. If stripped, the
+# scrypt KAT parity gate in src/services/secure/scryptKdf.ts falls back to
+# @noble — correct but far slower, and it logs nothing. Silent perf regression.
+-keep class com.margelo.nitro.** { *; }
+
+# --- Expo Module outside the expo.modules.* namespace ---
+# react-native-image-colors is an Expo Module() in its own package, so the
+# expo.modules.** rule above does not reach it.
+-keep class com.reactnativeimagecolors.** { *; }
+`;
 
 export default {
   "expo": {
@@ -134,6 +198,25 @@ export default {
             targetSdkVersion: 35,
             buildToolsVersion: "35.0.0",
             minSdkVersion: 24,
+            // R8 code shrinking + resource shrinking, release builds only
+            // (TASK-209 / PLAN-267). Debug and dev-client builds are
+            // unaffected: android/app/build.gradle applies both under the
+            // `release` buildType only.
+            //
+            // These MUST go through expo-build-properties, not
+            // android/gradle.properties — /android is gitignored and untracked,
+            // so EAS regenerates it from the prebuild template and would never
+            // see a local edit.
+            //
+            // Resource shrinking needs no hand-written keep.xml: the Expo
+            // bundler writes an exhaustive one. build.gradle sets
+            // bundleCommand = "export:embed", BundleHermesCTask passes
+            // --assets-dest <build/generated/res/react/VARIANT>, and @expo/cli
+            // persistMetroAssets.js createKeepFileAsync emits <res>/raw/keep.xml
+            // listing every Metro asset by its generated identifier.
+            enableMinifyInReleaseBuilds: true,
+            enableShrinkResourcesInReleaseBuilds: true,
+            extraProguardRules: ANDROID_PROGUARD_RULES,
           },
         },
       ],
@@ -150,7 +233,6 @@ export default {
       // line, remove it — the Nitro module still autolinks without the plugin.
       "react-native-quick-crypto",
       withAndroidJvmTarget,
-      withExpoModulesProguard,
     ]
   }
 };

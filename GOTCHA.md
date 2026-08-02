@@ -2,6 +2,30 @@
 
 This document captures critical lessons learned during development to prevent future bugs and infinite loops.
 
+## 📦 Android R8: React Native ships proguard rules it never applies
+
+**Problem**: React Native 0.81.5 contains three ProGuard rule files, but wires up only **one**.
+
+| File | Wired in? |
+| --- | --- |
+| `ReactAndroid/proguard-rules.pro` | ✅ `consumerProguardFiles` at `ReactAndroid/build.gradle.kts:504` |
+| `ReactAndroid/src/main/java/com/facebook/react/bridge/reactnative.pro` | ❌ referenced by no gradle script |
+| `ReactAndroid/src/main/java/com/facebook/hermes/reactexecutor/fbjni.pro` | ❌ referenced by no gradle script |
+
+Reading those filenames and assuming their rules are active is the trap. They are dead files — **this app must supply their rules itself**, which it does via `extraProguardRules` in `app.config.js` (TASK-209 / PLAN-267).
+
+**What breaks if they go missing** (R8 only runs in release builds, so none of this shows up in development):
+
+- **`fbjni.pro` — `com.facebook.jni.HybridData`** is resolved by *field name* from C++. If R8 renames it, JNI init fails. `react-native-nitro-modules` carries unannotated `mHybridData` fields, so `react-native-quick-crypto` is directly exposed.
+- **`reactnative.pro` — `**$$ReactModuleInfoProvider`** is loaded via `Class.forName` by `react-native-gesture-handler` and `@react-native-async-storage/async-storage`, whose fallback path reads the `@ReactModule` annotation reflectively. A stripped annotation is a **crash at launch**, not a degradation.
+- **`reactnative.pro` — `**$$PropsSetter`** is loaded via `Class.forName` by `ViewManagerPropertyUpdater`. `@react-native-community/slider` is a `SimpleViewManager`, *not* a `NativeModule`, so RN's blanket `NativeModule` keep does not cover it.
+
+**Also worth knowing**:
+
+- **Resource shrinking needs no hand-written `keep.xml`.** Expo's bundler emits an exhaustive one — `bundleCommand = "export:embed"` → `@expo/cli` `persistMetroAssets.js` `createKeepFileAsync` writes `<res>/raw/keep.xml` listing every Metro asset. Do not hand-author one.
+- **Silent failure mode**: if R8 strips the Nitro path, `src/services/secure/scryptKdf.ts`'s KAT parity gate falls back to `@noble` — correct, but far slower, and it logs nothing. A sluggish unlock is the only symptom.
+- **`/android` is gitignored.** Build config must go through `app.config.js`; editing `android/gradle.properties` is invisible to EAS, which regenerates the project from the prebuild template.
+
 ## 🔄 Infinite Loop Issues
 
 ### ❌ NEVER: Use Object Destructuring with Zustand Selectors
