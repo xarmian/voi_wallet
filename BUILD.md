@@ -11,6 +11,20 @@ npx expo-doctor
 # Build preview release for Android on Expo Cloud
 eas build --platform android --profile preview
 
+# Build preview release for Android locally
+npm run build:android:preview
+
+# NOTE: the Android `preview` profile is a RELEASE build (:app:assembleRelease),
+# so it is the artifact that exercises R8 minification + resource shrinking
+# (enabled in app.config.js, TASK-209). A debug or dev-client build does NOT --
+# both flags apply only under the `release` buildType. Any verification of
+# minification, keep rules, or APK size must use preview or production.
+
+# Regenerate the Android project from scratch (REQUIRED after changing config
+# plugins -- expo-build-properties only purges its own tagged proguard block, so
+# an incremental prebuild can leave stale rules behind from a removed plugin)
+npx expo prebuild --clean -p android
+
 # Prebuild for iOS
 npx expo prebuild --platform ios
 
