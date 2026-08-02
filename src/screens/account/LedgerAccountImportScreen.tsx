@@ -7,7 +7,7 @@ import React, {
 } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -139,7 +139,7 @@ function importReducer(state: ImportState, action: ImportAction): ImportState {
   }
 }
 
-type NavigationProp = StackNavigationProp<
+type NavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'LedgerAccountImport'
 >;

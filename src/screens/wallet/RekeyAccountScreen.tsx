@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { SettingsStackParamList } from '@/navigation/AppNavigator';
 import { useWalletStore } from '@/store/walletStore';
@@ -42,7 +42,7 @@ type RekeyAccountScreenRouteProp = RouteProp<
   SettingsStackParamList,
   'RekeyAccount'
 >;
-type RekeyAccountScreenNavigationProp = StackNavigationProp<
+type RekeyAccountScreenNavigationProp = NativeStackNavigationProp<
   SettingsStackParamList,
   'RekeyAccount'
 >;

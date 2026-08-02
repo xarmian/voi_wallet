@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import type { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme } from '@/contexts/ThemeContext';
 import ThemedWebView from '@/components/common/ThemedWebView';
 
@@ -14,7 +14,7 @@ interface WebViewRouteParams {
 
 export default function WebViewScreen() {
   const route = useRoute();
-  const navigation = useNavigation<StackNavigationProp<any>>();
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const { url, title } = route.params as WebViewRouteParams;
   const { theme } = useTheme();
 

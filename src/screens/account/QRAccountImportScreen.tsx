@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
@@ -21,7 +21,7 @@ import {
 import { useAccounts } from '@/store/walletStore';
 import { useTheme } from '@/contexts/ThemeContext';
 
-type QRAccountImportScreenNavigationProp = StackNavigationProp<
+type QRAccountImportScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'QRAccountImport'
 >;

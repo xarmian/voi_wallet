@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -33,7 +33,7 @@ import type { SecretSource } from '@/services/secure/SessionKeyVault';
 
 const PASSPHRASE_MIN = AccountSecureStorage.PASSPHRASE_MIN_LENGTH;
 
-type SecuritySetupScreenNavigationProp = StackNavigationProp<
+type SecuritySetupScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'SecuritySetup'
 >;

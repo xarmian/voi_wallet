@@ -8,7 +8,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
@@ -48,10 +48,8 @@ import {
   clearNavigationCallbacks,
 } from '@/services/navigation/callbackRegistry';
 
-type UniversalTransactionSigningScreenNavigationProp = StackNavigationProp<
-  RootStackParamList,
-  'UniversalTransactionSigning'
->;
+type UniversalTransactionSigningScreenNavigationProp =
+  NativeStackNavigationProp<RootStackParamList, 'UniversalTransactionSigning'>;
 type UniversalTransactionSigningScreenRouteProp = RouteProp<
   RootStackParamList,
   'UniversalTransactionSigning'

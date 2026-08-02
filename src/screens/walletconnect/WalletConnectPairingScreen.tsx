@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -12,7 +12,7 @@ import { Theme } from '@/constants/themes';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 
-type PairingScreenNavigationProp = StackNavigationProp<
+type PairingScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'WalletConnectPairing'
 >;

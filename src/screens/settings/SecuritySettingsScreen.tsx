@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SettingsStackParamList } from '@/navigation/AppNavigator';
 import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
@@ -23,7 +23,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 
 type SecuritySettingsScreenNavigationProp =
-  StackNavigationProp<SettingsStackParamList>;
+  NativeStackNavigationProp<SettingsStackParamList>;
 
 interface TimeoutOption {
   label: string;

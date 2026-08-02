@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, View, Text, StyleSheet, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { StackNavigationProp } from '@react-navigation/stack';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { WalletService } from '@/services/wallet';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
@@ -17,7 +17,7 @@ import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassCard } from '@/components/common/GlassCard';
 import { GlassButton } from '@/components/common/GlassButton';
 
-type CreateWalletScreenNavigationProp = StackNavigationProp<
+type CreateWalletScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'CreateWallet'
 >;
