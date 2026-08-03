@@ -57,6 +57,14 @@ export interface OfflineCounters {
 }
 
 let reachability: Reachability = 'unknown';
+// Whether `reachability` came from a DEFINITIVE reading. NetInfo's first emit
+// often carries `isInternetReachable: null` (interface up, probe still
+// running); `isOffline()` resolves that to the interface flag, which is the
+// right answer for gating but is a guess, not a determination. Without this
+// flag an indeterminate first emit looks identical to a settled one, so the
+// one-shot getState() below is discarded and a cold-start offline device keeps
+// running full retry ladders until NetInfo happens to emit again.
+let definitive = false;
 let primed = false;
 let unsubscribe: (() => void) | null = null;
 
@@ -69,6 +77,11 @@ function prime(): void {
   try {
     unsubscribe = connectivity.subscribe((state) => {
       reachability = isOffline(state) ? 'offline' : 'online';
+      // The extension/web adapter always reports `null` here by design, so it
+      // stays non-definitive and simply never benefits from the probe — it has
+      // no better source either. Mobile settles as soon as NetInfo's own probe
+      // resolves.
+      definitive = state.isInternetReachable !== null;
     });
   } catch {
     // No adapter available (or it threw on registration). Stay `unknown`,
@@ -79,10 +92,13 @@ function prime(): void {
     void connectivity
       .getState()
       .then((state) => {
-        // Only fills the initial gap. A subscription callback that already
-        // landed is fresher than this in-flight probe, so it wins.
-        if (reachability === 'unknown') {
+        // Fills the initial gap, and also corrects an indeterminate first
+        // emit: a settled subscription reading wins, but a guessed one does
+        // not. Only a definitive probe result may override.
+        const probeDefinitive = state.isInternetReachable !== null;
+        if (reachability === 'unknown' || (!definitive && probeDefinitive)) {
           reachability = isOffline(state) ? 'offline' : 'online';
+          definitive = probeDefinitive;
         }
       })
       .catch(() => {
@@ -151,5 +167,6 @@ export function resetOfflineGate(): void {
   unsubscribe = null;
   primed = false;
   reachability = 'unknown';
+  definitive = false;
   skipCounts.clear();
 }

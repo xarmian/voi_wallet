@@ -228,4 +228,49 @@ describe('offline gate (TASK-191)', () => {
       expect(unsubscribe).not.toHaveBeenCalled();
     });
   });
+
+  // Found by the full-diff Codex pass over PLAN-274. NetInfo's first emit often
+  // carries `isInternetReachable: null` — interface up, its own probe still
+  // running. `isOffline()` resolves that to the interface flag, which is the
+  // right call for gating but is a GUESS. Recording it as settled meant the
+  // one-shot getState() priming was discarded, so a cold-start offline device
+  // kept running full retry ladders until NetInfo happened to emit again.
+  describe('indeterminate first emit vs the priming probe', () => {
+    it('lets a definitive probe result override a guessed online reading', async () => {
+      mockGetState.mockResolvedValue({
+        isConnected: true,
+        isInternetReachable: false,
+        type: 'wifi',
+      });
+      resetOfflineGate();
+
+      shouldSkipForOffline('mimir'); // primes
+      // Interface up, reachability not yet determined → a guess, not a reading.
+      emit!({ isConnected: true, isInternetReachable: null, type: 'wifi' });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(getReachability()).toBe('offline');
+      expect(shouldSkipForOffline('mimir')).toBe(true);
+    });
+
+    it('does not let the probe override a SETTLED subscription reading', async () => {
+      mockGetState.mockResolvedValue({
+        isConnected: true,
+        isInternetReachable: false,
+        type: 'wifi',
+      });
+      resetOfflineGate();
+
+      shouldSkipForOffline('mimir'); // primes
+      emit!(ONLINE); // settled: isInternetReachable is a real true
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(getReachability()).toBe('online');
+      expect(shouldSkipForOffline('mimir')).toBe(false);
+    });
+  });
 });
