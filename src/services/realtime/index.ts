@@ -97,6 +97,13 @@ export class RealtimeService {
 
   /** Monotonic token; only the newest install may install its channel. */
   private installGeneration: number = 0;
+  // Defence in depth against an install completing after cleanup's final sweep.
+  // NOTE: the cleanup-race test below is satisfied by the synchronous clear +
+  // sweep alone — this flag is NOT isolated by any test, because the fake
+  // client installs too promptly to open the window it guards. Kept because a
+  // real Supabase install has genuine async gaps the fake does not model, and
+  // the cost is one boolean. Do not read its presence as tested behaviour.
+  private shuttingDown: boolean = false;
   /** Single-flight chain: installs never interleave. Never rejects. */
   private installChain: Promise<unknown> = Promise.resolve();
 
@@ -171,6 +178,8 @@ export class RealtimeService {
    *   superseded it — in the latter case the newer install owns the channel.
    */
   async subscribeToAddresses(addresses: string[]): Promise<boolean> {
+    // Explicit intent to start again clears the cleanup latch.
+    this.shuttingDown = false;
     if (!getSupabaseClient()) {
       console.warn('Supabase not configured, cannot subscribe to realtime');
       return false;
@@ -245,10 +254,22 @@ export class RealtimeService {
    * Clear all subscriptions and handlers
    */
   async cleanup(): Promise<void> {
-    await this.unsubscribe();
+    // Latch and clear SYNCHRONOUSLY, before any await. This previously awaited
+    // unsubscribe() and cleared afterwards, so an install completing during
+    // that await survived: its channel stayed live while the addresses,
+    // handlers and AppState listener were wiped from under it, leaving a
+    // channel nothing would ever tear down. The generation bump inside
+    // unsubscribe() does not cover that case — such an install starts after
+    // the bump and is therefore the newest.
+    this.shuttingDown = true;
     this.subscribedAddresses.clear();
     this.handlers = {};
     this.removeAppStateSubscription();
+
+    await this.unsubscribe();
+
+    // Sweep anything that landed between the latch and here.
+    await this.teardownChannel();
   }
 
   // Private methods
@@ -293,6 +314,8 @@ export class RealtimeService {
   private async performInstall(generation: number): Promise<boolean> {
     // Superseded before this install ever got its turn.
     if (generation !== this.installGeneration) return false;
+    // cleanup() is tearing the service down; do not resurrect a channel.
+    if (this.shuttingDown) return false;
 
     const supabase = getSupabaseClient();
     if (!supabase || this.subscribedAddresses.size === 0) return false;

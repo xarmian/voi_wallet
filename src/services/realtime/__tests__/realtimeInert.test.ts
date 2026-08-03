@@ -475,3 +475,30 @@ describe('realtime service — channel lifecycle', () => {
     expect(client.created).toHaveLength(1);
   });
 });
+
+// Round 3 of the full-diff Codex pass over PLAN-275. cleanup() awaited
+// unsubscribe() and cleared state only afterwards, so an install that completed
+// DURING that await survived: its channel stayed live while the addresses,
+// handlers and AppState listener were wiped out from under it — a channel
+// nothing would ever tear down. The generation bump does not cover this, because
+// such an install starts AFTER the bump and is therefore the newest.
+describe('cleanup() racing a concurrent subscribe (TASK-190)', () => {
+  it('leaves no channel behind when a subscribe lands mid-cleanup', async () => {
+    const client = mockCurrentClient!;
+    const { getRealtimeService } = loadModule();
+    const service = getRealtimeService();
+
+    await service.subscribeToAddresses([ADDRESS_A]);
+    expect(client.live).toHaveLength(1);
+
+    // Race an explicit subscribe into cleanup's teardown await.
+    const cleaning = service.cleanup();
+    const racing = service.subscribeToAddresses([ADDRESS_B]);
+    await Promise.all([cleaning, racing]);
+    await flush();
+
+    expect(client.live).toHaveLength(0);
+    expect(installedChannel(service)).toBeNull();
+    expect(client.created.length - client.removed.length).toBe(0);
+  });
+});
