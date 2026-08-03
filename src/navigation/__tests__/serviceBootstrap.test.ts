@@ -22,6 +22,7 @@
  */
 
 import { initializeServices } from '../serviceBootstrap';
+import { isAccountSubscribeTokenCurrent } from '@/services/notifications/subscribePass';
 
 // --- Mock leaves (all prefixed `mock` so jest can hoist them into factories) ---
 const mockWcService = {
@@ -41,7 +42,9 @@ const mockExtensionDeepLinkHandler = {
 const mockNotificationService = {
   initialize: jest.fn(async () => {}),
   registerPushToken: jest.fn(async () => null as string | null),
-  subscribeAllAccounts: jest.fn(async () => {}),
+  subscribeAllAccounts: jest.fn(
+    async (_accounts: unknown[], _subscribeToken?: number) => {}
+  ),
   cleanup: jest.fn(),
 };
 const mockTxnQueue = {
@@ -94,8 +97,14 @@ jest.mock('@/services/notifications', () => ({
   },
 }));
 
+const mockGetCurrentWallet = jest.fn(
+  async (): Promise<{ accounts: unknown[] } | null> => null
+);
+
 jest.mock('@/services/wallet', () => ({
-  MultiAccountWalletService: { getCurrentWallet: jest.fn(async () => null) },
+  MultiAccountWalletService: {
+    getCurrentWallet: () => mockGetCurrentWallet(),
+  },
 }));
 
 jest.mock('@/services/ledger/transport', () => ({
@@ -120,9 +129,11 @@ const makeCleanupRef = () => ({
 
 describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () => {
   beforeEach(() => {
-    // jest.config `clearMocks: true` resets call history; only the mutable app
-    // mode needs resetting.
+    // jest.config `clearMocks: true` resets call history but NOT implementations
+    // (mockResolvedValue survives), so restore the defaults the boot path reads.
     mockAppMode = 'user';
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
   });
 
   it('captures a teardown that unregisters BOTH WalletConnect handlers and cleans up deep-link + notifications on unmount', async () => {
@@ -248,5 +259,96 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     expect(mockWcService.off).not.toHaveBeenCalled();
     expect(mockExtensionDeepLinkHandler.cleanup).not.toHaveBeenCalled();
     expect(mockNotificationService.cleanup).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * TASK-192. The deferred per-account subscribe is fire-and-forget over a wallet
+ * snapshot, and since it now ends in ONE batched write the gap between snapshot
+ * and write is a real window. Teardown must be able to cancel it — teardown
+ * removes listeners, it does not await or abort this work, so without the token
+ * an unmounted session would still write. This spec pins the boot side: a token
+ * is taken and handed to the pass, and the captured teardown invalidates it.
+ */
+describe('serviceBootstrap.initializeServices — deferred subscribe abort token (TASK-192)', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  beforeEach(() => {
+    mockAppMode = 'user';
+    mockGetCurrentWallet.mockResolvedValue({ accounts: [{ id: 'acct-1' }] });
+    mockNotificationService.registerPushToken.mockResolvedValue('expo-token');
+  });
+
+  it('hands the deferred subscribe a live token, which the teardown then invalidates', async () => {
+    const cleanupRef = makeCleanupRef();
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef,
+    });
+    await flush();
+
+    expect(mockNotificationService.subscribeAllAccounts).toHaveBeenCalledTimes(
+      1
+    );
+    const [, subscribeToken] =
+      mockNotificationService.subscribeAllAccounts.mock.calls[0];
+    expect(typeof subscribeToken).toBe('number');
+
+    // Still mounted: the pass is allowed to write.
+    expect(isAccountSubscribeTokenCurrent(subscribeToken!)).toBe(true);
+
+    // Unmount. The pass may still be in flight; its token must now be stale.
+    cleanupRef.current!();
+
+    expect(isAccountSubscribeTokenCurrent(subscribeToken!)).toBe(false);
+  });
+
+  it('takes the token BEFORE the deferred pass awaits the wallet, so a teardown during that await still cancels it', async () => {
+    // The token must be taken synchronously at launch. Taken one await later —
+    // after getCurrentWallet() resolves — it would be minted AFTER an unmount
+    // that happened in the meantime, and would therefore still look current:
+    // the pass would go on to write for a dead session. Pin the ordering by
+    // holding the deferred wallet read open across the teardown.
+    const wallet = { accounts: [{ id: 'acct-1' }] };
+    let releaseDeferredWallet!: () => void;
+    mockGetCurrentWallet
+      // Boot-time read (decides shouldSubscribeAccounts) resolves normally...
+      .mockImplementationOnce(async () => wallet)
+      // ...the deferred pass's re-read hangs until the test releases it.
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseDeferredWallet = () => resolve(wallet);
+          })
+      );
+
+    const cleanupRef = makeCleanupRef();
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef,
+    });
+    await flush();
+
+    // The pass is parked on the wallet read; nothing has been subscribed yet.
+    expect(mockNotificationService.subscribeAllAccounts).not.toHaveBeenCalled();
+
+    // Unmount WHILE the read is still outstanding.
+    cleanupRef.current!();
+
+    releaseDeferredWallet();
+    await flush();
+
+    // The pass resumed and called through — with the token it minted at
+    // launch, which the teardown has already invalidated.
+    expect(mockNotificationService.subscribeAllAccounts).toHaveBeenCalledTimes(
+      1
+    );
+    const [, subscribeToken] =
+      mockNotificationService.subscribeAllAccounts.mock.calls[0];
+    expect(isAccountSubscribeTokenCurrent(subscribeToken!)).toBe(false);
   });
 });

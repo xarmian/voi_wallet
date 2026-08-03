@@ -43,6 +43,7 @@ import {
   notificationService,
   DEFAULT_NOTIFICATION_PREFERENCES,
 } from '@/services/notifications';
+import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { realtimeService } from '@/services/realtime';
 
 /**
@@ -965,6 +966,16 @@ export const useWalletStore = create<WalletState>()(
     deleteAccount: async (accountId: string) => {
       try {
         set({ isLoading: true, lastError: null });
+
+        // Cancel any in-flight deferred subscribe pass BEFORE the deletion
+        // starts. That pass holds a wallet snapshot taken at app start and
+        // finishes with one batched write; if it landed after this deletion it
+        // would re-create a subscription for the account being removed — in a
+        // session that never unmounted, so the teardown path never fires.
+        // MultiAccountWalletService.deleteAccount invalidates too (it is the
+        // chokepoint for callers that bypass this store); doing it here as well
+        // closes the window a few awaits earlier. (TASK-192.)
+        invalidateAccountSubscribePasses();
 
         // Get the account address before deletion for unsubscribing
         const { wallet: currentWallet } = get();

@@ -33,6 +33,7 @@ import {
   withDefaultAuthLevel,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
+import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
@@ -1359,6 +1360,16 @@ export class MultiAccountWalletService {
   }
 
   static async deleteAccount(accountId: string): Promise<void> {
+    // TASK-192: cancel any in-flight deferred notification subscribe pass. That
+    // pass holds a wallet snapshot from app start and finishes with one batched
+    // write, so a deletion inside its window would otherwise let it write a
+    // subscription derived from an account record that no longer exists.
+    // Invalidating HERE (not only in walletStore.deleteAccount) covers the
+    // callers that reach this service directly — e.g. the watch→standard
+    // upgrade in AccountImportPreviewScreen, which deletes the watch record
+    // without going through the store. Inert when no pass is in flight.
+    invalidateAccountSubscribePasses();
+
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();

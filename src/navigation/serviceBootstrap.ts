@@ -11,6 +11,10 @@ import { DeepLinkService } from '@/services/deeplink';
 import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
 import { notificationService } from '@/services/notifications';
+import {
+  takeAccountSubscribeToken,
+  invalidateAccountSubscribePasses,
+} from '@/services/notifications/subscribePass';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
@@ -240,9 +244,10 @@ export const initializeServices = async ({
             // Register push token if permissions granted
             const token = await notificationService.registerPushToken();
             if (token) {
-              // Defer the expensive per-account subscribe (N sequential
-              // Supabase round-trips) off the critical path; it re-reads the
-              // wallet at run time so startup-created accounts are included.
+              // Defer the per-account subscribe off the critical path; it
+              // re-reads the wallet at run time so startup-created accounts
+              // are included. TASK-192 collapsed it to two Supabase round
+              // trips (one read, one write) regardless of account count.
               shouldSubscribeAccounts = true;
             }
           }
@@ -330,18 +335,23 @@ export const initializeServices = async ({
     // included (constraint: defer only AFTER re-reading the wallet). This is
     // fire-and-forget so it never delays time-to-interactive.
     if (shouldSubscribeAccounts) {
+      // Abort token, taken SYNCHRONOUSLY at launch so it covers the whole
+      // window. The pass below works from a wallet snapshot and, since
+      // TASK-192, defers to a single batched write at the end — so an unmount
+      // or an account deletion in the meantime must be able to drop that
+      // write. The teardown assigned just below and the account-deletion paths
+      // both invalidate it; re-checked immediately before the write.
+      const subscribeToken = takeAccountSubscribeToken();
       void (async () => {
         try {
           const wallet = await MultiAccountWalletService.getCurrentWallet();
           if (wallet && wallet.accounts.length > 0) {
             // Subscribe ALL accounts to notifications (not just active one)
             // Watch accounts will have message notifications disabled by default
-            await notificationService.subscribeAllAccounts(wallet.accounts);
-
-            // TODO: Re-enable realtime subscription when needed
-            // Currently disabled to reduce server load - using polling instead
-            // const allAddresses = wallet.accounts.map(a => a.address);
-            // await realtimeService.subscribeToAddresses(allAddresses);
+            await notificationService.subscribeAllAccounts(
+              wallet.accounts,
+              subscribeToken
+            );
           }
         } catch (error) {
           console.warn('Failed to subscribe accounts to notifications:', error);
@@ -355,6 +365,11 @@ export const initializeServices = async ({
     // defect), so no teardown ever ran.
     cleanupRef.current = () => {
       try {
+        // FIRST, and unconditionally: cancel any in-flight deferred subscribe
+        // pass. It holds a wallet snapshot from this (now dead) session and
+        // would otherwise still perform its batched write. Done ahead of the
+        // unregister calls so a throw there cannot skip it.
+        invalidateAccountSubscribePasses();
         if (wcService && onProposal) {
           wcService.off?.('session_proposal', onProposal);
         }
@@ -365,7 +380,6 @@ export const initializeServices = async ({
           extensionDeepLinkHandler.cleanup();
           notificationService.cleanup();
         }
-        // realtimeService.cleanup(); // Disabled - realtime subscription not active
       } catch {}
     };
 
