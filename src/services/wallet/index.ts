@@ -2241,6 +2241,11 @@ export class MultiAccountWalletService {
    */
   static async pruneStandardAccounts(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
+    // TASK-192: this removes a SUBSET of accounts without going through
+    // deleteAccount or clearAllWallets, so neither of those guards covers it.
+    // A boot-time subscribe pass holding the pre-prune snapshot would otherwise
+    // batch-write a subscription for an account this call just removed.
+    invalidateAccountSubscribePasses();
     const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
