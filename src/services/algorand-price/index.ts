@@ -1,3 +1,5 @@
+import { shouldSkipForOffline } from '@/services/network/offline';
+
 export interface VestigePriceData {
   network_id: number;
   asset_id: number;
@@ -294,6 +296,18 @@ export class AlgorandPriceService {
   }
 
   private async fetchWithRetry(url: string): Promise<Response> {
+    // TASK-191: offline → skip the ladder instead of burning every attempt and
+    // its backoff. Same error shape the exhausted ladder throws, so the outcome
+    // is still `failed: true` and every joined caller applies the retained
+    // stale-price fallback exactly as it does after a real failure.
+    if (shouldSkipForOffline('algorand-price')) {
+      throw new AlgorandPriceError(
+        'Offline: skipped request without attempting the network',
+        undefined,
+        'NETWORK_ERROR'
+      );
+    }
+
     let lastError: Error;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {

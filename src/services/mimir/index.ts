@@ -1,3 +1,5 @@
+import { shouldSkipForOffline } from '@/services/network/offline';
+
 export interface MimirAsset {
   name: string;
   symbol: string;
@@ -383,6 +385,19 @@ export class MimirApiService {
   }
 
   private async fetchWithRetry(url: string): Promise<Response> {
+    // TASK-191: while the device is definitely offline, skip the ladder
+    // outright rather than burning `retryAttempts` fetches plus their backoff
+    // on a request that cannot reach the network. Deliberately the SAME error
+    // shape the exhausted ladder throws (MimirApiError / NETWORK_ERROR) — this
+    // is a faster failure, not a new one callers must learn to handle.
+    if (shouldSkipForOffline('mimir')) {
+      throw new MimirApiError(
+        'Offline: skipped request without attempting the network',
+        undefined,
+        'NETWORK_ERROR'
+      );
+    }
+
     let lastError: Error;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {

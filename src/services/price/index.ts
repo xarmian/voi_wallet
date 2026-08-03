@@ -1,3 +1,5 @@
+import { shouldSkipForOffline } from '@/services/network/offline';
+
 export interface VoiMarketData {
   trading_pair_id: number;
   exchange: string;
@@ -205,6 +207,17 @@ export class VoiPriceService {
   }
 
   private async fetchWithRetry(url: string): Promise<Response> {
+    // TASK-191: offline → skip the ladder instead of burning every attempt and
+    // its backoff. Same error shape the exhausted ladder throws, so the
+    // existing fallback (cached-but-stale price, else 0) applies unchanged.
+    if (shouldSkipForOffline('voi-price')) {
+      throw new VoiPriceError(
+        'Offline: skipped request without attempting the network',
+        undefined,
+        'NETWORK_ERROR'
+      );
+    }
+
     let lastError: Error;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {

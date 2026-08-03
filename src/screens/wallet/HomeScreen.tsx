@@ -41,6 +41,7 @@ import {
   useAssetNetworkFilter,
 } from '@/store/walletStore';
 import { networkService, NetworkStatus } from '@/services/network';
+import { shouldSkipForOffline } from '@/services/network/offline';
 import { formatCurrency } from '@/utils/formatting';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
@@ -1040,22 +1041,29 @@ export default function HomeScreen() {
     setRefreshing(true);
     handleUserInteraction();
 
-    if (activeAccount) {
-      const refreshedAddress = activeAccount.address;
-      // Only refresh the current account, not all accounts
-      await loadAccountData();
-      // Also refresh claimable tokens. force: pull-to-refresh must bypass the
-      // per-account TTL, otherwise the gesture silently does nothing.
-      //
-      // Re-checked against the live account: `loadAccountData` is awaited, and
-      // a forced fetch takes ownership of the claimable store, so refreshing a
-      // stale account here would discard the account the user switched to.
-      if (activeAccountAddressRef.current === refreshedAddress) {
-        await fetchApprovals(refreshedAddress, { force: true });
+    try {
+      // TASK-191: a pull-to-refresh fired while the device is definitely
+      // offline can only fail, so skip the fan-out rather than making the user
+      // watch several retry ladders time out. The spinner still clears below.
+      if (activeAccount && !shouldSkipForOffline('home-refresh')) {
+        const refreshedAddress = activeAccount.address;
+        // Only refresh the current account, not all accounts
+        await loadAccountData();
+        // Also refresh claimable tokens. force: pull-to-refresh must bypass the
+        // per-account TTL, otherwise the gesture silently does nothing.
+        //
+        // Re-checked against the live account: `loadAccountData` is awaited, and
+        // a forced fetch takes ownership of the claimable store, so refreshing a
+        // stale account here would discard the account the user switched to.
+        if (activeAccountAddressRef.current === refreshedAddress) {
+          await fetchApprovals(refreshedAddress, { force: true });
+        }
       }
+    } finally {
+      // Never wedge the spinner: it clears whether the refresh ran, was skipped
+      // as offline, or threw.
+      setRefreshing(false);
     }
-
-    setRefreshing(false);
   };
 
   useEffect(() => {
