@@ -118,3 +118,46 @@ describe('MultiAccountWalletService.deleteAccount — cancels the deferred subsc
     expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(false);
   });
 });
+
+// Found by the full-diff Codex pass over PLAN-275, not by either task's own
+// review — a gap that only exists BETWEEN the two tasks. TASK-192 invalidated
+// the pass on single-account deletion, but clearAllWallets() is a different
+// wallet-replacement path: it is the canonical metadata wipe behind
+// LockScreen.performReset(), the secure-storage-unavailable reset, and backup
+// restore. A wipe is the widest form of the same race — every account in the
+// boot snapshot is stale, not just one — so an in-flight pass could batch-write
+// subscriptions for a wallet the user just erased.
+describe('MultiAccountWalletService.clearAllWallets — cancels the deferred subscribe pass (TASK-192)', () => {
+  beforeEach(() => {
+    mockStore = {};
+    mockSecureDeleteAccount.mockImplementation(async () => {});
+    seedWallet();
+  });
+
+  it('invalidates an in-flight subscribe token synchronously, before any await', async () => {
+    const inFlightToken = takeAccountSubscribeToken();
+    expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(true);
+
+    // Do not await: assert on the synchronous prefix. The epoch bump this sits
+    // beside is documented as needing to happen before any await, and the same
+    // reasoning applies here — awaiting first would leave a window in which the
+    // batched write could still land.
+    const pending = MultiAccountWalletService.clearAllWallets();
+    expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(false);
+
+    await pending;
+    expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(false);
+  });
+
+  it('leaves a token taken AFTER the wipe current', async () => {
+    const staleToken = takeAccountSubscribeToken();
+    await MultiAccountWalletService.clearAllWallets();
+    expect(isAccountSubscribeTokenCurrent(staleToken)).toBe(false);
+
+    // A pass started after the reset describes the post-wipe wallet and must
+    // not be collateral damage — otherwise a restore flow could never
+    // re-subscribe.
+    const freshToken = takeAccountSubscribeToken();
+    expect(isAccountSubscribeTokenCurrent(freshToken)).toBe(true);
+  });
+});

@@ -1392,6 +1392,16 @@ export class MultiAccountWalletService {
   }
 
   static async clearAllWallets(): Promise<void> {
+    // TASK-192: cancel any in-flight deferred notification subscribe pass, for
+    // the same reason deleteAccount does — that pass holds a wallet snapshot
+    // from app start and finishes with one batched write, so a wipe inside its
+    // window would otherwise let it write subscriptions for accounts that no
+    // longer exist. A full wipe is the widest version of that race: EVERY
+    // account in the snapshot is stale, not just one. Must be synchronous and
+    // before any await, alongside the epoch bump below. Inert when no pass is
+    // in flight.
+    invalidateAccountSubscribePasses();
+
     // TASK-212: this is the canonical wallet-metadata wipe — restore
     // (backup/restorers.ts clearAllData) and LockScreen.performReset() both
     // funnel through it. Bump the reset epoch and bust the memo SYNCHRONOUSLY,
