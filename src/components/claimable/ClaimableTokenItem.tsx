@@ -137,7 +137,15 @@ export default function ClaimableTokenItem({
             {item.tokenSymbol}
           </Text>
         </View>
-        {!item.isClaimable && (
+        {/* An unknown owner balance must never read as "Insufficient": that
+            tells the user a claimable token cannot be claimed on what may be a
+            transient network error (TASK-188). */}
+        {item.ownerBalanceUnknown && (
+          <View style={styles.unknownBadge} testID="claimable-unknown-badge">
+            <Text style={styles.unknownText}>Unavailable</Text>
+          </View>
+        )}
+        {!item.isClaimable && !item.ownerBalanceUnknown && (
           <View style={styles.insufficientBadge}>
             <Text style={styles.insufficientText}>Insufficient</Text>
           </View>
@@ -257,6 +265,20 @@ const createStyles = (theme: Theme) =>
     insufficientText: {
       fontSize: 11,
       color: theme.colors.error,
+      fontWeight: '500',
+    },
+    unknownBadge: {
+      // A real token, not `textMuted + '20'`: `textMuted` is `rgba(...)` in the
+      // dark theme, so appending an alpha suffix yields an invalid color and
+      // the badge loses its background entirely.
+      backgroundColor: theme.colors.surfaceAlt,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: theme.borderRadius.sm,
+    },
+    unknownText: {
+      fontSize: 11,
+      color: theme.colors.textSecondary,
       fontWeight: '500',
     },
     chevron: {

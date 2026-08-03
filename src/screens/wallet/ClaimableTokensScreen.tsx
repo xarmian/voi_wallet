@@ -5,7 +5,13 @@
  * Supports hiding tokens, viewing hidden tokens, and claiming all at once.
  */
 
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from 'react';
 import {
   View,
   Text,
@@ -42,9 +48,8 @@ import { GlassCard } from '@/components/common/GlassCard';
 import ClaimableTokenItem from '@/components/claimable/ClaimableTokenItem';
 import {
   useClaimableStore,
-  useDisplayedClaimableItems,
-  useVisibleClaimableCount,
-  useHiddenClaimableCount,
+  useClaimableItemsForAccount,
+  useClaimablePartialFailure,
   useShowHiddenApprovals,
   useClaimableLoading,
 } from '@/store/claimableStore';
@@ -76,11 +81,9 @@ export default function ClaimableTokensScreen() {
   const pendingRefreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeAccount = useActiveAccount();
-  const displayedItems = useDisplayedClaimableItems();
-  const visibleCount = useVisibleClaimableCount();
-  const hiddenCount = useHiddenClaimableCount();
   const showHidden = useShowHiddenApprovals();
   const isLoading = useClaimableLoading();
+  const hasPartialFailure = useClaimablePartialFailure(activeAccount?.address);
 
   // Animation for pending refresh indicator
   const reducedMotion = useReducedMotion();
@@ -96,6 +99,33 @@ export default function ClaimableTokensScreen() {
     toggleShowHidden,
     hiddenApprovals,
   } = useClaimableStore();
+
+  // Rendering is bound to the active account: items held for any other account
+  // read as an empty list rather than being shown under this account's name.
+  const accountItems = useClaimableItemsForAccount(activeAccount?.address);
+
+  const displayedItems = useMemo(
+    () =>
+      showHidden
+        ? accountItems
+        : accountItems.filter((item) => !hiddenApprovals.has(item.id)),
+    [accountItems, hiddenApprovals, showHidden]
+  );
+  const visibleCount = useMemo(
+    () => accountItems.filter((item) => !hiddenApprovals.has(item.id)).length,
+    [accountItems, hiddenApprovals]
+  );
+  const hiddenCount = useMemo(
+    () => accountItems.filter((item) => hiddenApprovals.has(item.id)).length,
+    [accountItems, hiddenApprovals]
+  );
+
+  // Latest active account, readable from the delayed post-claim callbacks
+  // without re-arming their timers.
+  const activeAccountAddressRef = useRef(activeAccount?.address);
+  useEffect(() => {
+    activeAccountAddressRef.current = activeAccount?.address;
+  }, [activeAccount?.address]);
 
   // Handle pending refresh after successful claim
   useEffect(() => {
@@ -127,9 +157,29 @@ export default function ClaimableTokensScreen() {
         claimedItemIds: undefined,
       });
 
+      // The account the claim was made from. Both delayed refreshes below are
+      // abandoned if the user has switched away by the time they fire: a
+      // forced fetch takes ownership of the store, so refreshing a stale
+      // account would wipe the now-active account's list.
+      const claimAccountAddress = activeAccount.address;
+      const endPendingRefresh = () => {
+        setIsPendingRefresh(false);
+        cancelAnimation(pulseOpacity);
+        pulseOpacity.value = 1;
+        pendingRefreshTimeoutRef.current = null;
+      };
+
       // Schedule refresh after delay (store in ref so it persists across effect re-runs)
       pendingRefreshTimeoutRef.current = setTimeout(async () => {
-        await fetchApprovals(activeAccount.address);
+        if (activeAccountAddressRef.current !== claimAccountAddress) {
+          endPendingRefresh();
+          return;
+        }
+
+        // force: a just-completed claim must be reflected even if a fetch
+        // landed inside the TTL window, or the claim looks like it never
+        // happened.
+        await fetchApprovals(claimAccountAddress, { force: true });
 
         // Check if any claimed items are still present in the list
         const { claimableItems } = useClaimableStore.getState();
@@ -140,17 +190,15 @@ export default function ClaimableTokensScreen() {
         if (claimedStillPresent) {
           // Retry once after additional delay if indexer hasn't updated yet
           pendingRefreshTimeoutRef.current = setTimeout(async () => {
-            await fetchApprovals(activeAccount.address);
-            setIsPendingRefresh(false);
-            cancelAnimation(pulseOpacity);
-            pulseOpacity.value = 1;
-            pendingRefreshTimeoutRef.current = null;
+            if (activeAccountAddressRef.current !== claimAccountAddress) {
+              endPendingRefresh();
+              return;
+            }
+            await fetchApprovals(claimAccountAddress, { force: true });
+            endPendingRefresh();
           }, RETRY_REFRESH_DELAY);
         } else {
-          setIsPendingRefresh(false);
-          cancelAnimation(pulseOpacity);
-          pulseOpacity.value = 1;
-          pendingRefreshTimeoutRef.current = null;
+          endPendingRefresh();
         }
       }, PENDING_REFRESH_DELAY);
     }
@@ -193,12 +241,13 @@ export default function ClaimableTokensScreen() {
     }, [activeAccount?.address, fetchApprovals, isPendingRefresh])
   );
 
-  // Handle pull-to-refresh
+  // Handle pull-to-refresh. force: an explicit refresh gesture must not be
+  // answered by the TTL cache.
   const handleRefresh = useCallback(async () => {
     if (!activeAccount?.address) return;
     setIsRefreshing(true);
     try {
-      await fetchApprovals(activeAccount.address);
+      await fetchApprovals(activeAccount.address, { force: true });
     } finally {
       setIsRefreshing(false);
     }
@@ -407,6 +456,33 @@ export default function ClaimableTokensScreen() {
           rightAction={renderHeaderRight()}
         />
 
+        {/* Degraded state: at least one owner balance could not be fetched, so
+            some rows show an unknown claim status rather than a real one. */}
+        {hasPartialFailure && (
+          <View
+            style={styles.degradedBanner}
+            accessibilityRole="alert"
+            testID="claimable-degraded-banner"
+          >
+            <Ionicons
+              name="warning-outline"
+              size={18}
+              color={styles.degradedText.color}
+            />
+            <Text style={styles.degradedText}>
+              Some claim statuses couldn&apos;t be checked.
+            </Text>
+            <TouchableOpacity
+              onPress={handleRefresh}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading claim statuses"
+              testID="claimable-degraded-retry"
+            >
+              <Text style={styles.degradedRetryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Hidden toggle */}
         {hiddenCount > 0 && (
           <TouchableOpacity
@@ -497,6 +573,27 @@ const createStyles = (theme: Theme) =>
     hiddenToggleText: {
       fontSize: 13,
       color: theme.colors.textSecondary,
+    },
+    degradedBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.colors.warningLight,
+      borderRadius: theme.borderRadius.md,
+      marginHorizontal: 16,
+      marginTop: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      gap: 8,
+    },
+    degradedText: {
+      flex: 1,
+      fontSize: 13,
+      color: theme.colors.warning,
+    },
+    degradedRetryText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.primary,
     },
     pendingRefreshBanner: {
       flexDirection: 'row',

@@ -66,7 +66,7 @@ import { springConfigs } from '@/utils/animations';
 import ClaimableBanner from '@/components/claimable/ClaimableBanner';
 import {
   useClaimableStore,
-  useVisibleClaimableCount,
+  useVisibleClaimableCountForAccount,
 } from '@/store/claimableStore';
 import UpdateBanner from '@/components/update/UpdateBanner';
 import { useUpdateStore } from '@/store/updateStore';
@@ -111,9 +111,20 @@ export default function HomeScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
 
-  // Claimable tokens
-  const visibleClaimableCount = useVisibleClaimableCount();
+  // Claimable tokens. The count is bound to the active account so the banner
+  // never shows one account's claimable total under another's name during a
+  // switch.
+  const visibleClaimableCount = useVisibleClaimableCountForAccount(
+    activeAccount?.address
+  );
   const { fetchApprovals } = useClaimableStore();
+
+  // Latest active account, readable from async refresh callbacks without
+  // re-arming them.
+  const activeAccountAddressRef = React.useRef(activeAccount?.address);
+  React.useEffect(() => {
+    activeAccountAddressRef.current = activeAccount?.address;
+  }, [activeAccount?.address]);
 
   // Remote signer mode
   const appMode = useAppMode();
@@ -1030,10 +1041,18 @@ export default function HomeScreen() {
     handleUserInteraction();
 
     if (activeAccount) {
+      const refreshedAddress = activeAccount.address;
       // Only refresh the current account, not all accounts
       await loadAccountData();
-      // Also refresh claimable tokens
-      fetchApprovals(activeAccount.address);
+      // Also refresh claimable tokens. force: pull-to-refresh must bypass the
+      // per-account TTL, otherwise the gesture silently does nothing.
+      //
+      // Re-checked against the live account: `loadAccountData` is awaited, and
+      // a forced fetch takes ownership of the claimable store, so refreshing a
+      // stale account here would discard the account the user switched to.
+      if (activeAccountAddressRef.current === refreshedAddress) {
+        await fetchApprovals(refreshedAddress, { force: true });
+      }
     }
 
     setRefreshing(false);
