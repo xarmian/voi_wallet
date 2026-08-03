@@ -515,3 +515,49 @@ describe('subscribeAllAccounts — round-trip count', () => {
     expect(mockDb.upsertCalls).toHaveLength(0);
   });
 });
+
+// Found by the full-diff Codex pass over PLAN-275. `.in()` is serialised into
+// the request URL, so a single unbounded read grows with wallet size and a
+// large wallet can exceed PostgREST/proxy URL limits. Combined with the
+// fail-closed rule that is not a degraded read — it is a wallet that never
+// subscribes anything, on every launch. The per-account loop this replaced had
+// no aggregate limit, so an unchunked read would have been a regression.
+describe('subscribeAllAccounts — the read is chunked', () => {
+  it('splits a large wallet across several reads instead of one huge one', async () => {
+    const many = Array.from({ length: 120 }, () =>
+      account(algosdk.generateAccount().addr.toString())
+    );
+
+    await notificationService.subscribeAllAccounts(many);
+
+    // 120 accounts at a chunk size of 50 → 3 reads. Emphatically not 1 (the
+    // unbounded URL) and not 120 (the round-trip cost this task removed).
+    expect(mockDb.selectCalls).toHaveLength(3);
+    expect(mockDb.selectCalls[0].addresses).toHaveLength(50);
+    expect(mockDb.selectCalls[2].addresses).toHaveLength(20);
+
+    // Every address is still covered exactly once.
+    const queried = mockDb.selectCalls.flatMap((c) => c.addresses);
+    expect(new Set(queried).size).toBe(120);
+  });
+
+  it('still aborts the WHOLE pass when a later chunk fails', async () => {
+    const many = Array.from({ length: 120 }, () =>
+      account(algosdk.generateAccount().addr.toString())
+    );
+    // Fail only AFTER the first chunk has already succeeded, using the
+    // existing between-read hook — the point is that a partial success must
+    // not be treated as a complete read.
+    mockDb.betweenReadAndWrite = () => {
+      if (mockDb.selectCalls.length === 1) {
+        mockDb.selectError = { message: 'url too long' };
+      }
+    };
+
+    await notificationService.subscribeAllAccounts(many);
+
+    // A partially-read pass cannot tell "absent" from "unread" for the chunks
+    // it never got, so it must write nothing at all.
+    expect(mockDb.upsertCalls).toHaveLength(0);
+  });
+});

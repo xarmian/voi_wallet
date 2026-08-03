@@ -413,23 +413,41 @@ class NotificationService {
 
     const addresses = Array.from(pending.keys());
 
-    // --- ONE read for N accounts ---
-    const { data, error } = await supabase
-      .schema('voiwallet')
-      .from('account_subscriptions')
-      .select('account_address')
-      .eq('device_id', deviceId)
-      .in('account_address', addresses);
+    // --- Chunked read: one query per CHUNK, not per account ---
+    // `.in()` is serialised into the request URL, so an unbounded list grows
+    // with wallet size and a large wallet can blow past PostgREST/proxy URL
+    // limits. Combined with the fail-closed rule below that is not a degraded
+    // read — it is a wallet that never subscribes anything, on every launch.
+    // The old per-account loop had no aggregate limit; chunking keeps the
+    // round-trip saving (N accounts -> ceil(N/50) reads, not N) without
+    // reintroducing one.
+    const READ_CHUNK_SIZE = 50;
+    const existingRows: { account_address: string }[] = [];
 
-    // Fail CLOSED: writing defaults over accounts whose real preferences could
-    // not be read is the one outcome the user cannot recover from.
-    if (error || !data) {
-      console.error(
-        '[NotificationService] Aborting subscribe pass: failed to read existing subscriptions',
-        error
-      );
-      return;
+    for (let i = 0; i < addresses.length; i += READ_CHUNK_SIZE) {
+      const chunk = addresses.slice(i, i + READ_CHUNK_SIZE);
+      const { data, error } = await supabase
+        .schema('voiwallet')
+        .from('account_subscriptions')
+        .select('account_address')
+        .eq('device_id', deviceId)
+        .in('account_address', chunk);
+
+      // Fail CLOSED, and abort the WHOLE pass on any chunk failing. Writing
+      // defaults over accounts whose real preferences could not be read is the
+      // one outcome the user cannot recover from, and a partially-read pass
+      // cannot tell "absent" from "unread" for the chunks it never got.
+      if (error || !data) {
+        console.error(
+          '[NotificationService] Aborting subscribe pass: failed to read existing subscriptions',
+          error
+        );
+        return;
+      }
+      existingRows.push(...data);
     }
+
+    const data = existingRows;
 
     const alreadySubscribed = new Set(
       (data as { account_address: string }[]).map((row) => row.account_address)
