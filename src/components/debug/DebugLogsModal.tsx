@@ -13,6 +13,10 @@ import {
   StatusBar,
 } from 'react-native';
 import { debugLogger, LogEntry } from '@/services/debug/logger';
+import {
+  getOfflineCounters,
+  type OfflineCounters,
+} from '@/services/network/offline';
 
 interface DebugLogsModalProps {
   visible: boolean;
@@ -34,21 +38,36 @@ export const DebugLogsModal: React.FC<DebugLogsModalProps> = ({
   // React-canonical replacement for the old snapshot-in-effect. This re-seeds
   // on every open (catching logs that arrived while closed) at the same logical
   // moment the effect did. Only the live subscription stays in the effect.
+  // TASK-191 observability. Counts only — no addresses, amounts or identifiers
+  // — so this stays safe to render (and to share) in a release build, where
+  // `console.log` is stripped precisely because logs can carry those.
+  const [counters, setCounters] = useState<OfflineCounters>(getOfflineCounters);
+
   const [prevVisible, setPrevVisible] = useState(visible);
   if (visible !== prevVisible) {
     setPrevVisible(visible);
     if (visible) {
       setLogs(debugLogger.getLogs());
+      setCounters(getOfflineCounters());
     }
   }
 
   useEffect(() => {
     if (visible) {
-      // Listen for new logs while open.
-      const removeListener = debugLogger.addListener(setLogs);
+      // Listen for new logs while open. Counters have no listener of their own,
+      // so they re-read alongside — plus once on open, above.
+      const removeListener = debugLogger.addListener((next) => {
+        setLogs(next);
+        setCounters(getOfflineCounters());
+      });
       return removeListener;
     }
   }, [visible]);
+
+  const skippedScopes = Object.entries(counters.offlineSkipsByScope)
+    .filter(([, count]) => count > 0)
+    .map(([scope, count]) => `${scope} ${count}`)
+    .join(', ');
 
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
@@ -168,6 +187,10 @@ export const DebugLogsModal: React.FC<DebugLogsModalProps> = ({
           <View style={styles.footer}>
             <Text style={styles.footerText}>
               Showing {logs.length} log entries
+            </Text>
+            <Text style={styles.footerText}>
+              Offline skips: {counters.offlineSkips}
+              {skippedScopes ? ` (${skippedScopes})` : ''}
             </Text>
           </View>
         </SafeAreaView>

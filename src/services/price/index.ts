@@ -1,3 +1,5 @@
+import { shouldSkipForOffline } from '@/services/network/offline';
+
 export interface VoiMarketData {
   trading_pair_id: number;
   exchange: string;
@@ -68,6 +70,21 @@ export class VoiPriceService {
   private static instance: VoiPriceService;
   private config: VoiPriceConfig;
   private cachedPrice: CachedPrice | null = null;
+  /**
+   * TASK-189: shared in-flight promise for `getVoiPrice`.
+   *
+   * `getVoiPrice` takes no arguments, so every concurrent caller wants the same
+   * value and a single shared promise is the correct dedup key (unlike
+   * AlgorandPriceService, which is keyed per asset id). Without it, N callers
+   * past the TTL — e.g. refreshAllBalances fanning out over N accounts — each
+   * launch their own fetch, each with up to `retryAttempts` attempts.
+   *
+   * Mirrors the `balanceLoadsInFlight` shape in walletStore, including the
+   * `finally` cleanup so a failed fetch never wedges the slot.
+   */
+  private priceInFlight: Promise<number> | null = null;
+  /** Bumped by clearCache() so a fetch started before it cannot write back. */
+  private cacheGeneration = 0;
 
   private constructor() {
     this.config = {
@@ -87,33 +104,60 @@ export class VoiPriceService {
   }
 
   async getVoiPrice(): Promise<number> {
-    try {
-      // Check cache first
-      if (this.cachedPrice && this.isCacheValid()) {
-        return this.cachedPrice.price;
-      }
-
-      const response = await this.fetchVoiMarketData();
-      const price = response.aggregates.weightedAveragePrice;
-
-      // Cache the price
-      this.cachedPrice = {
-        price,
-        timestamp: Date.now(),
-      };
-
-      return price;
-    } catch (error) {
-      console.warn('Failed to fetch VOI price:', error);
-
-      // Return cached price if available, even if stale
-      if (this.cachedPrice) {
-        return this.cachedPrice.price;
-      }
-
-      // Default fallback price
-      return 0;
+    // Check cache first
+    if (this.cachedPrice && this.isCacheValid()) {
+      return this.cachedPrice.price;
     }
+
+    // Join the in-flight fetch rather than starting a second retry ladder.
+    if (this.priceInFlight) {
+      return this.priceInFlight;
+    }
+
+    // The request absorbs its own failures (stale-then-zero fallback) so every
+    // joiner observes the same resolved value and no joiner sees a rejection.
+    const generation = this.cacheGeneration;
+    const request: Promise<number> = (async () => {
+      try {
+        const response = await this.fetchVoiMarketData();
+        const price = response.aggregates.weightedAveragePrice;
+
+        // Cache the price — unless clearCache() ran while this was in flight,
+        // in which case the callers still get the price but the cache stays
+        // dropped as they asked.
+        if (this.cacheGeneration === generation) {
+          this.cachedPrice = {
+            price,
+            timestamp: Date.now(),
+          };
+        }
+
+        return price;
+      } catch (error) {
+        console.warn('Failed to fetch VOI price:', error);
+
+        // Return cached price if available, even if stale
+        if (this.cachedPrice) {
+          return this.cachedPrice.price;
+        }
+
+        // Default fallback price
+        return 0;
+      }
+    })();
+
+    this.priceInFlight = request;
+
+    // Always release the slot once settled — a failed fetch must not wedge it.
+    // Identity-checked so a later request is never cleared by an earlier one.
+    // `request` absorbs its own errors, so this chain can never reject.
+    void request.finally(() => {
+      if (this.priceInFlight === request) {
+        this.priceInFlight = null;
+      }
+    });
+
+    return request;
   }
 
   async getVoiMarketData(): Promise<VoiPriceResponse> {
@@ -163,6 +207,17 @@ export class VoiPriceService {
   }
 
   private async fetchWithRetry(url: string): Promise<Response> {
+    // TASK-191: offline → skip the ladder instead of burning every attempt and
+    // its backoff. Same error shape the exhausted ladder throws, so the
+    // existing fallback (cached-but-stale price, else 0) applies unchanged.
+    if (shouldSkipForOffline('voi-price')) {
+      throw new VoiPriceError(
+        'Offline: skipped request without attempting the network',
+        undefined,
+        'NETWORK_ERROR'
+      );
+    }
+
     let lastError: Error;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
@@ -227,6 +282,10 @@ export class VoiPriceService {
 
   clearCache(): void {
     this.cachedPrice = null;
+    // Abandon the in-flight request too: a later caller must not join a request
+    // that predates the clear, and that request must not repopulate the cache.
+    this.cacheGeneration++;
+    this.priceInFlight = null;
   }
 
   formatUsdValue(voiAmount: number | bigint, pricePerVoi?: number): string {

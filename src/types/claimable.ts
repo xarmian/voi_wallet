@@ -49,8 +49,15 @@ export interface ClaimableItem {
   ownerEnvoiName?: string;
   /** Approved amount as bigint */
   amount: bigint;
-  /** Current owner balance as bigint */
+  /** Current owner balance as bigint (0n when `ownerBalanceUnknown`) */
   ownerBalance: bigint;
+  /**
+   * True when the owner's balance could not be fetched (TASK-188). Distinct
+   * from a real zero balance: the item must render as "unknown", never as
+   * "Insufficient", because a transient network error is not evidence that the
+   * token cannot be claimed.
+   */
+  ownerBalanceUnknown?: boolean;
   /** Whether the claim can be executed (owner has sufficient balance) */
   isClaimable: boolean;
   /** Original approval data */
@@ -113,6 +120,7 @@ export interface SerializableClaimableItem {
   ownerEnvoiName?: string;
   amount: string;
   ownerBalance: string;
+  ownerBalanceUnknown?: boolean;
   isClaimable: boolean;
   approval: TokenApproval;
 }

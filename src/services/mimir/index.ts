@@ -1,3 +1,5 @@
+import { shouldSkipForOffline } from '@/services/network/offline';
+
 export interface MimirAsset {
   name: string;
   symbol: string;
@@ -84,6 +86,20 @@ export interface Arc200BalanceResponse {
     balance: string;
   }[];
   'current-round': number;
+}
+
+/**
+ * Result of a batched ARC-200 balance lookup.
+ *
+ * Both collections are keyed `${contractId}_${owner}`. A pair whose lookup
+ * failed is present in `failed` and ABSENT from `balances` — it is deliberately
+ * NOT recorded as '0', because a caller cannot tell a genuine zero balance from
+ * a failed request and would render a claimable token as un-claimable
+ * ("Insufficient") on a transient network error (TASK-188).
+ */
+export interface Arc200BatchBalancesResult {
+  balances: Map<string, string>;
+  failed: Set<string>;
 }
 
 export interface MimirApiConfig {
@@ -369,6 +385,19 @@ export class MimirApiService {
   }
 
   private async fetchWithRetry(url: string): Promise<Response> {
+    // TASK-191: while the device is definitely offline, skip the ladder
+    // outright rather than burning `retryAttempts` fetches plus their backoff
+    // on a request that cannot reach the network. Deliberately the SAME error
+    // shape the exhausted ladder throws (MimirApiError / NETWORK_ERROR) — this
+    // is a faster failure, not a new one callers must learn to handle.
+    if (shouldSkipForOffline('mimir')) {
+      throw new MimirApiError(
+        'Offline: skipped request without attempting the network',
+        undefined,
+        'NETWORK_ERROR'
+      );
+    }
+
     let lastError: Error;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
@@ -563,11 +592,17 @@ export class MimirApiService {
   /**
    * Batch fetch ARC-200 balances for multiple owner/contract pairs
    * More efficient than individual calls when validating multiple approvals
+   *
+   * Per-pair failures are reported through `failed` rather than being flattened
+   * to '0' — see `Arc200BatchBalancesResult`. Callers that do not care about
+   * failures can read `balances` alone and behave exactly as before, except
+   * that a failed pair now reads as missing instead of falsely zero.
    */
   async batchGetArc200Balances(
     pairs: { owner: string; contractId: number }[]
-  ): Promise<Map<string, string>> {
+  ): Promise<Arc200BatchBalancesResult> {
     const balanceMap = new Map<string, string>();
+    const failed = new Set<string>();
 
     // Group by contractId to minimize API calls
     const byContract = new Map<number, string[]>();
@@ -591,14 +626,15 @@ export class MimirApiService {
               `Failed to fetch balance for ${owner} on contract ${contractId}:`,
               error
             );
-            // Set to '0' on error to mark as not claimable
-            balanceMap.set(`${contractId}_${owner}`, '0');
+            // Record the failure instead of writing '0': the caller must be
+            // able to distinguish "owner holds nothing" from "we don't know".
+            failed.add(`${contractId}_${owner}`);
           }
         }
       })
     );
 
-    return balanceMap;
+    return { balances: balanceMap, failed };
   }
 }
 

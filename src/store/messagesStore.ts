@@ -22,6 +22,7 @@ import {
 import MessagingService from '@/services/messaging';
 import { computeSyncCursor } from '@/services/messaging/syncCursor';
 import { AppLockSignal } from '@/services/secure/appLockState';
+import { shouldSkipForOffline } from '@/services/network/offline';
 import { useFriendsStore } from './friendsStore';
 
 const STORAGE_KEY_PREFIX = '@messages/';
@@ -800,6 +801,11 @@ export const useMessagesStore = create<MessagesState>()(
       // sync cursor, so once the initial sync commits a cursor, steady-state
       // polls only fetch/decrypt new messages.
       const interval = setInterval(() => {
+        // TASK-191: a tick fired while the device is definitely offline can
+        // only fail, so skip it rather than paying a retry ladder per tick.
+        // The interval keeps running — the next tick after connectivity
+        // returns syncs from the same committed cursor, so nothing is lost.
+        if (shouldSkipForOffline('messages-poll')) return;
         get().fetchAllThreads(userAddress);
       }, intervalMs);
 

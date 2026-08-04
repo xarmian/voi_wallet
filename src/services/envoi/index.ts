@@ -1,5 +1,6 @@
 import algosdk from 'algosdk';
 import { NetworkId } from '@/types/network';
+import { shouldSkipForOffline } from '@/services/network/offline';
 import {
   EnvoiNameInfo,
   EnvoiTokenInfo,
@@ -591,6 +592,16 @@ export class EnvoiService {
   }
 
   private async fetchWithRetry(url: string): Promise<Response> {
+    // TASK-191: offline → skip the ladder instead of burning every attempt and
+    // its backoff. A plain Error matches what the exhausted ladder throws, so
+    // the callers that turn a failure into `null` (name unresolved) behave
+    // exactly as they do today — just sooner.
+    if (shouldSkipForOffline('envoi')) {
+      throw new Error(
+        'Offline: skipped request without attempting the network'
+      );
+    }
+
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {

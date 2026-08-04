@@ -10,6 +10,10 @@ module.exports = {
     // fallback in scryptKdf) so local and CI behave identically.
     '^react-native-quick-crypto$':
       '<rootDir>/__mocks__/react-native-quick-crypto.js',
+    // Native module whose reachability probe calls global.fetch — which unit
+    // tests replace. Force the stub; suites that need real NetInfo semantics
+    // re-mock it themselves (src/platform/__tests__/connectivity.test.ts).
+    '^@react-native-community/netinfo$': '<rootDir>/__mocks__/netinfo.js',
   },
   // jest-expo's default only allow-transpiles RN/Expo packages; several deps
   // these utils import ship as untranspiled ESM and must also be transformed.
