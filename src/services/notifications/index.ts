@@ -10,6 +10,7 @@ import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import algosdk from 'algosdk';
 import {
   getSupabaseClient,
   isSupabaseConfigured,
@@ -20,6 +21,10 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   NotificationData,
 } from './types';
+import {
+  takeAccountSubscribeToken,
+  isAccountSubscribeTokenCurrent,
+} from './subscribePass';
 import Toast from 'react-native-toast-message';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import { deviceId } from '../../platform';
@@ -318,20 +323,7 @@ class NotificationService {
       .schema('voiwallet')
       .from('account_subscriptions')
       .upsert(
-        {
-          device_id: this.deviceId,
-          account_address: validatedAddress,
-          notify_messages: prefs.messages,
-          notify_voi_payments: prefs.voiPayments,
-          notify_arc200_transfers: prefs.arc200Transfers,
-          notify_arc72_transfers: prefs.arc72Transfers,
-          notify_outgoing_confirmations: prefs.outgoingConfirmations,
-          notify_price_alerts: prefs.priceAlerts,
-          min_voi_amount: prefs.minVoiAmount,
-          min_arc200_amount: prefs.minArc200Amount,
-          price_alert_threshold_percent: prefs.priceAlertThreshold,
-          updated_at: new Date().toISOString(),
-        },
+        this.buildSubscriptionRow(this.deviceId, validatedAddress, prefs),
         {
           onConflict: 'device_id,account_address',
         }
@@ -347,30 +339,166 @@ class NotificationService {
   }
 
   /**
-   * Subscribe all wallet accounts to notifications
-   * Called on app startup and when new accounts are added.
-   * Only subscribes accounts that don't already have preferences (preserves existing settings).
-   * Watch accounts have message notifications disabled by default since they can't decrypt.
+   * Subscribe all wallet accounts to notifications.
+   *
+   * Called on app startup (deferred, fire-and-forget) and when new accounts are
+   * added. TASK-192 collapsed the former per-account loop — one `.single()`
+   * read plus one upsert per account — into exactly ONE read and ONE write for
+   * N accounts. The batching is subordinate to four correctness rules the old
+   * loop got for free, and which a naive batch upsert would each destroy:
+   *
+   * 1. Accounts that ALREADY have preferences are excluded from the payload
+   *    entirely. A blanket upsert of defaults would silently reset every user's
+   *    notification settings on the next app start.
+   * 2. Defaults are per account, not per batch: watch accounts cannot decrypt,
+   *    so they get `messages: false` while every other type gets `true`.
+   * 3. FAIL CLOSED on the read. A single batch `.select()` succeeds or fails
+   *    wholesale — it cannot say which account failed — so per-account error
+   *    tolerance is incoherent here. If the read fails we abort the whole pass
+   *    and write nothing, retrying on the next app start. (The old loop was
+   *    fail-OPEN: `getPreferences` returns null for both "absent" and "query
+   *    failed", which under a batch would make an errored account look brand
+   *    new and overwrite its real settings.) Aborting resolves that ambiguity
+   *    by removing the path where it matters: absent from a SUCCESSFUL batch
+   *    read means genuinely absent.
+   * 4. Insert-if-absent (`ignoreDuplicates`), not a blanket upsert, so a
+   *    preference changed on another device between the read and the write is
+   *    not clobbered.
+   *
+   * @param accounts - Wallet accounts to subscribe.
+   * @param subscribeToken - Abort token taken at launch (see `subscribePass`).
+   *   Re-checked immediately before the write; a teardown or account deletion
+   *   in between drops the write. Defaults to a token taken on entry, which is
+   *   correct for synchronous callers that are not working from a snapshot.
    */
-  async subscribeAllAccounts(accounts: AccountMetadata[]): Promise<void> {
-    for (const account of accounts) {
-      // Check if already subscribed - if so, don't overwrite existing preferences
-      const existing = await this.getPreferences(account.address);
-      if (existing) {
-        console.log('Account already subscribed, skipping:', account.address);
-        continue;
-      }
+  async subscribeAllAccounts(
+    accounts: AccountMetadata[],
+    subscribeToken: number = takeAccountSubscribeToken()
+  ): Promise<void> {
+    if (accounts.length === 0) return;
 
-      // Determine default preferences based on account type
-      const isWatchAccount = account.type === AccountType.WATCH;
-      const preferences: Partial<NotificationPreferences> = {
-        ...DEFAULT_NOTIFICATION_PREFERENCES,
-        // Watch accounts can't decrypt messages, so disable by default
-        messages: !isWatchAccount,
-      };
-
-      await this.subscribeAccount(account.address, preferences);
+    const supabase = getSupabaseClient();
+    const deviceId = this.deviceId;
+    if (!supabase || !deviceId) {
+      console.warn(
+        'Cannot subscribe accounts: Supabase or device ID not available'
+      );
+      return;
     }
+
+    // Validate (checksum, not just length) BEFORE anything reaches the payload.
+    // A batch write amplifies bad data, so a single malformed address must be
+    // dropped here rather than corrupting a row. Deduplicate by address at the
+    // same time: the table is keyed (device_id, account_address), so two wallet
+    // entries sharing an address are one subscription. If any of them can
+    // decrypt, the device can decrypt, so `messages` ORs across duplicates.
+    const pending = new Map<string, { messages: boolean }>();
+    for (const account of accounts) {
+      const address = this.validateAddress(
+        account.address,
+        'subscribeAllAccounts'
+      );
+      if (!address) continue;
+
+      const canDecryptMessages = account.type !== AccountType.WATCH;
+      const existing = pending.get(address);
+      if (existing) {
+        existing.messages = existing.messages || canDecryptMessages;
+      } else {
+        pending.set(address, { messages: canDecryptMessages });
+      }
+    }
+
+    if (pending.size === 0) return;
+
+    const addresses = Array.from(pending.keys());
+
+    // --- Chunked read: one query per CHUNK, not per account ---
+    // `.in()` is serialised into the request URL, so an unbounded list grows
+    // with wallet size and a large wallet can blow past PostgREST/proxy URL
+    // limits. Combined with the fail-closed rule below that is not a degraded
+    // read — it is a wallet that never subscribes anything, on every launch.
+    // The old per-account loop had no aggregate limit; chunking keeps the
+    // round-trip saving (N accounts -> ceil(N/50) reads, not N) without
+    // reintroducing one.
+    const READ_CHUNK_SIZE = 50;
+    const existingRows: { account_address: string }[] = [];
+
+    for (let i = 0; i < addresses.length; i += READ_CHUNK_SIZE) {
+      const chunk = addresses.slice(i, i + READ_CHUNK_SIZE);
+      const { data, error } = await supabase
+        .schema('voiwallet')
+        .from('account_subscriptions')
+        .select('account_address')
+        .eq('device_id', deviceId)
+        .in('account_address', chunk);
+
+      // Fail CLOSED, and abort the WHOLE pass on any chunk failing. Writing
+      // defaults over accounts whose real preferences could not be read is the
+      // one outcome the user cannot recover from, and a partially-read pass
+      // cannot tell "absent" from "unread" for the chunks it never got.
+      if (error || !data) {
+        console.error(
+          '[NotificationService] Aborting subscribe pass: failed to read existing subscriptions',
+          error
+        );
+        return;
+      }
+      existingRows.push(...data);
+    }
+
+    const data = existingRows;
+
+    const alreadySubscribed = new Set(
+      (data as { account_address: string }[]).map((row) => row.account_address)
+    );
+
+    const rows = addresses
+      .filter((address) => !alreadySubscribed.has(address))
+      .map((address) =>
+        this.buildSubscriptionRow(deviceId, address, {
+          ...DEFAULT_NOTIFICATION_PREFERENCES,
+          // Watch accounts can't decrypt messages, so disable by default.
+          messages: pending.get(address)!.messages,
+        })
+      );
+
+    if (rows.length === 0) {
+      console.log(
+        '[NotificationService] All accounts already subscribed, nothing to write'
+      );
+      return;
+    }
+
+    // Re-check the abort token as late as possible: the accounts array is a
+    // snapshot taken before the read above, and an unmount or a deleteAccount
+    // since then means this write would resurrect a subscription.
+    if (!isAccountSubscribeTokenCurrent(subscribeToken)) {
+      console.log(
+        '[NotificationService] Subscribe pass superseded (teardown or account deletion); skipping write'
+      );
+      return;
+    }
+
+    // --- ONE write for N accounts ---
+    // ignoreDuplicates => ON CONFLICT DO NOTHING: insert-if-absent, so a row
+    // created or edited on another device between the read and here survives.
+    const { error: writeError } = await supabase
+      .schema('voiwallet')
+      .from('account_subscriptions')
+      .upsert(rows, {
+        onConflict: 'device_id,account_address',
+        ignoreDuplicates: true,
+      });
+
+    if (writeError) {
+      console.error('Failed to subscribe accounts:', writeError);
+      return;
+    }
+
+    console.log(
+      `[NotificationService] Subscribed ${rows.length} account(s) to notifications`
+    );
   }
 
   /**
@@ -543,15 +671,47 @@ class NotificationService {
   // Private methods
 
   /**
+   * Build one `account_subscriptions` row. Shared by the single-account
+   * subscribe and the batch pass so both write an identical column set.
+   */
+  private buildSubscriptionRow(
+    deviceId: string,
+    address: string,
+    prefs: NotificationPreferences
+  ): Record<string, unknown> {
+    return {
+      device_id: deviceId,
+      account_address: address,
+      notify_messages: prefs.messages,
+      notify_voi_payments: prefs.voiPayments,
+      notify_arc200_transfers: prefs.arc200Transfers,
+      notify_arc72_transfers: prefs.arc72Transfers,
+      notify_outgoing_confirmations: prefs.outgoingConfirmations,
+      notify_price_alerts: prefs.priceAlerts,
+      min_voi_amount: prefs.minVoiAmount,
+      min_arc200_amount: prefs.minArc200Amount,
+      price_alert_threshold_percent: prefs.priceAlertThreshold,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  /**
    * Validate and normalize an address parameter.
    * Logs a warning and attempts recovery if an object is passed instead of a string.
+   *
+   * TASK-192: this used to accept ANY 58-character string — no checksum, no
+   * decode — so a truncated or corrupted address passed the gate and was
+   * written verbatim. It now runs the real checksum check (`isValidAddress`,
+   * as `services/envoi` does), because the batch subscribe amplifies bad data
+   * across a whole wallet in one write.
+   *
    * @param address - The address parameter to validate
    * @param context - Method name for logging context
    * @returns Validated address string, or null if invalid
    */
   private validateAddress(address: unknown, context: string): string | null {
     // Already a valid address string
-    if (typeof address === 'string' && address.length === 58) {
+    if (typeof address === 'string' && algosdk.isValidAddress(address)) {
       return address;
     }
 
@@ -574,7 +734,7 @@ class NotificationService {
       if (
         'address' in obj &&
         typeof obj.address === 'string' &&
-        obj.address.length === 58
+        algosdk.isValidAddress(obj.address)
       ) {
         console.warn(
           `[NotificationService] ${context}: Recovered address from object:`,

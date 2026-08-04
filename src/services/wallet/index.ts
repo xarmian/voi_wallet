@@ -33,6 +33,7 @@ import {
   withDefaultAuthLevel,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
+import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
@@ -1359,6 +1360,16 @@ export class MultiAccountWalletService {
   }
 
   static async deleteAccount(accountId: string): Promise<void> {
+    // TASK-192: cancel any in-flight deferred notification subscribe pass. That
+    // pass holds a wallet snapshot from app start and finishes with one batched
+    // write, so a deletion inside its window would otherwise let it write a
+    // subscription derived from an account record that no longer exists.
+    // Invalidating HERE (not only in walletStore.deleteAccount) covers the
+    // callers that reach this service directly — e.g. the watch→standard
+    // upgrade in AccountImportPreviewScreen, which deletes the watch record
+    // without going through the store. Inert when no pass is in flight.
+    invalidateAccountSubscribePasses();
+
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
@@ -1381,6 +1392,16 @@ export class MultiAccountWalletService {
   }
 
   static async clearAllWallets(): Promise<void> {
+    // TASK-192: cancel any in-flight deferred notification subscribe pass, for
+    // the same reason deleteAccount does — that pass holds a wallet snapshot
+    // from app start and finishes with one batched write, so a wipe inside its
+    // window would otherwise let it write subscriptions for accounts that no
+    // longer exist. A full wipe is the widest version of that race: EVERY
+    // account in the snapshot is stale, not just one. Must be synchronous and
+    // before any await, alongside the epoch bump below. Inert when no pass is
+    // in flight.
+    invalidateAccountSubscribePasses();
+
     // TASK-212: this is the canonical wallet-metadata wipe — restore
     // (backup/restorers.ts clearAllData) and LockScreen.performReset() both
     // funnel through it. Bump the reset epoch and bust the memo SYNCHRONOUSLY,
@@ -2220,6 +2241,11 @@ export class MultiAccountWalletService {
    */
   static async pruneStandardAccounts(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
+    // TASK-192: this removes a SUBSET of accounts without going through
+    // deleteAccount or clearAllWallets, so neither of those guards covers it.
+    // A boot-time subscribe pass holding the pre-prune snapshot would otherwise
+    // batch-write a subscription for an account this call just removed.
+    invalidateAccountSubscribePasses();
     const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
     if (!wallet) {

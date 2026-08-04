@@ -48,6 +48,7 @@ import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import type { SecretSource } from './SessionKeyVault';
 import { clearPinSetupPending } from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
+import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
@@ -3693,6 +3694,15 @@ export class AccountSecureStorage {
     // reliably aborted, even if the mutex is momentarily busy). Mirrors
     // clearAllWallets bumping walletResetEpoch at its entry (TASK-212).
     this.secureResetGeneration += 1;
+    // TASK-192: cancel any in-flight deferred notification subscribe pass, here
+    // rather than only in clearAllWallets. Every reset path awaits THIS method
+    // first and reaches clearAllWallets second (LockScreen.performReset,
+    // SecureStorageUnavailableScreen, backup restorers.clearAllData,
+    // keyManager), so invalidating downstream leaves a window the length of a
+    // full secure-storage wipe in which the boot-time batch can still write
+    // subscriptions for accounts being erased. Synchronous and before the mutex,
+    // for the same reason the generation bump above is.
+    invalidateAccountSubscribePasses();
     // TASK-220: zero the in-memory private-key cache NOW (synchronously) so a full
     // wipe can't leave a decrypted key readable from cache after the persisted
     // secret is gone. Paired with the generation guard on the cache write in
