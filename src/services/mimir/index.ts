@@ -384,7 +384,10 @@ export class MimirApiService {
     }
   }
 
-  private async fetchWithRetry(url: string): Promise<Response> {
+  private async fetchWithRetry(
+    url: string,
+    init?: RequestInit
+  ): Promise<Response> {
     // TASK-191: while the device is definitely offline, skip the ladder
     // outright rather than burning `retryAttempts` fetches plus their backoff
     // on a request that cannot reach the network. Deliberately the SAME error
@@ -410,9 +413,15 @@ export class MimirApiService {
 
         const response = await fetch(url, {
           signal: controller.signal,
+          // Caller-supplied method/body (e.g. a POST batch) override the
+          // GET default; headers below are merged over any the caller passes so
+          // Accept/Content-Type stay set. Existing GET callers pass no init and
+          // are unaffected.
+          ...init,
           headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
+            ...init?.headers,
           },
         });
 
@@ -590,8 +599,78 @@ export class MimirApiService {
   }
 
   /**
+   * Maximum accounts sent in one batched balance request. Matches the
+   * documented cap of the server's `accountIds` parameter and keeps the POST
+   * body well under its 64 KB limit (~100 × 58-char address ≈ 6 KB). Owners
+   * beyond this are split across additional requests.
+   */
+  private static readonly MAX_BATCH_ACCOUNTS = 100;
+
+  /**
+   * Fetch balances for many owners of ONE contract in a single request, using
+   * the server's `accountIds` batch parameter (mimir-api TASK-282).
+   *
+   * Returns a map of owner → balance. An owner ABSENT from the map held a zero
+   * balance or had no row — the caller maps that to '0', exactly as the
+   * single-account `getArc200Balance` returns '0' for a missing account. `limit`
+   * is set to the chunk size so the result is never truncated (the response
+   * excludes zero balances, so at most `owners.length` rows can come back).
+   *
+   * `owners` must be non-empty and no larger than MAX_BATCH_ACCOUNTS; callers
+   * chunk before calling. Throws on network/HTTP/shape errors so the caller can
+   * fall back to per-owner requests.
+   */
+  private async fetchArc200BalancesForOwners(
+    contractId: number,
+    owners: string[]
+  ): Promise<Map<string, string>> {
+    const response = await this.fetchWithRetry(
+      `${this.config.baseUrl}/arc200/balances`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          contractId,
+          accountIds: owners,
+          limit: owners.length,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new MimirApiError(
+        `Failed to fetch ARC-200 balances: ${response.statusText}`,
+        response.status
+      );
+    }
+
+    const data: Arc200BalanceResponse = await response.json();
+
+    if (!data.balances || !Array.isArray(data.balances)) {
+      throw new MimirApiError(
+        'Invalid response format from Mimir API balances endpoint'
+      );
+    }
+
+    const result = new Map<string, string>();
+    for (const b of data.balances) {
+      if (b.contractId === contractId) {
+        result.set(b.accountId, b.balance);
+      }
+    }
+    return result;
+  }
+
+  /**
    * Batch fetch ARC-200 balances for multiple owner/contract pairs
    * More efficient than individual calls when validating multiple approvals
+   *
+   * Issues ONE request per contract (chunked at MAX_BATCH_ACCOUNTS) via the
+   * server's `accountIds` parameter, collapsing the previous per-(contract,
+   * owner) fan-out — the claimable-approvals path that fired on every Home
+   * account-change, ClaimableTokens focus and pull-to-refresh (F-20 / PLAN-279
+   * Phase E). If a batched request fails, it falls back to per-owner requests
+   * for that chunk, so one failure cannot make a whole contract's balances
+   * unknown and per-owner failures stay isolated.
    *
    * Per-pair failures are reported through `failed` rather than being flattened
    * to '0' — see `Arc200BatchBalancesResult`. Callers that do not care about
@@ -604,7 +683,7 @@ export class MimirApiService {
     const balanceMap = new Map<string, string>();
     const failed = new Set<string>();
 
-    // Group by contractId to minimize API calls
+    // Group by contractId and dedup owners (unchanged from before).
     const byContract = new Map<number, string[]>();
     for (const pair of pairs) {
       const owners = byContract.get(pair.contractId) || [];
@@ -614,21 +693,52 @@ export class MimirApiService {
       byContract.set(pair.contractId, owners);
     }
 
-    // Fetch balances for each contract
     await Promise.all(
       Array.from(byContract.entries()).map(async ([contractId, owners]) => {
-        for (const owner of owners) {
+        for (
+          let i = 0;
+          i < owners.length;
+          i += MimirApiService.MAX_BATCH_ACCOUNTS
+        ) {
+          const chunk = owners.slice(i, i + MimirApiService.MAX_BATCH_ACCOUNTS);
           try {
-            const balance = await this.getArc200Balance(contractId, owner);
-            balanceMap.set(`${contractId}_${owner}`, balance);
+            // ONE request for the whole chunk, replacing chunk.length requests.
+            const balances = await this.fetchArc200BalancesForOwners(
+              contractId,
+              chunk
+            );
+            for (const owner of chunk) {
+              // Absent from the response == zero / no row, matching what the
+              // single getArc200Balance path returns for a missing account.
+              balanceMap.set(
+                `${contractId}_${owner}`,
+                balances.get(owner) ?? '0'
+              );
+            }
           } catch (error) {
-            console.error(
-              `Failed to fetch balance for ${owner} on contract ${contractId}:`,
+            // Batch failed: fall back to per-owner so one bad request cannot
+            // make a whole contract's balances unknown, and per-owner failures
+            // stay isolated in `failed` (TASK-188 semantics preserved).
+            console.warn(
+              `Batch balance fetch failed for contract ${contractId}; falling back to per-owner:`,
               error
             );
-            // Record the failure instead of writing '0': the caller must be
-            // able to distinguish "owner holds nothing" from "we don't know".
-            failed.add(`${contractId}_${owner}`);
+            for (const owner of chunk) {
+              try {
+                balanceMap.set(
+                  `${contractId}_${owner}`,
+                  await this.getArc200Balance(contractId, owner)
+                );
+              } catch (err) {
+                console.error(
+                  `Failed to fetch balance for ${owner} on contract ${contractId}:`,
+                  err
+                );
+                // Record the failure instead of writing '0': the caller must be
+                // able to distinguish "owner holds nothing" from "we don't know".
+                failed.add(`${contractId}_${owner}`);
+              }
+            }
           }
         }
       })
