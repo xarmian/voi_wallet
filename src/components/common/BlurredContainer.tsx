@@ -65,8 +65,14 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
   disableBlur = false,
 }) => {
   const { theme } = useTheme();
-  // Disable blur when requested (e.g., inside FlatList) to avoid Android crashes
-  const hasNFTBackground = !disableBlur && !!theme.backgroundImageUrl;
+  // Whether an NFT image is painted behind this container. This is a property
+  // of the THEME and is independent of whether we may blur.
+  const hasBackgroundImage = !!theme.backgroundImageUrl;
+  // Blur is suppressed on request (e.g. rows of a virtualized list, where a
+  // mounted BlurView crashes on Android view recycling — see SafeBlurView).
+  // Suppressing the blur does NOT remove the image behind us, so the no-blur
+  // branch below still has to stay legible over it (TASK-314).
+  const shouldBlur = !disableBlur && hasBackgroundImage;
 
   // Get glass config from theme based on variant
   const glassConfig: GlassEffect = theme.glass[variant];
@@ -135,18 +141,41 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
   // Overlay background color with glass effect
   const overlayBackgroundColor = useMemo(() => {
     if (backgroundColor) return backgroundColor;
-    if (!hasNFTBackground) return glassConfig.backgroundColor;
+    if (!shouldBlur) return glassConfig.backgroundColor;
 
     // Enhanced overlay for NFT backgrounds
     return theme.mode === 'dark'
       ? `rgba(0, 0, 0, 0.25)`
       : `rgba(255, 255, 255, 0.05)`;
-  }, [
-    backgroundColor,
-    hasNFTBackground,
-    glassConfig.backgroundColor,
-    theme.mode,
-  ]);
+  }, [backgroundColor, shouldBlur, glassConfig.backgroundColor, theme.mode]);
+
+  // Surface for the no-blur branch when an NFT image sits behind us (TASK-314).
+  //
+  // `theme.colors.glassBackground` is a WHITE veil — 0.06 alpha in the built-in
+  // dark theme, 0.20 in a generated NFT theme (themeGenerator.ts:103). It is
+  // designed to sit ON TOP OF a blur, not to be the whole surface. Painted
+  // straight onto an NFT image with no blur under it, it reads as washed out,
+  // which is the regression a6ce5c6 (TASK-39) introduced when it routed
+  // virtualized rows down this branch.
+  //
+  // A dark scrim is the blur-less stand-in: it holds text contrast over an
+  // arbitrary image while still letting the artwork read through, which is what
+  // BlurView(tint='dark') + the rgba(0,0,0,0.25) overlay above achieved together.
+  //
+  // Deliberately a literal pair rather than a new `theme.colors` key: the whole
+  // Theme object is JSON-serialized into AsyncStorage by themeStorage.ts and
+  // rehydrated verbatim (loadNFTTheme validates only top-level fields and never
+  // re-runs the generator), so a newly-added colour key would come back
+  // `undefined` for every user with an NFT theme saved before the upgrade — a
+  // transparent card, strictly worse than a washed-out one. Matches the existing
+  // literals in this file (the overlay above, the highlight gradients below).
+  const noBlurSurface = useMemo(
+    () =>
+      theme.mode === 'dark'
+        ? 'rgba(12, 12, 16, 0.62)'
+        : 'rgba(255, 255, 255, 0.72)',
+    [theme.mode]
+  );
 
   // Highlight gradient colors (subtle top edge highlight for depth)
   const highlightGradientColors = useMemo((): [string, string] => {
@@ -172,15 +201,21 @@ export const BlurredContainer: React.FC<BlurredContainerProps> = ({
     };
   }, [showInnerBorder, resolvedBorderRadius, theme.colors.glassHighlight]);
 
-  // Non-NFT background fallback with glass styling
-  if (!hasNFTBackground) {
+  // No-blur branch: either the theme has no NFT image at all, or blur was
+  // suppressed via `disableBlur` while an image is still painted behind us.
+  // Those two cases need different surfaces — see `noBlurSurface` above.
+  if (!shouldBlur) {
     return (
       <View
         style={[
           styles.container,
           {
             borderRadius: resolvedBorderRadius,
-            backgroundColor: backgroundColor ?? theme.colors.glassBackground,
+            backgroundColor:
+              backgroundColor ??
+              (hasBackgroundImage
+                ? noBlurSurface
+                : theme.colors.glassBackground),
           },
           containerStyle,
           style,
