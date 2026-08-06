@@ -318,7 +318,7 @@ function useFastWriter(): void {
 async function seedCredential(pin: string): Promise<void> {
   const salt = 'a'.repeat(64);
   await asPriv.persistPinCredential({
-    hash: asPriv.hashPin(pin, salt, PIN_ITERATIONS),
+    hash: await asPriv.hashPin(pin, salt, PIN_ITERATIONS),
     iterations: PIN_ITERATIONS,
     salt,
     secretSource: 'pin',
