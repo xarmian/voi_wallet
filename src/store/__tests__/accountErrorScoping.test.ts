@@ -90,7 +90,11 @@ const accountState = (id: string) =>
   useWalletStore.getState().accountStates[id];
 
 describe('operation-scoped account errors (TASK-40)', () => {
+  let consoleError: jest.SpyInstance;
+
   beforeEach(() => {
+    // Silenced, and asserted on below — a failed balance load must LOG.
+    consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
     mockGetAccountBalance.mockReset();
     mockGetTransactionHistory.mockReset();
     mockGetAllTransactionHistory.mockReset();
@@ -109,6 +113,21 @@ describe('operation-scoped account errors (TASK-40)', () => {
 
     expect(accountState('acc-1').balanceError).toBe('algod is down');
     expect(accountState('acc-1').transactionsError).toBeNull();
+  });
+
+  it('logs a balance failure instead of swallowing it', async () => {
+    // The catch wrote balanceError and nothing else — no console output. Every
+    // screen that does not render balanceError (SwapScreen among them) was left
+    // with a permanently balance-less account and no trace of why, which is
+    // what forced this bug onto a device to be found at all.
+    mockGetAccountBalance.mockRejectedValue(new Error('algod is down'));
+
+    await useWalletStore.getState().loadAccountBalance('acc-1', true);
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('acc-1'),
+      expect.objectContaining({ message: 'algod is down' })
+    );
   });
 
   it('records a transaction failure under transactionsError, not balanceError', async () => {

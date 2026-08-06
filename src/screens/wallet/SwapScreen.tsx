@@ -3,7 +3,7 @@
  * Allows users to swap tokens on Voi Network using Snowball DEX aggregator
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -58,6 +58,7 @@ import { GlassButton } from '@/components/common/GlassButton';
 import NetworkSelector from '@/components/network/NetworkSelector';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -114,11 +115,29 @@ export default function SwapScreen() {
     (state) => state.loadAccountBalance
   );
 
+  // A failed balance load is a dead end on this screen unless it is shown. The
+  // effect below is one-shot — keyed on `!singleNetworkBalance`, which does not
+  // change when the load fails — so the screen would sit with no From token
+  // while TokenSelector, which gates its entire token load on that balance,
+  // spins on "Loading tokens..." forever, with nothing on screen saying why.
+  const balanceError = useWalletStore((state) =>
+    accountId ? state.accountStates[accountId]?.balanceError : undefined
+  );
+
   useEffect(() => {
     if (accountId && !singleNetworkBalance) {
       loadAccountBalance(accountId);
     }
   }, [accountId, singleNetworkBalance, loadAccountBalance]);
+
+  // Force: the unforced path early-returns on a fresh cache, and after a
+  // failure there is no balance to be fresh — but a retry must also survive a
+  // partially-populated state.
+  const retryBalanceLoad = useCallback(() => {
+    if (accountId) {
+      void loadAccountBalance(accountId, true);
+    }
+  }, [accountId, loadAccountBalance]);
 
   // Load network-specific balance when network or account changes
   useEffect(() => {
@@ -1073,6 +1092,20 @@ export default function SwapScreen() {
             networks={[NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]}
           />
 
+          {/* Balance load failure. Shown only while there is still no balance:
+              a stale-refresh failure over a balance we already have is not
+              worth interrupting the swap for. */}
+          {balanceError && !singleNetworkBalance ? (
+            <ErrorStateView
+              variant="inline"
+              error={balanceError}
+              onRetry={retryBalanceLoad}
+              fallbackMessage="We couldn't load this account's balance."
+              style={styles.balanceErrorNotice}
+              testID="swap-balance-error"
+            />
+          ) : null}
+
           {/* Input Token Section */}
           <View style={styles.tokenSection}>
             <Text style={styles.sectionLabel}>You pay</Text>
@@ -1346,6 +1379,9 @@ const createStyles = (theme: Theme) =>
     errorText: {
       fontSize: 16,
       color: theme.colors.error,
+    },
+    balanceErrorNotice: {
+      marginBottom: theme.spacing.sm,
     },
     tokenSection: {
       marginBottom: theme.spacing.xs,
