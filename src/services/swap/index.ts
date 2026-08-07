@@ -110,6 +110,27 @@ class SnowballSwapAdapter implements SwapProvider {
         : undefined,
     });
 
+    // A 200 does NOT mean the swap is executable. The API prices the route and
+    // builds the transaction group in the same call, and when only the second
+    // half fails it still answers 200 — `unsignedTransactions` comes back empty
+    // and the reason sits in `error`/`simulationError` (observed: "Strict
+    // resource verification did not converge after 8 iterations: tx references
+    // exceed MaxAppTotalTxnReferences = 8" on a multi-hop route). Unguarded,
+    // that quote renders as healthy and SwapScreen's Review button navigates
+    // into UniversalTransactionSigning with ZERO transactions to sign.
+    //
+    // Gated on userAddress because an empty array is legitimate without one:
+    // an address-less request is a price-only quote and never carries
+    // transactions. SwapScreen always sends an address.
+    if (request.userAddress && quote.unsignedTransactions?.length === 0) {
+      throw new SwapServiceError(
+        quote.error ||
+          quote.simulationError ||
+          'This route could not be built into a swap transaction.',
+        'snowball'
+      );
+    }
+
     return {
       inputAmount: quote.quote.inputAmount,
       outputAmount: quote.quote.outputAmount,

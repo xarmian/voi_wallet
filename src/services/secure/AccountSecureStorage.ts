@@ -49,6 +49,7 @@ import type { SecretSource } from './SessionKeyVault';
 import { clearPinSetupPending } from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
+import { pbkdf2Hex } from './pbkdf2Kdf';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
@@ -150,21 +151,18 @@ interface AccountSecretPayload {
  */
 export type MigrationResult = 'MIGRATED' | 'ALREADY_V2' | 'NOT_MIGRATED';
 
-// PBKDF2 using CryptoJS with SHA256; returns hex string of keyLength bytes
-const customPBKDF2 = (
+// PBKDF2-HMAC-SHA256; returns hex string of keyLength bytes.
+//
+// Delegates to the native-first shim (TASK-311). It was `CryptoJS.PBKDF2`
+// inline here, which is pure JS and cost ~1.2s per call at PIN_ITERATIONS on
+// Android Hermes — five calls per cold start pinned the JS thread for ~6.3s.
+// Output is byte-identical across backends, so stored hashes stay valid.
+const customPBKDF2 = async (
   password: string,
   saltHex: string,
   iterations: number,
   keyLength: number
-): string => {
-  const saltWA = CryptoJS.enc.Hex.parse(saltHex);
-  const derived = CryptoJS.PBKDF2(password, saltWA, {
-    keySize: keyLength / 4, // CryptoJS keySize is in 32-bit words
-    iterations,
-    hasher: (CryptoJS.algo as any).SHA256,
-  });
-  return derived.toString(CryptoJS.enc.Hex);
-};
+): Promise<string> => pbkdf2Hex(password, saltHex, iterations, keyLength);
 
 // Platform options are now handled internally by the platform adapters
 
@@ -2254,7 +2252,7 @@ export class AccountSecureStorage {
 
       // Derive key using custom PBKDF2 with high iteration count
       const saltHex = Buffer.from(salt).toString('hex');
-      const key = customPBKDF2(
+      const key = await customPBKDF2(
         baseEntropy,
         saltHex,
         this.ENCRYPTION_KEY_ITERATIONS,
@@ -2279,7 +2277,7 @@ export class AccountSecureStorage {
       const baseEntropy = await platformCrypto.sha256(entropyString);
 
       const saltHex = Buffer.from(salt).toString('hex');
-      const key = customPBKDF2(
+      const key = await customPBKDF2(
         baseEntropy,
         saltHex,
         this.ENCRYPTION_KEY_ITERATIONS,
@@ -2826,14 +2824,22 @@ export class AccountSecureStorage {
 
     if (storedData.format === 'json') {
       this.legacyCheckRequired = false;
-      const candidateHash = this.hashPin(pin, salt, storedData.iterations);
+      const candidateHash = await this.hashPin(
+        pin,
+        salt,
+        storedData.iterations
+      );
       if (storedData.hash === candidateHash) {
         if (
           storedData.iterations !== this.PIN_ITERATIONS ||
           storedData.salt === undefined
         ) {
           try {
-            const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
+            const upgradedHash = await this.hashPin(
+              pin,
+              salt,
+              this.PIN_ITERATIONS
+            );
             await this.persistPinCredential({
               hash: upgradedHash,
               iterations: this.PIN_ITERATIONS,
@@ -2852,10 +2858,14 @@ export class AccountSecureStorage {
     const iterationCandidates = this.getIterationCandidates();
 
     for (const iterations of iterationCandidates) {
-      const candidateHash = this.hashPin(pin, salt, iterations);
+      const candidateHash = await this.hashPin(pin, salt, iterations);
       if (storedData.hash === candidateHash) {
         try {
-          const upgradedHash = this.hashPin(pin, salt, this.PIN_ITERATIONS);
+          const upgradedHash = await this.hashPin(
+            pin,
+            salt,
+            this.PIN_ITERATIONS
+          );
           await this.persistPinCredential({
             hash: upgradedHash,
             iterations: this.PIN_ITERATIONS,
@@ -3145,7 +3155,7 @@ export class AccountSecureStorage {
       // PHASE 4 — COMMIT: flip the PIN credential in ONE folded write (§5.2).
       // POINT OF NO RETURN.
       const newSalt = await this.generateRandomHex(32);
-      const hash = this.hashPin(newSecret, newSalt, this.PIN_ITERATIONS);
+      const hash = await this.hashPin(newSecret, newSalt, this.PIN_ITERATIONS);
       await this.persistPinCredential({
         hash,
         iterations: this.PIN_ITERATIONS,
@@ -3588,11 +3598,11 @@ export class AccountSecureStorage {
     ).join('');
   }
 
-  private static hashPin(
+  private static async hashPin(
     pin: string,
     salt: string,
     iterations: number
-  ): string {
+  ): Promise<string> {
     return customPBKDF2(pin, salt, iterations, 32);
   }
 

@@ -107,6 +107,19 @@ describe('Android R8 build configuration (TASK-209)', () => {
       // react-native-image-colors is an Expo Module() in its own package, so
       // the expo.modules.** rule does not reach it.
       '-keep class com.reactnativeimagecolors.** { *; }',
+
+      // TASK-312: react-native-screens ships NO consumer proguard rules, so
+      // nothing keeps its classes under R8. Bisected on device — Test A (minify
+      // OFF) removed the back-nav flash, Test B (minify ON, shrinkResources OFF)
+      // reproduced it — which isolates CODE shrinking as the cause. Note the
+      // ViewManager rule above is -keepnames, which prevents renaming but still
+      // permits shrinking, so it does not cover this.
+      '-keep class com.swmansion.rnscreens.** { *; }',
+
+      // The standard enum rule, absent from RN's shipped file. Defence-in-depth
+      // for transitive dependencies that resolve enum constants by name.
+      'public static **[] values();',
+      'public static ** valueOf(java.lang.String);',
     ];
 
     for (const rule of requiredRules) {

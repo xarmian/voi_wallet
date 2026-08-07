@@ -14,6 +14,10 @@ module.exports = {
     // tests replace. Force the stub; suites that need real NetInfo semantics
     // re-mock it themselves (src/platform/__tests__/connectivity.test.ts).
     '^@react-native-community/netinfo$': '<rootDir>/__mocks__/netinfo.js',
+    // ESM-only package (no `require` condition in its exports map), so the CJS
+    // resolver can't load it — and src/services/swap imports it transitively,
+    // which blocked every test of the unified swap service.
+    '^@txnlab/deflex$': '<rootDir>/__mocks__/txnlab-deflex.js',
   },
   // jest-expo's default only allow-transpiles RN/Expo packages; several deps
   // these utils import ship as untranspiled ESM and must also be transformed.

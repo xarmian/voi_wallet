@@ -30,6 +30,35 @@ export class SnowballApiError extends Error {
   }
 }
 
+/**
+ * Serialize an asset/app ID for the wire.
+ *
+ * The API rejects numeric IDs outright:
+ *   {"error":"Invalid inputToken/outputToken: must be a string of digits
+ *             (asset/app id) <= 9007199254740991"}
+ * and applies the same rule to `poolId` and to `items[].wrappedTokenId` on
+ * /unwrap. It is strict about the whole payload — one numeric field is enough
+ * for a 400, so every ID goes through here.
+ *
+ * The app carries IDs as numbers (see QuoteRequest's note), and the API's
+ * ceiling is exactly Number.MAX_SAFE_INTEGER, so `String(id)` is lossless for
+ * every ID the API will accept. Non-integer or out-of-range input would
+ * serialize to something the API rejects with an opaque 400, so it is caught
+ * here instead, where the message can name the field.
+ */
+const toWireId = (id: number | string, field: string): string => {
+  if (typeof id === 'string') {
+    if (!/^\d+$/.test(id)) {
+      throw new SnowballApiError(`Invalid ${field}: expected an asset/app ID`);
+    }
+    return id;
+  }
+  if (!Number.isSafeInteger(id) || id < 0) {
+    throw new SnowballApiError(`Invalid ${field}: expected an asset/app ID`);
+  }
+  return String(id);
+};
+
 export class SnowballApiService {
   private static instance: SnowballApiService;
   private tokensCache: CachedData<SnowballToken[]> | null = null;
@@ -70,9 +99,16 @@ export class SnowballApiService {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        // The API reports failures as {"error": "..."}, not {"message": ...},
+        // and RN's fetch leaves `statusText` empty — so reading only `message`
+        // collapsed every 400 to the literal, useless string "HTTP 400: "
+        // while the actual reason sat unread in the body.
         throw new SnowballApiError(
           errorData.message ||
-            `HTTP ${response.status}: ${response.statusText}`,
+            errorData.error ||
+            `HTTP ${response.status}${
+              response.statusText ? `: ${response.statusText}` : ''
+            }`,
           response.status
         );
       }
@@ -186,9 +222,15 @@ export class SnowballApiService {
    * Get swap quote
    */
   public async getQuote(request: QuoteRequest): Promise<SwapQuote> {
+    const { inputToken, outputToken, poolId, ...rest } = request;
     return await this.makeRequest<SwapQuote>('/quote', {
       method: 'POST',
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        ...rest,
+        inputToken: toWireId(inputToken, 'inputToken'),
+        outputToken: toWireId(outputToken, 'outputToken'),
+        ...(poolId !== undefined ? { poolId: toWireId(poolId, 'poolId') } : {}),
+      }),
     });
   }
 
@@ -200,7 +242,16 @@ export class SnowballApiService {
   ): Promise<{ transactions: string[] }> {
     return await this.makeRequest<{ transactions: string[] }>('/unwrap', {
       method: 'POST',
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        ...request,
+        items: request.items.map((item, i) => ({
+          ...item,
+          wrappedTokenId: toWireId(
+            item.wrappedTokenId,
+            `items[${i}].wrappedTokenId`
+          ),
+        })),
+      }),
     });
   }
 

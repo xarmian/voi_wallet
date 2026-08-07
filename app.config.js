@@ -71,6 +71,33 @@ const ANDROID_PROGUARD_RULES = `
 # react-native-image-colors is an Expo Module() in its own package, so the
 # expo.modules.** rule above does not reach it.
 -keep class com.reactnativeimagecolors.** { *; }
+
+# --- react-native-screens (TASK-312) ---
+# Back-navigation flashed a frame of the screen just departed. Bisected on
+# device: Test A (minify OFF + shrinkResources OFF) removed the flash, proving
+# R8 rather than release-build semantics; Test B (minify ON + shrinkResources
+# OFF) reproduced it, isolating CODE shrinking as the cause and exonerating
+# resource shrinking.
+#
+# react-native-screens ships NO consumer proguard rules of its own (no *.pro in
+# the package, no consumerProguardFiles in its build.gradle), so nothing keeps
+# its classes under R8 — the whole native stack/fragment machinery that drives
+# the pop transition is subject to shrinking and renaming. RN's own rules do not
+# reach it: proguard-rules.pro covers NativeModules, and the ViewManager rule
+# above is -keepnames, which prevents renaming but still ALLOWS shrinking.
+-keep class com.swmansion.rnscreens.** { *; }
+
+# --- Enum values()/valueOf() ---
+# The standard rule, absent from RN's shipped file. Kotlin/Java enums whose
+# constants are resolved from a string via valueOf() break silently when R8
+# strips the synthetic accessors. No direct Enum.valueOf was found in
+# com.swmansion.rnscreens (its stack/presentation/animation enums are matched
+# structurally), so this is defence-in-depth for transitive dependencies rather
+# than a proven fix — it is cheap, and its absence is a real gap either way.
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
 `;
 
 export default {
@@ -214,6 +241,13 @@ export default {
             // --assets-dest <build/generated/res/react/VARIANT>, and @expo/cli
             // persistMetroAssets.js createKeepFileAsync emits <res>/raw/keep.xml
             // listing every Metro asset by its generated identifier.
+            // Both restored to `true` after the TASK-312 bisect. Test A (both
+            // OFF) removed the back-nav flash, proving R8 rather than
+            // release-build semantics; Test B (minify ON, shrinkResources OFF)
+            // reproduced it, isolating CODE shrinking and exonerating resource
+            // shrinking. The fix is therefore a keep rule, not a flag — see the
+            // react-native-screens block in ANDROID_PROGUARD_RULES above — so
+            // both wins from TASK-209 are kept rather than traded away.
             enableMinifyInReleaseBuilds: true,
             enableShrinkResourcesInReleaseBuilds: true,
             extraProguardRules: ANDROID_PROGUARD_RULES,

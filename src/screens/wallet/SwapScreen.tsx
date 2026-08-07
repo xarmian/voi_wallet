@@ -3,7 +3,7 @@
  * Allows users to swap tokens on Voi Network using Snowball DEX aggregator
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -58,6 +58,7 @@ import { GlassButton } from '@/components/common/GlassButton';
 import NetworkSelector from '@/components/network/NetworkSelector';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -108,10 +109,27 @@ export default function SwapScreen() {
   const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(
     null
   );
+  // Failure of the network-specific fetch below. It served a non-VOI selection
+  // entirely on its own and reported nothing but a console.error, so an
+  // Algorand balance failure left the same dead end the store path used to.
+  const [networkBalanceError, setNetworkBalanceError] = useState<string | null>(
+    null
+  );
+  // Bumped by Retry to re-run the network-specific effect, which has no other
+  // trigger once its inputs have settled.
+  const [networkBalanceReloadToken, setNetworkBalanceReloadToken] = useState(0);
 
   // Load balance if not available
   const loadAccountBalance = useWalletStore(
     (state) => state.loadAccountBalance
+  );
+
+  // Failure of the STORE-backed load. This describes `loadAccountBalance`, which
+  // fetches on the app's current network — the same source `accountBalance`
+  // below falls back to, and only for VOI. Scoping matters: see
+  // `balanceErrorForSelectedNetwork`.
+  const storeBalanceError = useWalletStore((state) =>
+    accountId ? state.accountStates[accountId]?.balanceError : undefined
   );
 
   useEffect(() => {
@@ -135,16 +153,21 @@ export default function SwapScreen() {
           const balance = await networkService.getAccountBalance(address);
           if (!isCancelled) {
             setNetworkBalance(balance);
+            setNetworkBalanceError(null);
           }
         } else {
           // For VOI network, use the store balance
           if (!isCancelled) {
             setNetworkBalance(singleNetworkBalance || null);
+            setNetworkBalanceError(null);
           }
         }
       } catch (error) {
         if (!isCancelled) {
           console.error('Error loading network balance:', error);
+          setNetworkBalanceError(
+            error instanceof Error ? error.message : 'Failed to load balance'
+          );
         }
       }
     };
@@ -154,13 +177,40 @@ export default function SwapScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [currentAccount, selectedNetwork, singleNetworkBalance]);
+  }, [
+    currentAccount,
+    selectedNetwork,
+    singleNetworkBalance,
+    networkBalanceReloadToken,
+  ]);
 
   // Use network-specific balance - only fall back to store balance for VOI
   const accountBalance =
     selectedNetwork === NetworkId.VOI_MAINNET
       ? networkBalance || singleNetworkBalance
       : networkBalance;
+
+  // Report the failure that belongs to the network being swapped on, not
+  // whichever one the store happens to hold. The store is only consulted for
+  // VOI (see `accountBalance` above), so on an Algorand selection a stale VOI
+  // failure would raise an alarm about a swap that is working fine — and its
+  // Retry would re-run the wrong request. Each branch retries its own loader.
+  const isStoreBackedNetwork = selectedNetwork === NetworkId.VOI_MAINNET;
+  const balanceErrorForSelectedNetwork = isStoreBackedNetwork
+    ? storeBalanceError
+    : networkBalanceError;
+
+  const retryBalanceLoad = useCallback(() => {
+    if (isStoreBackedNetwork) {
+      // Force: the unforced path early-returns on a fresh cache, and a retry
+      // must survive a partially-populated state.
+      if (accountId) {
+        void loadAccountBalance(accountId, true);
+      }
+      return;
+    }
+    setNetworkBalanceReloadToken((token) => token + 1);
+  }, [isStoreBackedNetwork, accountId, loadAccountBalance]);
 
   // Token selection state
   const [inputToken, setInputToken] = useState<SwapToken | null>(null);
@@ -1073,6 +1123,20 @@ export default function SwapScreen() {
             networks={[NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]}
           />
 
+          {/* Balance load failure for the selected network. Shown only while
+              there is still no balance: a stale-refresh failure over a balance
+              we already have is not worth interrupting the swap for. */}
+          {balanceErrorForSelectedNetwork && !accountBalance ? (
+            <ErrorStateView
+              variant="inline"
+              error={balanceErrorForSelectedNetwork}
+              onRetry={retryBalanceLoad}
+              fallbackMessage="We couldn't load this account's balance."
+              style={styles.balanceErrorNotice}
+              testID="swap-balance-error"
+            />
+          ) : null}
+
           {/* Input Token Section */}
           <View style={styles.tokenSection}>
             <Text style={styles.sectionLabel}>You pay</Text>
@@ -1346,6 +1410,9 @@ const createStyles = (theme: Theme) =>
     errorText: {
       fontSize: 16,
       color: theme.colors.error,
+    },
+    balanceErrorNotice: {
+      marginBottom: theme.spacing.sm,
     },
     tokenSection: {
       marginBottom: theme.spacing.xs,

@@ -95,17 +95,35 @@ export interface PlatformFee {
 
 /**
  * Swap quote response from Snowball API
+ *
+ * NOTE: the API answers HTTP 200 even when it priced the swap but could not
+ * BUILD it — `unsignedTransactions` comes back empty and the reason is carried
+ * in `error`/`simulationError`. See `SnowballSwapAdapter.getQuote`.
  */
 export interface SwapQuote {
   quote: QuoteDetails;
   unsignedTransactions: string[]; // Base64 encoded unsigned transactions
   route: Route;
-  poolId: string;
+  poolId: string | null; // null when the route is multi-hop or unpinned
   platformFee: PlatformFee;
+  /** Why transaction building failed, on an otherwise-200 response. */
+  error?: string | null;
+  /** Why simulating the built group failed, on an otherwise-200 response. */
+  simulationError?: string | null;
+  /** True when the quote was priced over a reduced set of pools. */
+  routeDegraded?: boolean;
+  skippedPools?: unknown[];
 }
 
 /**
- * Quote request parameters
+ * Quote request parameters.
+ *
+ * IDs are numbers here — the app normalizes every token ID to a number
+ * (`SnowballToken.id`, `SwapToken.id`), because /config/tokens returns them
+ * inconsistently ("0" as a string, 300279 as a number). The API requires them
+ * as strings of digits on the wire; that conversion happens once, in
+ * `SnowballApiService`, so the wire format stays a concern of the service that
+ * owns the wire.
  */
 export interface QuoteRequest {
   inputToken: number;
@@ -118,7 +136,8 @@ export interface QuoteRequest {
 }
 
 /**
- * Unwrap request parameters
+ * Unwrap request parameters. `wrappedTokenId` is stringified on the wire for
+ * the same reason as `QuoteRequest`'s IDs.
  */
 export interface UnwrapRequest {
   address: string;

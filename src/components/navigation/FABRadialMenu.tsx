@@ -32,6 +32,7 @@ import { springConfigs } from '@/utils/animations';
 import { GlassCard } from '@/components/common/GlassCard';
 import { useActiveAccount } from '@/store/walletStore';
 import { useTotalUnreadCount } from '@/store/messagesStore';
+import { buildStackScreenParams } from './fabMenuParams';
 
 // Menu item configuration
 interface MenuItem {
@@ -235,11 +236,13 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
     (item: MenuItem) => {
       const navigateToScreen = () => {
         if (item.stackScreen) {
-          // Navigate to nested stack screen
-          const params =
-            item.stackScreen === 'Swap' && activeAccount
-              ? { accountId: activeAccount.address }
-              : {};
+          // Navigate to nested stack screen. The ID-vs-address distinction that
+          // broke Swap (TASK-313) lives in buildStackScreenParams, where it is
+          // unit-tested — see the comment there.
+          const params = buildStackScreenParams(
+            item.stackScreen,
+            activeAccount
+          );
 
           // Use Main -> Tab -> Stack screen navigation path
           navigation.navigate('Main', {

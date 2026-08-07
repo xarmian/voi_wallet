@@ -1327,6 +1327,17 @@ export const useWalletStore = create<WalletState>()(
             }, 0);
           }
         } catch (error) {
+          // A failed balance load used to be completely silent: it wrote
+          // balanceError into state, but nothing logged and — outside HomeScreen,
+          // which renders that error — nothing displayed it either. The account
+          // just stayed balance-less. SwapScreen's one-shot load effect is keyed
+          // on `!singleNetworkBalance`, which never changes after a failure, so
+          // it could not even retry. Diagnosing that took device instrumentation
+          // for want of one line.
+          console.error(
+            `Failed to load balance for account ${accountId}:`,
+            error
+          );
           const { accountStates: latestAccountStates } = get();
           set({
             accountStates: {

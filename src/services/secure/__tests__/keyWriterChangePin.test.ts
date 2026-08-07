@@ -289,7 +289,7 @@ function useFastWriter(): void {
 async function seedCredential(pin: string): Promise<void> {
   const salt = 'a'.repeat(64);
   await asPriv.persistPinCredential({
-    hash: asPriv.hashPin(pin, salt, PIN_ITERATIONS),
+    hash: await asPriv.hashPin(pin, salt, PIN_ITERATIONS),
     iterations: PIN_ITERATIONS,
     salt,
     secretSource: 'pin',
@@ -470,7 +470,7 @@ describe('changePin — atomic re-wrap of every account (§5.3)', () => {
     // Establish the OLD credential (no accounts unwrapped here since they are
     // already v2 — persist the credential directly).
     await asPriv.persistPinCredential({
-      hash: asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
+      hash: await asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
       iterations: PIN_ITERATIONS,
       salt: 'a'.repeat(64),
       secretSource: 'pin',
@@ -509,7 +509,7 @@ describe('changePin crash-injection — verify-before-delete, never strands (§4
     await seedV2('acct-a', a.sk, oldPin);
     await seedV2('acct-b', b.sk, oldPin);
     await asPriv.persistPinCredential({
-      hash: asPriv.hashPin(oldPin, 'a'.repeat(64), PIN_ITERATIONS),
+      hash: await asPriv.hashPin(oldPin, 'a'.repeat(64), PIN_ITERATIONS),
       iterations: PIN_ITERATIONS,
       salt: 'a'.repeat(64),
       secretSource: 'pin',
@@ -667,7 +667,7 @@ describe('deletePin policy (§5.5)', () => {
     const a = makeAlgoKey();
     await seedV2('acct-a', a.sk, '111111');
     await asPriv.persistPinCredential({
-      hash: asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
+      hash: await asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
       iterations: PIN_ITERATIONS,
       salt: 'a'.repeat(64),
       secretSource: 'pin',
@@ -691,7 +691,7 @@ describe('deletePin policy (§5.5)', () => {
   it('ALLOWS removing the PIN on a watch-only wallet (no key material)', async () => {
     addToList('acct-watch'); // no secret payload
     await asPriv.persistPinCredential({
-      hash: asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
+      hash: await asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
       iterations: PIN_ITERATIONS,
       salt: 'a'.repeat(64),
       secretSource: 'pin',
@@ -896,7 +896,7 @@ describe('changePin verify gate is throttle-aware (§8)', () => {
     const a = makeAlgoKey();
     await seedV2('acct-a', a.sk, '111111');
     await asPriv.persistPinCredential({
-      hash: asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
+      hash: await asPriv.hashPin('111111', 'a'.repeat(64), PIN_ITERATIONS),
       iterations: PIN_ITERATIONS,
       salt: 'a'.repeat(64),
       secretSource: 'pin',
