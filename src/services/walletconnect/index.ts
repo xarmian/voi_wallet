@@ -5,8 +5,9 @@ import algosdk from 'algosdk';
 import { Platform } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { detectPlatform } from '@/platform/detection';
+import { detectPlatform, isMobile } from '@/platform/detection';
 import { WalletConnectClient } from './client';
+import { sweepWalletConnectMessageStore } from './messagesRetention';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { AccountMetadata, AccountType } from '@/types/wallet';
@@ -54,11 +55,102 @@ import {
   topicFromStorageKey,
 } from '@/services/walletconnect/v1/sessionCleanup';
 
+/**
+ * Latched the first time `WalletConnectService.initialize()` is entered, and
+ * never cleared (PLAN-324 DR-2).
+ *
+ * Deliberately NOT the service's own `initialized` flag and not
+ * `WalletConnectClient`'s either: `WalletConnectClient.disconnect()` resets the
+ * client's flag (`client.ts`) while the SDK's global `Core` singleton survives
+ * it, so a later re-init would otherwise run a "pre-init" sweep against a WARM
+ * Core — whose in-memory `MessageTracker` would clobber whatever we wrote on
+ * its next persist. Module scope, because "once per process" is exactly the
+ * scope of the SDK global this protects.
+ */
+let hasEverInitialized = false;
+
+/** The single in-flight (or settled) sweep every initializer awaits. */
+let retentionSweep: Promise<void> | null = null;
+
+/**
+ * Where `@walletconnect/core` parks its PROCESS-global `Core`
+ * (`core.ts` `setGlobalCore`: ``globalThis[`_walletConnectCore_${prefix}`]``,
+ * with an empty prefix here because this app passes no storage options).
+ */
+const WC_GLOBAL_CORE_KEY = '_walletConnectCore_';
+
+/**
+ * True once the SDK's global `Core` exists — at which point a raw write to the
+ * message keys is already unsafe (its `MessageTracker` rewrites both wholesale
+ * on the next message), so the sweep must not run.
+ *
+ * The module latch alone is not enough: it lives in JS module scope, which a
+ * Fast Refresh reload resets, while the Core on `globalThis` survives.
+ */
+function isCoreAlreadyConstructed(): boolean {
+  try {
+    return (
+      (globalThis as unknown as Record<string, unknown>)[WC_GLOBAL_CORE_KEY] !=
+      null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Start the once-per-process retention sweep, and return the promise callers
+ * must await before Core is constructed.
+ *
+ * Everything up to the assignment is SYNCHRONOUS on purpose (DR-2): two
+ * concurrent `initialize()` calls interleave only at an `await`, so by
+ * assigning `retentionSweep` before the first one, the second caller finds the
+ * same promise and neither can reach `client.initialize()` while the sweep is
+ * still writing.
+ *
+ * Returns `null` off-native (DR-7): the sweep assumes the React Native
+ * key-value adapter's raw 1:1 AsyncStorage keys, which is unverified on
+ * web/extension, so those targets simply skip it — nothing else changes there.
+ */
+function beginRetentionSweep(): Promise<void> | null {
+  if (!hasEverInitialized) {
+    hasEverInitialized = true;
+    if (isMobile() && !isCoreAlreadyConstructed()) {
+      // The sweep body is deferred by one microtask so that `retentionSweep` is
+      // filled in BEFORE any of it runs: nothing, however re-entrant, can find
+      // the latch set and the slot still empty.
+      retentionSweep = Promise.resolve()
+        .then(() => {
+          // Re-check at the moment of execution, not just at scheduling: Core
+          // may have been constructed in between. From here on every service
+          // initializer is parked on this promise, so nothing else can reach
+          // `client.initialize()` while the sweep writes.
+          if (isCoreAlreadyConstructed()) return;
+          return sweepWalletConnectMessageStore();
+        })
+        .then(
+          () => undefined,
+          (error) => {
+            // The sweep already swallows its own failures; this is the backstop
+            // that guarantees a rejection can never fail WalletConnect init.
+            console.warn(
+              'WalletConnect retention sweep rejected:',
+              redactError(error)
+            );
+          }
+        );
+    }
+  }
+  return retentionSweep;
+}
+
 export class WalletConnectService extends EventEmitter {
   private static instance: WalletConnectService;
   private client: WalletConnectClient;
   private activeSessions: Map<string, WalletConnectSession> = new Map();
   private initialized = false;
+  /** The in-flight `initialize()`, so concurrent callers share one run. */
+  private initializing: Promise<void> | null = null;
 
   static getInstance(): WalletConnectService {
     if (!WalletConnectService.instance) {
@@ -74,13 +166,48 @@ export class WalletConnectService extends EventEmitter {
   }
 
   async initialize(): Promise<void> {
+    // Latch and start the sweep on the FIRST entry, before anything can await:
+    // this is the only moment we know the SDK's global Core has not been built
+    // yet. Concurrent callers get the same promise back.
+    const pendingRetentionSweep = beginRetentionSweep();
+
     // Prevent double initialization
     if (this.initialized) {
       console.log('WalletConnect service already initialized, skipping');
       return;
     }
 
+    // Concurrent callers join the run already in flight instead of starting a
+    // second one. The plain `initialized` flag above cannot do this on its own
+    // — it is only set at the END of a successful run, so two callers that
+    // arrive together would both fall through and initialize the provider
+    // twice. `pair()` relies on this handle to wait out a startup race.
+    if (this.initializing) return this.initializing;
+
+    // Deferred by one microtask so the slot is reserved BEFORE any of the run
+    // executes: without the sweep in front (off-native, or a warm Core) the
+    // body would otherwise reach `client.initialize()` synchronously, while
+    // `initializing` was still null.
+    this.initializing = Promise.resolve().then(() =>
+      this.runInitialization(pendingRetentionSweep)
+    );
     try {
+      await this.initializing;
+    } finally {
+      this.initializing = null;
+    }
+  }
+
+  private async runInitialization(
+    pendingRetentionSweep: Promise<void> | null
+  ): Promise<void> {
+    try {
+      // Must complete BEFORE the provider constructs Core: once the SDK's
+      // MessageTracker is live it rewrites both message keys wholesale on the
+      // next message and would clobber the swept records (PLAN-324 DR-2).
+      // Never rejects — see beginRetentionSweep.
+      if (pendingRetentionSweep) await pendingRetentionSweep;
+
       await this.client.initialize();
       await this.loadExistingSessions();
       await this.loadV1Sessions();
@@ -446,6 +573,21 @@ export class WalletConnectService extends EventEmitter {
 
   async pair(uri: string): Promise<void> {
     try {
+      // Startup race: `serviceBootstrap` starts WalletConnect and DeepLink init
+      // in PARALLEL, so a cold-start `wc:` link can reach us while init is
+      // still running — and now it also has the retention sweep in front of it.
+      // Wait that run out rather than failing the pairing on a provider that is
+      // seconds away from existing. (Only an IN-FLIGHT run is awaited: if init
+      // never started, or already finished, behaviour is unchanged.)
+      //
+      // A FAILED run propagates rather than being swallowed: init can fail
+      // after the provider exists but before the session handlers are
+      // attached, and pairing onto that would complete the handshake with
+      // nothing listening for the proposal — a silently lost connection.
+      if (this.initializing) {
+        await this.initializing;
+      }
+
       const provider = this.client.getProvider();
       const signClient = provider.client;
 
