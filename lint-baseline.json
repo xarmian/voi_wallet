@@ -2,14 +2,15 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 157,
-    "filesLinted": 463,
+    "warnings": 153,
+    "filesLinted": 491,
     "filesWithFindings": 62
   },
   "rules": {
-    "react-hooks/immutability": 95,
-    "react-hooks/preserve-manual-memoization": 25,
-    "react-hooks/set-state-in-effect": 37
+    "react-hooks/exhaustive-deps": 1,
+    "react-hooks/immutability": 92,
+    "react-hooks/preserve-manual-memoization": 22,
+    "react-hooks/set-state-in-effect": 38
   },
   "files": {
     "src/components/UnifiedAuthModal.tsx": {
@@ -381,10 +382,10 @@
     },
     "src/screens/wallet/HomeScreen.tsx": {
       "errors": 0,
-      "warnings": 6,
+      "warnings": 2,
       "rules": {
-        "react-hooks/immutability": 3,
-        "react-hooks/preserve-manual-memoization": 3
+        "react-hooks/exhaustive-deps": 1,
+        "react-hooks/set-state-in-effect": 1
       }
     },
     "src/screens/wallet/NFTScreen.tsx": {

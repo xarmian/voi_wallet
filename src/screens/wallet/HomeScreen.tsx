@@ -25,6 +25,7 @@ import type {
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  withDelay,
   withSpring,
   withTiming,
   Easing,
@@ -79,6 +80,129 @@ import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { toErrorAlert } from '@/utils/errorMapping';
 import { useConnectivity } from '@/hooks/useConnectivity';
+
+/**
+ * TASK-318: extracted VERBATIM from the account-change effect inside
+ * HomeScreen. The React Compiler cannot lower conditionals inside try/catch
+ * ("Support value blocks within a try/catch statement"), and any unsupported
+ * syntax anywhere in the component bails compilation of the whole component —
+ * module scope is outside the compiler's purview. Behavior is unchanged: the
+ * refs are the component's live viewModeRef/activeAccountIdRef, re-checked
+ * after every await so a stale run can never write to the wrong account.
+ */
+async function loadHomeAccountData({
+  accountId,
+  currentViewMode,
+  viewModeRef,
+  activeAccountIdRef,
+  setNetworkStatus,
+  setNetworkStatusError,
+  loadTokenMappings,
+  loadMultiNetworkBalance,
+  loadAccountTransactions,
+  loadEnvoiName,
+}: {
+  accountId: string;
+  currentViewMode: boolean;
+  viewModeRef: { current: boolean };
+  activeAccountIdRef: { current: string | undefined };
+  setNetworkStatus: (status: NetworkStatus) => void;
+  setNetworkStatusError: (error: unknown) => void;
+  loadTokenMappings: () => Promise<unknown>;
+  loadMultiNetworkBalance: (accountId: string) => Promise<unknown>;
+  loadAccountTransactions: (accountId: string) => Promise<unknown>;
+  loadEnvoiName: (accountId: string) => Promise<unknown>;
+}): Promise<void> {
+  try {
+    // Kick the health check off CONCURRENTLY with the mappings/balance load
+    // instead of awaiting it first. The service dedups/caches by NetworkId
+    // within a short TTL, so on cold boot this reuses the status networkStore
+    // already fetched during init (or shares its in-flight probe) rather than
+    // issuing a duplicate ~15s request, and never delays the first balance.
+    const networkHealthPromise = networkService
+      .checkNetworkHealth()
+      .then((status) => {
+        if (
+          viewModeRef.current === currentViewMode &&
+          activeAccountIdRef.current === accountId
+        ) {
+          setNetworkStatus(status);
+          setNetworkStatusError(null);
+        }
+      })
+      .catch((error) => {
+        console.warn('[HomeScreen] Network health check failed:', error);
+        if (
+          viewModeRef.current === currentViewMode &&
+          activeAccountIdRef.current === accountId
+        ) {
+          setNetworkStatusError(error);
+        }
+      });
+
+    // Check if view mode or account changed while loading
+    if (
+      viewModeRef.current !== currentViewMode ||
+      activeAccountIdRef.current !== accountId
+    ) {
+      console.log(
+        '[HomeScreen] View mode or account changed during load, aborting'
+      );
+      return;
+    }
+
+    // Load token mappings if needed for multi-network view
+    if (currentViewMode) {
+      await loadTokenMappings();
+    }
+
+    // Check again before loading balance
+    if (
+      viewModeRef.current !== currentViewMode ||
+      activeAccountIdRef.current !== accountId
+    ) {
+      console.log(
+        '[HomeScreen] View mode or account changed after mappings, aborting'
+      );
+      return;
+    }
+
+    // Trigger cache-first balance loading (will use cached data if available)
+    // This will show cached data immediately and refresh in background if needed
+    // ALWAYS load multi-network balance regardless of view mode since user can toggle
+    await loadMultiNetworkBalance(accountId);
+
+    // Final check before loading additional data
+    if (
+      viewModeRef.current !== currentViewMode ||
+      activeAccountIdRef.current !== accountId
+    ) {
+      console.log(
+        '[HomeScreen] View mode or account changed after balance, aborting'
+      );
+      return;
+    }
+
+    await Promise.all([
+      loadAccountTransactions(accountId),
+      loadEnvoiName(accountId),
+      // Already running concurrently (self-handles state + errors); await it
+      // here only so it settles within loadData rather than dangling.
+      networkHealthPromise,
+    ]);
+  } catch (error) {
+    // The store loaders record their own per-account error, so this outer
+    // catch only ever sees failures outside them (e.g. loadTokenMappings).
+    // It used to be console-only; surface it so the screen is never silent.
+    console.error('Failed to load account data:', error);
+    if (
+      viewModeRef.current === currentViewMode &&
+      activeAccountIdRef.current === accountId
+    ) {
+      setNetworkStatusError(error);
+    }
+  }
+}
 
 export default function HomeScreen() {
   // `networkStatus` used to be written twice and read nowhere (TASK-40 / R-03).
@@ -161,13 +285,18 @@ export default function HomeScreen() {
     }
   }, [isUpdatePending, downloadedUpdate, setUpdateAvailable]);
 
-  // Check for updates on app startup (silent - no toasts, just show banner if available)
+  // Check for updates on app startup (silent - no toasts, just show banner if
+  // available). TASK-318: run-once is enforced by the ref instead of an empty
+  // dep array + exhaustive-deps suppression — ANY exhaustive-deps suppression
+  // makes the React Compiler skip optimizing the entire component.
+  const updateCheckRanRef = React.useRef(false);
   useEffect(() => {
+    if (updateCheckRanRef.current) return;
+    updateCheckRanRef.current = true;
     if (!__DEV__) {
       checkForUpdate({ silent: true });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- silent startup update check; run once on mount, checkForUpdate is read at the mount commit.
-  }, []);
+  }, [checkForUpdate]);
 
   // Entrance animations
   const balanceOpacity = useSharedValue(0);
@@ -176,6 +305,61 @@ export default function HomeScreen() {
   const actionsTranslateY = useSharedValue(20);
   const assetsOpacity = useSharedValue(0);
   const assetsTranslateY = useSharedValue(20);
+
+  // Trigger entrance animations. TASK-318: this effect sits ABOVE the
+  // useAnimatedStyle calls and writes the shared values directly in its body
+  // (formerly an inner `animateEntrance` closure below the style hooks). The
+  // React Compiler's flow analysis freezes a value once a hook closure
+  // captures it, so writes that came AFTER the useAnimatedStyle captures —
+  // or from a nested closure — were compilation bailouts for this whole
+  // component. (AirgapHomeScreen has always used this order.)
+  useEffect(() => {
+    // Balance card - immediate
+    balanceOpacity.value = withTiming(1, {
+      duration: 400,
+      easing: Easing.out(Easing.ease),
+    });
+    balanceTranslateY.value = withSpring(0, springConfigs.smooth);
+
+    // Actions - slight delay; assets - more delay. TASK-318: withDelay
+    // replaces the setTimeout staggering — mutating a shared value from a
+    // closure nested inside the effect was the last React Compiler bailout in
+    // this component, and withDelay runs the stagger on the UI thread instead
+    // of a JS timer (same visual result, no timer on the JS thread).
+    actionsOpacity.value = withDelay(
+      100,
+      withTiming(1, {
+        duration: 400,
+        easing: Easing.out(Easing.ease),
+      })
+    );
+    actionsTranslateY.value = withDelay(
+      100,
+      withSpring(0, springConfigs.smooth)
+    );
+    assetsOpacity.value = withDelay(
+      200,
+      withTiming(1, {
+        duration: 400,
+        easing: Easing.out(Easing.ease),
+      })
+    );
+    assetsTranslateY.value = withDelay(
+      200,
+      withSpring(0, springConfigs.smooth)
+    );
+    // The shared-value handles are stable (useSharedValue identity never
+    // changes), so listing them keeps this effect run-once while letting the
+    // React Compiler see the mutated values as declared deps (TASK-318 — an
+    // empty array with captured mutations was a compilation bailout).
+  }, [
+    balanceOpacity,
+    balanceTranslateY,
+    actionsOpacity,
+    actionsTranslateY,
+    assetsOpacity,
+    assetsTranslateY,
+  ]);
 
   const balanceAnimatedStyle = useAnimatedStyle(() => ({
     opacity: balanceOpacity.value,
@@ -191,39 +375,6 @@ export default function HomeScreen() {
     opacity: assetsOpacity.value,
     transform: [{ translateY: assetsTranslateY.value }],
   }));
-
-  // Trigger entrance animations
-  useEffect(() => {
-    const animateEntrance = () => {
-      // Balance card - immediate
-      balanceOpacity.value = withTiming(1, {
-        duration: 400,
-        easing: Easing.out(Easing.ease),
-      });
-      balanceTranslateY.value = withSpring(0, springConfigs.smooth);
-
-      // Actions - slight delay
-      setTimeout(() => {
-        actionsOpacity.value = withTiming(1, {
-          duration: 400,
-          easing: Easing.out(Easing.ease),
-        });
-        actionsTranslateY.value = withSpring(0, springConfigs.smooth);
-      }, 100);
-
-      // Assets - more delay
-      setTimeout(() => {
-        assetsOpacity.value = withTiming(1, {
-          duration: 400,
-          easing: Easing.out(Easing.ease),
-        });
-        assetsTranslateY.value = withSpring(0, springConfigs.smooth);
-      }, 200);
-    };
-
-    animateEntrance();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- entrance animation runs once on mount; the *Opacity/*TranslateY are stable useSharedValue handles that never change identity.
-  }, []);
 
   const initialize = useWalletStore((state) => state.initialize);
   // Wallet-store hydration flag (F-48, TASK-182). This is the SAME signal the
@@ -363,30 +514,79 @@ export default function HomeScreen() {
   const hasBalanceData = isMultiNetworkView
     ? !!multiNetworkBalance
     : !!accountBalance;
+  // TASK-318: depend on a plain local rather than `activeAccount?.id` so the
+  // React Compiler's inferred deps match the manual list — the mismatch made it
+  // skip compiling (auto-memoizing) this entire component.
+  const activeAccountId = activeAccount?.id;
   const retryBalance = React.useCallback(() => {
     if (isMultiNetworkView) {
       // The multi-network hook's reload already forces.
       void reloadMultiNetworkBalance();
-    } else if (activeAccount?.id) {
-      void loadAccountBalance(activeAccount.id, true);
+    } else if (activeAccountId) {
+      void loadAccountBalance(activeAccountId, true);
     }
   }, [
     isMultiNetworkView,
     reloadMultiNetworkBalance,
     loadAccountBalance,
-    activeAccount?.id,
+    activeAccountId,
   ]);
+
+  // TASK-318: declared ABOVE the mount effect that calls it (was below, which
+  // the React Compiler reports as use-before-declare and refuses to reason
+  // about). Body unchanged.
+  const initializeWallet = async () => {
+    try {
+      // NOTE: no setLoading(true) here. `loading` initializes to true and this
+      // function's single caller is the mount effect, so the set was a no-op —
+      // and a synchronous setState inside an effect is a React Compiler
+      // bailout for this whole component (TASK-318).
+      await initialize();
+    } catch (error) {
+      console.error('Failed to initialize wallet:', error);
+      // Was a hardcoded generic alert; now routed through the central mapper
+      // (TASK-41) so the user gets a real reason and a next step.
+      const { title, message } = toErrorAlert(error, {
+        fallbackMessage: 'Failed to load wallet data.',
+        fallbackTitle: 'Error',
+      });
+      Alert.alert(title, message);
+    }
+    // Was a `finally` — the React Compiler cannot lower try/finally yet
+    // (TASK-318). The catch above never rethrows, so clearing the flag after
+    // the try block is equivalent.
+    setLoading(false);
+  };
 
   // Load wallet data and mark activity once when Home mounts. Kept separate from
   // the remote-signer effect below so that the remote-signer store flipping
   // isInitialized false→true does not re-trigger walletStore.initialize() (a
   // redundant accountStates rebuild + balance refetch/flicker on cold start).
-  // The store's initialize() coalescer dedupes any residual concurrent calls.
+  //
+  // TASK-318: gated on the store NOT already being hydrated. serviceBootstrap
+  // (F-03) always kicks off walletStore.initialize() well before Home mounts,
+  // and the store's coalescer only dedupes calls while that pass is IN FLIGHT.
+  // On a cold start the bootstrap pass completes (~1.4s) before this effect
+  // fires (~3.3s, delayed by Home's own first render), so an unconditional
+  // call here re-ran the ENTIRE init — every persisted key re-read,
+  // accountStates rebuilt, extra renders — on every cold start. When the
+  // bootstrap pass is still in flight, isInitialized is false and the call
+  // below joins it via the coalescer; if it never ran, this path self-heals.
+  // (AirgapHomeScreen has carried this same guard all along.)
+  //
+  // Run-once is enforced by the ref, not an empty dep array — an
+  // exhaustive-deps suppression here made the React Compiler skip this whole
+  // component (TASK-318). The listed deps may churn identity; the ref makes
+  // re-runs no-ops, preserving the original once-on-mount semantics.
+  const mountInitRanRef = React.useRef(false);
   useEffect(() => {
-    initializeWallet();
+    if (mountInitRanRef.current) return;
+    mountInitRanRef.current = true;
+    if (!useWalletStore.getState().isInitialized) {
+      initializeWallet();
+    }
     updateActivity();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load wallet data + mark activity once on mount (see comment above: kept separate so the remote-signer store init does not re-trigger initialize()); both are read at the mount commit.
-  }, []);
+  }, [initializeWallet, updateActivity]);
 
   // Initialize the remote-signer store (used to resolve app mode) once it is not
   // yet initialized. This runs independently of the wallet init above.
@@ -440,111 +640,43 @@ export default function HomeScreen() {
     activeAccountIdRef.current = activeAccount?.id;
   }, [isMultiNetworkView, activeAccount?.id]);
 
-  // Load data when active account changes - inline to avoid stale closure
+  // Load data when active account changes. TASK-318: the body lives in
+  // module-scope loadHomeAccountData (verbatim extraction) — the React
+  // Compiler cannot lower conditionals inside try/catch, so keeping this
+  // ~90-line try inline was a whole-component compilation bailout. All
+  // reactive inputs are passed explicitly; the stale-closure protections
+  // (viewModeRef/activeAccountIdRef re-checks after every await) ride along
+  // unchanged inside the extracted function.
   useEffect(() => {
-    if (!activeAccount?.id) return;
+    if (!activeAccountId) return;
 
-    const loadData = async () => {
-      const accountId = activeAccount.id;
-      const currentViewMode = isMultiNetworkView;
-
-      try {
-        // Kick the health check off CONCURRENTLY with the mappings/balance load
-        // instead of awaiting it first. The service dedups/caches by NetworkId
-        // within a short TTL, so on cold boot this reuses the status networkStore
-        // already fetched during init (or shares its in-flight probe) rather than
-        // issuing a duplicate ~15s request, and never delays the first balance.
-        const networkHealthPromise = networkService
-          .checkNetworkHealth()
-          .then((status) => {
-            if (
-              viewModeRef.current === currentViewMode &&
-              activeAccountIdRef.current === accountId
-            ) {
-              setNetworkStatus(status);
-              setNetworkStatusError(null);
-            }
-          })
-          .catch((error) => {
-            console.warn('[HomeScreen] Network health check failed:', error);
-            if (
-              viewModeRef.current === currentViewMode &&
-              activeAccountIdRef.current === accountId
-            ) {
-              setNetworkStatusError(error);
-            }
-          });
-
-        // Check if view mode or account changed while loading
-        if (
-          viewModeRef.current !== currentViewMode ||
-          activeAccountIdRef.current !== accountId
-        ) {
-          console.log(
-            '[HomeScreen] View mode or account changed during load, aborting'
-          );
-          return;
-        }
-
-        // Load token mappings if needed for multi-network view
-        if (currentViewMode) {
-          await loadTokenMappings();
-        }
-
-        // Check again before loading balance
-        if (
-          viewModeRef.current !== currentViewMode ||
-          activeAccountIdRef.current !== accountId
-        ) {
-          console.log(
-            '[HomeScreen] View mode or account changed after mappings, aborting'
-          );
-          return;
-        }
-
-        // Trigger cache-first balance loading (will use cached data if available)
-        // This will show cached data immediately and refresh in background if needed
-        // ALWAYS load multi-network balance regardless of view mode since user can toggle
-        await loadMultiNetworkBalance(accountId);
-
-        // Final check before loading additional data
-        if (
-          viewModeRef.current !== currentViewMode ||
-          activeAccountIdRef.current !== accountId
-        ) {
-          console.log(
-            '[HomeScreen] View mode or account changed after balance, aborting'
-          );
-          return;
-        }
-
-        await Promise.all([
-          loadAccountTransactions(accountId),
-          loadEnvoiName(accountId),
-          // Already running concurrently (self-handles state + errors); await it
-          // here only so it settles within loadData rather than dangling.
-          networkHealthPromise,
-        ]);
-      } catch (error) {
-        // The store loaders record their own per-account error, so this outer
-        // catch only ever sees failures outside them (e.g. loadTokenMappings).
-        // It used to be console-only; surface it so the screen is never silent.
-        console.error('Failed to load account data:', error);
-        if (
-          viewModeRef.current === currentViewMode &&
-          activeAccountIdRef.current === accountId
-        ) {
-          setNetworkStatusError(error);
-        }
-      }
-    };
-
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload keyed on activeAccount.id / isMultiNetworkView; the store loader fns are deliberately omitted (their identity churn would loop) and loadData re-checks activeAccountIdRef/viewModeRef after every await, so a stale closure can never write to the wrong account.
+    void loadHomeAccountData({
+      accountId: activeAccountId,
+      currentViewMode: isMultiNetworkView,
+      viewModeRef,
+      activeAccountIdRef,
+      setNetworkStatus,
+      setNetworkStatusError,
+      loadTokenMappings,
+      loadMultiNetworkBalance,
+      loadAccountTransactions,
+      loadEnvoiName,
+    });
+    // TASK-318: the dep list is now honest (the suppression it replaced made
+    // the React Compiler skip this whole component). The loader fns are all
+    // zustand store selections — stable identities by construction — so
+    // listing them cannot loop; the old "function refs cause infinite loops"
+    // fear applied to hook-returned callbacks this effect does not use. The
+    // reload key is unchanged: activeAccountId + isMultiNetworkView. loadData
+    // still re-checks activeAccountIdRef/viewModeRef after every await, so a
+    // stale closure can never write to the wrong account.
   }, [
-    activeAccount?.id,
+    activeAccountId,
     isMultiNetworkView,
-    // Don't include function refs as they cause infinite loops
+    loadTokenMappings,
+    loadMultiNetworkBalance,
+    loadAccountTransactions,
+    loadEnvoiName,
   ]);
 
   const handleUserInteraction = () => {
@@ -861,17 +993,25 @@ export default function HomeScreen() {
     [activeAccount, isMultiNetworkView, navigation]
   );
 
-  // Memoize multi-network asset list to prevent excessive re-renders
+  // Memoize multi-network asset list to prevent excessive re-renders.
+  // TASK-318: read the optional chains into locals so the React Compiler's
+  // inferred deps match the manual list (same skip-fix as retryBalance above).
+  const multiNetworkAssets = multiNetworkBalance?.assets;
+  const multiNetworkPerNetworkPrices = multiNetworkBalance?.perNetworkPrices;
   const multiNetworkAssetList = React.useMemo(() => {
+    // The prices guard can only trigger when the whole balance object is absent
+    // (in which case assets is absent too) — it exists to narrow the optional
+    // chain's type, not to change behavior.
     if (
-      !multiNetworkBalance?.assets ||
-      multiNetworkBalance.assets.length === 0
+      !multiNetworkAssets ||
+      multiNetworkAssets.length === 0 ||
+      !multiNetworkPerNetworkPrices
     ) {
       return null;
     }
 
     // Filter assets based on network filter
-    let filteredAssets = multiNetworkBalance.assets.filter((asset) => {
+    let filteredAssets = multiNetworkAssets.filter((asset) => {
       if (assetNetworkFilter === 'all') {
         return true;
       }
@@ -902,7 +1042,7 @@ export default function HomeScreen() {
         <MultiNetworkAssetItem
           key={key}
           asset={asset}
-          nativePrices={multiNetworkBalance.perNetworkPrices}
+          nativePrices={multiNetworkPerNetworkPrices}
           networkFilter={assetNetworkFilter}
           onPress={() =>
             handleAssetPress(
@@ -915,8 +1055,8 @@ export default function HomeScreen() {
       );
     });
   }, [
-    multiNetworkBalance?.assets,
-    multiNetworkBalance?.perNetworkPrices,
+    multiNetworkAssets,
+    multiNetworkPerNetworkPrices,
     assetNetworkFilter,
     handleAssetPress,
     filterAndSortMultiNetworkAssets,
@@ -978,26 +1118,13 @@ export default function HomeScreen() {
     filterAndSortSingleNetworkAssets,
   ]);
 
-  const initializeWallet = async () => {
-    try {
-      setLoading(true);
-      await initialize();
-    } catch (error) {
-      console.error('Failed to initialize wallet:', error);
-      // Was a hardcoded generic alert; now routed through the central mapper
-      // (TASK-41) so the user gets a real reason and a next step.
-      const { title, message } = toErrorAlert(error, {
-        fallbackMessage: 'Failed to load wallet data.',
-        fallbackTitle: 'Error',
-      });
-      Alert.alert(title, message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const loadAccountData = async () => {
     if (!activeAccount) return;
+    // TASK-318: plain locals read OUTSIDE the try — conditional/logical
+    // expressions inside a try/catch are a React Compiler whole-component
+    // bailout ("Support value blocks within a try/catch statement").
+    const accountId = activeAccount.id;
+    const refreshMultiNetwork = isMultiNetworkView;
 
     try {
       const [networkHealth] = await Promise.allSettled([
@@ -1021,16 +1148,18 @@ export default function HomeScreen() {
 
       // Load balance and transactions through the store
       await reloadBalance();
-      await Promise.all([
-        loadAccountTransactions(activeAccount.id),
-        loadEnvoiName(activeAccount.id),
-        // Multi-network aggregate is what the assets card renders in
-        // multi-network view; refreshing it here keeps pull-to-refresh honest
-        // in both view modes.
-        isMultiNetworkView
-          ? loadMultiNetworkBalance(activeAccount.id, true)
-          : Promise.resolve(),
-      ]);
+      // Multi-network aggregate is what the assets card renders in
+      // multi-network view; refreshing it here keeps pull-to-refresh honest
+      // in both view modes. (if-statement instead of a ternary in the array:
+      // see the TASK-318 note above.)
+      const refreshTasks: Promise<unknown>[] = [
+        loadAccountTransactions(accountId),
+        loadEnvoiName(accountId),
+      ];
+      if (refreshMultiNetwork) {
+        refreshTasks.push(loadMultiNetworkBalance(accountId, true));
+      }
+      await Promise.all(refreshTasks);
     } catch (error) {
       console.error('Failed to load account data:', error);
       setNetworkStatusError(error);
@@ -1041,29 +1170,40 @@ export default function HomeScreen() {
     setRefreshing(true);
     handleUserInteraction();
 
+    // TASK-318: resolved OUTSIDE the try (conditional expressions inside
+    // try/catch are a React Compiler bailout); the offline check stays inside
+    // the try as its own if so a throw from it still clears the spinner.
+    const refreshedAddress = activeAccount ? activeAccount.address : null;
+
     try {
       // TASK-191: a pull-to-refresh fired while the device is definitely
       // offline can only fail, so skip the fan-out rather than making the user
       // watch several retry ladders time out. The spinner still clears below.
-      if (activeAccount && !shouldSkipForOffline('home-refresh')) {
-        const refreshedAddress = activeAccount.address;
-        // Only refresh the current account, not all accounts
-        await loadAccountData();
-        // Also refresh claimable tokens. force: pull-to-refresh must bypass the
-        // per-account TTL, otherwise the gesture silently does nothing.
-        //
-        // Re-checked against the live account: `loadAccountData` is awaited, and
-        // a forced fetch takes ownership of the claimable store, so refreshing a
-        // stale account here would discard the account the user switched to.
-        if (activeAccountAddressRef.current === refreshedAddress) {
-          await fetchApprovals(refreshedAddress, { force: true });
+      if (refreshedAddress !== null) {
+        if (!shouldSkipForOffline('home-refresh')) {
+          // Only refresh the current account, not all accounts
+          await loadAccountData();
+          // Also refresh claimable tokens. force: pull-to-refresh must bypass
+          // the per-account TTL, otherwise the gesture silently does nothing.
+          //
+          // Re-checked against the live account: `loadAccountData` is awaited,
+          // and a forced fetch takes ownership of the claimable store, so
+          // refreshing a stale account here would discard the account the user
+          // switched to.
+          if (activeAccountAddressRef.current === refreshedAddress) {
+            await fetchApprovals(refreshedAddress, { force: true });
+          }
         }
       }
-    } finally {
-      // Never wedge the spinner: it clears whether the refresh ran, was skipped
-      // as offline, or threw.
+    } catch (error) {
+      // Was a `finally` — the React Compiler cannot lower try/finally yet
+      // (TASK-318). Preserve its exact semantics: never wedge the spinner
+      // (clear it on the throw path too), then rethrow so the promise still
+      // rejects exactly as before.
       setRefreshing(false);
+      throw error;
     }
+    setRefreshing(false);
   };
 
   useEffect(() => {
