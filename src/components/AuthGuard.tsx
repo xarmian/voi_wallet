@@ -50,7 +50,7 @@ const styles = StyleSheet.create({
     pointerEvents: 'none',
   },
   lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 1000,
   },
 });

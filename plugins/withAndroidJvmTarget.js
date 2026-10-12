@@ -1,4 +1,4 @@
-const { withAppBuildGradle, withProjectBuildGradle, withGradleProperties } = require('@expo/config-plugins');
+const { withAppBuildGradle, withProjectBuildGradle, withGradleProperties } = require('expo/config-plugins');
 
 /**
  * Expo config plugin to fix JVM target compatibility between Java and Kotlin

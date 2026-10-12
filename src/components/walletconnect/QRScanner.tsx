@@ -779,7 +779,7 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
   return (
     <View style={styles.container}>
       <CameraView
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         facing="back"
         onBarcodeScanned={
           scanned || isProcessing ? undefined : handleBarCodeScanned

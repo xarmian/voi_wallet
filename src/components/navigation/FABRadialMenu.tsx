@@ -372,7 +372,7 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
 
 const styles = StyleSheet.create({
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 1)',
     zIndex: 999,
   },

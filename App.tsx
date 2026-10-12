@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
-import { View, Platform, StatusBar } from 'react-native';
+import { View, StatusBar } from 'react-native';
 import Toast from 'react-native-toast-message';
 import AppNavigator from './src/navigation/AppNavigator';
 import { testCryptoPolyfills } from './src/utils/cryptoTest';
@@ -49,12 +49,10 @@ function AppContent() {
 
   return (
     <View style={{ flex: 1, backgroundColor }}>
-      <StatusBar
-        barStyle={statusBarStyle}
-        backgroundColor={Platform.OS === 'android' ? backgroundColor : undefined}
-        animated
-        translucent={false}
-      />
+      {/* RN 0.88 drops StatusBar backgroundColor/translucent: Android 16
+          edge-to-edge is mandatory, so the status bar is always transparent
+          and the root View's background shows through it. */}
+      <StatusBar barStyle={statusBarStyle} animated />
       <AppNavigator />
       {/* Above the navigator so it survives every navigation (including the
           pre-auth screens) and below the Toast so transient toasts still win

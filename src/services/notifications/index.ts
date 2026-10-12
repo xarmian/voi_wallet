@@ -6,6 +6,11 @@
  */
 
 import * as Notifications from 'expo-notifications';
+// Named import: expo-notifications 58 compiles its enums to
+// `export var X = /*#__PURE__*/ function…({})`, which eslint-plugin-import's
+// import/namespace cannot see, so `Notifications.AndroidImportance` is a lint
+// false positive. tsc verifies this import.
+import { AndroidImportance } from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
@@ -826,7 +831,7 @@ class NotificationService {
     await Notifications.setNotificationChannelAsync('messages', {
       name: 'Messages',
       description: 'Encrypted message notifications',
-      importance: Notifications.AndroidImportance.HIGH,
+      importance: AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#8B5CF6',
     });
@@ -835,7 +840,7 @@ class NotificationService {
     await Notifications.setNotificationChannelAsync('transactions', {
       name: 'Transactions',
       description: 'Payment and token transfer notifications',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250],
       lightColor: '#10B981',
     });
@@ -844,7 +849,7 @@ class NotificationService {
     await Notifications.setNotificationChannelAsync('default', {
       name: 'General',
       description: 'General notifications',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: AndroidImportance.DEFAULT,
     });
   }
 }

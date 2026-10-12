@@ -108,7 +108,6 @@ export default {
     "orientation": "portrait",
     "icon": "./assets/voi_wallet_logo.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "experiments": {
       "reactCompiler": true
     },
@@ -171,7 +170,6 @@ export default {
         "backgroundColor": "#FFFFFF"
       },
       "jsEngine": "hermes",
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
       "googleServicesFile": IS_DEV ? "./google-services-dev.json" : "./google-services.json",

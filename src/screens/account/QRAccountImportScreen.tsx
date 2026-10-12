@@ -272,7 +272,7 @@ export default function QRAccountImportScreen({ navigation }: Props) {
       {/* Camera View */}
       <View style={styles.cameraContainer}>
         <CameraView
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           facing={facing}
           onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
           barcodeScannerSettings={{
@@ -280,7 +280,7 @@ export default function QRAccountImportScreen({ navigation }: Props) {
           }}
         />
         {/* Overlay - rendered outside CameraView for iOS barcode detection compatibility */}
-        <View style={[StyleSheet.absoluteFillObject, styles.overlay]}>
+        <View style={[StyleSheet.absoluteFill, styles.overlay]}>
           {/* Top overlay */}
           <View style={styles.overlayTop} />
 

@@ -118,10 +118,11 @@ jest.mock('react-native-reanimated', () => {
   };
 });
 
-jest.mock('react-native-gesture-handler', () => {
+jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => {
   const { View } = require('react-native');
   return {
-    Swipeable: ({ children }: { children: React.ReactNode }) => (
+    __esModule: true,
+    default: ({ children }: { children: React.ReactNode }) => (
       <View>{children}</View>
     ),
   };
