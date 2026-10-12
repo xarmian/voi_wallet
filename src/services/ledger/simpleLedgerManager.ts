@@ -17,12 +17,7 @@ export interface SimpleLedgerDevice {
 }
 
 export type LedgerConnectionState =
-  | 'disconnected'
-  | 'discovering'
-  | 'connecting'
-  | 'ready'
-  | 'signing'
-  | 'error';
+  'disconnected' | 'discovering' | 'connecting' | 'ready' | 'signing' | 'error';
 
 export type LedgerError =
   | 'device_not_found'

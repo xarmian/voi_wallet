@@ -107,11 +107,7 @@ export type Arc0090Uri =
   | Arc0090AssetQueryUri;
 
 export type Arc0090UriType =
-  | 'payment'
-  | 'keyreg'
-  | 'appl'
-  | 'app-query'
-  | 'asset-query';
+  'payment' | 'keyreg' | 'appl' | 'app-query' | 'asset-query';
 
 // =============================================================================
 // Constants

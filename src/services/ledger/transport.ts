@@ -362,9 +362,7 @@ export class LedgerTransportService {
 
             const freshRecord = this.devices.get(deviceId);
             bleDescriptor = freshRecord?.descriptor as
-              | BleDevice
-              | string
-              | undefined;
+              BleDevice | string | undefined;
 
             if (!bleDescriptor) {
               if (!discovered) {
@@ -966,8 +964,7 @@ export class LedgerTransportService {
     descriptor?: LedgerDeviceRecord['descriptor']
   ): Promise<Transport> {
     const usbDescriptor = descriptor as
-      | { vendorId: number; productId: number }
-      | undefined;
+      { vendorId: number; productId: number } | undefined;
     if (!usbDescriptor) {
       throw new LedgerDeviceNotConnectedError(
         'USB descriptor missing for Ledger device'

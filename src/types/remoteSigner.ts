@@ -189,9 +189,7 @@ export interface RemoteSignerPairing {
  * Union type for all QR payload types
  */
 export type RemoteSignerPayload =
-  | RemoteSignerRequest
-  | RemoteSignerResponse
-  | RemoteSignerPairing;
+  RemoteSignerRequest | RemoteSignerResponse | RemoteSignerPairing;
 
 /**
  * Type guard to check if payload is a signing request

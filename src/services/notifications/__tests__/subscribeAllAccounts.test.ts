@@ -75,8 +75,7 @@ interface SelectQuery {
   in(column: string, values: string[]): SelectQuery;
   then<TResult1 = SelectResult, TResult2 = never>(
     onfulfilled?:
-      | ((value: SelectResult) => TResult1 | PromiseLike<TResult1>)
-      | null,
+      ((value: SelectResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ): PromiseLike<TResult1 | TResult2>;
 }

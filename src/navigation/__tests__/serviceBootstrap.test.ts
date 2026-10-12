@@ -34,6 +34,7 @@ const mockDeepLinkService = {
   setNavigationRef: jest.fn(),
   initialize: jest.fn(async () => {}),
   testDeepLink: jest.fn(async () => {}),
+  cleanup: jest.fn(),
 };
 const mockExtensionDeepLinkHandler = {
   initialize: jest.fn(),
@@ -166,6 +167,7 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     expect(mockWcService.off).not.toHaveBeenCalled();
     expect(mockExtensionDeepLinkHandler.cleanup).not.toHaveBeenCalled();
     expect(mockNotificationService.cleanup).not.toHaveBeenCalled();
+    expect(mockDeepLinkService.cleanup).not.toHaveBeenCalled();
 
     // Simulate the effect's synchronous unmount cleanup.
     cleanupRef.current!();
@@ -182,6 +184,8 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     // ...and the deep-link + notification services are cleaned up.
     expect(mockExtensionDeepLinkHandler.cleanup).toHaveBeenCalledTimes(1);
     expect(mockNotificationService.cleanup).toHaveBeenCalledTimes(1);
+    // TASK-381: the deep-link Linking subscription + route queue too.
+    expect(mockDeepLinkService.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it('tears services down IMMEDIATELY when the effect already unmounted before boot completed (isDisposed)', async () => {

@@ -16,6 +16,7 @@ import {
   TextStyle,
   StyleProp,
   Platform,
+  type TextInputInstance,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -86,7 +87,7 @@ export const GlassInput: React.FC<GlassInputProps> = ({
 }) => {
   const { theme } = useTheme();
   const hasNFTBackground = !!theme.backgroundImageUrl;
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
 
   // State
 
@@ -402,10 +403,10 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   background: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   glowLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     transform: [{ scale: 1.08 }],
   },
   inputRow: {

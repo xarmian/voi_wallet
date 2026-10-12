@@ -6,7 +6,7 @@ const WALLETCONNECT_PROJECT_ID =
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
-const withAndroidJvmTarget = require('./plugins/withAndroidJvmTarget');
+const withImageColorsJvmTarget = require('./plugins/withImageColorsJvmTarget');
 
 // R8 keep rules for Android release builds (TASK-209 / PLAN-267).
 //
@@ -16,11 +16,15 @@ const withAndroidJvmTarget = require('./plugins/withAndroidJvmTarget');
 // stale silently once the rules are edited.
 //
 // WHY EACH BLOCK EXISTS — do not trim without reading PLAN-267 DR-2. React
-// Native 0.81.5 ships exactly ONE consumer proguard file
-// (ReactAndroid/proguard-rules.pro, wired at ReactAndroid/build.gradle.kts:504).
-// Two further rule files exist in the RN tree — reactnative.pro and fbjni.pro —
-// but are referenced by NO gradle script, so their rules are absent from the
-// build and this app must supply them itself.
+// Native ships exactly ONE consumer proguard file
+// (ReactAndroid/proguard-rules.pro, wired at ReactAndroid/build.gradle.kts:579
+// in RN 0.88). Two further rule files exist in the RN tree — reactnative.pro
+// and fbjni.pro — but are referenced by NO gradle script, so their rules are
+// absent from the build and this app must supply them itself.
+//
+// Re-audited for Expo SDK 58 / RN 0.88 (FR-374 / PLAN-375 DR-9): every rule
+// below still protects a class present in that tree and none is covered by a
+// shipped consumer file, so all are kept; only the source references changed.
 const ANDROID_PROGUARD_RULES = `
 # --- Expo Modules ---
 # Carried over verbatim from the deleted plugins/withExpoModulesProguard.js so
@@ -29,6 +33,19 @@ const ANDROID_PROGUARD_RULES = `
 -keep class expo.modules.** { *; }
 -keep class expo.modules.kotlin.** { *; }
 -keep interface expo.modules.kotlin.** { *; }
+
+# --- Expo io.github.expo.* JNI layer (new in SDK 58) ---
+# expo-modules-core 58 adds a C++ layer whose Java side lives under
+# io.github.expo.* (kolibri runtime 0.2.0 + io.github.expo.modules.v2.{jsi,
+# args,events,errors,records,sharedobjects,types}). libexpo-kolibri.so and
+# libexpo-modules-core.so resolve these classes and members BY NAME, and
+# neither expo-modules-core's proguard-rules.pro nor the kolibri artifacts
+# ship keep rules for them. Without this rule R8 renames/removes them and the
+# release app aborts at startup (NoSuchFieldError NativeObject.nativePointer,
+# then ClassNotFoundException io.github.expo.modules.v2.jsi.AttachedRuntime).
+# Found by FR-374 T2's assembleRelease, 2026-10-12 (PLAN-375 DR-9 amendment).
+-keep class io.github.expo.** { *; }
+-keep interface io.github.expo.** { *; }
 
 # --- fbjni hybrid pattern ---
 # Mirrors the unreferenced react-native/.../hermes/reactexecutor/fbjni.pro.
@@ -45,10 +62,10 @@ const ANDROID_PROGUARD_RULES = `
 
 # --- RN annotation-processor generated classes ---
 # Mirrors the unreferenced react-native/.../react/bridge/reactnative.pro:15-18.
-# ViewManagerPropertyUpdater.kt:130 does Class.forName("<cls>$$PropsSetter") —
+# ViewManagerPropertyUpdater.kt:134 does Class.forName("<cls>$$PropsSetter") —
 # @react-native-community/slider is a SimpleViewManager, NOT a NativeModule, so
 # proguard-rules.pro:44 does not cover it. react-native-gesture-handler
-# (RNGestureHandlerPackage.kt:57) and @react-native-async-storage
+# (RNGestureHandlerPackage.kt:64) and @react-native-async-storage
 # (AsyncStoragePackage.java:48) do Class.forName("<cls>$$ReactModuleInfoProvider")
 # and fall back to reading @ReactModule reflectively — so a stripped annotation
 # is a STARTUP CRASH, not a degradation. "{ *; }" is stronger than RN's bare
@@ -104,11 +121,10 @@ export default {
   "expo": {
     "name": IS_DEV ? "Voi Wallet (Dev)" : "Voi Wallet",
     "slug": "voi-wallet",
-    "version": "0.1.11",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/voi_wallet_logo.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "experiments": {
       "reactCompiler": true
     },
@@ -139,7 +155,7 @@ export default {
       "supportsTablet": true,
       "jsEngine": "hermes",
       "bundleIdentifier": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
-      "buildNumber": "23",
+      "buildNumber": "24",
       "icon": "./assets/voi_wallet_logo.png",
       "splash": {
         "image": "./assets/voi_wallet_logo.png",
@@ -171,11 +187,10 @@ export default {
         "backgroundColor": "#FFFFFF"
       },
       "jsEngine": "hermes",
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": IS_DEV ? "com.voinetwork.wallet.dev" : "com.voinetwork.wallet",
       "googleServicesFile": IS_DEV ? "./google-services-dev.json" : "./google-services.json",
-      "versionCode": 23,
+      "versionCode": 24,
       "permissions": [
         "CAMERA",
         "USE_BIOMETRIC",
@@ -220,11 +235,13 @@ export default {
         "expo-build-properties",
         {
           android: {
-            kotlinVersion: "2.1.20",
-            compileSdkVersion: 35,
-            targetSdkVersion: 35,
-            buildToolsVersion: "35.0.0",
-            minSdkVersion: 24,
+            // SDK levels, buildTools and Kotlin are deliberately NOT pinned
+            // (FR-374 / PLAN-375 DR-5): they follow the React Native 0.88
+            // defaults (react-native/gradle/libs.versions.toml: compileSdk 37,
+            // targetSdk 36, minSdk 24, buildTools 37.0.0, Kotlin 2.2.0,
+            // AGP 9.2.1). compileSdk 37 is the AAR-metadata floor of the
+            // SDK 58 Expo modules and targetSdk 36 is the Play requirement;
+            // re-pinning lower breaks one or the other.
             // R8 code shrinking + resource shrinking, release builds only
             // (TASK-209 / PLAN-267). Debug and dev-client builds are
             // unaffected: android/app/build.gradle applies both under the
@@ -266,7 +283,7 @@ export default {
       // config plugin; it autolinks via Nitro. If `expo prebuild` errors on this
       // line, remove it — the Nitro module still autolinks without the plugin.
       "react-native-quick-crypto",
-      withAndroidJvmTarget,
+      withImageColorsJvmTarget,
     ]
   }
 };

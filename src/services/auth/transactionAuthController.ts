@@ -38,12 +38,7 @@ import { NetworkId } from '@/types/network';
  * Authentication states for transaction signing
  */
 export type TransactionAuthState =
-  | 'idle'
-  | 'authenticating'
-  | 'signing'
-  | 'processing'
-  | 'completed'
-  | 'error';
+  'idle' | 'authenticating' | 'signing' | 'processing' | 'completed' | 'error';
 
 /**
  * Ledger status during signing flow

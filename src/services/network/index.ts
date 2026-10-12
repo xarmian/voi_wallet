@@ -457,18 +457,18 @@ export class NetworkService {
           // which would inflate the displayed balance by 10^N (same
           // financial-correctness class as TASK-52). This mirrors the rejection
           // branch below: an unusable response resolves to null.
-          const decimals = this.normalizeDecimals(assetInfo.params.decimals);
+          const decimals = this.normalizeDecimals(assetInfo.params?.decimals);
           if (decimals === null) {
             console.warn(
               `Omitting asset ${asset.assetId}: algod returned no usable decimals`,
-              assetInfo.params.decimals
+              assetInfo.params?.decimals
             );
             return null;
           }
           const params = {
             decimals,
-            name: assetInfo.params.name,
-            unitName: assetInfo.params.unitName,
+            name: assetInfo.params?.name,
+            unitName: assetInfo.params?.unitName,
           };
           if (this.assetCacheGeneration === requestGeneration) {
             this.assetParamsCache.set(assetKey, params);

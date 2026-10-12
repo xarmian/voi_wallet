@@ -119,9 +119,24 @@ beforeEach(() => {
 // attempt has registered.
 const settle = () => act(async () => {});
 
+// Keep the next loadAllTransactions call pending until the returned release
+// function runs, so the in-flight state is observable.
+const holdNextFetch = () => {
+  let release: () => void = () => {};
+  mockLoadAllTransactions.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      })
+  );
+  return () => release();
+};
+
 describe('TransactionHistoryScreen error surfacing', () => {
   it('shows the empty state when the account genuinely has no transactions', async () => {
-    const { getByText, queryByTestId } = render(<TransactionHistoryScreen />);
+    const { getByText, queryByTestId } = await render(
+      <TransactionHistoryScreen />
+    );
     await settle();
 
     expect(getByText('No Transactions')).toBeTruthy();
@@ -131,25 +146,33 @@ describe('TransactionHistoryScreen error surfacing', () => {
   it('shows a loading state, not the empty state, before the first fetch settles', async () => {
     // The store only flips `isTransactionsLoading` after an await, so the
     // definitive "No Transactions" copy must not be reachable in the meantime.
-    const { queryByText, getByText } = render(<TransactionHistoryScreen />);
+    // RNTL 14's async render flushes resolved promises, so hold the fetch open.
+    const release = holdNextFetch();
+    const { queryByText, getByText } = await render(
+      <TransactionHistoryScreen />
+    );
 
     expect(queryByText('No Transactions')).toBeNull();
     expect(getByText('Loading transactions...')).toBeTruthy();
 
+    release();
     await settle();
+    expect(getByText('No Transactions')).toBeTruthy();
   });
 
   it('goes back to loading when the active account changes', async () => {
     // The "already attempted" marker is keyed by account, so a newly selected
     // account cannot inherit the previous one's "definitely empty" verdict.
-    const { getByText, rerender } = render(<TransactionHistoryScreen />);
+    const { getByText, rerender } = await render(<TransactionHistoryScreen />);
     await settle();
     expect(getByText('No Transactions')).toBeTruthy();
 
     mockActiveAccountId = 'acct-2';
-    rerender(<TransactionHistoryScreen />);
+    const release = holdNextFetch();
+    await rerender(<TransactionHistoryScreen />);
 
     expect(getByText('Loading transactions...')).toBeTruthy();
+    release();
     await settle();
   });
 
@@ -159,7 +182,9 @@ describe('TransactionHistoryScreen error surfacing', () => {
       transactionsError: { scope: 'all', message: 'Network request failed' },
     };
 
-    const { queryByText, getByTestId } = render(<TransactionHistoryScreen />);
+    const { queryByText, getByTestId } = await render(
+      <TransactionHistoryScreen />
+    );
     await settle();
 
     // The whole point of the fix: a failure must not look like an empty account.
@@ -173,11 +198,11 @@ describe('TransactionHistoryScreen error surfacing', () => {
       transactionsError: { scope: 'all', message: 'Network request failed' },
     };
 
-    const { getByTestId } = render(<TransactionHistoryScreen />);
+    const { getByTestId } = await render(<TransactionHistoryScreen />);
     await settle();
     mockLoadAllTransactions.mockClear();
 
-    fireEvent.press(getByTestId('transactions-error-retry'));
+    await fireEvent.press(getByTestId('transactions-error-retry'));
     await settle();
 
     expect(mockLoadAllTransactions).toHaveBeenCalledWith('acct-1');
@@ -191,7 +216,9 @@ describe('TransactionHistoryScreen error surfacing', () => {
       transactionsError: { scope: '42_asa', message: 'asset fetch failed' },
     };
 
-    const { getByText, queryByTestId } = render(<TransactionHistoryScreen />);
+    const { getByText, queryByTestId } = await render(
+      <TransactionHistoryScreen />
+    );
     await settle();
 
     expect(getByText('No Transactions')).toBeTruthy();
@@ -208,7 +235,9 @@ describe('TransactionHistoryScreen error surfacing', () => {
       recentTransactionsScope: '42_asa',
     };
 
-    const { queryByText, getByText } = render(<TransactionHistoryScreen />);
+    const { queryByText, getByText } = await render(
+      <TransactionHistoryScreen />
+    );
     await settle();
 
     expect(queryByText('tx-a')).toBeNull();
@@ -223,7 +252,7 @@ describe('TransactionHistoryScreen error surfacing', () => {
       transactionsPagination: { hasMore: true, isLoadingMore: false },
     };
 
-    const { getByText, getByTestId, queryByTestId } = render(
+    const { getByText, getByTestId, queryByTestId } = await render(
       <TransactionHistoryScreen />
     );
     await settle();

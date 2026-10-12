@@ -9,6 +9,7 @@ import {
   FlatList,
   Keyboard,
   Platform,
+  type TextInputInstance,
 } from 'react-native';
 import {
   SafeAreaView,
@@ -63,7 +64,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const importAccount = useWalletStore((state) => state.importAccount);
 
-  const inputRefs = useRef<(TextInput | null)[]>(Array(25).fill(null));
+  const inputRefs = useRef<(TextInputInstance | null)[]>(Array(25).fill(null));
   const scrollViewRef = useRef<any>(null);
 
   useFocusEffect(

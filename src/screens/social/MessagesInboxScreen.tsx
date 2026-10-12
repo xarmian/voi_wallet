@@ -18,7 +18,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Swipeable } from 'react-native-gesture-handler';
+// RNGH 3 removed the legacy `Swipeable`; ReanimatedSwipeable is its drop-in
+// replacement (same friction/threshold/overshoot defaults).
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import {
@@ -397,7 +399,7 @@ export default function MessagesInboxScreen() {
     const isHidden = hiddenThreads.has(thread.friendAddress);
 
     return (
-      <Swipeable
+      <ReanimatedSwipeable
         renderRightActions={() => renderRightActions(thread.friendAddress)}
         overshootRight={false}
       >
@@ -497,7 +499,7 @@ export default function MessagesInboxScreen() {
             </View>
           </TouchableOpacity>
         </BlurredContainer>
-      </Swipeable>
+      </ReanimatedSwipeable>
     );
   };
 
