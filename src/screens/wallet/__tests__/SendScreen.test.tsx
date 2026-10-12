@@ -341,11 +341,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     mockBalances[VOI] = bal(VOI, 5_000_000n, 900_000n);
     mockRouteParams = { fee: '1000' };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
 
     // balance - fee - minBalance = 5_000_000 - 1000 - 900_000 = 4_099_000.
     // Before the fix (minBalance dropped) this would have filled "4.999".
@@ -359,7 +359,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     mockBalances[VOI] = bal(VOI, 5_000_000n, 900_000n);
     mockRouteParams = { fee: '1000' };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
     await screen.findByLabelText(MAX_LABEL);
 
@@ -367,11 +367,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
 
     // "4.999" == balance - fee. Spendable is 4.099, so this must error now.
     // (Pre-fix, spendable == balance - fee, so this was wrongly accepted.)
-    fireEvent.changeText(amountInput, '4.999');
+    await fireEvent.changeText(amountInput, '4.999');
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeTruthy();
 
     // The actual spendable amount is accepted.
-    fireEvent.changeText(amountInput, '4.099');
+    await fireEvent.changeText(amountInput, '4.099');
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeNull();
     await settle();
   });
@@ -385,11 +385,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     // Aggregate reserve = 0.9 + 0.5 = 1.4 VOI. Present but MUST be ignored.
     mockMultiNetworkBalance = { minBalance: 1_400_000n, assets: [] };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
 
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
     // Correct (VOI-only): 5_000_000 - 0 - 900_000 = 4_100_000 -> "4.1".
@@ -415,14 +415,14 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     });
     mockTokenMappings = dualNativeMappings;
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
     // Auto-selected VOI native — wait until its balance has loaded.
     await screen.findByLabelText(MAX_LABEL);
 
     // Switch to the ALGO asset (network B) — selectedNetworkId is still VOI.
     await act(async () => {
-      fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
+      await fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
     });
     await settle();
 
@@ -430,7 +430,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     // using ALGO's reserve (0.5), NOT VOI's (0.9). A test keyed to
     // selectedNetworkId (still VOI) would instead compute VOI's reserve.
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
     expect(amountInput.props.value).toBe('2.5');
     await settle();
@@ -447,11 +447,11 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
     });
     mockTokenMappings = dualNativeMappings;
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     const maxButton = await screen.findByLabelText(MAX_LABEL);
-    fireEvent.press(maxButton);
+    await fireEvent.press(maxButton);
 
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
     // Record-based: 5_000_000 - 900_000 = 4_100_000 -> "4.1".
@@ -476,7 +476,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
       networkId === VOI ? voiD.promise : algoD.promise
     );
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     // Resolve VOI: Max becomes available for the VOI reserve.
@@ -487,7 +487,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
 
     // Switch to ALGO but leave its fetch pending.
     await act(async () => {
-      fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
+      await fireEvent.press(screen.getByTestId(`asset-option-${ALGO}-0`));
     });
 
     // The identity now mismatches the (VOI) record: native spendable is 0n, so
@@ -496,7 +496,7 @@ describe('SendScreen native minimum-balance math (TASK-239)', () => {
 
     // And the validator rejects any positive amount while spendable is 0n.
     const amountInput = screen.getByPlaceholderText(AMOUNT_PLACEHOLDER);
-    fireEvent.changeText(amountInput, '0.1');
+    await fireEvent.changeText(amountInput, '0.1');
     expect(screen.queryByText(/exceeds spendable balance/i)).toBeTruthy();
 
     // Once ALGO resolves, Max returns and the amount is within spendable again.
@@ -522,7 +522,7 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     // The screen is ALREADY MOUNTED sitting on ALGORAND (no route network yet).
     mockCurrentNetwork = ALGO;
     mockRouteParams = undefined;
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     // A deep link now arrives on the already-mounted screen, naming VOI + asset
@@ -531,7 +531,7 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     // runs — the bug resolved decimals against the STALE ALGORAND network.
     mockRouteParams = { networkId: VOI, asset: '12345', amount: '1000000' };
     await act(async () => {
-      screen.rerender(<SendScreen />);
+      await screen.rerender(<SendScreen />);
     });
     await settle();
 
@@ -559,7 +559,7 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     mockCurrentNetwork = ALGO;
     mockRouteParams = { networkId: VOI, asset: '12345', amount: '1000000' };
 
-    const screen = render(<SendScreen />);
+    const screen = await render(<SendScreen />);
     await settle();
 
     expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 12345);

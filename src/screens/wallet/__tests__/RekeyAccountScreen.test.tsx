@@ -189,7 +189,7 @@ const ALGO_NETWORK = 'Algorand';
 const settle = () => act(async () => {});
 
 /** Invoke a button on the most recent Alert.alert call, as the UI would. */
-function pressAlertButton(label: string) {
+async function pressAlertButton(label: string) {
   const spy = Alert.alert as unknown as jest.Mock;
   const calls = spy.mock.calls;
   const buttons = calls[calls.length - 1][2] as {
@@ -198,7 +198,7 @@ function pressAlertButton(label: string) {
   }[];
   const button = buttons.find((b) => b.text === label);
   expect(button).toBeDefined();
-  act(() => {
+  await act(() => {
     button!.onPress?.();
   });
 }
@@ -207,16 +207,18 @@ function pressAlertButton(label: string) {
  * Select the target account and confirm through to the auth modal, leaving the
  * screen in its in-flight state (modal open, isProcessing true).
  */
-async function startRekeyToInFlight(screen: ReturnType<typeof render>) {
-  fireEvent.press(screen.getByText('Target Account'));
+async function startRekeyToInFlight(
+  screen: Awaited<ReturnType<typeof render>>
+) {
+  await fireEvent.press(screen.getByText('Target Account'));
   // Async validation must resolve (to []) before the proceed button enables.
   await settle();
   await waitFor(() => expect(screen.getByText('Rekey Account')).toBeEnabled());
 
-  fireEvent.press(screen.getByText('Rekey Account'));
+  await fireEvent.press(screen.getByText('Rekey Account'));
   // handleProceed shows the "Confirm Rekey Operation" alert; confirming it is
   // what calls handleStartRekey → setIsProcessing(true) + opens the modal.
-  pressAlertButton('Continue');
+  await pressAlertButton('Continue');
   expect(screen.getByTestId('auth-modal-open')).toBeTruthy();
 }
 
@@ -230,7 +232,7 @@ afterEach(() => {
 
 describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
   it('leaves the network selector enabled before a rekey is started', async () => {
-    const screen = render(<RekeyAccountScreen />);
+    const screen = await render(<RekeyAccountScreen />);
     await settle();
 
     expect(screen.getByText(VOI_NETWORK)).toBeEnabled();
@@ -238,7 +240,7 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
   });
 
   it('disables the network selector while a rekey is in flight and re-enables it after completion', async () => {
-    const screen = render(<RekeyAccountScreen />);
+    const screen = await render(<RekeyAccountScreen />);
     await settle();
 
     await startRekeyToInFlight(screen);
@@ -253,7 +255,7 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
     jest.useFakeTimers();
     try {
       await act(async () => {
-        fireEvent.press(screen.getByTestId('auth-complete-success'));
+        await fireEvent.press(screen.getByTestId('auth-complete-success'));
       });
       jest.clearAllTimers();
     } finally {
@@ -266,7 +268,7 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
   });
 
   it('re-enables the network selector after a failed completion', async () => {
-    const screen = render(<RekeyAccountScreen />);
+    const screen = await render(<RekeyAccountScreen />);
     await settle();
 
     await startRekeyToInFlight(screen);
@@ -274,7 +276,7 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
 
     // The error branch of handleAuthComplete still runs through the finally.
     await act(async () => {
-      fireEvent.press(screen.getByTestId('auth-complete-error'));
+      await fireEvent.press(screen.getByTestId('auth-complete-error'));
     });
 
     expect(screen.getByText(VOI_NETWORK)).toBeEnabled();
@@ -282,7 +284,7 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
   });
 
   it('re-enables the network selector after the auth modal is cancelled', async () => {
-    const screen = render(<RekeyAccountScreen />);
+    const screen = await render(<RekeyAccountScreen />);
     await settle();
 
     await startRekeyToInFlight(screen);
@@ -291,7 +293,7 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
     // Dismissal is an exit too — a permanently-true flag here would wedge the
     // screen, which is strictly worse than the original inert guard.
     await act(async () => {
-      fireEvent.press(screen.getByTestId('auth-cancel'));
+      await fireEvent.press(screen.getByTestId('auth-cancel'));
     });
 
     expect(screen.queryByTestId('auth-modal-open')).toBeNull();

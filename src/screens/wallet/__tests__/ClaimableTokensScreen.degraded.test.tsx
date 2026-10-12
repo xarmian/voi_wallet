@@ -203,7 +203,7 @@ describe('ClaimableTokensScreen degraded state (TASK-188)', () => {
   it('renders the degraded banner with a retry when the last fetch was partial', async () => {
     mockHasPartialFailure = true;
 
-    const { getByTestId } = render(<ClaimableTokensScreen />);
+    const { getByTestId } = await render(<ClaimableTokensScreen />);
     await settle();
 
     expect(getByTestId('claimable-degraded-banner')).toBeTruthy();
@@ -213,12 +213,12 @@ describe('ClaimableTokensScreen degraded state (TASK-188)', () => {
   it('retry issues a FORCED refetch — a TTL-suppressed retry button is a dead button', async () => {
     mockHasPartialFailure = true;
 
-    const { getByTestId } = render(<ClaimableTokensScreen />);
+    const { getByTestId } = await render(<ClaimableTokensScreen />);
     await settle();
 
     mockFetchApprovals.mockClear();
     await act(async () => {
-      fireEvent.press(getByTestId('claimable-degraded-retry'));
+      await fireEvent.press(getByTestId('claimable-degraded-retry'));
     });
 
     expect(mockFetchApprovals).toHaveBeenCalledWith(ACCOUNT_A, { force: true });
@@ -227,7 +227,7 @@ describe('ClaimableTokensScreen degraded state (TASK-188)', () => {
   it('does not render the degraded banner after a fully successful fetch', async () => {
     mockHasPartialFailure = false;
 
-    const { queryByTestId } = render(<ClaimableTokensScreen />);
+    const { queryByTestId } = await render(<ClaimableTokensScreen />);
     await settle();
 
     expect(queryByTestId('claimable-degraded-banner')).toBeNull();
@@ -241,7 +241,7 @@ describe('ClaimableTokensScreen degraded state (TASK-188)', () => {
     mockItemsAccountAddress = ACCOUNT_A;
     mockActiveAddress = ACCOUNT_B;
 
-    const { queryByTestId } = render(<ClaimableTokensScreen />);
+    const { queryByTestId } = await render(<ClaimableTokensScreen />);
     await settle();
 
     expect(queryByTestId('claimable-degraded-banner')).toBeNull();
@@ -250,7 +250,7 @@ describe('ClaimableTokensScreen degraded state (TASK-188)', () => {
 
 describe('ClaimableTokensScreen account binding (TASK-188)', () => {
   it("renders the active account's items", async () => {
-    const { queryByText } = render(<ClaimableTokensScreen />);
+    const { queryByText } = await render(<ClaimableTokensScreen />);
     await settle();
 
     expect(queryByText('row-1_OWNER')).toBeTruthy();
@@ -262,7 +262,7 @@ describe('ClaimableTokensScreen account binding (TASK-188)', () => {
     mockItemsAccountAddress = ACCOUNT_A;
     mockActiveAddress = ACCOUNT_B;
 
-    const { queryByText } = render(<ClaimableTokensScreen />);
+    const { queryByText } = await render(<ClaimableTokensScreen />);
     await settle();
 
     expect(queryByText('row-1_OWNER')).toBeNull();
@@ -270,20 +270,26 @@ describe('ClaimableTokensScreen account binding (TASK-188)', () => {
   });
 
   it('pull-to-refresh forces a fetch', async () => {
-    const { UNSAFE_getByType } = render(<ClaimableTokensScreen />);
+    const { container } = await render(<ClaimableTokensScreen />);
     await settle();
 
-    const { RefreshControl } = require('react-native');
+    // RNTL 14 exposes host elements only, and the RefreshControl jest mock
+    // renders a prop-less host, so take onRefresh from the scroll host's
+    // refreshControl element.
+    const [scrollHost] = container.queryAll(
+      (node) =>
+        typeof node.props.refreshControl?.props?.onRefresh === 'function'
+    );
     mockFetchApprovals.mockClear();
     await act(async () => {
-      UNSAFE_getByType(RefreshControl).props.onRefresh();
+      scrollHost.props.refreshControl.props.onRefresh();
     });
 
     expect(mockFetchApprovals).toHaveBeenCalledWith(ACCOUNT_A, { force: true });
   });
 
   it('the focus fetch is NOT forced, so the TTL can suppress it', async () => {
-    render(<ClaimableTokensScreen />);
+    await render(<ClaimableTokensScreen />);
     await settle();
 
     expect(mockFetchApprovals).toHaveBeenCalledWith(ACCOUNT_A);
@@ -311,7 +317,7 @@ describe('ClaimableTokensScreen post-claim refresh (TASK-188)', () => {
   it('forces a refresh for the claiming account after the delay', async () => {
     mockRouteParams = { pendingRefresh: true, claimedItemIds: [] };
 
-    render(<ClaimableTokensScreen />);
+    await render(<ClaimableTokensScreen />);
     mockFetchApprovals.mockClear();
     await advance(8000);
 
@@ -321,7 +327,7 @@ describe('ClaimableTokensScreen post-claim refresh (TASK-188)', () => {
   it('abandons the delayed refresh when the account changed while it was pending', async () => {
     mockRouteParams = { pendingRefresh: true, claimedItemIds: [] };
 
-    const { rerender } = render(<ClaimableTokensScreen />);
+    const { rerender } = await render(<ClaimableTokensScreen />);
     mockFetchApprovals.mockClear();
 
     // User switches accounts inside the 8s window. A forced fetch takes
@@ -329,7 +335,7 @@ describe('ClaimableTokensScreen post-claim refresh (TASK-188)', () => {
     // from would wipe the now-active account's list.
     mockActiveAddress = ACCOUNT_B;
     mockRouteParams = {};
-    rerender(<ClaimableTokensScreen />);
+    await rerender(<ClaimableTokensScreen />);
 
     await advance(8000);
 

@@ -47,23 +47,23 @@ beforeEach(() => {
 });
 
 /** All descendants (inclusive) carrying an explicit a11y-hidden marker. */
-const hiddenNodes = (root: { findAll: (p: (n: any) => boolean) => any[] }) =>
-  root.findAll(
+const hiddenNodes = (root: { queryAll: (p: (n: any) => boolean) => any[] }) =>
+  root.queryAll(
     (node: any) =>
       node.props?.importantForAccessibility === 'no-hide-descendants' ||
       node.props?.accessibilityElementsHidden === true
   );
 
 describe('NFTBackground decorative layers', () => {
-  it('hides the whole decorative layer stack from the a11y tree', () => {
+  it('hides the whole decorative layer stack from the a11y tree', async () => {
     withNFTTheme();
-    const { UNSAFE_root } = render(
+    const { container } = await render(
       <NFTBackground>
         <Text>Balance</Text>
       </NFTBackground>
     );
 
-    const hidden = hiddenNodes(UNSAFE_root);
+    const hidden = hiddenNodes(container);
     expect(hidden.length).toBeGreaterThan(0);
     expect(
       hidden.every(
@@ -74,9 +74,9 @@ describe('NFTBackground decorative layers', () => {
     ).toBe(true);
   });
 
-  it('keeps its children reachable', () => {
+  it('keeps its children reachable', async () => {
     withNFTTheme();
-    const { getByText } = render(
+    const { getByText } = await render(
       <NFTBackground>
         <Text>Balance</Text>
       </NFTBackground>
@@ -85,21 +85,21 @@ describe('NFTBackground decorative layers', () => {
     expect(getByText('Balance')).toBeTruthy();
   });
 
-  it('renders no decorative layers at all without an NFT theme', () => {
-    const { UNSAFE_root, getByText } = render(
+  it('renders no decorative layers at all without an NFT theme', async () => {
+    const { container, getByText } = await render(
       <NFTBackground>
         <Text>Balance</Text>
       </NFTBackground>
     );
 
-    expect(hiddenNodes(UNSAFE_root)).toHaveLength(0);
+    expect(hiddenNodes(container)).toHaveLength(0);
     expect(getByText('Balance')).toBeTruthy();
   });
 });
 
 describe('BlurredContainer decorative layers', () => {
-  it('hides the highlight and inner-border chrome but not the content', () => {
-    const { UNSAFE_root, getByText } = render(
+  it('hides the highlight and inner-border chrome but not the content', async () => {
+    const { container, getByText } = await render(
       <BlurredContainer showHighlight showInnerBorder>
         <View>
           <Text>Recipient</Text>
@@ -107,19 +107,19 @@ describe('BlurredContainer decorative layers', () => {
       </BlurredContainer>
     );
 
-    expect(hiddenNodes(UNSAFE_root).length).toBeGreaterThan(0);
+    expect(hiddenNodes(container).length).toBeGreaterThan(0);
     expect(getByText('Recipient')).toBeTruthy();
   });
 
-  it('hides the tint overlay on the NFT-themed (blurred) branch', () => {
+  it('hides the tint overlay on the NFT-themed (blurred) branch', async () => {
     withNFTTheme();
-    const { UNSAFE_root, getByText } = render(
+    const { container, getByText } = await render(
       <BlurredContainer>
         <Text>Recipient</Text>
       </BlurredContainer>
     );
 
-    expect(hiddenNodes(UNSAFE_root).length).toBeGreaterThan(0);
+    expect(hiddenNodes(container).length).toBeGreaterThan(0);
     expect(getByText('Recipient')).toBeTruthy();
   });
 });

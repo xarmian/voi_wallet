@@ -110,13 +110,13 @@ describe('NFTThemeSelector ownership map (TASK-246)', () => {
   });
 
   it('rebuilds the ownership map when the account switches with a collection open', async () => {
-    const { getByText, getByTestId, rerender } = render(
+    const { getByText, getByTestId, rerender } = await render(
       <NFTThemeSelector visible onClose={jest.fn()} theme={lightTheme} />
     );
 
     // Open a collection: Browse Collections tab -> pick a collection.
-    fireEvent.press(getByText('Browse Collections'));
-    fireEvent.press(getByTestId('pick-collection'));
+    await fireEvent.press(getByText('Browse Collections'));
+    await fireEvent.press(getByTestId('pick-collection'));
 
     // Ownership reflects account A.
     await waitFor(() =>
@@ -126,7 +126,7 @@ describe('NFTThemeSelector ownership map (TASK-246)', () => {
 
     // Switch to account B with the collection still open.
     mockActiveAccount = { id: 'b', address: 'ADDR_B' };
-    rerender(
+    await rerender(
       <NFTThemeSelector visible onClose={jest.fn()} theme={lightTheme} />
     );
 
