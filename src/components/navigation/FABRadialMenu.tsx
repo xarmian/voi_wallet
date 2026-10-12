@@ -22,9 +22,9 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   interpolate,
-  runOnJS,
   type SharedValue,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -214,7 +214,7 @@ export const FABRadialMenu: React.FC<FABRadialMenuProps> = ({
       isOpen.value = false;
       menuProgress.value = withSpring(0, springConfigs.snappy, (finished) => {
         if (finished && onComplete) {
-          runOnJS(onComplete)();
+          scheduleOnRN(onComplete);
         }
       });
       buttonRotation.value = withSpring(0, springConfigs.snappy);
