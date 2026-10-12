@@ -6,6 +6,8 @@ const WALLETCONNECT_PROJECT_ID =
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
+const withImageColorsJvmTarget = require('./plugins/withImageColorsJvmTarget');
+
 // R8 keep rules for Android release builds (TASK-209 / PLAN-267).
 //
 // These live here rather than in a custom config plugin because
@@ -31,6 +33,19 @@ const ANDROID_PROGUARD_RULES = `
 -keep class expo.modules.** { *; }
 -keep class expo.modules.kotlin.** { *; }
 -keep interface expo.modules.kotlin.** { *; }
+
+# --- Expo io.github.expo.* JNI layer (new in SDK 58) ---
+# expo-modules-core 58 adds a C++ layer whose Java side lives under
+# io.github.expo.* (kolibri runtime 0.2.0 + io.github.expo.modules.v2.{jsi,
+# args,events,errors,records,sharedobjects,types}). libexpo-kolibri.so and
+# libexpo-modules-core.so resolve these classes and members BY NAME, and
+# neither expo-modules-core's proguard-rules.pro nor the kolibri artifacts
+# ship keep rules for them. Without this rule R8 renames/removes them and the
+# release app aborts at startup (NoSuchFieldError NativeObject.nativePointer,
+# then ClassNotFoundException io.github.expo.modules.v2.jsi.AttachedRuntime).
+# Found by FR-374 T2's assembleRelease, 2026-10-12 (PLAN-375 DR-9 amendment).
+-keep class io.github.expo.** { *; }
+-keep interface io.github.expo.** { *; }
 
 # --- fbjni hybrid pattern ---
 # Mirrors the unreferenced react-native/.../hermes/reactexecutor/fbjni.pro.
@@ -268,6 +283,7 @@ export default {
       // config plugin; it autolinks via Nitro. If `expo prebuild` errors on this
       // line, remove it — the Nitro module still autolinks without the plugin.
       "react-native-quick-crypto",
+      withImageColorsJvmTarget,
     ]
   }
 };

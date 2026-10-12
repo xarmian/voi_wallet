@@ -72,7 +72,7 @@ describe('Android R8 build configuration (TASK-209)', () => {
     expect(typeof rules).toBe('string');
     const proguard = rules as string;
 
-    // React Native 0.81.5 ships exactly ONE consumer proguard file
+    // React Native (0.88) ships exactly ONE consumer proguard file
     // (ReactAndroid/proguard-rules.pro). reactnative.pro and fbjni.pro exist in
     // the RN tree but are referenced by NO gradle script, so the rules below are
     // absent from the build unless this app supplies them.
@@ -81,6 +81,13 @@ describe('Android R8 build configuration (TASK-209)', () => {
       '-keep class expo.modules.** { *; }',
       '-keep class expo.modules.kotlin.** { *; }',
       '-keep interface expo.modules.kotlin.** { *; }',
+
+      // Expo SDK 58's io.github.expo.* JNI layer (kolibri + modules.v2) ships
+      // no consumer rules and its C++ resolves classes/members by name: without
+      // these the release app aborts at startup (NoSuchFieldError
+      // NativeObject.nativePointer, ClassNotFoundException AttachedRuntime).
+      '-keep class io.github.expo.** { *; }',
+      '-keep interface io.github.expo.** { *; }',
 
       // fbjni hybrid pattern: HybridData is resolved by FIELD NAME from C++.
       // Renaming it breaks JNI init for react-native-nitro-modules, which
