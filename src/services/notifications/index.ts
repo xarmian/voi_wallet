@@ -73,10 +73,17 @@ class NotificationService {
   private appStateSubscription: ReturnType<
     typeof AppState.addEventListener
   > | null = null;
+  // The second argument is the notification request identifier. The deep
+  // link service keys its cold-start route queue on it, so the cold-start
+  // response and a response-listener event for the same tap route once.
   private onNotificationTap:
-    | ((data: NotificationData) => void | Promise<void>)
+    | ((
+        data: NotificationData,
+        notificationId?: string
+      ) => void | Promise<void>)
     | null = null;
   private pendingNotificationTap: NotificationData | null = null;
+  private pendingNotificationTapId: string | undefined = undefined;
 
   private constructor() {
     // Private constructor for singleton
@@ -140,9 +147,10 @@ class NotificationService {
           );
 
           if (this.onNotificationTap) {
-            this.onNotificationTap(data);
+            this.onNotificationTap(data, notificationId);
           } else {
             this.pendingNotificationTap = data;
+            this.pendingNotificationTapId = notificationId;
           }
         }
       }
@@ -179,7 +187,10 @@ class NotificationService {
    * Set callback for notification taps
    */
   setNotificationTapHandler(
-    handler: (data: NotificationData) => void | Promise<void>
+    handler: (
+      data: NotificationData,
+      notificationId?: string
+    ) => void | Promise<void>
   ): void {
     this.onNotificationTap = handler;
 
@@ -190,8 +201,10 @@ class NotificationService {
         this.pendingNotificationTap
       );
       const pendingData = this.pendingNotificationTap;
+      const pendingId = this.pendingNotificationTapId;
       this.pendingNotificationTap = null;
-      handler(pendingData);
+      this.pendingNotificationTapId = undefined;
+      handler(pendingData, pendingId);
     }
   }
 
@@ -207,6 +220,7 @@ class NotificationService {
    */
   clearPendingNotificationTap(): void {
     this.pendingNotificationTap = null;
+    this.pendingNotificationTapId = undefined;
   }
 
   /**
@@ -794,14 +808,16 @@ class NotificationService {
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content
           .data as unknown as NotificationData;
+        const notificationId = response.notification.request.identifier;
         console.log('Notification tapped:', data);
 
         if (this.onNotificationTap) {
-          this.onNotificationTap(data);
+          this.onNotificationTap(data, notificationId);
         } else {
           // Handler not set yet (app still initializing), store for later
           console.log('No notification tap handler set yet, storing for later');
           this.pendingNotificationTap = data;
+          this.pendingNotificationTapId = notificationId;
         }
       });
   }

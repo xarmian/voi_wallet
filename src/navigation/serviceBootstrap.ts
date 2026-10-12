@@ -379,6 +379,10 @@ export const initializeServices = async ({
         if (!isSignerMode) {
           extensionDeepLinkHandler.cleanup();
           notificationService.cleanup();
+          // Removes the Linking 'url' subscription and the navigation-ready
+          // listeners, and drops any route still queued for readiness
+          // (TASK-381).
+          DeepLinkService.getInstance().cleanup();
         }
       } catch {}
     };
