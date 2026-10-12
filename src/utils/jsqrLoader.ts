@@ -36,10 +36,7 @@ export interface JsQrPoint {
 /** Decoder options. Mirrors jsqr's `Options`. */
 export interface JsQrOptions {
   inversionAttempts?:
-    | 'dontInvert'
-    | 'onlyInvert'
-    | 'attemptBoth'
-    | 'invertFirst';
+    'dontInvert' | 'onlyInvert' | 'attemptBoth' | 'invertFirst';
 }
 
 /** A successfully decoded QR code. Mirrors jsqr's `QRCode`. */

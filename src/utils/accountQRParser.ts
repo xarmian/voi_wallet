@@ -102,10 +102,7 @@ export interface ScannedAccount {
 
 export interface QRAccountData {
   type:
-    | 'voi-accounts'
-    | 'single-mnemonic'
-    | 'single-private-key'
-    | 'address-list';
+    'voi-accounts' | 'single-mnemonic' | 'single-private-key' | 'address-list';
   accounts?: {
     address?: string;
     name?: string;

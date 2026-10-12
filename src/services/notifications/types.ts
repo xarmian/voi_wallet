@@ -109,12 +109,7 @@ export interface AccountSubscription {
  */
 export interface NotificationData {
   type:
-    | 'message'
-    | 'payment'
-    | 'arc200'
-    | 'arc72'
-    | 'key_registration'
-    | 'test';
+    'message' | 'payment' | 'arc200' | 'arc72' | 'key_registration' | 'test';
   txId?: string; // 52-char base32 transaction ID
   sender?: string; // 58-char Algorand address
   receiver?: string; // 58-char Algorand address (our account that received the event)

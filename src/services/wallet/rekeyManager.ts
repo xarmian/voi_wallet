@@ -190,9 +190,8 @@ export class RekeyManager {
           // Check if we have a private key for this account - if so, it's a STANDARD account
           let hasPrivateKey = false;
           try {
-            const { AccountSecureStorage } = await import(
-              '@/services/secure/AccountSecureStorage'
-            );
+            const { AccountSecureStorage } =
+              await import('@/services/secure/AccountSecureStorage');
             await AccountSecureStorage.getPrivateKey(account.id);
             hasPrivateKey = true;
           } catch {

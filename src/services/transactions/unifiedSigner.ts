@@ -591,9 +591,8 @@ export class UnifiedTransactionSigner {
 
       // Clear private key cache for security (cache is inside AccountSecureStorage)
       // Note: Cache auto-expires after 60s, but we clear immediately for security
-      const { AccountSecureStorage } = await import(
-        '@/services/secure/AccountSecureStorage'
-      );
+      const { AccountSecureStorage } =
+        await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
 
       // All transactions signed successfully
@@ -605,9 +604,8 @@ export class UnifiedTransactionSigner {
       };
     } catch (error) {
       // Clear private key cache on error too for security
-      const { AccountSecureStorage } = await import(
-        '@/services/secure/AccountSecureStorage'
-      );
+      const { AccountSecureStorage } =
+        await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
       throw error;
     }

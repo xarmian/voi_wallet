@@ -774,9 +774,7 @@ export default function SwapScreen() {
         // existed, with raw unsigned bytes in that slot) is what produced the
         // `apaa` msgpack decode failure at algod. Fail loudly instead.
         const rawSigned = result.signedTransactions as (
-          | string
-          | Uint8Array
-          | null
+          string | Uint8Array | null
         )[];
         if (rawSigned.some((txn) => txn === null || txn === undefined)) {
           throw new Error(
