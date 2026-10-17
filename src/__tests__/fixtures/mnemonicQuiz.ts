@@ -53,15 +53,15 @@ export function quizQuestionCount(screen: QuizScreen, prefix: string): number {
 }
 
 /** Press the chip carrying `word`, or throw if it is not on the board. */
-export function pressQuizOption(
+export async function pressQuizOption(
   screen: QuizScreen,
   prefix: string,
   word: string
-): void {
+): Promise<void> {
   for (let slot = 0; slot < CHALLENGE_OPTION_COUNT; slot++) {
     const chip = screen.queryByTestId(`${prefix}-option-${slot}`);
     if (chip && chip.props.accessibilityLabel === word) {
-      fireEvent.press(chip as never);
+      await fireEvent.press(chip as never);
       return;
     }
   }
@@ -69,16 +69,16 @@ export function pressQuizOption(
 }
 
 /** Press a chip that is NOT the answer to the current question. */
-export function pressWrongQuizOption(
+export async function pressWrongQuizOption(
   screen: QuizScreen,
   prefix: string,
   words: string[]
-): void {
+): Promise<void> {
   const answer = words[currentQuizPosition(screen, prefix)];
   for (let slot = 0; slot < CHALLENGE_OPTION_COUNT; slot++) {
     const chip = screen.queryByTestId(`${prefix}-option-${slot}`);
     if (chip && chip.props.accessibilityLabel !== answer) {
-      fireEvent.press(chip as never);
+      await fireEvent.press(chip as never);
       return;
     }
   }
@@ -89,17 +89,17 @@ export function pressWrongQuizOption(
  * Answer every question correctly, the way a user holding a correct written
  * phrase would. Returns the positions that were asked.
  */
-export function completeQuiz(
+export async function completeQuiz(
   screen: QuizScreen,
   prefix: string,
   words: string[]
-): number[] {
+): Promise<number[]> {
   const total = quizQuestionCount(screen, prefix);
   const asked: number[] = [];
   for (let question = 0; question < total; question++) {
     const position = currentQuizPosition(screen, prefix);
     asked.push(position);
-    pressQuizOption(screen, prefix, words[position]);
+    await pressQuizOption(screen, prefix, words[position]);
   }
   return asked;
 }

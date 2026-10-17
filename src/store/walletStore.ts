@@ -3017,8 +3017,7 @@ const EMPTY_WATCH_ACCOUNTS: WatchAccountMetadata[] = [];
 const EMPTY_REKEYED_ACCOUNTS: RekeyedAccountMetadata[] = [];
 // Signable accounts are those that can directly sign transactions (STANDARD or LEDGER)
 const EMPTY_SIGNABLE_ACCOUNTS: (
-  | StandardAccountMetadata
-  | LedgerAccountMetadata
+  StandardAccountMetadata | LedgerAccountMetadata
 )[] = [];
 const EMPTY_ACCOUNT_UI_STATE: Readonly<AccountUIState> = Object.freeze({
   isLoading: false,
@@ -3046,8 +3045,7 @@ let cachedStandardAccounts: StandardAccountMetadata[] = EMPTY_STANDARD_ACCOUNTS;
 let cachedWatchAccounts: WatchAccountMetadata[] = EMPTY_WATCH_ACCOUNTS;
 let cachedRekeyedAccounts: RekeyedAccountMetadata[] = EMPTY_REKEYED_ACCOUNTS;
 let cachedSignableAccounts: (
-  | StandardAccountMetadata
-  | LedgerAccountMetadata
+  StandardAccountMetadata | LedgerAccountMetadata
 )[] = EMPTY_SIGNABLE_ACCOUNTS;
 
 function ensureDerivedAccountCaches(wallet: Wallet | null | undefined) {

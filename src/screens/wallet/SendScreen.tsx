@@ -647,10 +647,11 @@ export default function SendScreen() {
                     networkId,
                     assetId: initialAssetId,
                     balance: BigInt(assetHolding.amount || 0),
-                    decimals: assetInfo.params.decimals || 0,
-                    symbol: assetInfo.params.unitName || contextAssetName || '',
-                    name: assetInfo.params.name || contextAssetName || '',
-                    imageUrl: assetInfo.params.url,
+                    decimals: assetInfo.params?.decimals || 0,
+                    symbol:
+                      assetInfo.params?.unitName || contextAssetName || '',
+                    name: assetInfo.params?.name || contextAssetName || '',
+                    imageUrl: assetInfo.params?.url,
                   });
                 }
               }

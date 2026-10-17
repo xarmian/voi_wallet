@@ -413,7 +413,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     overlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       justifyContent: 'center',
       alignItems: 'center',
       backgroundColor: 'rgba(0,0,0,0.5)',
@@ -534,7 +534,7 @@ const createStyles = (theme: Theme) =>
       color: theme.colors.primary,
     },
     processingOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: 'rgba(0,0,0,0.7)',
       justifyContent: 'center',
       alignItems: 'center',

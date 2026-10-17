@@ -68,7 +68,10 @@ export async function buildAsaOptOutTransaction(
       .getAlgodClient()
       .getAssetByID(assetId)
       .do();
-    if (!assetInfo) {
+    // algosdk >=3.8 types Asset.params as optional. Without params there is
+    // no creator to close out to, and algosdk would reject the undefined
+    // receiver anyway, so fail here with the not-found error.
+    if (!assetInfo?.params) {
       throw new Error(`Asset ${assetId} not found`);
     }
     assetCreator = assetInfo.params.creator;

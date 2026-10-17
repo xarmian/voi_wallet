@@ -513,7 +513,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     backgroundOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
     },
     container: {
       flex: 1,

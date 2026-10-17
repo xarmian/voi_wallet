@@ -273,7 +273,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     };
 
     const txn = axfer(ALGO, owner, USDC, 10_000_000n);
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: ALGO,
       entries: [{ txn: b64(txn) }],
       approved: [owner],
@@ -298,7 +298,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
     mockAssetParams[VOI] = { '777': { decimals: 2, unitName: 'CENT' } };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(axfer(VOI, owner, 777n, 12_345n)) }],
       approved: [owner],
@@ -317,7 +317,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
     // No params registered -> getCachedAssetParams resolves null.
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(axfer(VOI, owner, 4242n, 5_000_000n)) }],
       approved: [owner],
@@ -340,7 +340,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
 
     // Well beyond 2^53; a Number() narrowing anywhere would round this.
     const amount = 18446744073709551615n;
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(axfer(VOI, owner, 9001n, amount)) }],
       approved: [owner],
@@ -357,7 +357,7 @@ describe('UniversalTransactionSigningScreen — asset display', () => {
     mockAccounts = [walletAccount('Main', owner)];
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: ALGO,
       entries: [{ txn: b64(pay(ALGO, owner, 1_500_000)) }],
       approved: [owner],
@@ -378,7 +378,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     mockRoutes[a] = { kind: 'software', signingAddress: a };
     mockRoutes[b] = { kind: 'software', signingAddress: b };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, a, 1)) }, { txn: b64(pay(VOI, b, 2)) }],
       approved: [a, b],
@@ -398,7 +398,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     mockAccounts = [walletAccount('Alpha', a)];
     mockRoutes[a] = { kind: 'software', signingAddress: a };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [
         { txn: b64(pay(VOI, a, 1)) },
@@ -422,7 +422,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     mockAccounts = [walletAccount('Alpha', mine)];
     mockRoutes[mine] = { kind: 'software', signingAddress: mine };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [
         { txn: b64(pay(VOI, mine, 1)) },
@@ -449,7 +449,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
       rekeyedTo: device,
     };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, owner, 1)) }],
       approved: [owner],
@@ -466,7 +466,7 @@ describe('UniversalTransactionSigningScreen — signer list', () => {
     const theirs = makeAccount('signer-none').addr;
     mockAccounts = [];
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, theirs, 1)) }],
       approved: [theirs],
@@ -487,7 +487,7 @@ describe('UniversalTransactionSigningScreen — unknown chain', () => {
     mockAccounts = [walletAccount('Main', owner)];
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: VOI,
       entries: [{ txn: b64(pay(VOI, owner, 1)) }],
       approved: [owner],
@@ -510,7 +510,7 @@ describe('UniversalTransactionSigningScreen — unknown chain', () => {
     mockAccounts = [walletAccount('Main', owner)];
     mockRoutes[owner] = { kind: 'software', signingAddress: owner };
 
-    const screen = renderScreen({
+    const screen = await renderScreen({
       networkId: ALGO,
       entries: [{ txn: b64(pay(ALGO, owner, 1)) }],
       approved: [owner],

@@ -540,9 +540,6 @@ export function useIsValidating(): boolean {
  * Hook to get validation status (reactive)
  */
 export function useValidationStatus():
-  | 'pending'
-  | 'valid'
-  | 'invalid'
-  | 'unknown' {
+  'pending' | 'valid' | 'invalid' | 'unknown' {
   return useUpdateStore((state) => state.validationStatus);
 }

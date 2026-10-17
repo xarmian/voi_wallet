@@ -256,8 +256,7 @@ export type RootStackParamList = {
   QRAccountImport: undefined;
   AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
   LedgerAccountImport:
-    | { deviceId?: string; isOnboarding?: boolean }
-    | undefined;
+    { deviceId?: string; isOnboarding?: boolean } | undefined;
   // Remote Signer signing flow screens
   SignRequestScanner: undefined;
   RemoteSignerTransactionReview: {
@@ -418,8 +417,7 @@ export type WalletStackParamList = {
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
   ClaimableTokens:
-    | { pendingRefresh?: boolean; claimedItemIds?: string[] }
-    | undefined;
+    { pendingRefresh?: boolean; claimedItemIds?: string[] } | undefined;
   ClaimToken: {
     claimableItem: SerializableClaimableItem;
   };
@@ -552,8 +550,7 @@ export type AirgapStackParamList = {
   QRAccountImport: undefined;
   AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
   LedgerAccountImport:
-    | { deviceId?: string; isOnboarding?: boolean }
-    | undefined;
+    { deviceId?: string; isOnboarding?: boolean } | undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();

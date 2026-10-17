@@ -36,6 +36,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
+import { createPendingRouteQueue, PendingRouteQueue } from './pendingRoute';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -118,6 +119,13 @@ export class DeepLinkService {
   private pendingNotification: NotificationData | null = null;
   private isAppUnlocked: boolean = false;
   private linkingSubscription: { remove: () => void } | null = null;
+  // DR-10 / TASK-381: cold-start delivery. Deep links and notification taps
+  // are handed to this queue, which holds them until the NavigationContainer
+  // is ready and then runs the unchanged handlers in arrival order.
+  private readyListeners: Set<() => void> = new Set();
+  private navigationRefUnsubscribes: (() => void)[] = [];
+  private untrackedNotificationCount = 0;
+  private readonly routeQueue: PendingRouteQueue = this.createRouteQueue();
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -131,7 +139,77 @@ export class DeepLinkService {
   }
 
   setNavigationRef(ref: NavigationContainerRef<any>): void {
+    this.detachNavigationRefListeners();
     this.navigationRef = ref;
+    // The container emits 'ready' at the same moment it calls its onReady
+    // prop (@react-navigation/core BaseNavigationContainer: `onReadyRef.current?.()`
+    // then `emitter.emit({ type: 'ready' })`). 'state' covers a root navigator
+    // that unmounts and later remounts, after which 'ready' does not re-fire.
+    if (typeof ref?.addListener === 'function') {
+      this.navigationRefUnsubscribes = [
+        ref.addListener('ready', this.notifyReadiness),
+        ref.addListener('state', this.notifyReadiness),
+      ];
+    }
+    // The container may already be ready (the 'ready' event fired before we
+    // subscribed); let any queued route re-check now.
+    this.notifyReadiness();
+  }
+
+  private createRouteQueue(): PendingRouteQueue {
+    return createPendingRouteQueue({
+      isReady: () => !!this.navigationRef?.isReady(),
+      onReady: (cb) => {
+        this.readyListeners.add(cb);
+        return () => {
+          this.readyListeners.delete(cb);
+        };
+      },
+    });
+  }
+
+  private notifyReadiness = (): void => {
+    for (const cb of Array.from(this.readyListeners)) {
+      cb();
+    }
+  };
+
+  private detachNavigationRefListeners(): void {
+    const unsubscribes = this.navigationRefUnsubscribes;
+    this.navigationRefUnsubscribes = [];
+    for (const unsubscribe of unsubscribes) {
+      try {
+        unsubscribe();
+      } catch {}
+    }
+  }
+
+  /**
+   * Hand a URL to the cold-start queue. Its handler (`handleUrl`, unchanged)
+   * runs once navigation is ready; a repeat of the same URL while it is
+   * queued/running or just finished (getInitialURL + the first 'url' event)
+   * runs once.
+   */
+  private deliverUrl(url: string): Promise<void> {
+    return this.routeQueue.deliver(`url:${url}`, async () => {
+      await this.handleUrl(url);
+    });
+  }
+
+  /**
+   * Tear down the Linking subscription and the navigation-ready listeners
+   * (unmount). A route still waiting for navigation is NOT dropped: a
+   * cold-start notification has already been marked handled, so dropping it
+   * would lose it for good. It stays queued and is delivered once a remount
+   * calls setNavigationRef() with a ready container.
+   */
+  cleanup(): void {
+    if (this.linkingSubscription) {
+      this.linkingSubscription.remove();
+      this.linkingSubscription = null;
+    }
+    this.detachNavigationRefListeners();
+    this.navigationRef = null;
   }
 
   /**
@@ -166,23 +244,31 @@ export class DeepLinkService {
 
   async initialize(): Promise<void> {
     try {
-      // Handle initial URL if app was opened via deep link
+      // Listen for incoming deep links FIRST, so a 'url' event that fires
+      // while getInitialURL() is pending is not lost. If it is the same URL
+      // as the initial one, the route queue runs it once (dedupe by key).
+      // Idempotent: drop a previous subscription before re-subscribing.
+      this.linkingSubscription?.remove();
+      this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
+        console.log('Received deep link:', redactSensitiveForLog(url));
+        this.deliverUrl(url).catch((error) => {
+          console.error('Failed to handle deep link:', redactError(error));
+        });
+      });
+
+      // Handle initial URL if app was opened via deep link. Queued until the
+      // navigation container is ready (DR-10), not awaited here: init must
+      // not block on navigation readiness or on a prompt the handler shows.
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
         console.log(
           'Handling initial deep link:',
           redactSensitiveForLog(initialUrl)
         );
-        await this.handleUrl(initialUrl);
-      }
-
-      // Listen for incoming deep links
-      this.linkingSubscription = Linking.addEventListener('url', ({ url }) => {
-        console.log('Received deep link:', redactSensitiveForLog(url));
-        this.handleUrl(url).catch((error) => {
+        this.deliverUrl(initialUrl).catch((error) => {
           console.error('Failed to handle deep link:', redactError(error));
         });
-      });
+      }
 
       // Set up notification tap handler for navigation
       this.setupNotificationHandler();
@@ -200,26 +286,43 @@ export class DeepLinkService {
    */
   private setupNotificationHandler(): void {
     notificationService.setNotificationTapHandler(
-      async (data: NotificationData) => {
-        console.log(
-          '[DeepLink] Notification tap handler called, isAppUnlocked:',
-          this.isAppUnlocked,
-          'data:',
-          redactNotificationData(data)
+      (data: NotificationData, notificationId?: string) => {
+        // Keyed by the notification identifier, so the cold-start response
+        // and a response-listener event for the same tap route once. The
+        // unlock gate below runs inside the queued call, i.e. after
+        // navigation is ready, unchanged.
+        const key = notificationId
+          ? `notification:${notificationId}`
+          : `notification:untracked:${++this.untrackedNotificationCount}`;
+        return this.routeQueue.deliver(key, () =>
+          this.handleNotificationTap(data)
         );
-
-        // If app is locked, store the notification for later processing after unlock
-        if (!this.isAppUnlocked) {
-          console.log(
-            '[DeepLink] App is locked, storing notification for after unlock'
-          );
-          this.pendingNotification = data;
-          return;
-        }
-
-        await this.handleNotificationNavigation(data);
       }
     );
+  }
+
+  /**
+   * The notification-tap handler body: hold the route until unlock, else
+   * navigate. Runs from the route queue once navigation is ready.
+   */
+  private async handleNotificationTap(data: NotificationData): Promise<void> {
+    console.log(
+      '[DeepLink] Notification tap handler called, isAppUnlocked:',
+      this.isAppUnlocked,
+      'data:',
+      redactNotificationData(data)
+    );
+
+    // If app is locked, store the notification for later processing after unlock
+    if (!this.isAppUnlocked) {
+      console.log(
+        '[DeepLink] App is locked, storing notification for after unlock'
+      );
+      this.pendingNotification = data;
+      return;
+    }
+
+    await this.handleNotificationNavigation(data);
   }
 
   /**
@@ -1137,10 +1240,12 @@ export class DeepLinkService {
 
     if (!this.navigationRef?.isReady()) {
       console.warn('[DeepLink] Navigation not ready, waiting...');
-      // Wait a bit for navigation to be ready
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // DR-10: wait for the navigation container's ready signal instead of a
+      // fixed 100 ms. The wait logs on a timeout but does not give up.
+      await this.routeQueue.whenReady();
       if (!this.navigationRef?.isReady()) {
-        console.error('[DeepLink] Navigation still not ready after waiting');
+        // Unreachable in practice: whenReady() resolves only while ready.
+        console.error('[DeepLink] Navigation not ready; route not delivered');
         return;
       }
     }

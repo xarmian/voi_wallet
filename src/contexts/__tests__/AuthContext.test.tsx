@@ -196,7 +196,7 @@ const mountAuth = async () => {
   // renderHook manages its own act(); wrapping it in an outer act() leaves the
   // renderer looking unmounted. Render directly, then flush the mount effects'
   // async checkInitialAuthState chain.
-  const rendered = renderHook(() => useAuth(), { wrapper });
+  const rendered = await renderHook(() => useAuth(), { wrapper });
   await flush();
   return rendered;
 };
@@ -205,7 +205,7 @@ const mountAuth = async () => {
 // FAIL (and therefore retry) settles into its final state (recovery or, for a
 // transient failure, the recovered lock state).
 const mountAuthWithRetries = async () => {
-  const rendered = renderHook(() => useAuth(), { wrapper });
+  const rendered = await renderHook(() => useAuth(), { wrapper });
   await flushWithRetries();
   return rendered;
 };
@@ -465,7 +465,7 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     mockHasPinStrict.mockReturnValue(neverSettles);
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    const rendered = renderHook(() => useAuth(), { wrapper });
+    const rendered = await renderHook(() => useAuth(), { wrapper });
     // Pump fake timers well past 3 attempts × (2000ms per-read timeout + backoff)
     // ≈ 6.6s worst case.
     await act(async () => {
@@ -497,7 +497,7 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     mockGetPinTimeout.mockReturnValue(new Promise<number>(() => {})); // hangs
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const rendered = renderHook(() => useAuth(), { wrapper });
+    const rendered = await renderHook(() => useAuth(), { wrapper });
     await act(async () => {
       for (let i = 0; i < 12; i += 1) {
         await Promise.resolve();
@@ -664,7 +664,7 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     mockIsPinSetupPending.mockReturnValue(new Promise<boolean>(() => {})); // hangs
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    const rendered = renderHook(() => useAuth(), { wrapper });
+    const rendered = await renderHook(() => useAuth(), { wrapper });
     await act(async () => {
       for (let i = 0; i < 20; i += 1) {
         await Promise.resolve();
@@ -691,7 +691,7 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     mockIsPinSetupPending.mockResolvedValue(true);
     mockClearPinSetupPending.mockReturnValue(new Promise<void>(() => {})); // hangs
 
-    const rendered = renderHook(() => useAuth(), { wrapper });
+    const rendered = await renderHook(() => useAuth(), { wrapper });
     await act(async () => {
       for (let i = 0; i < 20; i += 1) {
         await Promise.resolve();
@@ -1265,7 +1265,7 @@ describe('AuthContext — unmount teardown (no leaks)', () => {
     const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
 
     await act(async () => {
-      rendered.unmount();
+      await rendered.unmount();
     });
 
     // The mount-effect cleanup clears the activity interval and the session
@@ -1287,7 +1287,7 @@ describe('AuthContext — unmount teardown (no leaks)', () => {
     expect(appStateRemove).not.toHaveBeenCalled();
 
     await act(async () => {
-      rendered.unmount();
+      await rendered.unmount();
     });
 
     // Currently receives 0 calls — the subscription is leaked.
@@ -1302,7 +1302,7 @@ describe('AuthContext — unmount teardown (no leaks)', () => {
     });
 
     await act(async () => {
-      rendered.unmount();
+      await rendered.unmount();
     });
 
     mockEnterLocked.mockClear();
@@ -1332,7 +1332,7 @@ describe('AuthContext — unmount teardown (no leaks)', () => {
     });
 
     await act(async () => {
-      rendered.unmount();
+      await rendered.unmount();
     });
 
     mockEnterLocked.mockClear();
