@@ -89,6 +89,12 @@ describe('Android R8 build configuration (TASK-209)', () => {
       '-keep class io.github.expo.** { *; }',
       '-keep interface io.github.expo.** { *; }',
 
+      // WalletConnect compat 2.25 links yttrium-wcpay (Rust via JNA/uniffi);
+      // neither ships keep rules and both resolve classes by name.
+      '-keep class com.sun.jna.** { *; }',
+      '-keep class * implements com.sun.jna.** { *; }',
+      '-keep class uniffi.** { *; }',
+
       // fbjni hybrid pattern: HybridData is resolved by FIELD NAME from C++.
       // Renaming it breaks JNI init for react-native-nitro-modules, which
       // carries unannotated mHybridData fields.

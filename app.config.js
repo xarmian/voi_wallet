@@ -47,6 +47,19 @@ const ANDROID_PROGUARD_RULES = `
 -keep class io.github.expo.** { *; }
 -keep interface io.github.expo.** { *; }
 
+# --- WalletConnect react-native-compat 2.25: yttrium-wcpay (Rust via JNA/uniffi) ---
+# @walletconnect/react-native-compat >=2.25 links Reown's yttrium-wcpay
+# (android/build.gradle:115-120): libuniffi_yttrium_wcpay.so bound through
+# JNA. JNA resolves Structure/Callback/Library classes and fields reflectively,
+# and the uniffi bindings (package uniffi.*) are looked up by name, and NEITHER
+# artifact ships keep rules. java.awt is referenced only from JNA's desktop
+# code path (Native.getWindowHandle0) and never loads on Android.
+# Found by FR-374 T6's assembleRelease, 2026-10-17 (PLAN-375 DR-9 amendment).
+-dontwarn java.awt.**
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class uniffi.** { *; }
+
 # --- fbjni hybrid pattern ---
 # Mirrors the unreferenced react-native/.../hermes/reactexecutor/fbjni.pro.
 # HybridData is resolved by FIELD NAME from C++; renaming it breaks JNI init.
