@@ -375,8 +375,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           );
         }
 
-        // Check if there are pending requests in the queue
-        const nextRequest = await TransactionRequestQueue.peek();
+        // The next queued request this session has not shown yet (TASK-257):
+        // one already displayed (a redelivered persisted request) is dropped,
+        // never shown twice; one that was only queued is never skipped.
+        const nextRequest = await TransactionRequestQueue.peekUndisplayed();
         const queueSize = await TransactionRequestQueue.size();
 
         // Show non-blocking toast with queue info
@@ -392,26 +394,14 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
 
         if (nextRequest) {
-          // Atomically dequeue only if the request matches (prevents race conditions)
-          const dequeuedRequest = await TransactionRequestQueue.dequeueIfMatch(
-            nextRequest.id,
-            nextRequest.topic
-          );
-
-          if (dequeuedRequest) {
-            // Navigate to the next transaction request
+          // Navigate to the next transaction request. It leaves the queue only
+          // once the replace has gone through.
+          await TransactionRequestQueue.showQueued(nextRequest, (req) =>
             navigation.replace('WalletConnectTransactionRequest', {
-              requestEvent: dequeuedRequest,
-              version: dequeuedRequest.version,
-            });
-          } else {
-            // Queue changed, navigate back
-            if (navigation.canGoBack()) {
-              navigation.goBack();
-            } else {
-              navigation.navigate('Main', { screen: 'Home' });
-            }
-          }
+              requestEvent: req,
+              version: req.version,
+            })
+          );
         } else {
           // No pending requests, navigate back
           if (navigation.canGoBack()) {
@@ -477,8 +467,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       console.error('Failed to reject request:', error);
     }
 
-    // Check if there are pending requests in the queue
-    const nextRequest = await TransactionRequestQueue.peek();
+    // The next queued request this session has not shown yet (TASK-257):
+    // one already displayed (a redelivered persisted request) is dropped,
+    // never shown twice; one that was only queued is never skipped.
+    const nextRequest = await TransactionRequestQueue.peekUndisplayed();
     const queueSize = await TransactionRequestQueue.size();
 
     if (rejectionSent) {
@@ -500,26 +492,14 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     }
 
     if (nextRequest) {
-      // Atomically dequeue only if the request matches (prevents race conditions)
-      const dequeuedRequest = await TransactionRequestQueue.dequeueIfMatch(
-        nextRequest.id,
-        nextRequest.topic
-      );
-
-      if (dequeuedRequest) {
-        // Navigate to the next transaction request
+      // Navigate to the next transaction request. It leaves the queue only
+      // once the replace has gone through.
+      await TransactionRequestQueue.showQueued(nextRequest, (req) =>
         navigation.replace('WalletConnectTransactionRequest', {
-          requestEvent: dequeuedRequest,
-          version: dequeuedRequest.version,
-        });
-      } else {
-        // Queue changed, navigate back
-        if (navigation.canGoBack()) {
-          navigation.goBack();
-        } else {
-          navigation.navigate('Main', { screen: 'Home' });
-        }
-      }
+          requestEvent: req,
+          version: req.version,
+        })
+      );
     } else {
       // No pending requests, navigate back
       if (navigation.canGoBack()) {

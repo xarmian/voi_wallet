@@ -18,11 +18,26 @@ const QUEUE_STORAGE_KEY = '@walletconnect_transaction_queue';
 const PROCESSING_STATE_KEY = '@walletconnect_queue_processing';
 const REQUEST_TIMEOUT_MS = 60 * 1000; // 1 minute (reduced from 5 minutes)
 const MAX_QUEUE_SIZE = 10; // Prevent DOS attacks
+// Bound on the in-memory delivery map (claim()/markDisplayed()). Only the
+// oldest DISPLAYED entry is ever evicted; see setDelivery.
+const MAX_TRACKED_REQUESTS = 5000;
+
+/**
+ * In-memory, per app session (TASK-257):
+ *  - 'claimed': arrived from WalletConnect and is being shown or is queued;
+ *  - 'displayed': handed to the signing screen.
+ */
+type DeliveryState = 'claimed' | 'displayed';
+
+const requestKey = (id: number | string, topic: string): string =>
+  JSON.stringify([topic, id]);
 
 class TransactionRequestQueueService {
   private static instance: TransactionRequestQueueService;
   private queueMutex: Promise<void> = Promise.resolve();
   private processingStateCache: boolean | null = null;
+  /** (topic, id) -> delivery state for this app session (TASK-257). */
+  private delivery = new Map<string, DeliveryState>();
 
   private constructor() {}
 
@@ -50,6 +65,133 @@ class TransactionRequestQueueService {
     } finally {
       resolveLock!();
     }
+  }
+
+  /**
+   * Claim a signing request that just arrived from WalletConnect (TASK-257).
+   *
+   * Returns true the FIRST time a (topic, id) pair is seen in this app
+   * session and false for every repeat, so a duplicate emit (relay
+   * redelivery, a second listener) can never surface a second identical
+   * group, including while the original is still on screen. Synchronous and
+   * in memory: `enqueue`'s own dedupe only sees the persisted queue, not the
+   * request currently displayed.
+   *
+   * A claim means "this request is being shown or is queued". The claimant
+   * then either shows it (`markDisplayed`), queues it (the claim stays), or
+   * fails to deliver it and calls `releaseClaim` so a redelivery can surface.
+   */
+  claim(id: number | string, topic: string): boolean {
+    const key = requestKey(id, topic);
+    if (this.delivery.has(key)) {
+      return false;
+    }
+    this.setDelivery(key, 'claimed');
+    return true;
+  }
+
+  /**
+   * Record that a request has been handed to the signing screen. Returns
+   * false if it was ALREADY displayed this session, in which case the caller
+   * must not show it again. A request that was only claimed (queued, never
+   * shown) is not "displayed": it returns true and is marked displayed now.
+   */
+  markDisplayed(id: number | string, topic: string): boolean {
+    const key = requestKey(id, topic);
+    if (this.delivery.get(key) === 'displayed') {
+      return false;
+    }
+    this.setDelivery(key, 'displayed');
+    return true;
+  }
+
+  /**
+   * Undo `claim` for a request whose delivery FAILED (navigation unavailable,
+   * enqueue or navigate threw), so a later redelivery of it can still be
+   * shown. A request already displayed stays displayed.
+   */
+  releaseClaim(id: number | string, topic: string): void {
+    const key = requestKey(id, topic);
+    if (this.delivery.get(key) === 'claimed') {
+      this.delivery.delete(key);
+    }
+  }
+
+  private setDelivery(key: string, state: DeliveryState): void {
+    // Re-insert so eviction order follows the latest transition.
+    this.delivery.delete(key);
+    this.delivery.set(key, state);
+    if (this.delivery.size > MAX_TRACKED_REQUESTS) {
+      // Evict the request displayed longest ago. A 'claimed' entry (queued,
+      // not yet shown) is never evicted: forgetting it would let a
+      // redelivery show it while its queued copy is still waiting. Claimed
+      // entries are bounded by the queue itself (MAX_QUEUE_SIZE, and a stale
+      // or failed one releases its claim).
+      for (const [oldKey, oldState] of this.delivery) {
+        if (oldState === 'displayed' && oldKey !== key) {
+          this.delivery.delete(oldKey);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * The next queued request that has NOT been displayed this session, left in
+   * the queue (TASK-257). Queued requests that were already displayed (a
+   * persisted request the relay redelivered and the app showed directly) are
+   * removed: the copy on screen is the one the user answers. A request that
+   * was only queued is never removed here.
+   *
+   * Show it with `showQueued`, which removes it only once it is on screen.
+   */
+  async peekUndisplayed(): Promise<QueuedTransactionRequest | null> {
+    return this.withLock(async () => {
+      const { queue, dropped } = await this.dropDisplayedHead();
+      if (dropped > 0) {
+        await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+      }
+      return queue[0] ?? null;
+    });
+  }
+
+  /**
+   * Show a queued request (from `peekUndisplayed`) with `show` (a navigate
+   * or replace), then mark it displayed and remove it from the queue
+   * (TASK-257). If `show` throws, the request stays queued and undisplayed,
+   * so it is never lost, and the error propagates to the caller. Marking is
+   * synchronous right after `show`, so no other reader can show it again.
+   */
+  async showQueued(
+    request: QueuedTransactionRequest,
+    show: (request: QueuedTransactionRequest) => void
+  ): Promise<void> {
+    show(request);
+    this.markDisplayed(request.id, request.topic);
+    await this.remove(request.id, request.topic);
+  }
+
+  /** Lock held by the caller. Removes (in memory) displayed head entries. */
+  private async dropDisplayedHead(): Promise<{
+    queue: QueuedTransactionRequest[];
+    dropped: number;
+  }> {
+    const queue = await this.getAllInternal();
+    let dropped = 0;
+    while (
+      queue.length > 0 &&
+      this.delivery.get(requestKey(queue[0].id, queue[0].topic)) === 'displayed'
+    ) {
+      queue.shift();
+      dropped++;
+    }
+    if (dropped > 0) {
+      console.log(
+        '[TransactionRequestQueue] Dropped already-displayed request(s):',
+        dropped
+      );
+    }
+    return { queue, dropped };
   }
 
   /**
@@ -248,6 +390,8 @@ class TransactionRequestQueueService {
             Math.round(age / 1000),
             'seconds'
           );
+          // No longer queued: a redelivery of it may surface again.
+          this.releaseClaim(request.id, request.topic);
           return false;
         }
         return true;
@@ -390,6 +534,12 @@ class TransactionRequestQueueService {
           (request) => request.topic !== topic
         );
         const removed = queue.length - filteredQueue.length;
+        // No longer queued: release their claims (TASK-257).
+        for (const request of queue) {
+          if (request.topic === topic) {
+            this.releaseClaim(request.id, request.topic);
+          }
+        }
 
         if (removed > 0) {
           await AsyncStorage.setItem(
