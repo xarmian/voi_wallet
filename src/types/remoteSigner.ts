@@ -304,10 +304,10 @@ export interface DecodedTransactionInfo {
   amount?: bigint;
   /** Transaction fee */
   fee: bigint;
-  /** Asset ID (for asset transfers) */
-  assetId?: number;
-  /** Application ID (for app calls) */
-  appId?: number;
+  /** Asset ID (asset transfer / config / freeze) */
+  assetId?: bigint;
+  /** Application ID (for app calls; 0n on app creation) */
+  appId?: bigint;
   /** Note field (decoded as UTF-8 if possible) */
   note?: string;
   /** First valid round */
@@ -320,8 +320,15 @@ export interface DecodedTransactionInfo {
   genesisHash: string;
   /** Rekey to address */
   rekeyTo?: string;
-  /** Close remainder to address */
+  /** Close remainder to address (native payment: sweeps the whole account) */
   closeRemainderTo?: string;
+  /** Asset close-to address (asset transfer: sweeps the whole ASA holding) */
+  assetCloseTo?: string;
+  /**
+   * Clawback source (asset transfer `asnd`): the account the asset is taken
+   * from; the sender is only the clawback authority.
+   */
+  assetSender?: string;
   /** Raw transaction for full details */
   raw: any;
 }
