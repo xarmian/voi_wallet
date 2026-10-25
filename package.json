@@ -1,6 +1,6 @@
 {
   "name": "voi-wallet",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "main": "index.ts",
   "scripts": {
     "start": "APP_VARIANT=development npx expo start",

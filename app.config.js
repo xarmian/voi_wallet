@@ -8,6 +8,11 @@ const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
 const withImageColorsJvmTarget = require('./plugins/withImageColorsJvmTarget');
 
+// One source of truth for the marketing version (PLAN-375): package.json.
+// runtimeVersion uses the appVersion policy, so changing package.json's
+// version also moves the OTA runtime channel.
+const { version: APP_VERSION } = require('./package.json');
+
 // R8 keep rules for Android release builds (TASK-209 / PLAN-267).
 //
 // These live here rather than in a custom config plugin because
@@ -134,7 +139,7 @@ export default {
   "expo": {
     "name": IS_DEV ? "Voi Wallet (Dev)" : "Voi Wallet",
     "slug": "voi-wallet",
-    "version": "0.2.0",
+    "version": APP_VERSION,
     "orientation": "portrait",
     "icon": "./assets/voi_wallet_logo.png",
     "userInterfaceStyle": "automatic",
