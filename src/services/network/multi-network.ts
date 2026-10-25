@@ -11,6 +11,7 @@ import {
   normalizeAssetImageUrl,
   selectBestAssetImageUrl,
 } from '@/utils/assetImages';
+import { selectPrimarySource } from '@/utils/mappedAssetPrimary';
 
 /**
  * Service for aggregating balances across multiple networks
@@ -150,7 +151,16 @@ export class MultiNetworkBalanceService {
     networkBalances: { networkId: NetworkId; balance: AccountBalance }[],
     tokenMappings: TokenMapping[]
   ): MappedAsset[] {
-    const mappedAssets = new Map<string, MappedAsset>();
+    // Mapped groups collect every source first and are built afterwards, so
+    // the representative ("primary") source is chosen by content — the native
+    // token when the group has one — not by network processing order (#13).
+    const mappedGroups = new Map<
+      string,
+      {
+        mapping: TokenMapping;
+        sources: { networkId: NetworkId; balance: AssetBalance }[];
+      }
+    >();
     const unmappedAssets: MappedAsset[] = [];
 
     // Process each network's assets
@@ -187,45 +197,14 @@ export class MultiNetworkBalanceService {
 
         if (mapping) {
           // This asset is mapped - merge ALL tokens in the same mapping
-          const mappingId = mapping.mappingId;
-
-          // Check if we already have an entry for this mapping
-          if (mappedAssets.has(mappingId)) {
-            // Add this asset's balance to the existing mapped asset
-            const existing = mappedAssets.get(mappingId)!;
-            existing.sourceBalances.push({
-              networkId,
-              balance: asset,
-            });
-
-            // Update combined amount (if they have same decimals)
-            // Note: Different assets in mapping may have different decimals, so only combine if matching
-            if (existing.decimals === asset.decimals) {
-              const existingAmount =
-                typeof existing.amount === 'bigint'
-                  ? existing.amount
-                  : BigInt(existing.amount);
-              const assetAmount =
-                typeof asset.amount === 'bigint'
-                  ? asset.amount
-                  : BigInt(asset.amount);
-              existing.amount = existingAmount + assetAmount;
-            }
+          const group = mappedGroups.get(mapping.mappingId);
+          if (group) {
+            group.sources.push({ networkId, balance: asset });
           } else {
-            // Create new mapped asset entry using mapping info
-            // Use the mapping name and first token's details as the display values
-            const mappedAsset: MappedAsset = {
-              ...asset,
-              name: mapping.name, // Use mapping name (e.g., "USDC") instead of asset name
-              symbol: mapping.name, // Use mapping name as symbol too for consistency
-              mappingId: mapping.mappingId,
-              sourceBalances: [{ networkId, balance: asset }],
-              isMapped: true,
-              // AssetBalance.verified is a number (1 = verified); coerce the boolean mapping flag.
-              verified: mapping.verified ? 1 : 0,
-              primaryNetwork: networkId, // First network encountered is primary
-            };
-            mappedAssets.set(mappingId, mappedAsset);
+            mappedGroups.set(mapping.mappingId, {
+              mapping,
+              sources: [{ networkId, balance: asset }],
+            });
           }
         } else {
           // This asset is not mapped, add as standalone
@@ -240,8 +219,40 @@ export class MultiNetworkBalanceService {
       }
     }
 
+    const mappedAssetList: MappedAsset[] = [];
+    for (const { mapping, sources } of mappedGroups.values()) {
+      // Never undefined: a group is only created with its first source.
+      const primary = selectPrimarySource(sources)!;
+      const seed = primary.balance;
+
+      // Combine amounts only across sources with the primary's decimals:
+      // different assets in a mapping may use different decimals. A lone
+      // source keeps its original number|bigint amount, as before.
+      let amount: number | bigint = seed.amount;
+      for (const source of sources) {
+        if (source === primary || source.balance.decimals !== seed.decimals) {
+          continue;
+        }
+        amount = BigInt(amount) + BigInt(source.balance.amount);
+      }
+
+      mappedAssetList.push({
+        ...seed,
+        amount,
+        name: mapping.name, // Use mapping name (e.g., "USDC") instead of asset name
+        symbol: mapping.name, // Use mapping name as symbol too for consistency
+        mappingId: mapping.mappingId,
+        // Encounter order, unchanged: consumers read sourceBalances[0] for
+        // per-source display (e.g. AccountInfoScreen's chart image).
+        sourceBalances: sources,
+        isMapped: true,
+        // AssetBalance.verified is a number (1 = verified); coerce the boolean mapping flag.
+        verified: mapping.verified ? 1 : 0,
+        primaryNetwork: primary.networkId,
+      });
+    }
+
     // Normalize image URLs for mapped assets, preferring the best available option
-    const mappedAssetList = Array.from(mappedAssets.values());
     for (const asset of mappedAssetList) {
       const candidateUrls = [
         asset.imageUrl,
