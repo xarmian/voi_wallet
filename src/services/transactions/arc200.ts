@@ -639,16 +639,30 @@ export class Arc200TransactionService {
 
     const allTransactions: algosdk.Transaction[] = [];
     let totalMbrNeeded = false;
+    // GH #20: at most ONE MBR payment per contract. Every MBR payment for a
+    // contract has the same sender, receiver, amount and note, so a second one
+    // is a byte-identical transaction and the node rejects the whole group.
+    // One payment covers the recipient's single balance box for that token
+    // (the only caller, ClaimAllConfirmationScreen, sends every claim in a
+    // batch to one recipient).
+    const mbrCheckedContracts = new Set<number>();
 
     for (const claim of claims) {
-      // Check if recipient needs MBR payment for this token
-      const hasBalance = await this.checkRecipientBalance(
-        claim.to,
-        claim.contractId,
-        networkService
-      );
+      // Check, once per contract, whether the recipient needs an MBR payment
+      // for this token. The payment goes immediately before the contract's
+      // first claim, matching the single-claim [MBR, transferFrom] layout.
+      let needsMbrPayment = false;
+      if (!mbrCheckedContracts.has(claim.contractId)) {
+        mbrCheckedContracts.add(claim.contractId);
+        const hasBalance = await this.checkRecipientBalance(
+          claim.to,
+          claim.contractId,
+          networkService
+        );
+        needsMbrPayment = !hasBalance;
+      }
 
-      if (!hasBalance) {
+      if (needsMbrPayment) {
         totalMbrNeeded = true;
         // Add MBR payment for this token
         const appEscrowAddress = algosdk.getApplicationAddress(
