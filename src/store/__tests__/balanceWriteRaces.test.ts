@@ -25,8 +25,23 @@ const mockGetItem = jest.fn((key: string) => {
     setTimeout(() => resolve(value), 0)
   );
 });
-const mockSetItem = jest.fn(async (key: string, value: string) => {
-  mockStorage[key] = value;
+// When `mockSlowWrites` is set, a write lands 20ms later (slower than a read,
+// like real storage I/O), so a clear issued meanwhile can be overtaken by it.
+let mockSlowWrites = false;
+const mockSetItem = jest.fn((key: string, value: string) => {
+  if (!mockSlowWrites) {
+    mockStorage[key] = value;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) =>
+    setTimeout(() => {
+      mockStorage[key] = value;
+      resolve();
+    }, 20)
+  );
+});
+const mockRemoveItem = jest.fn(async (key: string) => {
+  delete mockStorage[key];
 });
 const mockDeleteAccount = jest.fn();
 const mockUpdateAccountMetadata = jest.fn(async (_account: unknown) => {});
@@ -81,7 +96,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: (key: string) => mockGetItem(key),
     setItem: (key: string, value: string) => mockSetItem(key, value),
-    removeItem: jest.fn(async () => {}),
+    removeItem: (key: string) => mockRemoveItem(key),
     multiGet: jest.fn(async () => []),
     multiSet: jest.fn(async () => {}),
   },
@@ -91,6 +106,8 @@ import { invalidateBalanceRequests, useWalletStore } from '../walletStore';
 import type { AccountBalance, Wallet } from '@/types/wallet';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** Outlasts every slow write. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
 
 const balanceOf = (amount: bigint): AccountBalance => ({
   address: 'ADDR',
@@ -134,6 +151,8 @@ beforeEach(() => {
   mockGetAccount.mockClear();
   mockSetItem.mockClear();
   mockStorage = {};
+  mockSlowWrites = false;
+  mockRemoveItem.mockClear();
   mockNetworkId = 'voi-mainnet';
   useWalletStore.setState({ accountStates: {}, wallet });
 });
@@ -294,6 +313,93 @@ describe('persisted balance cache (TASK-59)', () => {
     const keys = Object.keys(JSON.parse(blobs[0]));
     expect(keys.some((k) => k.startsWith('acc-1'))).toBe(true);
     expect(keys.some((k) => k.startsWith('acc-2'))).toBe(true);
+  });
+});
+
+describe('balance-cache clears vs deferred writes (TASK-59)', () => {
+  /** Commit a balance for acc-1; its persist is still queued behind a timer. */
+  const commitBalance = async () => {
+    mockSlowWrites = true;
+    const pending = deferFetches();
+    const load = useWalletStore.getState().loadAccountBalance('acc-1', true);
+    await flush();
+    pending[0].resolve(balanceOf(7n));
+    await load;
+    expect(mockSetItem).not.toHaveBeenCalled();
+  };
+
+  /** Commit a balance for acc-1 and stop once its persist has called setItem. */
+  const startDeferredWrite = async () => {
+    await commitBalance();
+    for (let i = 0; i < 10 && mockSetItem.mock.calls.length === 0; i += 1) {
+      await flush();
+    }
+    // The write passed its last token check and its setItem is in flight.
+    expect(mockSetItem).toHaveBeenCalledTimes(1);
+  };
+
+  const cachedKeys = () => {
+    const blob = Object.values(mockStorage)[0];
+    return blob ? Object.keys(JSON.parse(blob)) : [];
+  };
+
+  it('a network-switch clear sticks over a write already in setItem', async () => {
+    await startDeferredWrite();
+
+    // The network store's switch: invalidate, move, then clear the cache.
+    switchNetwork('algorand-mainnet');
+    await useWalletStore.getState().clearSingleNetworkCache();
+    await settle();
+
+    expect(cachedKeys()).toEqual([]);
+  });
+
+  it('the switch clear keeps a load already issued for the NEW network', async () => {
+    // networkStore.switchNetwork: invalidate, switch the service, then clear.
+    // A load issued between the switch and the clear is for the new network
+    // and must still land.
+    switchNetwork('algorand-mainnet');
+    const pending = deferFetches();
+    const load = useWalletStore.getState().loadAccountBalance('acc-1', true);
+    await flush();
+    await useWalletStore.getState().clearSingleNetworkCache();
+
+    pending[0].resolve(balanceOf(9n));
+    await load;
+    await settle();
+
+    expect(stateOf('acc-1')?.balance?.amount).toBe(9n);
+    expect(stateOf('acc-1')?.isBalanceLoading).toBe(false);
+    expect(cachedKeys()).toEqual(['acc-1_single_algorand-mainnet']);
+  });
+
+  it('a per-account clear sticks over a write already in setItem', async () => {
+    await startDeferredWrite();
+
+    await useWalletStore.getState().clearSingleNetworkCache('acc-1');
+    await settle();
+
+    expect(cachedKeys().some((k) => k.startsWith('acc-1'))).toBe(false);
+  });
+
+  it('a per-account clear sticks over a write that starts after it', async () => {
+    // The clear reads the blob first; the deferred write then reads, and its
+    // read-modify-write lands after the clear's.
+    await commitBalance();
+
+    await useWalletStore.getState().clearSingleNetworkCache('acc-1');
+    await settle();
+
+    expect(cachedKeys().some((k) => k.startsWith('acc-1'))).toBe(false);
+  });
+
+  it('clearAllBalanceCache sticks over a write already in setItem', async () => {
+    await startDeferredWrite();
+
+    await useWalletStore.getState().clearAllBalanceCache();
+    await settle();
+
+    expect(cachedKeys()).toEqual([]);
   });
 });
 

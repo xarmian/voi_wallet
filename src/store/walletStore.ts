@@ -487,7 +487,22 @@ const loadPersistedBalanceCache = async (): Promise<
 // Persists are read-modify-write of ONE AsyncStorage blob, so concurrent ones
 // (a batch refresh persists every account at once) would drop each other's
 // entries. Chain them so each reads the previous one's write (TASK-59).
+//
+// EVERY writer or remover of BALANCE_CACHE_KEY goes through this chain — the
+// cache clears included — so a clear can never be overtaken by a deferred write
+// that had already started its setItem (the clear would silently not stick).
 let balancePersistQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Run one balance-cache storage operation after every earlier one settles.
+ * The caller sees the operation's own outcome; the chain itself never rejects,
+ * so a failed operation can't wedge later ones.
+ */
+const enqueueBalanceCacheOp = (op: () => Promise<void>): Promise<void> => {
+  const run = balancePersistQueue.then(op);
+  balancePersistQueue = run.catch(() => {});
+  return run;
+};
 
 const persistBalanceToStorage = (
   accountId: string,
@@ -499,7 +514,8 @@ const persistBalanceToStorage = (
   // runs, and a stale balance must not be written back (TASK-59).
   isStillCurrent: () => boolean
 ): Promise<void> => {
-  balancePersistQueue = balancePersistQueue.then(() =>
+  // writeBalanceToStorage catches its own errors, so this never rejects.
+  return enqueueBalanceCacheOp(() =>
     writeBalanceToStorage(
       accountId,
       balance,
@@ -508,7 +524,6 @@ const persistBalanceToStorage = (
       isStillCurrent
     )
   );
-  return balancePersistQueue;
 };
 
 const writeBalanceToStorage = async (
@@ -3063,17 +3078,33 @@ export const useWalletStore = create<WalletState>()(
     // Cache management
     clearSingleNetworkCache: async (accountId?: string) => {
       try {
-        const cache = await loadPersistedBalanceCache();
+        // TASK-59: every clear runs on the balance-cache chain, so a write
+        // already in setItem finishes first instead of landing over it.
+        //
+        // The per-account clear also invalidates that account's in-flight
+        // fetches: it discards the account's balance, so a deferred persist
+        // queued behind it must skip (re-checked right before the write)
+        // rather than re-add the entry. The all-accounts clear deliberately
+        // does NOT invalidate: its caller is networkStore.switchNetwork, which
+        // already invalidated every old-network fetch BEFORE switching, and
+        // runs this clear AFTER the switch — invalidating here would also drop
+        // legitimate loads already issued for the new network.
+        if (accountId) {
+          invalidateAccountBalanceRequests(accountId);
+        }
 
         if (accountId) {
           // Clear cache for specific account across all networks
-          const filteredCache: Record<string, PersistedBalanceData> = {};
-          Object.entries(cache).forEach(([key, value]) => {
-            if (!key.startsWith(`${accountId}_single_`)) {
-              filteredCache[key] = value;
-            }
+          await enqueueBalanceCacheOp(async () => {
+            const cache = await loadPersistedBalanceCache();
+            const filteredCache: Record<string, PersistedBalanceData> = {};
+            Object.entries(cache).forEach(([key, value]) => {
+              if (!key.startsWith(`${accountId}_single_`)) {
+                filteredCache[key] = value;
+              }
+            });
+            await persistBalanceCache(filteredCache);
           });
-          await persistBalanceCache(filteredCache);
 
           // Also clear from state
           const { accountStates } = get();
@@ -3091,7 +3122,9 @@ export const useWalletStore = create<WalletState>()(
           }
         } else {
           // Clear all single-network cache
-          await AsyncStorage.removeItem(BALANCE_CACHE_KEY);
+          await enqueueBalanceCacheOp(() =>
+            AsyncStorage.removeItem(BALANCE_CACHE_KEY)
+          );
 
           // Also clear ALL single-network account balances from state immediately
           // BUT preserve multi-network balance since that's network-independent
@@ -3165,8 +3198,12 @@ export const useWalletStore = create<WalletState>()(
 
     clearAllBalanceCache: async () => {
       try {
+        // Same chain + invalidation as clearSingleNetworkCache (TASK-59).
+        invalidateBalanceRequests();
         await Promise.all([
-          AsyncStorage.removeItem(BALANCE_CACHE_KEY),
+          enqueueBalanceCacheOp(() =>
+            AsyncStorage.removeItem(BALANCE_CACHE_KEY)
+          ),
           AsyncStorage.removeItem(MULTI_NETWORK_BALANCE_CACHE_KEY),
         ]);
 
