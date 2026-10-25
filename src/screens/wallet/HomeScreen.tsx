@@ -396,7 +396,6 @@ export default function HomeScreen() {
     // Exposed by the store since forever but destructured by no consumer, so
     // balance failures rendered as "no balance" (TASK-40 / U-03).
     error: balanceError,
-    reload: reloadBalance,
   } = useActiveAccountBalance();
   const {
     nameInfo: envoiNameInfo,
@@ -1146,8 +1145,10 @@ export default function HomeScreen() {
         setNetworkStatusError(networkHealth.reason);
       }
 
-      // Load balance and transactions through the store
-      await reloadBalance();
+      // Load balance and transactions through the store. Forced and keyed on
+      // the account resolved above: pull-to-refresh must never be a fresh-cache
+      // no-op, nor reload a previously active account (GH #12 / TASK-390).
+      await loadAccountBalance(accountId, true);
       // Multi-network aggregate is what the assets card renders in
       // multi-network view; refreshing it here keeps pull-to-refresh honest
       // in both view modes. (if-statement instead of a ternary in the array:

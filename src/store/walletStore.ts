@@ -3220,8 +3220,14 @@ let cachedActiveAccountBalance: {
   reload: () => Promise<void>;
 } = EMPTY_BALANCE_STATE;
 
-// Stable reload function for active account
+// Stable reload function for active account, and the account it is bound to.
+// The binding is tracked separately from `lastActiveAccountId` (which is
+// reassigned just before the rebind check below): comparing against that just-
+// assigned id was always false, so the reload stayed bound to the FIRST active
+// account forever and pull-to-refresh after an account switch reloaded the wrong
+// account (GH #12 / TASK-390).
 let activeAccountReloadFunction: (() => Promise<void>) | null = null;
+let activeAccountReloadAccountId: string | undefined = undefined;
 
 export const useActiveAccountBalance = () =>
   useWalletStore((state) => {
@@ -3248,13 +3254,15 @@ export const useActiveAccountBalance = () =>
       lastActiveAccountId = activeAccount.id;
       lastAccountState = accountState;
 
-      // Create or reuse stable reload function
+      // Create or reuse stable reload function, rebinding on account switch.
       if (
         !activeAccountReloadFunction ||
-        lastActiveAccountId !== activeAccount.id
+        activeAccountReloadAccountId !== activeAccount.id
       ) {
+        const reloadAccountId = activeAccount.id;
+        activeAccountReloadAccountId = reloadAccountId;
         activeAccountReloadFunction = () =>
-          state.loadAccountBalance(activeAccount.id);
+          useWalletStore.getState().loadAccountBalance(reloadAccountId);
       }
 
       cachedActiveAccountBalance = Object.freeze({
@@ -3287,6 +3295,7 @@ export const clearWalletUICache = () => {
   lastAccountState = undefined;
   cachedActiveAccountBalance = EMPTY_BALANCE_STATE;
   activeAccountReloadFunction = null;
+  activeAccountReloadAccountId = undefined;
 };
 
 // Cache for Envoi name results to keep references stable
