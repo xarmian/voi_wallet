@@ -20,7 +20,7 @@
  * two copies of this redactor had disagreed on exactly this point; the
  * conservative form wins.
  */
-const redactAddress = (address?: string): string =>
+export const redactAddress = (address?: string): string =>
   address && address.length > 6
     ? `${address.slice(0, 6)}…[redacted]`
     : '[redacted]';
@@ -37,6 +37,9 @@ const redactAddress = (address?: string): string =>
  *    URI and is the subject of PLAN-260. Bounded to >=16 hex chars so ordinary
  *    `key=` query params (`api_key=`, `sort_key=`) are not blanket-redacted;
  *  - any scheme://… URL — whole URI including the query string;
+ *  - balances and amounts in algod rejection text (`MicroAlgos:{Raw:N}`,
+ *    `tried to spend {N}`, `balance N below min M`): the reason (overspend,
+ *    below min) is the diagnostic, the figures are the user's money (TASK-290);
  *  - full 58-char Algorand addresses, run LAST on the whole string so an address
  *    used as a pseudo-scheme (ADDR://…) is still redacted.
  *
@@ -53,7 +56,24 @@ export const redactSensitiveForLog = (message: string): string =>
     .replace(/symKey(=|%3[Dd])[^&\s"']+/gi, 'symKey=[redacted]')
     .replace(/\bkey(=|%3[Dd])[0-9a-f]{16,}/gi, 'key=[redacted]')
     .replace(/([a-z][a-z0-9+.-]*):\/\/\S*/gi, '$1://[redacted]')
+    .replace(/MicroAlgos:\{Raw:\d+\}/g, 'MicroAlgos:{Raw:[redacted]}')
+    .replace(/tried to spend \{\d+\}/g, 'tried to spend {[redacted]}')
+    .replace(
+      /balance \d+ below min \d+/g,
+      'balance [redacted] below min [redacted]'
+    )
     .replace(/[A-Z2-7]{58}/g, (addr) => redactAddress(addr));
+
+/**
+ * A plain object carrying a string `message` (a Supabase/PostgREST error, a
+ * rejected `Promise.allSettled` reason built as an object literal). Without this
+ * check `String(error)` renders it as `[object Object]` and the log keeps nothing
+ * diagnosable (TASK-290).
+ */
+const hasStringMessage = (error: unknown): error is { message: string } =>
+  typeof error === 'object' &&
+  error !== null &&
+  typeof (error as { message?: unknown }).message === 'string';
 
 /**
  * Convenience wrapper for the common `catch (error) { console.error(msg, error) }`
@@ -64,4 +84,8 @@ export const redactSensitiveForLog = (message: string): string =>
  * original `message` and `stack` itself.
  */
 export const redactError = (error: unknown): string =>
-  redactSensitiveForLog(error instanceof Error ? error.message : String(error));
+  redactSensitiveForLog(
+    error instanceof Error || hasStringMessage(error)
+      ? error.message
+      : String(error)
+  );

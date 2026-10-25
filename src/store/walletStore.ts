@@ -45,6 +45,7 @@ import {
 } from '@/services/notifications';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { realtimeService } from '@/services/realtime';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -1507,7 +1508,7 @@ export const useWalletStore = create<WalletState>()(
           // for want of one line.
           console.error(
             `Failed to load balance for account ${accountId}:`,
-            error
+            redactError(error)
           );
           // A stale request's failure is as irrelevant as its success: don't
           // paint an error banner over the network/request that replaced it.
@@ -1881,7 +1882,10 @@ export const useWalletStore = create<WalletState>()(
             },
           },
         });
-        console.error('Failed to load more asset transactions:', error);
+        console.error(
+          'Failed to load more asset transactions:',
+          redactError(error)
+        );
       }
     },
 
@@ -2094,7 +2098,7 @@ export const useWalletStore = create<WalletState>()(
             },
           },
         });
-        console.error('Failed to load more transactions:', error);
+        console.error('Failed to load more transactions:', redactError(error));
       }
     },
 
@@ -2894,7 +2898,7 @@ export const useWalletStore = create<WalletState>()(
         ) {
           console.error(
             '[WalletStore] Stale multi-network balance load failed:',
-            error
+            redactError(error)
           );
           return;
         }
@@ -2920,7 +2924,7 @@ export const useWalletStore = create<WalletState>()(
         });
         console.error(
           '[WalletStore] Failed to load multi-network balance:',
-          error
+          redactError(error)
         );
       }
     },

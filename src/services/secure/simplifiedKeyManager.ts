@@ -14,6 +14,7 @@ import {
 } from '@/services/ledger/simpleLedgerSigner';
 import algosdk, { Transaction } from 'algosdk';
 import { networkService } from '@/services/network';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Simplified Key Manager
@@ -241,7 +242,7 @@ export class SimplifiedKeyManager {
         requiresLedger: false,
       };
     } catch (error) {
-      console.error('Failed to get signing info:', error);
+      console.error('Failed to get signing info:', redactError(error));
       return {
         canSign: false,
         signingAddress: address,

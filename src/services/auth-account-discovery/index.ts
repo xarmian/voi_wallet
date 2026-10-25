@@ -13,6 +13,7 @@ import {
   AVAILABLE_NETWORKS,
 } from '@/services/network/config';
 import { MultiAccountWalletService } from '@/services/wallet';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 export class AuthAccountDiscoveryService {
   private static instance: AuthAccountDiscoveryService;
@@ -178,8 +179,8 @@ export class AuthAccountDiscoveryService {
         return accounts;
       } catch (error) {
         console.warn(
-          `Failed to search for auth accounts with address ${authAddress} on ${networkName}:`,
-          error
+          `Failed to search for auth accounts with address ${redactAddress(authAddress)} on ${networkName}:`,
+          redactError(error)
         );
         return [];
       }
@@ -277,7 +278,9 @@ export class AuthAccountDiscoveryService {
 
         nextToken = data['next-token'];
       } catch (error) {
-        console.error(`Failed to query indexer for auth accounts: ${error}`);
+        console.error(
+          `Failed to query indexer for auth accounts: ${redactError(error)}`
+        );
         break; // Stop pagination on error
       }
     } while (nextToken);
@@ -316,7 +319,10 @@ export class AuthAccountDiscoveryService {
         }
       } catch (error) {
         // Non-critical, continue without first seen date
-        console.warn(`Could not get first transaction for ${address}:`, error);
+        console.warn(
+          `Could not get first transaction for ${redactAddress(address)}:`,
+          redactError(error)
+        );
       }
 
       // Get last activity from account data if available

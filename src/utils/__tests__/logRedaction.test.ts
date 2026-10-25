@@ -4,7 +4,11 @@
 // tests per the project's pure-util rule. The v1 `key=` rule is the one added by
 // PLAN-260; the rest are hoisted behavior that must not regress.
 
-import { redactSensitiveForLog, redactError } from '../logRedaction';
+import {
+  redactAddress,
+  redactSensitiveForLog,
+  redactError,
+} from '../logRedaction';
 
 // Throwaway vectors — not real keys or accounts.
 const V1_KEY = 'a1b2c3d4'.repeat(8); // 64 hex chars
@@ -106,5 +110,51 @@ describe('redactError', () => {
 
   it('returns a string, never the error object', () => {
     expect(typeof redactError(new Error('boom'))).toBe('string');
+  });
+});
+
+describe('redactError on a plain object with a message (TASK-290)', () => {
+  it('logs the redacted message instead of [object Object]', () => {
+    const out = redactError({ message: `no row for ${ADDRESS}`, code: 'X' });
+    expect(out).not.toContain(ADDRESS);
+    expect(out).toContain('no row for AAAAAA…[redacted]');
+  });
+
+  it('still stringifies an object with no string message', () => {
+    expect(redactError({ code: 1 })).toBe('[object Object]');
+  });
+});
+
+describe('redactAddress (TASK-290)', () => {
+  it('keeps a six-character prefix and drops the rest', () => {
+    expect(redactAddress(ADDRESS)).toBe('AAAAAA…[redacted]');
+  });
+
+  it('redacts a short or missing value whole', () => {
+    expect(redactAddress('ABCDEF')).toBe('[redacted]');
+    expect(redactAddress(undefined)).toBe('[redacted]');
+  });
+});
+
+describe('algod rejection amounts (TASK-290)', () => {
+  it('redacts balances and spend amounts but keeps the reason', () => {
+    const msg =
+      `TransactionPool.Remember: transaction ${'T'.repeat(52)}: overspend ` +
+      `(account ${ADDRESS}, data {_struct:{} Status:Offline MicroAlgos:{Raw:123456789} ` +
+      `RewardsBase:0}, tried to spend {987654321})`;
+    const out = redactSensitiveForLog(msg);
+    expect(out).toContain('overspend');
+    expect(out).not.toContain(ADDRESS);
+    expect(out).not.toContain('123456789');
+    expect(out).not.toContain('987654321');
+  });
+
+  it('redacts the below-min figures', () => {
+    const out = redactSensitiveForLog(
+      'account balance 5000 below min 100000 (0 assets)'
+    );
+    expect(out).toContain('below min');
+    expect(out).not.toContain('5000');
+    expect(out).not.toContain('100000');
   });
 });

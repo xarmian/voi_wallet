@@ -33,6 +33,7 @@ import {
 import Toast from 'react-native-toast-message';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import { deviceId } from '../../platform';
+import { redactAddress } from '@/utils/logRedaction';
 
 const LAST_HANDLED_NOTIFICATION_KEY = '@voi_wallet/last_handled_notification';
 
@@ -757,7 +758,7 @@ class NotificationService {
       ) {
         console.warn(
           `[NotificationService] ${context}: Recovered address from object:`,
-          obj.address
+          redactAddress(obj.address)
         );
         return obj.address;
       }
@@ -765,7 +766,7 @@ class NotificationService {
 
     console.error(
       `[NotificationService] ${context}: Invalid address parameter:`,
-      address
+      typeof address === 'string' ? redactAddress(address) : typeof address
     );
     return null;
   }

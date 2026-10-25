@@ -30,6 +30,7 @@ import { GlassButton } from '@/components/common/GlassButton';
 import { GlassInput } from '@/components/common/GlassInput';
 import { PassphraseStrengthMeter } from '@/components/common/PassphraseStrengthMeter';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 const PASSPHRASE_MIN = AccountSecureStorage.PASSPHRASE_MIN_LENGTH;
 
@@ -215,8 +216,8 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
             successCount++;
           } catch (error) {
             console.error(
-              `Failed to import account ${account.address}:`,
-              error
+              `Failed to import account ${redactAddress(account.address)}:`,
+              redactError(error)
             );
             failedCount++;
           }

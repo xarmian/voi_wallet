@@ -54,6 +54,7 @@ import { SwapService } from '@/services/swap';
 import { GlassButton } from '@/components/common/GlassButton';
 import UniversalHeader from '@/components/common/UniversalHeader';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
+import { redactError } from '@/utils/logRedaction';
 
 interface AssetDetailRouteParams {
   assetName: string;
@@ -275,7 +276,10 @@ export default function AssetDetailScreen() {
           setNetworkSpecificBalance(balance);
         }
       } catch (error) {
-        console.error(`Failed to fetch balance from ${networkId}:`, error);
+        console.error(
+          `Failed to fetch balance from ${networkId}:`,
+          redactError(error)
+        );
       }
     };
 
@@ -444,7 +448,7 @@ export default function AssetDetailScreen() {
         } catch (error) {
           console.error(
             `Failed to load transactions from ${networkId}:`,
-            error
+            redactError(error)
           );
           // Clear the list: this path also runs on a network switch, and
           // leaving the previous network's rows up would attribute them to the
@@ -460,7 +464,7 @@ export default function AssetDetailScreen() {
         await loadAssetTransactions(accountId, assetId, isArc200);
       }
     } catch (error) {
-      console.error('Failed to load transactions:', error);
+      console.error('Failed to load transactions:', redactError(error));
       setNetworkTransactionsError(error);
     } finally {
       // Always set, even on failure, so a spinner can never wedge.
@@ -522,7 +526,7 @@ export default function AssetDetailScreen() {
           } catch (error) {
             console.error(
               `Failed to refresh transactions from ${networkId}:`,
-              error
+              redactError(error)
             );
             setNetworkTransactionsError(error);
           }

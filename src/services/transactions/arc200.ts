@@ -4,6 +4,7 @@ import {
   NetworkService,
 } from '@/services/network';
 import MimirApiService from '@/services/mimir';
+import { redactError } from '@/utils/logRedaction';
 
 // ARC-200 transfer ABI definition
 const ARC200_TRANSFER_ABI = {
@@ -229,7 +230,10 @@ export class Arc200TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-200 transfer group:', error);
+      console.error(
+        'Failed to build ARC-200 transfer group:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -339,7 +343,10 @@ export class Arc200TransactionService {
             }));
         }
       } catch (error) {
-        console.error('Failed to simulate ARC-200 transaction:', error);
+        console.error(
+          'Failed to simulate ARC-200 transaction:',
+          redactError(error)
+        );
         throw error;
       }
 
@@ -357,7 +364,10 @@ export class Arc200TransactionService {
 
       return appCallTxn;
     } catch (error) {
-      console.error('Failed to build ARC-200 application call:', error);
+      console.error(
+        'Failed to build ARC-200 application call:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 app call build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -402,7 +412,10 @@ export class Arc200TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to estimate ARC-200 transfer cost:', error);
+      console.error(
+        'Failed to estimate ARC-200 transfer cost:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 cost estimation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -496,7 +509,10 @@ export class Arc200TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-200 transferFrom group:', error);
+      console.error(
+        'Failed to build ARC-200 transferFrom group:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 transferFrom build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -595,7 +611,10 @@ export class Arc200TransactionService {
             }));
         }
       } catch (error) {
-        console.error('Failed to simulate ARC-200 transferFrom:', error);
+        console.error(
+          'Failed to simulate ARC-200 transferFrom:',
+          redactError(error)
+        );
         throw error;
       }
 
@@ -613,7 +632,10 @@ export class Arc200TransactionService {
 
       return appCallTxn;
     } catch (error) {
-      console.error('Failed to build ARC-200 transferFrom call:', error);
+      console.error(
+        'Failed to build ARC-200 transferFrom call:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-200 transferFrom call build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );

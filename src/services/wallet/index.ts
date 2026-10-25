@@ -39,6 +39,7 @@ import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
+import { redactAddress } from '@/utils/logRedaction';
 
 /**
  * F-22 (TASK-179) — getCurrentWallet() memoization.
@@ -1610,7 +1611,7 @@ export class MultiAccountWalletService {
 
       if (!canSign) {
         console.warn(
-          `Auth account ${authAccount.authAddress} not found in wallet. Import as watch-only.`
+          `Auth account ${redactAddress(authAccount.authAddress)} not found in wallet. Import as watch-only.`
         );
       }
 

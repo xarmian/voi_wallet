@@ -16,6 +16,11 @@ import { MimirApiService, MimirAsset } from '@/services/mimir';
 import VoiPriceService from '@/services/price';
 import AlgorandPriceService from '@/services/algorand-price';
 import EnvoiService from '@/services/envoi';
+import {
+  redactAddress,
+  redactError,
+  redactSensitiveForLog,
+} from '@/utils/logRedaction';
 
 export interface RekeyInfo {
   isRekeyed: boolean;
@@ -554,7 +559,7 @@ export class NetworkService {
             : { isRekeyed: false },
       };
     } catch (error) {
-      console.error('Failed to fetch account balance:', error);
+      console.error('Failed to fetch account balance:', redactError(error));
       throw new Error(
         `Failed to fetch balance: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -924,7 +929,7 @@ export class NetworkService {
 
       return transactions.sort((a, b) => b.timestamp - a.timestamp);
     } catch (error) {
-      console.error('Failed to fetch transaction history:', error);
+      console.error('Failed to fetch transaction history:', redactError(error));
       throw new Error(
         `Failed to fetch transactions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1094,7 +1099,10 @@ export class NetworkService {
         };
       }
     } catch (error) {
-      console.error('Failed to fetch asset transaction history:', error);
+      console.error(
+        'Failed to fetch asset transaction history:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to fetch asset transactions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1145,7 +1153,7 @@ export class NetworkService {
       const confirmed = await this.waitForConfirmationInternal(txId);
       return { txId, confirmed };
     } catch (error) {
-      console.error('Failed to submit transaction:', error);
+      console.error('Failed to submit transaction:', redactError(error));
       throw new Error(
         `Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1161,7 +1169,10 @@ export class NetworkService {
       // Not confirmed within the round window. This is a PENDING state, not a
       // failure: the tx may still confirm later. Surface a soft warning and let
       // the caller report a pending (not failed) status to the user.
-      console.warn('Transaction submitted but not yet confirmed:', err);
+      console.warn(
+        'Transaction submitted but not yet confirmed:',
+        redactError(err)
+      );
       return false;
     }
   }
@@ -1354,7 +1365,10 @@ export class NetworkService {
         nextToken: algodResponse.nextToken || undefined,
       };
     } catch (error) {
-      console.error('Failed to fetch complete transaction history:', error);
+      console.error(
+        'Failed to fetch complete transaction history:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to fetch transactions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1454,7 +1468,7 @@ export class NetworkService {
             }
           }
         } catch (error) {
-          console.warn('Failed to fetch rekey timestamp:', error);
+          console.warn('Failed to fetch rekey timestamp:', redactError(error));
         }
       }
 
@@ -1469,7 +1483,7 @@ export class NetworkService {
 
       return result;
     } catch (error) {
-      console.error('Failed to check rekey status:', error);
+      console.error('Failed to check rekey status:', redactError(error));
       throw new Error(
         `Failed to check rekey status: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1495,8 +1509,8 @@ export class NetworkService {
           rekeyInfo[address] = result.value;
         } else {
           console.warn(
-            `Failed to check rekey status for ${address}:`,
-            result.reason
+            `Failed to check rekey status for ${redactAddress(address)}:`,
+            redactError(result.reason)
           );
           rekeyInfo[address] = { isRekeyed: false };
         }
@@ -1504,7 +1518,10 @@ export class NetworkService {
 
       return rekeyInfo;
     } catch (error) {
-      console.error('Failed to check multiple rekey statuses:', error);
+      console.error(
+        'Failed to check multiple rekey statuses:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to check rekey statuses: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1659,7 +1676,10 @@ export class NetworkService {
         nextToken: data.nextToken,
       };
     } catch (error) {
-      console.error(`Failed to search assets for "${query}":`, error);
+      console.error(
+        `Failed to search assets for "${redactSensitiveForLog(query)}":`,
+        redactError(error)
+      );
       throw new Error(
         `Failed to search assets: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1693,7 +1713,10 @@ export class NetworkService {
 
       return null;
     } catch (error) {
-      console.error(`Failed to fetch first transaction for ${address}:`, error);
+      console.error(
+        `Failed to fetch first transaction for ${redactAddress(address)}:`,
+        redactError(error)
+      );
       return null;
     }
   }
@@ -1712,7 +1735,10 @@ export class NetworkService {
         .do();
       return accountInfo;
     } catch (error) {
-      console.error(`Failed to fetch account info for ${address}:`, error);
+      console.error(
+        `Failed to fetch account info for ${redactAddress(address)}:`,
+        redactError(error)
+      );
 
       if (error instanceof NetworkError) {
         throw error;
@@ -1765,7 +1791,7 @@ export class NetworkService {
 
       return txId;
     } catch (error) {
-      console.error('Failed to send transaction:', error);
+      console.error('Failed to send transaction:', redactError(error));
 
       if (error instanceof NetworkError) {
         throw error;
@@ -1808,7 +1834,7 @@ export class NetworkService {
       } catch (pendingError) {
         console.warn(
           'Failed to inspect pending transaction after waitForConfirmation error:',
-          pendingError
+          redactError(pendingError)
         );
       }
 

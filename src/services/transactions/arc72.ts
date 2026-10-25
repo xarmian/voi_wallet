@@ -4,6 +4,7 @@ import {
   NetworkService,
 } from '@/services/network';
 import MimirApiService from '@/services/mimir';
+import { redactError } from '@/utils/logRedaction';
 
 // ARC-72 transfer ABI definition
 const ARC72_TRANSFER_FROM_ABI = {
@@ -90,7 +91,7 @@ export class Arc72TransactionService {
     } catch (error) {
       console.warn(
         'Failed to check recipient balance, assuming MBR payment needed:',
-        error
+        redactError(error)
       );
       // If we can't check, assume MBR payment is needed for safety
       return false;
@@ -180,7 +181,10 @@ export class Arc72TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-72 transfer group:', error);
+      console.error(
+        'Failed to build ARC-72 transfer group:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-72 transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -288,7 +292,10 @@ export class Arc72TransactionService {
             }));
         }
       } catch (error) {
-        console.error('Failed to simulate ARC-72 transaction:', error);
+        console.error(
+          'Failed to simulate ARC-72 transaction:',
+          redactError(error)
+        );
         throw error;
       }
 
@@ -306,7 +313,10 @@ export class Arc72TransactionService {
 
       return appCallTxn;
     } catch (error) {
-      console.error('Failed to build ARC-72 application call:', error);
+      console.error(
+        'Failed to build ARC-72 application call:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-72 app call build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -349,7 +359,10 @@ export class Arc72TransactionService {
         needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to estimate ARC-72 transfer cost:', error);
+      console.error(
+        'Failed to estimate ARC-72 transfer cost:',
+        redactError(error)
+      );
       throw new Error(
         `ARC-72 cost estimation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );

@@ -12,6 +12,7 @@ import {
   selectBestAssetImageUrl,
 } from '@/utils/assetImages';
 import { selectPrimarySource } from '@/utils/mappedAssetPrimary';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Service for aggregating balances across multiple networks
@@ -37,7 +38,7 @@ export class MultiNetworkBalanceService {
         } catch (error) {
           console.warn(
             `[MultiNetworkBalanceService] Failed to fetch balance from ${networkId}:`,
-            error
+            redactError(error)
           );
           return { networkId, balance: null, success: false };
         }
@@ -79,7 +80,7 @@ export class MultiNetworkBalanceService {
     } catch (error) {
       console.error(
         '[MultiNetworkBalanceService] Failed to get aggregated balance:',
-        error
+        redactError(error)
       );
       throw error;
     }

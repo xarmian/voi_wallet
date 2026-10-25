@@ -15,6 +15,7 @@ import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import algosdk, { Transaction } from 'algosdk';
 import { NetworkService } from '@/services/network';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Secure Key Manager - Simplified version using AccountSecureStorage
@@ -414,7 +415,7 @@ export class SecureKeyManager {
         isRekeyed: false,
       };
     } catch (error) {
-      console.error('Failed to get signing info:', error);
+      console.error('Failed to get signing info:', redactError(error));
       return {
         canSign: false,
         signingAddress: address,

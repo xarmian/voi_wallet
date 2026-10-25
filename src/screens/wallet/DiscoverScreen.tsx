@@ -7,6 +7,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import ThemedWebView, {
   ThemedWebViewRef,
 } from '@/components/common/ThemedWebView';
+import { redactSensitiveForLog } from '@/utils/logRedaction';
 
 const DISCOVER_BASE_URL = 'https://voirewards.com/discover';
 
@@ -47,7 +48,10 @@ export default function DiscoverScreen() {
         style={styles.webview}
         loadingText="Loading Discover..."
         onLoadError={(errorDescription) => {
-          console.error('Discover page loading error:', errorDescription);
+          console.error(
+            'Discover page loading error:',
+            redactSensitiveForLog(errorDescription)
+          );
         }}
         javaScriptEnabled={true}
         domStorageEnabled={true}

@@ -13,6 +13,7 @@ import {
 } from '@/types/wallet';
 import { networkService, RekeyInfo } from '@/services/network';
 import { ledgerTransportService } from '@/services/ledger/transport';
+import { redactError } from '@/utils/logRedaction';
 
 export interface SigningAuthorityCheck {
   accountAddress: string;
@@ -122,7 +123,7 @@ export class RekeyManager {
       if (error instanceof LedgerAccountError) {
         throw error;
       }
-      console.error('Failed to check signing authority:', error);
+      console.error('Failed to check signing authority:', redactError(error));
       return {
         accountAddress: rekeyedAccountAddress,
         canSign: false,
@@ -167,7 +168,7 @@ export class RekeyManager {
         signingAuthorities,
       };
     } catch (error) {
-      console.error('Failed to detect rekeyed accounts:', error);
+      console.error('Failed to detect rekeyed accounts:', redactError(error));
       throw new Error(
         `Failed to detect rekeyed accounts: ${error instanceof Error ? error.message : 'Unknown error'}`
       );

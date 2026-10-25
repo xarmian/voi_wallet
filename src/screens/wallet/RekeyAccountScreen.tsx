@@ -37,6 +37,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { NetworkService } from '@/services/network';
+import { redactError } from '@/utils/logRedaction';
 
 type RekeyAccountScreenRouteProp = RouteProp<
   SettingsStackParamList,
@@ -197,7 +198,7 @@ export default function RekeyAccountScreen() {
           }
         }
       } catch (error) {
-        console.error('Failed to fetch rekey info:', error);
+        console.error('Failed to fetch rekey info:', redactError(error));
         if (!isCancelled) {
           setNetworkRekeyInfo(null);
           // Reset to standard flow on error
