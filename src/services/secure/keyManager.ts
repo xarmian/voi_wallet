@@ -256,7 +256,7 @@ export class SecureKeyManager {
 
           return result.signedTransaction;
         } catch (error) {
-          console.error('Ledger Signing Error:', error);
+          console.error('Ledger Signing Error:', redactError(error));
 
           // Normalize to LedgerAccountError for unexpected issues; known types propagate
           if (error instanceof LedgerDeviceNotConnectedError) {
@@ -667,7 +667,7 @@ export class SecureKeyManager {
     try {
       await AccountSecureStorage.clearAll();
     } catch (error) {
-      console.error('Failed to clear secure storage:', error);
+      console.error('Failed to clear secure storage:', redactError(error));
     }
   }
 }

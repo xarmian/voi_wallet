@@ -14,6 +14,7 @@ import {
 } from '@/services/ledger/simpleLedgerManager';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { LedgerSigningInfo } from '@/types/wallet';
+import { redactError } from '@/utils/logRedaction';
 
 export type SimpleLedgerAuthState =
   | 'idle'
@@ -398,7 +399,7 @@ export class SimpleLedgerAuthController {
       try {
         listener(this.currentState);
       } catch (error) {
-        console.error('State listener error:', error);
+        console.error('State listener error:', redactError(error));
       }
     });
   }

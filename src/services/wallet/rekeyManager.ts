@@ -295,7 +295,10 @@ export class RekeyManager {
 
       return rekeyedAccount;
     } catch (error) {
-      console.error('Failed to update account with rekey info:', error);
+      console.error(
+        'Failed to update account with rekey info:',
+        redactError(error)
+      );
       return account; // Return original account if update fails
     }
   }

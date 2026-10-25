@@ -20,6 +20,7 @@ import { enterLockedState } from '@/services/secure/sessionTeardown';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
+import { redactError } from '@/utils/logRedaction';
 
 // Helper to check if biometrics are available (web-safe)
 const checkBiometricAvailability = async (): Promise<{
@@ -313,7 +314,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // decision, so keep the safe display defaults and continue.
         console.warn(
           'Non-critical auth-init reads failed; using display defaults',
-          error
+          redactError(error)
         );
       }
 
@@ -374,7 +375,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Retry re-runs this check and recovers if storage becomes readable.
         console.error(
           'Secure storage unavailable at auth init after retries:',
-          lastError
+          redactError(lastError)
         );
         setAuthState((prev) => ({
           ...prev,
@@ -419,7 +420,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'cross-store boot reconcile'
         ).catch((error) => {
           // ids/status only upstream; here we log the failure class, not contents.
-          console.warn('Cross-store boot reconcile skipped:', error);
+          console.warn(
+            'Cross-store boot reconcile skipped:',
+            redactError(error)
+          );
           return null;
         });
 
@@ -454,7 +458,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } catch (error) {
             console.warn(
               'Post-reconcile lock refresh failed; keeping prior verdict:',
-              error
+              redactError(error)
             );
           }
         }
@@ -597,7 +601,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // unlocked). Retry re-runs this check.
       console.error(
         'Unexpected failure during auth init; failing closed:',
-        error
+        redactError(error)
       );
       setAuthState((prev) => ({
         ...prev,
@@ -760,7 +764,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return false;
     } catch (error) {
-      console.error('Failed to unlock with PIN:', error);
+      console.error('Failed to unlock with PIN:', redactError(error));
       return false;
     }
   };
@@ -815,7 +819,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // unlocked. Biometrics stays enabled on a cancel so the user can retry.
       return false;
     } catch (error) {
-      console.error('Failed to unlock with biometrics:', error);
+      console.error('Failed to unlock with biometrics:', redactError(error));
       return false;
     }
   };
@@ -957,7 +961,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         timeoutMinutes,
       }));
     } catch (error) {
-      console.error('Failed to update timeout setting:', error);
+      console.error('Failed to update timeout setting:', redactError(error));
     }
   };
 

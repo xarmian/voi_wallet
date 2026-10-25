@@ -30,6 +30,7 @@
 import { AccountSecureStorage } from '@/services/secure';
 
 import { MultiAccountWalletService } from './index';
+import { redactError } from '@/utils/logRedaction';
 
 export interface ReconcileResult {
   /** false when Phase 1 hit a read/probe failure and the pass was aborted. */
@@ -161,7 +162,10 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     // A Phase-2 repair failed after Phase 1 passed cleanly. Keep the partial
     // outcome (below) so the caller can still refresh the verdict; the remaining
     // repairs are retried on the next boot. ids/status only — no secret material.
-    console.warn('[bootReconcile] Phase 2 repair partially failed:', error);
+    console.warn(
+      '[bootReconcile] Phase 2 repair partially failed:',
+      redactError(error)
+    );
   }
 
   if (

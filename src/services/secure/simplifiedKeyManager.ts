@@ -93,7 +93,7 @@ export class SimplifiedKeyManager {
         );
       }
     } catch (error) {
-      console.error('Transaction signing failed:', error);
+      console.error('Transaction signing failed:', redactError(error));
       throw error;
     }
   }
@@ -364,7 +364,7 @@ export class SimplifiedKeyManager {
 
       return signingAccounts;
     } catch (error) {
-      console.error('Failed to get signing accounts:', error);
+      console.error('Failed to get signing accounts:', redactError(error));
       return [];
     }
   }

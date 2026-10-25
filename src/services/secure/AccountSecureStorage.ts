@@ -50,6 +50,7 @@ import { clearPinSetupPending } from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
+import { redactError } from '@/utils/logRedaction';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
@@ -340,7 +341,7 @@ export class AccountSecureStorage {
       try {
         return JSON.parse(stored) as PersistedAccountMetadata;
       } catch (error) {
-        console.warn('Failed to parse account metadata', error);
+        console.warn('Failed to parse account metadata', redactError(error));
         return null;
       }
     }
@@ -391,7 +392,10 @@ export class AccountSecureStorage {
         ? (JSON.parse(migratedSecret) as AccountSecretPayload)
         : null;
     } catch (error) {
-      console.warn('Failed to parse account secret payload', error);
+      console.warn(
+        'Failed to parse account secret payload',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -948,7 +952,7 @@ export class AccountSecureStorage {
           // wrong-secret trial-decrypt MAC-fails), so a surviving copy is harmless.
         }
       }
-      console.warn('v2 migration deferred', accountId, error);
+      console.warn('v2 migration deferred', accountId, redactError(error));
       return 'NOT_MIGRATED';
     } finally {
       unwrapped.plaintext.fill(0);
@@ -1066,7 +1070,10 @@ export class AccountSecureStorage {
       await secureStorage.deleteItem(legacyKey).catch(() => {});
       return persistable;
     } catch (error) {
-      console.error('Failed to migrate legacy account data', error);
+      console.error(
+        'Failed to migrate legacy account data',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -2847,7 +2854,10 @@ export class AccountSecureStorage {
               secretSource,
             });
           } catch (error) {
-            console.warn('Failed to upgrade stored PIN metadata', error);
+            console.warn(
+              'Failed to upgrade stored PIN metadata',
+              redactError(error)
+            );
           }
         }
         return true;
@@ -2876,7 +2886,7 @@ export class AccountSecureStorage {
         } catch (error) {
           console.warn(
             'Failed to upgrade PIN hash to latest iteration count',
-            error
+            redactError(error)
           );
         }
         return true;
@@ -3555,7 +3565,7 @@ export class AccountSecureStorage {
       }
       return null;
     } catch (error) {
-      console.warn('Failed to retrieve stored PIN hash', error);
+      console.warn('Failed to retrieve stored PIN hash', redactError(error));
       return null;
     }
   }
@@ -3635,7 +3645,7 @@ export class AccountSecureStorage {
           };
         }
       } catch (error) {
-        console.warn('Failed to parse stored PIN metadata', error);
+        console.warn('Failed to parse stored PIN metadata', redactError(error));
       }
     }
 

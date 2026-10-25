@@ -1,5 +1,6 @@
 import { storage, secureStorage } from '../../platform';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Transaction Tracker - Prevents replay attacks and enforces rate limits
@@ -35,7 +36,10 @@ export class TransactionTracker {
       await secureStorage.deleteItem(key).catch(() => {});
       return legacyValue;
     } catch (error) {
-      console.warn('Failed to migrate legacy SecureStore item', error);
+      console.warn(
+        'Failed to migrate legacy SecureStore item',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -51,7 +55,10 @@ export class TransactionTracker {
       }
       return JSON.parse(raw) as T;
     } catch (error) {
-      console.error(`TransactionTracker read error for ${key}:`, error);
+      console.error(
+        `TransactionTracker read error for ${key}:`,
+        redactError(error)
+      );
       return null;
     }
   }
@@ -92,7 +99,7 @@ export class TransactionTracker {
       // Additional validation
       await this.checkTransactionPattern(from, to, amount, errors);
     } catch (error) {
-      console.error('Transaction validation error:', error);
+      console.error('Transaction validation error:', redactError(error));
       errors.push('Failed to validate transaction security');
     }
 
@@ -121,7 +128,7 @@ export class TransactionTracker {
       // Update rate limits
       await this.updateRateLimits();
     } catch (error) {
-      console.error('Failed to record transaction:', error);
+      console.error('Failed to record transaction:', redactError(error));
     }
   }
 
@@ -160,7 +167,7 @@ export class TransactionTracker {
       // Save updated rate limits
       await this.saveRateLimits(rateLimits);
     } catch (error) {
-      console.error('Rate limit check failed:', error);
+      console.error('Rate limit check failed:', redactError(error));
     }
 
     return errors;
@@ -182,7 +189,7 @@ export class TransactionTracker {
       // Check if transaction hash already exists
       return validTransactions.some((tx) => tx.txHash === txHash);
     } catch (error) {
-      console.error('Replay check failed:', error);
+      console.error('Replay check failed:', redactError(error));
       return false;
     }
   }
@@ -226,7 +233,7 @@ export class TransactionTracker {
         );
       }
     } catch (error) {
-      console.error('Pattern check failed:', error);
+      console.error('Pattern check failed:', redactError(error));
     }
   }
 
@@ -266,7 +273,7 @@ export class TransactionTracker {
 
       await this.writeJson(TRANSACTION_CACHE_KEY, cache);
     } catch (error) {
-      console.error('Failed to update transaction cache:', error);
+      console.error('Failed to update transaction cache:', redactError(error));
     }
   }
 
@@ -304,7 +311,7 @@ export class TransactionTracker {
     try {
       await this.writeJson(RATE_LIMIT_KEY, rateLimits);
     } catch (error) {
-      console.error('Failed to save rate limits:', error);
+      console.error('Failed to save rate limits:', redactError(error));
     }
   }
 
@@ -318,7 +325,7 @@ export class TransactionTracker {
       rateLimits.dailyCount++;
       await this.saveRateLimits(rateLimits);
     } catch (error) {
-      console.error('Failed to update rate limits:', error);
+      console.error('Failed to update rate limits:', redactError(error));
     }
   }
 
@@ -332,7 +339,10 @@ export class TransactionTracker {
         this.removeItem(RATE_LIMIT_KEY),
       ]);
     } catch (error) {
-      console.error('Failed to clear transaction tracking data:', error);
+      console.error(
+        'Failed to clear transaction tracking data:',
+        redactError(error)
+      );
     }
   }
 }

@@ -577,7 +577,10 @@ export class TransactionService {
             account.address,
             networkId
           ).catch((e) => {
-            console.warn('Recovery: failed to read signing info:', e);
+            console.warn(
+              'Recovery: failed to read signing info:',
+              redactError(e)
+            );
             return null;
           });
 
@@ -587,7 +590,10 @@ export class TransactionService {
             targetIdentifier,
             { lookupByAddress: !signingInfo?.signingAccountId }
           ).catch((e) => {
-            console.warn('Recovery: failed to get Ledger signing info:', e);
+            console.warn(
+              'Recovery: failed to get Ledger signing info:',
+              redactError(e)
+            );
             return null;
           });
 
@@ -599,7 +605,7 @@ export class TransactionService {
                 .catch((connectError) => {
                   console.warn(
                     'Recovery: Failed to reconnect to Ledger device:',
-                    connectError
+                    redactError(connectError)
                   );
                 });
             }
@@ -608,7 +614,7 @@ export class TransactionService {
             } catch (verifyError) {
               console.warn(
                 'Recovery: Failed to verify Algorand app on Ledger:',
-                verifyError
+                redactError(verifyError)
               );
 
               // If wrong app is open (BOLOS/other), only stop retrying if this is the last attempt
@@ -1629,7 +1635,7 @@ export class TransactionService {
           .catch((error) =>
             console.warn(
               'Failed to refresh balance after transaction success:',
-              error
+              redactError(error)
             )
           );
       });
