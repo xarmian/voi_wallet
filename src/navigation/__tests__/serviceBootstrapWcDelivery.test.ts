@@ -238,14 +238,12 @@ const navigateMovesRoute = () => {
 
 /**
  * The signing screen's "next request" step after the user answers
- * (TransactionRequestScreen: peekUndisplayed, then showQueued with
- * navigation.replace). Returns the id it replaced to, or null.
+ * (TransactionRequestScreen: takeNext with navigation.replace). Returns the
+ * id it replaced to, or null.
  */
 const screenShowsNext = async (): Promise<number | string | null> => {
-  const next = await TransactionRequestQueue.peekUndisplayed();
-  if (!next) return null;
   let shown: number | string | null = null;
-  await TransactionRequestQueue.showQueued(next, (req) => {
+  await TransactionRequestQueue.takeNext((req) => {
     shown = req.id;
   });
   return shown;

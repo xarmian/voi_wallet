@@ -1,6 +1,6 @@
 /**
  * TransactionRequestQueue delivery states (TASK-257): claim / markDisplayed /
- * releaseClaim, and the peekUndisplayed + showQueued pair the startup drain
+ * releaseClaim / forgetDelivery, and the atomic takeNext the startup drain
  * and the signing screen's "next request" step use. Real queue over the
  * AsyncStorage jest mock. The payloads are opaque placeholders; no key or
  * signature material.
@@ -26,13 +26,12 @@ const enqueue = (id: number, topic = 'topic-q') =>
 const ids = async () =>
   (await TransactionRequestQueue.getAll()).map((r) => r.id);
 
-/** As the screen does: peek the next undisplayed request and show it. */
+/** As the screen does: take the next undisplayed request and show it. */
 const showNext = async (
   show: (r: QueuedTransactionRequest) => void = () => {}
 ) => {
-  const next = await TransactionRequestQueue.peekUndisplayed();
-  if (next) await TransactionRequestQueue.showQueued(next, show);
-  return next?.id ?? null;
+  const { request } = await TransactionRequestQueue.takeNext(show);
+  return request?.id ?? null;
 };
 
 beforeEach(async () => {
@@ -55,6 +54,13 @@ describe('claim lifecycle', () => {
     TransactionRequestQueue.releaseClaim(1, 't');
     expect(TransactionRequestQueue.claim(1, 't')).toBe(false);
     expect(TransactionRequestQueue.markDisplayed(1, 't')).toBe(false);
+  });
+
+  it('forgetDelivery clears a displayed request so a redelivery surfaces', () => {
+    TransactionRequestQueue.claim(4, 't');
+    TransactionRequestQueue.markDisplayed(4, 't');
+    TransactionRequestQueue.forgetDelivery(4, 't');
+    expect(TransactionRequestQueue.claim(4, 't')).toBe(true);
   });
 
   it('a queued request that goes stale releases its claim', async () => {
@@ -86,7 +92,7 @@ describe('claim lifecycle', () => {
   });
 });
 
-describe('peekUndisplayed / showQueued', () => {
+describe('takeNext', () => {
   it('drops only already-displayed requests; a queued (claimed) one is shown', async () => {
     // 101 displayed this session; 102 claimed and queued; 103 from a prior
     // session (untracked).
@@ -105,7 +111,8 @@ describe('peekUndisplayed / showQueued', () => {
     expect(await showNext()).toBeNull();
   });
 
-  it('a show that throws leaves the request queued and undisplayed', async () => {
+  it('a show that throws leaves the request queued, back to claimed', async () => {
+    TransactionRequestQueue.claim(301, 'topic-q');
     await enqueue(301);
 
     await expect(
@@ -114,8 +121,42 @@ describe('peekUndisplayed / showQueued', () => {
       })
     ).rejects.toThrow('replace failed');
     expect(await ids()).toEqual([301]);
+    // Back to 'claimed' (queued, not shown): a redelivery is still dropped,
+    // and it was not left marked displayed.
+    expect(TransactionRequestQueue.claim(301, 'topic-q')).toBe(false);
+    expect(TransactionRequestQueue.markDisplayed(301, 'topic-q')).toBe(true);
+    TransactionRequestQueue.releaseClaim(301, 'topic-q');
+    TransactionRequestQueue.forgetDelivery(301, 'topic-q');
 
     expect(await showNext()).toBe(301);
     expect(await ids()).toEqual([]);
+  });
+
+  it('two concurrent takers show a queued request exactly once (FL-353)', async () => {
+    await enqueue(401);
+    const show = jest.fn();
+    // The startup drain and a screen completion racing; each yields between
+    // finding the request and showing it, as the screen does (it awaited
+    // size() between peekUndisplayed and showQueued before TASK-257b).
+    const taker = async () => {
+      await Promise.resolve();
+      return TransactionRequestQueue.takeNext(show);
+    };
+    const results = await Promise.all([taker(), taker()]);
+
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r.request?.id ?? null).sort()).toEqual([
+      401,
+      null,
+    ]);
+    expect(await ids()).toEqual([]);
+  });
+
+  it('reports what remains queued after the one it showed', async () => {
+    await enqueue(501);
+    await enqueue(502);
+    const result = await TransactionRequestQueue.takeNext(() => {});
+    expect(result.request?.id).toBe(501);
+    expect(result.remaining).toBe(1);
   });
 });

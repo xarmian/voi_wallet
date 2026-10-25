@@ -181,7 +181,9 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     expect(nav.navigate).toHaveBeenCalledTimes(1);
 
     // The screen's "next request" step finds nothing left to show.
-    expect(await TransactionRequestQueue.peekUndisplayed()).toBeNull();
+    const show = jest.fn();
+    expect((await TransactionRequestQueue.takeNext(show)).request).toBeNull();
+    expect(show).not.toHaveBeenCalled();
     expect(await TransactionRequestQueue.size()).toBe(0);
   });
 });

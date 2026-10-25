@@ -398,12 +398,11 @@ export const initializeServices = async ({
             ) {
               return;
             }
-            // Skips (drops) only requests already displayed this session;
-            // one that was merely queued is shown, never discarded.
-            const nextRequest = await TransactionRequestQueue.peekUndisplayed();
-            if (!nextRequest) return;
-            // Removed only once shown, so a failed navigate leaves it queued.
-            await TransactionRequestQueue.showQueued(nextRequest, (req) =>
+            // Atomic take: skips (drops) only requests already displayed this
+            // session, and marks + shows the next one under the queue lock, so
+            // a screen completion racing this drain cannot show it too. It is
+            // removed only once shown; a failed navigate leaves it queued.
+            await TransactionRequestQueue.takeNext((req) =>
               nav.navigate('WalletConnectTransactionRequest', {
                 requestEvent: req,
                 version: req.version,

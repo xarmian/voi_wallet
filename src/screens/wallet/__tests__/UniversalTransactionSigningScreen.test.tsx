@@ -47,6 +47,8 @@ let mockAccounts: {
 let mockRoutes: Record<string, unknown>;
 const mockGetCachedAssetParams = jest.fn();
 const mockResolveSigningRoute = jest.fn();
+/** Registry callbacks by id (TASK-257: onDismiss on unmount). */
+let mockRegistry: Record<string, { onDismiss?: () => void }> = {};
 
 // `@/utils/bigint` re-exports through `@/utils/formatting`, which pulls in the
 // zustand wallet store (and therefore AsyncStorage). Only the locale lookup is
@@ -82,7 +84,7 @@ jest.mock('@/services/auth/transactionAuthController', () => ({
 }));
 
 jest.mock('@/services/navigation/callbackRegistry', () => ({
-  getNavigationCallbacks: () => undefined,
+  getNavigationCallbacks: (id?: string) => (id ? mockRegistry[id] : undefined),
   clearNavigationCallbacks: jest.fn(),
 }));
 
@@ -168,11 +170,18 @@ const b64 = (txn: algosdk.Transaction): string =>
 const chainIdOf = (networkId: NetworkId): string =>
   NETWORK_CONFIGURATIONS[networkId].chainId;
 
+let mockBeforeRemove: (() => void)[] = [];
 const navigationStub = {
   canGoBack: () => false,
   goBack: jest.fn(),
   navigate: jest.fn(),
   replace: jest.fn(),
+  addListener: (event: string, listener: () => void) => {
+    if (event === 'beforeRemove') mockBeforeRemove.push(listener);
+    return () => {
+      mockBeforeRemove = mockBeforeRemove.filter((l) => l !== listener);
+    };
+  },
 } as never;
 
 function walletAccount(label: string, address: string) {
@@ -196,6 +205,7 @@ function renderScreen(options: {
   reviewedAccount: { address: string; label: string };
   chainIdOverride?: string;
   walletConnect?: boolean;
+  callbackId?: string;
 }) {
   const {
     networkId,
@@ -204,6 +214,7 @@ function renderScreen(options: {
     reviewedAccount,
     chainIdOverride,
     walletConnect = true,
+    callbackId,
   } = options;
   const chainId = chainIdOverride ?? chainIdOf(networkId);
 
@@ -213,6 +224,7 @@ function renderScreen(options: {
     networkId,
     chainId,
     title: 'WalletConnect Request',
+    callbackId,
   };
   if (walletConnect) {
     params.walletConnect = {
@@ -235,6 +247,8 @@ function renderScreen(options: {
 }
 
 beforeEach(() => {
+  mockRegistry = {};
+  mockBeforeRemove = [];
   mockAssetParams = {};
   mockAccounts = [];
   mockRoutes = {};
@@ -521,5 +535,31 @@ describe('UniversalTransactionSigningScreen — unknown chain', () => {
       expect(screen.getByText('Algorand')).toBeTruthy();
     });
     expect(screen.queryByText('Unrecognized network')).toBeNull();
+  });
+});
+
+describe('UniversalTransactionSigningScreen — leaving the screen', () => {
+  it('tells the caller it left the stack through its onDismiss (TASK-257)', async () => {
+    const owner = makeAccount('dismiss').addr;
+    mockAccounts = [walletAccount('Main', owner)];
+    mockRoutes[owner] = { kind: 'software', signingAddress: owner };
+    const onDismiss = jest.fn();
+    mockRegistry['cb-dismiss'] = { onDismiss };
+
+    const screen = await renderScreen({
+      networkId: ALGO,
+      entries: [{ txn: b64(pay(ALGO, owner, 1)) }],
+      approved: [owner],
+      reviewedAccount: { address: owner, label: 'Main' },
+      callbackId: 'cb-dismiss',
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Algorand')).toBeTruthy();
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    // Leaving the stack (OS back, swipe-back) reports it once.
+    mockBeforeRemove.forEach((listener) => listener());
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

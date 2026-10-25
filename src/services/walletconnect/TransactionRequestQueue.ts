@@ -137,38 +137,68 @@ class TransactionRequestQueueService {
   }
 
   /**
-   * The next queued request that has NOT been displayed this session, left in
-   * the queue (TASK-257). Queued requests that were already displayed (a
-   * persisted request the relay redelivered and the app showed directly) are
-   * removed: the copy on screen is the one the user answers. A request that
-   * was only queued is never removed here.
-   *
-   * Show it with `showQueued`, which removes it only once it is on screen.
+   * Undo every delivery mark for a request whose ANSWER could not be sent
+   * (the approve response or the rejection failed), so a relay redelivery of
+   * it surfaces again and the dApp can still get an answer (TASK-257). Unlike
+   * `releaseClaim`, this also clears 'displayed'.
    */
-  async peekUndisplayed(): Promise<QueuedTransactionRequest | null> {
-    return this.withLock(async () => {
-      const { queue, dropped } = await this.dropDisplayedHead();
-      if (dropped > 0) {
-        await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
-      }
-      return queue[0] ?? null;
-    });
+  forgetDelivery(id: number | string, topic: string): void {
+    this.delivery.delete(requestKey(id, topic));
   }
 
   /**
-   * Show a queued request (from `peekUndisplayed`) with `show` (a navigate
-   * or replace), then mark it displayed and remove it from the queue
-   * (TASK-257). If `show` throws, the request stays queued and undisplayed,
-   * so it is never lost, and the error propagates to the caller. Marking is
-   * synchronous right after `show`, so no other reader can show it again.
+   * Take the next queued request that has NOT been displayed this session and
+   * show it with `show` (a navigate or replace), atomically (TASK-257).
+   *
+   * Under the queue lock, in one step: drop head requests already displayed
+   * this session (a persisted request the relay redelivered and the app
+   * showed directly: the copy on screen is the one the user answers), mark
+   * the next head displayed, call `show`, then remove it from the queue. A
+   * concurrent taker (the startup drain racing a screen completion) waits on
+   * the lock and finds it gone, so a request is shown at most once.
+   *
+   * If `show` throws, the mark goes back to 'claimed' (queued, not shown),
+   * the request stays queued so it is never lost, and the error propagates.
+   *
+   * Returns the request shown (or null if none was waiting) and how many
+   * requests remain queued after it.
    */
-  async showQueued(
-    request: QueuedTransactionRequest,
+  async takeNext(
     show: (request: QueuedTransactionRequest) => void
-  ): Promise<void> {
-    show(request);
-    this.markDisplayed(request.id, request.topic);
-    await this.remove(request.id, request.topic);
+  ): Promise<{ request: QueuedTransactionRequest | null; remaining: number }> {
+    return this.withLock(async () => {
+      const { queue, dropped } = await this.dropDisplayedHead();
+      const persist = async () => {
+        try {
+          await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+        } catch (error) {
+          // A displayed copy left behind is dropped by the next take.
+          console.error(
+            '[TransactionRequestQueue] Failed to persist queue after take:',
+            error
+          );
+        }
+      };
+
+      const next = queue[0];
+      if (!next) {
+        if (dropped > 0) await persist();
+        return { request: null, remaining: 0 };
+      }
+
+      const key = requestKey(next.id, next.topic);
+      this.setDelivery(key, 'displayed');
+      try {
+        show(next);
+      } catch (error) {
+        this.setDelivery(key, 'claimed');
+        if (dropped > 0) await persist();
+        throw error;
+      }
+      queue.shift();
+      await persist();
+      return { request: next, remaining: queue.length };
+    });
   }
 
   /** Lock held by the caller. Removes (in memory) displayed head entries. */

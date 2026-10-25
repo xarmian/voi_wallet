@@ -321,6 +321,17 @@ export default function UniversalTransactionSigningScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once teardown: it captures authController (a stable useState(() => new TransactionAuthController()) handle) and callbackId (stable route param), so the one-per-mount teardown targets the right instance.
   }, []);
 
+  // Tell the caller when this screen leaves the stack, however it was left
+  // (TASK-257). A navigation event, not an effect cleanup, so an effect
+  // replay never reports a departure that did not happen.
+  useEffect(
+    () =>
+      navigation.addListener('beforeRemove', () => {
+        getNavigationCallbacks(callbackId)?.onDismiss?.();
+      }),
+    [navigation, callbackId]
+  );
+
   /**
    * The network EVERY on-chain lookup on this screen resolves against, and the
    * exact value handed to the signer. Using one value for both is what keeps
