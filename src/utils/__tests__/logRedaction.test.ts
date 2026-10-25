@@ -158,3 +158,20 @@ describe('algod rejection amounts (TASK-290)', () => {
     expect(out).not.toContain('100000');
   });
 });
+
+describe('redactError never throws (final review, TASK-290)', () => {
+  it('returns a placeholder for a prototype-less object', () => {
+    const weird = Object.create(null) as unknown;
+    expect(() => redactError(weird)).not.toThrow();
+    expect(redactError(weird)).toBe('[unloggable error]');
+  });
+
+  it('returns a placeholder when toString throws', () => {
+    const hostile = {
+      toString() {
+        throw new Error('boom');
+      },
+    };
+    expect(redactError(hostile)).toBe('[unloggable error]');
+  });
+});

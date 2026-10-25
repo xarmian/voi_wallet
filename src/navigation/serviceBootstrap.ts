@@ -10,6 +10,7 @@ import { WalletConnectService } from '@/services/walletconnect';
 import { DeepLinkService } from '@/services/deeplink';
 import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
+import { redactSensitiveForLog } from '@/utils/logRedaction';
 import { notificationService } from '@/services/notifications';
 import {
   takeAccountSubscribeToken,
@@ -273,7 +274,11 @@ export const initializeServices = async ({
           // Initialize extension-specific deep link handling (for WalletConnect URIs from getvoi.app)
           if (Platform.OS === 'web' && detectPlatform() === 'extension') {
             extensionDeepLinkHandler.initialize(async (uri: string) => {
-              console.log('[AppNavigator] Extension received WC URI:', uri);
+              // The URI carries the session symKey (TASK-290 sweep).
+              console.log(
+                '[AppNavigator] Extension received WC URI:',
+                redactSensitiveForLog(uri)
+              );
               if (isWalletConnectUri(uri)) {
                 await deepLinkService.testDeepLink(uri);
               }

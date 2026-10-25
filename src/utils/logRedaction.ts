@@ -83,9 +83,17 @@ const hasStringMessage = (error: unknown): error is { message: string } =>
  * console call would defeat the redaction, since the console would format the
  * original `message` and `stack` itself.
  */
-export const redactError = (error: unknown): string =>
-  redactSensitiveForLog(
-    error instanceof Error || hasStringMessage(error)
-      ? error.message
-      : String(error)
-  );
+export const redactError = (error: unknown): string => {
+  // Total: callers use this inside catch blocks on signing and send paths, so
+  // it must never throw and replace the error being handled. String() throws
+  // on a prototype-less object or a throwing toString.
+  try {
+    return redactSensitiveForLog(
+      error instanceof Error || hasStringMessage(error)
+        ? error.message
+        : String(error)
+    );
+  } catch {
+    return '[unloggable error]';
+  }
+};
