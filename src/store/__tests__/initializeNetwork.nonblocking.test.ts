@@ -19,7 +19,10 @@ jest.mock('@/services/network', () => ({
   NetworkService: { getInstance: jest.fn() },
 }));
 
+const mockInvalidateBalanceRequests = jest.fn();
+
 jest.mock('../walletStore', () => ({
+  invalidateBalanceRequests: () => mockInvalidateBalanceRequests(),
   useWalletStore: {
     getState: () => ({
       clearSingleNetworkCache: jest.fn().mockResolvedValue(undefined),
@@ -57,6 +60,11 @@ describe('networkStore.initializeNetwork (F-04 non-blocking health, TASK-178)', 
 
     expect(fakeService.switchNetwork).toHaveBeenCalledWith(NON_DEFAULT);
     expect(useNetworkStore.getState().currentNetwork).toBe(NON_DEFAULT);
+    // TASK-59: in-flight balance fetches are invalidated BEFORE the switch.
+    expect(mockInvalidateBalanceRequests).toHaveBeenCalledTimes(1);
+    expect(
+      mockInvalidateBalanceRequests.mock.invocationCallOrder[0]
+    ).toBeLessThan(fakeService.switchNetwork.mock.invocationCallOrder[0]);
     // The refresh was still kicked off — just fired, not awaited.
     expect(healthProbeStarted).toBe(true);
   });
