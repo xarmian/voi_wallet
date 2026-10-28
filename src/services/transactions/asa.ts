@@ -269,8 +269,14 @@ export async function submitAsaOptIn(
     networkId,
   });
 
-  // Sign transaction
-  const signedTxn = await SecureKeyManager.signTransaction(txn, address, pin);
+  // Sign transaction. TASK-425: resolve the signing route on the network the
+  // txn was built for and is submitted to, not the app's active network.
+  const signedTxn = await SecureKeyManager.signTransaction(
+    txn,
+    address,
+    pin,
+    networkId
+  );
 
   // Submit transaction
   const { txId } = await networkService.submitTransaction(signedTxn);
@@ -302,8 +308,14 @@ export async function submitAsaOptOut(
     networkId,
   });
 
-  // Sign transaction
-  const signedTxn = await SecureKeyManager.signTransaction(txn, address, pin);
+  // Sign transaction. TASK-425: resolve the signing route on the network the
+  // txn was built for and is submitted to, not the app's active network.
+  const signedTxn = await SecureKeyManager.signTransaction(
+    txn,
+    address,
+    pin,
+    networkId
+  );
 
   // Submit transaction
   const { txId } = await networkService.submitTransaction(signedTxn);
