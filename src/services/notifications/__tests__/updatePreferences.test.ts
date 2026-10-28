@@ -130,19 +130,28 @@ beforeEach(() => {
 });
 
 describe('updatePreferences', () => {
-  it('stores the block rewards opt-out as notify_proposer_payouts', async () => {
-    const row = { device_id: DEVICE_ID, account_address: ADDRESS };
-    mockDb.rows.push(row);
+  it.each([false, true])(
+    'stores explicit blockRewards %s as notify_proposer_payouts',
+    async (enabled) => {
+      const row = {
+        device_id: DEVICE_ID,
+        account_address: ADDRESS,
+        notify_proposer_payouts: !enabled,
+      };
+      mockDb.rows.push(row);
 
-    await expect(
-      notificationService.updatePreferences(ADDRESS, { blockRewards: false })
-    ).resolves.toBe(true);
+      await expect(
+        notificationService.updatePreferences(ADDRESS, {
+          blockRewards: enabled,
+        })
+      ).resolves.toBe(true);
 
-    expect(mockDb.updates).toEqual([
-      expect.objectContaining({ notify_proposer_payouts: false }),
-    ]);
-    expect(row).toMatchObject({ notify_proposer_payouts: false });
-  });
+      expect(mockDb.updates).toEqual([
+        expect.objectContaining({ notify_proposer_payouts: enabled }),
+      ]);
+      expect(row).toMatchObject({ notify_proposer_payouts: enabled });
+    }
+  );
 
   it('returns true for one matched row and stores the threshold in micro-VOI', async () => {
     const row = { device_id: DEVICE_ID, account_address: ADDRESS };
@@ -185,8 +194,8 @@ describe('updatePreferences', () => {
 
 describe('getPreferences', () => {
   it.each([
-    [null, true],
-    [undefined, true],
+    [null, false],
+    [undefined, false],
     [false, false],
     [true, true],
   ])(
