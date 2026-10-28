@@ -195,6 +195,7 @@ describe.each([NewMessageScreen, ChatScreen, MessagesInboxScreen])(
       ['rekeyed to LEDGER', R, true, L, false, true],
       ['retained key, unrekeyed on Voi', R, false, undefined, true, false],
       ['rekeyed to missing key', R, true, undefined, false, false],
+      ['LEDGER source rekeyed to held STANDARD', L, true, S, false, false],
     ])('%s', async (_name, type, isRekeyed, authType, allowed, ledger) => {
       mockAccount.type = type;
       mockAccounts = [mockAccount];

@@ -42,9 +42,8 @@ export function useMessagingSigner(
                 (candidate) => candidate.address === state.authAddress
               )
             : source;
-          const isLedgerBacked =
-            source?.type === AccountType.LEDGER ||
-            signer?.type === AccountType.LEDGER;
+          // The Voi transaction signer decides this; unrekeyed, it is the source.
+          const isLedgerBacked = signer?.type === AccountType.LEDGER;
           const hasSourceSecret =
             (source?.type === AccountType.STANDARD ||
               source?.type === AccountType.REKEYED) &&
