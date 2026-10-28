@@ -1435,8 +1435,8 @@ export class TransactionService {
       if (!sourceAccount) {
         errors.push('Source account not found in wallet');
       } else if (
-        sourceAccount.type === 'rekeyed' &&
-        sourceAccount.authAddress === rekeyToAddress &&
+        accountBalance.rekeyInfo?.isRekeyed &&
+        accountBalance.rekeyInfo.authAddress === rekeyToAddress &&
         fromAddress !== rekeyToAddress // Allow reverse rekey to self
       ) {
         errors.push('Account is already rekeyed to this address');

@@ -4,14 +4,11 @@ import { Image } from 'expo-image';
 import Svg, { Circle, Rect, Polygon } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import EnvoiService from '@/services/envoi';
-import {
-  AccountMetadata,
-  AccountType,
-  RekeyedAccountMetadata,
-} from '@/types/wallet';
+import { AccountMetadata } from '@/types/wallet';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useWalletStore } from '@/store/walletStore';
+import { useCurrentNetwork } from '@/store/networkStore';
+import { useRekeyState, useWalletStore } from '@/store/walletStore';
 
 // Shared cache for avatar URLs across all AccountAvatar instances
 const avatarUrlCache = new Map<string, string | null>();
@@ -147,6 +144,7 @@ export default function AccountAvatar({
 }: AccountAvatarProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
+  const rekeyState = useRekeyState(address, useCurrentNetwork());
   const [envoiAvatarUrl, setEnvoiAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<boolean>(false);
 
@@ -285,19 +283,14 @@ export default function AccountAvatar({
 
   // Determine rekey indicator
   const getRekeyIndicator = () => {
-    if (
-      !showRekeyIndicator ||
-      !account ||
-      account.type !== AccountType.REKEYED
-    ) {
-      return null;
+    if (!showRekeyIndicator || !account) return null;
+    if (rekeyState.status !== 'loaded') {
+      return { iconName: 'lock-closed', color: themeColors.textMuted };
     }
-
-    const rekeyedAccount = account as RekeyedAccountMetadata;
+    if (!rekeyState.isRekeyed) return null;
     return {
-      iconName: rekeyedAccount.canSign ? 'key' : 'lock-closed',
-      // Success if we hold signing authority, warning if we do not
-      color: rekeyedAccount.canSign ? themeColors.success : themeColors.warning,
+      iconName: rekeyState.canSign ? 'key' : 'lock-closed',
+      color: rekeyState.canSign ? themeColors.success : themeColors.warning,
     };
   };
 

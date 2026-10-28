@@ -16,6 +16,7 @@ jest.mock('@expo/vector-icons', () => {
   return { Ionicons: ({ name }: { name: string }) => <Text>{name}</Text> };
 });
 jest.mock('../AccountAvatar', () => () => null);
+let mockRekeyState: object = { status: 'loading' };
 let mockStoreAccounts: AccountMetadata[] = [];
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: Object.assign(
@@ -23,9 +24,11 @@ jest.mock('@/store/walletStore', () => ({
       selector({ wallet: { accounts: mockStoreAccounts } }),
     { getState: () => ({ wallet: { accounts: mockStoreAccounts } }) }
   ),
+  useRekeyState: () => mockRekeyState,
   useAccountBalance: () => ({ balance: undefined, isLoading: false }),
 }));
 jest.mock('@/store/networkStore', () => ({
+  useCurrentNetwork: () => 'voi-mainnet',
   useCurrentNetworkConfig: () => ({ nativeToken: 'VOI' }),
 }));
 
@@ -50,6 +53,7 @@ const row = (metadata: AccountMetadata) => (
 );
 
 beforeEach(() => {
+  mockRekeyState = { status: 'loading' };
   mockStoreAccounts = [];
   onDelete.mockReset();
   probe.mockReset();
@@ -222,3 +226,24 @@ describe('open confirmation re-checks current protection', () => {
     expect(onDelete).not.toHaveBeenCalled();
   });
 });
+
+// Legacy fields deliberately disagree with the active network snapshot.
+it.each(['loading', 'error', 'loaded'])(
+  'uses derived signer label (%s)',
+  async (status) => {
+    mockStoreAccounts = [
+      account({ type: AccountType.LEDGER, address: 'CHAIN' }),
+    ];
+    mockRekeyState = {
+      status,
+      isRekeyed: true,
+      authAddress: 'CHAIN',
+      canSign: true,
+    };
+    const view = await render(
+      row(account({ authAddress: 'STALE', canSign: false }))
+    );
+    expect(Boolean(view.queryByText('Ledger'))).toBe(status === 'loaded');
+    expect(view.queryByText('Rekeyed (No Key)')).toBeNull();
+  }
+);
