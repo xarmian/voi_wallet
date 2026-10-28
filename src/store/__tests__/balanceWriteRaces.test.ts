@@ -97,12 +97,19 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     getItem: (key: string) => mockGetItem(key),
     setItem: (key: string, value: string) => mockSetItem(key, value),
     removeItem: (key: string) => mockRemoveItem(key),
+    multiRemove: async (keys: string[]) => {
+      for (const key of keys) await mockRemoveItem(key);
+    },
     multiGet: jest.fn(async () => []),
     multiSet: jest.fn(async () => {}),
   },
 }));
 
-import { invalidateBalanceRequests, useWalletStore } from '../walletStore';
+import {
+  invalidateBalanceRequests,
+  removePersistedBalanceCacheKeys,
+  useWalletStore,
+} from '../walletStore';
 import type { AccountBalance, Wallet } from '@/types/wallet';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -395,6 +402,26 @@ describe('balance-cache clears vs deferred writes (TASK-59)', () => {
     await settle();
 
     expect(cachedKeys().some((k) => k.startsWith('acc-1'))).toBe(false);
+  });
+
+  // TASK-398: the backup restore removes balance-cache keys from outside the
+  // store; a deferred persist must not re-add an entry afterwards.
+  it('a restore removal sticks over a write already in setItem', async () => {
+    await startDeferredWrite();
+
+    await removePersistedBalanceCacheKeys(['@voi_wallet_balance_cache_v2']);
+    await settle();
+
+    expect(cachedKeys()).toEqual([]);
+  });
+
+  it('a restore removal sticks over a deferred write that has not started', async () => {
+    await commitBalance();
+
+    await removePersistedBalanceCacheKeys(['@voi_wallet_balance_cache_v2']);
+    await settle();
+
+    expect(cachedKeys()).toEqual([]);
   });
 
   it('clearAllBalanceCache sticks over a write already in setItem', async () => {

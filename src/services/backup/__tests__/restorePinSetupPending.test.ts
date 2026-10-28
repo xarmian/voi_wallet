@@ -68,6 +68,14 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+const mockRemovePersistedBalanceCacheKeys = jest.fn(
+  async (_keys: string[]) => {}
+);
+jest.mock('@/store/walletStore', () => ({
+  removePersistedBalanceCacheKeys: (keys: string[]) =>
+    mockRemovePersistedBalanceCacheKeys(keys),
+}));
+
 jest.mock('algosdk', () => ({
   __esModule: true,
   default: {
@@ -148,4 +156,37 @@ it('a failed secure wipe aborts restore before wallet metadata or settings are c
   expect(mockMark).not.toHaveBeenCalled();
   expect(order).not.toContain('storeAccount');
   errorSpy.mockRestore();
+});
+
+it('removes balance-cache keys through the store chain and other caches directly (TASK-398)', async () => {
+  const AsyncStorage = jest.requireMock(
+    '@react-native-async-storage/async-storage'
+  ).default;
+  AsyncStorage.getAllKeys.mockResolvedValueOnce([
+    '@voi_wallet_balance_cache_v2',
+    '@voi_wallet_multi_network_balance_cache',
+    'claimable_cache_x',
+    'messages_cache_y',
+    'unrelated',
+  ]);
+  try {
+    await performFullRestore(
+      [],
+      {} as BackupSettings,
+      [],
+      {} as Parameters<typeof performFullRestore>[3]
+    );
+  } catch {
+    // later restorers may reject on the minimal fixtures; the clear ran first
+  }
+  expect(mockRemovePersistedBalanceCacheKeys).toHaveBeenCalledWith([
+    '@voi_wallet_balance_cache_v2',
+    '@voi_wallet_multi_network_balance_cache',
+  ]);
+  expect(AsyncStorage.multiRemove).toHaveBeenCalledWith([
+    'claimable_cache_x',
+    'messages_cache_y',
+  ]);
+  for (const [keys] of AsyncStorage.multiRemove.mock.calls)
+    expect(keys.some((k: string) => k.includes('balance_cache'))).toBe(false);
 });

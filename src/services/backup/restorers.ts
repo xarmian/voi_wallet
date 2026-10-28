@@ -33,6 +33,7 @@ import {
   RestoreResult,
 } from './types';
 import { redactAddress, redactError } from '@/utils/logRedaction';
+import { removePersistedBalanceCacheKeys } from '@/store/walletStore';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -126,16 +127,23 @@ export async function clearAllData(): Promise<void> {
       REMOTE_SIGNER_STORAGE_KEYS.PROCESSED_REQUESTS,
     ]);
 
-    // Clear balance caches
+    // Clear balance caches. Balance-cache keys go through the store's
+    // balance-cache chain so an in-flight deferred persist can't re-add one
+    // after the removal (TASK-398); claimable/messages keys aren't chain-owned.
     const allKeys = await AsyncStorage.getAllKeys();
-    const cacheKeys = allKeys.filter(
-      (key) =>
-        key.includes('balance_cache') ||
-        key.includes('claimable') ||
-        key.includes('messages')
+    const balanceCacheKeys = allKeys.filter((key) =>
+      key.includes('balance_cache')
     );
-    if (cacheKeys.length > 0) {
-      await AsyncStorage.multiRemove(cacheKeys);
+    const otherCacheKeys = allKeys.filter(
+      (key) =>
+        !key.includes('balance_cache') &&
+        (key.includes('claimable') || key.includes('messages'))
+    );
+    if (balanceCacheKeys.length > 0) {
+      await removePersistedBalanceCacheKeys(balanceCacheKeys);
+    }
+    if (otherCacheKeys.length > 0) {
+      await AsyncStorage.multiRemove(otherCacheKeys);
     }
   } catch (error) {
     throw new BackupError(

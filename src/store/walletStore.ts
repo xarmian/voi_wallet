@@ -514,6 +514,20 @@ const enqueueBalanceCacheOp = (op: () => Promise<void>): Promise<void> => {
   return run;
 };
 
+/**
+ * Remove persisted balance-cache keys from outside the store (backup restore,
+ * TASK-398). Invalidates every in-flight single-network fetch first, then runs
+ * the removal on the balance-cache chain: a deferred persist already queued
+ * re-checks its token at its turn and skips, so it can't re-add an entry after
+ * the removal. Rejects with the storage error so the caller can fail.
+ */
+export const removePersistedBalanceCacheKeys = (
+  keys: string[]
+): Promise<void> => {
+  invalidateBalanceRequests();
+  return enqueueBalanceCacheOp(() => AsyncStorage.multiRemove(keys));
+};
+
 const persistBalanceToStorage = (
   accountId: string,
   balance: AccountBalance,
