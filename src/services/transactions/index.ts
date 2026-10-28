@@ -20,6 +20,7 @@ import {
 } from '@/utils/bigint';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { MultiAccountWalletService } from '@/services/wallet';
 import {
   findOwnKeySigner,
   findUsableOwnKey,
@@ -1174,12 +1175,52 @@ export class TransactionService {
    * @param rekeyToAddress - The new authorizing address (must be in wallet)
    * @param note - Optional note for the transaction
    */
+  /**
+   * The record that signs as `address` once authority is handed to it: a
+   * Ledger, an airgap signer, or a record whose own key reads, a retained
+   * REKEYED key included (TASK-425 U3). Undefined when there is none.
+   */
+  private static async signsAfterRekey(
+    address: string,
+    accounts: readonly any[]
+  ): Promise<any | undefined> {
+    return (
+      accounts.find(
+        (acc: any) =>
+          acc.address === address &&
+          (acc.type === AccountType.LEDGER ||
+            acc.type === AccountType.REMOTE_SIGNER ||
+            acc.type === 'ledger' ||
+            acc.type === 'remote_signer')
+      ) ?? (await findUsableOwnKey(address, accounts))
+    );
+  }
+
+  /**
+   * The builders are the last step before every signing path, so custody of
+   * the key that receives authority is checked here, fresh, and not only in
+   * the screen's earlier validation: a confirm dialog or a PIN/Ledger wait can
+   * outlast it (TASK-425 U3 Codex confirm 2).
+   */
+  private static async assertSignsAfterRekey(address: string): Promise<void> {
+    const wallet = await MultiAccountWalletService.getCurrentWallet();
+    if (
+      !wallet ||
+      !(await TransactionService.signsAfterRekey(address, wallet.accounts))
+    ) {
+      throw new Error(
+        'The account receiving signing authority has no key in this wallet. Rekey cancelled.'
+      );
+    }
+  }
+
   static async buildRekeyTransaction(params: {
     fromAddress: string;
     rekeyToAddress: string;
     note?: string;
     networkId?: NetworkId;
   }): Promise<UnsignedTransaction> {
+    await TransactionService.assertSignsAfterRekey(params.rekeyToAddress);
     const cacheKey = TransactionService.getRekeyCacheKey({
       fromAddress: params.fromAddress,
       rekeyToAddress: params.rekeyToAddress,
@@ -1246,6 +1287,7 @@ export class TransactionService {
     note?: string;
     networkId?: NetworkId;
   }): Promise<UnsignedTransaction> {
+    await TransactionService.assertSignsAfterRekey(params.fromAddress);
     const cacheKey = TransactionService.getRekeyCacheKey({
       fromAddress: params.fromAddress,
       note: params.note,
@@ -1403,15 +1445,8 @@ export class TransactionService {
       // Authority passes to the target for good, so it must be able to sign as
       // itself afterwards: a Ledger, an airgap signer, or a record whose own key
       // reads, a retained REKEYED key included (TASK-425 U3).
-      const signsAfterwards = async (address: string) =>
-        wallet.accounts.find(
-          (acc: any) =>
-            acc.address === address &&
-            (acc.type === AccountType.LEDGER ||
-              acc.type === AccountType.REMOTE_SIGNER ||
-              acc.type === 'ledger' ||
-              acc.type === 'remote_signer')
-        ) ?? (await findUsableOwnKey(address, wallet.accounts));
+      const signsAfterwards = (address: string) =>
+        TransactionService.signsAfterRekey(address, wallet.accounts);
 
       if (fromAddress === rekeyToAddress) {
         // Removing a rekey returns authority to the account's own key, so that

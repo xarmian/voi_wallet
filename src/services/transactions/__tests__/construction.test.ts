@@ -107,9 +107,18 @@ jest.mock('@/services/security/transactionTracker', () => ({
 }));
 
 const mockSender = () => SENDER;
+// The rekey builders check the receiving key is held (TASK-425 U3).
+const mockCurrentWallet = jest.fn(async () => ({
+  accounts: [
+    { id: 'sender', address: mockSender(), type: 'standard' },
+    { id: 'recipient', address: mockRecipient(), type: 'standard' },
+  ] as { id: string; address: string; type: string }[],
+}));
+const mockRecipient = () => RECIPIENT;
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getAllAccounts: async () => [{ address: mockSender() }],
+    getCurrentWallet: () => mockCurrentWallet(),
   },
 }));
 // TASK-425 U3: which REKEYED records still hold their own secret.
@@ -961,5 +970,54 @@ describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
       { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
     ]);
     expect(errors).toEqual([]);
+  });
+});
+
+// TASK-425 U3 Codex confirm 2: the builders are the last step before every
+// signing path, so they re-check that the key receiving authority is held.
+describe('rekey builders re-check the receiving key (TASK-425 U3)', () => {
+  const REFUSED =
+    'The account receiving signing authority has no key in this wallet. Rekey cancelled.';
+  const only = (accounts: { id: string; address: string; type: string }[]) =>
+    mockCurrentWallet.mockResolvedValueOnce({ accounts });
+
+  beforeEach(() => {
+    mockGetSuggestedParams.mockResolvedValue(SUGGESTED_PARAMS);
+  });
+
+  it.each([
+    ['WATCH', AccountType.WATCH],
+    ['keyless REKEYED', AccountType.REKEYED],
+  ])('buildRekeyTransaction refuses a %s target', async (_label, type) => {
+    only([
+      { id: 'sender', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type },
+    ]);
+    await expect(
+      TransactionService.buildRekeyTransaction({
+        fromAddress: SENDER,
+        rekeyToAddress: RECIPIENT,
+        note: 'u3-refuse',
+      })
+    ).rejects.toThrow(REFUSED);
+  });
+
+  it('buildRekeyReverseTransaction refuses when the source key is gone', async () => {
+    only([{ id: 'sender', address: SENDER, type: AccountType.WATCH }]);
+    await expect(
+      TransactionService.buildRekeyReverseTransaction({
+        fromAddress: SENDER,
+        note: 'u3-refuse-reverse',
+      })
+    ).rejects.toThrow(REFUSED);
+  });
+
+  it('re-checks even when the transaction is already cached', async () => {
+    const params = { fromAddress: SENDER, note: 'u3-cached' };
+    await TransactionService.buildRekeyReverseTransaction(params);
+    only([{ id: 'sender', address: SENDER, type: AccountType.WATCH }]);
+    await expect(
+      TransactionService.buildRekeyReverseTransaction(params)
+    ).rejects.toThrow(REFUSED);
   });
 });

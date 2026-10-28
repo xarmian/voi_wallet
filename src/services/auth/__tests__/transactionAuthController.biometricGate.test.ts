@@ -666,6 +666,15 @@ describe('remote batch submission ownership (TASK-418)', () => {
         )
       ),
     }));
+    // The rekey builders check the receiving key is held (TASK-425 U3).
+    (MultiAccountWalletService.getCurrentWallet as jest.Mock).mockResolvedValue(
+      {
+        accounts: [
+          { id: 'owner', address: owner.addr, type: AccountType.REMOTE_SIGNER },
+          { id: 'wrong', address: wrong.addr, type: AccountType.STANDARD },
+        ],
+      }
+    );
     await controller.initializeSigningFlow({
       type,
       rekeyParams: {
