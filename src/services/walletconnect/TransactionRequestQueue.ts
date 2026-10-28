@@ -32,12 +32,55 @@ type DeliveryState = 'claimed' | 'displayed';
 const requestKey = (id: number | string, topic: string): string =>
   JSON.stringify([topic, id]);
 
+/**
+ * Thrown by `enqueue` when the queue already holds MAX_QUEUE_SIZE requests.
+ * Callers answer the request through `reportDropped(..., 'full')` instead of
+ * releasing its claim (TASK-394).
+ */
+export class QueueFullError extends Error {
+  constructor() {
+    super(
+      'Transaction request queue is full. Please process pending requests first.'
+    );
+    this.name = 'QueueFullError';
+    // Keep `instanceof` working if the class is ever down-levelled to ES5.
+    Object.setPrototypeOf(this, QueueFullError.prototype);
+  }
+}
+
+/** Why a request was dropped without being shown (TASK-394). */
+export type DroppedRequestReason = 'full' | 'expired';
+
+/**
+ * Answers dropped requests to the dApp. Fire-and-forget: it must not throw
+ * and is never awaited. Installed by the service boot, so this module does
+ * not import the WalletConnect services.
+ */
+export type DroppedRequestHandler = (
+  entries: QueuedTransactionRequest[],
+  reason: DroppedRequestReason
+) => void;
+
 class TransactionRequestQueueService {
   private static instance: TransactionRequestQueueService;
   private queueMutex: Promise<void> = Promise.resolve();
   private processingStateCache: boolean | null = null;
   /** (topic, id) -> delivery state for this app session (TASK-257). */
   private delivery = new Map<string, DeliveryState>();
+  /** Answers requests dropped unshown (TASK-394); null = none installed. */
+  private droppedRequestHandler: DroppedRequestHandler | null = null;
+  /**
+   * Stale requests removed by getAllInternal under the lock, reported by
+   * withLock once the lock is released (never network code under the lock).
+   */
+  private pendingExpired: QueuedTransactionRequest[] = [];
+  /**
+   * Keys whose 'displayed' mark was set by reportDropped (an unshown request
+   * answered as dropped), not by the UI. Only these may be cleared by
+   * forgetDeliveryIfAnsweredDrop. Any other delivery transition removes the
+   * key, so a mark the UI set is never in here.
+   */
+  private answeredDrops = new Set<string>();
 
   private constructor() {}
 
@@ -64,6 +107,59 @@ class TransactionRequestQueueService {
       return await fn();
     } finally {
       resolveLock!();
+      // Outside the lock: answer the stale requests this operation removed.
+      if (this.pendingExpired.length > 0) {
+        const expired = this.pendingExpired;
+        this.pendingExpired = [];
+        this.reportDropped(expired, 'expired');
+      }
+    }
+  }
+
+  /**
+   * Install (or clear, with null) the handler that answers requests dropped
+   * without being shown: a full queue or a stale entry (TASK-394).
+   */
+  setDroppedRequestHandler(handler: DroppedRequestHandler | null): void {
+    this.droppedRequestHandler = handler;
+  }
+
+  /**
+   * Hand requests dropped without being shown to the installed handler, which
+   * answers them to the dApp, and mark them displayed so a relay redelivery
+   * of an answered request is not shown again (TASK-394). With no handler
+   * installed nothing can answer them, so their claims are released instead
+   * and a redelivery may still surface. Never throws; must not be called
+   * with the queue lock held.
+   */
+  reportDropped(
+    entries: QueuedTransactionRequest[],
+    reason: DroppedRequestReason
+  ): void {
+    // A request already shown (the user is on it or has answered it) is never
+    // answered or unmarked here: its displayed copy owns the answer.
+    const unshown = entries.filter(
+      (entry) =>
+        this.delivery.get(requestKey(entry.id, entry.topic)) !== 'displayed'
+    );
+    if (unshown.length === 0) return;
+    const handler = this.droppedRequestHandler;
+    if (!handler) {
+      for (const entry of unshown) this.releaseClaim(entry.id, entry.topic);
+      return;
+    }
+    for (const entry of unshown) {
+      const key = requestKey(entry.id, entry.topic);
+      this.setDelivery(key, 'displayed');
+      this.answeredDrops.add(key);
+    }
+    try {
+      handler(unshown, reason);
+    } catch (error) {
+      console.error(
+        '[TransactionRequestQueue] Dropped-request handler failed:',
+        error instanceof Error ? error.name : 'unknown error'
+      );
     }
   }
 
@@ -114,10 +210,14 @@ class TransactionRequestQueueService {
     const key = requestKey(id, topic);
     if (this.delivery.get(key) === 'claimed') {
       this.delivery.delete(key);
+      this.answeredDrops.delete(key);
     }
   }
 
   private setDelivery(key: string, state: DeliveryState): void {
+    // Any transition other than reportDropped's own (which re-adds the key
+    // right after) means the mark is no longer an answered drop's.
+    this.answeredDrops.delete(key);
     // Re-insert so eviction order follows the latest transition.
     this.delivery.delete(key);
     this.delivery.set(key, state);
@@ -125,11 +225,13 @@ class TransactionRequestQueueService {
       // Evict the request displayed longest ago. A 'claimed' entry (queued,
       // not yet shown) is never evicted: forgetting it would let a
       // redelivery show it while its queued copy is still waiting. Claimed
-      // entries are bounded by the queue itself (MAX_QUEUE_SIZE, and a stale
-      // or failed one releases its claim).
+      // entries are bounded by the queue itself (MAX_QUEUE_SIZE; a failed one
+      // releases its claim and a stale one is answered and marked displayed,
+      // or released when no dropped-request handler is installed).
       for (const [oldKey, oldState] of this.delivery) {
         if (oldState === 'displayed' && oldKey !== key) {
           this.delivery.delete(oldKey);
+          this.answeredDrops.delete(oldKey);
           break;
         }
       }
@@ -143,7 +245,23 @@ class TransactionRequestQueueService {
    * `releaseClaim`, this also clears 'displayed'.
    */
   forgetDelivery(id: number | string, topic: string): void {
-    this.delivery.delete(requestKey(id, topic));
+    const key = requestKey(id, topic);
+    this.delivery.delete(key);
+    this.answeredDrops.delete(key);
+  }
+
+  /**
+   * `forgetDelivery`, but only for a request whose mark was set by
+   * `reportDropped` (answered as dropped, never shown) and is still that mark.
+   * Used when the drop answer failed to send, so a relay redelivery can
+   * surface. A mark the UI set (the request was shown) is never cleared, so a
+   * shown request can never be shown twice (TASK-394).
+   */
+  forgetDeliveryIfAnsweredDrop(id: number | string, topic: string): void {
+    const key = requestKey(id, topic);
+    if (this.answeredDrops.has(key)) {
+      this.forgetDelivery(id, topic);
+    }
   }
 
   /**
@@ -239,9 +357,7 @@ class TransactionRequestQueueService {
           console.warn(
             '[TransactionRequestQueue] Maximum queue size reached, rejecting request'
           );
-          throw new Error(
-            'Transaction request queue is full. Please process pending requests first.'
-          );
+          throw new QueueFullError();
         }
 
         // Check if request already exists (prevent duplicates)
@@ -313,6 +429,7 @@ class TransactionRequestQueueService {
 
       // Filter out stale requests (older than timeout)
       const now = Date.now();
+      const stale: QueuedTransactionRequest[] = [];
       const validQueue = queue.filter((request) => {
         const age = now - request.timestamp;
         if (age > REQUEST_TIMEOUT_MS) {
@@ -323,8 +440,16 @@ class TransactionRequestQueueService {
             Math.round(age / 1000),
             'seconds'
           );
-          // No longer queued: a redelivery of it may surface again.
-          this.releaseClaim(request.id, request.topic);
+          // Answered (or, with no handler, its claim released) by withLock
+          // once the lock is released: see reportDropped. A stale copy of a
+          // request already DISPLAYED (redelivered and shown directly) is
+          // removed but never answered: the user is on it or answered it.
+          if (
+            this.delivery.get(requestKey(request.id, request.topic)) !==
+            'displayed'
+          ) {
+            stale.push(request);
+          }
           return false;
         }
         return true;
@@ -336,6 +461,9 @@ class TransactionRequestQueueService {
           QUEUE_STORAGE_KEY,
           JSON.stringify(validQueue)
         );
+        // Only once they are gone from storage, so a failed write cannot
+        // answer the same request twice.
+        this.pendingExpired.push(...stale);
       }
 
       return validQueue;

@@ -27,7 +27,10 @@ import {
   validateKeyregUri,
   validateApplUri,
 } from '@/utils/arc0090Uri';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import {
+  QueueFullError,
+  TransactionRequestQueue,
+} from '@/services/walletconnect/TransactionRequestQueue';
 import {
   notificationService,
   NotificationData,
@@ -303,12 +306,30 @@ export class DeepLinkService {
           console.log(
             '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
           );
-          await TransactionRequestQueue.enqueue({
-            id: transformedRequest.id,
-            topic: transformedRequest.topic,
-            params: transformedRequest.params,
-            version: 1,
-          });
+          try {
+            await TransactionRequestQueue.enqueue({
+              id: transformedRequest.id,
+              topic: transformedRequest.topic,
+              params: transformedRequest.params,
+              version: 1,
+            });
+          } catch (error) {
+            if (!(error instanceof QueueFullError)) throw error;
+            // TASK-394: answer it as dropped (marks it displayed, so a
+            // redelivery is not shown) instead of releasing the claim.
+            TransactionRequestQueue.reportDropped(
+              [
+                {
+                  id: transformedRequest.id,
+                  topic: transformedRequest.topic,
+                  params: transformedRequest.params,
+                  timestamp: Date.now(),
+                  version: 1,
+                },
+              ],
+              'full'
+            );
+          }
           delivered = true;
           return;
         }

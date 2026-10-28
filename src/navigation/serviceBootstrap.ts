@@ -18,7 +18,11 @@ import {
 } from '@/services/notifications/subscribePass';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { ledgerTransportService } from '@/services/ledger/transport';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import {
+  QueueFullError,
+  TransactionRequestQueue,
+} from '@/services/walletconnect/TransactionRequestQueue';
+import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 
 /**
  * Whole-app service boot, extracted verbatim from AppNavigator's mount effect
@@ -116,6 +120,11 @@ export const initializeServices = async ({
       // AppNavigator navigation handlers must attach to that same initialized
       // instance, so init and .on(...) stay together in one unit.
       const initWalletConnect = async () => {
+        // TASK-394: answer requests the transaction queue drops unshown (full
+        // queue, stale entry) so the dApp is not left waiting. Installed
+        // before v2 init so v1 requests (DeepLinkService) are covered even if
+        // v2 init fails.
+        TransactionRequestQueue.setDroppedRequestHandler(answerDroppedRequests);
         try {
           wcService = WalletConnectService.getInstance();
           await wcService.initialize();
@@ -197,11 +206,28 @@ export const initializeServices = async ({
                     console.log(
                       '[AppNavigator] Currently on transaction screen, enqueueing request'
                     );
-                    await TransactionRequestQueue.enqueue({
-                      id: requestEvent.id,
-                      topic: requestEvent.topic,
-                      params: requestEvent.params,
-                    });
+                    try {
+                      await TransactionRequestQueue.enqueue({
+                        id: requestEvent.id,
+                        topic: requestEvent.topic,
+                        params: requestEvent.params,
+                      });
+                    } catch (err) {
+                      if (!(err instanceof QueueFullError)) throw err;
+                      // TASK-394: answer it as dropped (marks it displayed,
+                      // so a redelivery is not shown) instead of releasing.
+                      TransactionRequestQueue.reportDropped(
+                        [
+                          {
+                            id: requestEvent.id,
+                            topic: requestEvent.topic,
+                            params: requestEvent.params,
+                            timestamp: Date.now(),
+                          },
+                        ],
+                        'full'
+                      );
+                    }
                   } else {
                     // Navigate immediately if not on transaction screen
                     nav.navigate('WalletConnectTransactionRequest', {
