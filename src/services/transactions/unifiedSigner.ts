@@ -283,7 +283,7 @@ export class UnifiedTransactionSigner {
       callbacks?.onAuthStart?.();
 
       // Validate request
-      this.validateRequest(request);
+      await this.validateRequest(request);
 
       callbacks?.onAuthSuccess?.();
       callbacks?.onSigningStart?.();
@@ -917,9 +917,42 @@ export class UnifiedTransactionSigner {
   }
 
   /**
+   * TASK-425: the network each signing path below signs on, so a pre-signing
+   * route check resolves the same route the signer will.
+   */
+  private signingNetworkId(
+    request: UnifiedTransactionRequest
+  ): NetworkId | undefined {
+    switch (request.type) {
+      case 'voi_transfer':
+      case 'asa_transfer':
+      case 'arc200_transfer':
+      case 'arc72_transfer':
+        return request.transferParams?.networkId;
+      case 'rekey':
+      case 'rekey_reverse':
+        return request.rekeyParams?.networkId || request.networkId;
+      case 'batch_transaction':
+      case 'walletconnect_batch':
+        return (
+          request.walletConnectParams?.sessionBinding?.networkId ??
+          request.networkId
+        );
+      case 'keyreg':
+        return request.keyregParams?.networkId || request.networkId;
+      case 'appl':
+        return request.applParams?.networkId || request.networkId;
+      default:
+        return request.networkId;
+    }
+  }
+
+  /**
    * Validate the unified transaction request
    */
-  private validateRequest(request: UnifiedTransactionRequest): void {
+  private async validateRequest(
+    request: UnifiedTransactionRequest
+  ): Promise<void> {
     if (!request.account) {
       throw new Error('Account is required');
     }
@@ -938,9 +971,18 @@ export class UnifiedTransactionSigner {
       });
     }
 
-    // Check for WATCH accounts - these cannot sign at all
+    // TASK-425: a persisted WATCH account can still sign when it is rekeyed
+    // on chain to a key we hold, so ask the signer's own route resolution for
+    // the network this request signs on, instead of refusing by type. A WATCH
+    // that isn't rekeyed, or whose auth key we don't hold, still stops here.
     if (request.account.type === AccountType.WATCH) {
-      throw new Error('Watch accounts cannot sign transactions');
+      const route = await SecureKeyManager.resolveSigningRoute(
+        request.account.address,
+        this.signingNetworkId(request)
+      );
+      if (route.kind === 'unavailable') {
+        throw new Error(route.reason);
+      }
     }
 
     // Type-specific validation
@@ -1054,7 +1096,7 @@ export class UnifiedTransactionSigner {
     const errors: string[] = [];
 
     try {
-      this.validateRequest(request);
+      await this.validateRequest(request);
 
       // Type-specific validation
       switch (request.type) {
