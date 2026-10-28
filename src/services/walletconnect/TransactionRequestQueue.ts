@@ -74,6 +74,13 @@ class TransactionRequestQueueService {
    * withLock once the lock is released (never network code under the lock).
    */
   private pendingExpired: QueuedTransactionRequest[] = [];
+  /**
+   * Keys whose 'displayed' mark was set by reportDropped (an unshown request
+   * answered as dropped), not by the UI. Only these may be cleared by
+   * forgetDeliveryIfAnsweredDrop. Any other delivery transition removes the
+   * key, so a mark the UI set is never in here.
+   */
+  private answeredDrops = new Set<string>();
 
   private constructor() {}
 
@@ -129,15 +136,25 @@ class TransactionRequestQueueService {
     entries: QueuedTransactionRequest[],
     reason: DroppedRequestReason
   ): void {
-    if (entries.length === 0) return;
+    // A request already shown (the user is on it or has answered it) is never
+    // answered or unmarked here: its displayed copy owns the answer.
+    const unshown = entries.filter(
+      (entry) =>
+        this.delivery.get(requestKey(entry.id, entry.topic)) !== 'displayed'
+    );
+    if (unshown.length === 0) return;
     const handler = this.droppedRequestHandler;
     if (!handler) {
-      for (const entry of entries) this.releaseClaim(entry.id, entry.topic);
+      for (const entry of unshown) this.releaseClaim(entry.id, entry.topic);
       return;
     }
-    for (const entry of entries) this.markDisplayed(entry.id, entry.topic);
+    for (const entry of unshown) {
+      const key = requestKey(entry.id, entry.topic);
+      this.setDelivery(key, 'displayed');
+      this.answeredDrops.add(key);
+    }
     try {
-      handler(entries, reason);
+      handler(unshown, reason);
     } catch (error) {
       console.error(
         '[TransactionRequestQueue] Dropped-request handler failed:',
@@ -193,10 +210,14 @@ class TransactionRequestQueueService {
     const key = requestKey(id, topic);
     if (this.delivery.get(key) === 'claimed') {
       this.delivery.delete(key);
+      this.answeredDrops.delete(key);
     }
   }
 
   private setDelivery(key: string, state: DeliveryState): void {
+    // Any transition other than reportDropped's own (which re-adds the key
+    // right after) means the mark is no longer an answered drop's.
+    this.answeredDrops.delete(key);
     // Re-insert so eviction order follows the latest transition.
     this.delivery.delete(key);
     this.delivery.set(key, state);
@@ -210,6 +231,7 @@ class TransactionRequestQueueService {
       for (const [oldKey, oldState] of this.delivery) {
         if (oldState === 'displayed' && oldKey !== key) {
           this.delivery.delete(oldKey);
+          this.answeredDrops.delete(oldKey);
           break;
         }
       }
@@ -223,7 +245,23 @@ class TransactionRequestQueueService {
    * `releaseClaim`, this also clears 'displayed'.
    */
   forgetDelivery(id: number | string, topic: string): void {
-    this.delivery.delete(requestKey(id, topic));
+    const key = requestKey(id, topic);
+    this.delivery.delete(key);
+    this.answeredDrops.delete(key);
+  }
+
+  /**
+   * `forgetDelivery`, but only for a request whose mark was set by
+   * `reportDropped` (answered as dropped, never shown) and is still that mark.
+   * Used when the drop answer failed to send, so a relay redelivery can
+   * surface. A mark the UI set (the request was shown) is never cleared, so a
+   * shown request can never be shown twice (TASK-394).
+   */
+  forgetDeliveryIfAnsweredDrop(id: number | string, topic: string): void {
+    const key = requestKey(id, topic);
+    if (this.answeredDrops.has(key)) {
+      this.forgetDelivery(id, topic);
+    }
   }
 
   /**
@@ -403,8 +441,15 @@ class TransactionRequestQueueService {
             'seconds'
           );
           // Answered (or, with no handler, its claim released) by withLock
-          // once the lock is released: see reportDropped.
-          stale.push(request);
+          // once the lock is released: see reportDropped. A stale copy of a
+          // request already DISPLAYED (redelivered and shown directly) is
+          // removed but never answered: the user is on it or answered it.
+          if (
+            this.delivery.get(requestKey(request.id, request.topic)) !==
+            'displayed'
+          ) {
+            stale.push(request);
+          }
           return false;
         }
         return true;

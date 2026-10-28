@@ -62,7 +62,11 @@ export const answerDroppedRequests = (
         `[WalletConnect] Failed to answer dropped request (${reason}):`,
         redactError(error)
       );
-      TransactionRequestQueue.forgetDelivery(entry.id, entry.topic);
+      // Only an answered drop's own mark: never one the UI set.
+      TransactionRequestQueue.forgetDeliveryIfAnsweredDrop(
+        entry.id,
+        entry.topic
+      );
     });
   }
 };

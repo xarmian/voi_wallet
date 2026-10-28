@@ -115,6 +115,35 @@ describe('stale requests (expired)', () => {
     expect(TransactionRequestQueue.claim(11, 'topic-other')).toBe(false);
   });
 
+  it('a stale queued copy of a request already displayed is removed, never answered', async () => {
+    const realNow = Date.now();
+    // Persisted by a previous session, then redelivered and shown directly.
+    await enqueue(15);
+    TransactionRequestQueue.claim(15, 'topic-d');
+    TransactionRequestQueue.markDisplayed(15, 'topic-d');
+    jest.spyOn(Date, 'now').mockReturnValue(realNow + 10 * 60_000);
+    const handler = jest.fn();
+    TransactionRequestQueue.setDroppedRequestHandler(handler);
+    const report = jest.spyOn(TransactionRequestQueue, 'reportDropped');
+
+    expect(await TransactionRequestQueue.getAll()).toEqual([]);
+    expect(await storedIds()).toEqual([]);
+    expect(handler).not.toHaveBeenCalled();
+    // The stale filter itself never collects it (not just reportDropped's
+    // own displayed-skip).
+    expect(report).not.toHaveBeenCalled();
+
+    // The displayed mark survives, and reportDropped itself skips it too.
+    TransactionRequestQueue.reportDropped(
+      [{ id: 15, topic: 'topic-d', params, timestamp: 1 }],
+      'expired'
+    );
+    expect(handler).not.toHaveBeenCalled();
+    TransactionRequestQueue.forgetDeliveryIfAnsweredDrop(15, 'topic-d');
+    expect(TransactionRequestQueue.markDisplayed(15, 'topic-d')).toBe(false);
+    expect(TransactionRequestQueue.claim(15, 'topic-d')).toBe(false);
+  });
+
   it('are reported by any locked operation, e.g. enqueue', async () => {
     const realNow = Date.now();
     await enqueue(20);
@@ -236,12 +265,48 @@ describe('answerDroppedRequests (the boot-installed handler)', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     const forget = jest.spyOn(TransactionRequestQueue, 'forgetDelivery');
     mockV1Reject.mockRejectedValueOnce(new Error('Client not connected'));
+    TransactionRequestQueue.setDroppedRequestHandler(answerDroppedRequests);
+    TransactionRequestQueue.claim(50, 'handshake');
+    TransactionRequestQueue.claim(51, 'topic-v2');
 
-    answerDroppedRequests([v1Entry, v2Entry], 'expired');
+    TransactionRequestQueue.reportDropped([v1Entry, v2Entry], 'expired');
     await flush();
 
     expect(forget).toHaveBeenCalledTimes(1);
     expect(forget).toHaveBeenCalledWith(50, 'handshake');
+    // The failed one can surface again; the answered one stays answered.
+    expect(TransactionRequestQueue.claim(50, 'handshake')).toBe(true);
+    expect(TransactionRequestQueue.claim(51, 'topic-v2')).toBe(false);
     forget.mockRestore();
+  });
+
+  it('a failed send never clears a mark the UI set', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockV2Reject.mockRejectedValue(new Error('relay down'));
+    TransactionRequestQueue.setDroppedRequestHandler(answerDroppedRequests);
+
+    // Shown by the UI, never dropped: the responder must not unmark it.
+    TransactionRequestQueue.claim(60, 'topic-ui');
+    TransactionRequestQueue.markDisplayed(60, 'topic-ui');
+    answerDroppedRequests(
+      [{ id: 60, topic: 'topic-ui', params, timestamp: 1 }],
+      'expired'
+    );
+    await flush();
+    expect(TransactionRequestQueue.markDisplayed(60, 'topic-ui')).toBe(false);
+
+    // Answered as a drop, then shown by the UI after a redelivery (its first
+    // answer failed): a later failure of a stale answer must not unmark it.
+    TransactionRequestQueue.claim(61, 'topic-ui');
+    const entry = { id: 61, topic: 'topic-ui', params, timestamp: 1 };
+    mockV2Reject.mockImplementationOnce(() => new Promise(() => {})); // pending
+    TransactionRequestQueue.reportDropped([entry], 'full');
+    TransactionRequestQueue.forgetDelivery(61, 'topic-ui'); // its answer failed
+    expect(TransactionRequestQueue.claim(61, 'topic-ui')).toBe(true);
+    expect(TransactionRequestQueue.markDisplayed(61, 'topic-ui')).toBe(true);
+    answerDroppedRequests([entry], 'full'); // rejects
+    await flush();
+    expect(TransactionRequestQueue.markDisplayed(61, 'topic-ui')).toBe(false);
+    expect(TransactionRequestQueue.claim(61, 'topic-ui')).toBe(false);
   });
 });
