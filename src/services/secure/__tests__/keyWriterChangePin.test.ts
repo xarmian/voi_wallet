@@ -1097,3 +1097,23 @@ describe('REKEYED secret storage for creation', () => {
     }
   });
 });
+
+it.each([AccountType.WATCH, AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
+  'never stores a supplied secret for %s',
+  async (type) => {
+    const k = makeAlgoKey();
+    try {
+      await AccountSecureStorage.storeAccount(
+        { ...makeStandardMeta('forbidden-key', k), type } as Parameters<
+          typeof AccountSecureStorage.storeAccount
+        >[0],
+        k.sk
+      );
+      expect(
+        await AccountSecureStorage.probeSecretPresenceStrict('forbidden-key')
+      ).toBe(false);
+    } finally {
+      k.sk.fill(0);
+    }
+  }
+);

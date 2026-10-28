@@ -313,6 +313,7 @@ export type EncryptedBackupFile = EncryptedBackupFileV1 | EncryptedBackupFileV2;
  * Result of creating a backup
  */
 export interface BackupResult {
+  rekeyedKeyCount?: number;
   /** Generated filename */
   filename: string;
   /** File URI in cache directory */

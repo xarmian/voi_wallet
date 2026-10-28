@@ -60,6 +60,9 @@ jest.mock('@/services/wallet', () => ({
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     getResetGeneration: () => 0,
+    clearAll: jest.fn(),
+    probeSecretPresenceStrict: jest.fn(async () => false),
+    storeAccountMetadataForCreation: jest.fn(),
     storeAccountForCreation: jest.fn(async () => 'token'),
     commitPendingCreate: jest.fn(async () => {}),
     deleteAccountIfAttemptMatches: jest.fn(async () => {}),
@@ -79,10 +82,12 @@ jest.mock('@/services/secure/pinSetupPending', () => ({
 let mockMnemonicForCollect = '';
 
 import algosdk from 'algosdk';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { SecureKeyManager } from '@/services/secure/keyManager';
 import { Buffer } from 'buffer';
 import { AccountType, StandardAccountMetadata } from '@/types/wallet';
 import { collectAccounts } from '../collectors';
-import { restoreAccounts } from '../restorers';
+import { restoreAccounts, performFullRestore } from '../restorers';
 import type { BackupAccountData } from '../types';
 
 function freshAccount() {
@@ -247,4 +252,169 @@ describe('round trip against an existing (pre-TASK-45) payload shape', () => {
     // TASK-111: the phrase is never persisted into the metadata blob.
     expect(restored.mnemonic).toBe('');
   });
+});
+
+const secure = AccountSecureStorage;
+const mnemonicRead = jest.mocked(SecureKeyManager.getMnemonic);
+function retained(overrides: object = {}): BackupAccountData {
+  const fresh = freshAccount();
+  return {
+    id: 'retained',
+    isHidden: false,
+    type: AccountType.REKEYED,
+    createdAt: '',
+    ...fresh,
+    originalOwner: true,
+    authAddress: freshAccount().address,
+    ...overrides,
+  };
+}
+function exportWallet(record: BackupAccountData) {
+  mockGetCurrentWallet.mockResolvedValue({ accounts: [record] });
+  mnemonicRead.mockResolvedValue(record.mnemonic!);
+}
+
+it('round trips the original retained key, signs as its address, and wipes the write buffer', async () => {
+  const record = retained();
+  exportWallet(record);
+  let stored: Uint8Array | undefined;
+  jest
+    .mocked(secure.storeAccountForCreation)
+    .mockImplementationOnce(async (_meta, key) => {
+      stored = new Uint8Array(key);
+      return 'token';
+    });
+  const wire = JSON.parse(JSON.stringify(await collectAccounts()));
+  expect(wire[0].mnemonic).toBe(record.mnemonic);
+  expect(mnemonicRead).toHaveBeenCalledWith(record.address);
+  expect(mnemonicRead).not.toHaveBeenCalledWith(record.authAddress);
+  await restoreAccounts(wire);
+  const restored = (
+    mockPersistRestoredWallet.mock.calls[0] as unknown as [
+      { accounts: object[] },
+    ]
+  )[0].accounts[0];
+  expect(restored).toMatchObject({
+    address: record.address,
+    type: AccountType.REKEYED,
+    originalOwner: true,
+    backupVerified: false,
+  });
+  const message = new Uint8Array([1, 2, 3]);
+  try {
+    expect(
+      algosdk.verifyBytes(
+        message,
+        algosdk.signBytes(message, stored!),
+        record.address
+      )
+    ).toBe(true);
+    expect(
+      jest
+        .mocked(secure.storeAccountForCreation)
+        .mock.calls[0][1].every((byte) => byte === 0)
+    ).toBe(true);
+  } finally {
+    stored?.fill(0);
+  }
+});
+
+it.each([false, true])(
+  'keyless/old REKEYED backup restores metadata only (owner %s)',
+  async (originalOwner) => {
+    const record = retained({ mnemonic: undefined, originalOwner });
+    if (!originalOwner) {
+      exportWallet(record);
+      expect((await collectAccounts())[0].mnemonic).toBeUndefined();
+      expect(mnemonicRead).not.toHaveBeenCalled();
+    }
+    await restoreAccounts([record]);
+    expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
+    expect(secure.storeAccountMetadataForCreation).toHaveBeenCalledWith(
+      expect.objectContaining({ backupVerified: false }),
+      0
+    );
+  }
+);
+
+it('probe-present exports its own key even without originalOwner', async () => {
+  const record = retained({ originalOwner: false });
+  exportWallet(record);
+  jest.mocked(secure.probeSecretPresenceStrict).mockResolvedValueOnce(true);
+  expect((await collectAccounts())[0].mnemonic).toBe(record.mnemonic);
+});
+
+it('probe error aborts export instead of silently omitting the key', async () => {
+  exportWallet(retained({ originalOwner: false }));
+  jest
+    .mocked(secure.probeSecretPresenceStrict)
+    .mockRejectedValueOnce(new Error('probe failed'));
+  await expect(collectAccounts()).rejects.toThrow(
+    'Failed to retrieve retained key'
+  );
+});
+
+it('getMnemonic error aborts export for an expected key', async () => {
+  exportWallet(retained());
+  mnemonicRead.mockRejectedValueOnce(new Error('read failed'));
+  await expect(collectAccounts()).rejects.toThrow('read failed');
+});
+
+it.each(['address', 'publicKey'])(
+  'mismatched %s rejects the whole restore before clearing',
+  async (field) => {
+    const other = freshAccount();
+    await expect(
+      performFullRestore(
+        [retained({ [field]: other[field as 'address' | 'publicKey'] })],
+        {} as never,
+        [],
+        {} as never
+      )
+    ).rejects.toThrow('does not match');
+    expect(secure.clearAll).not.toHaveBeenCalled();
+    expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
+  }
+);
+
+it('mid-restore failure rolls back the earlier journaled key and wipes buffers', async () => {
+  // First call succeeds, the second fails.
+  jest
+    .mocked(secure.storeAccountForCreation)
+    .mockReset()
+    .mockResolvedValueOnce('owned')
+    .mockRejectedValueOnce(new Error('disk full'));
+  await expect(
+    restoreAccounts([retained(), retained({ id: 'second' })])
+  ).rejects.toThrow('disk full');
+  expect(secure.deleteAccountIfAttemptMatches).toHaveBeenCalledWith(
+    'retained',
+    'owned'
+  );
+  for (const call of jest.mocked(secure.storeAccountForCreation).mock.calls)
+    expect(call[1].every((byte) => byte === 0)).toBe(true);
+  jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
+});
+
+it('never rolls back secrets the persisted wallet already references', async () => {
+  // The wallet blob is written, then committing the second journal entry fails:
+  // deleting either secret would leave a persisted account without its key.
+  jest
+    .mocked(secure.storeAccountForCreation)
+    .mockReset()
+    .mockResolvedValueOnce('first-token')
+    .mockResolvedValueOnce('second-token');
+  jest
+    .mocked(secure.commitPendingCreate)
+    .mockReset()
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error('keychain write failed'));
+  jest.mocked(secure.deleteAccountIfAttemptMatches).mockClear();
+  await expect(
+    restoreAccounts([retained(), retained({ id: 'second' })])
+  ).rejects.toThrow('keychain write failed');
+  expect(mockPersistRestoredWallet).toHaveBeenCalled();
+  expect(secure.deleteAccountIfAttemptMatches).not.toHaveBeenCalled();
+  jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
+  jest.mocked(secure.commitPendingCreate).mockResolvedValue(undefined);
 });
