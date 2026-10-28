@@ -1927,6 +1927,95 @@ describe('signTransaction — account-type routing guards', () => {
 });
 
 // ===========================================================================
+// TASK-425: keyreg and app calls sign on the network they were built for,
+// and only for their own sender.
+// ===========================================================================
+
+describe('signTransaction — keyreg/appl signing network (TASK-425)', () => {
+  it.each([
+    [
+      'keyreg',
+      (address: string) => ({
+        type: 'keyreg' as const,
+        keyregParams: {
+          address,
+          nonParticipation: true,
+          networkId: 'voi-testnet' as never,
+        },
+      }),
+    ],
+    [
+      'appl',
+      (address: string) => ({
+        type: 'appl' as const,
+        applParams: {
+          senderAddress: address,
+          appId: 67890,
+          networkId: 'voi-testnet' as never,
+        },
+      }),
+    ],
+  ])(
+    'the %s path signs on its params network, not the active one',
+    async (_name, build) => {
+      const account = accountOf(`net-${_name}`, AccountType.STANDARD);
+      mockGetInstance.mockReturnValue({
+        getSuggestedParams: jest.fn().mockResolvedValue({
+          fee: 1000,
+          firstValid: 1,
+          lastValid: 1001,
+          genesisID: 'voi-test-v1',
+          genesisHash: new Uint8Array(32),
+          flatFee: true,
+          minFee: 1000,
+        }),
+        sendRawTransaction: jest.fn().mockResolvedValue('TXID'),
+        waitForConfirmation: jest.fn().mockResolvedValue({}),
+      });
+
+      const result = await signer.signTransaction({
+        ...build(account.address),
+        account,
+        networkId: 'algorand-mainnet' as never,
+      } as UnifiedTransactionRequest);
+
+      expect(result.success).toBe(true);
+      expect(mockGetInstance).toHaveBeenCalledWith('voi-testnet');
+      expect(mockSignTransaction.mock.calls[0][3]).toBe('voi-testnet');
+    }
+  );
+
+  it.each([
+    [
+      'keyreg',
+      {
+        type: 'keyreg' as const,
+        keyregParams: { address: 'SOMEONE_ELSE', nonParticipation: true },
+      },
+    ],
+    [
+      'appl',
+      {
+        type: 'appl' as const,
+        applParams: { senderAddress: 'SOMEONE_ELSE', appId: 1 },
+      },
+    ],
+  ])(
+    'refuses a %s whose sender is not the signing account',
+    async (_name, request) => {
+      const account = accountOf(`mismatch-${_name}`, AccountType.STANDARD);
+      const result = await signer.signTransaction({
+        ...request,
+        account,
+      } as UnifiedTransactionRequest);
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toMatch(/sender does not match/i);
+      expect(mockSignTransaction).not.toHaveBeenCalled();
+    }
+  );
+});
+
+// ===========================================================================
 // Validation + top-level error/callback contract
 // ===========================================================================
 
