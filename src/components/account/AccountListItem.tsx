@@ -4,7 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import * as Clipboard from 'expo-clipboard';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import {
+  AccountDeletionExpectation,
+  AccountMetadata,
+  AccountType,
+} from '@/types/wallet';
 import {
   useWalletStore,
   useAccountBalance,
@@ -24,7 +28,7 @@ interface AccountListItemProps {
   balance?: string | number | bigint;
   onSelect: (accountId: string) => void;
   onEdit?: (accountId: string) => void;
-  onDelete?: (accountId: string) => void;
+  onDelete?: (accountId: string, expected: AccountDeletionExpectation) => void;
   shouldLoadBalance?: boolean;
   hideBalance?: boolean;
 }
@@ -172,7 +176,13 @@ export default function AccountListItem({
                 );
                 return;
               }
-              onDelete(account.id);
+              // TASK-424: the service re-checks this identity, and that the
+              // account is still keyless, before it deletes anything.
+              onDelete(account.id, {
+                address: checked.address,
+                type: checked.type,
+                keyless: true,
+              });
             },
           },
         ]

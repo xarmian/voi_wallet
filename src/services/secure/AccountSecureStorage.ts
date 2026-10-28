@@ -32,6 +32,7 @@ import {
   AccountStorageError,
   AccountRetrievalError,
   AccountNotFoundError,
+  AccountDeletionPreconditionError,
   AuthenticationRequiredError,
   ResetRacedError,
   DuplicatePendingCreateError,
@@ -1995,12 +1996,27 @@ export class AccountSecureStorage {
     });
   }
 
-  static async deleteAccount(accountId: string): Promise<void> {
+  static async deleteAccount(
+    accountId: string,
+    options: { requireNoSecret?: boolean } = {}
+  ): Promise<void> {
     // Secret writer → acquire the GLOBAL key-mutation mutex (P1-1a) so a delete
     // can never interleave with a rewrap enumeration+commit.
-    return this.runKeyMutationExclusive(() =>
-      this.deleteAccountLocked(accountId)
-    );
+    return this.runKeyMutationExclusive(async () => {
+      // TASK-424: a deletion confirmed as keyless re-checks custody under the
+      // same mutex every secret writer takes, so a key written after the
+      // caller's check can't be deleted with it. A probe failure can't prove
+      // the account keyless, so it refuses too (the probe propagates it).
+      if (
+        options.requireNoSecret &&
+        (await this.probeSecretPresenceStrict(accountId))
+      ) {
+        throw new AccountDeletionPreconditionError(
+          'This account now holds its own key, so it wasn’t deleted.'
+        );
+      }
+      return this.deleteAccountLocked(accountId);
+    });
   }
 
   /** RAW deleteAccount (no mutex acquire) — for callers already holding it

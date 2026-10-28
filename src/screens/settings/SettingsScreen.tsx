@@ -493,7 +493,11 @@ export default function SettingsScreen() {
     // expressions inside a try block.
     const accountName = target.label?.trim() || formatAddress(target.address);
     try {
-      await deleteAccount(target.id);
+      await deleteAccount(target.id, {
+        address: target.address,
+        type: target.type,
+        keyless: !keyHolding,
+      });
       Alert.alert('Account Deleted', `${accountName} has been removed.`);
     } catch (error) {
       Alert.alert('Delete Failed', deletionErrorMessage(error));

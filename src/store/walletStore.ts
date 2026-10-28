@@ -18,6 +18,7 @@ import {
   AddWatchAccountRequest,
   DetectRekeyedAccountRequest,
   ImportRemoteSignerAccountRequest,
+  AccountDeletionExpectation,
   AccountBalance,
   AssetParams,
   TransactionInfo,
@@ -318,7 +319,10 @@ interface WalletState {
   addRemoteSignerAccount: (
     request: ImportRemoteSignerAccountRequest
   ) => Promise<RemoteSignerAccountMetadata>;
-  deleteAccount: (accountId: string) => Promise<void>;
+  deleteAccount: (
+    accountId: string,
+    expected: AccountDeletionExpectation
+  ) => Promise<void>;
 
   // Account operations
   setActiveAccount: (accountId: string) => Promise<void>;
@@ -1118,7 +1122,10 @@ export const useWalletStore = create<WalletState>()(
       }
     },
 
-    deleteAccount: async (accountId: string) => {
+    deleteAccount: async (
+      accountId: string,
+      expected: AccountDeletionExpectation
+    ) => {
       try {
         set({ isLoading: true, lastError: null });
 
@@ -1139,7 +1146,7 @@ export const useWalletStore = create<WalletState>()(
         );
         const addressToUnsubscribe = accountToDelete?.address;
 
-        await MultiAccountWalletService.deleteAccount(accountId);
+        await MultiAccountWalletService.deleteAccount(accountId, expected);
         const wallet = await MultiAccountWalletService.getCurrentWallet();
 
         // Remove account state. Invalidate its in-flight balance fetches in the

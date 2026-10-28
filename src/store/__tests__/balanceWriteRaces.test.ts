@@ -448,7 +448,12 @@ describe('deleteAccount vs in-flight balance fetches (TASK-59)', () => {
     };
     mockDeleteAccount.mockResolvedValueOnce(undefined);
     mockGetCurrentWallet.mockResolvedValueOnce(remaining);
-    await useWalletStore.getState().deleteAccount('acc-2');
+    const target = wallet.accounts.find((a) => a.id === 'acc-2')!;
+    await useWalletStore.getState().deleteAccount('acc-2', {
+      address: target.address,
+      type: target.type,
+      keyless: true,
+    });
     expect(stateOf('acc-2')).toBeUndefined();
 
     pending[0].resolve(balanceOf(7n));

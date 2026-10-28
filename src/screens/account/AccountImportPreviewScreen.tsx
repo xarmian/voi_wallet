@@ -187,7 +187,12 @@ export default function AccountImportPreviewScreen({
             // If upgrading from watch account, delete the watch account first
             if (account.isUpgrade && account.existingAccountId) {
               await MultiAccountWalletService.deleteAccount(
-                account.existingAccountId
+                account.existingAccountId,
+                {
+                  address: account.address,
+                  type: AccountType.WATCH,
+                  keyless: true,
+                }
               );
             }
 
