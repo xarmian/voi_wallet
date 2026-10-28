@@ -10,6 +10,7 @@
 export type NotificationType =
   | 'message'
   | 'voi_payment'
+  | 'proposer_payout'
   | 'arc200_transfer'
   | 'arc72_transfer'
   | 'key_registration';
@@ -20,6 +21,8 @@ export type NotificationType =
 export interface NotificationPreferences {
   messages: boolean;
   voiPayments: boolean;
+  /** Block-reward / proposer-payout pushes from the network fee sink; defaults to true. */
+  blockRewards: boolean;
   arc200Transfers: boolean;
   arc72Transfers: boolean;
   outgoingConfirmations: boolean;
@@ -48,6 +51,7 @@ export function microVoiToVoi(micro: number): number {
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   messages: true,
   voiPayments: true,
+  blockRewards: true,
   arc200Transfers: true,
   arc72Transfers: true,
   outgoingConfirmations: false,
@@ -103,6 +107,7 @@ export interface AccountSubscription {
   account_address: string; // 58-char Algorand address
   notify_messages: boolean;
   notify_voi_payments: boolean;
+  notify_proposer_payouts: boolean;
   notify_arc200_transfers: boolean;
   notify_arc72_transfers: boolean;
   notify_outgoing_confirmations: boolean;

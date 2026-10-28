@@ -568,6 +568,9 @@ class NotificationService {
     if (preferences.voiPayments !== undefined) {
       updates.notify_voi_payments = preferences.voiPayments;
     }
+    if (preferences.blockRewards !== undefined) {
+      updates.notify_proposer_payouts = preferences.blockRewards;
+    }
     if (preferences.arc200Transfers !== undefined) {
       updates.notify_arc200_transfers = preferences.arc200Transfers;
     }
@@ -640,6 +643,7 @@ class NotificationService {
     return {
       messages: data.notify_messages,
       voiPayments: data.notify_voi_payments,
+      blockRewards: data.notify_proposer_payouts ?? true,
       arc200Transfers: data.notify_arc200_transfers,
       arc72Transfers: data.notify_arc72_transfers,
       outgoingConfirmations: data.notify_outgoing_confirmations,
@@ -688,6 +692,7 @@ class NotificationService {
       account_address: address,
       notify_messages: prefs.messages,
       notify_voi_payments: prefs.voiPayments,
+      notify_proposer_payouts: prefs.blockRewards,
       notify_arc200_transfers: prefs.arc200Transfers,
       notify_arc72_transfers: prefs.arc72Transfers,
       notify_outgoing_confirmations: prefs.outgoingConfirmations,

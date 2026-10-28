@@ -15,6 +15,29 @@ const mockDb = {
 const mockSupabaseClient = {
   schema: (schemaName: string) => ({
     from: (table: string) => ({
+      select: (columns: string) => {
+        if (schemaName !== 'voiwallet' || table !== 'account_subscriptions') {
+          throw new Error(`Unexpected read of ${schemaName}.${table}`);
+        }
+        expect(columns).toBe('*');
+        const filters: Record<string, string> = {};
+        const query = {
+          eq(column: string, value: string) {
+            filters[column] = value;
+            return query;
+          },
+          async single() {
+            if (mockDb.error) return { data: null, error: mockDb.error };
+            const data = mockDb.rows.find((row) =>
+              Object.entries(filters).every(
+                ([key, value]) => row[key] === value
+              )
+            );
+            return { data: data ?? null, error: null };
+          },
+        };
+        return query;
+      },
       update: (updates: SubscriptionRow) => {
         if (schemaName !== 'voiwallet' || table !== 'account_subscriptions') {
           throw new Error(`Unexpected update of ${schemaName}.${table}`);
@@ -107,6 +130,20 @@ beforeEach(() => {
 });
 
 describe('updatePreferences', () => {
+  it('stores the block rewards opt-out as notify_proposer_payouts', async () => {
+    const row = { device_id: DEVICE_ID, account_address: ADDRESS };
+    mockDb.rows.push(row);
+
+    await expect(
+      notificationService.updatePreferences(ADDRESS, { blockRewards: false })
+    ).resolves.toBe(true);
+
+    expect(mockDb.updates).toEqual([
+      expect.objectContaining({ notify_proposer_payouts: false }),
+    ]);
+    expect(row).toMatchObject({ notify_proposer_payouts: false });
+  });
+
   it('returns true for one matched row and stores the threshold in micro-VOI', async () => {
     const row = { device_id: DEVICE_ID, account_address: ADDRESS };
     mockDb.rows.push(row);
@@ -144,6 +181,37 @@ describe('updatePreferences', () => {
       notificationService.updatePreferences(ADDRESS, { messages: false })
     ).resolves.toBe(false);
   });
+});
+
+describe('getPreferences', () => {
+  it.each([
+    [null, true],
+    [undefined, true],
+    [false, false],
+    [true, true],
+  ])(
+    'maps notify_proposer_payouts %s to blockRewards %s',
+    async (stored, expected) => {
+      mockDb.rows.push(
+        {
+          device_id: 'other-device',
+          account_address: ADDRESS,
+          notify_proposer_payouts: !expected,
+        },
+        {
+          device_id: DEVICE_ID,
+          account_address: ADDRESS,
+          notify_proposer_payouts: stored,
+        }
+      );
+
+      await expect(
+        notificationService.getPreferences(ADDRESS)
+      ).resolves.toMatchObject({
+        blockRewards: expected,
+      });
+    }
+  );
 });
 
 describe('VOI and micro-VOI conversion', () => {

@@ -611,6 +611,14 @@ export default function NotificationSettingsScreen() {
               disabled={!notificationsEnabled || !preferences.voiPayments}
             />
             <SettingToggle
+              icon="ribbon-outline"
+              label="Block Rewards"
+              description="Get notified when you receive a block reward for proposing a block"
+              value={preferences.blockRewards}
+              onValueChange={(value) => updatePreference('blockRewards', value)}
+              disabled={!notificationsEnabled || !preferences.voiPayments}
+            />
+            <SettingToggle
               icon="cube-outline"
               label="ARC-200 Tokens"
               description="Get notified for incoming token transfers"
