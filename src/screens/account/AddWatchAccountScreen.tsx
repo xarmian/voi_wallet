@@ -148,8 +148,6 @@ export default function AddWatchAccountScreen() {
             type: 'watch' as const,
             isValid: true,
             isDuplicate: false,
-            mnemonic: undefined,
-            privateKey: undefined,
           };
 
           navigation.navigate('SecuritySetup', {
