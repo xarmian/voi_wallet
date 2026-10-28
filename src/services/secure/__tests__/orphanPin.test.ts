@@ -263,10 +263,21 @@ it('drains a journal-only failed import using the real reconcile before removing
 });
 
 it('probes ids indexed only BEFORE reconcile (pre ∪ post second layer)', async () => {
+  // Keyed on reconcile having run, not on call count, so dropping the pre
+  // snapshot leaves only a post read that returns [] and the test goes red.
+  let reconciled = false;
+  jest.mocked(reconcileCrossStoreHalfState).mockImplementation(async () => {
+    reconciled = true;
+    return {
+      ran: true,
+      orphanSecretsDeleted: [],
+      phantomAccountsPruned: [],
+      staleJournalDropped: [],
+    };
+  });
   jest
     .mocked(AccountSecureStorage.readAccountListStrict)
-    .mockResolvedValueOnce(['unindexed'])
-    .mockResolvedValueOnce([]);
+    .mockImplementation(async () => (reconciled ? [] : ['unindexed']));
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
     .mockResolvedValue({});
@@ -282,7 +293,9 @@ it('probes ids indexed only BEFORE reconcile (pre ∪ post second layer)', async
   expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
 });
 
-it('TASK-415: a failed orphan delete stays indexed, so the gate refuses and a retry succeeds', async () => {
+// Mocks deleteAccount to TASK-415's contract; the real verified delete is
+// covered by verifiedSecretDelete.test.ts.
+it("given TASK-415's contract, a failed orphan delete stays indexed: the gate refuses and a retry succeeds", async () => {
   const secretIds = new Set(['orphan']);
   let journal: Record<string, string> = { orphan: 'attempt' };
   let failDelete = true;
@@ -325,3 +338,31 @@ it('TASK-415: a failed orphan delete stays indexed, so the gate refuses and a re
   expect(secretIds.size).toBe(0);
   expect(AccountSecureStorage.deletePin).toHaveBeenCalledTimes(1);
 });
+
+it.each(['hasKeyBearingAccountStrict', 'readAccountListStrict'] as const)(
+  'fails closed when %s never settles',
+  async (method) => {
+    jest.useFakeTimers();
+    try {
+      const never = new Promise<never>(() => {});
+      if (method === 'hasKeyBearingAccountStrict') {
+        jest
+          .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+          .mockReturnValue(never);
+      } else {
+        jest
+          .mocked(AccountSecureStorage.readAccountListStrict)
+          .mockReturnValue(never);
+      }
+      const run = clearOrphanPin();
+      const settled = expect(run).rejects.toThrow(
+        ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+      );
+      await jest.advanceTimersByTimeAsync(1500);
+      await settled;
+      expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  }
+);

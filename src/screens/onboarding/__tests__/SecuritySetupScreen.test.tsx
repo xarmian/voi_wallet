@@ -16,7 +16,7 @@
  */
 
 import React from 'react';
-import { render, fireEvent, act } from '@testing-library/react-native';
+import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 
 const mockImportStandardAccount = jest.fn();
 jest.mock('@/services/wallet', () => ({
@@ -702,6 +702,27 @@ describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
     expect(AccountSecureStorage.clearBiometricSecret).not.toHaveBeenCalled();
     expect(navigation.emitBeforeRemove()).toBe(false);
     expect(screen.getByTestId('header-back')).toBeTruthy();
+    await screen.unmount();
+  });
+
+  it('releases the submit when the PIN read never settles', async () => {
+    jest
+      .mocked(AccountSecureStorage.hasPinStrict)
+      .mockReturnValue(new Promise<never>(() => {}));
+    const { screen, navigation } = await renderScreen({
+      source: 'create',
+      mnemonicSecretId: storeMnemonicSecret(FAKE_MNEMONIC),
+    });
+    // Real timers: the press awaits the handler, so the 1500ms bound elapses.
+    await submitPin(screen);
+    expect(mockAuthSetupPin).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Error',
+      'Failed to setup wallet security: ' + ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+    );
+    // The timeout settles outside act, so wait for the released header.
+    await waitFor(() => expect(screen.getByTestId('header-back')).toBeTruthy());
+    expect(navigation.emitBeforeRemove()).toBe(false);
     await screen.unmount();
   });
 

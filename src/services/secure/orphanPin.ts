@@ -5,11 +5,37 @@ import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconc
 export const ORPHAN_PIN_UNVERIFIABLE_MESSAGE =
   "We couldn't verify your wallet's security state. Please restart the app.";
 
+const STRICT_READ_TIMEOUT_MS = 1500;
+
+// TASK-413: bound a strict READ so a wedged store can't leave the submit
+// spinning with Back hidden; the abandoned read is harmless. Mutations
+// (reconcile repairs, deletePin) are never bounded: an abandoned deletePin
+// that lands late could race a retry that has already set a new PIN.
+export const withStrictReadTimeout = <T>(promise: Promise<T>): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('orphan PIN strict read timed out')),
+      STRICT_READ_TIMEOUT_MS
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+
 // TASK-413 DR-1: drain failed-import orphans, then strictly verify no keys remain.
 export async function clearOrphanPin(): Promise<void> {
   try {
     if (
-      (await MultiAccountWalletService.hasKeyBearingAccountStrict()) !== false
+      (await withStrictReadTimeout(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      )) !== false
     ) {
       throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
     }
@@ -59,7 +85,9 @@ export async function clearOrphanPin(): Promise<void> {
 
 // Strict account-list ∪ journal ids; any read failure or malformed shape throws.
 async function readCandidateIdsStrict(): Promise<string[]> {
-  const accountIds = await AccountSecureStorage.readAccountListStrict();
+  const accountIds = await withStrictReadTimeout(
+    AccountSecureStorage.readAccountListStrict()
+  );
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
   if (
     !Array.isArray(accountIds) ||

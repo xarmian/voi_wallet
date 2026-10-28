@@ -11,6 +11,7 @@ import { AccountSecureStorage } from '@/services/secure';
 import {
   clearOrphanPin,
   ORPHAN_PIN_UNVERIFIABLE_MESSAGE,
+  withStrictReadTimeout,
 } from '@/services/secure/orphanPin';
 import {
   AccountType,
@@ -244,7 +245,8 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
         // PIN with no keys. Strict reads must fail closed before first-secret
         // setup; same-session retries keep their already committed credential.
         try {
-          if (await AccountSecureStorage.hasPinStrict()) await clearOrphanPin();
+          if (await withStrictReadTimeout(AccountSecureStorage.hasPinStrict()))
+            await clearOrphanPin();
         } catch {
           throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
         }
