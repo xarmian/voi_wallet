@@ -13,6 +13,7 @@ import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import algosdk, { Transaction } from 'algosdk';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
 
@@ -613,10 +614,7 @@ export class SecureKeyManager {
         privateKey = await AccountSecureStorage.getPrivateKey(account.id);
         // Never show a phrase for a key that isn't this account's own: a
         // mismatched key would display a plausible but WRONG recovery phrase.
-        if (
-          privateKey.length !== 64 ||
-          algosdk.encodeAddress(privateKey.slice(32, 64)) !== account.address
-        ) {
+        if (!keyBelongsToAddress(privateKey, account.address)) {
           throw new Error('The stored key does not match this account');
         }
         const derivedMnemonic = algosdk.secretKeyToMnemonic(privateKey);

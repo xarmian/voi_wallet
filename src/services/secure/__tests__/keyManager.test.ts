@@ -921,6 +921,22 @@ describe('SecureKeyManager.getMnemonic', () => {
     }
   );
 
+  // Codex confirm (U2): the phrase comes from the SEED (first 32 bytes). A key
+  // made of a foreign seed + this account's public half must be refused.
+  it('refuses a key whose seed is foreign even though its public half matches', async () => {
+    setWallet([
+      { ...watchAccount(REKEYED, 'acc-x'), type: AccountType.REKEYED },
+    ]);
+    const spliced = new Uint8Array(64);
+    spliced.set(AUTH.sk.slice(0, 32), 0);
+    spliced.set(REKEYED.sk.slice(32, 64), 32);
+    mockSecureGetPrivateKey.mockResolvedValueOnce(spliced);
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'does not match this account'
+    );
+    expect(spliced.every((byte) => byte === 0)).toBe(true);
+  });
+
   it('wipes a REKEYED key even when mnemonic derivation fails', async () => {
     setWallet([
       { ...watchAccount(REKEYED, 'acc-rekeyed'), type: AccountType.REKEYED },

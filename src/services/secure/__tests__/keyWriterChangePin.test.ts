@@ -1014,6 +1014,27 @@ describe('REKEYED secret storage for creation', () => {
     }
   });
 
+  it("rejects a key made of a foreign seed and this account's public half", async () => {
+    const own = makeAlgoKey();
+    const foreign = makeAlgoKey();
+    const spliced = new Uint8Array(64);
+    spliced.set(foreign.sk.slice(0, 32), 0);
+    spliced.set(own.sk.slice(32, 64), 32);
+    try {
+      await expect(
+        AccountSecureStorage.storeAccountForCreation(
+          rekeyed(own),
+          spliced,
+          AccountSecureStorage.getResetGeneration()
+        )
+      ).rejects.toThrow('does not belong to this account');
+    } finally {
+      own.sk.fill(0);
+      foreign.sk.fill(0);
+      spliced.fill(0);
+    }
+  });
+
   it('keeps metadata-only REKEYED keyless without implicitly creating a key', async () => {
     const k = makeAlgoKey();
     try {
