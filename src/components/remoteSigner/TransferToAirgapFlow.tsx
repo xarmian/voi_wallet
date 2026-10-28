@@ -25,10 +25,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
-import {
-  StandardAccountMetadata,
-  RemoteSignerAccountMetadata,
-} from '@/types/wallet';
+import { RemoteSignerAccountMetadata } from '@/types/wallet';
+import { OwnKeyAccount } from '@/services/wallet/ownKeyCustody';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { RemoteSignerResponse } from '@/types/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -53,8 +52,8 @@ type TransferState =
   | 'error';
 
 interface TransferToAirgapFlowProps {
-  /** The STANDARD account to transfer */
-  account: StandardAccountMetadata;
+  /** The account to transfer: one whose own key this device holds */
+  account: OwnKeyAccount;
   /** Called when transfer succeeds */
   onSuccess: (newAccount: RemoteSignerAccountMetadata) => void;
   /** Called when user cancels the flow */
@@ -97,6 +96,11 @@ export function TransferToAirgapFlow({
 
       if (!privateKey) {
         throw new Error('Could not retrieve private key for this account');
+      }
+      // TASK-425 U2: export only the account's OWN key, never one for
+      // another address.
+      if (!keyBelongsToAddress(privateKey, account.address)) {
+        throw new Error('The stored key does not belong to this account');
       }
 
       // Generate ARC-300 URI. The returned string embeds the key and is an

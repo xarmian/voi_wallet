@@ -32,6 +32,7 @@ import {
 } from './subscribePass';
 import Toast from 'react-native-toast-message';
 import { AccountMetadata, AccountType } from '@/types/wallet';
+import { holdsOwnKey } from '@/services/wallet/ownKeyCustody';
 import { deviceId } from '../../platform';
 import { redactAddress } from '@/utils/logRedaction';
 
@@ -371,7 +372,8 @@ class NotificationService {
    *    entirely. A blanket upsert of defaults would silently reset every user's
    *    notification settings on the next app start.
    * 2. Defaults are per account, not per batch: watch accounts cannot decrypt,
-   *    so they get `messages: false` while every other type gets `true`.
+   *    so they get `messages: false`, as does a REKEYED account that has not
+   *    kept its own key; every other type gets `true`.
    * 3. FAIL CLOSED on the read. A single batch `.select()` succeeds or fails
    *    wholesale — it cannot say which account failed — so per-account error
    *    tolerance is incoherent here. If the read fails we abort the whole pass
@@ -413,6 +415,17 @@ class NotificationService {
     // entries sharing an address are one subscription. If any of them can
     // decrypt, the device can decrypt, so `messages` ORs across duplicates.
     const pending = new Map<string, { messages: boolean }>();
+    // TASK-425 U2: a REKEYED record may or may not have kept its own key, so
+    // probe it rather than trusting the type.
+    const rekeyedHoldsKey = new Map(
+      await Promise.all(
+        accounts
+          .filter((account) => account.type === AccountType.REKEYED)
+          .map(
+            async (account) => [account.id, await holdsOwnKey(account)] as const
+          )
+      )
+    );
     for (const account of accounts) {
       const address = this.validateAddress(
         account.address,
@@ -420,7 +433,10 @@ class NotificationService {
       );
       if (!address) continue;
 
-      const canDecryptMessages = account.type !== AccountType.WATCH;
+      const canDecryptMessages =
+        account.type === AccountType.REKEYED
+          ? rekeyedHoldsKey.get(account.id) === true
+          : account.type !== AccountType.WATCH;
       const existing = pending.get(address);
       if (existing) {
         existing.messages = existing.messages || canDecryptMessages;

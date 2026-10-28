@@ -5,13 +5,7 @@
  * a transaction signing request from the wallet device.
  */
 
-import React, {
-  useState,
-  useEffect,
-  useRef,
-  useCallback,
-  useMemo,
-} from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Alert,
   View,
@@ -35,7 +29,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { isRemoteSignerRequest } from '@/types/remoteSigner';
 import { getFromClipboard } from '@/utils/clipboard';
-import { AccountType, AccountMetadata } from '@/types/wallet';
+import { filterOwnKeyAccounts } from '@/services/wallet/ownKeyCustody';
 import { AnimatedQRScanner } from '@/components/remoteSigner';
 
 const { width } = Dimensions.get('window');
@@ -88,17 +82,6 @@ export default function SignRequestScannerScreen() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Get addresses we can sign for (STANDARD accounts only)
-  const signableAddresses = useMemo(
-    () =>
-      new Set(
-        accounts
-          .filter((acc: AccountMetadata) => acc.type === AccountType.STANDARD)
-          .map((acc: AccountMetadata) => acc.address)
-      ),
-    [accounts]
-  );
-
   useEffect(() => {
     if (Platform.OS !== 'web') {
       requestCameraPermission();
@@ -114,7 +97,7 @@ export default function SignRequestScannerScreen() {
   };
 
   const processQRData = useCallback(
-    (data: string) => {
+    async (data: string) => {
       if (isProcessing) return;
       setIsProcessing(true);
 
@@ -143,7 +126,11 @@ export default function SignRequestScannerScreen() {
           return;
         }
 
-        // Check if we have the keys for all signers
+        // Check if we have the keys for all signers. TASK-425 U2: probed now,
+        // so a REKEYED account that kept its own key counts.
+        const signableAddresses = new Set(
+          (await filterOwnKeyAccounts(accounts)).map((acc) => acc.address)
+        );
         const missingSigners: string[] = [];
         for (const txn of payload.txns) {
           const signerAddr = txn.a || txn.s; // Use auth address if provided
@@ -176,13 +163,7 @@ export default function SignRequestScannerScreen() {
         setIsProcessing(false);
       }
     },
-    [
-      isProcessing,
-      validateRequest,
-      signableAddresses,
-      setPendingRequest,
-      navigation,
-    ]
+    [isProcessing, validateRequest, accounts, setPendingRequest, navigation]
   );
 
   const handlePasteFromClipboard = async () => {

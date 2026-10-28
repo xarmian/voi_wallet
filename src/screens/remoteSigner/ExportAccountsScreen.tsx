@@ -23,6 +23,8 @@ import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useSecureScreen } from '@/hooks/useSecureScreen';
+import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
+import { OwnKeyAccount } from '@/services/wallet/ownKeyCustody';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
 import { useWalletStore } from '@/store/walletStore';
@@ -33,11 +35,7 @@ import {
 } from '@/services/remoteSigner';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import SignerAuthModal from '@/components/remoteSigner/SignerAuthModal';
-import {
-  AccountType,
-  AccountMetadata,
-  AuthenticationRequiredError,
-} from '@/types/wallet';
+import { AccountMetadata, AuthenticationRequiredError } from '@/types/wallet';
 import { formatAddress } from '@/utils/address';
 
 /**
@@ -62,21 +60,39 @@ interface PairingSession {
 export default function ExportAccountsScreen() {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const accounts = useWalletStore((state) => state.wallet?.accounts ?? []);
+  // TASK-425 U2: the accounts whose own secret this device holds, a REKEYED
+  // one included, not the STANDARD type alone.
+  const signableAccounts = useOwnKeyAccounts(accounts);
+
+  if (signableAccounts === null) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <ActivityIndicator
+          style={{ flex: 1 }}
+          size="large"
+          color={theme.colors.primary}
+        />
+      </SafeAreaView>
+    );
+  }
+  return <ExportAccountsContent signableAccounts={signableAccounts} />;
+}
+
+function ExportAccountsContent({
+  signableAccounts,
+}: {
+  signableAccounts: OwnKeyAccount[];
+}) {
+  const { theme } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const navigation = useNavigation();
 
   // Block OS screenshots / screen recordings while an account-pairing QR is on
   // screen (no-op on web/extension).
   useSecureScreen();
 
-  const accounts = useWalletStore((state) => state.wallet?.accounts ?? []);
   const signerConfig = useSignerConfig();
-
-  // Get signable accounts (STANDARD type only - we have their private keys)
-  const signableAccounts = useMemo(() => {
-    return accounts.filter(
-      (acc: AccountMetadata) => acc.type === AccountType.STANDARD
-    );
-  }, [accounts]);
 
   // Track selected accounts
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(

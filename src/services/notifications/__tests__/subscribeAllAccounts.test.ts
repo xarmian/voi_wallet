@@ -191,6 +191,13 @@ jest.mock('../../../platform', () => ({
   deviceId: { getDeviceId: jest.fn(async () => DEVICE_ID) },
 }));
 
+// TASK-425 U2: whether a REKEYED record kept its own key is a secret-store
+// probe; each test sets the answer.
+const mockHoldsOwnKey = jest.fn(async (_account: unknown) => true);
+jest.mock('@/services/wallet/ownKeyCustody', () => ({
+  holdsOwnKey: (account: unknown) => mockHoldsOwnKey(account),
+}));
+
 import { notificationService } from '../index';
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../types';
 import {
@@ -257,6 +264,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  mockHoldsOwnKey.mockReset();
+  mockHoldsOwnKey.mockImplementation(async () => true);
   mockDb.rows.clear();
   mockDb.selectCalls = [];
   mockDb.upsertCalls = [];
@@ -377,6 +386,24 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       notify_proposer_payouts: DEFAULT_NOTIFICATION_PREFERENCES.blockRewards,
     });
     expect(writtenRow(STANDARD_B)?.notify_messages).toBe(true);
+  });
+
+  it('disables messages for a REKEYED account that has not kept its own key (TASK-425)', async () => {
+    mockHoldsOwnKey.mockImplementation(
+      async (acc) => (acc as { address: string }).address === STANDARD_A
+    );
+
+    await notificationService.subscribeAllAccounts([
+      account(STANDARD_A, AccountType.REKEYED),
+      account(STANDARD_B, AccountType.REKEYED),
+      account(LEDGER_A, AccountType.LEDGER),
+    ]);
+
+    expect(writtenRow(STANDARD_A)?.notify_messages).toBe(true);
+    expect(writtenRow(STANDARD_B)?.notify_messages).toBe(false);
+    // Only REKEYED is probed: a LEDGER default is unchanged.
+    expect(writtenRow(LEDGER_A)?.notify_messages).toBe(true);
+    expect(mockHoldsOwnKey).toHaveBeenCalledTimes(2);
   });
 });
 

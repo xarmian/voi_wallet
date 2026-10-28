@@ -31,7 +31,7 @@ import {
   RemoteSignerRequest,
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
-import { AccountType, AccountMetadata } from '@/types/wallet';
+import { filterOwnKeyAccounts } from '@/services/wallet/ownKeyCustody';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
 import { redactError } from '@/utils/logRedaction';
@@ -91,6 +91,9 @@ export default function SignatureDisplayScreen() {
       try {
         // Sign all transactions
         const signedTxns: Uint8Array[] = [];
+        // TASK-425 U2: the accounts whose own key we hold, a REKEYED account
+        // that kept its key included.
+        const ownKeyAccounts = await filterOwnKeyAccounts(accounts);
 
         for (let i = 0; i < request.txns.length; i++) {
           setSigningProgress({ current: i + 1, total: request.txns.length });
@@ -103,9 +106,8 @@ export default function SignatureDisplayScreen() {
           const signerAddress = txnData.a || txnData.s;
 
           // Find the account with this address
-          const account = accounts.find(
-            (acc: AccountMetadata) =>
-              acc.address === signerAddress && acc.type === AccountType.STANDARD
+          const account = ownKeyAccounts.find(
+            (acc) => acc.address === signerAddress
           );
 
           if (!account) {

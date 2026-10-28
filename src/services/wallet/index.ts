@@ -37,6 +37,7 @@ import {
   classifyKeyHolding,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
+import { holdsOwnKey } from './ownKeyCustody';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
@@ -840,10 +841,11 @@ export class MultiAccountWalletService {
 
     const existingAccount = wallet.accounts[accountIndex];
 
-    // Validate it's a STANDARD account
-    if (existingAccount.type !== AccountType.STANDARD) {
+    // TASK-425 U2: any account whose own key this device holds, a REKEYED
+    // account that kept its key included.
+    if (!(await holdsOwnKey(existingAccount))) {
       throw new Error(
-        `Cannot convert account type ${existingAccount.type} to remote signer. Only STANDARD accounts can be converted.`
+        `Cannot convert account type ${existingAccount.type} to remote signer. Only an account whose key is on this device can be converted.`
       );
     }
 
