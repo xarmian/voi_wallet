@@ -30,7 +30,7 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import { AssetBalance, needsBackupVerification } from '@/types/wallet';
+import { AssetBalance } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
@@ -75,6 +75,7 @@ import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
+import { useHomeBackupReminder } from '@/store/useHomeBackupReminder';
 import BackupWarningBanner from '@/components/wallet/BackupWarningBanner';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
@@ -1218,12 +1219,7 @@ export default function HomeScreen() {
     fetchApprovals(activeAccount.address);
   }, [activeAccount?.address, fetchApprovals]);
 
-  // Navigate to claimable tokens screen
-  // TASK-45 / DR-10: the warning is driven by the persisted `backupVerified`
-  // flag via needsBackupVerification(), which fails closed — non-standard
-  // accounts are excluded, and anything other than an explicit `true` (legacy
-  // record, restored account, skipped quiz) keeps the warning up.
-  const showBackupWarning = needsBackupVerification(activeAccount);
+  const showBackupWarning = useHomeBackupReminder();
 
   const handleBackupBannerPress = useCallback(() => {
     if (!activeAccount) return;

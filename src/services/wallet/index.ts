@@ -32,6 +32,7 @@ import {
   Wallet,
   WalletSettings,
   withDefaultAuthLevel,
+  classifyKeyHolding,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
@@ -2210,26 +2211,20 @@ export class MultiAccountWalletService {
       if (!Array.isArray(parsed.accounts)) {
         return false;
       }
-      if (parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD)) {
-        return true;
-      }
-      // TASK-419: `originalOwner: true` is the durable, keystore-independent
-      // signal that rekeyManager converted a STANDARD account and kept its key.
-      // It must not depend on a secure read: a pre-sentinel Android keystore
-      // failure reads the secret as null exactly like the PIN.
+      // STANDARD, or REKEYED with `originalOwner: true` (TASK-419): the durable,
+      // keystore-independent signal that rekeyManager converted a STANDARD
+      // account and kept its key. It must not depend on a secure read: a
+      // pre-sentinel Android keystore failure reads the secret as null exactly
+      // like the PIN.
       if (
-        parsed.accounts.some(
-          (acc) =>
-            acc?.type === AccountType.REKEYED &&
-            (acc as RekeyedAccountMetadata).originalOwner === true
-        )
+        parsed.accounts.some((acc) => classifyKeyHolding(acc) === 'present')
       ) {
         return true;
       }
       rekeyedIds = parsed.accounts
         .filter(
           (acc) =>
-            acc?.type === AccountType.REKEYED &&
+            classifyKeyHolding(acc) === 'unresolved' &&
             typeof acc.id === 'string' &&
             acc.id !== ''
         )

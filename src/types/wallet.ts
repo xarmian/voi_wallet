@@ -129,30 +129,46 @@ export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
   authLevel?: RemoteSignerAuthLevel;
 }
 
-/**
- * TASK-45 — the ONLY sanctioned read of `backupVerified`.
- *
- * Retains the STANDARD-only policy until TASK-421 U4e. Legacy or invalid
- * verification values fail closed before read-time migration. Anything but
- * a literal `true` means "not verified", so the Home warning banner can never
- * be wrongly suppressed.
- */
+/** Local custody evidence; pending/failed strict probes remain unresolved. */
+export type KeyHolding = 'present' | 'absent' | 'unresolved';
+type BackupAccount = Pick<AccountMetadata, 'type'> &
+  BackupMetadata & { originalOwner?: boolean };
+
+/** Shared per-account classifier. Signer capability and auth membership grant nothing. */
+export function classifyKeyHolding(
+  account: BackupAccount | null | undefined,
+  secretPresence: KeyHolding = 'unresolved'
+): KeyHolding {
+  if (!account) return 'absent';
+  if (account.type === AccountType.STANDARD) return 'present';
+  if (account.type !== AccountType.REKEYED) return 'absent';
+  return account.originalOwner === true ? 'present' : secretPresence;
+}
+
+/** Only a literal true on this account establishes backup verification. */
 export function isBackupVerified(
-  account: (Pick<AccountMetadata, 'type'> & BackupMetadata) | null | undefined
+  account: BackupAccount | null | undefined
 ): boolean {
-  if (!account || account.type !== AccountType.STANDARD) return false;
+  if (
+    !account ||
+    (account.type !== AccountType.STANDARD &&
+      account.type !== AccountType.REKEYED)
+  )
+    return false;
   return account.backupVerified === true;
 }
 
-/**
- * True when an account still needs its recovery phrase confirmed — i.e. it is a
- * key-bearing STANDARD account whose phrase the user has not proven they hold.
- */
+/** Home policy: unresolved custody reminds; only confirmed delegation suppresses. */
 export function needsBackupVerification(
-  account: (Pick<AccountMetadata, 'type'> & BackupMetadata) | null | undefined
+  account: BackupAccount | null | undefined,
+  keyHolding = classifyKeyHolding(account),
+  delegatedEverywhere = false
 ): boolean {
-  if (!account || account.type !== AccountType.STANDARD) return false;
-  return !isBackupVerified(account);
+  return (
+    keyHolding !== 'absent' &&
+    !isBackupVerified(account) &&
+    !delegatedEverywhere
+  );
 }
 
 // Union type for all account metadata types
