@@ -99,7 +99,10 @@ import {
 } from '../envelopeV2';
 import type { ScryptKdfParams } from '../../backup/types';
 import { AccountType } from '../../../types/wallet';
-import type { StandardAccountMetadata } from '../../../types/wallet';
+import type {
+  RekeyedAccountMetadata,
+  StandardAccountMetadata,
+} from '../../../types/wallet';
 
 const DEVICE_ID = 'pr4-test-device-idfv';
 const PIN_ITERATIONS = 8000; // AccountSecureStorage.PIN_ITERATIONS
@@ -953,5 +956,100 @@ describe('salt-in-credential (§5.2)', () => {
     expect(parsed.salt).toBe(oldSalt);
     expect(parsed.secretSource).toBe('pin');
     expect(await AccountSecureStorage.verifyPin('123456')).toBe(true);
+  });
+});
+
+describe('REKEYED secret storage for creation', () => {
+  function rekeyed(k: ReturnType<typeof makeAlgoKey>): RekeyedAccountMetadata {
+    return {
+      ...makeStandardMeta('acct-rekeyed', k),
+      type: AccountType.REKEYED,
+      authAddress: algosdk.encodeAddress(new Uint8Array(32)),
+      canSign: false,
+      originalOwner: true,
+    };
+  }
+
+  it('persists an explicit key through journal commit and reads it byte-identically', async () => {
+    const k = makeAlgoKey();
+    const account = rekeyed(k);
+    let out: Uint8Array | undefined;
+    try {
+      const token = await AccountSecureStorage.storeAccountForCreation(
+        account,
+        k.sk,
+        AccountSecureStorage.getResetGeneration()
+      );
+      await AccountSecureStorage.commitPendingCreate(account.id, token);
+      AccountSecureStorage.clearPrivateKeyCache();
+      out = await AccountSecureStorage.getPrivateKey(account.id);
+      expect(Buffer.compare(Buffer.from(out), Buffer.from(k.sk))).toBe(0);
+      expect(algosdk.encodeAddress(out.slice(32))).toBe(account.address);
+    } finally {
+      out?.fill(0);
+      k.sk.fill(0);
+    }
+  });
+
+  it('keeps metadata-only REKEYED keyless without implicitly creating a key', async () => {
+    const k = makeAlgoKey();
+    try {
+      const account = { ...rekeyed(k), originalOwner: false };
+      await AccountSecureStorage.storeAccountMetadataForCreation(
+        account,
+        AccountSecureStorage.getResetGeneration()
+      );
+      expect(
+        await AccountSecureStorage.probeSecretPresenceStrict(account.id)
+      ).toBe(false);
+      await expect(
+        AccountSecureStorage.getPrivateKey(account.id)
+      ).rejects.toThrow();
+    } finally {
+      k.sk.fill(0);
+    }
+  });
+
+  it('rejects a REKEYED creation whose reset generation is stale', async () => {
+    const k = makeAlgoKey();
+    try {
+      const account = rekeyed(k);
+      await expect(
+        AccountSecureStorage.storeAccountForCreation(
+          account,
+          k.sk,
+          AccountSecureStorage.getResetGeneration() - 1
+        )
+      ).rejects.toThrow();
+      expect(
+        await AccountSecureStorage.probeSecretPresenceStrict(account.id)
+      ).toBe(false);
+    } finally {
+      k.sk.fill(0);
+    }
+  });
+
+  it('rolls back a journaled REKEYED secret with the existing ownership token', async () => {
+    const k = makeAlgoKey();
+    try {
+      const account = rekeyed(k);
+      const token = await AccountSecureStorage.storeAccountForCreation(
+        account,
+        k.sk,
+        AccountSecureStorage.getResetGeneration()
+      );
+      expect(
+        await AccountSecureStorage.probeSecretPresenceStrict(account.id)
+      ).toBe(true);
+      await AccountSecureStorage.deleteAccountIfAttemptMatches(
+        account.id,
+        token
+      );
+      expect(
+        await AccountSecureStorage.probeSecretPresenceStrict(account.id)
+      ).toBe(false);
+    } finally {
+      k.sk.fill(0);
+    }
   });
 });

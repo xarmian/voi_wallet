@@ -591,9 +591,12 @@ export class SecureKeyManager {
         throw new Error('Account not found');
       }
 
-      // Check if it's a standard account with mnemonic
-      // TEMPORARY: Allow any account type to check if private key exists
-      if (account.type !== 'standard' && account.type !== 'watch') {
+      // Retrieval, rather than ownership metadata, proves a REKEYED key exists.
+      if (
+        account.type !== 'standard' &&
+        account.type !== 'watch' &&
+        account.type !== 'rekeyed'
+      ) {
         throw new Error('This account type does not have a recovery phrase');
       }
 
@@ -601,15 +604,13 @@ export class SecureKeyManager {
         account as import('@/types/wallet').StandardAccountMetadata;
 
       const storedMnemonic = standardAccount.mnemonic?.trim();
-      if (storedMnemonic) {
+      if (account.type !== 'rekeyed' && storedMnemonic) {
         return storedMnemonic;
       }
 
       let privateKey: Uint8Array | null = null;
       try {
-        privateKey = await AccountSecureStorage.getPrivateKey(
-          standardAccount.id
-        );
+        privateKey = await AccountSecureStorage.getPrivateKey(account.id);
         const derivedMnemonic = algosdk.secretKeyToMnemonic(privateKey);
         return derivedMnemonic;
       } catch (privateKeyError) {

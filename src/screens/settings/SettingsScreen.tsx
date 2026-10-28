@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -31,6 +31,7 @@ import RenameAccountModal from '@/components/account/RenameAccountModal';
 import ThemeSwitcher from '@/components/common/ThemeSwitcher';
 import LocaleSwitcher from '@/components/common/LocaleSwitcher';
 import NFTThemeSelector from '@/components/common/NFTThemeSelector';
+import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 import { formatAddress } from '@/utils/address';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
@@ -233,6 +234,25 @@ function SectionHeader({
 export default function SettingsScreen() {
   const navigation = useNavigation<SettingsScreenNavigationProp>();
   const activeAccount = useActiveAccount();
+  const [phraseAccess, setPhraseAccess] = useState<{
+    account: AccountMetadata;
+    available: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (activeAccount?.type !== AccountType.REKEYED) return;
+    let cancelled = false;
+    void isListDeletionProtected(activeAccount).then((available) => {
+      if (!cancelled) setPhraseAccess({ account: activeAccount, available });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAccount]);
+  const canShowPhrase =
+    activeAccount?.type === AccountType.STANDARD ||
+    (activeAccount?.type === AccountType.REKEYED &&
+      (activeAccount.originalOwner === true ||
+        (phraseAccess?.account === activeAccount && phraseAccess.available)));
   const accounts = useAccounts();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
   const updateAccountLabel = useWalletStore(
@@ -585,9 +605,9 @@ export default function SettingsScreen() {
               icon="document-text-outline"
               label="Show Recovery Phrase"
               onPress={handleShowRecoveryPhrase}
-              disabled={activeAccount?.type !== AccountType.STANDARD}
+              disabled={!canShowPhrase}
               subtitle={
-                activeAccount?.type !== AccountType.STANDARD
+                !canShowPhrase
                   ? 'Not available for this account type'
                   : undefined
               }

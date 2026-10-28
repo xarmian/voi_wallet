@@ -877,6 +877,57 @@ describe('SecureKeyManager.getMnemonic', () => {
     expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
   });
 
+  it.each([true, false])(
+    'reads the original REKEYED key (originalOwner: %s) and wipes it',
+    async (originalOwner) => {
+      const account = {
+        ...watchAccount(REKEYED, 'acc-rekeyed'),
+        type: AccountType.REKEYED,
+        authAddress: AUTH.addr,
+        originalOwner,
+        // A stale cached phrase must never bypass actual retrieval for REKEYED.
+        mnemonic: AUTH.mnemonic,
+      };
+      keyRegistry.set(account.id, REKEYED.sk);
+      setWallet([account, standardAccount(AUTH, 'acc-auth')]);
+      const mnemonic = await SecureKeyManager.getMnemonic(REKEYED.addr);
+      expect(addressForMnemonic(mnemonic)).toBe(REKEYED.addr);
+      expect(mockSecureGetPrivateKey).toHaveBeenCalledWith(account.id);
+      expect(handedOutKeys).toHaveLength(1);
+      expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
+    }
+  );
+
+  it('wipes a REKEYED key even when mnemonic derivation fails', async () => {
+    setWallet([
+      { ...watchAccount(REKEYED, 'acc-rekeyed'), type: AccountType.REKEYED },
+    ]);
+    const invalidKey = REKEYED.sk.slice(0, 31);
+    mockSecureGetPrivateKey.mockResolvedValueOnce(invalidKey);
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'Failed to retrieve recovery phrase'
+    );
+    expect(invalidKey.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('propagates missing and unavailable REKEYED key errors even for an original owner', async () => {
+    setWallet([
+      {
+        ...watchAccount(REKEYED, 'acc-rekeyed'),
+        type: AccountType.REKEYED,
+        originalOwner: true,
+        mnemonic: AUTH.mnemonic,
+      },
+    ]);
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'Failed to retrieve recovery phrase: No key stored'
+    );
+    mockSecureGetPrivateKey.mockRejectedValueOnce(new Error('vault locked'));
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'vault locked'
+    );
+  });
+
   it('rejects for account types without a recovery phrase', async () => {
     setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
 
