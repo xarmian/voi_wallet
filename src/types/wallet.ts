@@ -25,11 +25,8 @@ export interface BaseAccountMetadata {
   avatarUpdatedAt?: string; // Last time avatarUrl was refreshed
 }
 
-// Standard Account (with private key)
-export interface StandardAccountMetadata extends BaseAccountMetadata {
-  type: AccountType.STANDARD;
-  mnemonic: string; // 25-word recovery phrase
-  derivationPath?: string; // HD derivation path if applicable
+/** Per-account backup metadata shared by STANDARD and REKEYED records. */
+export interface BackupMetadata {
   /**
    * LEGACY. Despite the historical name this means "a mnemonic was supplied for
    * this account", NOT "the user proved they have it" — `importStandardAccount`
@@ -37,12 +34,12 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
    * (DR-10); nothing in the app reads it today. Use `backupVerified` for any
    * "is this account safely backed up?" decision.
    */
-  hasBackup: boolean;
+  hasBackup?: boolean;
   /**
    * TASK-45 / DR-10 / DR-11 — whether the user has demonstrably confirmed this
    * account's recovery phrase by completing the word-verification quiz.
    *
-   * - `true` ONLY on quiz success. Plain creation, import, rekey conversion,
+   * - `true` ONLY on quiz success. Plain creation, import,
    *   restore-from-backup, and the "Skip for now" escape all leave it `false`.
    * - Pre-existing accounts (persisted before this field existed) migrate to
    *   `false`; it is NOT derived from `hasBackup`, which means something else.
@@ -51,9 +48,18 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
    *
    * Read it through `isBackupVerified()` so a legacy record that has not yet
    * been through the read-time migration can never be treated as verified.
+   * Each account owns these fields; an auth account grants no verification.
    */
-  backupVerified: boolean;
+  backupVerified?: boolean;
   backupCreatedAt?: string; // Backup creation timestamp
+}
+
+// Standard Account (with private key)
+export interface StandardAccountMetadata
+  extends BaseAccountMetadata, BackupMetadata {
+  type: AccountType.STANDARD;
+  mnemonic: string; // 25-word recovery phrase
+  derivationPath?: string; // HD derivation path if applicable
 }
 
 // Watch Account (read-only)
@@ -64,7 +70,8 @@ export interface WatchAccountMetadata extends BaseAccountMetadata {
 }
 
 // Rekeyed Account (delegated signing)
-export interface RekeyedAccountMetadata extends BaseAccountMetadata {
+export interface RekeyedAccountMetadata
+  extends BaseAccountMetadata, BackupMetadata {
   type: AccountType.REKEYED;
   authAddress: string; // Address that has signing authority
   rekeyedAt?: string; // When the account was rekeyed
@@ -125,18 +132,16 @@ export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
 /**
  * TASK-45 — the ONLY sanctioned read of `backupVerified`.
  *
- * Fails closed in every ambiguous case: non-standard accounts (no phrase to
- * back up), and legacy standard records persisted before the field existed
- * (`undefined` at runtime even though the type declares it required, until the
- * read-time migration in MultiAccountWalletService rewrites them). Anything but
+ * Retains the STANDARD-only policy until TASK-421 U4e. Legacy or invalid
+ * verification values fail closed before read-time migration. Anything but
  * a literal `true` means "not verified", so the Home warning banner can never
  * be wrongly suppressed.
  */
 export function isBackupVerified(
-  account: Pick<AccountMetadata, 'type'> | null | undefined
+  account: (Pick<AccountMetadata, 'type'> & BackupMetadata) | null | undefined
 ): boolean {
   if (!account || account.type !== AccountType.STANDARD) return false;
-  return (account as Partial<StandardAccountMetadata>).backupVerified === true;
+  return account.backupVerified === true;
 }
 
 /**
@@ -144,7 +149,7 @@ export function isBackupVerified(
  * key-bearing STANDARD account whose phrase the user has not proven they hold.
  */
 export function needsBackupVerification(
-  account: Pick<AccountMetadata, 'type'> | null | undefined
+  account: (Pick<AccountMetadata, 'type'> & BackupMetadata) | null | undefined
 ): boolean {
   if (!account || account.type !== AccountType.STANDARD) return false;
   return !isBackupVerified(account);

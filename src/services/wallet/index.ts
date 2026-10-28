@@ -1028,20 +1028,19 @@ export class MultiAccountWalletService {
     // from an exactly-32-byte public key; it never weakens validation.
     let modified = false;
 
-    // TASK-45 / DR-10 — `backupVerified` migration. Every STANDARD account
-    // persisted before the field existed is normalized to `false`, NOT derived
-    // from `hasBackup` (which records "a mnemonic was supplied", not "the user
-    // proved they hold it"). Idempotent: after the first pass every standard
-    // account carries a boolean, so `modified` stays false on later reads and no
-    // further write is enqueued. Non-boolean junk (a hand-edited or corrupted
-    // blob) is coerced to `false` rather than trusted. The resulting write is
-    // the existing epoch-guarded read-repair write, so a concurrent wipe/reset
-    // still wins.
+    // TASK-45 / TASK-421 U4a — normalize STANDARD and REKEYED verification.
+    // Preserve literal booleans; missing/invalid values become false, never
+    // inferred from hasBackup or an auth account. No other flags are invented.
+    // Idempotent and persisted through the existing epoch-guarded read-repair
+    // write, so a concurrent wipe/reset still wins. No network/probe dependency.
     wallet.accounts = wallet.accounts.map((acc) => {
-      if (acc.type !== AccountType.STANDARD) return acc;
       if (
-        typeof (acc as StandardAccountMetadata).backupVerified === 'boolean'
+        acc.type !== AccountType.STANDARD &&
+        acc.type !== AccountType.REKEYED
       ) {
+        return acc;
+      }
+      if (typeof acc.backupVerified === 'boolean') {
         return acc;
       }
       modified = true;

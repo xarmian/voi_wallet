@@ -97,3 +97,27 @@ describe('needsBackupVerification', () => {
     expect(needsBackupVerification(undefined)).toBe(false);
   });
 });
+
+// U4a changes the accepted metadata shape, while U4e owns policy changes.
+describe('existing reminder policy compatibility', () => {
+  it.each(Object.values(AccountType))(
+    'keeps %s results for every flag combination',
+    (type) => {
+      for (const hasBackup of [undefined, false, true]) {
+        for (const backupVerified of [undefined, false, true, 'yes', 1, null]) {
+          const account = {
+            type,
+            hasBackup,
+            backupVerified,
+          } as unknown as Parameters<typeof isBackupVerified>[0];
+          const verified =
+            type === AccountType.STANDARD && backupVerified === true;
+          expect(isBackupVerified(account)).toBe(verified);
+          expect(needsBackupVerification(account)).toBe(
+            type === AccountType.STANDARD && !verified
+          );
+        }
+      }
+    }
+  );
+});
