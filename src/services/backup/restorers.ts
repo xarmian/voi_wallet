@@ -209,6 +209,9 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
   ledger: number;
   remoteSigner: number;
 }> {
+  // Defensive: the full-restore entry points validate before clearing, but a
+  // direct call must not bypass the duplicate-id and key-identity checks.
+  validateRetainedKeys(accounts);
   const counts = {
     total: 0,
     standard: 0,

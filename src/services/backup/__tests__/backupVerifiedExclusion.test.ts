@@ -480,3 +480,13 @@ it.each([null, '', 'not a recovery phrase', 42])(
     expect(secure.clearAll).not.toHaveBeenCalled();
   }
 );
+
+it('a direct restoreAccounts call also rejects duplicate ids before storing', async () => {
+  const keyed = retained();
+  const { mnemonic: _drop, ...metadataOnly } = retained();
+  await expect(
+    restoreAccounts([keyed, { ...metadataOnly, id: keyed.id }])
+  ).rejects.toThrow('duplicate account ids');
+  expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
+  expect(secure.storeAccountMetadataForCreation).not.toHaveBeenCalled();
+});
