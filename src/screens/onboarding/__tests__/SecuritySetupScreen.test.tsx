@@ -24,15 +24,30 @@ jest.mock('@/services/wallet', () => ({
     importStandardAccount: (...args: unknown[]) =>
       mockImportStandardAccount(...args),
     addWatchAccount: jest.fn(),
+    hasKeyBearingAccountStrict: jest.fn(),
   },
 }));
 
 jest.mock('@/services/secure', () => ({
   AccountSecureStorage: {
     PASSPHRASE_MIN_LENGTH: 12,
+    hasPinStrict: jest.fn(),
+    deletePin: jest.fn(),
+    readAccountListStrict: jest.fn(),
+    readPendingCreatesStrict: jest.fn(),
+    probeSecretPresenceStrict: jest.fn(),
+    clearBiometricSecret: jest.fn(),
     setBiometricEnabled: jest.fn(async () => {}),
     setBiometricSecret: jest.fn(async () => {}),
   },
+}));
+
+jest.mock('@/services/secure/AccountSecureStorage', () =>
+  jest.requireMock('@/services/secure')
+);
+
+jest.mock('@/services/wallet/crossStoreReconcile', () => ({
+  reconcileCrossStoreHalfState: jest.fn(),
 }));
 
 const mockAuthSetupPin = jest.fn();
@@ -152,6 +167,10 @@ jest.mock('@/components/common/GlassButton', () => {
 });
 
 import { Alert } from 'react-native';
+import { AccountSecureStorage } from '@/services/secure';
+import { MultiAccountWalletService } from '@/services/wallet';
+import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
+import { ORPHAN_PIN_UNVERIFIABLE_MESSAGE } from '@/services/secure/orphanPin';
 import SecuritySetupScreen from '../SecuritySetupScreen';
 import {
   storeMnemonicSecret,
@@ -228,9 +247,32 @@ async function submitPin(
 }
 
 beforeEach(() => {
+  jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
+    ran: true,
+    orphanSecretsDeleted: [],
+    phantomAccountsPruned: [],
+    staleJournalDropped: [],
+  });
+  jest
+    .mocked(AccountSecureStorage.readAccountListStrict)
+    .mockResolvedValue(['listed']);
+  jest
+    .mocked(AccountSecureStorage.readPendingCreatesStrict)
+    .mockResolvedValue({ journaled: 'attempt' });
+  jest
+    .mocked(AccountSecureStorage.probeSecretPresenceStrict)
+    .mockResolvedValue(false);
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   jest.spyOn(console, 'log').mockImplementation(() => {});
   jest.spyOn(console, 'error').mockImplementation(() => {});
+  jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(false);
+  jest.mocked(AccountSecureStorage.deletePin).mockResolvedValue(undefined);
+  jest
+    .mocked(AccountSecureStorage.clearBiometricSecret)
+    .mockResolvedValue(undefined);
+  jest
+    .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+    .mockResolvedValue(false);
   mockAuthSetupPin.mockResolvedValue(undefined);
   mockImportStandardAccount.mockResolvedValue({ address: 'FAKEADDRESS' });
 });
@@ -238,6 +280,7 @@ beforeEach(() => {
 afterEach(() => {
   clearAllAccountSecrets();
   jest.restoreAllMocks();
+  jest.clearAllMocks();
   mockAuthSetupPin.mockReset();
   mockImportStandardAccount.mockReset();
 });
@@ -289,9 +332,22 @@ describe('SecuritySetupScreen — mnemonic secret carrier (TASK-224)', () => {
 
     // Retry with the same PIN: no second first-secret setup, import succeeds,
     // secret released.
+    jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
     await fireEvent.press(screen.getByTestId('complete-setup'));
 
     expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(AccountSecureStorage.hasPinStrict).toHaveBeenCalledTimes(1);
+    for (const fn of [
+      reconcileCrossStoreHalfState,
+      MultiAccountWalletService.hasKeyBearingAccountStrict,
+      AccountSecureStorage.readAccountListStrict,
+      AccountSecureStorage.readPendingCreatesStrict,
+      AccountSecureStorage.probeSecretPresenceStrict,
+      AccountSecureStorage.clearBiometricSecret,
+    ]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
+    expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
     expect(mockImportStandardAccount).toHaveBeenCalledTimes(2);
     expect(mockImportStandardAccount).toHaveBeenLastCalledWith(
       expect.objectContaining({ mnemonic: FAKE_MNEMONIC })
@@ -495,6 +551,171 @@ describe('SecuritySetupScreen — mnemonic secret carrier (TASK-224)', () => {
       expect.stringMatching(UNAVAILABLE)
     );
     expect(navigation.navigate).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+});
+
+describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
+  it.each(['create', 'mnemonic', 'qr', 'watch', 'restore', 'ledger'])(
+    'clears an orphan before first-secret setup for %s',
+    async (source) => {
+      const order: string[] = [];
+      jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+      jest
+        .mocked(AccountSecureStorage.deletePin)
+        .mockImplementation(async () => {
+          order.push('delete');
+        });
+      jest
+        .mocked(AccountSecureStorage.clearBiometricSecret)
+        .mockImplementation(async () => {
+          order.push('clear');
+        });
+      jest
+        .mocked(AccountSecureStorage.setBiometricEnabled)
+        .mockImplementation(async () => {
+          order.push('disable');
+        });
+      mockAuthSetupPin.mockImplementation(async () => {
+        order.push('setup');
+      });
+      mockImportStandardAccount.mockImplementation(async () => {
+        order.push('import');
+        return { address: 'FAKEADDRESS' };
+      });
+      const { screen, navigation } = await renderScreen({
+        source,
+        mnemonicSecretId: storeMnemonicSecret(FAKE_MNEMONIC),
+      });
+      await submitPin(screen, '654321');
+      expect(order.slice(0, 4)).toEqual([
+        'delete',
+        'clear',
+        'disable',
+        'setup',
+      ]);
+      const at = (fn: unknown, n = 0) =>
+        jest.mocked(fn as jest.Mock).mock.invocationCallOrder[n];
+      const calls = [
+        at(AccountSecureStorage.readAccountListStrict, 0),
+        at(AccountSecureStorage.readPendingCreatesStrict, 0),
+        at(reconcileCrossStoreHalfState),
+        at(AccountSecureStorage.readAccountListStrict, 1),
+        at(AccountSecureStorage.readPendingCreatesStrict, 1),
+        at(AccountSecureStorage.probeSecretPresenceStrict),
+        at(AccountSecureStorage.deletePin),
+        at(AccountSecureStorage.clearBiometricSecret),
+        at(mockAuthSetupPin),
+      ];
+      expect(calls.every((c) => typeof c === 'number')).toBe(true);
+      expect(calls).toEqual([...calls].sort((a, b) => a - b));
+      expect(mockAuthSetupPin).toHaveBeenCalledWith('654321', 'pin');
+      if (source === 'create' || source === 'mnemonic') {
+        expect(order).toEqual([
+          'delete',
+          'clear',
+          'disable',
+          'setup',
+          'disable',
+          'import',
+        ]);
+      }
+      expect(navigation.navigate).toHaveBeenCalledWith('Main');
+      await screen.unmount();
+    }
+  );
+
+  it.each([
+    'probe failure (fail-open regression)',
+    'reconcile skipped',
+    'reconcile throws',
+    'listed secret',
+    'journaled secret',
+    'list read failure',
+    'journal read failure',
+    'keys',
+    'delete refusal',
+    'PIN read failure',
+    'account read failure',
+  ])('fails closed on %s', async (failure) => {
+    jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+    if (failure === 'probe failure (fail-open regression)')
+      jest
+        .mocked(AccountSecureStorage.probeSecretPresenceStrict)
+        .mockRejectedValue(new Error('timeout'));
+    if (failure === 'reconcile skipped')
+      jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
+        ran: false,
+        orphanSecretsDeleted: [],
+        phantomAccountsPruned: [],
+        staleJournalDropped: [],
+      });
+    if (failure === 'reconcile throws')
+      jest
+        .mocked(reconcileCrossStoreHalfState)
+        .mockRejectedValue(new Error('timeout'));
+    if (failure === 'listed secret' || failure === 'journaled secret')
+      jest
+        .mocked(AccountSecureStorage.probeSecretPresenceStrict)
+        .mockImplementation(
+          async (id) =>
+            id === (failure === 'listed secret' ? 'listed' : 'journaled')
+        );
+    if (failure === 'list read failure')
+      jest
+        .mocked(AccountSecureStorage.readAccountListStrict)
+        .mockRejectedValue(new Error('timeout'));
+    if (failure === 'journal read failure')
+      jest
+        .mocked(AccountSecureStorage.readPendingCreatesStrict)
+        .mockRejectedValue(new Error('timeout'));
+    if (failure === 'keys')
+      jest
+        .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+        .mockResolvedValue(true);
+    if (failure === 'delete refusal')
+      jest
+        .mocked(AccountSecureStorage.deletePin)
+        .mockRejectedValue(new Error('private details'));
+    if (failure === 'PIN read failure')
+      jest
+        .mocked(AccountSecureStorage.hasPinStrict)
+        .mockRejectedValue(new Error('private details'));
+    if (failure === 'account read failure')
+      jest
+        .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+        .mockRejectedValue(new Error('private details'));
+    const { screen, navigation } = await renderScreen({
+      source: 'create',
+      mnemonicSecretId: storeMnemonicSecret(FAKE_MNEMONIC),
+    });
+    await submitPin(screen);
+    expect(mockAuthSetupPin).not.toHaveBeenCalled();
+    expect(mockImportStandardAccount).not.toHaveBeenCalled();
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Error',
+      'Failed to setup wallet security: ' + ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+    );
+    if (failure !== 'delete refusal')
+      expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+    expect(AccountSecureStorage.clearBiometricSecret).not.toHaveBeenCalled();
+    expect(navigation.emitBeforeRemove()).toBe(false);
+    expect(screen.getByTestId('header-back')).toBeTruthy();
+    await screen.unmount();
+  });
+
+  it('keeps first-secret setup unchanged when no PIN exists', async () => {
+    const { screen } = await renderScreen({
+      source: 'create',
+      mnemonicSecretId: storeMnemonicSecret(FAKE_MNEMONIC),
+    });
+    await submitPin(screen);
+    expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+    expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict
+    ).not.toHaveBeenCalled();
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
     await screen.unmount();
   });
 });

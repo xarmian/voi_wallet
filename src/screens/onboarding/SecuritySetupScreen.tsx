@@ -9,6 +9,10 @@ import { RootStackParamList } from '@/navigation/AppNavigator';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure';
 import {
+  clearOrphanPin,
+  ORPHAN_PIN_UNVERIFIABLE_MESSAGE,
+} from '@/services/secure/orphanPin';
+import {
   AccountType,
   ImportAccountRequest,
   AddWatchAccountRequest,
@@ -236,6 +240,14 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       setSubmitting(true);
 
       if (!committed) {
+        // TASK-413 DR-1 / #195: re-entry after an abandoned import may leave a
+        // PIN with no keys. Strict reads must fail closed before first-secret
+        // setup; same-session retries keep their already committed credential.
+        try {
+          if (await AccountSecureStorage.hasPinStrict()) await clearOrphanPin();
+        } catch {
+          throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
+        }
         await setUpSecretAndBiometrics();
       }
 
