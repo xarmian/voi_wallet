@@ -193,3 +193,76 @@ it('cancels both scheduled operations if active account changes before paint', a
   expect(mockLookup.mock.calls.map(([address]) => address)).toEqual(['B', 'B']);
   await unmount();
 });
+
+it.each([
+  [
+    'verified standard',
+    account('A', AccountType.STANDARD, { backupVerified: true }),
+  ],
+  [
+    'verified rekeyed',
+    account('A', AccountType.REKEYED, { backupVerified: true }),
+  ],
+  ['watch', account('A', AccountType.WATCH)],
+  ['ledger', account('A', AccountType.LEDGER)],
+])('does no probe or network work for a %s account', async (_n, active) => {
+  select(active);
+  const { result, unmount } = await renderHook(useHomeBackupReminder);
+  await paint();
+  expect(result.current).toBe(false);
+  expect(probe).not.toHaveBeenCalled();
+  expect(mockLookup).not.toHaveBeenCalled();
+  await unmount();
+});
+
+it('shows nothing and does no work before the wallet loads', async () => {
+  useWalletStore.setState({ wallet: null });
+  const { result, unmount } = await renderHook(useHomeBackupReminder);
+  await paint();
+  expect(result.current).toBe(false);
+  expect(probe).not.toHaveBeenCalled();
+  expect(mockLookup).not.toHaveBeenCalled();
+  await unmount();
+});
+
+it('never adopts an old probe of A after an A -> B -> A switch', async () => {
+  const finishers: ((present: boolean) => void)[] = [];
+  probe.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishers.push(resolve);
+      })
+  );
+  select(account('A'));
+  const { result, unmount } = await renderHook(useHomeBackupReminder);
+  await paint();
+  await act(() => select(account('B'), [account('A')]));
+  await paint();
+  await act(() => select(account('A'), [account('B')]));
+  await paint();
+  expect(probe.mock.calls.map(([id]) => id)).toEqual(['A', 'B', 'A']);
+  // The FIRST A probe resolves absent; only the current A probe may decide.
+  await act(() => finishers[0](false));
+  expect(result.current).toBe(true);
+  await act(() => finishers[2](false));
+  expect(result.current).toBe(false);
+  await unmount();
+});
+
+it('ignores a probe that completes after unmount', async () => {
+  let finish!: (present: boolean) => void;
+  probe.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+  const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  select(account('A'));
+  const { unmount } = await renderHook(useHomeBackupReminder);
+  await paint();
+  await unmount();
+  await act(() => finish(false));
+  expect(spy).not.toHaveBeenCalled();
+  spy.mockRestore();
+});

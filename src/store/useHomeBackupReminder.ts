@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   classifyKeyHolding,
+  isBackupVerified,
   KeyHolding,
   needsBackupVerification,
 } from '@/types/wallet';
@@ -29,24 +30,37 @@ export function useHomeBackupReminder(): boolean {
         : null;
     })
   );
-  const { delegatedEverywhere } = useNetworkRekeyStatus(account?.address ?? '');
+  // Only an unverified account that may hold its key can remind, so only it
+  // pays for a secret probe or per-network lookups (U4e review Low).
+  const candidate =
+    account &&
+    !isBackupVerified(account) &&
+    classifyKeyHolding(account) !== 'absent'
+      ? account
+      : null;
+  const { delegatedEverywhere } = useNetworkRekeyStatus(
+    candidate?.address ?? ''
+  );
   const [probe, setProbe] = useState<{
     account: typeof account;
     holding: KeyHolding;
   } | null>(null);
   useEffect(() => {
-    if (!account || classifyKeyHolding(account) !== 'unresolved') return;
+    if (!candidate || classifyKeyHolding(candidate) !== 'unresolved') return;
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const frame = requestAnimationFrame(() => {
       timer = setTimeout(() => {
-        void AccountSecureStorage.probeSecretPresenceStrict(account.id)
+        void AccountSecureStorage.probeSecretPresenceStrict(candidate.id)
           .then((present) => {
             if (live)
-              setProbe({ account, holding: present ? 'present' : 'absent' });
+              setProbe({
+                account: candidate,
+                holding: present ? 'present' : 'absent',
+              });
           })
           .catch(() => {
-            if (live) setProbe({ account, holding: 'unresolved' });
+            if (live) setProbe({ account: candidate, holding: 'unresolved' });
           });
       }, 0);
     });
@@ -55,7 +69,7 @@ export function useHomeBackupReminder(): boolean {
       cancelAnimationFrame(frame);
       clearTimeout(timer);
     };
-  }, [account]);
+  }, [candidate]);
   // Check identity during render too: effects haven't cleaned up yet on a switch.
   const holding = classifyKeyHolding(
     account,
