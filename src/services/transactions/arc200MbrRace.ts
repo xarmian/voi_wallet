@@ -15,10 +15,37 @@ export function isArc200MbrRace(error: unknown, group: Arc200TransactionGroup) {
       error.message
     );
   if (!match || BigInt(match[2]) >= BigInt(match[3])) return false;
-  return group.transactions.some((txn) => {
+  const isEscrow = group.transactions.some((txn) => {
     const appId = txn.applicationCall?.appIndex;
     return (
       appId && algosdk.getApplicationAddress(appId).toString() === match[1]
     );
   });
+  const funded = group.transactions.some(
+    (txn) =>
+      txn.payment?.receiver.toString() === match[1] &&
+      txn.payment.amount >= 28500n
+  );
+  return isEscrow && !funded;
+}
+
+// Match algod's round-range rejection, and only an expired range in this group.
+export function isArc200ExpiredGroup(
+  error: unknown,
+  group: Arc200TransactionGroup
+) {
+  if (!(error instanceof Error)) return false;
+  const match =
+    /(?:txn|transaction) dead: round (\d+) outside of (\d+)--(\d+)/.exec(
+      error.message
+    );
+  return (
+    !!match &&
+    BigInt(match[1]) > BigInt(match[3]) &&
+    group.transactions.some(
+      (txn) =>
+        txn.firstValid === BigInt(match[2]) &&
+        txn.lastValid === BigInt(match[3])
+    )
+  );
 }

@@ -1,3 +1,4 @@
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 /**
  * ClaimTokenScreen - Screen for claiming a single approved token
  *
@@ -296,6 +297,8 @@ export default function ClaimTokenScreen() {
     group: txnGroup,
     fee: estimatedFee,
     recover,
+    buildError,
+    retry,
   } = useArc200Confirmation(buildClaim);
 
   // Handle claim - navigate to universal signing screen
@@ -372,9 +375,11 @@ export default function ClaimTokenScreen() {
             // recovery the user confirms again, and this same callback must
             // then be allowed to submit the rebuilt group (TASK-418 + TASK-416).
             hasSubmittedRef.current = false;
-            if (await recover(submitError, txnGroup)) {
+            const recoveryResult = await recover(submitError, txnGroup);
+            if (recoveryResult) {
               navigation.goBack();
-              Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+              if (recoveryResult === 'rebuilt')
+                Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
               return;
             }
             const message =
@@ -625,6 +630,14 @@ export default function ClaimTokenScreen() {
             )}
           </GlassCard>
 
+          {!!buildError && (
+            <ErrorStateView
+              error={buildError}
+              onRetry={retry}
+              variant="inline"
+              fallbackMessage="Unable to prepare transaction. Please retry."
+            />
+          )}
           {/* Fee Estimate */}
           <View style={styles.feeContainer}>
             <Text style={styles.feeLabel}>Estimated Fee</Text>

@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Arc200TransactionGroup,
   Arc200TransactionService,
 } from '@/services/transactions/arc200';
-import { isArc200MbrRace } from '@/services/transactions/arc200MbrRace';
+import {
+  isArc200MbrRace,
+  isArc200ExpiredGroup,
+} from '@/services/transactions/arc200MbrRace';
 
 // Retain one group for both review and signing; discard stale async builds.
 export function useArc200Confirmation(
@@ -15,20 +18,34 @@ export function useArc200Confirmation(
     build: typeof build;
     group: Arc200TransactionGroup;
   }>();
-  const recovery = useRef({ build, attempted: false });
+  const [failure, setFailure] = useState<{
+    build: typeof build;
+    error: unknown;
+  }>();
+  const recovery = useRef({ build, attempted: false, force: false });
+  const load = useCallback(
+    async (state: typeof recovery.current) => {
+      try {
+        const group = await build(state.force);
+        if (group && recovery.current === state) setReview({ build, group });
+        return !!group;
+      } catch (error) {
+        if (recovery.current === state) setFailure({ build, error });
+        return false;
+      }
+    },
+    [build]
+  );
   useEffect(() => {
-    recovery.current = { build, attempted: false };
-    let cancelled = false;
-    build()
-      ?.then((group) => {
-        if (!cancelled) setReview({ build, group });
-      })
-      .catch(() => {});
+    const state = { build, attempted: false, force: false };
+    recovery.current = state;
+    void Promise.resolve().then(() => {
+      if (recovery.current === state) return load(state);
+    });
     return () => {
-      cancelled = true;
-      recovery.current = { build, attempted: true };
+      recovery.current = { build, attempted: true, force: false };
     };
-  }, [build]);
+  }, [build, load]);
   const group = review?.build === build ? review.group : undefined;
   const recover = async (error: unknown, failedGroup = group) => {
     const state = recovery.current;
@@ -36,25 +53,27 @@ export function useArc200Confirmation(
       state.build !== build ||
       state.attempted ||
       !failedGroup ||
-      failedGroup.needsMbrPayment ||
-      !isArc200MbrRace(error, failedGroup)
+      (!isArc200MbrRace(error, failedGroup) &&
+        !isArc200ExpiredGroup(error, failedGroup))
     )
       return false;
     // Latch before awaiting: duplicate callbacks cannot build a third group.
     state.attempted = true;
     setReview(undefined);
-    try {
-      const rebuilt = await build(true);
-      if (rebuilt && recovery.current === state)
-        setReview({ build, group: rebuilt });
-    } catch {
-      // Keep confirmation disabled if rebuilding fails; never expose the race error.
-    }
-    return true;
+    setFailure(undefined);
+    // An MBR race forces funding for the whole group; expiry simulates afresh.
+    state.force = isArc200MbrRace(error, failedGroup);
+    return (await load(state)) ? 'rebuilt' : 'failed';
   };
   return {
     group,
     fee: group ? Arc200TransactionService.groupCost(group) : 0,
     recover,
+    buildError: failure?.build === build ? failure.error : undefined,
+    retry: () => {
+      setReview(undefined);
+      setFailure(undefined);
+      void load(recovery.current);
+    },
   };
 }

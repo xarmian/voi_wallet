@@ -1,3 +1,4 @@
+import { withTimeout } from '@/utils/withTimeout';
 import algosdk from 'algosdk';
 import {
   networkService as defaultNetworkService,
@@ -104,8 +105,8 @@ export class Arc200TransactionService {
   private static async requiresMbr(
     sender: string,
     simulated: boolean,
-    force = false,
-    networkId?: string
+    force: boolean | undefined,
+    networkId: string | undefined
   ) {
     if (force || !simulated) return true;
     try {
@@ -137,7 +138,11 @@ export class Arc200TransactionService {
       request.txnGroups[0].txns = txns.map(
         (txn) => new algosdk.SignedTransaction({ txn, sig: new Uint8Array(64) })
       );
-      return networkService.getAlgodClient().simulateTransactions(request).do();
+      return withTimeout(
+        networkService.getAlgodClient().simulateTransactions(request).do(),
+        10000,
+        new Error('Simulation timed out')
+      );
     };
     let group;
     let simulated = false;

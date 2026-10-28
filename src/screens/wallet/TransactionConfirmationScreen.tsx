@@ -1,3 +1,4 @@
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -14,6 +15,7 @@ import { Arc200TransactionService } from '@/services/transactions/arc200';
 import {
   ARC200_RECONFIRM_MESSAGE,
   isArc200MbrRace,
+  isArc200ExpiredGroup,
 } from '@/services/transactions/arc200MbrRace';
 import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 import { formatAddress } from '@/utils/address';
@@ -121,6 +123,8 @@ export default function TransactionConfirmationScreen() {
     group,
     fee: builtFee,
     recover,
+    buildError,
+    retry,
   } = useArc200Confirmation(buildTransfer);
   const confirmationFee =
     params.assetType === 'arc200' ? builtFee : params.estimatedFee;
@@ -329,14 +333,15 @@ export default function TransactionConfirmationScreen() {
     setShowAuthModal(false);
     setCurrentRequest(null);
 
-    if (
+    const recoveryResult =
       !success &&
       (await recover(
         result?.error ?? result,
         currentRequest?.transferParams?.preparedArc200Group
-      ))
-    ) {
-      Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+      ));
+    if (recoveryResult) {
+      if (recoveryResult === 'rebuilt')
+        Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
       return;
     }
 
@@ -429,6 +434,14 @@ export default function TransactionConfirmationScreen() {
       />
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {!!buildError && (
+          <ErrorStateView
+            error={buildError}
+            onRetry={retry}
+            variant="inline"
+            fallbackMessage="Unable to prepare transaction. Please retry."
+          />
+        )}
         {/* Recipient Profile */}
         <EnvoiProfileCard
           address={params.recipient}
@@ -488,7 +501,8 @@ export default function TransactionConfirmationScreen() {
         request={currentRequest}
         onComplete={handleAuthComplete}
         formatErrorMessage={(error) =>
-          group && !group.needsMbrPayment && isArc200MbrRace(error, group)
+          group &&
+          (isArc200MbrRace(error, group) || isArc200ExpiredGroup(error, group))
             ? ARC200_RECONFIRM_MESSAGE
             : undefined
         }

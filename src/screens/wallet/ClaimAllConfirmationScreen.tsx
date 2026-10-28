@@ -1,3 +1,4 @@
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 /**
  * ClaimAllConfirmationScreen - Confirmation screen for batch claiming multiple tokens
  *
@@ -300,6 +301,8 @@ export default function ClaimAllConfirmationScreen() {
     group: txnGroup,
     fee: estimatedFee,
     recover,
+    buildError,
+    retry,
   } = useArc200Confirmation(buildClaim);
 
   // Handle batch claim - navigate to universal signing screen
@@ -375,9 +378,11 @@ export default function ClaimAllConfirmationScreen() {
             // recovery the user confirms again, and this same callback must
             // then be allowed to submit the rebuilt group (TASK-418 + TASK-416).
             hasSubmittedRef.current = false;
-            if (await recover(submitError, txnGroup)) {
+            const recoveryResult = await recover(submitError, txnGroup);
+            if (recoveryResult) {
               navigation.goBack();
-              Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+              if (recoveryResult === 'rebuilt')
+                Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
               return;
             }
             const message =
@@ -625,6 +630,14 @@ export default function ClaimAllConfirmationScreen() {
             )}
           </GlassCard>
 
+          {!!buildError && (
+            <ErrorStateView
+              error={buildError}
+              onRetry={retry}
+              variant="inline"
+              fallbackMessage="Unable to prepare transaction. Please retry."
+            />
+          )}
           {/* Fee Estimate */}
           <View style={styles.feeContainer}>
             <Text style={styles.feeLabel}>Estimated Max Fee</Text>

@@ -1,3 +1,4 @@
+import { withTimeout } from '@/utils/withTimeout';
 import algosdk from 'algosdk';
 import {
   AccountBalance,
@@ -283,22 +284,14 @@ export class NetworkService {
     label: string,
     timeoutMs: number = NetworkService.REQUEST_TIMEOUT_MS
   ): Promise<T> {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(
-        () =>
-          reject(
-            new NetworkError(
-              `${label} timed out after ${timeoutMs}ms`,
-              this.currentNetworkId
-            )
-          ),
-        timeoutMs
-      );
-    });
-    return Promise.race([promise, timeout]).finally(() =>
-      clearTimeout(timeoutId)
-    ) as Promise<T>;
+    return withTimeout(
+      promise,
+      timeoutMs,
+      new NetworkError(
+        `${label} timed out after ${timeoutMs}ms`,
+        this.currentNetworkId
+      )
+    );
   }
 
   /**
