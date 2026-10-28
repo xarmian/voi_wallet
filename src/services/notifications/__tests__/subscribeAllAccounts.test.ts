@@ -264,6 +264,18 @@ beforeEach(() => {
   mockDb.betweenReadAndWrite = null;
 });
 
+describe('subscribeAccount — defaults', () => {
+  it('stores block reward notifications as off for a new subscription', async () => {
+    await expect(
+      notificationService.subscribeAccount(STANDARD_A)
+    ).resolves.toBe(true);
+
+    expect(mockDb.rows.get(STANDARD_A)).toMatchObject({
+      notify_proposer_payouts: false,
+    });
+  });
+});
+
 describe('subscribeAllAccounts — existing preferences are never overwritten', () => {
   it('excludes accounts that already have preferences from the payload entirely', async () => {
     seedExisting(EXISTING_A);
@@ -303,6 +315,24 @@ describe('subscribeAllAccounts — existing preferences are never overwritten', 
 });
 
 describe('subscribeAllAccounts — defaults are decided per account', () => {
+  it('stores block reward notifications as off for new accounts of every type', async () => {
+    const accounts = [
+      account(STANDARD_A, AccountType.STANDARD),
+      account(WATCH_A, AccountType.WATCH),
+      account(LEDGER_A, AccountType.LEDGER),
+      account(STANDARD_B, AccountType.REKEYED),
+      account(address(6), AccountType.REMOTE_SIGNER),
+    ];
+
+    await notificationService.subscribeAllAccounts(accounts);
+
+    for (const { address } of accounts) {
+      expect(mockDb.rows.get(address)).toMatchObject({
+        notify_proposer_payouts: false,
+      });
+    }
+  });
+
   it('disables messages for watch accounts and enables them for every other type', async () => {
     await notificationService.subscribeAllAccounts([
       account(STANDARD_A, AccountType.STANDARD),
@@ -334,7 +364,7 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       account_address: STANDARD_A,
       notify_messages: true,
       notify_voi_payments: DEFAULT_NOTIFICATION_PREFERENCES.voiPayments,
-      notify_proposer_payouts: true,
+      notify_proposer_payouts: DEFAULT_NOTIFICATION_PREFERENCES.blockRewards,
       notify_price_alerts: DEFAULT_NOTIFICATION_PREFERENCES.priceAlerts,
       price_alert_threshold_percent:
         DEFAULT_NOTIFICATION_PREFERENCES.priceAlertThreshold,
@@ -344,7 +374,7 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       notify_messages: false,
       // Only `messages` differs for a watch account; the rest are defaults.
       notify_voi_payments: DEFAULT_NOTIFICATION_PREFERENCES.voiPayments,
-      notify_proposer_payouts: true,
+      notify_proposer_payouts: DEFAULT_NOTIFICATION_PREFERENCES.blockRewards,
     });
     expect(writtenRow(STANDARD_B)?.notify_messages).toBe(true);
   });

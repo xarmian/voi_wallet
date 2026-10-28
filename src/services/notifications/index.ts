@@ -663,7 +663,7 @@ class NotificationService {
     return {
       messages: data.notify_messages,
       voiPayments: data.notify_voi_payments,
-      blockRewards: data.notify_proposer_payouts ?? true,
+      blockRewards: data.notify_proposer_payouts ?? false,
       arc200Transfers: data.notify_arc200_transfers,
       arc72Transfers: data.notify_arc72_transfers,
       outgoingConfirmations: data.notify_outgoing_confirmations,

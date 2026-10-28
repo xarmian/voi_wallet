@@ -21,7 +21,7 @@ export type NotificationType =
 export interface NotificationPreferences {
   messages: boolean;
   voiPayments: boolean;
-  /** Block-reward / proposer-payout pushes from the network fee sink; defaults to true. */
+  /** Block-reward / proposer-payout pushes from the network fee sink; defaults to false. */
   blockRewards: boolean;
   arc200Transfers: boolean;
   arc72Transfers: boolean;
@@ -51,7 +51,7 @@ export function microVoiToVoi(micro: number): number {
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   messages: true,
   voiPayments: true,
-  blockRewards: true,
+  blockRewards: false,
   arc200Transfers: true,
   arc72Transfers: true,
   outgoingConfirmations: false,
