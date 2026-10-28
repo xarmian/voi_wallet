@@ -39,6 +39,9 @@ type SecuritySetupScreenNavigationProp = NativeStackNavigationProp<
   'SecuritySetup'
 >;
 
+const MNEMONIC_UNAVAILABLE_MESSAGE =
+  'Your recovery phrase is no longer available. Please go back and try again.';
+
 type SecuritySetupScreenRouteProp = RouteProp<
   RootStackParamList,
   'SecuritySetup'
@@ -67,7 +70,8 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [setupStep, setSetupStep] = useState('');
   const {
-    mnemonic,
+    // TASK-224: opaque id into the in-memory secret store — never the phrase.
+    mnemonicSecretId,
     accounts,
     source = 'create',
     accountLabel: initialAccountLabel,
@@ -87,8 +91,19 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       if (accounts) {
         clearAccountSecrets(accounts.map((acc) => acc.secretId));
       }
+      // TASK-224: unmount (back, swipe-dismiss, hardware back, completion)
+      // releases the recovery phrase too. The source screen stores a fresh id
+      // on every navigate, so returning and continuing again still works.
+      clearAccountSecret(mnemonicSecretId);
     };
-  }, [accounts]);
+  }, [accounts, mnemonicSecretId]);
+
+  const isPhraseSource = source === 'create' || source === 'mnemonic';
+  // Presence check only — the copy returned by getAccountSecret is dropped
+  // immediately. Used to fail BEFORE any PIN is set when the phrase is gone
+  // (e.g. TASK-213 cold-boot: params rehydrate, the in-memory store does not).
+  const hasStoredMnemonic = (): boolean =>
+    !!mnemonicSecretId && !!getAccountSecret(mnemonicSecretId)?.mnemonic;
 
   const checkBiometricAvailability = async () => {
     const available = await LocalAuthentication.hasHardwareAsync();
@@ -119,6 +134,11 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
         'Error',
         isPassphrase ? 'Passphrases do not match' : 'PINs do not match'
       );
+      return;
+    }
+
+    if (isPhraseSource && !hasStoredMnemonic()) {
+      Alert.alert('Error', MNEMONIC_UNAVAILABLE_MESSAGE);
       return;
     }
 
@@ -156,21 +176,37 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       }
 
       // Handle different onboarding sources
-      if ((source === 'create' || source === 'mnemonic') && mnemonic) {
+      if (isPhraseSource) {
         // Standard wallet creation flow
         setSetupStep('Creating wallet...');
         const normalizedLabel = accountLabel.trim();
-        const importedAccount =
-          await MultiAccountWalletService.importStandardAccount({
-            type: AccountType.STANDARD,
-            mnemonic,
-            label: normalizedLabel || 'Main Account',
-            // Only the 'create' flow runs the verification quiz; a plain
-            // mnemonic import is someone typing in a phrase they already hold
-            // elsewhere, which is not a confirmation performed on this device.
-            backupVerified: source === 'create' && backupVerifiedParam === true,
-          });
-        console.log('Successfully created account:', importedAccount.address);
+        try {
+          // TASK-224: read the phrase from the in-memory holder at import time.
+          // Re-checked here (not just in the pre-check above) because the entry
+          // can be cleared while setupPin is awaited. Never import with an
+          // empty phrase.
+          const mnemonic = mnemonicSecretId
+            ? getAccountSecret(mnemonicSecretId)?.mnemonic
+            : undefined;
+          if (!mnemonic) {
+            throw new Error(MNEMONIC_UNAVAILABLE_MESSAGE);
+          }
+          const importedAccount =
+            await MultiAccountWalletService.importStandardAccount({
+              type: AccountType.STANDARD,
+              mnemonic,
+              label: normalizedLabel || 'Main Account',
+              // Only the 'create' flow runs the verification quiz; a plain
+              // mnemonic import is someone typing in a phrase they already hold
+              // elsewhere, which is not a confirmation performed on this device.
+              backupVerified:
+                source === 'create' && backupVerifiedParam === true,
+            });
+          console.log('Successfully created account:', importedAccount.address);
+        } finally {
+          // Consumed: release it on success AND failure.
+          clearAccountSecret(mnemonicSecretId);
+        }
       } else if ((source === 'qr' || source === 'watch') && accounts) {
         // QR import or watch account flow - import the scanned accounts
         setSetupStep(

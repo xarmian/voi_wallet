@@ -6,8 +6,9 @@
  * 1. DR-11 carrier #1 — the quiz result reaches `SecuritySetup` as a
  *    `backupVerified` BOOLEAN route param. Verified => true, skip => false.
  *    Nothing else about the navigation payload changes (DR-9: the mnemonic
- *    handoff is an accepted risk being remediated in TASK-224 — this task must
- *    not widen it, so the param set is asserted exactly).
+ *    handoff was remediated in TASK-224 — the phrase travels as an opaque
+ *    `mnemonicSecretId` into the in-memory holder, and the param set is
+ *    asserted exactly).
  *
  * 2. U-10 — a `beforeRemove` listener guards EVERY pop path (header back, iOS
  *    swipe-back, Android hardware back), not just the header button. Losing
@@ -94,6 +95,33 @@ import {
   pressWrongQuizOption,
 } from '@/__tests__/fixtures/mnemonicQuiz';
 import { MAX_MISTAKES } from '@/components/wallet/mnemonicQuiz';
+import { getAccountSecret, clearAccountSecret } from '@/utils/accountQRParser';
+
+/**
+ * TASK-224: the phrase must never be a route param. Assert the exact param set
+ * (an opaque `mnemonicSecretId`, no `mnemonic` key) and that the id resolves,
+ * via the in-memory holder, to the phrase that was shown. Clears the entry
+ * afterwards, standing in for SecuritySetup's consume/unmount clear.
+ */
+function expectSecuritySetupHandoff(
+  navigate: jest.Mock,
+  backupVerified: boolean
+): string {
+  const calls = navigate.mock.calls;
+  const [routeName, params] = calls[calls.length - 1];
+  expect(routeName).toBe('SecuritySetup');
+  expect(params).toEqual({
+    mnemonicSecretId: expect.any(String),
+    source: 'create',
+    backupVerified,
+  });
+  expect(params).not.toHaveProperty('mnemonic');
+  expect(getAccountSecret(params.mnemonicSecretId)?.mnemonic).toBe(
+    MOCK_MNEMONIC
+  );
+  clearAccountSecret(params.mnemonicSecretId);
+  return params.mnemonicSecretId;
+}
 
 type Listener = (event: {
   preventDefault: () => void;
@@ -181,11 +209,7 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
     await completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
 
     expect(navigation.navigate).toHaveBeenCalledTimes(1);
-    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
-      mnemonic: MOCK_MNEMONIC,
-      source: 'create',
-      backupVerified: true,
-    });
+    expectSecuritySetupHandoff(navigation.navigate, true);
   });
 
   it('navigates with backupVerified: false when the user skips', async () => {
@@ -205,11 +229,7 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
 
     await pressAlertButton('Skip for now');
 
-    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
-      mnemonic: MOCK_MNEMONIC,
-      source: 'create',
-      backupVerified: false,
-    });
+    expectSecuritySetupHandoff(navigation.navigate, false);
   });
 
   it('does not navigate if the skip confirmation is cancelled', async () => {
@@ -255,11 +275,7 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
     // ...and the legitimate user can still get through afterwards.
     await fireEvent.press(screen.getByTestId('saved-phrase-button'));
     await completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
-    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
-      mnemonic: MOCK_MNEMONIC,
-      source: 'create',
-      backupVerified: true,
-    });
+    expectSecuritySetupHandoff(navigation.navigate, true);
   });
 });
 
@@ -309,11 +325,24 @@ describe('CreateWalletScreen — back-path guard (U-10)', () => {
     await pressAlertButton('Skip for now');
     expect(navigation.navigate).toHaveBeenCalled();
 
+    const firstId = expectSecuritySetupHandoff(navigation.navigate, false);
+
     await act(() => navigation.emitFocus());
 
     const { prevented } = navigation.emitBeforeRemove();
     expect(prevented).toBe(true);
     expect(navigation.dispatch).not.toHaveBeenCalled();
+
+    // TASK-224: SecuritySetup cleared the first id on unmount (simulated by the
+    // clear in the helper). Continuing again (still on the quiz step) must
+    // store a FRESH, resolvable id.
+    await fireEvent.press(
+      screen.getByTestId('create-wallet-verification-skip')
+    );
+    await pressAlertButton('Skip for now');
+    expect(navigation.navigate).toHaveBeenCalledTimes(2);
+    const secondId = expectSecuritySetupHandoff(navigation.navigate, false);
+    expect(secondId).not.toBe(firstId);
   });
 
   it('keeps the user on screen when the confirmation is cancelled', async () => {

@@ -198,7 +198,14 @@ export type RootStackParamList = {
   Onboarding: undefined;
   CreateWallet: undefined;
   SecuritySetup: {
-    mnemonic?: string;
+    /**
+     * TASK-224 — opaque id of the recovery phrase held in the in-memory secret
+     * store (`storeMnemonicSecret` in `@/utils/accountQRParser`). The raw
+     * mnemonic is deliberately NOT a route param: params are serializable nav
+     * state. SecuritySetupScreen consumes the id at import time and clears it
+     * on consume (success or failure) and on unmount.
+     */
+    mnemonicSecretId?: string;
     accounts?: ScannedAccount[];
     // 'restore' = post-restore PIN setup (no import branch runs; setupPin only).
     // RestoreWalletScreen already navigates with it via CommonActions.reset, and
