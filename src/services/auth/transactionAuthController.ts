@@ -115,6 +115,9 @@ export class TransactionAuthController {
     [];
   private currentState: TransactionAuthState_Interface;
   private currentRequest: UnifiedTransactionRequest | null = null;
+  private remoteBatchPlan: Awaited<
+    ReturnType<UnifiedTransactionSigner['planBatch']>
+  > | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;
   // Tracks the device currently being connected during a Ledger flow; cleared on
   // reset(). Declared so the reset assignment type-checks.
@@ -2140,6 +2143,19 @@ export class TransactionAuthController {
       // Build the unsigned transactions based on request type
       const unsignedTxns = await this.buildUnsignedTransactions();
 
+      if (this.remoteBatchPlan && unsignedTxns.length === 0) {
+        this.updateState({
+          state: 'completed',
+          remoteSignerStatus: 'idle',
+          result: {
+            success: true,
+            signedTransactions: this.remoteBatchPlan.map((plan) =>
+              plan.action === 'passthrough' ? plan.value : null
+            ),
+          },
+        });
+        return;
+      }
       const networkId = this.getRequestNetworkId();
       const rekey = await getRekeyStateStrict(
         this.currentRequest.account.address,
@@ -2187,6 +2203,7 @@ export class TransactionAuthController {
 
     const { TransactionService } = await import('@/services/transactions');
 
+    this.remoteBatchPlan = null;
     switch (this.currentRequest.type) {
       case 'voi_transfer':
       case 'asa_transfer':
@@ -2232,15 +2249,11 @@ export class TransactionAuthController {
 
       case 'batch_transaction':
       case 'walletconnect_batch':
-        if (!this.currentRequest.walletConnectParams?.transactions) {
-          throw new Error('Batch transactions required');
-        }
-        // Decode the WalletConnect transactions
-        return this.currentRequest.walletConnectParams.transactions.map(
-          (wtxn) => {
-            const txnBytes = Buffer.from(wtxn.txn, 'base64');
-            return algosdk.decodeUnsignedTransaction(txnBytes);
-          }
+        this.remoteBatchPlan = await this.unifiedSigner.planBatch(
+          this.currentRequest
+        );
+        return this.remoteBatchPlan.flatMap((plan) =>
+          plan.action === 'sign' ? [plan.txn] : []
         );
 
       default:
@@ -2363,6 +2376,31 @@ export class TransactionAuthController {
 
       if (!signedTxns || signedTxns.length === 0) {
         throw new Error('No signed transactions in response');
+      }
+
+      if (
+        this.currentRequest?.type === 'batch_transaction' ||
+        this.currentRequest?.type === 'walletconnect_batch'
+      ) {
+        // Batch callers own submission. Return the same ARC-0001 shape as
+        // local signing, restoring declined/passthrough slots in request order.
+        const signatures = signedTxns.map((txn) =>
+          Buffer.from(txn).toString('base64')
+        );
+        let index = 0;
+        const signedTransactions = this.remoteBatchPlan!.map((plan) =>
+          plan.action === 'sign'
+            ? signatures[index++]
+            : plan.action === 'passthrough'
+              ? plan.value
+              : null
+        );
+        this.updateState({
+          state: 'completed',
+          remoteSignerStatus: 'idle',
+          result: { success: true, signedTransactions },
+        });
+        return;
       }
 
       // Submit to network

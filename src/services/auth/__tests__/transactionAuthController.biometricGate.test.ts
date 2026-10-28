@@ -45,7 +45,16 @@ jest.mock('@/services/secure/keyManager', () => ({
 jest.mock('@/services/transactions/unifiedSigner', () => {
   const signTransaction = jest.fn();
   return {
-    UnifiedTransactionSigner: { getInstance: () => ({ signTransaction }) },
+    UnifiedTransactionSigner: {
+      getInstance: () => ({
+        signTransaction,
+        planBatch: (request: unknown) =>
+          jest
+            .requireActual('@/services/transactions/unifiedSigner')
+            .UnifiedTransactionSigner.getInstance()
+            .planBatch(request),
+      }),
+    },
   };
 });
 jest.mock('@/services/wallet', () => ({
@@ -84,6 +93,14 @@ jest.mock('@/services/network', () => ({
         confirmed: true,
       })),
     })),
+  },
+}));
+let mockApprovedAccounts: string[] = [];
+jest.mock('@/services/walletconnect', () => ({
+  WalletConnectService: {
+    getInstance: () => ({
+      getApprovedAccountsForChain: () => mockApprovedAccounts,
+    }),
   },
 }));
 jest.mock('@/services/transactions', () => ({
@@ -402,4 +419,282 @@ describe('request-network signing authority', () => {
       remoteSignerStatus: 'error',
     });
   });
+});
+
+// Real signed responses through the controller and the production caller
+// callbacks. Only UI/transport closure dependencies are supplied by the fixture.
+describe('remote batch submission ownership (TASK-418)', () => {
+  const { screenHandler } = require('@/__tests__/fixtures/screenHandler');
+  const { NetworkId: Nets } = require('@/types/network');
+  const owner = makeAccount('task418-owner');
+  const wrong = makeAccount('task418-wrong');
+  const netId = Nets.VOI_MAINNET;
+  const txn = paymentTxn(owner.addr, {
+    suggestedParams: {
+      ...SUGGESTED_PARAMS,
+      genesisID: NETWORK_CONFIGURATIONS[netId as NetworkId].genesisId,
+      genesisHash: new Uint8Array(
+        Buffer.from(
+          NETWORK_CONFIGURATIONS[netId as NetworkId].genesisHash,
+          'base64'
+        )
+      ),
+    },
+  });
+  const encoded = Buffer.from(txn.toByte()).toString('base64');
+  const signed = Buffer.from(txn.signTxn(owner.sk)).toString('base64');
+  const submit = jest.fn(async (_bytes: Uint8Array | Uint8Array[]) => ({
+    txId: 'batch-tx',
+    confirmed: true,
+  }));
+  const respond = jest.fn();
+  const net = {
+    getCurrentNetworkId: () => netId,
+    getAccountRekeyInfo: jest.fn(async () => ({ isRekeyed: false })),
+    submitTransaction: submit,
+    getAlgodClient: () => ({
+      sendRawTransaction: (bytes: Uint8Array[]) => ({
+        do: () => submit(bytes),
+      }),
+    }),
+  };
+
+  beforeEach(() => {
+    mockApprovedAccounts = [
+      `${NETWORK_CONFIGURATIONS[netId as NetworkId].chainId}:${owner.addr}`,
+    ];
+    (NetworkService.getInstance as jest.Mock).mockReturnValue(net);
+    (SecureKeyManager.getSigningInfo as jest.Mock).mockResolvedValue({
+      signingAddress: owner.addr,
+    });
+    (MultiAccountWalletService.getAllAccounts as jest.Mock).mockResolvedValue([
+      { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+    ]);
+    (getRekeyStateStrict as jest.Mock).mockResolvedValue({ isRekeyed: false });
+  });
+
+  async function flow(type = 'batch_transaction', declined = false) {
+    const controller = new TransactionAuthController();
+    await controller.initializeSigningFlow({
+      type,
+      networkId: netId,
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      walletConnectParams: {
+        transactions: [
+          { txn: encoded },
+          ...(declined ? [{ txn: encoded, signers: [] }] : []),
+        ],
+        reviewedSigners: [owner.addr],
+        sessionBinding: declined
+          ? {
+              topic: 'dapp',
+              networkId: netId,
+              chainId: NETWORK_CONFIGURATIONS[netId as NetworkId].chainId,
+              approvedAccounts: mockApprovedAccounts,
+            }
+          : null,
+      },
+    } as any);
+    expect(controller.getState().isRemoteSignerFlow).toBe(true);
+    const request = controller.getRemoteSignerRequest()!;
+    expect(request.txns).toHaveLength(1);
+    const response = RemoteSignerService.createSuccessResponse(request.id, [
+      txn.signTxn(owner.sk),
+    ]);
+    return { controller, request, response };
+  }
+
+  function scope() {
+    const noop = jest.fn();
+    return {
+      Buffer,
+      Uint8Array,
+      NetworkService,
+      CLAIM_NETWORK_ID: netId,
+      selectedNetwork: netId,
+      hasSubmittedRef: { current: false },
+      navigation: {
+        dispatch: jest.fn(),
+        navigate: jest.fn(),
+        goBack: jest.fn(),
+        canGoBack: () => true,
+      },
+      CommonActions: { reset: (value: unknown) => value },
+      claimableItem: { id: 'claim' },
+      items: [{ id: 'claim' }],
+      Alert: { alert: jest.fn() },
+      Toast: { show: noop },
+      redactError: (e: unknown) => e,
+      setIsSwapping: noop,
+      setIsWaitingForConfirmation: noop,
+      delayedRefreshTimeout: { current: null },
+      setTimeout: noop,
+      accountId: null,
+      routeParams: null,
+      inputToken: null,
+      settledRef: { current: false },
+      requestEvent: { id: 418, topic: 'dapp' },
+      WalletConnectService: {
+        getInstance: () => ({ respondToRequest: respond }),
+      },
+      WalletConnectV1Client: {
+        getInstance: () => ({ approveRequest: respond }),
+      },
+      takeNextRequest: async () => null,
+      forgetUnanswered: noop,
+      setShowAuthModal: noop,
+      setCurrentRequest: noop,
+    };
+  }
+
+  it('returns nulls without a QR exchange when every entry is declined', async () => {
+    const controller = new TransactionAuthController();
+    await controller.initializeSigningFlow({
+      type: 'walletconnect_batch',
+      networkId: netId,
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      walletConnectParams: {
+        transactions: [{ txn: encoded, signers: [] }],
+        reviewedSigners: [owner.addr],
+        sessionBinding: null,
+      },
+    } as any);
+    expect(controller.getState().result).toEqual({
+      success: true,
+      signedTransactions: [null],
+    });
+    expect(controller.getRemoteSignerRequest()).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen', 'SwapScreen'])(
+    '%s submits a remote batch exactly once',
+    async (screen) => {
+      const { controller, response } = await flow();
+      await controller.processRemoteSignerResponse(response);
+      const result = controller.getState().result;
+      const env = scope();
+      await screenHandler(
+        `wallet/${screen}`,
+        screen === 'SwapScreen' ? 'handleSwapSuccess' : 'onSuccess',
+        env
+      )(result);
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit).toHaveBeenCalledWith([
+        new Uint8Array(Buffer.from(signed, 'base64')),
+      ]);
+      expect(result).toEqual({ success: true, signedTransactions: [signed] });
+      expect(env.Alert.alert).not.toHaveBeenCalled();
+      expect(env.navigation.dispatch).toHaveBeenCalled();
+    }
+  );
+
+  it.each([1, 2])(
+    'WalletConnect v%s returns base64/null without broadcasting',
+    async (version) => {
+      const { controller, response } = await flow('batch_transaction', true);
+      await controller.processRemoteSignerResponse(response);
+      const env = { ...scope(), version };
+      await screenHandler(
+        'walletconnect/TransactionRequestScreen',
+        'handleWalletConnectSuccess',
+        env
+      )(controller.getState().result);
+      expect(respond.mock.calls[0].at(-1)).toEqual([signed, null]);
+      expect(submit).not.toHaveBeenCalled();
+      expect(env.navigation.navigate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('walletconnect_batch fallback returns base64/null without broadcasting', async () => {
+    const { controller, response } = await flow('walletconnect_batch', true);
+    await controller.processRemoteSignerResponse(response);
+    const env = { ...scope(), version: 2 };
+    const handler = screenHandler(
+      'walletconnect/TransactionRequestScreen',
+      'handleWalletConnectSuccess',
+      env
+    );
+    await screenHandler(
+      'walletconnect/TransactionRequestScreen',
+      'handleAuthComplete',
+      {
+        ...env,
+        handleWalletConnectSuccess: handler,
+      }
+    )(true, controller.getState().result);
+    expect(respond.mock.calls[0].at(-1)).toEqual([signed, null]);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'voi_transfer',
+    'asa_transfer',
+    'arc200_transfer',
+    'arc72_transfer',
+    'rekey',
+    'rekey_reverse',
+    'keyreg',
+    'appl',
+  ])('%s retains controller submission', async (type) => {
+    const { controller, response } = await flow();
+    // Isolate response dispatch from the unrelated unsigned builders.
+    (controller as any).currentRequest.type = type;
+    await controller.processRemoteSignerResponse(response);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(Buffer.from(signed, 'base64'));
+    expect(controller.getState().result).toMatchObject({
+      transactionId: 'batch-tx',
+      confirmed: true,
+    });
+  });
+
+  it.each(['signer', 'network', 'genesis'])(
+    'still rejects mismatched %s',
+    async (mismatch) => {
+      const { controller, request, response } = await flow();
+      if (mismatch === 'signer')
+        response.sigs![0].b = Buffer.from(txn.signTxn(wrong.sk)).toString(
+          'base64'
+        );
+      if (mismatch !== 'signer') {
+        const foreign = paymentTxn(owner.addr, {
+          suggestedParams: {
+            ...SUGGESTED_PARAMS,
+            genesisID:
+              NETWORK_CONFIGURATIONS[Nets.ALGORAND_MAINNET as NetworkId]
+                .genesisId,
+            genesisHash: new Uint8Array(
+              Buffer.from(
+                NETWORK_CONFIGURATIONS[Nets.ALGORAND_MAINNET as NetworkId]
+                  .genesisHash,
+                'base64'
+              )
+            ),
+          },
+        });
+        response.sigs![0].b = Buffer.from(foreign.signTxn(owner.sk)).toString(
+          'base64'
+        );
+        if (mismatch === 'network') {
+          // A matching foreign request/response still resolves authority on
+          // request.net; an account rekeyed there cannot use the sender's key.
+          request.txns[0].b = Buffer.from(foreign.toByte()).toString('base64');
+          request.net = Nets.ALGORAND_MAINNET;
+          request.gh =
+            NETWORK_CONFIGURATIONS[
+              Nets.ALGORAND_MAINNET as NetworkId
+            ].genesisHash;
+          net.getAccountRekeyInfo.mockResolvedValueOnce({
+            isRekeyed: true,
+            authAddress: wrong.addr,
+          } as any);
+        }
+      }
+      await controller.processRemoteSignerResponse(response);
+      expect(controller.getState().state).toBe('error');
+      expect(controller.getState().result).toBeNull();
+      expect(submit).not.toHaveBeenCalled();
+    }
+  );
 });

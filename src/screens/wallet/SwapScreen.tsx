@@ -750,8 +750,7 @@ export default function SwapScreen() {
   };
 
   const handleSwapSuccess = async (result: any) => {
-    // Check if transaction was already submitted by auth controller (remote signer flow)
-    // or if we have signed transactions to submit (standard flow)
+    // Batch signing returns signatures for this caller to submit.
     if (!result?.transactionId && !result?.signedTransactions) {
       Alert.alert('Error', 'No signed transactions returned');
       return;
@@ -764,10 +763,10 @@ export default function SwapScreen() {
       let txId: string;
 
       if (result?.transactionId) {
-        // Transaction already submitted by auth controller (remote signer flow)
+        // Preserve support for an already-submitted result.
         txId = result.transactionId;
       } else {
-        // Standard flow - need to submit signed transactions
+        // Local and remote batch signing both submit here.
         const networkService = NetworkService.getInstance(selectedNetwork);
 
         // DR-1: the signer returns ARC-0001 `null` for any entry it DECLINED to
