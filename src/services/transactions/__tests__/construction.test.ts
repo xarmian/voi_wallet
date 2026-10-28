@@ -92,13 +92,25 @@ jest.mock('@/services/ledger/algorand', () => ({
 jest.mock('@/services/secure/keyManager', () => ({
   __esModule: true,
   SecureKeyManager: {
-    getSigningInfo: jest.fn(),
+    getSigningInfo: jest.fn(async (sender: string) => ({
+      signingAddress: sender,
+    })),
     getLedgerSigningInfo: jest.fn(),
   },
 }));
 jest.mock('@/services/security/transactionTracker', () => ({
   __esModule: true,
   TransactionTracker: {},
+}));
+
+const mockSender = () => SENDER;
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    getAllAccounts: async () => [{ address: mockSender() }],
+  },
+}));
+jest.mock('@/services/remoteSigner/signingRouter', () => ({
+  checkRemoteSigningRequired: () => ({ needsRemoteSigning: false }),
 }));
 
 // Imported AFTER the mocks above are registered (jest hoists jest.mock, but keep
@@ -152,7 +164,7 @@ beforeEach(() => {
   // Simulate client returns no unnamed resources / boxes by default.
   mockGetAlgodClient.mockReturnValue({
     simulateTransactions: () => ({
-      do: async () => ({ txnGroups: [{}] }),
+      do: async () => ({ txnGroups: [{ txnResults: [{ txnResult: {} }] }] }),
     }),
   });
   // ARC-72 balance path (network) and ARC-200 balance path (mimir) default to
@@ -402,8 +414,13 @@ describe('ARC-200 transfer construction', () => {
   });
 
   it('prepends an MBR payment to the app escrow when the recipient is not opted in', async () => {
-    // Recipient has no ARC-200 balance -> needsMbrPayment.
-    mockGetAllAccountAssets.mockResolvedValueOnce([]);
+    mockGetAlgodClient.mockReturnValueOnce({
+      simulateTransactions: () => ({
+        do: async () => ({
+          txnGroups: [{ failureMessage: 'box minimum balance' }],
+        }),
+      }),
+    });
 
     const result = (await TransactionService.buildTransaction({
       from: SENDER,
@@ -450,6 +467,7 @@ describe('ARC-200 transfer construction', () => {
         do: async () => ({
           txnGroups: [
             {
+              txnResults: [{ txnResult: {} }],
               unnamedResourcesAccessed: {
                 boxes: [{ app: FIXTURE_APP_ID, name: boxName }],
               },
