@@ -1097,3 +1097,121 @@ describe('originalOwner through repeated rekeys (TASK-419)', () => {
     expect(toLedger.originalOwner).toBe(false);
   });
 });
+
+// TASK-421 U4b: backup history belongs to the converted account, never its auth.
+describe('per-account backup history through conversions', () => {
+  const backupCreatedAt = '2025-04-03T02:01:00.000Z';
+  const histories = [
+    { hasBackup: true, backupVerified: true, backupCreatedAt },
+    { hasBackup: true, backupVerified: false, backupCreatedAt },
+    { hasBackup: false, backupVerified: false },
+    {}, // Legacy records must not gain verification or a timestamp.
+  ];
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(histories)(
+    'preserves %j through STANDARD → REKEYED → STANDARD',
+    async (history) => {
+      jest
+        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+        .mockResolvedValue(true);
+      const source = { ...standardAccount(REKEYED, 'src-1'), ...history };
+      // Remove the builder's defaults for the missing-fields legacy case.
+      if (!('hasBackup' in history)) {
+        delete source.hasBackup;
+        delete source.backupVerified;
+      }
+      const auth = {
+        ...standardAccount(STD_AUTH, 'auth-1'),
+        hasBackup: !source.hasBackup,
+        backupVerified: !source.backupVerified,
+        backupCreatedAt: '2026-09-08T07:06:00.000Z',
+      };
+      const wallet = makeWallet([source, auth]);
+      const converted = await manager.updateAccountWithRekeyInfo(
+        source,
+        { isRekeyed: true, authAddress: auth.address },
+        wallet
+      );
+      expect(converted.type).toBe(AccountType.REKEYED);
+      const restored = await manager.updateAccountWithRekeyInfo(
+        converted,
+        { isRekeyed: false },
+        makeWallet([converted, auth])
+      );
+      expect(restored.type).toBe(AccountType.STANDARD);
+      for (const result of [converted, restored]) {
+        expect(result).toMatchObject({
+          hasBackup: source.hasBackup,
+          backupVerified: source.backupVerified,
+          backupCreatedAt: source.backupCreatedAt,
+        });
+      }
+    }
+  );
+
+  it.each(histories)(
+    'keeps %j through Ledger and airgap rekeys in both orders',
+    async (history) => {
+      const source: StandardAccountMetadata = {
+        ...standardAccount(REKEYED, 'src-1'),
+        ...history,
+      };
+      const ledger = ledgerAccount(LEDGER_AUTH, 'led-1');
+      const airgap = remoteSignerAccount(REMOTE_AUTH, 'air-1');
+      const toLedger = (account: AccountMetadata) =>
+        manager.rekeyToLedger(
+          account,
+          ledger,
+          makeWallet([account, ledger, airgap])
+        );
+      const toAirgap = (account: AccountMetadata) =>
+        manager.rekeyToAirgap(
+          account,
+          airgap,
+          makeWallet([account, ledger, airgap])
+        );
+      const ledgerFirst = await toLedger(source);
+      const airgapFirst = await toAirgap(source);
+      for (const result of [
+        ledgerFirst,
+        airgapFirst,
+        await toAirgap(ledgerFirst),
+        await toLedger(airgapFirst),
+      ]) {
+        expect(result).toMatchObject({
+          hasBackup: source.hasBackup,
+          backupVerified: source.backupVerified,
+          backupCreatedAt: source.backupCreatedAt,
+        });
+      }
+    }
+  );
+
+  it('gives WATCH sources no flags across all three REKEYED constructors', async () => {
+    const source = watchAccount(REKEYED, 'watch-1');
+    const auth = {
+      ...standardAccount(STD_AUTH, 'auth-1'),
+      hasBackup: true,
+      backupVerified: true,
+      backupCreatedAt,
+    };
+    const ledger = ledgerAccount(LEDGER_AUTH, 'led-1');
+    const airgap = remoteSignerAccount(REMOTE_AUTH, 'air-1');
+    const wallet = makeWallet([source, auth, ledger, airgap]);
+    for (const result of [
+      await manager.updateAccountWithRekeyInfo(
+        source,
+        { isRekeyed: true, authAddress: auth.address },
+        wallet
+      ),
+      await manager.rekeyToLedger(source, ledger, wallet),
+      await manager.rekeyToAirgap(source, airgap, wallet),
+    ]) {
+      expect(result.type).toBe(AccountType.REKEYED);
+      for (const field of ['hasBackup', 'backupVerified', 'backupCreatedAt']) {
+        expect(result).not.toHaveProperty(field);
+      }
+    }
+  });
+});

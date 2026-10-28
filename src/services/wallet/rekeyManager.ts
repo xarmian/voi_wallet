@@ -2,6 +2,7 @@ import {
   Wallet,
   AccountMetadata,
   AccountType,
+  BackupMetadata,
   RekeyedAccountMetadata,
   StandardAccountMetadata,
   WatchAccountMetadata,
@@ -15,6 +16,21 @@ import { networkService, RekeyInfo } from '@/services/network';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import { redactError } from '@/utils/logRedaction';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+
+// Conversions preserve only the source account's own backup history.
+function sourceBackupMetadata(account: AccountMetadata): BackupMetadata {
+  if (
+    account.type !== AccountType.STANDARD &&
+    account.type !== AccountType.REKEYED
+  ) {
+    return {};
+  }
+  return {
+    hasBackup: account.hasBackup,
+    backupVerified: account.backupVerified,
+    backupCreatedAt: account.backupCreatedAt,
+  };
+}
 
 export interface SigningAuthorityCheck {
   accountAddress: string;
@@ -243,12 +259,9 @@ export class RekeyManager {
               // Sanitized-storage convention: the real mnemonic lives only in
               // secure storage and is stripped on persist, so keep it empty here.
               mnemonic: '',
-              // Backup is unverified; the private key is confirmed present in
-              // secure storage (checked above) but that is not a mnemonic backup.
-              hasBackup: false,
-              // TASK-45/DR-11: a rekey conversion is not a user confirmation of
-              // the recovery phrase, so the account stays un-backed-up.
-              backupVerified: false,
+              // TASK-421 / TASK-45/DR-11: conversion neither grants nor removes
+              // phrase verification; preserve this account's own backup history.
+              ...sourceBackupMetadata(account),
             };
             return standardAccount;
           } else {
@@ -310,6 +323,7 @@ export class RekeyManager {
 
       const rekeyedAccount: RekeyedAccountMetadata = {
         ...baseMetadata,
+        ...sourceBackupMetadata(account),
         type: AccountType.REKEYED,
         authAddress: rekeyInfo.authAddress,
         rekeyedAt: rekeyInfo.rekeyedAt
@@ -445,6 +459,7 @@ export class RekeyManager {
 
     return {
       ...baseMetadata,
+      ...sourceBackupMetadata(sourceAccount),
       type: AccountType.REKEYED,
       authAddress: ledgerAccountInWallet.address,
       // TASK-419: preserve ownership through repeated rekeys; the original key
@@ -507,6 +522,7 @@ export class RekeyManager {
 
     return {
       ...baseMetadata,
+      ...sourceBackupMetadata(sourceAccount),
       type: AccountType.REKEYED,
       authAddress: airgapAccountInWallet.address,
       // TASK-419: preserve ownership through repeated rekeys; the original key
