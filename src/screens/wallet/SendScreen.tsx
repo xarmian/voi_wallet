@@ -135,7 +135,12 @@ export default function SendScreen() {
   const [signingLoading, setSigningLoading] = useState(true);
   const [signingError, setSigningError] = useState(false);
   const [signingAttempt, setSigningAttempt] = useState(0);
-  const [hasLedgerSigner, setHasLedgerSigner] = useState(false);
+  // TASK-425: how a WATCH account would sign on the send network, from the
+  // signer's own route resolution (null for any other account type).
+  const [watchSigner, setWatchSigner] = useState<
+    'software' | 'ledger' | 'unavailable' | null
+  >(null);
+  const watchCanSign = watchSigner === 'software' || watchSigner === 'ledger';
 
   const contextAssetName = routeParams?.assetName;
   const contextNftToken = routeParams?.nftToken;
@@ -825,66 +830,29 @@ export default function SendScreen() {
     showAssetSelector,
   ]);
 
-  // Determine signing capability and Ledger signer presence for the active account
+  // Determine how the active WATCH account would sign on the send network.
+  // TASK-425: this asks the same route resolution the signer runs, so the
+  // screen allows a send exactly when the signer would sign it: a WATCH
+  // account rekeyed on chain to a key or Ledger we hold can send.
   useEffect(() => {
     let isCancelled = false;
     const loadSigningCapability = async () => {
       setSigningLoading(true);
       setSigningError(false);
       try {
-        if (!activeAccount) {
-          if (!isCancelled) {
-            setHasLedgerSigner(false);
-          }
+        if (!activeAccount || activeAccount.type !== AccountType.WATCH) {
+          if (!isCancelled) setWatchSigner(null);
           return;
         }
 
-        const info = await SecureKeyManager.getSigningInfo(
+        const route = await SecureKeyManager.resolveSigningRoute(
           activeAccount.address,
           effectiveNetworkId
         );
-        if (isCancelled) return;
-
-        // Probe for a Ledger signer via id, then signing address, then the account address
-        let ledgerFound = false;
-        try {
-          if (info?.signingAccountId) {
-            const li = await SecureKeyManager.getLedgerSigningInfo(
-              info.signingAccountId,
-              { lookupByAddress: false }
-            );
-            ledgerFound = Boolean(li);
-          }
-        } catch {}
-
-        if (!ledgerFound) {
-          try {
-            if (info?.signingAddress) {
-              const li = await SecureKeyManager.getLedgerSigningInfo(
-                info.signingAddress,
-                { lookupByAddress: true }
-              );
-              ledgerFound = Boolean(li);
-            }
-          } catch {}
-        }
-
-        if (!ledgerFound) {
-          try {
-            const li = await SecureKeyManager.getLedgerSigningInfo(
-              activeAccount.address,
-              { lookupByAddress: true }
-            );
-            ledgerFound = Boolean(li);
-          } catch {}
-        }
-
-        if (!isCancelled) {
-          setHasLedgerSigner(ledgerFound);
-        }
+        if (!isCancelled) setWatchSigner(route.kind);
       } catch {
         if (!isCancelled) {
-          setHasLedgerSigner(false);
+          setWatchSigner('unavailable');
           setSigningError(true);
         }
       } finally {
@@ -896,8 +864,13 @@ export default function SendScreen() {
     return () => {
       isCancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address (the content-stable slice that scopes the signing-capability probe); the full activeAccount object is read at the current commit and omitted on purpose to avoid identity-churn re-runs, matching the file's hand-mirror pattern (TASK-246; no money-path logic changes).
-  }, [activeAccount?.address, effectiveNetworkId, signingAttempt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address and ?.type (the content-stable slices that scope the signing-capability probe); the full activeAccount object is read at the current commit and omitted on purpose to avoid identity-churn re-runs, matching the file's hand-mirror pattern (TASK-246; no money-path logic changes).
+  }, [
+    activeAccount?.address,
+    activeAccount?.type,
+    effectiveNetworkId,
+    signingAttempt,
+  ]);
 
   // Get network config for selected network
   const selectedNetworkConfig = React.useMemo(() => {
@@ -1454,8 +1427,8 @@ export default function SendScreen() {
     )
       return;
 
-    // Block only if watch account without a Ledger signer available
-    if (activeAccount.type === AccountType.WATCH && !hasLedgerSigner) {
+    // Block a watch account only when no key or Ledger we hold can sign for it
+    if (activeAccount.type === AccountType.WATCH && !watchCanSign) {
       Alert.alert(
         'Cannot Send from Watch Account',
         'Watch accounts are read-only and cannot send transactions. Switch to a standard account to send funds.',
@@ -2058,10 +2031,15 @@ export default function SendScreen() {
                       <Text style={styles.watchAccountWarningText}>Retry</Text>
                     </TouchableOpacity>
                   </View>
-                ) : hasLedgerSigner ? (
+                ) : watchSigner === 'ledger' ? (
                   <Text style={styles.watchAccountWarningText}>
                     🔐 Ledger signer detected for this account. You can send
                     transactions using your Ledger device.
+                  </Text>
+                ) : watchSigner === 'software' ? (
+                  <Text style={styles.watchAccountWarningText}>
+                    🔑 This account is rekeyed to a key in this wallet. You can
+                    send transactions with that key.
                   </Text>
                 ) : (
                   <Text style={styles.watchAccountWarningText}>
@@ -2074,7 +2052,7 @@ export default function SendScreen() {
 
             <GlassButton
               variant={
-                activeAccount?.type === AccountType.WATCH && !hasLedgerSigner
+                activeAccount?.type === AccountType.WATCH && !watchCanSign
                   ? 'secondary'
                   : 'primary'
               }
@@ -2087,7 +2065,7 @@ export default function SendScreen() {
                 !!amountError ||
                 isSending ||
                 (activeAccount?.type === AccountType.WATCH &&
-                  (signingLoading || signingError || !hasLedgerSigner))
+                  (signingLoading || signingError || !watchCanSign))
               }
               onPress={handleSend}
               fullWidth
