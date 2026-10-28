@@ -80,8 +80,14 @@ jest.mock('@/store/walletStore', () => ({
     const ownKeyIds = new Set<string>();
     for (const account of accounts) {
       if (account.type === 'rekeyed' && account.address === signingAddress) {
-        if (await mockProbeSecretPresence(account.id))
-          ownKeyIds.add(account.id);
+        // A probe error propagates, as in the real strict path.
+        let present: boolean;
+        try {
+          present = await mockProbeSecretPresence(account.id);
+        } catch {
+          throw new Error('Signer custody unavailable');
+        }
+        if (present) ownKeyIds.add(account.id);
       }
     }
     return deriveRekeyState(address, info, accounts, ownKeyIds);
@@ -1121,9 +1127,11 @@ describe('SecureKeyManager.getSigningInfo', () => {
     mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
     mockProbeSecretPresence.mockRejectedValue(new Error('keychain'));
 
+    // Since TASK-425 U3 the strict rekey state probes the same record first
+    // and rejects there; either rejection fails closed.
     await expect(
       SecureKeyManager.getSigningInfo(REKEYED.addr, networkId)
-    ).rejects.toThrow('keychain');
+    ).rejects.toThrow(/keychain|Signer custody unavailable/);
   });
 
   it('propagates strict fetch failure for every signing preflight reader', async () => {
@@ -1313,6 +1321,15 @@ describe('SecureKeyManager — retained REKEYED key as a rekey authority (TASK-4
       signingAccountId: 'acc-auth',
       isRekeyed: true,
     });
+  });
+
+  it('getSigningInfo propagates a failing auth key probe (fail closed)', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-watch'), retainedAuth()]);
+    mockProbeSecretPresence.mockRejectedValue(new Error('keychain busy'));
+
+    await expect(
+      SecureKeyManager.getSigningInfo(REKEYED.addr, networkId)
+    ).rejects.toThrow('Signer custody unavailable');
   });
 
   it('getSigningInfo names no signer when the retained auth record has no secret', async () => {

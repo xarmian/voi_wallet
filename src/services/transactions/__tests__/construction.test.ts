@@ -26,6 +26,7 @@ import algosdk from 'algosdk';
 import { AccountType } from '@/types/wallet';
 
 import {
+  makeAccount,
   makeAddress,
   SUGGESTED_PARAMS,
   FIXTURE_ASSET_ID,
@@ -113,9 +114,13 @@ jest.mock('@/services/wallet', () => ({
 }));
 // TASK-425 U3: which REKEYED records still hold their own secret.
 const mockProbe = jest.fn(async (_id: string) => false);
+const mockGetPrivateKey = jest.fn(async (_id: string): Promise<Uint8Array> => {
+  throw new Error('no key');
+});
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     probeSecretPresenceStrict: (id: string) => mockProbe(id),
+    getPrivateKey: (id: string) => mockGetPrivateKey(id),
   },
 }));
 jest.mock('@/services/remoteSigner/signingRouter', () => ({
@@ -778,20 +783,121 @@ describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
       accounts,
     });
 
+  const REVERSE_ERROR =
+    "Removing the rekey returns control to this account's own key, which is not in your wallet.";
+  const UNKNOWN_ERROR =
+    "Couldn't check this account's rekey status on this network. Try again.";
+
   beforeEach(() => {
     mockProbe.mockReset();
     mockProbe.mockResolvedValue(false);
+    mockGetPrivateKey.mockReset();
+    mockGetPrivateKey.mockRejectedValue(new Error('no key'));
   });
 
-  it('accepts a REKEYED target whose own key is held', async () => {
+  it('accepts a REKEYED target that is a converted STANDARD account (originalOwner)', async () => {
     funded({ isRekeyed: false });
     mockProbe.mockImplementation(async (id) => id === 'tgt');
     const errors = await validate([
       { id: 'src', address: SENDER, type: AccountType.STANDARD },
-      { id: 'tgt', address: RECIPIENT, type: AccountType.REKEYED },
+      {
+        id: 'tgt',
+        address: RECIPIENT,
+        type: AccountType.REKEYED,
+        originalOwner: true,
+      },
     ]);
     expect(errors).toEqual([]);
   });
+
+  it('accepts a REKEYED target whose key reads and is its own', async () => {
+    const TGT = makeAccount('tx-construction:usable-target');
+    funded({ isRekeyed: false });
+    mockProbe.mockResolvedValue(true);
+    mockGetPrivateKey.mockImplementation(async () => TGT.sk.slice());
+    const errors = await TransactionService.validateRekeyTransaction(
+      SENDER,
+      TGT.addr,
+      {
+        accounts: [
+          { id: 'src', address: SENDER, type: AccountType.STANDARD },
+          { id: 'tgt', address: TGT.addr, type: AccountType.REKEYED },
+        ],
+      }
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects a REKEYED target that probes present but has no readable key', async () => {
+    funded({ isRekeyed: false });
+    mockProbe.mockResolvedValue(true);
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.REKEYED },
+    ]);
+    expect(errors).toContain(TARGET_ERROR);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['unavailable', { isRekeyed: false, unavailable: true }],
+    ['rekeyed without an auth address', { isRekeyed: true }],
+  ])('fails closed when rekey state is %s', async (_label, rekeyInfo) => {
+    mockGetAccountBalance.mockResolvedValue({
+      amount: 1000000n,
+      minBalance: 100000n,
+      rekeyInfo,
+    });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([UNKNOWN_ERROR]);
+  });
+
+  it.each([
+    ['WATCH', AccountType.WATCH, {}, false],
+    ['keyless REKEYED', AccountType.REKEYED, {}, false],
+    ['STANDARD', AccountType.STANDARD, {}, true],
+    [
+      'originalOwner REKEYED',
+      AccountType.REKEYED,
+      { originalOwner: true },
+      true,
+    ],
+    ['LEDGER', AccountType.LEDGER, {}, true],
+    ['REMOTE_SIGNER', AccountType.REMOTE_SIGNER, {}, true],
+  ])(
+    'removing a rekey from a %s source needs its own key afterwards',
+    async (_label, type, extra, allowed) => {
+      funded({ isRekeyed: true, authAddress: CONTROLLER });
+      mockProbe.mockImplementation(async (id) => id === 'src');
+      const errors = await TransactionService.validateRekeyTransaction(
+        SENDER,
+        SENDER,
+        {
+          accounts: [
+            { id: 'src', address: SENDER, type, ...extra },
+            { id: 'ctl', address: CONTROLLER, type: AccountType.STANDARD },
+          ],
+        }
+      );
+      expect(errors.includes(REVERSE_ERROR)).toBe(!allowed);
+      if (allowed) expect(errors).toEqual([]);
+    }
+  );
+
+  it.each([AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
+    'an unrekeyed %s source signs as itself without a software key',
+    async (type) => {
+      funded({ isRekeyed: false });
+      const errors = await validate([
+        { id: 'src', address: SENDER, type },
+        { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+      ]);
+      expect(errors).not.toContain(SOURCE_ERROR);
+    }
+  );
 
   it.each([
     ['REKEYED without its key', AccountType.REKEYED],

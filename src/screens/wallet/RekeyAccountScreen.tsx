@@ -38,7 +38,10 @@ import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
 import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
-import { OwnKeyAccount } from '@/services/wallet/ownKeyCustody';
+import {
+  filterUsableOwnKeyAccounts,
+  OwnKeyAccount,
+} from '@/services/wallet/ownKeyCustody';
 
 type RekeyAccountScreenRouteProp = RouteProp<
   SettingsStackParamList,
@@ -71,7 +74,7 @@ export default function RekeyAccountScreen() {
     NetworkId.VOI_MAINNET
   );
   const [rekeyFlow, setRekeyFlow] = useState<RekeyFlow>('standard');
-  const [selectedStandardAccount, setSelectedStandardAccount] =
+  const [pickedStandardAccount, setSelectedStandardAccount] =
     useState<OwnKeyAccount | null>(null);
   const [selectedLedgerAccount, setSelectedLedgerAccount] =
     useState<LedgerAccountMetadata | null>(null);
@@ -96,14 +99,30 @@ export default function RekeyAccountScreen() {
   const sourceAccount = wallet?.accounts.find(
     (acc) => acc.id === params.accountId
   );
-  // A software target, or a software controller, is an account whose own key
-  // this device holds, a retained REKEYED key included (TASK-425 U3). Null
-  // until the first probe resolves.
-  const ownKeyAccounts = useOwnKeyAccounts(wallet?.accounts ?? NO_ACCOUNTS);
-  const standardAccounts = useMemo(
-    () => ownKeyAccounts?.filter((acc) => acc.id !== params.accountId) ?? null,
-    [ownKeyAccounts, params.accountId]
+  // A software controller is an account whose own key this device holds, a
+  // retained REKEYED key included. A software target, or the source when a
+  // rekey is removed, receives authority for good, so its key must also read
+  // and belong to it (holdsUsableOwnKey). Both are null until the first probe
+  // resolves. (TASK-425 U3.)
+  const accounts = wallet?.accounts ?? NO_ACCOUNTS;
+  const ownKeyAccounts = useOwnKeyAccounts(accounts);
+  const usableOwnKeyAccounts = useOwnKeyAccounts(
+    accounts,
+    filterUsableOwnKeyAccounts
   );
+  const custodyLoading =
+    ownKeyAccounts === null || usableOwnKeyAccounts === null;
+  const standardAccounts = useMemo(
+    () =>
+      usableOwnKeyAccounts?.filter((acc) => acc.id !== params.accountId) ??
+      null,
+    [usableOwnKeyAccounts, params.accountId]
+  );
+  // A pick that a later custody probe drops is no longer selected, so the
+  // proceed button and validation follow the current answer.
+  const selectedStandardAccount =
+    standardAccounts?.find((acc) => acc.id === pickedStandardAccount?.id) ??
+    null;
   const ledgerAccounts = useMemo(
     () =>
       (wallet?.accounts.filter((acc) => acc.type === AccountType.LEDGER) ??
@@ -140,16 +159,16 @@ export default function RekeyAccountScreen() {
         ))
       : undefined;
 
-  // Check if we have the source account in our wallet (to maintain control after rekey)
-  const hasSourceAccount = !!sourceAccount;
+  // Removing the rekey hands authority back to the source's own key, so the
+  // source must sign as itself afterwards (TASK-425 U3 review).
+  const sourceSignsAfterwards =
+    !!sourceAccount &&
+    (sourceAccount.type === AccountType.LEDGER ||
+      sourceAccount.type === AccountType.REMOTE_SIGNER ||
+      !!usableOwnKeyAccounts?.some((acc) => acc.id === sourceAccount.id));
 
-  // We can reverse rekey if we have both the auth signer AND the source account
-  const canReverseRekey = !!authSignerAccount && hasSourceAccount;
-
-  const matchingLedgerSigner =
-    authSignerAccount?.type === AccountType.LEDGER
-      ? (authSignerAccount as LedgerAccountMetadata)
-      : undefined;
+  // We can reverse rekey if we hold the auth signer AND the source's own key
+  const canReverseRekey = !!authSignerAccount && sourceSignsAfterwards;
 
   const isReverseFlow = rekeyFlow === 'reverse';
   const isLedgerFlow = rekeyFlow === 'ledger';
@@ -436,8 +455,15 @@ export default function RekeyAccountScreen() {
       errors.push('Account is not currently rekeyed');
     }
 
-    if (!canReverseRekey && !matchingLedgerSigner) {
+    // Still probing custody: no verdict yet, so no refusal either.
+    if (custodyLoading) return;
+
+    if (!authSignerAccount) {
       errors.push('You do not have signing authority for this rekeyed account');
+    } else if (!sourceSignsAfterwards) {
+      errors.push(
+        "Removing the rekey returns control to this account's own key, which is not in your wallet."
+      );
     }
 
     if (errors.length > 0) {

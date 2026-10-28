@@ -20,7 +20,10 @@ import {
 } from '@/utils/bigint';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { findOwnKeySigner } from '@/services/wallet/ownKeyCustody';
+import {
+  findOwnKeySigner,
+  findUsableOwnKey,
+} from '@/services/wallet/ownKeyCustody';
 import { TransactionTracker } from '@/services/security/transactionTracker';
 import { Arc200TransactionService, Arc200TransactionGroup } from './arc200';
 import { Arc72TransactionService } from './arc72';
@@ -1377,28 +1380,49 @@ export class TransactionService {
         : defaultNetworkService;
       const accountBalance =
         await networkService.getAccountBalance(fromAddress);
-      const isCurrentlyRekeyed = accountBalance.rekeyInfo?.isRekeyed;
+      // Every check below reads chain authority, so an unknown rekey state is
+      // an error, never "not rekeyed" (TASK-425 U3 review).
+      const rekeyInfo = accountBalance.rekeyInfo;
+      if (
+        !rekeyInfo ||
+        rekeyInfo.unavailable ||
+        (rekeyInfo.isRekeyed && !rekeyInfo.authAddress)
+      ) {
+        errors.push(
+          "Couldn't check this account's rekey status on this network. Try again."
+        );
+        return errors;
+      }
+      const isCurrentlyRekeyed = rekeyInfo.isRekeyed;
 
       // Allow rekeying to self only if currently rekeyed (for reverse rekey)
       if (fromAddress === rekeyToAddress && !isCurrentlyRekeyed) {
         errors.push('Cannot rekey an account to itself');
       }
 
-      // For reverse rekey (to self), we don't need to check target account in wallet
-      // since the target IS the source account
-      if (fromAddress !== rekeyToAddress) {
-        // The target must be able to sign as itself afterwards: a Ledger, an
-        // airgap signer, or a record whose own key we hold, a retained REKEYED
-        // key included (TASK-425 U3).
-        const targetAccount =
-          wallet.accounts.find(
-            (acc: any) =>
-              acc.address === rekeyToAddress &&
-              (acc.type === AccountType.LEDGER ||
-                acc.type === AccountType.REMOTE_SIGNER ||
-                acc.type === 'ledger' ||
-                acc.type === 'remote_signer')
-          ) ?? (await findOwnKeySigner(rekeyToAddress, wallet.accounts));
+      // Authority passes to the target for good, so it must be able to sign as
+      // itself afterwards: a Ledger, an airgap signer, or a record whose own key
+      // reads, a retained REKEYED key included (TASK-425 U3).
+      const signsAfterwards = async (address: string) =>
+        wallet.accounts.find(
+          (acc: any) =>
+            acc.address === address &&
+            (acc.type === AccountType.LEDGER ||
+              acc.type === AccountType.REMOTE_SIGNER ||
+              acc.type === 'ledger' ||
+              acc.type === 'remote_signer')
+        ) ?? (await findUsableOwnKey(address, wallet.accounts));
+
+      if (fromAddress === rekeyToAddress) {
+        // Removing a rekey returns authority to the account's own key, so that
+        // key must be ours too, or the account is stranded (TASK-425 U3).
+        if (isCurrentlyRekeyed && !(await signsAfterwards(fromAddress))) {
+          errors.push(
+            "Removing the rekey returns control to this account's own key, which is not in your wallet."
+          );
+        }
+      } else {
+        const targetAccount = await signsAfterwards(rekeyToAddress);
 
         if (!targetAccount) {
           errors.push(

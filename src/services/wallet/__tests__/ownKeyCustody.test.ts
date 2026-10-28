@@ -5,11 +5,14 @@
  * controls the account.
  */
 import { AccountMetadata, AccountType } from '@/types/wallet';
+import { makeAccount } from '@/__tests__/fixtures/algorand';
 
 const mockProbe = jest.fn<Promise<boolean>, [string]>();
+const mockGetPrivateKey = jest.fn<Promise<Uint8Array>, [string]>();
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     probeSecretPresenceStrict: (id: string) => mockProbe(id),
+    getPrivateKey: (id: string) => mockGetPrivateKey(id),
   },
 }));
 
@@ -31,7 +34,9 @@ import {
   filterAirgapSignableAccounts,
   filterOwnKeyAccounts,
   findOwnKeySigner,
+  findUsableOwnKey,
   holdsOwnKey,
+  holdsUsableOwnKey,
   probeOwnKey,
 } from '../ownKeyCustody';
 
@@ -40,6 +45,7 @@ const acc = (id: string, type: AccountType) =>
 
 beforeEach(() => {
   mockProbe.mockReset();
+  mockGetPrivateKey.mockReset();
   mockRekeyInfo.mockReset();
   mockRekeyInfo.mockResolvedValue({ isRekeyed: false });
 });
@@ -197,5 +203,69 @@ describe('findOwnKeySigner (TASK-425 U3)', () => {
     await expect(findOwnKeySigner('addr_a', accounts)).resolves.toBe(
       accounts[1]
     );
+  });
+});
+
+describe('holdsUsableOwnKey (TASK-425 U3 hunter review)', () => {
+  // A presence probe also reads a keyless legacy blob as present, so an
+  // irreversible hand-over needs more than presence for a REKEYED record.
+  const OWN = makeAccount('own-key-custody:usable');
+  const FOREIGN = makeAccount('own-key-custody:foreign');
+  const rekeyed = (overrides: object = {}) =>
+    ({
+      id: 'r',
+      type: AccountType.REKEYED,
+      address: OWN.addr,
+      ...overrides,
+    }) as unknown as AccountMetadata;
+
+  it('accepts STANDARD without probing or reading', async () => {
+    await expect(
+      holdsUsableOwnKey(acc('s', AccountType.STANDARD))
+    ).resolves.toBe(true);
+    expect(mockProbe).not.toHaveBeenCalled();
+    expect(mockGetPrivateKey).not.toHaveBeenCalled();
+  });
+
+  it('accepts an originalOwner REKEYED record on presence, without a read', async () => {
+    mockProbe.mockResolvedValue(true);
+    await expect(
+      holdsUsableOwnKey(rekeyed({ originalOwner: true }))
+    ).resolves.toBe(true);
+    expect(mockGetPrivateKey).not.toHaveBeenCalled();
+  });
+
+  it('accepts a REKEYED record whose key reads and is its own, and zeroes it', async () => {
+    mockProbe.mockResolvedValue(true);
+    const key = OWN.sk.slice();
+    mockGetPrivateKey.mockResolvedValue(key);
+    await expect(holdsUsableOwnKey(rekeyed())).resolves.toBe(true);
+    expect(key.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it.each([
+    ['the probe says absent', false, () => Promise.resolve(OWN.sk.slice())],
+    [
+      'the key read fails (keyless legacy blob)',
+      true,
+      () => Promise.reject(new Error('no key')),
+    ],
+    [
+      'the key belongs to another address',
+      true,
+      () => Promise.resolve(FOREIGN.sk.slice()),
+    ],
+  ])('refuses when %s', async (_label, present, read) => {
+    mockProbe.mockResolvedValue(present);
+    mockGetPrivateKey.mockImplementation(read);
+    await expect(holdsUsableOwnKey(rekeyed())).resolves.toBe(false);
+  });
+
+  it('findUsableOwnKey skips a present-but-unreadable record', async () => {
+    mockProbe.mockResolvedValue(true);
+    mockGetPrivateKey.mockRejectedValue(new Error('no key'));
+    await expect(
+      findUsableOwnKey(OWN.addr, [rekeyed()])
+    ).resolves.toBeUndefined();
   });
 });
