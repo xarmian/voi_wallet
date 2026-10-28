@@ -22,6 +22,7 @@ jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     hasKeyBearingAccountStrict: jest.fn(),
     getStandardAccountIdsStrict: jest.fn(),
+    getBlobAccountIdsStrict: jest.fn(),
   },
 }));
 
@@ -227,6 +228,9 @@ it('drains a journal-only failed import using the real reconcile before removing
   jest
     .mocked(MultiAccountWalletService.getStandardAccountIdsStrict)
     .mockResolvedValue([]);
+  jest
+    .mocked(MultiAccountWalletService.getBlobAccountIdsStrict)
+    .mockResolvedValue({ standardIds: [], allIds: [] });
   jest.mocked(AccountSecureStorage.readAccountListStrict).mockResolvedValue([]);
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
@@ -302,6 +306,9 @@ it("given TASK-415's contract, a failed orphan delete stays indexed: the gate re
   jest
     .mocked(MultiAccountWalletService.getStandardAccountIdsStrict)
     .mockResolvedValue([]);
+  jest
+    .mocked(MultiAccountWalletService.getBlobAccountIdsStrict)
+    .mockResolvedValue({ standardIds: [], allIds: [] });
   jest.mocked(AccountSecureStorage.readAccountListStrict).mockResolvedValue([]);
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)

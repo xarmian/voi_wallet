@@ -37,8 +37,13 @@ jest.mock('@/services/ledger/transport', () => ({
 }));
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
 jest.mock('@/services/network', () => ({ NetworkService: {} }));
+const mockProbeSecretPresence = jest.fn(
+  async (_id: string): Promise<boolean> => false
+);
 jest.mock('../../secure/AccountSecureStorage', () => ({
-  AccountSecureStorage: {},
+  AccountSecureStorage: {
+    probeSecretPresenceStrict: (id: string) => mockProbeSecretPresence(id),
+  },
 }));
 
 import { storage, secureStorage } from '@/platform';
@@ -160,6 +165,83 @@ describe('hasKeyBearingAccountStrict — STANDARD-account signal (TASK-213)', ()
     await expect(
       MultiAccountWalletService.hasKeyBearingAccountStrict()
     ).resolves.toBe(true);
+  });
+
+  // TASK-419: rekeying converts STANDARD → REKEYED in the blob only and keeps
+  // the original key; discovered/imported REKEYED accounts hold none. Only a
+  // REKEYED account whose secret is present is key-bearing.
+  describe('REKEYED accounts (TASK-419)', () => {
+    const rekeyedWallet = () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [
+          { id: 'k', type: 'rekeyed' },
+          { id: 'w', type: 'watch' },
+        ],
+      });
+    };
+    afterEach(() => mockProbeSecretPresence.mockReset());
+
+    it('resolves TRUE when a REKEYED account retains its key', async () => {
+      rekeyedWallet();
+      mockProbeSecretPresence.mockResolvedValue(true);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('k');
+    });
+
+    it('resolves FALSE for a keyless (discovered/imported) REKEYED account', async () => {
+      rekeyedWallet();
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(false);
+    });
+
+    it('PROPAGATES a probe failure (fail closed)', async () => {
+      rekeyedWallet();
+      mockProbeSecretPresence.mockRejectedValue(new Error('keychain'));
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).rejects.toThrow('keychain');
+    });
+
+    // The pre-sentinel Android keystore break reads the secret as null like the
+    // PIN, so a converted account must count WITHOUT a secure read.
+    it('resolves TRUE for originalOwner REKEYED without probing (keystore-independent)', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [{ id: 'k', type: 'rekeyed', originalOwner: true }],
+      });
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).not.toHaveBeenCalled();
+    });
+
+    it('probes a REKEYED account with originalOwner false', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [{ id: 'k', type: 'rekeyed', originalOwner: false }],
+      });
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(false);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('k');
+    });
+
+    it('does not probe when a STANDARD account already answers', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [
+          { id: 's', type: 'standard' },
+          { id: 'k', type: 'rekeyed' },
+        ],
+      });
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).not.toHaveBeenCalled();
+    });
   });
 
   it('resolves FALSE for a watch-only / ledger / remote-signer wallet (no local key ⇒ PIN-less is legit)', async () => {

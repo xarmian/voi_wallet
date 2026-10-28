@@ -22,6 +22,7 @@ jest.mock('@/services/secure', () => ({
 jest.mock('../index', () => ({
   MultiAccountWalletService: {
     getStandardAccountIdsStrict: jest.fn(),
+    getBlobAccountIdsStrict: jest.fn(),
     pruneStandardAccounts: jest.fn(async () => {}),
   },
 }));
@@ -39,18 +40,21 @@ const secure = AccountSecureStorage as unknown as {
 };
 const wallet = MultiAccountWalletService as unknown as {
   getStandardAccountIdsStrict: jest.Mock;
+  getBlobAccountIdsStrict: jest.Mock;
   pruneStandardAccounts: jest.Mock;
 };
 
 /**
  * Configure the mocked stores.
  * @param blob   STANDARD account ids in the wallet blob.
+ * @param others non-STANDARD (e.g. REKEYED/WATCH) account ids in the blob.
  * @param list   ids in the secure account list (voi_account_list).
  * @param journal pending-creation journal { id: token }.
  * @param secrets set of ids whose secret is PRESENT.
  */
 function setup(opts: {
   blob?: string[];
+  others?: string[];
   list?: string[];
   journal?: Record<string, string>;
   secrets?: string[];
@@ -59,6 +63,10 @@ function setup(opts: {
   secure.readAccountListStrict.mockResolvedValue(opts.list ?? []);
   secure.readPendingCreatesStrict.mockResolvedValue(opts.journal ?? {});
   wallet.getStandardAccountIdsStrict.mockResolvedValue(opts.blob ?? []);
+  wallet.getBlobAccountIdsStrict.mockResolvedValue({
+    standardIds: opts.blob ?? [],
+    allIds: [...(opts.blob ?? []), ...(opts.others ?? [])],
+  });
   secure.probeSecretPresenceStrict.mockImplementation(async (id: string) =>
     secrets.has(id)
   );
@@ -78,6 +86,9 @@ describe('reconcileCrossStoreHalfState — fail-closed abort (delete nothing)', 
   it('aborts and mutates nothing when the wallet-blob strict read throws', async () => {
     setup({ list: ['a'], secrets: ['a'] });
     wallet.getStandardAccountIdsStrict.mockRejectedValue(
+      new Error('blob read failed')
+    );
+    wallet.getBlobAccountIdsStrict.mockRejectedValue(
       new Error('blob read failed')
     );
 
@@ -281,5 +292,54 @@ describe('reconcileCrossStoreHalfState — Phase 2 is best-effort (partial failu
     expect(result.ran).toBe(true);
     // Prune threw → not recorded → caller does NOT refresh (wallet likely intact).
     expect(result.phantomAccountsPruned).toEqual([]);
+  });
+});
+
+describe('reconcileCrossStoreHalfState — non-STANDARD owners (TASK-419)', () => {
+  it('keeps the retained key of a STANDARD-origin REKEYED account', async () => {
+    // rekeyManager converts STANDARD → REKEYED in the blob only; the id, its
+    // secret and its secure list entry are deliberately retained.
+    setup({ others: ['rekeyed'], list: ['rekeyed'], secrets: ['rekeyed'] });
+
+    const result = await reconcileCrossStoreHalfState();
+
+    expect(result.ran).toBe(true);
+    expect(result.orphanSecretsDeleted).toEqual([]);
+    assertNoMutation();
+  });
+
+  it('still deletes a secret that no blob account of any type owns', async () => {
+    setup({
+      others: ['rekeyed'],
+      list: ['rekeyed', 'orphan'],
+      secrets: ['rekeyed', 'orphan'],
+    });
+
+    const result = await reconcileCrossStoreHalfState();
+
+    expect(secure.deleteAccount).toHaveBeenCalledTimes(1);
+    expect(secure.deleteAccount).toHaveBeenCalledWith('orphan');
+    expect(result.orphanSecretsDeleted).toEqual(['orphan']);
+  });
+
+  it('never prunes a non-STANDARD blob account as a phantom', async () => {
+    setup({ others: ['watch'], list: ['watch'], secrets: [] });
+
+    await reconcileCrossStoreHalfState();
+
+    expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
+  });
+
+  it('keeps a journaled REKEYED secret and leaves its journal entry', async () => {
+    setup({
+      others: ['rekeyed'],
+      journal: { rekeyed: 'attempt' },
+      secrets: ['rekeyed'],
+    });
+
+    await reconcileCrossStoreHalfState();
+
+    expect(secure.deleteAccount).not.toHaveBeenCalled();
+    expect(secure.dropPendingCreateEntries).not.toHaveBeenCalled();
   });
 });

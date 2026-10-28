@@ -929,3 +929,56 @@ describe('updateAccountWithRekeyInfo', () => {
     expect(result.type).toBe(AccountType.WATCH);
   });
 });
+
+// TASK-419: `originalOwner` is the durable signal that the account still holds
+// its original key (hasKeyBearingAccountStrict counts it without a secure read),
+// so it must survive repeated rekeys.
+describe('originalOwner through repeated rekeys (TASK-419)', () => {
+  const ledger = ledgerAccount(LEDGER_AUTH, 'led-1');
+  const airgap = remoteSignerAccount(REMOTE_AUTH, 'rs-1');
+
+  it('STANDARD → Ledger → airgap keeps originalOwner true', async () => {
+    const source = standardAccount(REKEYED, 'acct-1');
+    const wallet = makeWallet([source, ledger, airgap]);
+    const toLedger = await manager.rekeyToLedger(source, ledger, wallet);
+    expect(toLedger.originalOwner).toBe(true);
+    const toAirgap = await manager.rekeyToAirgap(
+      toLedger,
+      airgap,
+      makeWallet([toLedger, ledger, airgap])
+    );
+    expect(toAirgap.originalOwner).toBe(true);
+  });
+
+  it('STANDARD → airgap → Ledger keeps originalOwner true', async () => {
+    const source = standardAccount(REKEYED, 'acct-1');
+    const wallet = makeWallet([source, ledger, airgap]);
+    const toAirgap = await manager.rekeyToAirgap(source, airgap, wallet);
+    const toLedger = await manager.rekeyToLedger(
+      toAirgap,
+      ledger,
+      makeWallet([toAirgap, ledger, airgap])
+    );
+    expect(toLedger.originalOwner).toBe(true);
+  });
+
+  it('a keyless REKEYED source stays originalOwner false', async () => {
+    const source = rekeyedAccount(REKEYED, 'acct-1', LEDGER_AUTH.addr, true);
+    const toAirgap = await manager.rekeyToAirgap(
+      source,
+      airgap,
+      makeWallet([source, ledger, airgap])
+    );
+    expect(toAirgap.originalOwner).toBe(false);
+  });
+
+  it('a WATCH source stays originalOwner false', async () => {
+    const source = watchAccount(REKEYED, 'acct-1');
+    const toLedger = await manager.rekeyToLedger(
+      source,
+      ledger,
+      makeWallet([source, ledger, airgap])
+    );
+    expect(toLedger.originalOwner).toBe(false);
+  });
+});

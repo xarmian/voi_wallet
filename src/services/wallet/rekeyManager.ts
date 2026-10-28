@@ -421,7 +421,12 @@ export class RekeyManager {
       ...baseMetadata,
       type: AccountType.REKEYED,
       authAddress: ledgerAccountInWallet.address,
-      originalOwner: sourceAccount.type === AccountType.STANDARD,
+      // TASK-419: preserve ownership through repeated rekeys; the original key
+      // is still retained, and hasKeyBearingAccountStrict relies on this flag.
+      originalOwner:
+        sourceAccount.type === AccountType.STANDARD ||
+        (sourceAccount.type === AccountType.REKEYED &&
+          (sourceAccount as RekeyedAccountMetadata).originalOwner === true),
       canSign: ledgerInfo
         ? ledgerInfo.isDeviceConnected || ledgerInfo.isDeviceAvailable
         : false,
@@ -478,7 +483,12 @@ export class RekeyManager {
       ...baseMetadata,
       type: AccountType.REKEYED,
       authAddress: airgapAccountInWallet.address,
-      originalOwner: sourceAccount.type === AccountType.STANDARD,
+      // TASK-419: preserve ownership through repeated rekeys; the original key
+      // is still retained, and hasKeyBearingAccountStrict relies on this flag.
+      originalOwner:
+        sourceAccount.type === AccountType.STANDARD ||
+        (sourceAccount.type === AccountType.REKEYED &&
+          (sourceAccount as RekeyedAccountMetadata).originalOwner === true),
       canSign: true, // Airgap accounts can always sign via QR flow
       rekeyedFrom:
         sourceAccount.type === AccountType.REKEYED

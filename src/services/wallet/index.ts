@@ -2172,17 +2172,49 @@ export class MultiAccountWalletService {
     if (!walletData) {
       return false;
     }
+    let rekeyedIds: string[] = [];
     try {
       const parsed = JSON.parse(walletData) as Wallet;
       if (!Array.isArray(parsed.accounts)) {
         return false;
       }
-      return parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD);
+      if (parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD)) {
+        return true;
+      }
+      // TASK-419: `originalOwner: true` is the durable, keystore-independent
+      // signal that rekeyManager converted a STANDARD account and kept its key.
+      // It must not depend on a secure read: a pre-sentinel Android keystore
+      // failure reads the secret as null exactly like the PIN.
+      if (
+        parsed.accounts.some(
+          (acc) =>
+            acc?.type === AccountType.REKEYED &&
+            (acc as RekeyedAccountMetadata).originalOwner === true
+        )
+      ) {
+        return true;
+      }
+      rekeyedIds = parsed.accounts
+        .filter(
+          (acc) =>
+            acc?.type === AccountType.REKEYED &&
+            typeof acc.id === 'string' &&
+            acc.id !== ''
+        )
+        .map((acc) => acc.id);
     } catch {
       // A corrupt blob is handled (thrown) by hasWalletWithAccountsStrict; here we
       // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
       return false;
     }
+    // Any other REKEYED account is key-bearing only if a secret is present
+    // (discovered/imported REKEYED accounts hold none). A probe failure
+    // PROPAGATES (fail closed, like the sibling strict reads). Concurrent, so
+    // the AuthContext read stays one probe deep under its outer timeout.
+    const present = await Promise.all(
+      rekeyedIds.map((id) => AccountSecureStorage.probeSecretPresenceStrict(id))
+    );
+    return present.some(Boolean);
   }
 
   /**
@@ -2247,6 +2279,59 @@ export class MultiAccountWalletService {
     return parsed.accounts
       .filter((acc) => acc.type === AccountType.STANDARD)
       .map((acc) => acc.id);
+  }
+
+  /**
+   * STRICT read of the blob's account ids for the boot reconcile (TASK-419):
+   * `standardIds` (phantom candidates, as before) and `allIds`, every account of
+   * ANY type. A secret is owned by any blob account with its id, not only a
+   * STANDARD one: rekeying converts STANDARD → REKEYED in the blob only and the
+   * original key is deliberately retained (rekeyManager converts back when it
+   * still finds it). Same fail-closed validation as getStandardAccountIdsStrict.
+   */
+  static async getBlobAccountIdsStrict(): Promise<{
+    standardIds: string[];
+    allIds: string[];
+  }> {
+    const rawPrimary = await storage.getItem(this.WALLET_KEY);
+    if (rawPrimary === '') {
+      throw new Error('Corrupt wallet blob: present but empty');
+    }
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (walletData == null) {
+      return { standardIds: [], allIds: [] };
+    }
+    const parsed = JSON.parse(walletData) as Wallet;
+    if (!Array.isArray(parsed.accounts)) {
+      throw new Error(
+        'Corrupt wallet blob: `accounts` is present but not an array'
+      );
+    }
+    const validTypes = new Set<string>(Object.values(AccountType));
+    for (const acc of parsed.accounts) {
+      if (
+        acc == null ||
+        typeof acc.id !== 'string' ||
+        acc.id === '' ||
+        !validTypes.has(acc.type)
+      ) {
+        throw new Error('Corrupt wallet blob: malformed account entry');
+      }
+    }
+    // A duplicated id is CORRUPTION: pruneStandardAccounts filters by id, so a
+    // STANDARD phantom sharing an id with another entry would remove both.
+    if (
+      new Set(parsed.accounts.map((acc) => acc.id)).size !==
+      parsed.accounts.length
+    ) {
+      throw new Error('Corrupt wallet blob: duplicate account id');
+    }
+    return {
+      standardIds: parsed.accounts
+        .filter((acc) => acc.type === AccountType.STANDARD)
+        .map((acc) => acc.id),
+      allIds: parsed.accounts.map((acc) => acc.id),
+    };
   }
 
   /**

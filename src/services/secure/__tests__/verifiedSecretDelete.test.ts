@@ -71,6 +71,10 @@ jest.mock('@/services/secure', () =>
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getStandardAccountIdsStrict: jest.fn(async () => []),
+    getBlobAccountIdsStrict: jest.fn(async () => ({
+      standardIds: [],
+      allIds: [],
+    })),
     pruneStandardAccounts: jest.fn(async () => {}),
   },
 }));
