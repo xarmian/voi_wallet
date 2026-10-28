@@ -195,7 +195,7 @@ export class TransactionService {
     try {
       const signingInfo = await SecureKeyManager.getSigningInfo(
         account.address,
-        networkId
+        networkId ?? defaultNetworkService.getCurrentNetworkId()
       );
       if (!signingInfo) {
         return null;
@@ -575,7 +575,7 @@ export class TransactionService {
           // On retries, ensure connection/app are ready
           const signingInfo = await SecureKeyManager.getSigningInfo(
             account.address,
-            networkId
+            networkId ?? defaultNetworkService.getCurrentNetworkId()
           ).catch((e) => {
             console.warn(
               'Recovery: failed to read signing info:',
@@ -1091,15 +1091,9 @@ export class TransactionService {
     networkId?: NetworkId
   ): Promise<void> {
     try {
-      // Check if this is a remote signer account - these are always valid
-      // (signing will be handled via QR code flow)
-      if (account.type === AccountType.REMOTE_SIGNER) {
-        return;
-      }
-
       const info = await SecureKeyManager.getSigningInfo(
         account.address,
-        networkId
+        networkId ?? defaultNetworkService.getCurrentNetworkId()
       );
 
       // If we can sign, no error
@@ -1154,7 +1148,9 @@ export class TransactionService {
           'You do not have the necessary signing authority for this account.'
         );
       }
-    } catch {}
+    } catch {
+      errors.push('Unable to verify signing authority. Please try again.');
+    }
   }
 
   /**

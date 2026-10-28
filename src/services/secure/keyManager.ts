@@ -2,14 +2,13 @@ import { AccountSecureStorage } from './AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import {
   AccountType,
-  RekeyedAccountMetadata,
   LedgerAccountMetadata,
   LedgerSigningInfo,
   LedgerDeviceNotConnectedError,
   LedgerAccountError,
   AuthenticationRequiredError,
 } from '@/types/wallet';
-import RekeyManager from '@/services/wallet/rekeyManager';
+import { getRekeyStateStrict } from '@/store/walletStore';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
@@ -299,12 +298,11 @@ export class SecureKeyManager {
    * Get signing information for an account
    * Returns the actual address that will be used for signing and whether signing is possible
    * @param address - The account address to check
-   * @param networkId - Optional network ID to check network-specific rekey status
-   * WARNING: For transaction signing, ALWAYS provide networkId to avoid using wrong network's rekey state
+   * @param networkId - The request network used to resolve signing authority
    */
   static async getSigningInfo(
     address: string,
-    networkId?: import('@/types/network').NetworkId
+    networkId: import('@/types/network').NetworkId
   ): Promise<{
     canSign: boolean;
     signingAddress: string;
@@ -312,6 +310,7 @@ export class SecureKeyManager {
     isRekeyed: boolean;
     authAddress?: string;
   }> {
+    const rekey = await getRekeyStateStrict(address, networkId);
     try {
       const wallet = await MultiAccountWalletService.getCurrentWallet();
       if (!wallet) {
@@ -331,7 +330,7 @@ export class SecureKeyManager {
         };
       }
 
-      if (account.type === AccountType.STANDARD) {
+      if (!rekey.isRekeyed && account.type === AccountType.STANDARD) {
         return {
           canSign: true,
           signingAddress: address,
@@ -340,7 +339,7 @@ export class SecureKeyManager {
         };
       }
 
-      if (account.type === AccountType.LEDGER) {
+      if (!rekey.isRekeyed && account.type === AccountType.LEDGER) {
         // User can sign with Ledger accounts regardless of current connection state.
         // Connection will be handled just-in-time during signing.
         return {
@@ -351,76 +350,26 @@ export class SecureKeyManager {
         };
       }
 
-      if (account.type === AccountType.REKEYED) {
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        const signingAccount = RekeyManager.findSigningAccount(
-          rekeyedAccount,
-          wallet
-        );
-
-        return {
-          canSign: rekeyedAccount.canSign,
-          signingAddress: rekeyedAccount.authAddress,
-          signingAccountId: signingAccount?.id,
-          isRekeyed: true,
-          authAddress: rekeyedAccount.authAddress,
-        };
-      }
-      // WATCH accounts: detect if rekeyed to an account we control (standard or Ledger)
-      // If rekeyed to a standard account in our wallet, report canSign true
-      // If rekeyed to a Ledger account in our wallet, report canSign false but include signer identifiers
-      try {
-        // Use network-specific service to check rekey status
-        const networkService = NetworkService.getInstance(networkId);
-        const rekeyInfo = await networkService.getAccountRekeyInfo(address);
-        if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
-          const signer = wallet.accounts.find(
-            (acc) => acc.address === rekeyInfo.authAddress
-          );
-
-          if (signer?.type === AccountType.STANDARD) {
-            return {
-              canSign: true,
-              signingAddress: rekeyInfo.authAddress,
-              signingAccountId: signer.id,
-              isRekeyed: true,
-              authAddress: rekeyInfo.authAddress,
-            };
-          }
-
-          if (signer?.type === AccountType.LEDGER) {
-            return {
-              canSign: false,
-              signingAddress: rekeyInfo.authAddress,
-              signingAccountId: signer.id,
-              isRekeyed: true,
-              authAddress: rekeyInfo.authAddress,
-            };
-          }
-
-          // Rekeyed but signer not in wallet
-          return {
-            canSign: false,
-            signingAddress: rekeyInfo.authAddress,
-            isRekeyed: true,
-            authAddress: rekeyInfo.authAddress,
-          };
-        }
-      } catch {}
-
-      // Not rekeyed or unable to detect signer for watch account
+      const signingAddress = rekey.authAddress ?? address;
+      const signer = wallet?.accounts.find(
+        (acc) =>
+          acc.address === signingAddress &&
+          [
+            AccountType.STANDARD,
+            AccountType.LEDGER,
+            AccountType.REMOTE_SIGNER,
+          ].includes(acc.type)
+      );
       return {
-        canSign: false,
-        signingAddress: address,
-        isRekeyed: false,
+        canSign: rekey.canSign,
+        signingAddress,
+        signingAccountId: signer?.id,
+        isRekeyed: rekey.isRekeyed,
+        authAddress: rekey.authAddress,
       };
     } catch (error) {
       console.error('Failed to get signing info:', redactError(error));
-      return {
-        canSign: false,
-        signingAddress: address,
-        isRekeyed: false,
-      };
+      throw error;
     }
   }
 
