@@ -26,6 +26,11 @@ export interface RekeyInfo {
   isRekeyed: boolean;
   authAddress?: string;
   rekeyedAt?: number;
+  /**
+   * TASK-421 (c): the rekey lookup FAILED and `isRekeyed: false` is only a
+   * display fallback. Nothing may persist a metadata change from it.
+   */
+  unavailable?: boolean;
 }
 
 // Resolved shape of `algodClient.accountInformation(address).do()`. Used to pass
@@ -556,7 +561,7 @@ export class NetworkService {
         rekeyInfo:
           rekeyInfo.status === 'fulfilled'
             ? rekeyInfo.value
-            : { isRekeyed: false },
+            : { isRekeyed: false, unavailable: true },
       };
     } catch (error) {
       console.error('Failed to fetch account balance:', redactError(error));

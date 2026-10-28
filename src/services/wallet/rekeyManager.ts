@@ -185,6 +185,11 @@ export class RekeyManager {
     wallet: Wallet
   ): Promise<AccountMetadata> {
     try {
+      // TASK-421 (c): a failed rekey lookup is not evidence of anything; never
+      // convert (and so never persist) from its display fallback.
+      if (rekeyInfo.unavailable) {
+        return account;
+      }
       if (!rekeyInfo.isRekeyed || !rekeyInfo.authAddress) {
         // Account is not rekeyed according to network - check if we should auto-convert
         // Only process REKEYED accounts - WATCH accounts stay as-is
@@ -204,6 +209,20 @@ export class RekeyManager {
               redactError(error)
             );
             return account;
+          }
+          // A present record isn't proof of a usable key: a keyless legacy
+          // metadata record also probes as present. originalOwner (a converted
+          // STANDARD account) is; otherwise the key must actually read, and a
+          // failed read keeps the record rather than demoting it.
+          if (
+            hasPrivateKey &&
+            (account as RekeyedAccountMetadata).originalOwner !== true
+          ) {
+            try {
+              await AccountSecureStorage.getPrivateKey(account.id);
+            } catch {
+              return account;
+            }
           }
 
           if (hasPrivateKey) {

@@ -83,6 +83,29 @@ describe('NetworkService.getAccountBalance (batch + dedupe, TASK-46)', () => {
     jest.restoreAllMocks();
   });
 
+  // TASK-421 (c): a failed rekey lookup must be distinguishable from "not
+  // rekeyed", so nothing persists a metadata conversion from the fallback.
+  it('flags the rekey fallback unavailable when the rekey lookup fails', async () => {
+    let callCount = 0;
+    (service as any).algodClient = {
+      accountInformation: () => ({
+        do: async () => {
+          callCount += 1;
+          if (callCount === 1) {
+            return { amount: 1n, minBalance: 100_000n, assets: [] };
+          }
+          throw new Error('algod 503');
+        },
+      }),
+    };
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await service.getAccountBalance(ADDRESS);
+
+    expect(result.rekeyInfo).toEqual({ isRekeyed: false, unavailable: true });
+  });
+
   it('reads rekey authority from an INDEPENDENT fetch, not the shared balance snapshot (DR-1); dedupes only pricing', async () => {
     // DR-1 guard: the balance snapshot is plain, but the rekey path's own
     // (distinct, later) request shows the account rekeyed. The returned

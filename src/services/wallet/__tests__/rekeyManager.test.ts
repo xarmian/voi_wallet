@@ -974,6 +974,58 @@ describe('updateAccountWithRekeyInfo', () => {
       expect((result as RekeyedAccountMetadata).originalOwner).toBe(true);
     });
 
+    it('keeps the record when the rekey lookup itself failed (unavailable)', async () => {
+      const probe = jest.spyOn(
+        AccountSecureStorage,
+        'probeSecretPresenceStrict'
+      );
+      const original = source();
+      const result = await manager.updateAccountWithRekeyInfo(
+        original,
+        { isRekeyed: false, unavailable: true },
+        makeWallet([original])
+      );
+      expect(result).toBe(original);
+      expect(probe).not.toHaveBeenCalled();
+    });
+
+    describe('without originalOwner, presence alone is not a usable key', () => {
+      const keylessCandidate = () =>
+        rekeyedAccount(REKEYED, 'src-2', LEDGER_AUTH.addr, true);
+
+      it('converts to STANDARD only when the key actually reads', async () => {
+        jest
+          .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+          .mockResolvedValue(true);
+        jest
+          .spyOn(AccountSecureStorage, 'getPrivateKey')
+          .mockResolvedValue(new Uint8Array(64));
+        const result = await manager.updateAccountWithRekeyInfo(
+          keylessCandidate(),
+          { isRekeyed: false },
+          makeWallet([keylessCandidate()])
+        );
+        expect(result.type).toBe(AccountType.STANDARD);
+      });
+
+      it('keeps a keyless legacy record REKEYED instead of making it STANDARD', async () => {
+        // A legacy metadata record without encryptedPrivateKey probes present.
+        jest
+          .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+          .mockResolvedValue(true);
+        jest
+          .spyOn(AccountSecureStorage, 'getPrivateKey')
+          .mockRejectedValue(new Error('no private key in record'));
+        const original = keylessCandidate();
+        const result = await manager.updateAccountWithRekeyInfo(
+          original,
+          { isRekeyed: false },
+          makeWallet([original])
+        );
+        expect(result).toBe(original);
+      });
+    });
+
     it('needs no unlock: a locked vault does not affect the decision', async () => {
       const probe = jest
         .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
