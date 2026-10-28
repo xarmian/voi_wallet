@@ -501,6 +501,13 @@ export default function SettingsScreen() {
     cancelDeletion();
   };
 
+  // An unexpected throw must never strand the busy ref and latch (leaving
+  // Delete dead): reset on rejection. A promise catch, not try/finally, which
+  // the React Compiler can't lower.
+  const runDeletion = (target: AccountMetadata, keyHolding: boolean) => {
+    void confirmDeletion(target, keyHolding).catch(cancelDeletion);
+  };
+
   const handleDeleteActiveAccount = async () => {
     if (deletionBusy.current) return;
     if (!activeAccount) {
@@ -548,7 +555,7 @@ export default function SettingsScreen() {
           {
             text: 'Delete',
             style: 'destructive',
-            onPress: () => confirmDeletion(target, false),
+            onPress: () => runDeletion(target, false),
           },
         ],
         { cancelable: true, onDismiss: cancelDeletion }
@@ -894,7 +901,7 @@ export default function SettingsScreen() {
               formatAddress(deletionTarget.address)
             }
             onCancel={cancelDeletion}
-            onConfirm={() => void confirmDeletion(deletionTarget, true)}
+            onConfirm={() => runDeletion(deletionTarget, true)}
           />
         )}
         <RenameAccountModal

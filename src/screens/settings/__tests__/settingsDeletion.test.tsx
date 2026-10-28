@@ -283,3 +283,20 @@ it('a dismissed alert and a finished deletion both leave Delete usable', async (
   await fireEvent.press(view.getByLabelText('Delete account'));
   expect(mockDelete).toHaveBeenCalledTimes(2);
 });
+
+it('an unexpected throw during confirmation leaves Delete usable', async () => {
+  const { view, alert } = await open();
+  await pressAlert(alert, 'I have my phrase');
+  await typeDelete(view);
+  // The account vanishes from a broken store read: confirmation throws.
+  const accounts = mockAccounts;
+  mockAccounts = undefined as unknown as AccountMetadata[];
+  await fireEvent.press(view.getByLabelText('Delete account'));
+  mockAccounts = accounts;
+  expect(mockDelete).not.toHaveBeenCalled();
+  await fireEvent.press(view.getByText(/^Delete "/));
+  await pressAlert(alert, 'I have my phrase');
+  await typeDelete(view);
+  await fireEvent.press(view.getByLabelText('Delete account'));
+  expect(mockDelete).toHaveBeenCalledTimes(1);
+});
