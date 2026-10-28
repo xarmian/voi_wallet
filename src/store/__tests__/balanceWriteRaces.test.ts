@@ -175,6 +175,7 @@ describe('loadAccountBalance commit guard (TASK-59)', () => {
     for (let i = 0; i < 10; i += 1) await flush();
 
     expect(stateOf('acc-1')?.balance?.amount).toBe(7n);
+    expect(stateOf('acc-1')?.balanceNetworkId).toBe('voi-mainnet');
     expect(stateOf('acc-1')?.isBalanceLoading).toBe(false);
     expect(mockSetItem).toHaveBeenCalled();
   });
@@ -292,6 +293,7 @@ describe('persisted balance cache (TASK-59)', () => {
     pending[0].resolve(balanceOf(7n));
     await load;
     expect(stateOf('acc-1')?.balance?.amount).toBe(7n);
+    expect(stateOf('acc-1')?.balanceNetworkId).toBe('voi-mainnet');
 
     // The persist is still queued behind a 0ms timer.
     switchNetwork('algorand-mainnet');
@@ -352,6 +354,7 @@ describe('balance-cache clears vs deferred writes (TASK-59)', () => {
     await settle();
 
     expect(cachedKeys()).toEqual([]);
+    expect(stateOf('acc-1')?.balanceNetworkId).toBeUndefined();
   });
 
   it('the switch clear keeps a load already issued for the NEW network', async () => {
@@ -369,6 +372,7 @@ describe('balance-cache clears vs deferred writes (TASK-59)', () => {
     await settle();
 
     expect(stateOf('acc-1')?.balance?.amount).toBe(9n);
+    expect(stateOf('acc-1')?.balanceNetworkId).toBe('algorand-mainnet');
     expect(stateOf('acc-1')?.isBalanceLoading).toBe(false);
     expect(cachedKeys()).toEqual(['acc-1_single_algorand-mainnet']);
   });
@@ -400,6 +404,7 @@ describe('balance-cache clears vs deferred writes (TASK-59)', () => {
     await settle();
 
     expect(cachedKeys()).toEqual([]);
+    expect(stateOf('acc-1')?.balanceNetworkId).toBeUndefined();
   });
 });
 
