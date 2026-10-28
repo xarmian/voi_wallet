@@ -107,7 +107,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 import {
   invalidateBalanceRequests,
-  removePersistedBalanceCacheKeys,
+  removePersistedBalanceCaches,
   useWalletStore,
 } from '../walletStore';
 import type { AccountBalance, Wallet } from '@/types/wallet';
@@ -409,7 +409,7 @@ describe('balance-cache clears vs deferred writes (TASK-59)', () => {
   it('a restore removal sticks over a write already in setItem', async () => {
     await startDeferredWrite();
 
-    await removePersistedBalanceCacheKeys(['@voi_wallet_balance_cache_v2']);
+    await removePersistedBalanceCaches();
     await settle();
 
     expect(cachedKeys()).toEqual([]);
@@ -418,7 +418,7 @@ describe('balance-cache clears vs deferred writes (TASK-59)', () => {
   it('a restore removal sticks over a deferred write that has not started', async () => {
     await commitBalance();
 
-    await removePersistedBalanceCacheKeys(['@voi_wallet_balance_cache_v2']);
+    await removePersistedBalanceCaches();
     await settle();
 
     expect(cachedKeys()).toEqual([]);
@@ -502,6 +502,25 @@ describe('refreshAllBalances (TASK-59)', () => {
     expect(stateOf('acc-1')?.balance).toBeUndefined();
     expect(stateOf('acc-2')?.balance).toBeUndefined();
     expect(mockSetItem).not.toHaveBeenCalled();
+  });
+
+  it('a restore removal releases the spinner of a load a batch superseded (TASK-398)', async () => {
+    // The per-account load is no longer "latest" once the batch starts, and
+    // after the restore's invalidation neither can settle the loading flag.
+    const pending = deferFetches();
+    const load = useWalletStore.getState().loadAccountBalance('acc-1', true);
+    await flush();
+    const refresh = useWalletStore.getState().refreshAllBalances();
+    await flush();
+    expect(stateOf('acc-1')?.isBalanceLoading).toBe(true);
+
+    await removePersistedBalanceCaches();
+    pending.forEach(({ resolve }) => resolve(balanceOf(5n)));
+    await Promise.all([load, refresh]);
+    await settle();
+
+    expect(stateOf('acc-1')?.isBalanceLoading).toBe(false);
+    expect(stateOf('acc-1')?.balance).toBeUndefined();
   });
 
   it('an older batch result cannot overwrite a newer per-account load', async () => {

@@ -68,12 +68,10 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
-const mockRemovePersistedBalanceCacheKeys = jest.fn(
-  async (_keys: string[]) => {}
-);
+const mockRemovePersistedBalanceCaches = jest.fn(async (_keys: string[]) => {});
 jest.mock('@/store/walletStore', () => ({
-  removePersistedBalanceCacheKeys: (keys: string[]) =>
-    mockRemovePersistedBalanceCacheKeys(keys),
+  removePersistedBalanceCaches: (keys: string[]) =>
+    mockRemovePersistedBalanceCaches(keys),
 }));
 
 jest.mock('algosdk', () => ({
@@ -179,7 +177,7 @@ it('removes balance-cache keys through the store chain and other caches directly
   } catch {
     // later restorers may reject on the minimal fixtures; the clear ran first
   }
-  expect(mockRemovePersistedBalanceCacheKeys).toHaveBeenCalledWith([
+  expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([
     '@voi_wallet_balance_cache_v2',
     '@voi_wallet_multi_network_balance_cache',
   ]);
@@ -189,4 +187,18 @@ it('removes balance-cache keys through the store chain and other caches directly
   ]);
   for (const [keys] of AsyncStorage.multiRemove.mock.calls)
     expect(keys.some((k: string) => k.includes('balance_cache'))).toBe(false);
+});
+
+it('runs the balance-cache barrier even when no balance key exists yet (TASK-398)', async () => {
+  try {
+    await performFullRestore(
+      [],
+      {} as BackupSettings,
+      [],
+      {} as Parameters<typeof performFullRestore>[3]
+    );
+  } catch {
+    // later restorers may reject on the minimal fixtures; the clear ran first
+  }
+  expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([]);
 });

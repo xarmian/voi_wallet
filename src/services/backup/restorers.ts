@@ -33,7 +33,7 @@ import {
   RestoreResult,
 } from './types';
 import { redactAddress, redactError } from '@/utils/logRedaction';
-import { removePersistedBalanceCacheKeys } from '@/store/walletStore';
+import { removePersistedBalanceCaches } from '@/store/walletStore';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -139,9 +139,9 @@ export async function clearAllData(): Promise<void> {
         !key.includes('balance_cache') &&
         (key.includes('claimable') || key.includes('messages'))
     );
-    if (balanceCacheKeys.length > 0) {
-      await removePersistedBalanceCacheKeys(balanceCacheKeys);
-    }
+    // Always, even when nothing was enumerated: a deferred first persist may
+    // not have created its key yet.
+    await removePersistedBalanceCaches(balanceCacheKeys);
     if (otherCacheKeys.length > 0) {
       await AsyncStorage.multiRemove(otherCacheKeys);
     }

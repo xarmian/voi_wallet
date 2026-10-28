@@ -515,16 +515,34 @@ const enqueueBalanceCacheOp = (op: () => Promise<void>): Promise<void> => {
 };
 
 /**
- * Remove persisted balance-cache keys from outside the store (backup restore,
+ * Remove the persisted balance caches from outside the store (backup restore,
  * TASK-398). Invalidates every in-flight single-network fetch first, then runs
  * the removal on the balance-cache chain: a deferred persist already queued
  * re-checks its token at its turn and skips, so it can't re-add an entry after
- * the removal. Rejects with the storage error so the caller can fail.
+ * the removal. BALANCE_CACHE_KEY is always removed, even when the caller's
+ * enumeration ran before a first persist created it. The invalidated fetches
+ * can no longer settle their own loading flags, so they are cleared here.
+ * Rejects with the storage error so the caller can fail.
  */
-export const removePersistedBalanceCacheKeys = (
-  keys: string[]
+export const removePersistedBalanceCaches = (
+  extraKeys: string[] = []
 ): Promise<void> => {
   invalidateBalanceRequests();
+  useWalletStore.setState((state) => {
+    const accountStates: Record<string, AccountUIState> = {};
+    for (const [id, current] of Object.entries(state.accountStates)) {
+      accountStates[id] =
+        current.isBalanceLoading || current.isBackgroundRefreshing
+          ? {
+              ...current,
+              isBalanceLoading: false,
+              isBackgroundRefreshing: false,
+            }
+          : current;
+    }
+    return { accountStates };
+  });
+  const keys = [...new Set([BALANCE_CACHE_KEY, ...extraKeys])];
   return enqueueBalanceCacheOp(() => AsyncStorage.multiRemove(keys));
 };
 
