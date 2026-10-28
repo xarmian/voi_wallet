@@ -1,4 +1,6 @@
+import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 import { subscribeWithSelector } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -46,6 +48,11 @@ import {
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { realtimeService } from '@/services/realtime';
 import { redactError } from '@/utils/logRedaction';
+import {
+  deriveRekeyState,
+  RekeyState,
+  subscribeRekeySigner,
+} from '@/services/wallet/rekeyState';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -208,6 +215,8 @@ interface AccountUIState {
   transactionsError: TransactionsError | null;
   multiNetworkBalanceError: string | null;
   balance?: AccountBalance;
+  /** Network that produced balance; committed and cleared with it. */
+  balanceNetworkId?: NetworkId;
   recentTransactions: TransactionInfo[];
   /**
    * Which resource `recentTransactions` currently holds — `'all'` or an asset
@@ -797,6 +806,7 @@ export const useWalletStore = create<WalletState>()(
                 accountStates[account.id] = {
                   ...accountStates[account.id],
                   balance: persistedData.balance,
+                  balanceNetworkId: persistedData.networkId,
                   balanceLastUpdated: persistedData.lastUpdated,
                 };
               }
@@ -1464,6 +1474,7 @@ export const useWalletStore = create<WalletState>()(
 
             patchAccountState({
               balance,
+              balanceNetworkId: currentNetworkId,
               isBalanceLoading: false,
               isBackgroundRefreshing: false,
               balanceLastUpdated: now,
@@ -1482,6 +1493,7 @@ export const useWalletStore = create<WalletState>()(
           } else {
             patchAccountState({
               balance,
+              balanceNetworkId: currentNetworkId,
               isBalanceLoading: false,
               isBackgroundRefreshing: false,
               balanceLastUpdated: now,
@@ -2176,6 +2188,7 @@ export const useWalletStore = create<WalletState>()(
         } else if (balance) {
           patches.set(accountId, {
             balance,
+            balanceNetworkId: currentNetworkId,
             isBalanceLoading: false,
             isBackgroundRefreshing: false,
             balanceLastUpdated: now,
@@ -2780,6 +2793,7 @@ export const useWalletStore = create<WalletState>()(
               updatedStates[account.id] = {
                 ...updatedStates[account.id],
                 balance: cachedData.balance,
+                balanceNetworkId: cachedData.networkId,
                 balanceLastUpdated: cachedData.lastUpdated,
               };
             }
@@ -3119,6 +3133,7 @@ export const useWalletStore = create<WalletState>()(
                 [accountId]: {
                   ...accountStates[accountId],
                   balance: undefined,
+                  balanceNetworkId: undefined,
                   balanceLastUpdated: 0,
                 },
               },
@@ -3138,6 +3153,7 @@ export const useWalletStore = create<WalletState>()(
             updatedStates[id] = {
               ...accountStates[id],
               balance: undefined, // Clear single-network balance
+              balanceNetworkId: undefined,
               balanceLastUpdated: 0,
               isBalanceLoading: false,
               // Keep multiNetworkBalance and multiNetworkBalanceLastUpdated intact
@@ -3218,6 +3234,7 @@ export const useWalletStore = create<WalletState>()(
           clearedStates[accountId] = {
             ...accountStates[accountId],
             balance: undefined,
+            balanceNetworkId: undefined,
             balanceLastUpdated: 0,
             multiNetworkBalance: undefined,
             multiNetworkBalanceLastUpdated: 0,
@@ -3695,3 +3712,63 @@ export const useMultiNetworkBalance = (accountId: string) =>
     multiNetworkBalanceCache.set(accountId, { accountState, result });
     return result;
   });
+
+export type { RekeyState } from '@/services/wallet/rekeyState';
+
+const REKEY_LOADING: RekeyState = Object.freeze({ status: 'loading' });
+const REKEY_ERROR: RekeyState = Object.freeze({ status: 'error' });
+
+function selectRekeyState(
+  state: WalletState,
+  address: string,
+  networkId: NetworkId
+): RekeyState {
+  const account = state.wallet?.accounts.find((a) => a.address === address);
+  const ui = account && state.accountStates[account.id];
+  // An error from a different network must not describe this request.
+  if (!ui || ui.balanceNetworkId !== networkId) return REKEY_LOADING;
+  if (ui.balanceError) return REKEY_ERROR;
+  if (typeof ui.balance?.rekeyInfo?.isRekeyed !== 'boolean')
+    return REKEY_LOADING;
+  return deriveRekeyState(
+    address,
+    ui.balance.rekeyInfo,
+    state.wallet!.accounts
+  );
+}
+
+/** Network-scoped balance snapshot; legacy account authority fields are ignored. */
+export function getRekeyState(
+  address: string,
+  networkId: NetworkId
+): RekeyState {
+  return selectRekeyState(useWalletStore.getState(), address, networkId);
+}
+
+/** Uses the requested network's own cache; fetch failures propagate to callers. */
+export async function getRekeyStateStrict(
+  address: string,
+  networkId: NetworkId
+): Promise<Extract<RekeyState, { status: 'loaded' }>> {
+  const info = await NetworkService.getInstance(networkId).getAccountRekeyInfo(
+    address,
+    true
+  );
+  return deriveRekeyState(
+    address,
+    info,
+    useWalletStore.getState().wallet?.accounts ?? []
+  );
+}
+
+// Shallow equality keeps the discriminated result stable across store updates,
+// matching the selector idiom without render-time ref mutation (TASK-318).
+export const useRekeyState = (address: string, networkId: NetworkId) => {
+  useSyncExternalStore(subscribeRekeySigner, () => {
+    const result = getRekeyState(address, networkId);
+    return result.status === 'loaded' && result.canSign;
+  });
+  return useWalletStore(
+    useShallow((state) => selectRekeyState(state, address, networkId))
+  );
+};
