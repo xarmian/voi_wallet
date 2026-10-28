@@ -16,9 +16,13 @@ jest.mock('@expo/vector-icons', () => {
   return { Ionicons: ({ name }: { name: string }) => <Text>{name}</Text> };
 });
 jest.mock('../AccountAvatar', () => () => null);
+let mockStoreAccounts: AccountMetadata[] = [];
 jest.mock('@/store/walletStore', () => ({
-  useWalletStore: (selector: (state: unknown) => unknown) =>
-    selector({ wallet: { accounts: [] } }),
+  useWalletStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({ wallet: { accounts: mockStoreAccounts } }),
+    { getState: () => ({ wallet: { accounts: mockStoreAccounts } }) }
+  ),
   useAccountBalance: () => ({ balance: undefined, isLoading: false }),
 }));
 jest.mock('@/store/networkStore', () => ({
@@ -46,6 +50,8 @@ const row = (metadata: AccountMetadata) => (
 );
 
 beforeEach(() => {
+  mockStoreAccounts = [];
+  onDelete.mockReset();
   probe.mockReset();
   probe.mockResolvedValue(false);
 });
@@ -84,7 +90,9 @@ it('hides while pending, then preserves the deletion confirmation and callback',
     expect.any(Array)
   );
   expect(onDelete).not.toHaveBeenCalled();
-  alert.mock.calls[0][2]?.[1].onPress?.();
+  await act(async () => {
+    await alert.mock.calls[0][2]?.[1].onPress?.();
+  });
   expect(onDelete).toHaveBeenCalledWith('rekeyed');
 });
 
@@ -99,7 +107,7 @@ it.each([
   expect(probe).not.toHaveBeenCalled();
 });
 
-it('hides immediately on account change and ignores a stale absent result', async () => {
+it('hides immediately on account change: a stale absent result never applies to the new metadata (reference-bound)', async () => {
   let resolveOld!: (present: boolean) => void;
   probe.mockReturnValueOnce(new Promise((done) => (resolveOld = done)));
   probe.mockReturnValueOnce(new Promise(() => {}));
@@ -119,4 +127,61 @@ it('removes a previously allowed action when metadata becomes protected', async 
   );
   expect(view.queryByText('trash-outline')).toBeNull();
   expect(alert).not.toHaveBeenCalled();
+});
+
+// Codex review (U1): a confirmation opened while deletable must not delete an
+// account that became protected while the alert was up.
+describe('open confirmation re-checks current protection', () => {
+  const pressConfirmedDelete = async () => {
+    const alert = jest.spyOn(Alert, 'alert');
+    return alert;
+  };
+
+  it('deletes when the current metadata is still unprotected', async () => {
+    const alert = await pressConfirmedDelete();
+    const view = await render(row(account()));
+    await act(async () => {});
+    await fireEvent.press(view.getByText('trash-outline'));
+    const destructive = alert.mock.calls[0][2]!.find(
+      (b) => b.style === 'destructive'
+    )!;
+    await act(async () => {
+      await destructive.onPress!();
+    });
+    expect(onDelete).toHaveBeenCalledWith('rekeyed');
+  });
+
+  it('refuses when the account became originalOwner while the alert was open', async () => {
+    const alert = await pressConfirmedDelete();
+    const view = await render(row(account()));
+    await act(async () => {});
+    await fireEvent.press(view.getByText('trash-outline'));
+    const destructive = alert.mock.calls[0][2]!.find(
+      (b) => b.style === 'destructive'
+    )!;
+    mockStoreAccounts = [account({ originalOwner: true })];
+    await act(async () => {
+      await destructive.onPress!();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenLastCalledWith(
+      'Account not deleted',
+      expect.any(String)
+    );
+  });
+
+  it('refuses when the key appeared while the alert was open', async () => {
+    const alert = await pressConfirmedDelete();
+    const view = await render(row(account()));
+    await act(async () => {});
+    await fireEvent.press(view.getByText('trash-outline'));
+    const destructive = alert.mock.calls[0][2]!.find(
+      (b) => b.style === 'destructive'
+    )!;
+    probe.mockResolvedValue(true);
+    await act(async () => {
+      await destructive.onPress!();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+  });
 });

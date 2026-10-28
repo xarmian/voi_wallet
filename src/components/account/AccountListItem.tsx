@@ -171,7 +171,22 @@ export default function AccountListItem({
           {
             text: 'Delete',
             style: 'destructive',
-            onPress: () => onDelete(account.id),
+            // The account can change (or gain its key) while the alert is
+            // open: re-check its CURRENT metadata before deleting.
+            onPress: async () => {
+              const latest =
+                useWalletStore
+                  .getState()
+                  .wallet?.accounts.find((a) => a.id === account.id) ?? account;
+              if (await isListDeletionProtected(latest)) {
+                Alert.alert(
+                  'Account not deleted',
+                  'This account holds its own key, so it can’t be deleted from the account list.'
+                );
+                return;
+              }
+              onDelete(account.id);
+            },
           },
         ]
       );
