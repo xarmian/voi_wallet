@@ -41,6 +41,7 @@ const mockLedgerVerifyApp = jest.fn(async (..._args: unknown[]) => {});
 const mockGetConnectedDevice = jest.fn((): { id: string } | null => null);
 const mockGetDevices = jest.fn((): unknown[] => []);
 
+const mockProbeSecretPresence = jest.fn(async (..._args: unknown[]) => false);
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getCurrentWallet: () => mockGetCurrentWallet(),
@@ -52,6 +53,8 @@ jest.mock('@/services/wallet', () => ({
 jest.mock('../AccountSecureStorage', () => ({
   AccountSecureStorage: {
     getPrivateKey: (...args: unknown[]) => mockSecureGetPrivateKey(...args),
+    probeSecretPresenceStrict: (...args: unknown[]) =>
+      mockProbeSecretPresence(...args),
     clearAll: jest.fn(async () => {}),
   },
 }));
@@ -963,6 +966,63 @@ describe('SecureKeyManager.getSigningInfo', () => {
       await SimplifiedKeyManager.getSigningAccounts(networkId)
     ).toMatchObject([{ canSign: true }, { canSign: true }]);
     expect(mockGetAccountRekeyInfo).toHaveBeenCalledWith(REKEYED.addr, true);
+  });
+
+  // TASK-396 U2a bug-hunter P2: a REKEYED record from ANOTHER network's rekey
+  // keeps its original key; unrekeyed on the request network, that key signs.
+  it.each([
+    [true, true],
+    [false, false],
+  ])(
+    'a REKEYED record unrekeyed on the request network signs with its retained key (key present: %s)',
+    async (present, canSign) => {
+      const rekeyed = {
+        id: 'acc-rekeyed',
+        address: REKEYED.addr,
+        publicKey: Buffer.from(REKEYED.pk).toString('hex'),
+        type: AccountType.REKEYED,
+        authAddress: AUTH.addr,
+        canSign: true,
+        isHidden: false,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        lastUsed: '2024-01-01T00:00:00.000Z',
+      };
+      setWallet([rekeyed, standardAccount(AUTH, 'acc-auth')]);
+      mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+      mockProbeSecretPresence.mockResolvedValue(present);
+
+      const info = await SecureKeyManager.getSigningInfo(
+        REKEYED.addr,
+        networkId
+      );
+
+      expect(info.canSign).toBe(canSign);
+      expect(info.isRekeyed).toBe(false);
+      expect(info.signingAddress).toBe(REKEYED.addr);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('acc-rekeyed');
+    }
+  );
+
+  it('a failing key probe for that REKEYED record propagates (fail closed)', async () => {
+    setWallet([
+      {
+        id: 'acc-rekeyed',
+        address: REKEYED.addr,
+        publicKey: Buffer.from(REKEYED.pk).toString('hex'),
+        type: AccountType.REKEYED,
+        authAddress: AUTH.addr,
+        canSign: true,
+        isHidden: false,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        lastUsed: '2024-01-01T00:00:00.000Z',
+      },
+    ]);
+    mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+    mockProbeSecretPresence.mockRejectedValue(new Error('keychain'));
+
+    await expect(
+      SecureKeyManager.getSigningInfo(REKEYED.addr, networkId)
+    ).rejects.toThrow('keychain');
   });
 
   it('propagates strict fetch failure for every signing preflight reader', async () => {

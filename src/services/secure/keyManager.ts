@@ -350,6 +350,23 @@ export class SecureKeyManager {
         };
       }
 
+      // A REKEYED record can come from ANOTHER network's rekey (the persisted
+      // type is network-agnostic), and its original key is retained (TASK-419).
+      // When the request network reports no rekey, that key signs, exactly as
+      // resolveSigningRoute does.
+      if (
+        !rekey.isRekeyed &&
+        account.type === AccountType.REKEYED &&
+        (await AccountSecureStorage.probeSecretPresenceStrict(account.id))
+      ) {
+        return {
+          canSign: true,
+          signingAddress: address,
+          signingAccountId: account.id,
+          isRekeyed: false,
+        };
+      }
+
       const signingAddress = rekey.authAddress ?? address;
       const signer = wallet?.accounts.find(
         (acc) =>

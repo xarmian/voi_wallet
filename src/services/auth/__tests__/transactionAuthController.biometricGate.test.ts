@@ -80,7 +80,7 @@ jest.mock('@/services/network', () => ({
         authAddress: 'AUTH-X',
       })),
       submitTransaction: jest.fn(async () => ({
-        transactionId: 'tx',
+        txId: 'tx',
         confirmed: true,
       })),
     })),
@@ -385,6 +385,7 @@ describe('request-network signing authority', () => {
       sigs: [{ i: 0, b: Buffer.from(txn.signTxn(auth.sk)).toString('base64') }],
     });
     expect(controller.getState().state).toBe('completed');
+    expect(controller.getState().result?.transactionId).toBe('tx');
     expect(NetworkService.getInstance).toHaveBeenLastCalledWith(
       NetworkId.ALGORAND_MAINNET
     );
