@@ -10,7 +10,8 @@ export type NetworkRekeyStatus =
   | { status: 'delegated'; authAddress: string };
 const UNKNOWN: NetworkRekeyStatus = Object.freeze({ status: 'unknown' });
 const SELF: NetworkRekeyStatus = Object.freeze({ status: 'self' });
-// Reuse for 10s to limit repeated reads; the underlying cache also lasts 10s.
+// External rekeys (including dApp-submitted WalletConnect rekeys) rely on expiry.
+// Refreshes bypass the network cache so the two TTLs cannot stack.
 export const REKEY_STATUS_TTL = 10_000;
 type Entry = { value: NetworkRekeyStatus; expires: number };
 type Snapshot = { networks: NetworkId[]; entries: Record<string, Entry> };
@@ -43,7 +44,11 @@ export class NetworkRekeyStatusService {
   private timers = new Set<ReturnType<typeof setTimeout>>();
   constructor(
     private lookup = (address: string, network: NetworkId) =>
-      NetworkService.getInstance(network).getAccountRekeyInfo(address, true)
+      NetworkService.getInstance(network).getAccountRekeyInfo(
+        address,
+        true,
+        true
+      )
   ) {}
 
   setNetworks(networks: NetworkId[]): void {
@@ -104,6 +109,7 @@ export class NetworkRekeyStatusService {
         void (async () => {
           try {
             if (generation !== this.generation) return;
+            const expires = Date.now() + REKEY_STATUS_TTL;
             let value = UNKNOWN;
             try {
               value = classifyNetworkRekey(
@@ -115,19 +121,22 @@ export class NetworkRekeyStatusService {
               await Promise.resolve();
             }
             if (generation !== this.generation) return;
-            const result = { value, expires: Date.now() + REKEY_STATUS_TTL };
+            const result = { value, expires };
             this.store.setState((state) => ({
               entries: { ...state.entries, [key]: result },
             }));
-            const timer = setTimeout(() => {
-              this.timers.delete(timer);
-              if (this.store.getState().entries[key] !== result) return;
-              this.store.setState((state) => {
-                const entries = { ...state.entries };
-                delete entries[key];
-                return { entries };
-              });
-            }, REKEY_STATUS_TTL);
+            const timer = setTimeout(
+              () => {
+                this.timers.delete(timer);
+                if (this.store.getState().entries[key] !== result) return;
+                this.store.setState((state) => {
+                  const entries = { ...state.entries };
+                  delete entries[key];
+                  return { entries };
+                });
+              },
+              Math.max(0, expires - Date.now())
+            );
             this.timers.add(timer);
           } finally {
             if (generation === this.generation) this.pending.delete(key);

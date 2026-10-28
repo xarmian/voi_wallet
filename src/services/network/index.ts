@@ -1390,22 +1390,37 @@ export class NetworkService {
    */
   async getAccountRekeyInfo(
     address: string,
-    skipTimestamp: boolean = false
+    skipTimestamp: boolean = false,
+    bypassCache: boolean = false
   ): Promise<RekeyInfo> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
       }
 
+      const networkId = this.currentNetworkId;
+      const generation = this.assetCacheGeneration;
+      const cacheKey = `${networkId}:${address}`;
+      const assertCurrentNetwork = () => {
+        if (
+          networkId !== this.currentNetworkId ||
+          generation !== this.assetCacheGeneration
+        )
+          throw new Error('Network changed during rekey lookup');
+      };
       const epoch = getRekeyStatusEpoch();
       if (this.rekeyCacheEpoch !== epoch) {
         this.rekeyInfoCache.clear();
         this.rekeyCacheEpoch = epoch;
       }
       // Check cache first
-      const cached = this.rekeyInfoCache.get(address);
+      const cached = this.rekeyInfoCache.get(cacheKey);
       const now = Date.now();
-      if (cached && now - cached.timestamp < this.rekeyInfoCacheTTL) {
+      if (
+        !bypassCache &&
+        cached &&
+        now - cached.timestamp < this.rekeyInfoCacheTTL
+      ) {
         return cached.info;
       }
 
@@ -1420,6 +1435,8 @@ export class NetworkService {
       const accountInfo = await this.algodClient
         .accountInformation(address)
         .do();
+
+      assertCurrentNetwork();
 
       // Check if account has auth-addr field (indicating it's been rekeyed)
       let authAddress: string | undefined;
@@ -1438,7 +1455,7 @@ export class NetworkService {
         const result = { isRekeyed: false };
         // Cache the result
         if (epoch === getRekeyStatusEpoch())
-          this.rekeyInfoCache.set(address, {
+          this.rekeyInfoCache.set(cacheKey, {
             info: result,
             timestamp: Date.now(),
           });
@@ -1485,9 +1502,10 @@ export class NetworkService {
         rekeyedAt,
       };
 
+      assertCurrentNetwork();
       // Cache the result
       if (epoch === getRekeyStatusEpoch())
-        this.rekeyInfoCache.set(address, {
+        this.rekeyInfoCache.set(cacheKey, {
           info: result,
           timestamp: Date.now(),
         });

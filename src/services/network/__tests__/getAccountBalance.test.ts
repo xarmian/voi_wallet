@@ -1,3 +1,7 @@
+import {
+  NetworkRekeyStatusService,
+  REKEY_STATUS_TTL,
+} from '@/services/wallet/networkRekeyStatus';
 import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import { NetworkService } from '../index';
@@ -376,7 +380,11 @@ describe('NetworkService.getAccountRekeyInfo (independent fetch, DR-1)', () => {
     invalidateRekeyStatus();
     finish({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
     await pending;
-    expect((service as any).rekeyInfoCache.has(ADDRESS)).toBe(false);
+    expect(
+      (service as any).rekeyInfoCache.has(
+        `${service.getCurrentNetworkId()}:${ADDRESS}`
+      )
+    ).toBe(false);
     fetch.mockResolvedValue({});
     await service.getAccountRekeyInfo(ADDRESS, true);
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -384,12 +392,90 @@ describe('NetworkService.getAccountRekeyInfo (independent fetch, DR-1)', () => {
     await service.getAccountRekeyInfo(ADDRESS, true);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+  it('isolates cached authority across switches and rejects a late old-network response', async () => {
+    jest
+      .spyOn(service as any, 'initializeClients')
+      .mockImplementation(() => {});
+    jest
+      .spyOn(service as any, 'initializeMimirService')
+      .mockImplementation(() => {});
+    jest
+      .spyOn(service as any, 'configureEnvoiService')
+      .mockImplementation(() => {});
+    jest
+      .spyOn(service, 'checkNetworkHealth')
+      .mockResolvedValue(undefined as any);
+    await service.switchNetwork(NetworkId.VOI_MAINNET);
+    const fetch = jest
+      .fn()
+      .mockResolvedValue({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: fetch }),
+    };
+    expect((await service.getAccountRekeyInfo(ADDRESS, true)).isRekeyed).toBe(
+      true
+    );
+    let finish!: (info: object) => void;
+    fetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const pending = service.getAccountRekeyInfo(ADDRESS, true, true);
+    const rejected = expect(pending).rejects.toThrow('Network changed');
+    await service.switchNetwork(NetworkId.ALGORAND_MAINNET);
+    fetch.mockResolvedValue({});
+    expect(await service.getAccountRekeyInfo(ADDRESS, true)).toEqual({
+      isRekeyed: false,
+    });
+    finish({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    await rejected;
+    expect(await service.getAccountRekeyInfo(ADDRESS, true)).toEqual({
+      isRekeyed: false,
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounds aggregate staleness to one TTL with an almost-expired network entry', async () => {
+    jest.useFakeTimers();
+    const status = new NetworkRekeyStatusService();
+    status.setNetworks([NetworkId.ALGORAND_MAINNET]);
+    jest.spyOn(NetworkService, 'getInstance').mockReturnValue(service);
+    const fetch = jest
+      .fn()
+      .mockResolvedValue({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: fetch }),
+    };
+    try {
+      await service.getAccountRekeyInfo(ADDRESS, true);
+      jest.advanceTimersByTime(REKEY_STATUS_TTL - 1);
+      fetch.mockResolvedValue({});
+      await status.ensure(ADDRESS);
+      expect(
+        status.get(ADDRESS).perNetwork[NetworkId.ALGORAND_MAINNET]
+      ).toEqual({ status: 'self' });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(REKEY_STATUS_TTL);
+      expect(
+        status.get(ADDRESS).perNetwork[NetworkId.ALGORAND_MAINNET]
+      ).toEqual({ status: 'unknown' });
+    } finally {
+      status.invalidate();
+      jest.useRealTimers();
+    }
+  });
+
   it('returns a fresh cache entry without a network fetch (cache semantics preserved)', async () => {
     const cachedInfo = { isRekeyed: false };
-    (service as any).rekeyInfoCache.set(ADDRESS, {
-      info: cachedInfo,
-      timestamp: Date.now(),
-    });
+    (service as any).rekeyInfoCache.set(
+      `${service.getCurrentNetworkId()}:${ADDRESS}`,
+      {
+        info: cachedInfo,
+        timestamp: Date.now(),
+      }
+    );
     let accountInfoCalls = 0;
     (service as any).algodClient = {
       accountInformation: () => ({
