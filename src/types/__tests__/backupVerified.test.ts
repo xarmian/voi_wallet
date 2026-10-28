@@ -89,7 +89,7 @@ describe('needsBackupVerification', () => {
     expect(needsBackupVerification({ type: AccountType.REMOTE_SIGNER })).toBe(
       false
     );
-    expect(needsBackupVerification({ type: AccountType.REKEYED })).toBe(false);
+    expect(needsBackupVerification({ type: AccountType.REKEYED })).toBe(true);
   });
 
   it('is false when there is no active account', () => {
@@ -98,8 +98,8 @@ describe('needsBackupVerification', () => {
   });
 });
 
-// U4a changes the accepted metadata shape, while U4e owns policy changes.
-describe('existing reminder policy compatibility', () => {
+// Both metadata-bearing types use literal verification; unresolved custody reminds.
+describe('shared reminder policy', () => {
   it.each(Object.values(AccountType))(
     'keeps %s results for every flag combination',
     (type) => {
@@ -111,10 +111,12 @@ describe('existing reminder policy compatibility', () => {
             backupVerified,
           } as unknown as Parameters<typeof isBackupVerified>[0];
           const verified =
-            type === AccountType.STANDARD && backupVerified === true;
+            (type === AccountType.STANDARD || type === AccountType.REKEYED) &&
+            backupVerified === true;
           expect(isBackupVerified(account)).toBe(verified);
           expect(needsBackupVerification(account)).toBe(
-            type === AccountType.STANDARD && !verified
+            (type === AccountType.STANDARD || type === AccountType.REKEYED) &&
+              !verified
           );
         }
       }
