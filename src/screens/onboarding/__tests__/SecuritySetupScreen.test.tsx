@@ -583,9 +583,20 @@ describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
         order.push('import');
         return { address: 'FAKEADDRESS' };
       });
+      const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+      const account = {
+        id: 'orphan-healing-account',
+        type: source === 'watch' ? 'watch' : 'standard',
+        address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+        name: 'Recovered account',
+        isValid: true,
+        isDuplicate: false,
+        ...(source === 'qr' ? { secretId } : {}),
+      };
       const { screen, navigation } = await renderScreen({
         source,
-        mnemonicSecretId: storeMnemonicSecret(FAKE_MNEMONIC),
+        mnemonicSecretId: secretId,
+        ...(['qr', 'watch'].includes(source) ? { accounts: [account] } : {}),
       });
       await submitPin(screen, '654321');
       expect(order.slice(0, 4)).toEqual([
@@ -619,6 +630,29 @@ describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
           'disable',
           'import',
         ]);
+      }
+      if (source === 'qr') {
+        expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+        expect(mockImportStandardAccount).toHaveBeenCalledWith({
+          type: 'standard',
+          label: 'Recovered account',
+          mnemonic: FAKE_MNEMONIC,
+        });
+        expect(
+          MultiAccountWalletService.addWatchAccount
+        ).not.toHaveBeenCalled();
+        expect(getAccountSecret(secretId)).toBeUndefined();
+      }
+      if (source === 'watch') {
+        expect(MultiAccountWalletService.addWatchAccount).toHaveBeenCalledTimes(
+          1
+        );
+        expect(MultiAccountWalletService.addWatchAccount).toHaveBeenCalledWith({
+          type: 'watch',
+          address: account.address,
+          label: 'Recovered account',
+        });
+        expect(mockImportStandardAccount).not.toHaveBeenCalled();
       }
       expect(navigation.navigate).toHaveBeenCalledWith('Main');
       await screen.unmount();

@@ -168,7 +168,8 @@ export default function OnboardingScreen({ navigation }: Props) {
       title: 'Import via QR Code',
       subtitle: 'Scan QR codes to import multiple accounts',
       icon: 'qr-code-outline' as const,
-      onPress: () => navigation.navigate('QRAccountImport'),
+      onPress: () =>
+        navigation.navigate('QRAccountImport', { isOnboarding: true }),
     },
     {
       id: 'watch',

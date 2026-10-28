@@ -29,6 +29,22 @@ export const withStrictReadTimeout = <T>(promise: Promise<T>): Promise<T> =>
     );
   });
 
+// TASK-417: onboarding entry points that skip SecuritySetup when a PIN exists
+// must handle an orphan PIN too: route to setup, or heal before importing.
+// Onboarding history can remain reachable for a real wallet. A PIN is orphaned
+// only when there are no accounts at all, including watch/Ledger/remote accounts.
+// Strict and bounded; a read failure rejects (callers fail closed).
+export async function onboardingNeedsSecuritySetup(): Promise<boolean> {
+  if (!(await withStrictReadTimeout(AccountSecureStorage.hasPinStrict()))) {
+    return true;
+  }
+  return (
+    (await withStrictReadTimeout(
+      MultiAccountWalletService.hasWalletWithAccountsStrict()
+    )) === false
+  );
+}
+
 // TASK-413 DR-1: drain failed-import orphans, then strictly verify no keys remain.
 export async function clearOrphanPin(): Promise<void> {
   try {
