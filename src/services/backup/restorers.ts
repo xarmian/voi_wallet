@@ -128,8 +128,10 @@ export async function clearAllData(): Promise<void> {
     ]);
 
     // Clear balance caches. Balance-cache keys go through the store's
-    // balance-cache chain so an in-flight deferred persist can't re-add one
-    // after the removal (TASK-398); claimable/messages keys aren't chain-owned.
+    // balance-cache chain so an in-flight deferred single-network persist can't
+    // re-add its entry after the removal (TASK-398). The multi-network cache
+    // has no chain, so this doesn't stop its writers; claimable/messages keys
+    // aren't chain-owned either.
     const allKeys = await AsyncStorage.getAllKeys();
     const balanceCacheKeys = allKeys.filter((key) =>
       key.includes('balance_cache')
