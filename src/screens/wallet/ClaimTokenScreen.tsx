@@ -375,8 +375,15 @@ export default function ClaimTokenScreen() {
             // the old group must not submit while recover() awaits), then
             // release it on every path, so the reconfirmed group can submit
             // through this same callback (TASK-418 + TASK-416).
-            const recoveryResult = await recover(submitError, txnGroup);
-            hasSubmittedRef.current = false;
+            let recoveryResult: Awaited<ReturnType<typeof recover>> = false;
+            try {
+              recoveryResult = await recover(submitError, txnGroup);
+            } catch {
+              // A failed recovery is no recovery: show the original error.
+              recoveryResult = false;
+            } finally {
+              hasSubmittedRef.current = false;
+            }
             if (recoveryResult) {
               navigation.goBack();
               if (recoveryResult === 'rebuilt')

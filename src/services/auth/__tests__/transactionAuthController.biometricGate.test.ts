@@ -904,6 +904,26 @@ describe('remote batch submission ownership (TASK-418)', () => {
     }
   );
 
+  // Codex focused confirm 2 (#208): a THROWING recovery must not leave the
+  // latch set (that would silently swallow every later submit).
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s releases the latch and shows the original error when recovery throws',
+    async (screen) => {
+      const env = scope();
+      env.recover.mockRejectedValueOnce(new Error('rebuild exploded'));
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      submit.mockRejectedValueOnce(new Error('below min'));
+      await handler({ signedTransactions: [signed] });
+      expect(env.hasSubmittedRef.current).toBe(false);
+      expect(env.Alert.alert).toHaveBeenCalledWith(
+        'Submission Failed',
+        'below min'
+      );
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it.each(['signer', 'network', 'genesis'])(
     'still rejects mismatched %s',
     async (mismatch) => {
