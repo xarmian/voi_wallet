@@ -83,8 +83,19 @@ export default function BackupWalletScreen() {
 
     try {
       const result = await BackupService.createBackup(password);
-      setBackupResult(result);
       setShowProgressModal(false);
+      if (result.rekeyedKeyCount) {
+        Alert.alert(
+          'Update required when restoring',
+          `Restore this backup with this version of Voi Wallet or newer, or the key for ${result.rekeyedKeyCount} rekeyed account(s) won't be restored.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Continue', onPress: () => setBackupResult(result) },
+          ]
+        );
+      } else {
+        setBackupResult(result);
+      }
       // Show success state - user will see save/share options in the UI
     } catch (err) {
       setShowProgressModal(false);

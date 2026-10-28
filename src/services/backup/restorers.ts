@@ -155,10 +155,52 @@ export async function clearAllData(): Promise<void> {
   }
 }
 
-/**
- * Restore accounts from backup data
- * Creates new wallet structure and stores all accounts
- */
+/** Validate custody before any destructive restore action; never trust payload identity. */
+export function validateRetainedKeys(accounts: BackupAccountData[]): void {
+  // A later record reusing an id would overwrite (or, metadata-only, delete)
+  // the key an earlier record stored, so ids must be unique.
+  const ids = new Set<string>();
+  for (const account of accounts) {
+    if (ids.has(account.id)) {
+      throw new BackupError(
+        'Backup contains duplicate account ids',
+        'INVALID_FILE_FORMAT'
+      );
+    }
+    ids.add(account.id);
+  }
+  for (const account of accounts) {
+    if (account.type !== AccountType.REKEYED || account.mnemonic === undefined)
+      continue;
+    let derived: algosdk.Account;
+    try {
+      if (typeof account.mnemonic !== 'string') throw new Error('not a string');
+      derived = algosdk.mnemonicToSecretKey(account.mnemonic);
+    } catch {
+      throw new BackupError(
+        'Retained key in the backup is not a valid recovery phrase',
+        'INVALID_FILE_FORMAT'
+      );
+    }
+    try {
+      if (
+        derived.addr.toString() !== account.address ||
+        (account.publicKey &&
+          Buffer.from(derived.sk.subarray(32)).toString('hex') !==
+            account.publicKey)
+      ) {
+        throw new BackupError(
+          'Retained key does not match the rekeyed account',
+          'INVALID_FILE_FORMAT'
+        );
+      }
+    } finally {
+      derived.sk.fill(0);
+    }
+  }
+}
+
+/** Restore account metadata and journal every restored local key. */
 export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
   total: number;
   standard: number;
@@ -167,6 +209,9 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
   ledger: number;
   remoteSigner: number;
 }> {
+  // Defensive: the full-restore entry points validate before clearing, but a
+  // direct call must not bypass the duplicate-id and key-identity checks.
+  validateRetainedKeys(accounts);
   const counts = {
     total: 0,
     standard: 0,
@@ -189,6 +234,11 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
   // resurrected wallet (DR-2).
   const creationGen = AccountSecureStorage.getResetGeneration();
   const pendingCreates: { id: string; token: string }[] = [];
+  // Once the wallet blob MAY reference the restored accounts, their secrets
+  // must never be rolled back: deleting them would leave persisted accounts
+  // keyless. storeWallet writes the blob and THEN clears the wipe tombstone, so
+  // a rejection from the persist call can arrive after the blob is written.
+  let persistAttempted = false;
 
   try {
     const restoredAccounts: (
@@ -307,15 +357,34 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             avatarUrl: backupAccount.avatarUrl,
             authAddress: backupAccount.authAddress || '',
             rekeyedAt: backupAccount.rekeyedAt,
-            originalOwner: backupAccount.originalOwner,
+            originalOwner: backupAccount.mnemonic
+              ? true
+              : backupAccount.originalOwner,
+            hasBackup: backupAccount.hasBackup ?? false,
+            backupVerified: false,
             canSign: backupAccount.canSign || false,
             rekeyedFrom: backupAccount.rekeyedFrom,
           };
 
-          await AccountSecureStorage.storeAccountMetadataForCreation(
-            rekeyedAccount,
-            creationGen
-          );
+          if (backupAccount.mnemonic !== undefined) {
+            validateRetainedKeys([backupAccount]);
+            const derived = algosdk.mnemonicToSecretKey(backupAccount.mnemonic);
+            try {
+              const token = await AccountSecureStorage.storeAccountForCreation(
+                rekeyedAccount,
+                derived.sk,
+                creationGen
+              );
+              pendingCreates.push({ id: rekeyedAccount.id, token });
+            } finally {
+              derived.sk.fill(0);
+            }
+          } else {
+            await AccountSecureStorage.storeAccountMetadataForCreation(
+              rekeyedAccount,
+              creationGen
+            );
+          }
           restoredAccounts.push(rekeyedAccount);
           counts.rekeyed++;
           counts.total++;
@@ -433,6 +502,7 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
       // persistence and legacy secure-store copies are cleared.
       // TASK-220: generation-guarded so a reset racing the restore aborts this
       // commit (ResetRacedError) instead of resurrecting the wallet.
+      persistAttempted = true;
       await MultiAccountWalletService.persistRestoredWallet(
         wallet,
         creationGen
@@ -447,23 +517,21 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
 
     return counts;
   } catch (error) {
-    // TASK-220 DR-2: a reset raced the restore → roll back precisely the STANDARD
-    // secrets this attempt wrote (ownership-checked; a no-op for ones the reset
-    // already deleted), then surface the race so restore reports cleanly.
-    if (error instanceof ResetRacedError) {
-      for (const p of pendingCreates) {
-        try {
-          await AccountSecureStorage.deleteAccountIfAttemptMatches(
-            p.id,
-            p.token
-          );
-        } catch (rollbackError) {
-          // TASK-415: retry this indexed, journaled id during reconciliation.
-          console.warn('Restore rollback failed:', redactError(rollbackError));
-        }
+    // Roll back this attempt's journaled secrets only when no blob can have
+    // been written: before the persist call, or a reset race, which storeWallet
+    // throws before its write (TASK-220 DR-2). Any other persist-time or later
+    // failure keeps them; an orphan journaled secret is reconciled at boot,
+    // a keyless persisted account is not (TASK-421 U3).
+    const rollback = !persistAttempted || error instanceof ResetRacedError;
+    for (const p of rollback ? pendingCreates : []) {
+      try {
+        await AccountSecureStorage.deleteAccountIfAttemptMatches(p.id, p.token);
+      } catch (rollbackError) {
+        // TASK-415: retry this indexed, journaled id during reconciliation.
+        console.warn('Restore rollback failed:', redactError(rollbackError));
       }
-      throw error;
     }
+    if (error instanceof ResetRacedError) throw error;
     throw new BackupError(
       `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'RESTORE_FAILED'
@@ -723,6 +791,8 @@ export async function performFullRestore(
   friends: Friend[],
   experimental: BackupExperimentalFlags
 ): Promise<RestoreResult> {
+  validateRetainedKeys(accounts);
+
   // Clear all existing data first
   await clearAllData();
 

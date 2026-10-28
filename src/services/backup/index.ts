@@ -29,7 +29,7 @@ import {
   collectFriends,
   collectExperimental,
 } from './collectors';
-import { performFullRestore } from './restorers';
+import { performFullRestore, validateRetainedKeys } from './restorers';
 
 /**
  * Format date for filename
@@ -204,6 +204,10 @@ export class BackupService {
         fileContent,
         size: fileContent.length,
         accountCount: accounts.length,
+        rekeyedKeyCount: accounts.filter(
+          (account) =>
+            account.type === 'rekeyed' && account.mnemonic !== undefined
+        ).length,
         createdAt: backup.createdAt,
       };
     } catch (error) {
@@ -283,6 +287,8 @@ export class BackupService {
           'INVALID_FILE_FORMAT'
         );
       }
+
+      validateRetainedKeys(backup.accounts);
 
       // Step 5: Clear existing data
       this.reportProgress({
