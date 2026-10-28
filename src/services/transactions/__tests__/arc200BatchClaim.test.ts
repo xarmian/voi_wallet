@@ -20,6 +20,28 @@ import { dedupeLatestApprovals } from '@/utils/arc200Approvals';
 const mockGetSuggestedParams = jest.fn();
 const mockGetAlgodClient = jest.fn();
 const mockGetAllAccountAssets = jest.fn();
+const mockSimulate = jest.fn();
+const mockRemote = jest.fn();
+const mockAccounts = () => [CLAIMER, OTHER_SENDER, OWNER_2];
+const mockSigningAddress = jest.fn();
+
+jest.mock('@/services/secure/keyManager', () => ({
+  SecureKeyManager: {
+    getSigningInfo: async (sender: string) => ({
+      signingAddress: mockSigningAddress(sender),
+    }),
+  },
+}));
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    getAllAccounts: async () => mockAccounts().map((address) => ({ address })),
+  },
+}));
+jest.mock('@/services/remoteSigner/signingRouter', () => ({
+  checkRemoteSigningRequired: (account: { address: string }) => ({
+    needsRemoteSigning: mockRemote(account.address),
+  }),
+}));
 
 jest.mock('@/services/network', () => {
   const svc = {
@@ -87,7 +109,11 @@ function expectNoDuplicates(txnBytes: Uint8Array[]) {
 }
 
 /** Exactly one MBR payment per contract in `contracts`, and none elsewhere. */
-function expectOneMbrPerContract(txnBytes: Uint8Array[], contracts: number[]) {
+function expectOneMbrPerContract(
+  txnBytes: Uint8Array[],
+  contracts: number[],
+  sender = CLAIMER
+) {
   const payments = decodeGroup(txnBytes).filter(isMbrPayment);
   expect(payments).toHaveLength(contracts.length);
   for (const contractId of contracts) {
@@ -96,7 +122,7 @@ function expectOneMbrPerContract(txnBytes: Uint8Array[], contracts: number[]) {
     );
     expect(forContract).toHaveLength(1);
     expect(forContract[0].payment!.amount).toBe(BigInt(ARC200_MBR_AMOUNT));
-    expect(forContract[0].sender.toString()).toBe(CLAIMER);
+    expect(forContract[0].sender.toString()).toBe(sender);
   }
 }
 
@@ -133,11 +159,16 @@ beforeEach(() => {
     ...SUGGESTED_PARAMS,
   }));
   mockGetAlgodClient.mockReturnValue({
-    simulateTransactions: () => ({
-      do: async () => ({ txnGroups: [{}] }),
+    simulateTransactions: (request: unknown) => ({
+      do: () => mockSimulate(request),
     }),
   });
-  // Recipient holds none of the tokens: every contract needs an MBR payment.
+  mockRemote.mockReturnValue(false);
+  mockSigningAddress.mockImplementation((sender: string) => sender);
+  mockSimulate.mockResolvedValue({
+    txnGroups: [{ failureMessage: 'box minimum balance' }],
+  });
+  // Failed simulation: every contract needs an MBR payment.
   mockGetAllAccountAssets.mockResolvedValue([]);
 });
 
@@ -255,13 +286,15 @@ describe('buildBatchClaimTransactionGroup (TASK-392, GH #20)', () => {
       }))
     );
 
-    // One recipient-balance lookup per contract, not per claim.
-    expect(mockGetAllAccountAssets).toHaveBeenCalledTimes(2);
+    expect(mockGetAllAccountAssets).not.toHaveBeenCalled();
   });
 
-  it('adds no MBR payment for a contract the recipient already holds', async () => {
+  it('adds no MBR payment when simulation succeeds, even with zero balance', async () => {
+    mockSimulate.mockResolvedValue({
+      txnGroups: [{ txnResults: [{ txnResult: {} }] }],
+    });
     mockGetAllAccountAssets.mockResolvedValue([
-      { assetType: 'arc200', contractId: CONTRACT_A, balance: '1' },
+      { assetType: 'arc200', contractId: CONTRACT_A, balance: '0' },
     ]);
     const claims: Arc200ClaimParams[] = [OWNER_1, OWNER_2].map((owner) => ({
       contractId: CONTRACT_A,
@@ -440,13 +473,17 @@ describe('TASK-397 claim builder guards', () => {
   ] as const)(
     'encodes a valid %s batch byte-identically to the original builder',
     async (scenario, held) => {
-      mockGetAllAccountAssets.mockResolvedValue(
-        held.map((contractId) => ({
-          assetType: 'arc200',
-          contractId,
-          balance: '1',
-        }))
-      );
+      mockSimulate.mockImplementation(async (request) => ({
+        txnGroups: [
+          held.includes(
+            Number(
+              request.txnGroups[0].txns.at(-1).txn.applicationCall.appIndex
+            ) as never
+          )
+            ? { txnResults: [{ txnResult: {} }] }
+            : { failureMessage: 'box minimum balance' },
+        ],
+      }));
       const group =
         await Arc200TransactionService.buildBatchClaimTransactionGroup(
           validFixtureClaims(),
@@ -461,4 +498,93 @@ describe('TASK-397 claim builder guards', () => {
       ).toEqual(ORIGINAL_BATCH_BASE64[scenario]);
     }
   );
+});
+
+describe('TASK-416 simulation MBR decision and service fee parity', () => {
+  const success = { txnGroups: [{ txnResults: [{ txnResult: {} }] }] };
+  it.each(['send', 'claim'] as const)(
+    '%s: success, failure, throws and remote signer',
+    async (flow) => {
+      const params = {
+        from: CLAIMER,
+        to: OWNER_1,
+        sender: CLAIMER,
+        amount: 42n,
+        contractId: CONTRACT_A,
+        networkId: 'voi-mainnet',
+      };
+      const build = () =>
+        flow === 'send'
+          ? Arc200TransactionService.buildArc200TransferGroup(params)
+          : Arc200TransactionService.buildArc200TransferFromGroup(params);
+      for (const scenario of [
+        'success',
+        'failure',
+        'throws',
+        'remote',
+        'remote-auth',
+      ]) {
+        mockRemote.mockImplementation(
+          (address: string) =>
+            scenario === 'remote' ||
+            (scenario === 'remote-auth' && address === OWNER_2)
+        );
+        mockSigningAddress.mockReturnValue(
+          scenario === 'remote-auth' ? OWNER_2 : CLAIMER
+        );
+        mockSimulate.mockImplementation(async (request) => {
+          if (scenario === 'throws' && request.txnGroups[0].txns.length === 1)
+            throw new Error('algod unavailable');
+          if (scenario === 'failure')
+            return { txnGroups: [{ failureMessage: 'box minimum balance' }] };
+          return success;
+        });
+        const group = await build();
+        const needsMbr = scenario !== 'success';
+        expect(group.needsMbrPayment).toBe(needsMbr);
+        const decoded = decodeGroup(group.txnBytes);
+        expect(decoded.filter(isMbrPayment)).toHaveLength(needsMbr ? 1 : 0);
+        const cost = decoded.reduce(
+          (sum, txn) =>
+            sum + Number(txn.fee) + Number(txn.payment?.amount || 0),
+          0
+        );
+        expect(cost).toBe(needsMbr ? 30500 : 1000);
+        const estimate =
+          flow === 'send'
+            ? await Arc200TransactionService.estimateArc200TransferCost(params)
+            : await Arc200TransactionService.estimateClaimCost(
+                [{ ...params }],
+                0,
+                'voi-mainnet'
+              );
+        expect(estimate.total).toBe(cost);
+        expect(
+          (await Arc200TransactionService.estimateClaimCost(group)).total
+        ).toBe(cost);
+      }
+      expect(mockGetAllAccountAssets).not.toHaveBeenCalled();
+    }
+  );
+
+  it('decides per recipient/contract and funds a later remote sender only once', async () => {
+    mockSimulate.mockResolvedValue(success);
+    mockRemote.mockImplementation(
+      (address: string) => address === OTHER_SENDER
+    );
+    const first = validFixtureClaims()[0];
+    const claims = [
+      first,
+      { ...first, sender: OTHER_SENDER },
+      { ...first, contractId: CONTRACT_B, to: OWNER_2 },
+    ];
+    const group =
+      await Arc200TransactionService.buildBatchClaimTransactionGroup(claims);
+    expectOneMbrPerContract(group.txnBytes, [CONTRACT_A], OTHER_SENDER);
+    expectNoDuplicates(group.txnBytes);
+    expectCanonicalGroup(group.txnBytes);
+    expect(
+      (await Arc200TransactionService.estimateClaimCost(claims)).total
+    ).toBe(Arc200TransactionService.groupCost(group));
+  });
 });
