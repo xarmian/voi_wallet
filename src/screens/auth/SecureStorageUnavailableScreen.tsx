@@ -153,9 +153,11 @@ export default function SecureStorageUnavailableScreen({
     setResetAttempted(true);
     setResetError(null);
     try {
-      // Secure deletion must finish before wallet metadata or auth is reset.
       try {
         await withTimeout(
+          // TASK-415: reset fails closed when key material can't be verifiably
+          // erased. A keychain that fails every read can't support wallet setup
+          // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
           AccountSecureStorage.clearAll(),
           RESET_STEP_TIMEOUT_MS,
           'clearAll'
@@ -163,7 +165,7 @@ export default function SecureStorageUnavailableScreen({
       } catch (error) {
         if (mountedRef.current) {
           setResetError(
-            "Couldn't erase all wallet data from secure storage. Free up some storage space on your device, then try again."
+            "Couldn't erase all wallet data from secure storage. Restart your device and try again. If your device is low on storage, free some up first."
           );
         }
         throw error;

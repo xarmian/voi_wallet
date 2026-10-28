@@ -172,10 +172,18 @@ export class MultiAccountWalletService {
         // written secret (ownership-checked; a no-op if the reset already
         // deleted it) so neither store keeps a half-created account.
         if (error instanceof ResetRacedError && token !== undefined) {
-          await AccountSecureStorage.deleteAccountIfAttemptMatches(
-            accountMetadata.id,
-            token
-          );
+          try {
+            await AccountSecureStorage.deleteAccountIfAttemptMatches(
+              accountMetadata.id,
+              token
+            );
+          } catch (rollbackError) {
+            // TASK-415: retain the indexed, journaled id for reconciliation.
+            console.warn(
+              'Account rollback failed:',
+              redactError(rollbackError)
+            );
+          }
         }
         throw error;
       } finally {
@@ -289,10 +297,18 @@ export class MultiAccountWalletService {
         return accountMetadata;
       } catch (error) {
         if (error instanceof ResetRacedError && token !== undefined) {
-          await AccountSecureStorage.deleteAccountIfAttemptMatches(
-            accountMetadata.id,
-            token
-          );
+          try {
+            await AccountSecureStorage.deleteAccountIfAttemptMatches(
+              accountMetadata.id,
+              token
+            );
+          } catch (rollbackError) {
+            // TASK-415: retain the indexed, journaled id for reconciliation.
+            console.warn(
+              'Account rollback failed:',
+              redactError(rollbackError)
+            );
+          }
         }
         throw error;
       } finally {

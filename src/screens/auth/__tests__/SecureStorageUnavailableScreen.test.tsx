@@ -136,7 +136,7 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     expect(onRetry).not.toHaveBeenCalled();
     expect(
       getByText(
-        "Couldn't erase all wallet data from secure storage. Free up some storage space on your device, then try again."
+        "Couldn't erase all wallet data from secure storage. Restart your device and try again. If your device is low on storage, free some up first."
       )
     ).toBeTruthy();
     await act(async () => {
@@ -280,7 +280,7 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
 
     expect(onRetry).not.toHaveBeenCalled();
     expect(mockClearAllWallets).not.toHaveBeenCalled();
-    expect(queryByText(/Free up some storage space/)).not.toBeNull();
+    expect(queryByText(/Restart your device and try again/)).not.toBeNull();
     await act(async () => {
       await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
