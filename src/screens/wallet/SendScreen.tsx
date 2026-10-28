@@ -132,6 +132,9 @@ export default function SendScreen() {
   const [isSearchingNames, setIsSearchingNames] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const [showAssetSelector, setShowAssetSelector] = useState(false);
+  const [signingLoading, setSigningLoading] = useState(true);
+  const [signingError, setSigningError] = useState(false);
+  const [signingAttempt, setSigningAttempt] = useState(0);
   const [hasLedgerSigner, setHasLedgerSigner] = useState(false);
 
   const contextAssetName = routeParams?.assetName;
@@ -826,6 +829,8 @@ export default function SendScreen() {
   useEffect(() => {
     let isCancelled = false;
     const loadSigningCapability = async () => {
+      setSigningLoading(true);
+      setSigningError(false);
       try {
         if (!activeAccount) {
           if (!isCancelled) {
@@ -880,7 +885,10 @@ export default function SendScreen() {
       } catch {
         if (!isCancelled) {
           setHasLedgerSigner(false);
+          setSigningError(true);
         }
+      } finally {
+        if (!isCancelled) setSigningLoading(false);
       }
     };
 
@@ -889,7 +897,7 @@ export default function SendScreen() {
       isCancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address (the content-stable slice that scopes the signing-capability probe); the full activeAccount object is read at the current commit and omitted on purpose to avoid identity-churn re-runs, matching the file's hand-mirror pattern (TASK-246; no money-path logic changes).
-  }, [activeAccount?.address, effectiveNetworkId]);
+  }, [activeAccount?.address, effectiveNetworkId, signingAttempt]);
 
   // Get network config for selected network
   const selectedNetworkConfig = React.useMemo(() => {
@@ -1439,6 +1447,12 @@ export default function SendScreen() {
       Alert.alert('Error', 'Wallet not loaded');
       return;
     }
+
+    if (
+      activeAccount.type === AccountType.WATCH &&
+      (signingLoading || signingError)
+    )
+      return;
 
     // Block only if watch account without a Ledger signer available
     if (activeAccount.type === AccountType.WATCH && !hasLedgerSigner) {
@@ -2028,7 +2042,23 @@ export default function SendScreen() {
             {/* Watch Account Status */}
             {activeAccount?.type === AccountType.WATCH && (
               <View style={styles.watchAccountWarning}>
-                {hasLedgerSigner ? (
+                {signingLoading ? (
+                  <ActivityIndicator />
+                ) : signingError ? (
+                  <View>
+                    <Text style={styles.watchAccountWarningText}>
+                      {"Couldn't check signing authority"}
+                    </Text>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      onPress={() =>
+                        setSigningAttempt((attempt) => attempt + 1)
+                      }
+                    >
+                      <Text style={styles.watchAccountWarningText}>Retry</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : hasLedgerSigner ? (
                   <Text style={styles.watchAccountWarningText}>
                     🔐 Ledger signer detected for this account. You can send
                     transactions using your Ledger device.
@@ -2056,7 +2086,8 @@ export default function SendScreen() {
                 (!contextNftToken && !amount) ||
                 !!amountError ||
                 isSending ||
-                (activeAccount?.type === AccountType.WATCH && !hasLedgerSigner)
+                (activeAccount?.type === AccountType.WATCH &&
+                  (signingLoading || signingError || !hasLedgerSigner))
               }
               onPress={handleSend}
               fullWidth

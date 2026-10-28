@@ -343,80 +343,6 @@ export class RekeyManager {
     }
   }
 
-  /**
-   * Find the signing account for a rekeyed account
-   */
-  findSigningAccount(
-    rekeyedAccount: RekeyedAccountMetadata,
-    wallet: Wallet
-  ): StandardAccountMetadata | LedgerAccountMetadata | null {
-    if (!rekeyedAccount.canSign) {
-      return null;
-    }
-
-    const signingAccount = wallet.accounts.find(
-      (account) =>
-        account.address === rekeyedAccount.authAddress &&
-        account.type === AccountType.STANDARD
-    ) as StandardAccountMetadata | undefined;
-
-    if (signingAccount) {
-      return signingAccount;
-    }
-
-    const ledgerAccount = wallet.accounts.find(
-      (account) =>
-        account.address === rekeyedAccount.authAddress &&
-        account.type === AccountType.LEDGER
-    ) as LedgerAccountMetadata | undefined;
-
-    return ledgerAccount || null;
-  }
-
-  /**
-   * Check if an account can sign transactions
-   * Returns true for standard accounts and rekeyed accounts where we have the auth key
-   */
-  canAccountSign(account: AccountMetadata, wallet: Wallet): boolean {
-    switch (account.type) {
-      case AccountType.STANDARD:
-        return true;
-      case AccountType.REKEYED:
-        return (account as RekeyedAccountMetadata).canSign;
-      case AccountType.LEDGER:
-        return this.isLedgerDeviceConnected(account as LedgerAccountMetadata);
-      case AccountType.REMOTE_SIGNER:
-        return true; // Can sign via QR flow
-      case AccountType.WATCH:
-        return false;
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Get the actual signing address for an account
-   * For standard accounts, returns the account address
-   * For rekeyed accounts, returns the auth address if we can sign
-   */
-  getSigningAddress(account: AccountMetadata): string | null {
-    switch (account.type) {
-      case AccountType.STANDARD:
-        return account.address;
-      case AccountType.LEDGER:
-        return account.address;
-      case AccountType.REMOTE_SIGNER:
-        return account.address;
-      case AccountType.REKEYED:
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        return rekeyedAccount.canSign ? rekeyedAccount.authAddress : null;
-      case AccountType.WATCH:
-        return null;
-      default:
-        return null;
-    }
-  }
-
   async rekeyToLedger(
     sourceAccount: AccountMetadata,
     ledgerAccount: LedgerAccountMetadata,
@@ -540,23 +466,6 @@ export class RekeyManager {
     };
   }
 
-  async getLedgerSigningDetailsForAccount(
-    account: RekeyedAccountMetadata,
-    wallet: Wallet
-  ): Promise<LedgerSigningInfo | null> {
-    const ledgerAccount = wallet.accounts.find(
-      (candidate) =>
-        candidate.address === account.authAddress &&
-        candidate.type === AccountType.LEDGER
-    ) as LedgerAccountMetadata | undefined;
-
-    if (!ledgerAccount) {
-      return null;
-    }
-
-    return this.getLedgerSigningDetails(ledgerAccount);
-  }
-
   private async getLedgerSigningDetails(
     account: LedgerAccountMetadata
   ): Promise<LedgerSigningInfo> {
@@ -585,11 +494,6 @@ export class RekeyManager {
       transportType: availableDevice?.type,
       lastDeviceConnection: account.lastDeviceConnection,
     };
-  }
-
-  private isLedgerDeviceConnected(account: LedgerAccountMetadata): boolean {
-    const device = ledgerTransportService.getConnectedDevice();
-    return !!device && device.id === account.deviceId;
   }
 }
 
