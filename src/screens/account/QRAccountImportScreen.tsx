@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RouteProp } from '@react-navigation/native';
+import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { RootStackParamList } from '@/navigation/AppNavigator';
@@ -43,6 +43,8 @@ export default function QRAccountImportScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
 
   const existingAccounts = useAccounts();
+
+  useFocusEffect(useCallback(() => setScanned(false), []));
 
   useEffect(() => {
     if (!permission) {

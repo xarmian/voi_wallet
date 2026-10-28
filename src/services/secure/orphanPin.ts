@@ -31,7 +31,8 @@ export const withStrictReadTimeout = <T>(promise: Promise<T>): Promise<T> =>
 
 // TASK-417: onboarding entry points that skip SecuritySetup when a PIN exists
 // must route there for an orphan PIN too, so its healer (clearOrphanPin) runs.
-// Onboarding only: outside it, a watch-only wallet with a PIN is legitimate.
+// Onboarding history can remain reachable for a real wallet. A PIN is orphaned
+// only when there are no accounts at all, including watch/Ledger/remote accounts.
 // Strict and bounded; a read failure rejects (callers fail closed).
 export async function onboardingNeedsSecuritySetup(): Promise<boolean> {
   if (!(await withStrictReadTimeout(AccountSecureStorage.hasPinStrict()))) {
@@ -39,7 +40,7 @@ export async function onboardingNeedsSecuritySetup(): Promise<boolean> {
   }
   return (
     (await withStrictReadTimeout(
-      MultiAccountWalletService.hasKeyBearingAccountStrict()
+      MultiAccountWalletService.hasWalletWithAccountsStrict()
     )) === false
   );
 }

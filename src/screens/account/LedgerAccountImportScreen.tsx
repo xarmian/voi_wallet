@@ -3,6 +3,7 @@ import React, {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -172,6 +173,8 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     importReducer,
     INITIAL_IMPORT_STATE
   );
+  // Preserve the pre-import verdict through Continue and auth discovery.
+  const needsSecuritySetupRef = useRef(false);
   const [showAuthDiscovery, setShowAuthDiscovery] = useState(false);
   const [importedLedgerAccounts, setImportedLedgerAccounts] = useState<
     LedgerAccountDiscoveryResult[]
@@ -242,16 +245,10 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
-    try {
-      // An orphan PIN routes through SecuritySetup's healer too (TASK-417).
-      if (await onboardingNeedsSecuritySetup()) {
-        navigation.replace('SecuritySetup', { source: 'ledger' });
-      } else {
-        navigation.navigate('Main');
-      }
-    } catch (error) {
-      console.error('Failed to finalize ledger onboarding:', error);
+    if (needsSecuritySetupRef.current) {
       navigation.replace('SecuritySetup', { source: 'ledger' });
+    } else {
+      navigation.navigate('Main');
     }
   }, [isOnboarding, navigation]);
 
@@ -386,9 +383,6 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
         selectedIndexes.has(account.derivationIndex) && !account.existsInWallet
     );
 
-    // Store the accounts being imported for auth discovery
-    setImportedLedgerAccounts(toImport);
-
     if (toImport.length === 0) {
       Alert.alert(
         'No Accounts Selected',
@@ -406,6 +400,13 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     };
 
     try {
+      // Decide before the first store write: importing a Ledger account makes
+      // the wallet nonempty. A rejected read must leave all accounts untouched.
+      needsSecuritySetupRef.current = isOnboarding
+        ? await onboardingNeedsSecuritySetup()
+        : false;
+      // Store the accounts being imported for auth discovery.
+      setImportedLedgerAccounts(toImport);
       for (const account of toImport) {
         try {
           const derivedFromScan: LedgerAccountDerivation = {

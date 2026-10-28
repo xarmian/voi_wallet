@@ -1,5 +1,5 @@
 /** TASK-417: screen contracts, with the strict onboarding decision mocked at
- * its module boundary. Only obviously fake secret material is used. */
+ * its module boundary, plus real strict-reader regressions. Only fake secrets. */
 import React from 'react';
 import { Alert } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
@@ -10,6 +10,7 @@ const mockNavigation = {
   goBack: jest.fn(),
   setOptions: jest.fn(),
 };
+const mockFocusEffect = jest.fn();
 let mockParams: { isOnboarding?: boolean } = {};
 const mockAddWatchAccount = jest.fn();
 const mockRefresh = jest.fn();
@@ -17,7 +18,9 @@ const mockExistingAccounts: never[] = [];
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => mockNavigation,
   useRoute: () => ({ params: mockParams }),
-  useFocusEffect: () => {},
+  useFocusEffect: (effect: () => void) => {
+    mockFocusEffect(effect);
+  },
 }));
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: (selector: (state: unknown) => unknown) =>
@@ -30,11 +33,26 @@ jest.mock('@/services/wallet', () => ({
     addWatchAccount: jest.fn(),
     importLedgerAccount: jest.fn(),
     detectLedgerAccounts: jest.fn(),
+    hasWalletWithAccountsStrict: jest.fn(),
+    hasKeyBearingAccountStrict: jest.fn(),
   },
 }));
 jest.mock('@/services/secure', () => ({
-  AccountSecureStorage: { hasPin: jest.fn() },
+  AccountSecureStorage: {
+    hasPin: jest.fn(),
+    hasPinStrict: jest.fn(),
+    deletePin: jest.fn(),
+    setupPin: jest.fn(),
+    probeSecretPresenceStrict: jest.fn(),
+  },
 }));
+jest.mock('@/platform', () => ({
+  storage: { getItem: jest.fn() },
+  secureStorage: { getItem: jest.fn() },
+}));
+jest.mock('@/services/secure/AccountSecureStorage', () =>
+  jest.requireMock('@/services/secure')
+);
 jest.mock('@/services/secure/orphanPin', () => ({
   onboardingNeedsSecuritySetup: jest.fn(),
 }));
@@ -82,8 +100,20 @@ jest.mock('@/components/auth-account/AuthAccountDiscovery', () => {
   const { Button } = require('react-native');
   return {
     __esModule: true,
-    default: ({ onSkip }: { onSkip: () => void }) => (
-      <Button title="Skip discovery" onPress={onSkip} />
+    default: ({
+      onSkip,
+      onImportComplete,
+    }: {
+      onSkip: () => void;
+      onImportComplete: (count: number) => void;
+    }) => (
+      <>
+        <Button title="Skip discovery" onPress={onSkip} />
+        <Button
+          title="Complete discovery"
+          onPress={() => onImportComplete(1)}
+        />
+      </>
     ),
   };
 });
@@ -97,6 +127,7 @@ jest.mock('expo-camera', () => {
   };
 });
 
+import { storage } from '@/platform';
 import AccountImportPreviewScreen from '../AccountImportPreviewScreen';
 import AddWatchAccountScreen from '../AddWatchAccountScreen';
 import LedgerAccountImportScreen from '../LedgerAccountImportScreen';
@@ -125,7 +156,7 @@ const mockLedgerAccount = {
 };
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  jest.resetAllMocks();
   mockParams = {};
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -323,6 +354,58 @@ describe('watch onboarding decision', () => {
     expect(mockNavigation.navigate).toHaveBeenCalledWith('Main');
   });
 
+  it('keeps the PIN of a real watch-only wallet reached with isOnboarding:true and adds directly', async () => {
+    const existing = {
+      id: 'existing-watch',
+      type: AccountType.WATCH,
+      address: 'existing-address',
+    };
+    const wallet = { accounts: [existing] };
+    const pin = 'fake-existing-pin';
+    jest
+      .mocked(AccountSecureStorage.hasPinStrict)
+      .mockImplementation(async () => Boolean(pin));
+    jest
+      .mocked(storage.getItem)
+      .mockImplementation(async () => JSON.stringify(wallet));
+    const realWallet =
+      jest.requireActual('@/services/wallet').MultiAccountWalletService;
+    jest
+      .mocked(MultiAccountWalletService.hasWalletWithAccountsStrict)
+      .mockImplementation(() => realWallet.hasWalletWithAccountsStrict());
+    jest
+      .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+      .mockImplementation(() => realWallet.hasKeyBearingAccountStrict());
+    jest
+      .mocked(onboardingNeedsSecuritySetup)
+      .mockImplementation(
+        jest.requireActual('@/services/secure/orphanPin')
+          .onboardingNeedsSecuritySetup
+      );
+    mockAddWatchAccount.mockImplementation(async (request) => {
+      wallet.accounts.push({
+        id: 'added-watch',
+        type: request.type,
+        address: request.address,
+      });
+    });
+    const screen = await renderWatch(true);
+    await submitWatch(screen);
+    expect(mockAddWatchAccount).toHaveBeenCalledTimes(1);
+    expect(wallet.accounts).toEqual([
+      existing,
+      { id: 'added-watch', type: AccountType.WATCH, address: WATCH_ADDRESS },
+    ]);
+    expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+    expect(AccountSecureStorage.setupPin).not.toHaveBeenCalled();
+    await pressAlert('Success', 'OK');
+    expect(mockNavigation.navigate).toHaveBeenCalledWith('Main');
+    expect(mockNavigation.navigate).not.toHaveBeenCalledWith(
+      'SecuritySetup',
+      expect.anything()
+    );
+  });
+
   it('alerts on a rejected check, imports nothing, and releases loading', async () => {
     jest
       .mocked(onboardingNeedsSecuritySetup)
@@ -369,10 +452,6 @@ async function renderLedger(isOnboarding: boolean) {
     ).toHaveBeenCalledTimes(1)
   );
   await fireEvent.press(screen.getByText('Import Ledger selection'));
-  expect(MultiAccountWalletService.importLedgerAccount).toHaveBeenCalledTimes(
-    1
-  );
-  expect(onboardingNeedsSecuritySetup).not.toHaveBeenCalled();
   return screen;
 }
 function expectOnlyLedgerImport() {
@@ -407,19 +486,67 @@ describe('Ledger onboarding completion decision', () => {
     expectOnlyLedgerImport();
   });
 
-  it('preserves the catch fallback to SecuritySetup on a rejected check', async () => {
+  it('a rejected pre-import check imports nothing and shows the existing error', async () => {
     jest
       .mocked(onboardingNeedsSecuritySetup)
       .mockRejectedValueOnce(new Error('strict read failed'));
-    await renderLedger(true);
-    await pressAlert('Ledger Import Complete', 'Continue');
-    expect(mockNavigation.replace).toHaveBeenCalledTimes(1);
-    expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
-      source: 'ledger',
-    });
+    const screen = await renderLedger(true);
+    expect(
+      MultiAccountWalletService.importLedgerAccount
+    ).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Failed',
+      'strict read failed'
+    );
+    expect(mockNavigation.replace).not.toHaveBeenCalled();
     expect(mockNavigation.navigate).not.toHaveBeenCalled();
-    expectOnlyLedgerImport();
+    // Loading was released and a subsequent attempt can import.
+    await fireEvent.press(screen.getByText('Import Ledger selection'));
+    expect(MultiAccountWalletService.importLedgerAccount).toHaveBeenCalledTimes(
+      1
+    );
   });
+
+  it.each(['Continue', 'Skip and Continue', 'discovery complete'])(
+    'decides before persisting and retains the verdict through %s',
+    async (completion) => {
+      let persisted = false;
+      jest
+        .mocked(onboardingNeedsSecuritySetup)
+        .mockImplementation(async () => !persisted);
+      jest
+        .mocked(MultiAccountWalletService.importLedgerAccount)
+        .mockImplementation(async () => {
+          persisted = true;
+          return {} as never;
+        });
+      const screen = await renderLedger(true);
+      expect(persisted).toBe(true);
+      expect(onboardingNeedsSecuritySetup).toHaveBeenCalledTimes(1);
+      if (completion === 'Continue') {
+        await pressAlert('Ledger Import Complete', 'Continue');
+      } else {
+        await pressAlert(
+          'Ledger Import Complete',
+          'Search for Rekeyed Accounts'
+        );
+        if (completion === 'Skip and Continue') {
+          await fireEvent.press(screen.getByText('Skip discovery'));
+          await pressAlert('Skip Auth Discovery', 'Skip and Continue');
+        } else {
+          await fireEvent.press(screen.getByText('Complete discovery'));
+          await pressAlert('All Done!', 'Continue');
+        }
+      }
+      expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
+        source: 'ledger',
+      });
+      expect(mockNavigation.navigate).not.toHaveBeenCalled();
+      expect(onboardingNeedsSecuritySetup).toHaveBeenCalledTimes(1);
+      expectOnlyLedgerImport();
+    }
+  );
 
   it('outside onboarding preserves back without a PIN check', async () => {
     const screen = await renderLedger(false);
@@ -469,6 +596,17 @@ describe('QR camera handoff', () => {
         'AccountImportPreview',
         { accounts, source: 'qr', isOnboarding }
       );
+      expect(
+        screen.getByTestId('camera').props.onBarcodeScanned
+      ).toBeUndefined();
+      await act(async () => {
+        mockFocusEffect.mock.calls.at(-1)?.[0]();
+      });
+      await fireEvent(screen.getByTestId('camera'), 'barcodeScanned', {
+        data: 'second-fake-qr-content',
+      });
+      expect(AccountQRParser.parseQRContent).toHaveBeenCalledTimes(2);
+      expect(mockNavigation.navigate).toHaveBeenCalledTimes(2);
     }
   );
 });
