@@ -85,7 +85,11 @@ import algosdk from 'algosdk';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { Buffer } from 'buffer';
-import { AccountType, StandardAccountMetadata } from '@/types/wallet';
+import {
+  AccountType,
+  ResetRacedError,
+  StandardAccountMetadata,
+} from '@/types/wallet';
 import { collectAccounts } from '../collectors';
 import { restoreAccounts, performFullRestore } from '../restorers';
 import type { BackupAccountData } from '../types';
@@ -418,3 +422,61 @@ it('never rolls back secrets the persisted wallet already references', async () 
   jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
   jest.mocked(secure.commitPendingCreate).mockResolvedValue(undefined);
 });
+
+it('keeps secrets when the persist call fails after its blob write', async () => {
+  // storeWallet writes the blob, then clears the wipe tombstone: a failure in
+  // that second step rejects the persist call AFTER the wallet references the key.
+  jest
+    .mocked(secure.storeAccountForCreation)
+    .mockReset()
+    .mockResolvedValue('owned');
+  mockPersistRestoredWallet.mockRejectedValueOnce(
+    new Error('tombstone removal failed')
+  );
+  await expect(restoreAccounts([retained()])).rejects.toThrow(
+    'tombstone removal failed'
+  );
+  expect(secure.deleteAccountIfAttemptMatches).not.toHaveBeenCalled();
+  jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
+});
+
+it('rolls back on a reset race at persist, which storeWallet throws before writing', async () => {
+  jest
+    .mocked(secure.storeAccountForCreation)
+    .mockReset()
+    .mockResolvedValue('owned');
+  mockPersistRestoredWallet.mockRejectedValueOnce(new ResetRacedError());
+  await expect(restoreAccounts([retained()])).rejects.toBeInstanceOf(
+    ResetRacedError
+  );
+  expect(secure.deleteAccountIfAttemptMatches).toHaveBeenCalledWith(
+    'retained',
+    'owned'
+  );
+  jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
+});
+
+it('rejects duplicate account ids before clearing anything', async () => {
+  const keyed = retained();
+  const { mnemonic: _drop, ...metadataOnly } = retained();
+  await expect(
+    performFullRestore(
+      [keyed, { ...metadataOnly, id: keyed.id }],
+      {} as never,
+      [],
+      {} as never
+    )
+  ).rejects.toThrow('duplicate account ids');
+  expect(secure.clearAll).not.toHaveBeenCalled();
+  expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
+});
+
+it.each([null, '', 'not a recovery phrase', 42])(
+  'rejects an invalid retained phrase (%p) cleanly before clearing',
+  async (mnemonic) => {
+    await expect(
+      performFullRestore([retained({ mnemonic })], {} as never, [], {} as never)
+    ).rejects.toThrow('not a valid recovery phrase');
+    expect(secure.clearAll).not.toHaveBeenCalled();
+  }
+);
