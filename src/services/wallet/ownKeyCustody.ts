@@ -61,10 +61,13 @@ export async function filterOwnKeyAccounts(
  * record to REMOTE_SIGNER, so that key must be the account's authority. A
  * REKEYED record qualifies only once chain state shows no rekey on any network
  * (an undone rekey); a still-rekeyed one keeps its record. A lookup error fails
- * closed. (TASK-425 U2 hunter review.)
+ * closed. (TASK-425 U2 hunter review.) `fresh` bypasses the rekey-info cache;
+ * the destructive convert passes it, so a cached "not rekeyed" can't authorize
+ * deleting the key (U2 Codex confirm).
  */
 export async function canTransferOwnKey(
-  account: AccountMetadata
+  account: AccountMetadata,
+  { fresh = false }: { fresh?: boolean } = {}
 ): Promise<boolean> {
   if (!(await holdsOwnKey(account))) return false;
   if (account.type === AccountType.STANDARD) return true;
@@ -72,7 +75,7 @@ export async function canTransferOwnKey(
     for (const networkId of Object.values(NetworkId)) {
       const info = await NetworkService.getInstance(
         networkId
-      ).getAccountRekeyInfo(account.address, true);
+      ).getAccountRekeyInfo(account.address, true, fresh);
       if (info.isRekeyed) return false;
     }
     return true;
@@ -85,7 +88,9 @@ export async function canTransferOwnKey(
 export async function filterTransferableAccounts(
   accounts: readonly AccountMetadata[]
 ): Promise<OwnKeyAccount[]> {
-  const ok = await Promise.all(accounts.map(canTransferOwnKey));
+  const ok = await Promise.all(
+    accounts.map((account) => canTransferOwnKey(account))
+  );
   return accounts.filter((account, i): account is OwnKeyAccount => ok[i]);
 }
 

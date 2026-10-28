@@ -844,7 +844,7 @@ export class MultiAccountWalletService {
 
     // TASK-425 U2: an account whose own key this device holds and controls
     // it on chain (a REKEYED account whose rekey was undone included).
-    if (!(await canTransferOwnKey(existingAccount))) {
+    if (!(await canTransferOwnKey(existingAccount, { fresh: true }))) {
       throw new Error(
         `Cannot convert account type ${existingAccount.type} to remote signer. Only an account whose key is on this device can be converted.`
       );

@@ -31,12 +31,18 @@ jest.mock('@/services/ledger/transport', () => ({
   ledgerTransportService: {},
 }));
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
-const mockIsRekeyed = jest.fn(async (_networkId: string) => false);
+const mockIsRekeyed = jest.fn(
+  async (_networkId: string, _bypassCache?: boolean) => false
+);
 jest.mock('@/services/network', () => ({
   NetworkService: {
     getInstance: (networkId: string) => ({
-      getAccountRekeyInfo: async () => ({
-        isRekeyed: await mockIsRekeyed(networkId),
+      getAccountRekeyInfo: async (
+        _address: string,
+        _skipTimestamp?: boolean,
+        bypassCache?: boolean
+      ) => ({
+        isRekeyed: await mockIsRekeyed(networkId, bypassCache),
       }),
     }),
   },
@@ -134,6 +140,20 @@ describe('MultiAccountWalletService.convertStandardToRemoteSigner — own-key cu
     ).rejects.toThrow(/Only an account whose key is on this device/);
     expect(mockSecureDeleteAccount).not.toHaveBeenCalled();
     expect(storedType()).toBe(AccountType.REKEYED);
+  });
+
+  it('reads chain authority fresh, never from the rekey-info cache', async () => {
+    seedWallet(AccountType.REKEYED);
+    // Stands in for the cache: a cached read says "not rekeyed", the chain
+    // (a fresh read) says it is.
+    mockIsRekeyed.mockImplementation(async (_n, bypassCache) => !!bypassCache);
+    await expect(
+      MultiAccountWalletService.convertStandardToRemoteSigner(
+        'acc-1',
+        'device-1'
+      )
+    ).rejects.toThrow(/Only an account whose key is on this device/);
+    expect(mockSecureDeleteAccount).not.toHaveBeenCalled();
   });
 
   it('refuses when the custody probe errors', async () => {
