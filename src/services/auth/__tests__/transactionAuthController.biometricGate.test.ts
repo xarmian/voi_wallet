@@ -515,6 +515,10 @@ describe('remote batch submission ownership (TASK-418)', () => {
       CLAIM_NETWORK_ID: netId,
       selectedNetwork: netId,
       hasSubmittedRef: { current: false },
+      // TASK-416 unit 3's recovery hook, closed over by the claim callbacks.
+      recover: jest.fn(async (_error: unknown, _group: unknown) => false),
+      txnGroup: [],
+      ARC200_RECONFIRM_MESSAGE: 'Network state changed, please confirm again.',
       navigation: {
         dispatch: jest.fn(),
         navigate: jest.fn(),
@@ -846,6 +850,29 @@ describe('remote batch submission ownership (TASK-418)', () => {
       expect(env.hasSubmittedRef.current).toBe(true);
       release({ txId: 'retry', confirmed: true });
       await retry;
+      expect(env.navigation.dispatch).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  // TASK-418 + TASK-416: after a recovery rebuild, the user confirms again and
+  // the SAME mounted callback must submit (the latch is released first).
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s submits the reconfirmed group after a recovery rebuild',
+    async (screen) => {
+      const env = scope();
+      env.recover.mockResolvedValueOnce('rebuilt' as never);
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      submit.mockRejectedValueOnce(new Error('below min'));
+      await handler({ signedTransactions: [signed] });
+      expect(env.recover).toHaveBeenCalledTimes(1);
+      expect(env.navigation.goBack).toHaveBeenCalledTimes(1);
+      expect(env.Alert.alert).toHaveBeenCalledWith(
+        'Confirm Again',
+        'Network state changed, please confirm again.'
+      );
+      expect(env.hasSubmittedRef.current).toBe(false);
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
       expect(env.navigation.dispatch).toHaveBeenCalledTimes(1);
     }
   );
