@@ -9,6 +9,7 @@ import algosdk from 'algosdk';
 import nacl from 'tweetnacl';
 import { getCrypto } from '@/platform';
 import { NetworkService } from '../network';
+import { NetworkId } from '@/types/network';
 import { SecureKeyManager } from '../secure/keyManager';
 import {
   RemoteSignerRequest,
@@ -212,13 +213,15 @@ class RemoteSignerServiceClass {
     unsignedTxns: algosdk.Transaction[],
     signerAddresses: string[],
     options?: {
+      networkId?: NetworkId;
       authAddresses?: (string | undefined)[];
       dappName?: string;
       description?: string;
     }
   ): Promise<RemoteSignerRequest> {
     const networkService = NetworkService.getInstance();
-    const networkId = networkService.getCurrentNetworkId();
+    const networkId =
+      options?.networkId ?? networkService.getCurrentNetworkId();
     const genesisHash = unsignedTxns[0]?.genesisHash
       ? Buffer.from(unsignedTxns[0].genesisHash).toString('base64')
       : '';

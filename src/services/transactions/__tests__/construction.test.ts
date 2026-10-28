@@ -91,7 +91,10 @@ jest.mock('@/services/ledger/algorand', () => ({
 }));
 jest.mock('@/services/secure/keyManager', () => ({
   __esModule: true,
-  SecureKeyManager: {},
+  SecureKeyManager: {
+    getSigningInfo: jest.fn(),
+    getLedgerSigningInfo: jest.fn(),
+  },
 }));
 jest.mock('@/services/security/transactionTracker', () => ({
   __esModule: true,
@@ -600,4 +603,40 @@ describe('ARC-72 transfer construction', () => {
     expect(Number(boxes[0].appIndex)).toBe(0);
     expect(Buffer.from(boxes[0].name).toString()).toBe('arc72-owner-box');
   });
+});
+
+test('signing preflight uses the request network and fails closed on strict lookup failure', async () => {
+  const { SecureKeyManager } = require('@/services/secure/keyManager');
+  const { NetworkId } = require('@/types/network');
+  const account = {
+    address: SENDER,
+    type: 'rekeyed',
+    authAddress: 'STALE',
+    canSign: true,
+  };
+  SecureKeyManager.getSigningInfo.mockResolvedValue({ canSign: false });
+  SecureKeyManager.getLedgerSigningInfo.mockRejectedValue(
+    new Error('not ledger')
+  );
+  const errors: string[] = [];
+  await (TransactionService as any).appendSigningValidation(
+    errors,
+    account,
+    NetworkId.ALGORAND_MAINNET
+  );
+  expect(errors).toHaveLength(1);
+  expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledWith(
+    SENDER,
+    NetworkId.ALGORAND_MAINNET
+  );
+  SecureKeyManager.getSigningInfo.mockRejectedValue(new Error('offline'));
+  errors.length = 0;
+  await (TransactionService as any).appendSigningValidation(
+    errors,
+    account,
+    NetworkId.ALGORAND_MAINNET
+  );
+  expect(errors).toEqual([
+    'Unable to verify signing authority. Please try again.',
+  ]);
 });

@@ -2,18 +2,17 @@ import { AccountSecureStorage } from './AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import {
   AccountType,
-  RekeyedAccountMetadata,
   LedgerAccountMetadata,
   LedgerSigningInfo,
   LedgerAccountError,
 } from '@/types/wallet';
-import RekeyManager from '@/services/wallet/rekeyManager';
+import { SecureKeyManager as NetworkKeyManager } from './keyManager';
+import { NetworkId } from '@/types/network';
 import {
   simpleLedgerSigner,
   SimpleLedgerSigningRequest,
 } from '@/services/ledger/simpleLedgerSigner';
 import algosdk, { Transaction } from 'algosdk';
-import { networkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
 
 /**
@@ -67,7 +66,8 @@ export class SimplifiedKeyManager {
   static async signTransaction(
     transaction: any,
     address: string,
-    pin?: string
+    pin: string | undefined,
+    networkId: NetworkId
   ): Promise<Uint8Array> {
     try {
       const wallet = await MultiAccountWalletService.getCurrentWallet();
@@ -81,7 +81,7 @@ export class SimplifiedKeyManager {
       }
 
       // Determine signing approach based on account type
-      const signingInfo = await this.getSigningInfo(address);
+      const signingInfo = await this.getSigningInfo(address, networkId);
 
       if (signingInfo.requiresLedger) {
         return await this.signWithLedger(transaction, signingInfo, address);
@@ -155,7 +155,10 @@ export class SimplifiedKeyManager {
   /**
    * Get comprehensive signing information for an address
    */
-  static async getSigningInfo(address: string): Promise<{
+  static async getSigningInfo(
+    address: string,
+    networkId: NetworkId
+  ): Promise<{
     canSign: boolean;
     signingAddress: string;
     signingAccountId?: string;
@@ -163,93 +166,16 @@ export class SimplifiedKeyManager {
     authAddress?: string;
     requiresLedger: boolean;
   }> {
-    try {
-      const wallet = await MultiAccountWalletService.getCurrentWallet();
-      if (!wallet) {
-        throw new Error('No wallet found');
-      }
-
-      const account = wallet.accounts.find((acc) => acc.address === address);
-
-      // Handle direct account types
-      if (account) {
-        switch (account.type) {
-          case AccountType.STANDARD:
-            return {
-              canSign: true,
-              signingAddress: address,
-              signingAccountId: account.id,
-              isRekeyed: false,
-              requiresLedger: false,
-            };
-
-          case AccountType.LEDGER:
-            return {
-              canSign: true,
-              signingAddress: address,
-              signingAccountId: account.id,
-              isRekeyed: false,
-              requiresLedger: true,
-            };
-
-          case AccountType.REKEYED:
-            const rekeyedAccount = account as RekeyedAccountMetadata;
-            const signingAccount = RekeyManager.findSigningAccount(
-              rekeyedAccount,
-              wallet
-            );
-
-            if (signingAccount) {
-              return {
-                canSign: rekeyedAccount.canSign,
-                signingAddress: rekeyedAccount.authAddress,
-                signingAccountId: signingAccount.id,
-                isRekeyed: true,
-                authAddress: rekeyedAccount.authAddress,
-                requiresLedger: signingAccount.type === AccountType.LEDGER,
-              };
-            }
-            break;
-
-          case AccountType.WATCH:
-            // For watch accounts, check if they're rekeyed to an account we control
-            const rekeyInfo = await networkService.getAccountRekeyInfo(address);
-            if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
-              const signerAccount = wallet.accounts.find(
-                (acc) => acc.address === rekeyInfo.authAddress
-              );
-
-              if (signerAccount) {
-                return {
-                  canSign: true,
-                  signingAddress: rekeyInfo.authAddress,
-                  signingAccountId: signerAccount.id,
-                  isRekeyed: true,
-                  authAddress: rekeyInfo.authAddress,
-                  requiresLedger: signerAccount.type === AccountType.LEDGER,
-                };
-              }
-            }
-            break;
-        }
-      }
-
-      // Default: cannot sign
-      return {
-        canSign: false,
-        signingAddress: address,
-        isRekeyed: false,
-        requiresLedger: false,
-      };
-    } catch (error) {
-      console.error('Failed to get signing info:', redactError(error));
-      return {
-        canSign: false,
-        signingAddress: address,
-        isRekeyed: false,
-        requiresLedger: false,
-      };
-    }
+    const info = await NetworkKeyManager.getSigningInfo(address, networkId);
+    const wallet = await MultiAccountWalletService.getCurrentWallet();
+    return {
+      ...info,
+      requiresLedger:
+        wallet?.accounts.some(
+          (acc) =>
+            acc.id === info.signingAccountId && acc.type === AccountType.LEDGER
+        ) ?? false,
+    };
   }
 
   /**
@@ -309,9 +235,12 @@ export class SimplifiedKeyManager {
   /**
    * Check if an address can be signed with current wallet
    */
-  static async canSignTransaction(address: string): Promise<boolean> {
+  static async canSignTransaction(
+    address: string,
+    networkId: NetworkId
+  ): Promise<boolean> {
     try {
-      const signingInfo = await this.getSigningInfo(address);
+      const signingInfo = await this.getSigningInfo(address, networkId);
       return signingInfo.canSign;
     } catch {
       return false;
@@ -321,7 +250,7 @@ export class SimplifiedKeyManager {
   /**
    * Get list of signing accounts (accounts that can sign transactions)
    */
-  static async getSigningAccounts(): Promise<
+  static async getSigningAccounts(networkId: NetworkId): Promise<
     {
       id: string;
       address: string;
@@ -339,6 +268,7 @@ export class SimplifiedKeyManager {
       const signingAccounts = [];
 
       for (const account of wallet.accounts) {
+        const info = await this.getSigningInfo(account.address, networkId);
         if (
           account.type === AccountType.STANDARD ||
           account.type === AccountType.LEDGER
@@ -347,17 +277,16 @@ export class SimplifiedKeyManager {
             id: account.id,
             address: account.address,
             type: account.type,
-            canSign: true,
-            requiresLedger: account.type === AccountType.LEDGER,
+            canSign: info.canSign,
+            requiresLedger: info.requiresLedger,
           });
         } else if (account.type === AccountType.REKEYED) {
-          const rekeyedAccount = account as RekeyedAccountMetadata;
           signingAccounts.push({
             id: account.id,
             address: account.address,
             type: account.type,
-            canSign: rekeyedAccount.canSign,
-            requiresLedger: false, // Rekeyed accounts don't directly require Ledger
+            canSign: info.canSign,
+            requiresLedger: info.requiresLedger,
           });
         }
       }
@@ -365,14 +294,17 @@ export class SimplifiedKeyManager {
       return signingAccounts;
     } catch (error) {
       console.error('Failed to get signing accounts:', redactError(error));
-      return [];
+      throw error;
     }
   }
 
   /**
    * Validate that a transaction can be signed
    */
-  static async validateSigningCapability(addresses: string[]): Promise<{
+  static async validateSigningCapability(
+    addresses: string[],
+    networkId: NetworkId
+  ): Promise<{
     canSign: boolean;
     missingSigners: string[];
     ledgerRequired: boolean;
@@ -381,7 +313,7 @@ export class SimplifiedKeyManager {
     let ledgerRequired = false;
 
     for (const address of addresses) {
-      const signingInfo = await this.getSigningInfo(address);
+      const signingInfo = await this.getSigningInfo(address, networkId);
       if (!signingInfo.canSign) {
         missingSigners.push(address);
       }

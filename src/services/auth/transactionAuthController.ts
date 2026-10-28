@@ -10,12 +10,7 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 import { isSoftwareAuthError } from '@/services/secure/authErrors';
-import {
-  LedgerSigningInfo,
-  WalletAccount,
-  AccountType,
-  RekeyedAccountMetadata,
-} from '@/types/wallet';
+import { LedgerSigningInfo, WalletAccount, AccountType } from '@/types/wallet';
 import {
   ledgerTransportService,
   LedgerDeviceInfo,
@@ -33,6 +28,8 @@ import { RemoteSignerService } from '@/services/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { verifyRemoteSignerResponse } from '@/utils/signatureVerification';
 import { NetworkId } from '@/types/network';
+import { NetworkService } from '@/services/network';
+import { getRekeyStateStrict } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
 
 /**
@@ -529,6 +526,19 @@ export class TransactionAuthController {
     }
   }
 
+  private getRequestNetworkId(): NetworkId {
+    const request = this.currentRequest;
+    return (
+      request?.walletConnectParams?.sessionBinding?.networkId ??
+      request?.transferParams?.networkId ??
+      request?.rekeyParams?.networkId ??
+      request?.keyregParams?.networkId ??
+      request?.applParams?.networkId ??
+      request?.networkId ??
+      NetworkService.getInstance().getCurrentNetworkId()
+    );
+  }
+
   /**
    * Determine what type of authentication is required
    */
@@ -541,39 +551,16 @@ export class TransactionAuthController {
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
       const biometricAvailable = hasHardware && isEnrolled;
 
-      // Check if this is a remote signer (air-gapped QR) account
-      // This takes precedence over other flow types
-      // Also look up the account from storage to handle cases where type might be lost
-      // during navigation param serialization (e.g., WalletConnect flows)
-      let isRemoteSigner = account.type === AccountType.REMOTE_SIGNER;
-
-      if (!isRemoteSigner && account.address) {
-        try {
-          const allAccounts = await MultiAccountWalletService.getAllAccounts();
-          const storedAccount = allAccounts.find(
-            (acc) => acc.address === account.address
-          );
-          if (storedAccount?.type === AccountType.REMOTE_SIGNER) {
-            isRemoteSigner = true;
-          }
-
-          // For rekeyed accounts, check if the auth address is a REMOTE_SIGNER
-          // This enables unrekey/re-rekey transactions to route through the airgap flow
-          if (!isRemoteSigner && storedAccount?.type === AccountType.REKEYED) {
-            const rekeyedAccount = storedAccount as RekeyedAccountMetadata;
-            if (rekeyedAccount.authAddress) {
-              const authAccount = allAccounts.find(
-                (acc) => acc.address === rekeyedAccount.authAddress
-              );
-              if (authAccount?.type === AccountType.REMOTE_SIGNER) {
-                isRemoteSigner = true;
-              }
-            }
-          }
-        } catch {
-          // Ignore lookup errors, continue with passed account type
-        }
-      }
+      const signingInfo = await SecureKeyManager.getSigningInfo(
+        account.address,
+        this.getRequestNetworkId()
+      );
+      const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      const isRemoteSigner = allAccounts.some(
+        (acc) =>
+          acc.address === signingInfo.signingAddress &&
+          acc.type === AccountType.REMOTE_SIGNER
+      );
 
       if (isRemoteSigner) {
         this.updateState({
@@ -592,10 +579,6 @@ export class TransactionAuthController {
       let ledgerInfo: LedgerSigningInfo | null = null;
 
       try {
-        const signingInfo = await SecureKeyManager.getSigningInfo(
-          account.address
-        );
-
         // Try to get Ledger signing info
         if (signingInfo.signingAccountId) {
           ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
@@ -2157,27 +2140,21 @@ export class TransactionAuthController {
       // Build the unsigned transactions based on request type
       const unsignedTxns = await this.buildUnsignedTransactions();
 
-      // Determine the actual signer address
-      // For rekeyed accounts, we need to use the auth address as the signer
-      let signerAddress = this.currentRequest.account.address;
-      const account = this.currentRequest.account;
-
-      if (account.type === AccountType.REKEYED) {
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        if (rekeyedAccount.authAddress) {
-          signerAddress = rekeyedAccount.authAddress;
-        }
-      }
+      const networkId = this.getRequestNetworkId();
+      const rekey = await getRekeyStateStrict(
+        this.currentRequest.account.address,
+        networkId
+      );
+      const signerAddress =
+        rekey.authAddress ?? this.currentRequest.account.address;
 
       // Create the remote signer request
       const signerRequest = await RemoteSignerService.createSigningRequest(
         unsignedTxns,
         [signerAddress], // signer addresses - use auth address for rekeyed accounts
         {
-          authAddresses:
-            account.type === AccountType.REKEYED
-              ? [(account as RekeyedAccountMetadata).authAddress]
-              : undefined,
+          networkId,
+          authAddresses: rekey.authAddress ? [rekey.authAddress] : undefined,
           description: this.getTransactionDescription(),
         }
       );

@@ -41,6 +41,7 @@ const mockLedgerVerifyApp = jest.fn(async (..._args: unknown[]) => {});
 const mockGetConnectedDevice = jest.fn((): { id: string } | null => null);
 const mockGetDevices = jest.fn((): unknown[] => []);
 
+const mockProbeSecretPresence = jest.fn(async (..._args: unknown[]) => false);
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getCurrentWallet: () => mockGetCurrentWallet(),
@@ -52,6 +53,8 @@ jest.mock('@/services/wallet', () => ({
 jest.mock('../AccountSecureStorage', () => ({
   AccountSecureStorage: {
     getPrivateKey: (...args: unknown[]) => mockSecureGetPrivateKey(...args),
+    probeSecretPresenceStrict: (...args: unknown[]) =>
+      mockProbeSecretPresence(...args),
     clearAll: jest.fn(async () => {}),
   },
 }));
@@ -62,11 +65,19 @@ jest.mock('@/services/network', () => ({
   },
 }));
 
-jest.mock('@/services/wallet/rekeyManager', () => ({
-  __esModule: true,
-  default: {
-    findSigningAccount: (...args: unknown[]) => mockFindSigningAccount(...args),
+jest.mock('@/store/walletStore', () => ({
+  getRekeyStateStrict: async (address: string, networkId: NetworkId) => {
+    const { deriveRekeyState } = require('@/services/wallet/rekeyState');
+    const info = await mockNetworkGetInstance(networkId).getAccountRekeyInfo(
+      address,
+      true
+    );
+    const wallet = await mockGetCurrentWallet();
+    return deriveRekeyState(address, info, wallet?.accounts ?? []);
   },
+}));
+jest.mock('@/services/ledger/simpleLedgerSigner', () => ({
+  simpleLedgerSigner: {},
 }));
 
 jest.mock('@/services/ledger/algorand', () => ({
@@ -93,6 +104,7 @@ import nacl from 'tweetnacl';
 import { NetworkId } from '@/types/network';
 import { AccountType, AuthenticationRequiredError } from '@/types/wallet';
 import { SecureKeyManager } from '../keyManager';
+import { SimplifiedKeyManager } from '../simplifiedKeyManager';
 import {
   makeAccount,
   paymentTxn,
@@ -900,10 +912,11 @@ describe('SecureKeyManager.getMnemonic', () => {
 // ===========================================================================
 
 describe('SecureKeyManager.getSigningInfo', () => {
+  const networkId = NetworkId.VOI_MAINNET;
   it('reports a standard account as directly signable', async () => {
     setWallet([standardAccount(OWNER, 'acc-owner')]);
 
-    const info = await SecureKeyManager.getSigningInfo(OWNER.addr);
+    const info = await SecureKeyManager.getSigningInfo(OWNER.addr, networkId);
 
     expect(info).toMatchObject({
       canSign: true,
@@ -913,22 +926,25 @@ describe('SecureKeyManager.getSigningInfo', () => {
     });
   });
 
-  it('resolves a REKEYED account via RekeyManager.findSigningAccount', async () => {
+  it('ignores stale REKEYED authority on the request network', async () => {
     const rekeyed = {
       id: 'acc-rekeyed',
       address: REKEYED.addr,
       publicKey: Buffer.from(REKEYED.pk).toString('hex'),
       type: AccountType.REKEYED,
-      authAddress: AUTH.addr,
-      canSign: true,
+      authAddress: OTHER.addr,
+      canSign: false,
       isHidden: false,
       createdAt: '2024-01-01T00:00:00.000Z',
       lastUsed: '2024-01-01T00:00:00.000Z',
     };
     setWallet([rekeyed, standardAccount(AUTH, 'acc-auth')]);
-    mockFindSigningAccount.mockReturnValue({ id: 'acc-auth' });
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: AUTH.addr,
+    });
 
-    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr);
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr, networkId);
 
     expect(info).toMatchObject({
       canSign: true,
@@ -937,12 +953,97 @@ describe('SecureKeyManager.getSigningInfo', () => {
       isRekeyed: true,
       authAddress: AUTH.addr,
     });
+    expect(
+      await SimplifiedKeyManager.getSigningInfo(REKEYED.addr, networkId)
+    ).toEqual({ ...info, requiresLedger: false });
+    expect(
+      await SimplifiedKeyManager.validateSigningCapability(
+        [REKEYED.addr],
+        networkId
+      )
+    ).toMatchObject({ canSign: true });
+    expect(
+      await SimplifiedKeyManager.getSigningAccounts(networkId)
+    ).toMatchObject([{ canSign: true }, { canSign: true }]);
+    expect(mockGetAccountRekeyInfo).toHaveBeenCalledWith(REKEYED.addr, true);
+  });
+
+  // TASK-396 U2a bug-hunter P2: a REKEYED record from ANOTHER network's rekey
+  // keeps its original key; unrekeyed on the request network, that key signs.
+  it.each([
+    [true, true],
+    [false, false],
+  ])(
+    'a REKEYED record unrekeyed on the request network signs with its retained key (key present: %s)',
+    async (present, canSign) => {
+      const rekeyed = {
+        id: 'acc-rekeyed',
+        address: REKEYED.addr,
+        publicKey: Buffer.from(REKEYED.pk).toString('hex'),
+        type: AccountType.REKEYED,
+        authAddress: AUTH.addr,
+        canSign: true,
+        isHidden: false,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        lastUsed: '2024-01-01T00:00:00.000Z',
+      };
+      setWallet([rekeyed, standardAccount(AUTH, 'acc-auth')]);
+      mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+      mockProbeSecretPresence.mockResolvedValue(present);
+
+      const info = await SecureKeyManager.getSigningInfo(
+        REKEYED.addr,
+        networkId
+      );
+
+      expect(info.canSign).toBe(canSign);
+      expect(info.isRekeyed).toBe(false);
+      expect(info.signingAddress).toBe(REKEYED.addr);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('acc-rekeyed');
+    }
+  );
+
+  it('a failing key probe for that REKEYED record propagates (fail closed)', async () => {
+    setWallet([
+      {
+        id: 'acc-rekeyed',
+        address: REKEYED.addr,
+        publicKey: Buffer.from(REKEYED.pk).toString('hex'),
+        type: AccountType.REKEYED,
+        authAddress: AUTH.addr,
+        canSign: true,
+        isHidden: false,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        lastUsed: '2024-01-01T00:00:00.000Z',
+      },
+    ]);
+    mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
+    mockProbeSecretPresence.mockRejectedValue(new Error('keychain'));
+
+    await expect(
+      SecureKeyManager.getSigningInfo(REKEYED.addr, networkId)
+    ).rejects.toThrow('keychain');
+  });
+
+  it('propagates strict fetch failure for every signing preflight reader', async () => {
+    const networkId = NetworkId.ALGORAND_MAINNET;
+    setWallet([standardAccount(OWNER, 'acc-owner')]);
+    mockGetAccountRekeyInfo.mockRejectedValue(new Error('offline'));
+    for (const read of [
+      () => SecureKeyManager.getSigningInfo(OWNER.addr, networkId),
+      () => SimplifiedKeyManager.getSigningInfo(OWNER.addr, networkId),
+      () =>
+        SimplifiedKeyManager.validateSigningCapability([OWNER.addr], networkId),
+      () => SimplifiedKeyManager.getSigningAccounts(networkId),
+    ])
+      await expect(read()).rejects.toThrow('offline');
+    expect(mockNetworkGetInstance).toHaveBeenCalledWith(networkId);
   });
 
   it('reports a Ledger account as signable (connection deferred)', async () => {
     setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
 
-    const info = await SecureKeyManager.getSigningInfo(LEDGER.addr);
+    const info = await SecureKeyManager.getSigningInfo(LEDGER.addr, networkId);
 
     expect(info).toMatchObject({
       canSign: true,
@@ -962,10 +1063,7 @@ describe('SecureKeyManager.getSigningInfo', () => {
       authAddress: AUTH.addr,
     });
 
-    const info = await SecureKeyManager.getSigningInfo(
-      REKEYED.addr,
-      NetworkId.VOI_MAINNET
-    );
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr, networkId);
 
     expect(info).toMatchObject({
       canSign: true,
@@ -975,7 +1073,7 @@ describe('SecureKeyManager.getSigningInfo', () => {
       authAddress: AUTH.addr,
     });
     // Rekey state was resolved on the caller-specified network.
-    expect(mockNetworkGetInstance).toHaveBeenCalledWith(NetworkId.VOI_MAINNET);
+    expect(mockNetworkGetInstance).toHaveBeenCalledWith(networkId);
   });
 
   it('reports a watch account rekeyed to a signer we do NOT hold as not signable', async () => {
@@ -985,7 +1083,7 @@ describe('SecureKeyManager.getSigningInfo', () => {
       authAddress: OTHER.addr, // signer absent from the wallet
     });
 
-    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr);
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr, networkId);
 
     expect(info).toMatchObject({
       canSign: false,
@@ -999,7 +1097,7 @@ describe('SecureKeyManager.getSigningInfo', () => {
     setWallet([watchAccount(REKEYED, 'acc-watch')]);
     mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
 
-    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr);
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr, networkId);
 
     expect(info).toMatchObject({ canSign: false, isRekeyed: false });
   });
@@ -1007,7 +1105,7 @@ describe('SecureKeyManager.getSigningInfo', () => {
   it('returns a safe non-signable result when no wallet exists', async () => {
     mockGetCurrentWallet.mockResolvedValue(null);
 
-    const info = await SecureKeyManager.getSigningInfo(OWNER.addr);
+    const info = await SecureKeyManager.getSigningInfo(OWNER.addr, networkId);
 
     expect(info).toMatchObject({
       canSign: false,

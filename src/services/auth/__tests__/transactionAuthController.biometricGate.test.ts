@@ -70,7 +70,25 @@ jest.mock('@/services/ledger/algorand', () => ({
   ledgerAlgorandService: { verifyApp: jest.fn() },
   LedgerAlgorandService: { isCurrentlySigningTransaction: jest.fn() },
 }));
-jest.mock('@/services/remoteSigner', () => ({ RemoteSignerService: {} }));
+jest.mock('@/store/walletStore', () => ({ getRekeyStateStrict: jest.fn() }));
+jest.mock('@/services/network', () => ({
+  NetworkService: {
+    getInstance: jest.fn(() => ({
+      getCurrentNetworkId: () => 'voi-mainnet',
+      getAccountRekeyInfo: jest.fn(async () => ({
+        isRekeyed: true,
+        authAddress: 'AUTH-X',
+      })),
+      submitTransaction: jest.fn(async () => ({
+        txId: 'tx',
+        confirmed: true,
+      })),
+    })),
+  },
+}));
+jest.mock('@/services/transactions', () => ({
+  TransactionService: { buildTransaction: jest.fn() },
+}));
 
 import * as LocalAuthentication from 'expo-local-authentication';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
@@ -79,6 +97,16 @@ import { SecureKeyManager } from '@/services/secure/keyManager';
 import { UnifiedTransactionSigner } from '@/services/transactions/unifiedSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { ledgerTransportService } from '@/services/ledger/transport';
+import {
+  paymentTxn,
+  makeAccount,
+  SUGGESTED_PARAMS,
+} from '@/__tests__/fixtures/algorand';
+import { RemoteSignerService } from '@/services/remoteSigner';
+import { NetworkService } from '@/services/network';
+import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
+import { getRekeyStateStrict } from '@/store/walletStore';
+import { NetworkId } from '@/types/network';
 import { AccountType } from '@/types/wallet';
 import { TransactionAuthController } from '../transactionAuthController';
 
@@ -264,5 +292,114 @@ describe('software signing failure is never Ledger-shaped (PR6.1, onError + onCo
     expect(s.ledgerError).toBeNull(); // NEVER "Please unlock your Ledger device"
     expect(s.ledgerStatus).not.toBe('error'); // not Ledger-shaped
     expect(s.error?.message).toContain('Enter your PIN');
+  });
+});
+
+describe('request-network signing authority', () => {
+  it('fails closed when auth preflight cannot resolve authority', async () => {
+    (SecureKeyManager.getSigningInfo as jest.Mock).mockRejectedValueOnce(
+      new Error('offline')
+    );
+    const controller = new TransactionAuthController();
+    await controller.initializeSigningFlow({
+      ...softwareRequest,
+      networkId: NetworkId.ALGORAND_MAINNET,
+    });
+    expect(controller.getState()).toMatchObject({
+      state: 'error',
+      isRemoteSignerFlow: false,
+    });
+    expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledWith(
+      'ADDR',
+      NetworkId.ALGORAND_MAINNET
+    );
+  });
+
+  it('ignores stale metadata in flow selection and stamps the request network in the QR envelope', async () => {
+    const sender = makeAccount('u2a-sender');
+    const auth = makeAccount('u2a-auth');
+    const txn = paymentTxn(sender.addr, {
+      suggestedParams: {
+        ...SUGGESTED_PARAMS,
+        genesisHash: new Uint8Array(
+          Buffer.from(
+            NETWORK_CONFIGURATIONS[NetworkId.ALGORAND_MAINNET].genesisHash,
+            'base64'
+          )
+        ),
+      },
+    });
+    const { TransactionService } = require('@/services/transactions');
+    TransactionService.buildTransaction.mockResolvedValue({ txn });
+    (SecureKeyManager.getSigningInfo as jest.Mock).mockResolvedValue({
+      signingAddress: auth.addr,
+    });
+    (MultiAccountWalletService.getAllAccounts as jest.Mock).mockResolvedValue([
+      { address: auth.addr, type: AccountType.REMOTE_SIGNER },
+    ]);
+    (getRekeyStateStrict as jest.Mock).mockResolvedValue({
+      isRekeyed: true,
+      authAddress: auth.addr,
+      canSign: true,
+    });
+    const controller = new TransactionAuthController();
+    await controller.initializeSigningFlow({
+      type: 'voi_transfer',
+      account: {
+        address: sender.addr,
+        type: AccountType.REKEYED,
+        authAddress: 'STALE',
+        canSign: false,
+      },
+      transferParams: { networkId: NetworkId.ALGORAND_MAINNET },
+    } as any);
+    const request = controller.getState().remoteSignerRequest!;
+    expect(controller.getState().isRemoteSignerFlow).toBe(true);
+    expect(request.gh).toBe(
+      NETWORK_CONFIGURATIONS[NetworkId.ALGORAND_MAINNET].genesisHash
+    );
+    expect(request).toMatchObject({
+      net: NetworkId.ALGORAND_MAINNET,
+      txns: [{ s: auth.addr, a: auth.addr }],
+    });
+    expect(getRekeyStateStrict).toHaveBeenCalledWith(
+      sender.addr,
+      NetworkId.ALGORAND_MAINNET
+    );
+    expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledWith(
+      sender.addr,
+      NetworkId.ALGORAND_MAINNET
+    );
+    const net = NetworkService.getInstance(request.net as NetworkId);
+    (NetworkService.getInstance as jest.Mock).mockReturnValue(net);
+    (net.getAccountRekeyInfo as jest.Mock).mockResolvedValue({
+      isRekeyed: true,
+      authAddress: auth.addr,
+    });
+    await controller.processRemoteSignerResponse({
+      v: request.v,
+      t: 'res',
+      id: request.id,
+      ts: Date.now(),
+      ok: true,
+      sigs: [{ i: 0, b: Buffer.from(txn.signTxn(auth.sk)).toString('base64') }],
+    });
+    expect(controller.getState().state).toBe('completed');
+    expect(controller.getState().result?.transactionId).toBe('tx');
+    expect(NetworkService.getInstance).toHaveBeenLastCalledWith(
+      NetworkId.ALGORAND_MAINNET
+    );
+    expect(net.getAccountRekeyInfo).toHaveBeenCalledWith(sender.addr, true);
+    expect(
+      (await RemoteSignerService.createSigningRequest([txn], [sender.addr])).net
+    ).toBe(NetworkId.VOI_MAINNET);
+    (getRekeyStateStrict as jest.Mock).mockRejectedValueOnce(
+      new Error('offline')
+    );
+    await (controller as any).initializeRemoteSignerFlow();
+    expect(controller.getState()).toMatchObject({
+      state: 'error',
+      remoteSignerStatus: 'error',
+    });
   });
 });

@@ -835,7 +835,8 @@ export default function SendScreen() {
         }
 
         const info = await SecureKeyManager.getSigningInfo(
-          activeAccount.address
+          activeAccount.address,
+          effectiveNetworkId
         );
         if (isCancelled) return;
 
@@ -888,7 +889,7 @@ export default function SendScreen() {
       isCancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on activeAccount?.address (the content-stable slice that scopes the signing-capability probe); the full activeAccount object is read at the current commit and omitted on purpose to avoid identity-churn re-runs, matching the file's hand-mirror pattern (TASK-246; no money-path logic changes).
-  }, [activeAccount?.address]);
+  }, [activeAccount?.address, effectiveNetworkId]);
 
   // Get network config for selected network
   const selectedNetworkConfig = React.useMemo(() => {
