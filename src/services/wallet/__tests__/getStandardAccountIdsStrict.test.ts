@@ -229,6 +229,29 @@ describe('getBlobAccountIdsStrict (TASK-419)', () => {
       },
     ],
     [
+      'a null account entry',
+      () => {
+        mockStore[WALLET_KEY] = JSON.stringify({ accounts: [null] });
+      },
+    ],
+    [
+      'a non-string id',
+      () => {
+        mockStore[WALLET_KEY] = JSON.stringify({
+          accounts: [{ id: 7, type: 'rekeyed' }],
+        });
+      },
+    ],
+    [
+      'a duplicated id across types (TASK-419 bug-hunter)',
+      () => {
+        mockStore[WALLET_KEY] = blob([
+          { id: 'dup', type: 'standard' },
+          { id: 'dup', type: 'watch' },
+        ]);
+      },
+    ],
+    [
       'accounts not an array',
       () => {
         mockStore[WALLET_KEY] = JSON.stringify({ accounts: {} });

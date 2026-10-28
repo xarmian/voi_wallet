@@ -2286,6 +2286,14 @@ export class MultiAccountWalletService {
         throw new Error('Corrupt wallet blob: malformed account entry');
       }
     }
+    // A duplicated id is CORRUPTION: pruneStandardAccounts filters by id, so a
+    // STANDARD phantom sharing an id with another entry would remove both.
+    if (
+      new Set(parsed.accounts.map((acc) => acc.id)).size !==
+      parsed.accounts.length
+    ) {
+      throw new Error('Corrupt wallet blob: duplicate account id');
+    }
     return {
       standardIds: parsed.accounts
         .filter((acc) => acc.type === AccountType.STANDARD)
