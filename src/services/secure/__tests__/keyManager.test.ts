@@ -877,6 +877,96 @@ describe('SecureKeyManager.getMnemonic', () => {
     expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
   });
 
+  it.each([true, false])(
+    'reads the original REKEYED key (originalOwner: %s) and wipes it',
+    async (originalOwner) => {
+      const account = {
+        ...watchAccount(REKEYED, 'acc-rekeyed'),
+        type: AccountType.REKEYED,
+        authAddress: AUTH.addr,
+        originalOwner,
+        // A stale cached phrase must never bypass actual retrieval for REKEYED.
+        mnemonic: AUTH.mnemonic,
+      };
+      keyRegistry.set(account.id, REKEYED.sk);
+      setWallet([account, standardAccount(AUTH, 'acc-auth')]);
+      const mnemonic = await SecureKeyManager.getMnemonic(REKEYED.addr);
+      expect(addressForMnemonic(mnemonic)).toBe(REKEYED.addr);
+      expect(mockSecureGetPrivateKey).toHaveBeenCalledWith(account.id);
+      expect(handedOutKeys).toHaveLength(1);
+      expect(handedOutKeys[0].every((byte) => byte === 0)).toBe(true);
+    }
+  );
+
+  // Codex pass A (U2): a valid key that belongs to ANOTHER account must never
+  // be shown as this account's phrase.
+  it.each([AccountType.REKEYED, AccountType.STANDARD])(
+    'refuses (and wipes) a stored key that does not belong to the %s account',
+    async (type) => {
+      const account =
+        type === AccountType.REKEYED
+          ? {
+              ...watchAccount(REKEYED, 'acc-x'),
+              type: AccountType.REKEYED,
+              authAddress: AUTH.addr,
+            }
+          : { ...standardAccount(REKEYED, 'acc-x'), mnemonic: '' };
+      setWallet([account]);
+      const foreign = Uint8Array.from(AUTH.sk);
+      mockSecureGetPrivateKey.mockResolvedValueOnce(foreign);
+      await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+        'does not match this account'
+      );
+      expect(foreign.every((byte) => byte === 0)).toBe(true);
+    }
+  );
+
+  // Codex confirm (U2): the phrase comes from the SEED (first 32 bytes). A key
+  // made of a foreign seed + this account's public half must be refused.
+  it('refuses a key whose seed is foreign even though its public half matches', async () => {
+    setWallet([
+      { ...watchAccount(REKEYED, 'acc-x'), type: AccountType.REKEYED },
+    ]);
+    const spliced = new Uint8Array(64);
+    spliced.set(AUTH.sk.slice(0, 32), 0);
+    spliced.set(REKEYED.sk.slice(32, 64), 32);
+    mockSecureGetPrivateKey.mockResolvedValueOnce(spliced);
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'does not match this account'
+    );
+    expect(spliced.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('wipes a REKEYED key even when mnemonic derivation fails', async () => {
+    setWallet([
+      { ...watchAccount(REKEYED, 'acc-rekeyed'), type: AccountType.REKEYED },
+    ]);
+    const invalidKey = REKEYED.sk.slice(0, 31);
+    mockSecureGetPrivateKey.mockResolvedValueOnce(invalidKey);
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'Failed to retrieve recovery phrase'
+    );
+    expect(invalidKey.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('propagates missing and unavailable REKEYED key errors even for an original owner', async () => {
+    setWallet([
+      {
+        ...watchAccount(REKEYED, 'acc-rekeyed'),
+        type: AccountType.REKEYED,
+        originalOwner: true,
+        mnemonic: AUTH.mnemonic,
+      },
+    ]);
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'Failed to retrieve recovery phrase: No key stored'
+    );
+    mockSecureGetPrivateKey.mockRejectedValueOnce(new Error('vault locked'));
+    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      'vault locked'
+    );
+  });
+
   it('rejects for account types without a recovery phrase', async () => {
     setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
 

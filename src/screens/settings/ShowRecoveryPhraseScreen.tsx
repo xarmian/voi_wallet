@@ -14,7 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { useActiveAccount } from '@/store/walletStore';
+import { AccountType } from '@/types/wallet';
+import { useAccounts, useActiveAccount } from '@/store/walletStore';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -42,6 +43,10 @@ export default function ShowRecoveryPhraseScreen() {
 
   const activeAccount = useActiveAccount();
   const targetAddress = accountAddress ?? activeAccount?.address;
+  const accounts = useAccounts();
+  const targetAccount = accounts.find(
+    (account) => account.address === targetAddress
+  );
 
   const [mnemonic, setMnemonic] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -235,6 +240,16 @@ export default function ShowRecoveryPhraseScreen() {
             it with anyone.
           </Text>
         </View>
+
+        {targetAccount?.type === AccountType.REKEYED && (
+          <View style={styles.warningContainer}>
+            <Text style={styles.warningText}>
+              {
+                "This phrase restores this account's original key. It does not recover the current signing authority on networks where the account is rekeyed."
+              }
+            </Text>
+          </View>
+        )}
 
         {isLoading ? (
           <View style={styles.loadingContainer}>

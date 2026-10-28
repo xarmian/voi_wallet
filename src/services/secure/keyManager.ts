@@ -13,6 +13,7 @@ import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import algosdk, { Transaction } from 'algosdk';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
 
@@ -591,9 +592,12 @@ export class SecureKeyManager {
         throw new Error('Account not found');
       }
 
-      // Check if it's a standard account with mnemonic
-      // TEMPORARY: Allow any account type to check if private key exists
-      if (account.type !== 'standard' && account.type !== 'watch') {
+      // Retrieval, rather than ownership metadata, proves a REKEYED key exists.
+      if (
+        account.type !== 'standard' &&
+        account.type !== 'watch' &&
+        account.type !== 'rekeyed'
+      ) {
         throw new Error('This account type does not have a recovery phrase');
       }
 
@@ -601,15 +605,18 @@ export class SecureKeyManager {
         account as import('@/types/wallet').StandardAccountMetadata;
 
       const storedMnemonic = standardAccount.mnemonic?.trim();
-      if (storedMnemonic) {
+      if (account.type !== 'rekeyed' && storedMnemonic) {
         return storedMnemonic;
       }
 
       let privateKey: Uint8Array | null = null;
       try {
-        privateKey = await AccountSecureStorage.getPrivateKey(
-          standardAccount.id
-        );
+        privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+        // Never show a phrase for a key that isn't this account's own: a
+        // mismatched key would display a plausible but WRONG recovery phrase.
+        if (!keyBelongsToAddress(privateKey, account.address)) {
+          throw new Error('The stored key does not match this account');
+        }
         const derivedMnemonic = algosdk.secretKeyToMnemonic(privateKey);
         return derivedMnemonic;
       } catch (privateKeyError) {

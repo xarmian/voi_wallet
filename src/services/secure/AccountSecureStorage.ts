@@ -9,6 +9,7 @@ import {
 
 // Buffer polyfill for extension compatibility
 import { Buffer } from 'buffer';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 
 // Use crypto-js (pure JS, works in RN/Expo and browser) with explicit side-effect imports
 import CryptoJS from 'crypto-js';
@@ -1149,7 +1150,7 @@ export class AccountSecureStorage {
   }
 
   /**
-   * Atomic guarded secret write for a NEW STANDARD account (TASK-220). In ONE
+   * Atomic guarded secret write for a NEW key-bearing account (TASK-220). In ONE
    * key-mutation-mutex task: (1) abort if a reset advanced the generation since
    * the creation began (reset wins); (2) reject a duplicate pending id (another
    * attempt owns it — prevents an earlier attempt's rollback deleting a later
@@ -1449,7 +1450,18 @@ export class AccountSecureStorage {
         lastAccessed,
       };
 
-      // Encrypt and store private key for Standard accounts.
+      // TASK-421 (b) U2: a REKEYED account's key must be ITS OWN original key.
+      // Reject a key whose seed and public half don't both derive this address,
+      // so a signer's (or any other) key can never be stored under its id.
+      if (account.type === AccountType.REKEYED && privateKey) {
+        if (!keyBelongsToAddress(privateKey, account.address)) {
+          throw new AccountStorageError(
+            'Private key does not belong to this account'
+          );
+        }
+      }
+
+      // Encrypt and store explicitly supplied keys for STANDARD or REKEYED accounts.
       //
       // ALWAYS write the legacy device-key (Format A) envelope — NEVER v2 here
       // (Codex P1-2). A device-key blob is PIN-independent and can be read back
@@ -1463,7 +1475,11 @@ export class AccountSecureStorage {
       // ordered either fully before the enumeration (→ re-wrapped) or fully
       // after the commit (→ stays device-readable, upgraded on the next
       // enumerate). Either way the key is readable — never lost (P1-B).
-      if (account.type === AccountType.STANDARD && privateKey) {
+      if (
+        (account.type === AccountType.STANDARD ||
+          account.type === AccountType.REKEYED) &&
+        privateKey
+      ) {
         const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
         await this.saveSecret(account.id, {
           accountId: account.id,
