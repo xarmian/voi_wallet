@@ -51,6 +51,7 @@ import { storage } from '@/platform';
 import {
   AccountType,
   StandardAccountMetadata,
+  RekeyedAccountMetadata,
   isBackupVerified,
 } from '@/types/wallet';
 import { MultiAccountWalletService } from '../index';
@@ -180,7 +181,7 @@ describe('backupVerified migration on existing installs', () => {
     ).toBe(false);
   });
 
-  it('does not add the field to non-standard accounts', async () => {
+  it('does not add the field to WATCH accounts', async () => {
     persistBlob([legacyWatchAccount('watch-1')]);
 
     await MultiAccountWalletService.getCurrentWallet();
@@ -203,6 +204,88 @@ describe('backupVerified migration on existing installs', () => {
       (byId['acc-verified'] as StandardAccountMetadata).backupVerified
     ).toBe(true);
     expect(byId['watch-1']).not.toHaveProperty('backupVerified');
+  });
+});
+
+function rekeyedAccount(id: string): RekeyedAccountMetadata {
+  return {
+    ...legacyWatchAccount(id),
+    type: AccountType.REKEYED,
+    authAddress: algosdk.generateAccount().addr.toString(),
+    canSign: true,
+  };
+}
+
+describe('REKEYED backup metadata', () => {
+  it('round-trips each account’s own flags without changing STANDARD bytes', async () => {
+    const standard = {
+      ...legacyStandardAccount('standard', true),
+      backupVerified: true,
+      backupCreatedAt: '2026-01-02T00:00:00.000Z',
+    };
+    const accounts: RekeyedAccountMetadata[] = [
+      {
+        ...rekeyedAccount('verified'),
+        hasBackup: false,
+        backupVerified: true,
+        backupCreatedAt: '2026-02-01T00:00:00.000Z',
+      },
+      {
+        ...rekeyedAccount('unverified'),
+        hasBackup: true,
+        backupVerified: false,
+      },
+    ];
+    // The existing sanitizer removes and reinserts mnemonic at the end.
+    delete (standard as Partial<StandardAccountMetadata>).mnemonic;
+    standard.mnemonic = '';
+    persistBlob([standard, ...accounts, rekeyedAccount('legacy')]);
+    const wallet = await MultiAccountWalletService.getCurrentWallet();
+    expect(wallet!.accounts.slice(1, 3)).toEqual(accounts);
+    expect(JSON.stringify(storedAccounts()[0])).toBe(JSON.stringify(standard));
+    expect(storedAccounts().slice(1, 3)).toEqual(accounts);
+    // Exercise the normal persistence path as well as read-repair.
+    await MultiAccountWalletService.persistRestoredWallet(wallet!);
+    expect(
+      (await MultiAccountWalletService.getCurrentWallet())!.accounts.slice(1, 3)
+    ).toEqual(accounts);
+  });
+
+  it.each([undefined, null, 'true', 'false', 1, 0, {}, []])(
+    'normalizes missing/invalid verification %p without inventing other flags',
+    async (backupVerified) => {
+      const account = rekeyedAccount('legacy-rekeyed');
+      persistBlob([{ ...account, backupVerified }]);
+      const wallet = await MultiAccountWalletService.getCurrentWallet();
+      expect(wallet!.accounts[0]).toEqual({
+        ...account,
+        backupVerified: false,
+      });
+      expect(storedAccounts()[0]).toEqual({
+        ...account,
+        backupVerified: false,
+      });
+      const writes = (storage.setItem as jest.Mock).mock.calls.length;
+      await MultiAccountWalletService.getCurrentWallet();
+      await MultiAccountWalletService.getCurrentWallet();
+      expect(storage.setItem).toHaveBeenCalledTimes(writes);
+    }
+  );
+
+  it('never derives verification from hasBackup or a verified auth account', async () => {
+    const signer = { ...rekeyedAccount('signer'), backupVerified: true };
+    const delegated = {
+      ...rekeyedAccount('delegated'),
+      authAddress: signer.address,
+      hasBackup: true,
+    };
+    persistBlob([signer, delegated]);
+    await MultiAccountWalletService.getCurrentWallet();
+    expect(storedAccounts()[0].backupVerified).toBe(true);
+    expect(storedAccounts()[1]).toEqual({
+      ...delegated,
+      backupVerified: false,
+    });
   });
 });
 
