@@ -59,6 +59,7 @@ import NetworkSelector from '@/components/network/NetworkSelector';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
+import { redactError } from '@/utils/logRedaction';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -164,7 +165,7 @@ export default function SwapScreen() {
         }
       } catch (error) {
         if (!isCancelled) {
-          console.error('Error loading network balance:', error);
+          console.error('Error loading network balance:', redactError(error));
           setNetworkBalanceError(
             error instanceof Error ? error.message : 'Failed to load balance'
           );
@@ -512,7 +513,7 @@ export default function SwapScreen() {
       } catch (error) {
         console.warn(
           '[handleNetworkChange] Failed to fetch new network balance:',
-          error
+          redactError(error)
         );
       }
     }
@@ -871,7 +872,7 @@ export default function SwapScreen() {
         });
       });
     } catch (error) {
-      console.error('Error executing swap:', error);
+      console.error('Error executing swap:', redactError(error));
       // TASK-41: keep the "Swap Failed" framing but map the body — a raw
       // algod/aggregator string here is the least actionable message in the app.
       const { message } = toErrorAlert(error, {
@@ -919,7 +920,7 @@ export default function SwapScreen() {
         });
       }
     } catch (error) {
-      console.error('Error getting balance:', error);
+      console.error('Error getting balance:', redactError(error));
     }
 
     return '0';

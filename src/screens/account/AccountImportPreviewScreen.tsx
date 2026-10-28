@@ -28,6 +28,7 @@ import {
 import { AccountSecureStorage } from '@/services/secure';
 import AccountImportItem from '@/components/account/AccountImportItem';
 import { useTheme } from '@/contexts/ThemeContext';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 type AccountImportPreviewScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -216,7 +217,10 @@ export default function AccountImportPreviewScreen({
             results.success++;
           }
         } catch (error) {
-          console.error(`Failed to import account ${account.address}:`, error);
+          console.error(
+            `Failed to import account ${redactAddress(account.address)}:`,
+            redactError(error)
+          );
           results.failed++;
           results.errors.push({
             account: account.address,

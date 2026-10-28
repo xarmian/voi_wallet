@@ -27,6 +27,7 @@ import {
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
 import { hapticNotify } from '@/utils/haptics';
+import { redactError } from '@/utils/logRedaction';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -209,7 +210,7 @@ export default function UnifiedTransactionAuthModal({
         hapticNotify('error');
       }
     } catch (error) {
-      console.error('PIN authentication error:', error);
+      console.error('PIN authentication error:', redactError(error));
       setPin('');
     } finally {
       setIsVerifying(false);
@@ -220,7 +221,7 @@ export default function UnifiedTransactionAuthModal({
     try {
       await controller.authenticateWithBiometrics();
     } catch (error) {
-      console.error('Biometric authentication error:', error);
+      console.error('Biometric authentication error:', redactError(error));
     }
   };
 
@@ -262,7 +263,10 @@ export default function UnifiedTransactionAuthModal({
           payload as RemoteSignerResponse
         );
       } catch (error) {
-        console.error('Failed to process remote signer response:', error);
+        console.error(
+          'Failed to process remote signer response:',
+          redactError(error)
+        );
       }
     },
     [controller]

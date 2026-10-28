@@ -39,7 +39,7 @@ const deserializeNumeric = (
     } catch (error) {
       console.warn(
         'Failed to parse BigInt from navigation param:',
-        value,
+        { length: value.length },
         error
       );
     }
@@ -54,7 +54,7 @@ const ensureNumeric = (value: SerializableNumeric): number | bigint => {
   if (typeof parsed === 'undefined') {
     console.warn(
       'Falling back to 0 for unparseable navigation numeric value:',
-      value
+      typeof value
     );
     return 0;
   }

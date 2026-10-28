@@ -1,4 +1,5 @@
 import { shouldSkipForOffline } from '@/services/network/offline';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 export interface MimirAsset {
   name: string;
@@ -731,8 +732,8 @@ export class MimirApiService {
                 );
               } catch (err) {
                 console.error(
-                  `Failed to fetch balance for ${owner} on contract ${contractId}:`,
-                  err
+                  `Failed to fetch balance for ${redactAddress(owner)} on contract ${contractId}:`,
+                  redactError(err)
                 );
                 // Record the failure instead of writing '0': the caller must be
                 // able to distinguish "owner holds nothing" from "we don't know".

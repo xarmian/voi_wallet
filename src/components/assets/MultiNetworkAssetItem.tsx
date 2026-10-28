@@ -6,6 +6,7 @@ import { MappedAsset } from '@/services/token-mapping/types';
 import { formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
 import { getNetworkConfig } from '@/services/network/config';
+import { getNativeIconNetwork } from '@/utils/mappedAssetPrimary';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { NetworkId } from '@/types/network';
@@ -167,11 +168,12 @@ export default function MultiNetworkAssetItem({
       (asset.isMapped &&
         asset.sourceBalances.some((s) => s.balance.assetId === 0))
     ) {
-      // For mapped native tokens, use the primary network's icon as fallback
-      const primaryNetworkConfig = getNetworkConfig(asset.primaryNetwork);
+      // Use the icon of the network whose native token is in the group, not
+      // whichever network was processed first (GH #13 / TASK-391).
+      const nativeNetworkConfig = getNetworkConfig(getNativeIconNetwork(asset));
       return (
         <Image
-          source={primaryNetworkConfig.nativeTokenImage}
+          source={nativeNetworkConfig.nativeTokenImage}
           style={styles.assetImage}
         />
       );

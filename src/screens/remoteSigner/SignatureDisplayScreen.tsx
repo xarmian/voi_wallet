@@ -34,6 +34,7 @@ import {
 import { AccountType, AccountMetadata } from '@/types/wallet';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
+import { redactError } from '@/utils/logRedaction';
 
 type RouteParams = {
   SignatureDisplay: {
@@ -152,7 +153,7 @@ export default function SignatureDisplayScreen() {
         setResponse(successResponse);
         setScreenState('display');
       } catch (error) {
-        console.error('Signing failed:', error);
+        console.error('Signing failed:', redactError(error));
         setErrorMessage(
           error instanceof Error ? error.message : 'Signing failed'
         );

@@ -1,5 +1,6 @@
 import algosdk from 'algosdk';
 import { NetworkId } from '@/types/network';
+import { redactAddress } from '@/utils/logRedaction';
 
 // =============================================================================
 // Types
@@ -378,7 +379,7 @@ function parsePaymentUri(uri: string): Arc0090PaymentUri | null {
   }
 
   if (!isValidAddress && address) {
-    console.warn('Invalid address in payment URI:', address);
+    console.warn('Invalid address in payment URI:', redactAddress(address));
     return null;
   }
 

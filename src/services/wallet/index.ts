@@ -39,6 +39,7 @@ import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 /**
  * F-22 (TASK-179) — getCurrentWallet() memoization.
@@ -976,7 +977,7 @@ export class MultiAccountWalletService {
         getCurrentWalletParsesInFlight.delete(walletData);
       }
     } catch (error) {
-      console.error('Failed to get current wallet:', error);
+      console.error('Failed to get current wallet:', redactError(error));
       return null;
     }
   }
@@ -1452,7 +1453,7 @@ export class MultiAccountWalletService {
       if (walletResetEpoch === bumpedEpoch) {
         walletResetEpoch = bumpedEpoch - 1;
       }
-      console.error('Failed to clear wallet data:', error);
+      console.error('Failed to clear wallet data:', redactError(error));
       throw new Error(
         `Failed to clear wallet data: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1610,7 +1611,7 @@ export class MultiAccountWalletService {
 
       if (!canSign) {
         console.warn(
-          `Auth account ${authAccount.authAddress} not found in wallet. Import as watch-only.`
+          `Auth account ${redactAddress(authAccount.authAddress)} not found in wallet. Import as watch-only.`
         );
       }
 
@@ -1642,7 +1643,7 @@ export class MultiAccountWalletService {
 
       return accountMetadata;
     } catch (error) {
-      console.error('Failed to import auth account:', error);
+      console.error('Failed to import auth account:', redactError(error));
       throw error instanceof Error
         ? error
         : new Error('Failed to import auth account');
@@ -1807,7 +1808,7 @@ export class MultiAccountWalletService {
 
       return reportedAuthAddress.toUpperCase() === normalizedAuth.toUpperCase();
     } catch (error) {
-      console.error('Failed to verify rekey relationship', error);
+      console.error('Failed to verify rekey relationship', redactError(error));
       return false;
     }
   }
@@ -2078,7 +2079,10 @@ export class MultiAccountWalletService {
 
       return await this.migrateLegacyValue(key);
     } catch (error) {
-      console.error(`Failed to get stored value for key ${key}:`, error);
+      console.error(
+        `Failed to get stored value for key ${key}:`,
+        redactError(error)
+      );
       return null;
     }
   }
@@ -2355,7 +2359,7 @@ export class MultiAccountWalletService {
         } catch (error) {
           console.warn(
             'Failed to sanitize legacy wallet payload; not migrating',
-            error
+            redactError(error)
           );
           return null;
         }
@@ -2398,7 +2402,10 @@ export class MultiAccountWalletService {
       await secureStorage.deleteItem(key).catch(() => {});
       return legacyValue;
     } catch (error) {
-      console.error(`Failed to migrate legacy value for key ${key}:`, error);
+      console.error(
+        `Failed to migrate legacy value for key ${key}:`,
+        redactError(error)
+      );
       return null;
     }
   }

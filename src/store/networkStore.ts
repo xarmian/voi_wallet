@@ -14,7 +14,7 @@ import {
 } from '@/services/network/config';
 import { NetworkService } from '@/services/network';
 import { AppStorage } from '@/utils/storage';
-import { useWalletStore } from './walletStore';
+import { invalidateBalanceRequests, useWalletStore } from './walletStore';
 
 interface NetworkStoreState extends NetworkState {
   // Actions
@@ -87,6 +87,8 @@ export const useNetworkStore = create<NetworkStoreState>()(
 
         // If we're using a different network than the current one, switch to it
         if (networkService.getCurrentNetworkId() !== networkToUse) {
+          // TASK-59: no balance fetch issued before the switch may commit.
+          invalidateBalanceRequests();
           await networkService.switchNetwork(networkToUse);
         }
 
@@ -123,7 +125,11 @@ export const useNetworkStore = create<NetworkStoreState>()(
       set({ isSwitching: true });
 
       try {
-        // Switch the network service
+        // Switch the network service. First invalidate every in-flight balance
+        // fetch (TASK-59): one that straddles the switch must not land the old
+        // network's balances in the new network's UI or cache — including after
+        // a quick A→B→A, where the network id alone would match again.
+        invalidateBalanceRequests();
         const networkService = NetworkService.getInstance();
         await networkService.switchNetwork(networkId);
 

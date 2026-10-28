@@ -51,6 +51,7 @@ import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
+import { redactError } from '@/utils/logRedaction';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
@@ -299,7 +300,7 @@ export default function ClaimTokenScreen() {
         );
         setEstimatedFee(costEstimate.total);
       } catch (error) {
-        console.error('Failed to estimate fee:', error);
+        console.error('Failed to estimate fee:', redactError(error));
         setEstimatedFee(1000);
       }
     };

@@ -513,40 +513,14 @@ export class WalletConnectService extends EventEmitter {
         key: sessionKey,
       });
 
-      // Set up call_request listener on DeepLinkService
-      // This ensures navigation works the same way as during initial URI connection
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- breaks a REAL require cycle: @/services/deeplink imports this module, so a static import here would form a load-time circular dependency. (Contrast :463, whose "avoid circular dependencies" note is stale — WalletConnectV1Client is already statically imported at line 36.)
+      // Signing requests for the restored session go through the ONE v1
+      // `call_request` listener DeepLinkService owns (TASK-257). This used to
+      // add its own listener that both emitted `session_request` (which the
+      // app navigates on) AND navigated directly, so each request navigated
+      // twice, and a later re-pair stacked a second listener on the client.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- breaks a REAL require cycle: @/services/deeplink imports this module, so a static import here would form a load-time circular dependency.
       const DeepLinkService = require('@/services/deeplink').DeepLinkService;
-      const deepLinkService = DeepLinkService.getInstance();
-
-      v1Client.on('call_request', (callRequest) => {
-        // Transform v1 call_request format to match v2 format
-        const sessionData = v1Client.getSessionData();
-        const transformedRequest = {
-          id: callRequest.id,
-          topic: sessionData?.handshakeTopic || topic,
-          params: {
-            request: {
-              method: callRequest.method,
-              params: [callRequest.params],
-            },
-            chainId: sessionData?.chainId || 416001,
-          },
-        };
-
-        // Emit through both WalletConnectService (for potential listeners)
-        // AND directly navigate using DeepLinkService
-        this.emit('session_request', transformedRequest);
-
-        // Navigate to transaction request screen directly
-        deepLinkService['navigateToRoute']({
-          screen: 'WalletConnectTransactionRequest',
-          params: {
-            requestEvent: transformedRequest,
-            version: 1,
-          },
-        });
-      });
+      DeepLinkService.getInstance().attachV1CallRequests(v1Client, topic);
     } catch (error) {
       console.error('Failed to load v1 sessions:', redactError(error));
       // Don't throw - v1 session restoration failure shouldn't block app startup

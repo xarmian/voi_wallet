@@ -32,6 +32,7 @@ import {
   BackupError,
   RestoreResult,
 } from './types';
+import { redactAddress } from '@/utils/logRedaction';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -193,7 +194,7 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
         case AccountType.STANDARD: {
           if (!backupAccount.mnemonic) {
             console.warn(
-              `Skipping standard account ${backupAccount.address} - no mnemonic`
+              `Skipping standard account ${redactAddress(backupAccount.address)} - no mnemonic`
             );
             continue;
           }
@@ -345,14 +346,14 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
           // Validate required fields for remote signer accounts
           if (!backupAccount.signerDeviceId) {
             console.warn(
-              `Skipping remote signer account ${backupAccount.address} - missing signerDeviceId`
+              `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing signerDeviceId`
             );
             continue;
           }
 
           if (!backupAccount.pairedAt) {
             console.warn(
-              `Skipping remote signer account ${backupAccount.address} - missing pairedAt`
+              `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing pairedAt`
             );
             continue;
           }

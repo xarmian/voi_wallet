@@ -67,6 +67,7 @@ import NetworkAssetSelector from '@/components/send/NetworkAssetSelector';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { GlassButton } from '@/components/common/GlassButton';
 import { BlurredContainer } from '@/components/common/BlurredContainer';
+import { redactError } from '@/utils/logRedaction';
 
 interface SendScreenRouteParams {
   assetName?: string;
@@ -419,7 +420,7 @@ export default function SendScreen() {
         }
         console.error(
           '[SendScreen] Failed to load account balance for spendable math:',
-          error
+          redactError(error)
         );
       }
     })();
@@ -1382,7 +1383,10 @@ export default function SendScreen() {
       if (contextNftToken) {
         // For NFTs, ALWAYS use the NFT's network, not the global selected network
         if (!contextNftToken.networkId) {
-          console.error('NFT missing networkId:', contextNftToken);
+          console.error('NFT missing networkId:', {
+            contractId: contextNftToken.contractId,
+            tokenId: contextNftToken.tokenId,
+          });
           throw new Error('NFT is missing network information');
         }
         const cost = await TransactionService.estimateTransactionCost({
@@ -1425,7 +1429,7 @@ export default function SendScreen() {
 
       setEstimatedFee(cost.fee);
     } catch (error) {
-      console.error('Failed to estimate fee:', error);
+      console.error('Failed to estimate fee:', redactError(error));
     }
   };
 
@@ -1608,7 +1612,7 @@ export default function SendScreen() {
         mappingId: mappingId,
       });
     } catch (error) {
-      console.error('Error preparing transaction:', error);
+      console.error('Error preparing transaction:', redactError(error));
       // TASK-41: never surface the raw SDK/algod message here — it produces
       // strings like "TransactionPool.Remember: ... overspend ..." at the most
       // stressful moment in the app.

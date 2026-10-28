@@ -10,6 +10,7 @@ import {
   EnvoiCache,
   EnvoiCacheEntry,
 } from './types';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 export class EnvoiService {
   private static instance: EnvoiService;
@@ -334,7 +335,11 @@ export class EnvoiService {
         return null;
       }
 
-      console.error('Failed to resolve Envoi name:', address, error);
+      console.error(
+        'Failed to resolve Envoi name:',
+        redactAddress(address),
+        redactError(error)
+      );
       return null;
     } finally {
       this.pendingNameRequests.delete(address);

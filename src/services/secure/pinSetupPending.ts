@@ -42,6 +42,7 @@
 // only the literal marker string 'true'.
 
 import { storage } from '../../platform';
+import { redactError } from '@/utils/logRedaction';
 
 /** Plaintext AsyncStorage key for the restore-before-PIN breadcrumb. */
 export const PIN_SETUP_PENDING_KEY = 'pin_setup_pending';
@@ -139,7 +140,10 @@ export async function isPinSetupPending(): Promise<boolean> {
   try {
     return (await storage.getItem(PIN_SETUP_PENDING_KEY)) === PENDING_VALUE;
   } catch (error) {
-    console.warn('Failed to read pin_setup_pending breadcrumb:', error);
+    console.warn(
+      'Failed to read pin_setup_pending breadcrumb:',
+      redactError(error)
+    );
     return false;
   }
 }

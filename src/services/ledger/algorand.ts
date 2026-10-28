@@ -27,6 +27,7 @@ import {
   setLedgerSigningInProgress,
 } from './signingState';
 import { isLedgerTransportError } from '@/utils/errorMapping';
+import { redactError } from '@/utils/logRedaction';
 
 export interface LedgerAccountDerivation {
   address: string;
@@ -259,7 +260,7 @@ class LedgerAlgorandService {
         signedTransaction,
       };
     } catch (error) {
-      console.error('Ledger signTransaction error:', error);
+      console.error('Ledger signTransaction error:', redactError(error));
       throw this.normalizeLedgerError(error);
     } finally {
       // Always clear signing flag, even on error
@@ -385,7 +386,7 @@ class LedgerAlgorandService {
       } catch (error) {
         console.error(
           'Ledger ensureTransactionInstance: Failed to decode Uint8Array',
-          error
+          redactError(error)
         );
         throw new LedgerAccountError(
           `Failed to decode transaction bytes: ${error instanceof Error ? error.message : 'Unknown error'}`,

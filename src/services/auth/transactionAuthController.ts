@@ -33,6 +33,7 @@ import { RemoteSignerService } from '@/services/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { verifyRemoteSignerResponse } from '@/utils/signatureVerification';
 import { NetworkId } from '@/types/network';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Authentication states for transaction signing
@@ -1803,7 +1804,7 @@ export class TransactionAuthController {
               if (__DEV__) {
                 console.warn(
                   'Failed to (re)start Ledger discovery during retry preparation',
-                  startError
+                  redactError(startError)
                 );
               }
             });
@@ -1821,7 +1822,7 @@ export class TransactionAuthController {
             if (__DEV__) {
               console.error(
                 'Failed to restart Ledger discovery after signing error',
-                initError
+                redactError(initError)
               );
             }
           });
@@ -1999,7 +2000,10 @@ export class TransactionAuthController {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
       if (__DEV__) {
-        console.warn('Failed to stop Ledger discovery on cancel', stopError);
+        console.warn(
+          'Failed to stop Ledger discovery on cancel',
+          redactError(stopError)
+        );
       }
     }
 
@@ -2049,7 +2053,10 @@ export class TransactionAuthController {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
       if (__DEV__) {
-        console.warn('Failed to stop Ledger discovery during reset', stopError);
+        console.warn(
+          'Failed to stop Ledger discovery during reset',
+          redactError(stopError)
+        );
       }
     }
 

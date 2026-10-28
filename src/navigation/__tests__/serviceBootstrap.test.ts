@@ -52,8 +52,6 @@ const mockTxnQueue = {
   enqueue: jest.fn(async () => {}),
   setProcessing: jest.fn(async () => {}),
   isEmpty: jest.fn(async () => true),
-  peek: jest.fn(async () => null),
-  dequeue: jest.fn(async () => {}),
 };
 // Mutable app mode driven per test ('user' vs 'signer').
 let mockAppMode = 'user';

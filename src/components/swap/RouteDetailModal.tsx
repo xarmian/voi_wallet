@@ -188,7 +188,12 @@ export const RouteDetailModal: React.FC<RouteDetailModalProps> = ({
       if (steps.length === 0) {
         console.warn(
           'RouteDetailModal: No route steps generated. Route structure:',
-          route
+          {
+            type: route.type,
+            totalPools: route.totalPools,
+            pools: route.pools?.length,
+            hops: route.hops?.length,
+          }
         );
       } else {
         console.log(`RouteDetailModal: Generated ${steps.length} route steps`);

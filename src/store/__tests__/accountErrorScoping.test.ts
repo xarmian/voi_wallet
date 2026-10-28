@@ -126,7 +126,8 @@ describe('operation-scoped account errors (TASK-40)', () => {
 
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining('acc-1'),
-      expect.objectContaining({ message: 'algod is down' })
+      // TASK-290: the error is logged as its redacted message string.
+      expect.stringContaining('algod is down')
     );
   });
 

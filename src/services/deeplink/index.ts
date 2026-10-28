@@ -36,7 +36,11 @@ import { useWalletStore } from '@/store/walletStore';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
-import { createPendingRouteQueue, PendingRouteQueue } from './pendingRoute';
+import {
+  createPendingRouteQueue,
+  PendingRouteQueue,
+  RouteRun,
+} from './pendingRoute';
 
 // Log-redaction helpers (TASK-33): deep-link URIs and their parsed contents can
 // embed full addresses, amounts, notes and other PII. These keep debug logs
@@ -126,6 +130,11 @@ export class DeepLinkService {
   private navigationRefUnsubscribes: (() => void)[] = [];
   private untrackedNotificationCount = 0;
   private readonly routeQueue: PendingRouteQueue = this.createRouteQueue();
+  // TASK-257: the single v1 `call_request` listener and the client and
+  // pairing topic it currently serves (see attachV1CallRequests).
+  private v1CallRequestClient: WalletConnectV1Client | null = null;
+  private v1CallRequestTopic = '';
+  private signingDeliverySeq = 0;
 
   static getInstance(): DeepLinkService {
     if (!DeepLinkService.instance) {
@@ -195,6 +204,151 @@ export class DeepLinkService {
       await this.handleUrl(url);
     });
   }
+
+  /**
+   * Run `run` through the same cold-start queue as deep links (TASK-382):
+   * it waits for the navigation container to be ready instead of being
+   * dropped, runs in arrival order, and a repeat `key` while queued, running
+   * or just finished runs once. Keys are never logged.
+   */
+  deliverRoute(key: string, run: RouteRun): Promise<void> {
+    return this.routeQueue.deliver(key, run);
+  }
+
+  /**
+   * Deliver a WalletConnect signing request (or the startup queue drain)
+   * through the same cold-start queue (TASK-382/TASK-257). Each call gets its
+   * own route key: duplicate suppression for signing requests is
+   * TransactionRequestQueue.claim(), not the route key, so a redelivery after
+   * a FAILED delivery (claim released) is not swallowed by the route queue's
+   * completed-key window.
+   */
+  deliverSigningRequest(run: RouteRun): Promise<void> {
+    this.signingDeliverySeq += 1;
+    return this.routeQueue.deliver(
+      `wc:signing:${this.signingDeliverySeq}`,
+      run
+    );
+  }
+
+  /**
+   * Make this service the ONE owner of the v1 client's `call_request`
+   * listener (TASK-257). Both a fresh v1 pairing and a restored v1 session
+   * call this; the listener is removed before it is added, so re-pairing
+   * never stacks a second listener and each request is delivered once.
+   * `fallbackTopic` is the pairing topic used when the session data has no
+   * handshake topic.
+   */
+  attachV1CallRequests(
+    v1Client: WalletConnectV1Client,
+    fallbackTopic: string
+  ): void {
+    if (this.v1CallRequestClient && this.v1CallRequestClient !== v1Client) {
+      this.v1CallRequestClient.off('call_request', this.onV1CallRequest);
+    }
+    this.v1CallRequestClient = v1Client;
+    this.v1CallRequestTopic = fallbackTopic;
+    v1Client.off('call_request', this.onV1CallRequest);
+    v1Client.on('call_request', this.onV1CallRequest);
+  }
+
+  private onV1CallRequest = (callRequest: any): void => {
+    // Transform v1 call_request format to match v2 format
+    // v1 format: { id, method, params: transactions[] }
+    // v2 format: { id, topic, params: { request: { method, params: [transactions[]] }, chainId } }
+    const sessionData = this.v1CallRequestClient?.getSessionData();
+    const transformedRequest = {
+      id: callRequest.id,
+      topic: sessionData?.handshakeTopic || this.v1CallRequestTopic,
+      params: {
+        request: {
+          method: callRequest.method,
+          // Wrap transactions array in another array to match v2 format
+          params: [callRequest.params],
+        },
+        chainId: sessionData?.chainId || 416001, // Default to Algorand mainnet
+      },
+    };
+
+    // A request already queued or shown is not surfaced again (TASK-257).
+    // Same claim lifecycle as the boot's session_request handler: the claim
+    // stays while the request is shown or queued, and a failed delivery
+    // releases it so a redelivery can surface.
+    if (
+      !TransactionRequestQueue.claim(
+        transformedRequest.id,
+        transformedRequest.topic
+      )
+    ) {
+      console.log('[DeepLinkService] Duplicate V1 request ignored');
+      return;
+    }
+
+    void this.deliverSigningRequest(async () => {
+      let delivered = false;
+      try {
+        if (!this.navigationRef?.isReady()) {
+          console.error(
+            '[DeepLinkService] V1 transaction request not shown: navigation not ready'
+          );
+          return;
+        }
+        // Check if we're already on the TransactionRequestScreen
+        if (
+          this.navigationRef.getCurrentRoute()?.name ===
+          'WalletConnectTransactionRequest'
+        ) {
+          // Enqueue the request instead of navigating immediately; that
+          // screen takes it next. The claim stays: queued.
+          console.log(
+            '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
+          );
+          await TransactionRequestQueue.enqueue({
+            id: transformedRequest.id,
+            topic: transformedRequest.topic,
+            params: transformedRequest.params,
+            version: 1,
+          });
+          delivered = true;
+          return;
+        }
+
+        // Navigate to transaction request screen if not already there
+        delivered = await this.navigateToRoute({
+          screen: 'WalletConnectTransactionRequest',
+          params: {
+            requestEvent: transformedRequest,
+            version: 1,
+          },
+        });
+        if (delivered) {
+          TransactionRequestQueue.markDisplayed(
+            transformedRequest.id,
+            transformedRequest.topic
+          );
+        }
+      } finally {
+        if (!delivered) {
+          // Not shown and not queued: let a redelivery of it through.
+          TransactionRequestQueue.releaseClaim(
+            transformedRequest.id,
+            transformedRequest.topic
+          );
+        }
+      }
+    }).catch((error) => {
+      // The route queue never rejects; if it ever did, the handler above
+      // never ran, so the request was not delivered.
+      TransactionRequestQueue.releaseClaim(
+        transformedRequest.id,
+        transformedRequest.topic
+      );
+      console.error(
+        '[DeepLinkService] Failed to deliver V1 request:',
+        redactError(error)
+      );
+    });
+  };
 
   /**
    * Tear down the Linking subscription and the navigation-ready listeners
@@ -541,53 +695,9 @@ export class DeepLinkService {
         });
       });
 
-      // Listen for transaction signing requests (permanent listener)
-      v1Client.on('call_request', async (callRequest) => {
-        // Transform v1 call_request format to match v2 format
-        // v1 format: { id, method, params: transactions[] }
-        // v2 format: { id, topic, params: { request: { method, params: [transactions[]] }, chainId } }
-        const sessionData = v1Client.getSessionData();
-        const transformedRequest = {
-          id: callRequest.id,
-          topic: sessionData?.handshakeTopic || parsed.topic,
-          params: {
-            request: {
-              method: callRequest.method,
-              // Wrap transactions array in another array to match v2 format
-              params: [callRequest.params],
-            },
-            chainId: sessionData?.chainId || 416001, // Default to Algorand mainnet
-          },
-        };
-
-        // Check if we're already on the TransactionRequestScreen
-        if (this.navigationRef?.isReady()) {
-          const currentRoute = this.navigationRef.getCurrentRoute();
-
-          if (currentRoute?.name === 'WalletConnectTransactionRequest') {
-            // Enqueue the request instead of navigating immediately
-            console.log(
-              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
-            );
-            await TransactionRequestQueue.enqueue({
-              id: transformedRequest.id,
-              topic: transformedRequest.topic,
-              params: transformedRequest.params,
-              version: 1,
-            });
-            return;
-          }
-        }
-
-        // Navigate to transaction request screen if not already there
-        this.navigateToRoute({
-          screen: 'WalletConnectTransactionRequest',
-          params: {
-            requestEvent: transformedRequest,
-            version: 1,
-          },
-        });
-      });
+      // Transaction signing requests: one permanent listener, owned here
+      // and shared with session restore (TASK-257).
+      this.attachV1CallRequests(v1Client, parsed.topic);
 
       v1Client.once('error', (error) => {
         console.error(
@@ -1220,7 +1330,7 @@ export class DeepLinkService {
   private async navigateToRoute(
     route: DeepLinkRoute,
     options?: { replace?: boolean }
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Log route name + param keys only; param values can carry
     // recipient addresses, amounts, notes and keyreg key material.
     console.log(
@@ -1246,7 +1356,7 @@ export class DeepLinkService {
       if (!this.navigationRef?.isReady()) {
         // Unreachable in practice: whenReady() resolves only while ready.
         console.error('[DeepLink] Navigation not ready; route not delivered');
-        return;
+        return false;
       }
     }
 
@@ -1267,6 +1377,7 @@ export class DeepLinkService {
       console.log(
         '[DeepLink] navigateToRoute - navigation called successfully'
       );
+      return true;
     } catch (error) {
       console.error(
         '[DeepLink] navigateToRoute - Failed to navigate:',

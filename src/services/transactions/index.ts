@@ -29,6 +29,7 @@ import {
 import { ledgerTransportService } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { useWalletStore } from '@/store/walletStore';
+import { redactError } from '@/utils/logRedaction';
 
 export interface TransactionParams {
   from: string;
@@ -330,7 +331,7 @@ export class TransactionService {
       };
       return result;
     } catch (error) {
-      console.error('Failed to build VOI transaction:', error);
+      console.error('Failed to build VOI transaction:', redactError(error));
       throw new Error(
         `VOI transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -381,7 +382,7 @@ export class TransactionService {
       };
       return result;
     } catch (error) {
-      console.error('Failed to build ASA transaction:', error);
+      console.error('Failed to build ASA transaction:', redactError(error));
       throw new Error(
         `ASA transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -414,7 +415,7 @@ export class TransactionService {
         needsMbrPayment: result.needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-200 transaction:', error);
+      console.error('Failed to build ARC-200 transaction:', redactError(error));
       throw new Error(
         `ARC-200 transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -451,7 +452,7 @@ export class TransactionService {
         needsMbrPayment: result.needsMbrPayment,
       };
     } catch (error) {
-      console.error('Failed to build ARC-72 transaction:', error);
+      console.error('Failed to build ARC-72 transaction:', redactError(error));
       throw new Error(
         `ARC-72 transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -537,7 +538,10 @@ export class TransactionService {
         return result;
       }
     } catch (error) {
-      console.error('TransactionService: Failed to sign transaction:', error);
+      console.error(
+        'TransactionService: Failed to sign transaction:',
+        redactError(error)
+      );
 
       // Propagate known domain errors unchanged
       if (error instanceof LedgerDeviceNotConnectedError) {
@@ -573,7 +577,10 @@ export class TransactionService {
             account.address,
             networkId
           ).catch((e) => {
-            console.warn('Recovery: failed to read signing info:', e);
+            console.warn(
+              'Recovery: failed to read signing info:',
+              redactError(e)
+            );
             return null;
           });
 
@@ -583,7 +590,10 @@ export class TransactionService {
             targetIdentifier,
             { lookupByAddress: !signingInfo?.signingAccountId }
           ).catch((e) => {
-            console.warn('Recovery: failed to get Ledger signing info:', e);
+            console.warn(
+              'Recovery: failed to get Ledger signing info:',
+              redactError(e)
+            );
             return null;
           });
 
@@ -595,7 +605,7 @@ export class TransactionService {
                 .catch((connectError) => {
                   console.warn(
                     'Recovery: Failed to reconnect to Ledger device:',
-                    connectError
+                    redactError(connectError)
                   );
                 });
             }
@@ -604,7 +614,7 @@ export class TransactionService {
             } catch (verifyError) {
               console.warn(
                 'Recovery: Failed to verify Algorand app on Ledger:',
-                verifyError
+                redactError(verifyError)
               );
 
               // If wrong app is open (BOLOS/other), only stop retrying if this is the last attempt
@@ -736,7 +746,7 @@ export class TransactionService {
       return { txId, confirmed };
     } catch (error) {
       const userRejected = TransactionService.isLedgerUserRejected(error);
-      console.error('Failed to send transaction:', error);
+      console.error('Failed to send transaction:', redactError(error));
       if (!userRejected) {
         try {
           TransactionService.notifyTransactionFailure(
@@ -951,7 +961,10 @@ export class TransactionService {
               }
             }
           } catch (error) {
-            console.warn('Failed to check recipient ASA opt-in status:', error);
+            console.warn(
+              'Failed to check recipient ASA opt-in status:',
+              redactError(error)
+            );
             // Don't fail validation if we can't check - the network will reject it anyway
           }
         }
@@ -983,7 +996,7 @@ export class TransactionService {
         }
       }
     } catch (error) {
-      console.error('Failed to validate transaction:', error);
+      console.error('Failed to validate transaction:', redactError(error));
       errors.push('Failed to validate account balance');
     }
 
@@ -1065,7 +1078,7 @@ export class TransactionService {
         total,
       };
     } catch (error) {
-      console.error('Failed to estimate transaction cost:', error);
+      console.error('Failed to estimate transaction cost:', redactError(error));
       throw new Error(
         `Cost estimation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1205,7 +1218,7 @@ export class TransactionService {
       TransactionService.cacheTransaction(cacheKey, result);
       return result;
     } catch (error) {
-      console.error('Failed to build rekey transaction:', error);
+      console.error('Failed to build rekey transaction:', redactError(error));
       throw new Error(
         `Rekey transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1264,7 +1277,10 @@ export class TransactionService {
       TransactionService.cacheTransaction(cacheKey, result);
       return result;
     } catch (error) {
-      console.error('Failed to build rekey reverse transaction:', error);
+      console.error(
+        'Failed to build rekey reverse transaction:',
+        redactError(error)
+      );
       throw new Error(
         `Rekey reverse transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1312,7 +1328,10 @@ export class TransactionService {
         txnBytes,
       };
     } catch (error) {
-      console.error('Failed to build verification transaction:', error);
+      console.error(
+        'Failed to build verification transaction:',
+        redactError(error)
+      );
       throw new Error(
         `Verification transaction build failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1479,7 +1498,10 @@ export class TransactionService {
         errors.push('Transaction would violate minimum balance requirement');
       }
     } catch (error) {
-      console.error('Failed to validate rekey transaction:', error);
+      console.error(
+        'Failed to validate rekey transaction:',
+        redactError(error)
+      );
       errors.push('Failed to validate transaction requirements');
     }
 
@@ -1556,7 +1578,7 @@ export class TransactionService {
       return { txId, confirmed };
     } catch (error) {
       const userRejected = TransactionService.isLedgerUserRejected(error);
-      console.error('Failed to send rekey transaction:', error);
+      console.error('Failed to send rekey transaction:', redactError(error));
       if (!userRejected) {
         try {
           TransactionService.notifyTransactionFailure(
@@ -1613,7 +1635,7 @@ export class TransactionService {
           .catch((error) =>
             console.warn(
               'Failed to refresh balance after transaction success:',
-              error
+              redactError(error)
             )
           );
       });
@@ -1705,7 +1727,10 @@ export class TransactionService {
       return { txId, confirmed };
     } catch (error) {
       const userRejected = TransactionService.isLedgerUserRejected(error);
-      console.error('Failed to send reverse rekey transaction:', error);
+      console.error(
+        'Failed to send reverse rekey transaction:',
+        redactError(error)
+      );
       if (!userRejected) {
         try {
           TransactionService.notifyTransactionFailure(

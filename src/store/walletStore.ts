@@ -45,6 +45,7 @@ import {
 } from '@/services/notifications';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { realtimeService } from '@/services/realtime';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -109,6 +110,69 @@ const isLatestMultiNetworkRequest = (
   accountId: string,
   token: number
 ): boolean => multiNetworkRequestSeq.get(accountId) === token;
+
+/**
+ * Commit guard for single-network balance fetches (TASK-59 / R-05).
+ *
+ * A balance fetch takes seconds, and the network can switch underneath it:
+ * NetworkService mutates its shared instance in place, so a request issued on
+ * network A can resolve after the wallet is on B (or on A again, after A→B→A)
+ * and land A's balances in B's UI and persisted cache. Each fetch therefore
+ * takes a token — the network it was issued on, the balance epoch, and a
+ * per-account request id — and commits only while all three are still current:
+ * - `networkId`: the active network has not changed since issue;
+ * - `epoch`: no network switch happened in between (catches A→B→A, where the
+ *   network id alone matches again). `invalidateBalanceRequests` bumps it;
+ * - `requestId`: no newer fetch for the same account was issued since, so an
+ *   older response (e.g. a slow batch refresh) can't overwrite a fresher one.
+ */
+interface BalanceRequestToken {
+  networkId: NetworkId;
+  epoch: number;
+  requestId: number;
+}
+
+let balanceEpoch = 0;
+const balanceRequestSeq = new Map<string, number>();
+
+const beginBalanceRequest = (
+  accountId: string,
+  networkId: NetworkId
+): BalanceRequestToken => {
+  const requestId = (balanceRequestSeq.get(accountId) ?? 0) + 1;
+  balanceRequestSeq.set(accountId, requestId);
+  return { networkId, epoch: balanceEpoch, requestId };
+};
+
+/** Still the newest balance request for this account (ignores network). */
+const isLatestBalanceRequest = (
+  accountId: string,
+  token: BalanceRequestToken
+): boolean => balanceRequestSeq.get(accountId) === token.requestId;
+
+const isCurrentBalanceRequest = (
+  accountId: string,
+  token: BalanceRequestToken
+): boolean =>
+  token.epoch === balanceEpoch &&
+  isLatestBalanceRequest(accountId, token) &&
+  NetworkService.getInstance().getCurrentNetworkId() === token.networkId;
+
+/**
+ * Invalidate one account's in-flight balance fetches (e.g. on deletion, so a
+ * late commit can't recreate the deleted account's accountStates entry).
+ */
+const invalidateAccountBalanceRequests = (accountId: string): void => {
+  balanceRequestSeq.set(accountId, (balanceRequestSeq.get(accountId) ?? 0) + 1);
+};
+
+/**
+ * Invalidate every in-flight single-network balance fetch so none of them can
+ * commit. Called by the network store BEFORE it switches networks.
+ */
+export const invalidateBalanceRequests = (): void => {
+  balanceEpoch += 1;
+};
 
 const toTransactionsError = (
   error: unknown,
@@ -421,17 +485,63 @@ const loadPersistedBalanceCache = async (): Promise<
   return {};
 };
 
-const persistBalanceToStorage = async (
+// Persists are read-modify-write of ONE AsyncStorage blob, so concurrent ones
+// (a batch refresh persists every account at once) would drop each other's
+// entries. Chain them so each reads the previous one's write (TASK-59).
+//
+// EVERY writer or remover of BALANCE_CACHE_KEY goes through this chain — the
+// cache clears included — so a clear can never be overtaken by a deferred write
+// that had already started its setItem (the clear would silently not stick).
+let balancePersistQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Run one balance-cache storage operation after every earlier one settles.
+ * The caller sees the operation's own outcome; the chain itself never rejects,
+ * so a failed operation can't wedge later ones.
+ */
+const enqueueBalanceCacheOp = (op: () => Promise<void>): Promise<void> => {
+  const run = balancePersistQueue.then(op);
+  balancePersistQueue = run.catch(() => {});
+  return run;
+};
+
+const persistBalanceToStorage = (
   accountId: string,
   balance: AccountBalance,
   lastUpdated: number,
-  networkId: NetworkId
+  networkId: NetworkId,
+  // Re-checked right before the write: a network switch can clear the cache
+  // after the result was committed to state but before this deferred persist
+  // runs, and a stale balance must not be written back (TASK-59).
+  isStillCurrent: () => boolean
+): Promise<void> => {
+  // writeBalanceToStorage catches its own errors, so this never rejects.
+  return enqueueBalanceCacheOp(() =>
+    writeBalanceToStorage(
+      accountId,
+      balance,
+      lastUpdated,
+      networkId,
+      isStillCurrent
+    )
+  );
+};
+
+const writeBalanceToStorage = async (
+  accountId: string,
+  balance: AccountBalance,
+  lastUpdated: number,
+  networkId: NetworkId,
+  isStillCurrent: () => boolean
 ) => {
   try {
+    if (!isStillCurrent()) return;
     const cacheKey = getSingleNetworkCacheKey(accountId, networkId);
 
     // Load existing cache
     const existingCache = await loadPersistedBalanceCache();
+    // No await between this check and the write below.
+    if (!isStillCurrent()) return;
 
     // Update with new balance data (using network-specific key)
     const updatedCache = {
@@ -987,13 +1097,15 @@ export const useWalletStore = create<WalletState>()(
         await MultiAccountWalletService.deleteAccount(accountId);
         const wallet = await MultiAccountWalletService.getCurrentWallet();
 
-        // Remove account state
-        const { accountStates } = get();
-        delete accountStates[accountId];
-
-        set({
-          wallet,
-          accountStates: { ...accountStates },
+        // Remove account state. Invalidate its in-flight balance fetches in the
+        // same synchronous step, so none can commit afterwards and recreate the
+        // entry; and remove it functionally (the old code `delete`d from the
+        // live state object, mutating it in place) (TASK-59).
+        invalidateAccountBalanceRequests(accountId);
+        set((state) => {
+          const nextAccountStates = { ...state.accountStates };
+          delete nextAccountStates[accountId];
+          return { wallet, accountStates: nextAccountStates };
         });
 
         // Unsubscribe deleted account from notifications
@@ -1185,7 +1297,9 @@ export const useWalletStore = create<WalletState>()(
       // matches the fetched network exactly as it did before this change.)
       const networkService = NetworkService.getInstance();
       const keyNetworkId = networkService.getCurrentNetworkId();
-      const inFlightKey = `${accountId}:${keyNetworkId}`;
+      // The epoch is part of the key too: after A→B→A a caller must not join a
+      // load issued before the switches, whose result the commit guard drops.
+      const inFlightKey = `${accountId}:${keyNetworkId}:${balanceEpoch}`;
 
       // In-flight dedup: concurrent callers (HomeScreen mount, pull-to-refresh,
       // SendScreen, the transactionSuccess force-refresh) for the same
@@ -1200,48 +1314,102 @@ export const useWalletStore = create<WalletState>()(
         return existingLoad;
       }
 
+      // TASK-59: issued on the key network; commits below only while current.
+      const requestToken = beginBalanceRequest(accountId, keyNetworkId);
+      const currentNetworkId = requestToken.networkId;
+
+      // A stale result is dropped. If this was still the account's newest
+      // request (only the network moved on), nothing else will clear the
+      // loading flags it raised, so clear them here.
+      const settleStaleRequest = () => {
+        if (!isLatestBalanceRequest(accountId, requestToken)) return;
+        set((state) => {
+          const current = state.accountStates[accountId];
+          if (
+            !current ||
+            (!current.isBalanceLoading && !current.isBackgroundRefreshing)
+          ) {
+            return state;
+          }
+          return {
+            accountStates: {
+              ...state.accountStates,
+              [accountId]: {
+                ...current,
+                isBalanceLoading: false,
+                isBackgroundRefreshing: false,
+              },
+            },
+          };
+        });
+      };
+
+      // Functional per-account write: merges into the LATEST state, so an
+      // interleaved update (another account's load, a network-switch cache
+      // clear) is never overwritten by a snapshot taken before an await.
+      const patchAccountState = (patch: Partial<AccountUIState>) => {
+        set((state) => ({
+          accountStates: {
+            ...state.accountStates,
+            [accountId]: {
+              ...(state.accountStates[accountId] ?? accountState),
+              ...patch,
+            },
+          },
+        }));
+      };
+
       const loadPromise = (async () => {
         try {
           // Resolve account fresh from service (repairs missing addresses if needed)
           const account = await MultiAccountWalletService.getAccount(accountId);
+
+          if (!isCurrentBalanceRequest(accountId, requestToken)) {
+            settleStaleRequest();
+            return;
+          }
 
           // Determine loading state based on cache availability
           const shouldShowLoading = !hasExistingBalance || forceRefresh;
           const shouldShowBackgroundRefresh =
             hasExistingBalance && !forceRefresh;
 
-          set({
-            accountStates: {
-              ...accountStates,
-              [accountId]: {
-                ...accountState,
-                isBalanceLoading: shouldShowLoading,
-                isBackgroundRefreshing: shouldShowBackgroundRefresh,
-                lastError: null,
-                balanceError: null,
-              },
-            },
+          patchAccountState({
+            isBalanceLoading: shouldShowLoading,
+            isBackgroundRefreshing: shouldShowBackgroundRefresh,
+            lastError: null,
+            balanceError: null,
           });
 
-          // Re-read the network right before the fetch so the balance is
-          // persisted under the network it was actually fetched on (a switch
-          // during the getAccount await above must not persist under the stale
-          // key-network). The dedup key already isolated cross-network callers.
-          const currentNetworkId = networkService.getCurrentNetworkId();
           const balance = await networkService.getAccountBalance(
             account.address
           );
 
+          // A fetch that straddled a network switch (or was superseded by a
+          // newer fetch for this account) must not land: drop it before the
+          // rekey persist, the state write and the cache persist.
+          if (!isCurrentBalanceRequest(accountId, requestToken)) {
+            settleStaleRequest();
+            return;
+          }
+
           // Process rekey information if available (both rekeyed and non-rekeyed states)
-          let updatedWallet = get().wallet;
-          if (balance.rekeyInfo && updatedWallet) {
+          const currentWallet = get().wallet;
+          if (balance.rekeyInfo && currentWallet) {
             // Update the account with rekey information
             const updatedAccount =
               await rekeyManager.updateAccountWithRekeyInfo(
                 account,
                 balance.rekeyInfo,
-                updatedWallet
+                currentWallet
               );
+
+            // Re-checked after the await: stale rekey metadata must not be
+            // persisted or applied either.
+            if (!isCurrentBalanceRequest(accountId, requestToken)) {
+              settleStaleRequest();
+              return;
+            }
 
             let shouldPersistMetadata = account.type !== updatedAccount.type;
 
@@ -1272,57 +1440,61 @@ export const useWalletStore = create<WalletState>()(
               }
             }
 
-            // Update the wallet with the new account metadata
-            const updatedAccounts = updatedWallet.accounts.map((acc) =>
-              acc.id === accountId ? updatedAccount : acc
+            // Update the wallet with the new account metadata — functionally,
+            // against the latest wallet: the rekey awaits above could have
+            // interleaved another wallet change (label, new account, …).
+            set((state) =>
+              state.wallet
+                ? {
+                    wallet: {
+                      ...state.wallet,
+                      accounts: state.wallet.accounts.map((acc) =>
+                        acc.id === accountId ? updatedAccount : acc
+                      ),
+                    },
+                  }
+                : state
             );
 
-            updatedWallet = { ...updatedWallet, accounts: updatedAccounts };
+            // The rekey awaits gave the network another chance to move on.
+            if (!isCurrentBalanceRequest(accountId, requestToken)) {
+              settleStaleRequest();
+              return;
+            }
 
-            set({
-              wallet: updatedWallet,
-              accountStates: {
-                ...get().accountStates,
-                [accountId]: {
-                  ...get().accountStates[accountId],
-                  balance,
-                  isBalanceLoading: false,
-                  isBackgroundRefreshing: false,
-                  balanceLastUpdated: now,
-                },
-              },
+            patchAccountState({
+              balance,
+              isBalanceLoading: false,
+              isBackgroundRefreshing: false,
+              balanceLastUpdated: now,
             });
 
             // Persist the updated balance cache with network ID
             setTimeout(() => {
-              persistBalanceToStorage(
+              void persistBalanceToStorage(
                 accountId,
                 balance,
                 now,
-                currentNetworkId
+                currentNetworkId,
+                () => isCurrentBalanceRequest(accountId, requestToken)
               );
             }, 0);
           } else {
-            set({
-              accountStates: {
-                ...get().accountStates,
-                [accountId]: {
-                  ...get().accountStates[accountId],
-                  balance,
-                  isBalanceLoading: false,
-                  isBackgroundRefreshing: false,
-                  balanceLastUpdated: now,
-                },
-              },
+            patchAccountState({
+              balance,
+              isBalanceLoading: false,
+              isBackgroundRefreshing: false,
+              balanceLastUpdated: now,
             });
 
             // Persist the updated balance cache with network ID
             setTimeout(() => {
-              persistBalanceToStorage(
+              void persistBalanceToStorage(
                 accountId,
                 balance,
                 now,
-                currentNetworkId
+                currentNetworkId,
+                () => isCurrentBalanceRequest(accountId, requestToken)
               );
             }, 0);
           }
@@ -1336,26 +1508,21 @@ export const useWalletStore = create<WalletState>()(
           // for want of one line.
           console.error(
             `Failed to load balance for account ${accountId}:`,
-            error
+            redactError(error)
           );
-          const { accountStates: latestAccountStates } = get();
-          set({
-            accountStates: {
-              ...latestAccountStates,
-              [accountId]: {
-                ...latestAccountStates[accountId],
-                lastError:
-                  error instanceof Error
-                    ? error.message
-                    : 'Failed to load balance',
-                balanceError:
-                  error instanceof Error
-                    ? error.message
-                    : 'Failed to load balance',
-                isBalanceLoading: false,
-                isBackgroundRefreshing: false,
-              },
-            },
+          // A stale request's failure is as irrelevant as its success: don't
+          // paint an error banner over the network/request that replaced it.
+          if (!isCurrentBalanceRequest(accountId, requestToken)) {
+            settleStaleRequest();
+            return;
+          }
+          const message =
+            error instanceof Error ? error.message : 'Failed to load balance';
+          patchAccountState({
+            lastError: message,
+            balanceError: message,
+            isBalanceLoading: false,
+            isBackgroundRefreshing: false,
           });
         }
       })();
@@ -1715,7 +1882,10 @@ export const useWalletStore = create<WalletState>()(
             },
           },
         });
-        console.error('Failed to load more asset transactions:', error);
+        console.error(
+          'Failed to load more asset transactions:',
+          redactError(error)
+        );
       }
     },
 
@@ -1928,17 +2098,28 @@ export const useWalletStore = create<WalletState>()(
             },
           },
         });
-        console.error('Failed to load more transactions:', error);
+        console.error('Failed to load more transactions:', redactError(error));
       }
     },
 
     refreshAllBalances: async () => {
-      const { wallet, accountStates } = get();
+      const { wallet } = get();
       if (!wallet) return;
 
       const networkService = NetworkService.getInstance();
       const currentNetworkId = networkService.getCurrentNetworkId();
       const now = Date.now();
+
+      // TASK-59: every account's fetch takes a commit token up front. The batch
+      // used to snapshot accountStates here and write the whole map back after
+      // seconds of fetching, discarding interleaved updates — including the
+      // network-switch cache clear, so old-network balances reappeared.
+      const tokens = new Map(
+        wallet.accounts.map((account) => [
+          account.id,
+          beginBalanceRequest(account.id, currentNetworkId),
+        ])
+      );
 
       // Fetch all balances in parallel without individual state updates
       const balancePromises = wallet.accounts.map(async (account) => {
@@ -1970,112 +2151,142 @@ export const useWalletStore = create<WalletState>()(
 
       const results = await Promise.allSettled(balancePromises);
 
-      // Prepare batch state update
-      const updatedAccountStates: Record<string, AccountUIState> = {
-        ...accountStates,
-      };
-      const rekeyUpdates: { account: AccountMetadata; balance: any }[] = [];
-      let updatedWallet: Wallet | null = get().wallet;
+      // Keep only results whose request is still current; a stale one (network
+      // switched, or a newer fetch for that account was issued) is dropped.
+      const patches = new Map<string, Partial<AccountUIState>>();
+      const rekeyUpdates: {
+        account: AccountMetadata;
+        balance: AccountBalance;
+        token: BalanceRequestToken;
+      }[] = [];
 
-      // Process all results
       for (const result of results) {
-        if (result.status === 'fulfilled') {
-          const { accountId, account, balance, error } = result.value;
-          const currentState =
-            updatedAccountStates[accountId] || createInitialAccountState();
+        if (result.status !== 'fulfilled') continue;
+        const { accountId, account, balance, error } = result.value;
+        const token = tokens.get(accountId);
+        if (!token || !isCurrentBalanceRequest(accountId, token)) continue;
 
-          if (error) {
-            // Update with error
-            updatedAccountStates[accountId] = {
-              ...currentState,
-              lastError: error,
-              balanceError: error,
-              isBalanceLoading: false,
-              isBackgroundRefreshing: false,
-            };
-          } else if (balance) {
-            // Update with successful balance
-            updatedAccountStates[accountId] = {
-              ...currentState,
-              balance,
-              isBalanceLoading: false,
-              isBackgroundRefreshing: false,
-              balanceLastUpdated: now,
-              lastError: null,
-              balanceError: null,
-            };
+        if (error) {
+          patches.set(accountId, {
+            lastError: error,
+            balanceError: error,
+            isBalanceLoading: false,
+            isBackgroundRefreshing: false,
+          });
+        } else if (balance) {
+          patches.set(accountId, {
+            balance,
+            isBalanceLoading: false,
+            isBackgroundRefreshing: false,
+            balanceLastUpdated: now,
+            lastError: null,
+            balanceError: null,
+          });
 
-            // Collect rekey updates for later processing
-            if (balance.rekeyInfo && updatedWallet) {
-              rekeyUpdates.push({ account, balance });
-            }
-
-            // Persist balance to storage asynchronously
-            setTimeout(() => {
-              persistBalanceToStorage(
-                accountId,
-                balance,
-                now,
-                currentNetworkId
-              );
-            }, 0);
+          // Collect rekey updates for later processing
+          if (balance.rekeyInfo) {
+            rekeyUpdates.push({ account, balance, token });
           }
+
+          // Persist balance to storage asynchronously
+          setTimeout(() => {
+            void persistBalanceToStorage(
+              accountId,
+              balance,
+              now,
+              currentNetworkId,
+              () => isCurrentBalanceRequest(accountId, token)
+            );
+          }, 0);
         }
+      }
+
+      // Functional per-account merge into the LATEST state. No await separates
+      // the currency check above from this write.
+      if (patches.size > 0) {
+        set((state) => {
+          const nextAccountStates = { ...state.accountStates };
+          for (const [accountId, patch] of patches) {
+            nextAccountStates[accountId] = {
+              ...(nextAccountStates[accountId] ?? createInitialAccountState()),
+              ...patch,
+            };
+          }
+          return { accountStates: nextAccountStates };
+        });
       }
 
       // Process rekey updates if any
-      if (rekeyUpdates.length > 0 && updatedWallet) {
-        for (const { account, balance } of rekeyUpdates) {
-          const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
-            account,
-            balance.rekeyInfo,
-            updatedWallet
-          );
+      const updatedAccountsById = new Map<string, AccountMetadata>();
+      for (const { account, balance, token } of rekeyUpdates) {
+        const latestWallet = get().wallet;
+        if (!latestWallet || !balance.rekeyInfo) continue;
+        // Earlier iterations awaited: skip results that went stale meanwhile.
+        if (!isCurrentBalanceRequest(account.id, token)) continue;
+        // Each update sees the ones before it, as the old accumulating loop did.
+        const walletForRekey: Wallet = {
+          ...latestWallet,
+          accounts: latestWallet.accounts.map(
+            (acc) => updatedAccountsById.get(acc.id) ?? acc
+          ),
+        };
 
-          let shouldPersistMetadata = account.type !== updatedAccount.type;
+        const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
+          account,
+          balance.rekeyInfo,
+          walletForRekey
+        );
+        // Re-checked after the await, before anything is persisted.
+        if (!isCurrentBalanceRequest(account.id, token)) continue;
 
-          if (
-            !shouldPersistMetadata &&
-            updatedAccount.type === AccountType.REKEYED &&
-            account.type === AccountType.REKEYED
-          ) {
-            const existingRekeyed = account as RekeyedAccountMetadata;
-            const newRekeyed = updatedAccount as RekeyedAccountMetadata;
+        let shouldPersistMetadata = account.type !== updatedAccount.type;
 
-            shouldPersistMetadata =
-              existingRekeyed.authAddress !== newRekeyed.authAddress ||
-              existingRekeyed.canSign !== newRekeyed.canSign ||
-              existingRekeyed.rekeyedAt !== newRekeyed.rekeyedAt;
-          }
+        if (
+          !shouldPersistMetadata &&
+          updatedAccount.type === AccountType.REKEYED &&
+          account.type === AccountType.REKEYED
+        ) {
+          const existingRekeyed = account as RekeyedAccountMetadata;
+          const newRekeyed = updatedAccount as RekeyedAccountMetadata;
 
-          if (shouldPersistMetadata) {
-            try {
-              await MultiAccountWalletService.updateAccountMetadata(
-                updatedAccount
-              );
-            } catch (persistError) {
-              console.warn(
-                'Failed to persist rekey metadata update:',
-                persistError
-              );
-            }
-          }
-
-          // Update wallet with rekey metadata. Annotate explicitly: the
-          // in-loop reassignment of `updatedWallet` below would otherwise make
-          // this initializer self-referential (TS7022).
-          const updatedAccounts: AccountMetadata[] = updatedWallet.accounts.map(
-            (acc) => (acc.id === account.id ? updatedAccount : acc)
-          );
-          updatedWallet = { ...updatedWallet, accounts: updatedAccounts };
+          shouldPersistMetadata =
+            existingRekeyed.authAddress !== newRekeyed.authAddress ||
+            existingRekeyed.canSign !== newRekeyed.canSign ||
+            existingRekeyed.rekeyedAt !== newRekeyed.rekeyedAt;
         }
+
+        if (shouldPersistMetadata) {
+          try {
+            await MultiAccountWalletService.updateAccountMetadata(
+              updatedAccount
+            );
+          } catch (persistError) {
+            console.warn(
+              'Failed to persist rekey metadata update:',
+              persistError
+            );
+          }
+        }
+
+        updatedAccountsById.set(account.id, updatedAccount);
       }
 
-      // Single batch state update with all balance changes
-      set({
-        accountStates: updatedAccountStates,
-        ...(updatedWallet !== get().wallet && { wallet: updatedWallet }),
-      });
+      // Apply rekey metadata functionally against the latest wallet, so a wallet
+      // change made during the awaits above is kept.
+      if (updatedAccountsById.size > 0) {
+        set((state) =>
+          state.wallet
+            ? {
+                wallet: {
+                  ...state.wallet,
+                  accounts: state.wallet.accounts.map(
+                    (acc) => updatedAccountsById.get(acc.id) ?? acc
+                  ),
+                },
+              }
+            : state
+        );
+      }
     },
 
     // Envoi name management
@@ -2687,7 +2898,7 @@ export const useWalletStore = create<WalletState>()(
         ) {
           console.error(
             '[WalletStore] Stale multi-network balance load failed:',
-            error
+            redactError(error)
           );
           return;
         }
@@ -2713,7 +2924,7 @@ export const useWalletStore = create<WalletState>()(
         });
         console.error(
           '[WalletStore] Failed to load multi-network balance:',
-          error
+          redactError(error)
         );
       }
     },
@@ -2871,17 +3082,33 @@ export const useWalletStore = create<WalletState>()(
     // Cache management
     clearSingleNetworkCache: async (accountId?: string) => {
       try {
-        const cache = await loadPersistedBalanceCache();
+        // TASK-59: every clear runs on the balance-cache chain, so a write
+        // already in setItem finishes first instead of landing over it.
+        //
+        // The per-account clear also invalidates that account's in-flight
+        // fetches: it discards the account's balance, so a deferred persist
+        // queued behind it must skip (re-checked right before the write)
+        // rather than re-add the entry. The all-accounts clear deliberately
+        // does NOT invalidate: its caller is networkStore.switchNetwork, which
+        // already invalidated every old-network fetch BEFORE switching, and
+        // runs this clear AFTER the switch — invalidating here would also drop
+        // legitimate loads already issued for the new network.
+        if (accountId) {
+          invalidateAccountBalanceRequests(accountId);
+        }
 
         if (accountId) {
           // Clear cache for specific account across all networks
-          const filteredCache: Record<string, PersistedBalanceData> = {};
-          Object.entries(cache).forEach(([key, value]) => {
-            if (!key.startsWith(`${accountId}_single_`)) {
-              filteredCache[key] = value;
-            }
+          await enqueueBalanceCacheOp(async () => {
+            const cache = await loadPersistedBalanceCache();
+            const filteredCache: Record<string, PersistedBalanceData> = {};
+            Object.entries(cache).forEach(([key, value]) => {
+              if (!key.startsWith(`${accountId}_single_`)) {
+                filteredCache[key] = value;
+              }
+            });
+            await persistBalanceCache(filteredCache);
           });
-          await persistBalanceCache(filteredCache);
 
           // Also clear from state
           const { accountStates } = get();
@@ -2899,7 +3126,9 @@ export const useWalletStore = create<WalletState>()(
           }
         } else {
           // Clear all single-network cache
-          await AsyncStorage.removeItem(BALANCE_CACHE_KEY);
+          await enqueueBalanceCacheOp(() =>
+            AsyncStorage.removeItem(BALANCE_CACHE_KEY)
+          );
 
           // Also clear ALL single-network account balances from state immediately
           // BUT preserve multi-network balance since that's network-independent
@@ -2973,8 +3202,12 @@ export const useWalletStore = create<WalletState>()(
 
     clearAllBalanceCache: async () => {
       try {
+        // Same chain + invalidation as clearSingleNetworkCache (TASK-59).
+        invalidateBalanceRequests();
         await Promise.all([
-          AsyncStorage.removeItem(BALANCE_CACHE_KEY),
+          enqueueBalanceCacheOp(() =>
+            AsyncStorage.removeItem(BALANCE_CACHE_KEY)
+          ),
           AsyncStorage.removeItem(MULTI_NETWORK_BALANCE_CACHE_KEY),
         ]);
 
@@ -3220,8 +3453,14 @@ let cachedActiveAccountBalance: {
   reload: () => Promise<void>;
 } = EMPTY_BALANCE_STATE;
 
-// Stable reload function for active account
+// Stable reload function for active account, and the account it is bound to.
+// The binding is tracked separately from `lastActiveAccountId` (which is
+// reassigned just before the rebind check below): comparing against that just-
+// assigned id was always false, so the reload stayed bound to the FIRST active
+// account forever and pull-to-refresh after an account switch reloaded the wrong
+// account (GH #12 / TASK-390).
 let activeAccountReloadFunction: (() => Promise<void>) | null = null;
+let activeAccountReloadAccountId: string | undefined = undefined;
 
 export const useActiveAccountBalance = () =>
   useWalletStore((state) => {
@@ -3248,13 +3487,15 @@ export const useActiveAccountBalance = () =>
       lastActiveAccountId = activeAccount.id;
       lastAccountState = accountState;
 
-      // Create or reuse stable reload function
+      // Create or reuse stable reload function, rebinding on account switch.
       if (
         !activeAccountReloadFunction ||
-        lastActiveAccountId !== activeAccount.id
+        activeAccountReloadAccountId !== activeAccount.id
       ) {
+        const reloadAccountId = activeAccount.id;
+        activeAccountReloadAccountId = reloadAccountId;
         activeAccountReloadFunction = () =>
-          state.loadAccountBalance(activeAccount.id);
+          useWalletStore.getState().loadAccountBalance(reloadAccountId);
       }
 
       cachedActiveAccountBalance = Object.freeze({
@@ -3287,6 +3528,7 @@ export const clearWalletUICache = () => {
   lastAccountState = undefined;
   cachedActiveAccountBalance = EMPTY_BALANCE_STATE;
   activeAccountReloadFunction = null;
+  activeAccountReloadAccountId = undefined;
 };
 
 // Cache for Envoi name results to keep references stable
