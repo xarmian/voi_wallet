@@ -157,6 +157,7 @@ import { AccountType } from '@/types/wallet';
 import {
   AccountQRParser,
   clearAllAccountSecrets,
+  getAccountSecret,
   ScannedAccount,
   storeMnemonicSecret,
 } from '@/utils/accountQRParser';
@@ -231,6 +232,26 @@ async function renderQRPreview(isOnboarding?: boolean) {
 }
 
 describe('QR preview onboarding decision', () => {
+  it('reuses QR secrets on Import again and releases them when preview unmounts (TASK-422)', async () => {
+    const { screen, accounts } = await renderQRPreview(true);
+    await pressAlert('Import Accounts', 'Import');
+    expect(getAccountSecret(accounts[0].secretId!)?.mnemonic).toBe(
+      FAKE_MNEMONIC
+    );
+    // Preview stays mounted while SecuritySetup is pushed and popped.
+    await fireEvent.press(screen.getByText('Import Selected'));
+    await pressAlert('Import Accounts', 'Import');
+    expect(mockNavigation.navigate).toHaveBeenCalledTimes(2);
+    for (const call of mockNavigation.navigate.mock.calls) {
+      expect(call).toEqual(['SecuritySetup', { source: 'qr', accounts }]);
+    }
+    expect(getAccountSecret(accounts[0].secretId!)?.mnemonic).toBe(
+      FAKE_MNEMONIC
+    );
+    await screen.unmount();
+    expect(getAccountSecret(accounts[0].secretId!)).toBeUndefined();
+  });
+
   it('routes an orphan PIN to SecuritySetup with selected accounts', async () => {
     const { accounts } = await renderQRPreview(true);
     await pressAlert('Import Accounts', 'Import');

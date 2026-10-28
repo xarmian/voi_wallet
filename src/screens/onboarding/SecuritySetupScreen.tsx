@@ -18,11 +18,7 @@ import {
   ImportAccountRequest,
   AddWatchAccountRequest,
 } from '@/types/wallet';
-import {
-  getAccountSecret,
-  clearAccountSecret,
-  clearAccountSecrets,
-} from '@/utils/accountQRParser';
+import { getAccountSecret, clearAccountSecret } from '@/utils/accountQRParser';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -43,6 +39,9 @@ type SecuritySetupScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'SecuritySetup'
 >;
+
+const QR_SECRETS_UNAVAILABLE_MESSAGE =
+  'Your account data is no longer available. Please go back and scan the QR code again.';
 
 const MNEMONIC_UNAVAILABLE_MESSAGE =
   'Your recovery phrase is no longer available. Please go back and try again.';
@@ -129,11 +128,9 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
 
   React.useEffect(() => {
     return () => {
-      if (accounts) {
-        clearAccountSecrets(accounts.map((acc) => acc.secretId));
-      }
+      // TASK-422: the QR preview owns account secrets and releases them on unmount.
       // TASK-224: unmount (back, swipe-dismiss, hardware back, completion)
-      // releases the recovery phrase too. The source screen stores a fresh id
+      // releases the recovery phrase. The source screen stores a fresh id
       // on every navigate, so returning and continuing again still works.
       // Skipped while a submit is in flight: that submit's own finally releases
       // it once the import has run (it checks mountedRef).
@@ -217,6 +214,21 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
 
     if (isPhraseSource && !hasStoredMnemonic()) {
       Alert.alert('Error', MNEMONIC_UNAVAILABLE_MESSAGE);
+      return;
+    }
+
+    if (
+      source === 'qr' &&
+      accounts?.some((account) => {
+        if (account.type !== 'standard') return false;
+        // Presence only: drop the returned copy before any async setup work.
+        const secret = account.secretId
+          ? getAccountSecret(account.secretId)
+          : undefined;
+        return !secret || (!secret.mnemonic && !secret.privateKey);
+      })
+    ) {
+      Alert.alert('Error', QR_SECRETS_UNAVAILABLE_MESSAGE);
       return;
     }
 

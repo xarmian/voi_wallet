@@ -177,6 +177,7 @@ import {
   getAccountSecret,
   clearAccountSecret,
   clearAllAccountSecrets,
+  ScannedAccount,
 } from '@/utils/accountQRParser';
 
 const FAKE_MNEMONIC = Array(25).fill('fake-word-not-real').join(' ');
@@ -553,6 +554,75 @@ describe('SecuritySetupScreen — mnemonic secret carrier (TASK-224)', () => {
     expect(navigation.navigate).not.toHaveBeenCalled();
     await screen.unmount();
   });
+});
+
+describe('SecuritySetupScreen — QR secret ownership (TASK-422)', () => {
+  function qrAccount(secretId?: string): ScannedAccount {
+    return {
+      id: 'qr-standard',
+      type: 'standard',
+      address: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ',
+      name: 'QR account',
+      secretId,
+      isValid: true,
+    };
+  }
+
+  it('keeps QR secrets readable on back and imports on the next setup visit', async () => {
+    const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+    const params = { source: 'qr', accounts: [qrAccount(secretId)] };
+    const first = await renderScreen(params);
+    await fireEvent.press(first.screen.getByTestId('header-back'));
+    expect(first.navigation.goBack).toHaveBeenCalledTimes(1);
+    await first.screen.unmount();
+    expect(getAccountSecret(secretId)?.mnemonic).toBe(FAKE_MNEMONIC);
+    expect(mockAuthSetupPin).not.toHaveBeenCalled();
+
+    const retry = await renderScreen(params);
+    await submitPin(retry.screen);
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockAuthSetupPin).toHaveBeenCalledWith('123456', 'pin');
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount).toHaveBeenCalledWith({
+      type: 'standard',
+      label: 'QR account',
+      mnemonic: FAKE_MNEMONIC,
+    });
+    expect(retry.navigation.navigate).toHaveBeenCalledWith('Main');
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(getAccountSecret(secretId)).toBeUndefined();
+    await retry.screen.unmount();
+  });
+
+  it.each(['cleared', 'absent', 'empty'])(
+    'rejects a %s QR secret before PIN setup, even after a valid account',
+    async (missing) => {
+      const validId = storeMnemonicSecret(FAKE_MNEMONIC);
+      const missingId = storeMnemonicSecret('');
+      if (missing === 'cleared') clearAccountSecret(missingId);
+      const { screen, navigation } = await renderScreen({
+        source: 'qr',
+        accounts: [
+          qrAccount(validId),
+          {
+            ...qrAccount(missing === 'absent' ? undefined : missingId),
+            id: 'missing',
+          },
+        ],
+      });
+      await submitPin(screen);
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Error',
+        'Your account data is no longer available. Please go back and scan the QR code again.'
+      );
+      expect(mockAuthSetupPin).not.toHaveBeenCalled();
+      expect(AccountSecureStorage.hasPinStrict).not.toHaveBeenCalled();
+      expect(mockImportStandardAccount).not.toHaveBeenCalled();
+      expect(navigation.navigate).not.toHaveBeenCalled();
+      expect(getAccountSecret(validId)?.mnemonic).toBe(FAKE_MNEMONIC);
+      await screen.unmount();
+    }
+  );
 });
 
 describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
