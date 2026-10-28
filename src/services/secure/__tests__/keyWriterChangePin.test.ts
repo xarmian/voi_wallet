@@ -991,6 +991,29 @@ describe('REKEYED secret storage for creation', () => {
     }
   });
 
+  // Codex pass A (U2): only the account's OWN key may be stored under its id.
+  it('rejects a key that does not derive the REKEYED account address', async () => {
+    const own = makeAlgoKey();
+    const foreign = makeAlgoKey();
+    try {
+      const account = rekeyed(own);
+      await expect(
+        AccountSecureStorage.storeAccountForCreation(
+          account,
+          foreign.sk,
+          AccountSecureStorage.getResetGeneration()
+        )
+      ).rejects.toThrow('does not belong to this account');
+      AccountSecureStorage.clearPrivateKeyCache();
+      await expect(
+        AccountSecureStorage.getPrivateKey(account.id)
+      ).rejects.toThrow();
+    } finally {
+      own.sk.fill(0);
+      foreign.sk.fill(0);
+    }
+  });
+
   it('keeps metadata-only REKEYED keyless without implicitly creating a key', async () => {
     const k = makeAlgoKey();
     try {

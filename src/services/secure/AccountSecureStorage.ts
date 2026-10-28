@@ -9,6 +9,7 @@ import {
 
 // Buffer polyfill for extension compatibility
 import { Buffer } from 'buffer';
+import algosdk from 'algosdk';
 
 // Use crypto-js (pure JS, works in RN/Expo and browser) with explicit side-effect imports
 import CryptoJS from 'crypto-js';
@@ -1448,6 +1449,18 @@ export class AccountSecureStorage {
         authMethod: hasPin ? 'pin' : 'biometric',
         lastAccessed,
       };
+
+      // TASK-421 (b) U2: a REKEYED account's key must be ITS OWN original key.
+      // Reject a key whose public half doesn't derive this account's address,
+      // so a signer's (or any other) key can never be stored under its id.
+      if (account.type === AccountType.REKEYED && privateKey) {
+        const derived = algosdk.encodeAddress(privateKey.slice(32, 64));
+        if (privateKey.length !== 64 || derived !== account.address) {
+          throw new AccountStorageError(
+            'Private key does not belong to this account'
+          );
+        }
+      }
 
       // Encrypt and store explicitly supplied keys for STANDARD or REKEYED accounts.
       //

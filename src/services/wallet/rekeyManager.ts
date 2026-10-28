@@ -219,7 +219,7 @@ export class RekeyManager {
             (account as RekeyedAccountMetadata).originalOwner !== true
           ) {
             try {
-              await AccountSecureStorage.getPrivateKey(account.id);
+              (await AccountSecureStorage.getPrivateKey(account.id)).fill(0);
             } catch {
               return account;
             }

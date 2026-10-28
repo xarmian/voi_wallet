@@ -898,6 +898,29 @@ describe('SecureKeyManager.getMnemonic', () => {
     }
   );
 
+  // Codex pass A (U2): a valid key that belongs to ANOTHER account must never
+  // be shown as this account's phrase.
+  it.each([AccountType.REKEYED, AccountType.STANDARD])(
+    'refuses (and wipes) a stored key that does not belong to the %s account',
+    async (type) => {
+      const account =
+        type === AccountType.REKEYED
+          ? {
+              ...watchAccount(REKEYED, 'acc-x'),
+              type: AccountType.REKEYED,
+              authAddress: AUTH.addr,
+            }
+          : { ...standardAccount(REKEYED, 'acc-x'), mnemonic: '' };
+      setWallet([account]);
+      const foreign = Uint8Array.from(AUTH.sk);
+      mockSecureGetPrivateKey.mockResolvedValueOnce(foreign);
+      await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+        'does not match this account'
+      );
+      expect(foreign.every((byte) => byte === 0)).toBe(true);
+    }
+  );
+
   it('wipes a REKEYED key even when mnemonic derivation fails', async () => {
     setWallet([
       { ...watchAccount(REKEYED, 'acc-rekeyed'), type: AccountType.REKEYED },

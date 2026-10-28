@@ -611,6 +611,14 @@ export class SecureKeyManager {
       let privateKey: Uint8Array | null = null;
       try {
         privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+        // Never show a phrase for a key that isn't this account's own: a
+        // mismatched key would display a plausible but WRONG recovery phrase.
+        if (
+          privateKey.length !== 64 ||
+          algosdk.encodeAddress(privateKey.slice(32, 64)) !== account.address
+        ) {
+          throw new Error('The stored key does not match this account');
+        }
         const derivedMnemonic = algosdk.secretKeyToMnemonic(privateKey);
         return derivedMnemonic;
       } catch (privateKeyError) {
