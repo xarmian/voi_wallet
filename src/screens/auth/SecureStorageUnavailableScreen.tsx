@@ -46,11 +46,8 @@ const showAlert = (
   }
 };
 
-// No-stuck bound for each reset step (TASK-213). A wedged native call — a hung
-// keystore deletion or a recheck that never settles — must not leave the button
-// pinned on "Resetting…" forever. On timeout the step is abandoned (best-effort)
-// so the flow proceeds to the recheck / the "reset didn't resolve it" guidance
-// instead of hanging. 8s comfortably exceeds any healthy local wipe.
+// Bound each reset step so a wedged native call leaves the reset retry usable.
+// A timeout fails closed just like a rejected deletion.
 const RESET_STEP_TIMEOUT_MS = 8000;
 
 const withTimeout = <T,>(
@@ -119,6 +116,7 @@ export default function SecureStorageUnavailableScreen({
   // the guidance renders (no silent loop). This survives-by-unmount design needs
   // no fragile post-await timing check.
   const [resetAttempted, setResetAttempted] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const RESET_CONFIRM_WORD = 'RESET';
   const canReset = resetConfirmText === RESET_CONFIRM_WORD;
   // Avoid a setState-after-unmount warning: on a SUCCESSFUL retry/reset this
@@ -153,13 +151,9 @@ export default function SecureStorageUnavailableScreen({
     // (securityUnavailable cleared), discarding this flag; if we stay mounted the
     // reset did NOT resolve the failure and the guidance below renders.
     setResetAttempted(true);
+    setResetError(null);
     try {
-      // Best-effort local wipe. Each step is isolated so a throw in one (a broken
-      // keystore can make key-material deletion fail) still lets the wallet-
-      // metadata wipe run — that AsyncStorage removal is what makes the next
-      // strict boot read resolve "no wallet" and route to Onboarding, and on
-      // Android it also clears the secure-store presence sentinel so hasPinStrict
-      // reads genuine ABSENCE (not a fail-closed throw) afterward.
+      // Secure deletion must finish before wallet metadata or auth is reset.
       try {
         await withTimeout(
           AccountSecureStorage.clearAll(),
@@ -167,7 +161,12 @@ export default function SecureStorageUnavailableScreen({
           'clearAll'
         );
       } catch (error) {
-        console.error('Reset: clearAll failed/timed out (continuing):', error);
+        if (mountedRef.current) {
+          setResetError(
+            "Couldn't erase all wallet data from secure storage. Free up some storage space on your device, then try again."
+          );
+        }
+        throw error;
       }
       try {
         await withTimeout(
@@ -294,8 +293,8 @@ export default function SecureStorageUnavailableScreen({
             style={styles.resetFailedNotice}
             accessibilityLiveRegion="polite"
           >
-            Reset didn&apos;t resolve the problem. Fully restart your device and
-            reopen the app. If it keeps happening, contact support.
+            {resetError ??
+              "Reset didn't resolve the problem. Fully restart your device and reopen the app. If it keeps happening, contact support."}
           </Text>
         ) : null}
 

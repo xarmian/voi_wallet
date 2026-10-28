@@ -1037,3 +1037,12 @@ describe('SecureKeyManager.hasEncryptedMnemonic', () => {
     await expect(SecureKeyManager.hasEncryptedMnemonic()).resolves.toBe(false);
   });
 });
+
+it('clearAll propagates secure storage failure', async () => {
+  const { AccountSecureStorage } = require('../AccountSecureStorage');
+  const failure = new Error('disk I/O failure');
+  AccountSecureStorage.clearAll.mockRejectedValueOnce(failure);
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  await expect(SecureKeyManager.clearAll()).rejects.toBe(failure);
+  errorSpy.mockRestore();
+});
