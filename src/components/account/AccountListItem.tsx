@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
@@ -13,6 +13,7 @@ import { useWalletStore, useAccountBalance } from '@/store/walletStore';
 import AccountAvatar from './AccountAvatar';
 import { formatNativeBalance } from '@/utils/bigint';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
+import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 
 interface AccountListItemProps {
   account: AccountMetadata;
@@ -41,6 +42,30 @@ export default function AccountListItem({
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
   const accountBalanceData = useAccountBalance(account.id);
   const currentNetworkConfig = useCurrentNetworkConfig();
+  const [deletionProtection, setDeletionProtection] = useState<{
+    account: AccountMetadata;
+    protected: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (account.type !== AccountType.REKEYED) return;
+    let cancelled = false;
+    void isListDeletionProtected(account).then((protectedAccount) => {
+      if (!cancelled) {
+        setDeletionProtection({ account, protected: protectedAccount });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  // A result belongs only to the metadata it checked; pending stays hidden.
+  const canDelete =
+    account.type !== AccountType.STANDARD &&
+    (account.type !== AccountType.REKEYED ||
+      (deletionProtection?.account === account &&
+        !deletionProtection.protected));
 
   // Extract values without destructuring to avoid infinite loops
   const centralizedBalance = accountBalanceData.balance;
@@ -137,7 +162,7 @@ export default function AccountListItem({
   };
 
   const handleDelete = () => {
-    if (onDelete && account.type !== AccountType.STANDARD) {
+    if (onDelete && canDelete) {
       Alert.alert(
         'Delete Account',
         `Are you sure you want to delete "${account.label || 'this account'}"?`,
@@ -146,7 +171,26 @@ export default function AccountListItem({
           {
             text: 'Delete',
             style: 'destructive',
-            onPress: () => onDelete(account.id),
+            // The account can change (or gain its key) while the alert is
+            // open: re-check its CURRENT metadata before deleting.
+            onPress: async () => {
+              const current = () =>
+                useWalletStore
+                  .getState()
+                  .wallet?.accounts.find((a) => a.id === account.id) ?? account;
+              const checked = current();
+              const isProtected = await isListDeletionProtected(checked);
+              // The verdict only holds for the metadata it checked: if the
+              // account changed during the probe, don't act on a stale answer.
+              if (isProtected || current() !== checked) {
+                Alert.alert(
+                  'Account not deleted',
+                  'This account holds its own key, or it changed while you were confirming, so it wasn’t deleted from the account list.'
+                );
+                return;
+              }
+              onDelete(account.id);
+            },
           },
         ]
       );
@@ -225,7 +269,7 @@ export default function AccountListItem({
               </TouchableOpacity>
             )}
 
-            {onDelete && account.type !== AccountType.STANDARD && (
+            {onDelete && canDelete && (
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={handleDelete}
