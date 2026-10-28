@@ -25,8 +25,9 @@ import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useMessagesStore, useThread } from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
-import { useActiveAccount, useAccounts } from '@/store/walletStore';
-import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
+import { useActiveAccount } from '@/store/walletStore';
+import { useMessagingSigner } from './useMessagingSigner';
+import { MessagingSignerNotice } from './MessagingSignerNotice';
 import { Message, MESSAGE_FEE_MICRO } from '@/services/messaging/types';
 import MessagingService, {
   isMessagingKeyRegistered,
@@ -69,7 +70,8 @@ export default function ChatScreen() {
   }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
-  const allAccounts = useAccounts();
+  const signer = useMessagingSigner(activeAccount);
+  const { canUseMessaging } = signer;
   const thread = useThread(friendAddress);
   const {
     fetchThreadMessages,
@@ -90,30 +92,6 @@ export default function ChatScreen() {
 
   // Messages sorted newest first for inverted FlatList
   const messages = thread?.messages.slice().reverse() || [];
-
-  // Check if current account can use messaging (whitelist approach for future-proofing)
-  const canUseMessaging = (() => {
-    if (!activeAccount) return false;
-
-    // Standard accounts can always use messaging
-    if (activeAccount.type === AccountType.STANDARD) {
-      return true;
-    }
-
-    // Rekeyed accounts can use messaging if the auth account is a Standard account we control
-    if (activeAccount.type === AccountType.REKEYED) {
-      const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(
-        (acc) => acc.address === rekeyedAccount.authAddress
-      );
-      if (authAccount?.type === AccountType.STANDARD) {
-        return true;
-      }
-    }
-
-    // All other account types (Watch, Ledger, future types) cannot use messaging
-    return false;
-  })();
 
   // Check if sender and recipient can use messaging on mount
   useFocusEffect(
@@ -191,6 +169,8 @@ export default function ChatScreen() {
         return;
       }
 
+      if (!canUseMessaging) return;
+
       const isRetry = !!existingMessageId;
       const tempId = existingMessageId || `pending-${Date.now()}`;
 
@@ -244,6 +224,7 @@ export default function ChatScreen() {
       }
     },
     [
+      canUseMessaging,
       activeAccount?.address,
       friendAddress,
       addPendingMessage,
@@ -261,7 +242,7 @@ export default function ChatScreen() {
 
   // Handle key registration
   const handleRegisterKey = useCallback(async () => {
-    if (!activeAccount?.address || isRegistering) return;
+    if (!activeAccount?.address || isRegistering || !canUseMessaging) return;
 
     setIsRegistering(true);
     try {
@@ -276,7 +257,12 @@ export default function ChatScreen() {
     } finally {
       setIsRegistering(false);
     }
-  }, [activeAccount?.address, isRegistering, registerMessagingKey]);
+  }, [
+    activeAccount?.address,
+    isRegistering,
+    registerMessagingKey,
+    canUseMessaging,
+  ]);
 
   // Handle retrying a failed message
   const handleRetry = useCallback(
@@ -354,15 +340,7 @@ export default function ChatScreen() {
         onAccountSelectorPress={() => {}}
       />
 
-      {/* Warning banner when account type doesn't support messaging */}
-      {!canUseMessaging && (
-        <View style={styles.warningBanner}>
-          <Ionicons name="alert-circle" size={16} color="white" />
-          <Text style={styles.warningText}>
-            Only standard accounts can use encrypted messaging
-          </Text>
-        </View>
-      )}
+      <MessagingSignerNotice signer={signer} />
 
       {/* Warning banner when recipient hasn't enabled messaging */}
       {!isCheckingRecipient && !recipientCanReceive && (
