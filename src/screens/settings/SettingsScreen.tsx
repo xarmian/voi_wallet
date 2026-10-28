@@ -343,15 +343,9 @@ export default function SettingsScreen() {
       return;
     }
 
-    // Only allow rekeying of standard accounts and rekeyed accounts that we control
-    if (activeAccount.type === AccountType.WATCH) {
-      Alert.alert(
-        'Cannot Rekey Watch Account',
-        'Watch-only accounts cannot be rekeyed. You can only rekey accounts where you control the private key.'
-      );
-      return;
-    }
-
+    // No type gate: a WATCH record can be rekeyed to a key we hold, and
+    // authority is per network, so the rekey screen's validation decides it
+    // for the network chosen there (TASK-425 U3).
     navigation.navigate('RekeyAccount', { accountId: activeAccount.id });
   };
 

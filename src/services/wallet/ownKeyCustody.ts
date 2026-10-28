@@ -57,6 +57,29 @@ export async function filterOwnKeyAccounts(
 }
 
 /**
+ * The software record that signs AS `address` when it is a rekey authority:
+ * the record at that address whose own secret this device holds (TASK-425 U3).
+ * A rekey authority signs with its own key whatever its own rekey state, so a
+ * retained REKEYED key qualifies. After U4 an undone rekey stays REKEYED, so a
+ * STANDARD-only lookup would strand every account rekeyed to it.
+ */
+export async function findOwnKeySigner(
+  address: string,
+  accounts: readonly AccountMetadata[]
+): Promise<OwnKeyAccount | undefined> {
+  const target = address.toUpperCase();
+  for (const account of accounts) {
+    if (
+      account.address.toUpperCase() === target &&
+      (await holdsOwnKey(account))
+    ) {
+      return account as OwnKeyAccount;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Airgap transfer hands the account's own key to the signer and converts the
  * record to REMOTE_SIGNER, so that key must be the account's authority. A
  * REKEYED record qualifies only once chain state shows no rekey on any network

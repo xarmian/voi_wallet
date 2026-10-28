@@ -30,6 +30,7 @@ import {
   canTransferOwnKey,
   filterAirgapSignableAccounts,
   filterOwnKeyAccounts,
+  findOwnKeySigner,
   holdsOwnKey,
   probeOwnKey,
 } from '../ownKeyCustody';
@@ -155,5 +156,46 @@ describe('canTransferOwnKey', () => {
       canTransferOwnKey(acc('r', AccountType.REKEYED))
     ).resolves.toBe(false);
     expect(mockRekeyInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe('findOwnKeySigner (TASK-425 U3)', () => {
+  it('returns a STANDARD record at the address without probing', async () => {
+    const accounts = [acc('a', AccountType.STANDARD)];
+    await expect(findOwnKeySigner('ADDR_a', accounts)).resolves.toBe(
+      accounts[0]
+    );
+    expect(mockProbe).not.toHaveBeenCalled();
+  });
+
+  it('returns a REKEYED record only once its key is probed present', async () => {
+    const accounts = [acc('r', AccountType.REKEYED)];
+    mockProbe.mockResolvedValueOnce(true);
+    await expect(findOwnKeySigner('ADDR_r', accounts)).resolves.toBe(
+      accounts[0]
+    );
+    mockProbe.mockResolvedValueOnce(false);
+    await expect(findOwnKeySigner('ADDR_r', accounts)).resolves.toBeUndefined();
+    mockProbe.mockRejectedValueOnce(new Error('keychain busy'));
+    await expect(findOwnKeySigner('ADDR_r', accounts)).resolves.toBeUndefined();
+  });
+
+  it.each([AccountType.WATCH, AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
+    'never returns a %s record',
+    async (type) => {
+      await expect(
+        findOwnKeySigner('ADDR_x', [acc('x', type)])
+      ).resolves.toBeUndefined();
+    }
+  );
+
+  it('matches the address case-insensitively and ignores other addresses', async () => {
+    const accounts = [
+      acc('other', AccountType.STANDARD),
+      acc('a', AccountType.STANDARD),
+    ];
+    await expect(findOwnKeySigner('addr_a', accounts)).resolves.toBe(
+      accounts[1]
+    );
   });
 });

@@ -16,6 +16,7 @@ import { networkService, RekeyInfo } from '@/services/network';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import { redactError } from '@/utils/logRedaction';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { findOwnKeySigner } from './ownKeyCustody';
 
 // Conversions preserve only the source account's own backup history.
 function sourceBackupMetadata(account: AccountMetadata): BackupMetadata {
@@ -76,11 +77,11 @@ export class RekeyManager {
     wallet: Wallet
   ): Promise<SigningAuthorityCheck> {
     try {
-      // Look for the auth address in our wallet accounts (standard accounts)
-      const signingAccount = wallet.accounts.find(
-        (account) =>
-          account.address === authAddress &&
-          account.type === AccountType.STANDARD
+      // An auth account whose own key we hold, a retained REKEYED key
+      // included (TASK-425 U3).
+      const signingAccount = await findOwnKeySigner(
+        authAddress,
+        wallet.accounts
       );
 
       if (signingAccount) {

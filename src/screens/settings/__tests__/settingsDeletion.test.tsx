@@ -334,3 +334,20 @@ it('an unexpected throw before the first alert leaves Delete usable and is repor
   await fireEvent.press(view.getByLabelText('Delete account'));
   expect(mockDelete).toHaveBeenCalledTimes(1);
 });
+
+// TASK-425 U3: opening rekey is not gated by persisted type; the rekey screen
+// validates authority for the network chosen there.
+it.each([AccountType.WATCH, AccountType.STANDARD, AccountType.REKEYED])(
+  'opens rekey for a %s account',
+  async (type) => {
+    mockActive = account({ type, label: 'Alice' });
+    mockAccounts = [mockActive];
+    const alert = jest.spyOn(Alert, 'alert');
+    const view = await render(<SettingsScreen />);
+    await fireEvent.press(view.getByText('Rekey Account'));
+    expect(mockNavigate).toHaveBeenCalledWith('RekeyAccount', {
+      accountId: 'original',
+    });
+    expect(alert).not.toHaveBeenCalled();
+  }
+);

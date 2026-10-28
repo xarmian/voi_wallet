@@ -15,6 +15,7 @@ import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import algosdk, { Transaction } from 'algosdk';
 import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { NetworkService } from '@/services/network';
+import { findOwnKeySigner } from '@/services/wallet/ownKeyCustody';
 import { redactError } from '@/utils/logRedaction';
 
 /**
@@ -133,12 +134,14 @@ export class SecureKeyManager {
     if (rekeyInfo.isRekeyed && rekeyInfo.authAddress) {
       signingAddress = rekeyInfo.authAddress;
 
-      // Find the signing account in our wallet
-      const signingAccount = wallet.accounts.find(
-        (acc) =>
-          acc.address.toUpperCase() === signingAddress.toUpperCase() &&
-          (acc.type === AccountType.STANDARD || acc.type === AccountType.LEDGER)
-      );
+      // Find the signing account in our wallet: a Ledger, or a record whose own
+      // key we hold, a retained REKEYED key included (TASK-425 U3).
+      const signingAccount =
+        wallet.accounts.find(
+          (acc) =>
+            acc.address.toUpperCase() === signingAddress.toUpperCase() &&
+            acc.type === AccountType.LEDGER
+        ) ?? (await findOwnKeySigner(signingAddress, wallet.accounts));
 
       if (!signingAccount) {
         return {
@@ -369,15 +372,12 @@ export class SecureKeyManager {
       }
 
       const signingAddress = rekey.authAddress ?? address;
-      const signer = wallet?.accounts.find(
-        (acc) =>
-          acc.address === signingAddress &&
-          [
-            AccountType.STANDARD,
-            AccountType.LEDGER,
-            AccountType.REMOTE_SIGNER,
-          ].includes(acc.type)
-      );
+      const signer =
+        wallet.accounts.find(
+          (acc) =>
+            acc.address === signingAddress &&
+            [AccountType.LEDGER, AccountType.REMOTE_SIGNER].includes(acc.type)
+        ) ?? (await findOwnKeySigner(signingAddress, wallet.accounts));
       return {
         canSign: rekey.canSign,
         signingAddress,

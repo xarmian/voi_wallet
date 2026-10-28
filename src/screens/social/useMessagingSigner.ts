@@ -48,9 +48,11 @@ export function useMessagingSigner(
             (source?.type === AccountType.STANDARD ||
               source?.type === AccountType.REKEYED) &&
             (await AccountSecureStorage.probeSecretPresenceStrict(id));
+          // A retained REKEYED auth key signs too (TASK-425 U3).
           const hasTransactionKey =
             !state.isRekeyed ||
-            (signer?.type === AccountType.STANDARD &&
+            ((signer?.type === AccountType.STANDARD ||
+              signer?.type === AccountType.REKEYED) &&
               (await AccountSecureStorage.probeSecretPresenceStrict(
                 signer.id
               )));

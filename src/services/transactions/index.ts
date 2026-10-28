@@ -20,6 +20,7 @@ import {
 } from '@/utils/bigint';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { findOwnKeySigner } from '@/services/wallet/ownKeyCustody';
 import { TransactionTracker } from '@/services/security/transactionTracker';
 import { Arc200TransactionService, Arc200TransactionGroup } from './arc200';
 import { Arc72TransactionService } from './arc72';
@@ -1386,21 +1387,22 @@ export class TransactionService {
       // For reverse rekey (to self), we don't need to check target account in wallet
       // since the target IS the source account
       if (fromAddress !== rekeyToAddress) {
-        // Check if target address is in the wallet
-        const targetAccount = wallet.accounts.find(
-          (acc: any) =>
-            acc.address === rekeyToAddress &&
-            (acc.type === AccountType.STANDARD ||
-              acc.type === AccountType.LEDGER ||
-              acc.type === AccountType.REMOTE_SIGNER ||
-              acc.type === 'standard' ||
-              acc.type === 'ledger' ||
-              acc.type === 'remote_signer')
-        );
+        // The target must be able to sign as itself afterwards: a Ledger, an
+        // airgap signer, or a record whose own key we hold, a retained REKEYED
+        // key included (TASK-425 U3).
+        const targetAccount =
+          wallet.accounts.find(
+            (acc: any) =>
+              acc.address === rekeyToAddress &&
+              (acc.type === AccountType.LEDGER ||
+                acc.type === AccountType.REMOTE_SIGNER ||
+                acc.type === 'ledger' ||
+                acc.type === 'remote_signer')
+          ) ?? (await findOwnKeySigner(rekeyToAddress, wallet.accounts));
 
         if (!targetAccount) {
           errors.push(
-            'Target address must be a standard, Ledger, or airgap signer account in your wallet'
+            'Target address must be an account whose key you hold, a Ledger, or an airgap signer account in your wallet'
           );
         }
 
@@ -1451,16 +1453,15 @@ export class TransactionService {
         accountBalance.rekeyInfo?.authAddress
       ) {
         const authAddress = accountBalance.rekeyInfo.authAddress;
-        const authSigner = wallet.accounts.find(
-          (acc: any) =>
-            acc.address === authAddress &&
-            (acc.type === AccountType.STANDARD ||
-              acc.type === AccountType.LEDGER ||
-              acc.type === AccountType.REMOTE_SIGNER ||
-              acc.type === 'standard' ||
-              acc.type === 'ledger' ||
-              acc.type === 'remote_signer')
-        );
+        const authSigner =
+          wallet.accounts.find(
+            (acc: any) =>
+              acc.address === authAddress &&
+              (acc.type === AccountType.LEDGER ||
+                acc.type === AccountType.REMOTE_SIGNER ||
+                acc.type === 'ledger' ||
+                acc.type === 'remote_signer')
+          ) ?? (await findOwnKeySigner(authAddress, wallet.accounts));
 
         if (!authSigner) {
           errors.push(
@@ -1490,6 +1491,19 @@ export class TransactionService {
         }
         // Note: For REMOTE_SIGNER, we don't need to verify device availability here
         // The QR signing flow will handle that when the user scans the transaction
+      } else if (sourceAccount && !accountBalance.rekeyInfo?.isRekeyed) {
+        // Not rekeyed on this network: the source signs as itself. Settings no
+        // longer refuses a WATCH record by type, so a source with no key of
+        // its own stops here (TASK-425 U3).
+        const signsAsItself =
+          sourceAccount.type === AccountType.LEDGER ||
+          sourceAccount.type === AccountType.REMOTE_SIGNER ||
+          !!(await findOwnKeySigner(fromAddress, wallet.accounts));
+        if (!signsAsItself) {
+          errors.push(
+            'This account is not rekeyed on this network and its key is not in your wallet, so it cannot sign a rekey.'
+          );
+        }
       }
 
       if (compareBigIntSafe(accountBalance.amount, estimatedFee) < 0) {

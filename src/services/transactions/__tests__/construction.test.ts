@@ -111,6 +111,13 @@ jest.mock('@/services/wallet', () => ({
     getAllAccounts: async () => [{ address: mockSender() }],
   },
 }));
+// TASK-425 U3: which REKEYED records still hold their own secret.
+const mockProbe = jest.fn(async (_id: string) => false);
+jest.mock('@/services/secure/AccountSecureStorage', () => ({
+  AccountSecureStorage: {
+    probeSecretPresenceStrict: (id: string) => mockProbe(id),
+  },
+}));
 jest.mock('@/services/remoteSigner/signingRouter', () => ({
   checkRemoteSigningRequired: () => ({ needsRemoteSigning: false }),
 }));
@@ -751,3 +758,102 @@ it.each([false, true])(
     expect(errors).not.toContain('Failed to validate transaction requirements');
   }
 );
+
+// TASK-425 U3: target, controller and source authority follow own-key custody
+// and chain state, not the persisted kind.
+describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
+  const CONTROLLER = makeAddress('tx-construction:controller');
+  const TARGET_ERROR =
+    'Target address must be an account whose key you hold, a Ledger, or an airgap signer account in your wallet';
+  const SOURCE_ERROR =
+    'This account is not rekeyed on this network and its key is not in your wallet, so it cannot sign a rekey.';
+  const funded = (rekeyInfo: { isRekeyed: boolean; authAddress?: string }) =>
+    mockGetAccountBalance.mockResolvedValue({
+      amount: 1000000n,
+      minBalance: 100000n,
+      rekeyInfo,
+    });
+  const validate = (accounts: unknown[]) =>
+    TransactionService.validateRekeyTransaction(SENDER, RECIPIENT, {
+      accounts,
+    });
+
+  beforeEach(() => {
+    mockProbe.mockReset();
+    mockProbe.mockResolvedValue(false);
+  });
+
+  it('accepts a REKEYED target whose own key is held', async () => {
+    funded({ isRekeyed: false });
+    mockProbe.mockImplementation(async (id) => id === 'tgt');
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.REKEYED },
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it.each([
+    ['REKEYED without its key', AccountType.REKEYED],
+    ['WATCH', AccountType.WATCH],
+  ])('rejects a %s target', async (_label, type) => {
+    funded({ isRekeyed: false });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type },
+    ]);
+    expect(errors).toContain(TARGET_ERROR);
+  });
+
+  it('accepts a controller that is a REKEYED record holding its own key', async () => {
+    funded({ isRekeyed: true, authAddress: CONTROLLER });
+    mockProbe.mockImplementation(async (id) => id === 'ctl');
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.WATCH },
+      { id: 'ctl', address: CONTROLLER, type: AccountType.REKEYED },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects a controller that is a REKEYED record without its key', async () => {
+    funded({ isRekeyed: true, authAddress: CONTROLLER });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.WATCH },
+      { id: 'ctl', address: CONTROLLER, type: AccountType.REKEYED },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([
+      expect.stringContaining('You need this controlling account'),
+    ]);
+  });
+
+  it.each([
+    ['WATCH', AccountType.WATCH, false],
+    ['REKEYED without its key', AccountType.REKEYED, false],
+    ['REKEYED holding its key', AccountType.REKEYED, true],
+    ['STANDARD', AccountType.STANDARD, false],
+  ])(
+    'unrekeyed %s source signs as itself only with its own key',
+    async (_label, type, held) => {
+      funded({ isRekeyed: false });
+      mockProbe.mockImplementation(async (id) => held && id === 'src');
+      const errors = await validate([
+        { id: 'src', address: SENDER, type },
+        { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+      ]);
+      const ownsKey = type === AccountType.STANDARD || held;
+      expect(errors.includes(SOURCE_ERROR)).toBe(!ownsKey);
+    }
+  );
+
+  it('a rekeyed WATCH source is judged by its controller, not by its own key', async () => {
+    funded({ isRekeyed: true, authAddress: CONTROLLER });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.WATCH },
+      { id: 'ctl', address: CONTROLLER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([]);
+  });
+});
