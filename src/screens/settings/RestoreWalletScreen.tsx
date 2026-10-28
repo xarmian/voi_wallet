@@ -151,6 +151,10 @@ export default function RestoreWalletScreen() {
         result.ledgerAccountCount > 0
           ? `\n\nNote: ${result.ledgerAccountCount} Ledger account(s) will need to be re-paired with your device.`
           : '';
+      const duplicateNote =
+        result.duplicateAccountsDropped > 0
+          ? `\n\n${result.duplicateAccountsDropped} duplicate account record(s) in the backup were merged.`
+          : '';
 
       Alert.alert(
         'Restore Complete',
@@ -159,7 +163,7 @@ export default function RestoreWalletScreen() {
           `• ${result.watchAccountCount} Watch account(s)\n` +
           `• ${result.rekeyedAccountCount} Rekeyed account(s)\n` +
           `• ${result.ledgerAccountCount} Ledger account(s)\n` +
-          `• ${result.friendsCount} Friend(s)${ledgerNote}`,
+          `• ${result.friendsCount} Friend(s)${ledgerNote}${duplicateNote}`,
         [
           {
             text: 'OK',

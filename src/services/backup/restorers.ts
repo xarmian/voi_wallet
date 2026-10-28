@@ -200,19 +200,83 @@ export function validateRetainedKeys(accounts: BackupAccountData[]): void {
   }
 }
 
+/**
+ * TASK-423: the address a record will be restored under. A STANDARD record is
+ * restored under the address its mnemonic derives, not the payload's; null
+ * for a record restore skips (no mnemonic) or that will fail on its own.
+ */
+function restoredAddress(account: BackupAccountData): string | null {
+  if (account.type !== AccountType.STANDARD) return account.address;
+  if (!account.mnemonic) return null;
+  try {
+    const derived = algosdk.mnemonicToSecretKey(account.mnemonic);
+    derived.sk.fill(0);
+    return derived.addr.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** TASK-423: lower wins when two records share an address. */
+function dedupeRank(account: BackupAccountData): number {
+  const keyBearing =
+    (account.type === AccountType.STANDARD && !!account.mnemonic) ||
+    (account.type === AccountType.REKEYED && account.mnemonic !== undefined);
+  if (keyBearing) return 0;
+  if (
+    account.type === AccountType.LEDGER ||
+    account.type === AccountType.REMOTE_SIGNER
+  )
+    return 1;
+  return 2;
+}
+
+/**
+ * TASK-423: keep one record per restored address, before anything is written.
+ * Records sharing an address never carry different keys (a STANDARD address is
+ * derived from its mnemonic; a retained REKEYED key is validated against its
+ * address), so dropping duplicates loses only their labels. The kept record is
+ * the key-bearing one, then Ledger/remote signer over watch, then backup order.
+ */
+export function dedupeAccountsByAddress(accounts: BackupAccountData[]): {
+  accounts: BackupAccountData[];
+  dropped: number;
+} {
+  const addresses = accounts.map(restoredAddress);
+  const winners = new Map<string, BackupAccountData>();
+  accounts.forEach((account, i) => {
+    const address = addresses[i];
+    if (address === null) return;
+    const current = winners.get(address);
+    if (!current || dedupeRank(account) < dedupeRank(current)) {
+      winners.set(address, account);
+    }
+  });
+  const kept = accounts.filter((account, i) => {
+    const address = addresses[i];
+    return address === null || winners.get(address) === account;
+  });
+  return { accounts: kept, dropped: accounts.length - kept.length };
+}
+
 /** Restore account metadata and journal every restored local key. */
-export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
+export async function restoreAccounts(
+  backupAccounts: BackupAccountData[]
+): Promise<{
   total: number;
   standard: number;
   watch: number;
   rekeyed: number;
   ledger: number;
   remoteSigner: number;
+  duplicatesDropped: number;
 }> {
   // Defensive: the full-restore entry points validate before clearing, but a
   // direct call must not bypass the duplicate-id and key-identity checks.
-  validateRetainedKeys(accounts);
+  validateRetainedKeys(backupAccounts);
+  const { accounts, dropped } = dedupeAccountsByAddress(backupAccounts);
   const counts = {
+    duplicatesDropped: dropped,
     total: 0,
     standard: 0,
     watch: 0,
@@ -831,6 +895,7 @@ export async function performFullRestore(
     watchAccountCount: accountCounts.watch,
     rekeyedAccountCount: accountCounts.rekeyed,
     remoteSignerAccountCount: accountCounts.remoteSigner,
+    duplicateAccountsDropped: accountCounts.duplicatesDropped,
     settingsRestored: true,
     friendsCount,
     remoteSignerSettingsRestored,
