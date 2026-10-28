@@ -344,6 +344,8 @@ export interface RestoreResult {
   rekeyedAccountCount: number;
   /** Number of remote signer accounts */
   remoteSignerAccountCount: number;
+  /** Records dropped because another record had the same address (TASK-423) */
+  duplicateAccountsDropped: number;
   /** Whether settings were restored */
   settingsRestored: boolean;
   /** Number of friends restored */
