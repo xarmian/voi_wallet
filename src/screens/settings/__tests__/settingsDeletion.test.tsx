@@ -284,7 +284,7 @@ it('a dismissed alert and a finished deletion both leave Delete usable', async (
   expect(mockDelete).toHaveBeenCalledTimes(2);
 });
 
-it('an unexpected throw during confirmation leaves Delete usable', async () => {
+it('an unexpected throw during confirmation leaves Delete usable and is reported', async () => {
   const { view, alert } = await open();
   await pressAlert(alert, 'I have my phrase');
   await typeDelete(view);
@@ -294,6 +294,31 @@ it('an unexpected throw during confirmation leaves Delete usable', async () => {
   await fireEvent.press(view.getByLabelText('Delete account'));
   mockAccounts = accounts;
   expect(mockDelete).not.toHaveBeenCalled();
+  expect(alert).toHaveBeenLastCalledWith('Delete Failed', expect.any(String));
+  await fireEvent.press(view.getByText(/^Delete "/));
+  await pressAlert(alert, 'I have my phrase');
+  await typeDelete(view);
+  await fireEvent.press(view.getByLabelText('Delete account'));
+  expect(mockDelete).toHaveBeenCalledTimes(1);
+});
+
+it('an unexpected throw before the first alert leaves Delete usable and is reported', async () => {
+  // A non-standard account goes through the custody probe at tap time; make
+  // the helper itself throw there (it already catches probe rejections).
+  mockActive = account({ type: AccountType.REKEYED, label: 'Bob' });
+  mockAccounts = [mockActive];
+  probe.mockResolvedValue(true);
+  const alert = jest.spyOn(Alert, 'alert');
+  const view = await render(<SettingsScreen />);
+  await act(async () => {});
+  const helper = require('@/services/wallet/listDeletionProtection');
+  const spy = jest
+    .spyOn(helper, 'isListDeletionProtected')
+    .mockRejectedValueOnce(new Error('unexpected'));
+  await fireEvent.press(view.getByText(/^Delete "/));
+  await act(async () => {});
+  expect(alert).toHaveBeenLastCalledWith('Delete Failed', expect.any(String));
+  spy.mockRestore();
   await fireEvent.press(view.getByText(/^Delete "/));
   await pressAlert(alert, 'I have my phrase');
   await typeDelete(view);

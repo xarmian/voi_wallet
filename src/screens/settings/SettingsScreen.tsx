@@ -501,11 +501,17 @@ export default function SettingsScreen() {
     cancelDeletion();
   };
 
-  // An unexpected throw must never strand the busy ref and latch (leaving
-  // Delete dead): reset on rejection. A promise catch, not try/finally, which
-  // the React Compiler can't lower.
+  // Every deletion entry point (the Settings row, the keyless confirm, the
+  // typed-confirm modal) ends here on an unexpected throw: reset the busy ref
+  // and latch so Delete never goes dead, and tell the user. A promise catch,
+  // not try/finally, which the React Compiler can't lower.
+  const failDeletion = () => {
+    cancelDeletion();
+    Alert.alert('Delete Failed', 'Something went wrong. Please try again.');
+  };
+
   const runDeletion = (target: AccountMetadata, keyHolding: boolean) => {
-    void confirmDeletion(target, keyHolding).catch(cancelDeletion);
+    void confirmDeletion(target, keyHolding).catch(failDeletion);
   };
 
   const handleDeleteActiveAccount = async () => {
@@ -828,7 +834,9 @@ export default function SettingsScreen() {
                   ? `Delete "${activeAccount.label?.trim() || formatAddress(activeAccount.address)}"`
                   : 'Delete Account'
               }
-              onPress={() => void handleDeleteActiveAccount()}
+              onPress={() =>
+                void handleDeleteActiveAccount().catch(failDeletion)
+              }
               danger
               showChevron={false}
             />
