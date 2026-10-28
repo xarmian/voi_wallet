@@ -31,6 +31,8 @@ import {
   notificationService,
   NotificationPreferences,
   DEFAULT_NOTIFICATION_PREFERENCES,
+  voiToMicroVoi,
+  microVoiToVoi,
 } from '@/services/notifications';
 import { isSupabaseConfigured } from '@/services/supabase';
 
@@ -444,13 +446,19 @@ export default function NotificationSettingsScreen() {
 
       // Save to server (debounced for sliders)
       try {
-        await notificationService.updatePreferences(selectedAccount.address, {
-          [key]: value,
-        });
+        const saved = await notificationService.updatePreferences(
+          selectedAccount.address,
+          { [key]: value }
+        );
+        if (!saved) throw new Error('Notification preference save failed');
       } catch (error) {
         console.error('Failed to update preference:', error);
         // Revert on error
         setPreferences(preferences);
+        Alert.alert(
+          'Error',
+          "Couldn't save notification setting. Please try again."
+        );
       }
     },
     [selectedAccount, notificationsEnabled, preferences]
@@ -595,11 +603,19 @@ export default function NotificationSettingsScreen() {
               icon="filter-outline"
               label="Minimum VOI Amount"
               description="Only notify for amounts above this threshold"
-              value={preferences.minVoiAmount / 1_000_000}
+              value={microVoiToVoi(preferences.minVoiAmount)}
               onValueChange={(value) =>
-                updatePreference('minVoiAmount', Math.round(value * 1_000_000))
+                updatePreference('minVoiAmount', voiToMicroVoi(value))
               }
               suffix="VOI"
+              disabled={!notificationsEnabled || !preferences.voiPayments}
+            />
+            <SettingToggle
+              icon="ribbon-outline"
+              label="Block Rewards"
+              description="Get notified when you receive a block reward for proposing a block"
+              value={preferences.blockRewards}
+              onValueChange={(value) => updatePreference('blockRewards', value)}
               disabled={!notificationsEnabled || !preferences.voiPayments}
             />
             <SettingToggle

@@ -588,6 +588,9 @@ class NotificationService {
     if (preferences.voiPayments !== undefined) {
       updates.notify_voi_payments = preferences.voiPayments;
     }
+    if (preferences.blockRewards !== undefined) {
+      updates.notify_proposer_payouts = preferences.blockRewards;
+    }
     if (preferences.arc200Transfers !== undefined) {
       updates.notify_arc200_transfers = preferences.arc200Transfers;
     }
@@ -610,15 +613,19 @@ class NotificationService {
       updates.price_alert_threshold_percent = preferences.priceAlertThreshold;
     }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .schema('voiwallet')
       .from('account_subscriptions')
       .update(updates)
       .eq('device_id', this.deviceId)
-      .eq('account_address', validatedAddress);
+      .eq('account_address', validatedAddress)
+      .select('account_address');
 
-    if (error) {
-      console.error('Failed to update preferences:', error);
+    if (error || !data?.length) {
+      console.warn(
+        'Failed to update preferences:',
+        error ?? 'update matched no rows'
+      );
       return false;
     }
 
@@ -656,6 +663,7 @@ class NotificationService {
     return {
       messages: data.notify_messages,
       voiPayments: data.notify_voi_payments,
+      blockRewards: data.notify_proposer_payouts ?? true,
       arc200Transfers: data.notify_arc200_transfers,
       arc72Transfers: data.notify_arc72_transfers,
       outgoingConfirmations: data.notify_outgoing_confirmations,
@@ -704,6 +712,7 @@ class NotificationService {
       account_address: address,
       notify_messages: prefs.messages,
       notify_voi_payments: prefs.voiPayments,
+      notify_proposer_payouts: prefs.blockRewards,
       notify_arc200_transfers: prefs.arc200Transfers,
       notify_arc72_transfers: prefs.arc72Transfers,
       notify_outgoing_confirmations: prefs.outgoingConfirmations,

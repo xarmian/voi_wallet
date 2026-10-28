@@ -334,6 +334,7 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       account_address: STANDARD_A,
       notify_messages: true,
       notify_voi_payments: DEFAULT_NOTIFICATION_PREFERENCES.voiPayments,
+      notify_proposer_payouts: true,
       notify_price_alerts: DEFAULT_NOTIFICATION_PREFERENCES.priceAlerts,
       price_alert_threshold_percent:
         DEFAULT_NOTIFICATION_PREFERENCES.priceAlertThreshold,
@@ -343,6 +344,7 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
       notify_messages: false,
       // Only `messages` differs for a watch account; the rest are defaults.
       notify_voi_payments: DEFAULT_NOTIFICATION_PREFERENCES.voiPayments,
+      notify_proposer_payouts: true,
     });
     expect(writtenRow(STANDARD_B)?.notify_messages).toBe(true);
   });
