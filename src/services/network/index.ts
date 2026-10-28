@@ -287,10 +287,11 @@ export class NetworkService {
     return withTimeout(
       promise,
       timeoutMs,
-      new NetworkError(
-        `${label} timed out after ${timeoutMs}ms`,
-        this.currentNetworkId
-      )
+      () =>
+        new NetworkError(
+          `${label} timed out after ${timeoutMs}ms`,
+          this.currentNetworkId
+        )
     );
   }
 
