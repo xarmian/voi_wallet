@@ -405,7 +405,7 @@ export class AccountSecureStorage {
     secret: AccountSecretPayload | null
   ): Promise<void> {
     if (!secret) {
-      await secureStorage.deleteItem(this.secretKey(accountId)).catch(() => {});
+      await secureStorage.deleteItem(this.secretKey(accountId));
       return;
     }
     await secureStorage.setItem(
@@ -1062,12 +1062,23 @@ export class AccountSecureStorage {
           JSON.stringify(secretPayload)
         );
       } else {
-        await secureStorage
-          .deleteItem(this.secretKey(accountId))
-          .catch(() => {});
+        try {
+          await secureStorage.deleteItem(this.secretKey(accountId));
+        } catch (error) {
+          // Both entry points serve reads. Preserve the successful legacy read
+          // and its discoverable blob when cleanup fails; retry on migration.
+          console.warn('Legacy primary cleanup failed', redactError(error));
+          return persistable;
+        }
       }
 
-      await secureStorage.deleteItem(legacyKey).catch(() => {});
+      try {
+        await secureStorage.deleteItem(legacyKey);
+      } catch (error) {
+        // The migrated primary is readable. Keep the legacy copy discoverable
+        // rather than turning a successful read into a retrieval failure.
+        console.warn('Legacy account cleanup failed', redactError(error));
+      }
       return persistable;
     } catch (error) {
       console.error(
@@ -1983,11 +1994,15 @@ export class AccountSecureStorage {
       // Remove from secure storage
       await this.saveSecret(accountId, null);
 
-      // Remove metadata
+      await secureStorage.deleteItem(
+        `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`
+      );
+      if (await this.probeSecretPresenceStrict(accountId)) {
+        throw new AccountStorageError('Account secret remains after deletion');
+      }
+
+      // Only discard metadata and indexing after verified secret removal.
       await storage.removeItem(this.metadataKey(accountId));
-      await secureStorage
-        .deleteItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`)
-        .catch(() => {});
 
       // Update account list
       await this.removeFromAccountList(accountId);
@@ -3753,8 +3768,18 @@ export class AccountSecureStorage {
         ]);
 
         // Delete all accounts (listed + in-flight-journaled)
+        let failedCount = 0;
         for (const accountId of idsToDelete) {
-          await this.deleteAccountLocked(accountId);
+          try {
+            await this.deleteAccountLocked(accountId);
+          } catch {
+            failedCount += 1;
+          }
+        }
+        if (failedCount > 0) {
+          throw new AccountStorageError(
+            `Failed to delete ${failedCount} account(s) from secure storage`
+          );
         }
         await this.writePendingCreateJournal({});
 
@@ -3789,7 +3814,8 @@ export class AccountSecureStorage {
           await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
           this.throttleMirror = null;
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof AccountStorageError) throw error;
         throw new AccountStorageError('Failed to clear all secure storage');
       }
     });

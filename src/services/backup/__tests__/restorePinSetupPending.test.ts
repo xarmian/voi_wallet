@@ -126,3 +126,26 @@ describe('performFullRestore — pin_setup_pending breadcrumb ordering (TASK-213
     expect(order.indexOf('mark')).toBeLessThan(order.indexOf('storeAccount'));
   });
 });
+
+it('a failed secure wipe aborts restore before wallet metadata or settings are cleared', async () => {
+  const {
+    AccountSecureStorage,
+  } = require('@/services/secure/AccountSecureStorage');
+  const { MultiAccountWalletService } = require('@/services/wallet');
+  AccountSecureStorage.clearAll.mockRejectedValueOnce(
+    new Error('disk I/O failure')
+  );
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  await expect(
+    performFullRestore(
+      [],
+      {} as BackupSettings,
+      [],
+      {} as Parameters<typeof performFullRestore>[3]
+    )
+  ).rejects.toThrow();
+  expect(MultiAccountWalletService.clearAllWallets).not.toHaveBeenCalled();
+  expect(mockMark).not.toHaveBeenCalled();
+  expect(order).not.toContain('storeAccount');
+  errorSpy.mockRestore();
+});

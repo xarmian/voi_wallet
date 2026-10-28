@@ -32,7 +32,7 @@ import {
   BackupError,
   RestoreResult,
 } from './types';
-import { redactAddress } from '@/utils/logRedaction';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -442,7 +442,15 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
     // already deleted), then surface the race so restore reports cleanly.
     if (error instanceof ResetRacedError) {
       for (const p of pendingCreates) {
-        await AccountSecureStorage.deleteAccountIfAttemptMatches(p.id, p.token);
+        try {
+          await AccountSecureStorage.deleteAccountIfAttemptMatches(
+            p.id,
+            p.token
+          );
+        } catch (rollbackError) {
+          // TASK-415: retry this indexed, journaled id during reconciliation.
+          console.warn('Restore rollback failed:', redactError(rollbackError));
+        }
       }
       throw error;
     }
