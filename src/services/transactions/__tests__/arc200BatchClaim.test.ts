@@ -279,3 +279,93 @@ describe('buildBatchClaimTransactionGroup (TASK-392, GH #20)', () => {
     expect(group.needsMbrPayment).toBe(false);
   });
 });
+
+// Captured from the original e0d0613 builder before adding TASK-397 guards.
+// Fixed suggested params and empty simulation resources come from the mocks above.
+const ORIGINAL_BATCH_BASE64 = [
+  'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCA/C89YVGJDOorffz3opSGZJuU6EebwBcrXB0dHkVaZTKNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
+  'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+  'iaRhcGFhlMQESpaPj8QgrEa7ykzAWlgeSYuBRkMzDJA1+LYsDh3rtcQFV2j7VfzEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+  'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCCf7tVnsBDRwJzhj0VdRjdsjbmivTuaRrTAJ2gNxKiX86NzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
+  'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB6RhcGlkzgLPRRSjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+];
+
+const validFixtureClaims = (): Arc200ClaimParams[] => [
+  {
+    contractId: CONTRACT_A,
+    from: OWNER_1,
+    to: CLAIMER,
+    amount: 5000n,
+    sender: CLAIMER,
+  },
+  {
+    contractId: CONTRACT_A,
+    from: OWNER_2,
+    to: CLAIMER,
+    amount: 5000n,
+    sender: CLAIMER,
+  },
+  {
+    contractId: CONTRACT_B,
+    from: OWNER_1,
+    to: CLAIMER,
+    amount: 7n,
+    sender: CLAIMER,
+  },
+];
+
+function expectNoNetworkCalls() {
+  expect(mockGetSuggestedParams).not.toHaveBeenCalled();
+  expect(mockGetAlgodClient).not.toHaveBeenCalled();
+  expect(mockGetAllAccountAssets).not.toHaveBeenCalled();
+}
+
+describe('TASK-397 claim builder guards', () => {
+  it.each([5000n, 1n])(
+    'rejects a duplicate owner/token before network access (amount %s)',
+    async (amount) => {
+      const claims = validFixtureClaims();
+      // Append after other valid claims to require a full preflight pass.
+      claims.push({ ...claims[0], amount });
+
+      await expect(
+        Arc200TransactionService.buildBatchClaimTransactionGroup(
+          claims,
+          'voi-mainnet'
+        )
+      ).rejects.toThrow(
+        new Error(`Duplicate claim for token ${CONTRACT_A} from ${OWNER_1}`)
+      );
+      expectNoNetworkCalls();
+    }
+  );
+
+  it('rejects different recipients for one contract before network access', async () => {
+    const claims = validFixtureClaims();
+    claims[1] = { ...claims[1], to: OWNER_2 };
+
+    await expect(
+      Arc200TransactionService.buildBatchClaimTransactionGroup(claims)
+    ).rejects.toThrow(
+      new Error(
+        `All claims for token ${CONTRACT_A} must go to the same recipient`
+      )
+    );
+    expectNoNetworkCalls();
+  });
+
+  it('encodes a valid batch byte-identically to the original builder', async () => {
+    const group =
+      await Arc200TransactionService.buildBatchClaimTransactionGroup(
+        validFixtureClaims(),
+        'voi-mainnet'
+      );
+    const encoded = group.transactions.map((txn) =>
+      Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')
+    );
+    expect(encoded).toEqual(ORIGINAL_BATCH_BASE64);
+    expect(
+      group.txnBytes.map((bytes) => Buffer.from(bytes).toString('base64'))
+    ).toEqual(ORIGINAL_BATCH_BASE64);
+  });
+});

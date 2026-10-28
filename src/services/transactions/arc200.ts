@@ -435,6 +435,9 @@ export class Arc200TransactionService {
   static async buildArc200TransferFromGroup(
     params: Arc200TransferFromParams
   ): Promise<Arc200TransactionGroup> {
+    // TASK-397: identical bytes for repeated single claims in one validity
+    // window are deliberate. The chain's txid dedupe stops a retry or double
+    // tap from claiming the allowance twice; a nonce note removes that protection.
     try {
       const networkService = params.networkId
         ? NetworkService.getInstance(params.networkId as any)
@@ -652,6 +655,31 @@ export class Arc200TransactionService {
   ): Promise<Arc200TransactionGroup> {
     if (claims.length === 0) {
       throw new Error('No claims provided');
+    }
+
+    // TASK-397: validate the whole batch before network access or construction.
+    const ownersByContract = new Map<number, Set<string>>();
+    const recipientsByContract = new Map<number, string>();
+    for (const claim of claims) {
+      const owners =
+        ownersByContract.get(claim.contractId) ?? new Set<string>();
+      if (owners.has(claim.from)) {
+        throw new Error(
+          `Duplicate claim for token ${claim.contractId} from ${claim.from}`
+        );
+      }
+      owners.add(claim.from);
+      ownersByContract.set(claim.contractId, owners);
+
+      if (
+        recipientsByContract.has(claim.contractId) &&
+        recipientsByContract.get(claim.contractId) !== claim.to
+      ) {
+        throw new Error(
+          `All claims for token ${claim.contractId} must go to the same recipient`
+        );
+      }
+      recipientsByContract.set(claim.contractId, claim.to);
     }
 
     const networkService = networkId
