@@ -18,8 +18,11 @@
 // without error does the destructive phase run.
 //
 // Invariant repaired (DOC-221): for every STANDARD account, `wallet-blob entry
-// ⟺ secure secret exists`. Only STANDARD accounts hold a secret; WATCH / LEDGER
-// / REKEYED / REMOTE_SIGNER accounts hold none and are never touched here.
+// ⟺ secure secret exists`. A secret is OWNED by any blob account with its id,
+// whatever the type (TASK-419): rekeying converts STANDARD → REKEYED in the blob
+// only and deliberately retains the original key, so treating only STANDARD ids
+// as owners deleted that key on every launch. WATCH / LEDGER / REMOTE_SIGNER
+// accounts hold no secret; only STANDARD accounts are pruned as phantoms.
 //
 // Bounded + never blocks boot: each probe is time-bounded, and the AuthContext
 // caller additionally wraps the whole call in a timeout + best-effort catch, so
@@ -67,13 +70,14 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // readAccountListStrict (not getAllAccountIds) is READ-ONLY — getAllAccountIds
   // migrates a legacy list (write + delete), which would mutate the store during
   // this abort-safe read phase (Codex P2).
-  const blobStandardIds =
-    await MultiAccountWalletService.getStandardAccountIdsStrict();
+  const { standardIds: blobStandardIds, allIds: blobAllIds } =
+    await MultiAccountWalletService.getBlobAccountIdsStrict();
   const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
   const journalIds = Object.keys(journal);
 
   const blobStandardSet = new Set(blobStandardIds);
+  const blobAnySet = new Set(blobAllIds);
 
   // Candidate universe: every id that could be half-committed in EITHER store.
   // The journal closes the unindexed-secret gap — a secret written just before a
@@ -109,11 +113,13 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   for (const id of candidates) {
     const hasSecret = secretPresent.get(id) === true;
     const inBlob = blobStandardSet.has(id);
+    const ownedByBlob = blobAnySet.has(id);
     const inJournal = journal[id] !== undefined;
 
-    if (hasSecret && !inBlob) {
-      // Orphan secret: a live secret with no wallet-blob account. Delete the
-      // secret (+ its secure metadata/list entry) and drop any journal entry.
+    if (hasSecret && !ownedByBlob) {
+      // Orphan secret: a live secret with NO wallet-blob account of any type.
+      // Delete the secret (+ its secure metadata/list entry) and drop any
+      // journal entry. A REKEYED account's retained key is owned, never this.
       orphanSecretIds.push(id);
     } else if (!hasSecret && inBlob) {
       // Phantom account: a blob STANDARD account whose secret is gone. Prune it

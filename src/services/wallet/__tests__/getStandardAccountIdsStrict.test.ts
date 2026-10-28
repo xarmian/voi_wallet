@@ -185,3 +185,59 @@ it('does not write or migrate (pure read)', async () => {
   // Present primary means the legacy secure-store fallback is never consulted.
   expect(mockSecureGet).not.toHaveBeenCalled();
 });
+
+describe('getBlobAccountIdsStrict (TASK-419)', () => {
+  it('returns STANDARD ids and every account id, REKEYED included', async () => {
+    mockStore[WALLET_KEY] = blob([
+      { id: 's1', type: 'standard' },
+      { id: 'k1', type: 'rekeyed' },
+      { id: 'w1', type: 'watch' },
+    ]);
+    await expect(
+      MultiAccountWalletService.getBlobAccountIdsStrict()
+    ).resolves.toEqual({ standardIds: ['s1'], allIds: ['s1', 'k1', 'w1'] });
+  });
+
+  it('returns empty lists for genuine absence', async () => {
+    await expect(
+      MultiAccountWalletService.getBlobAccountIdsStrict()
+    ).resolves.toEqual({ standardIds: [], allIds: [] });
+  });
+
+  it.each([
+    [
+      'a storage read failure',
+      () =>
+        mockStorageGet.mockRejectedValueOnce(new Error('keychain unavailable')),
+    ],
+    [
+      'an unparseable blob',
+      () => {
+        mockStore[WALLET_KEY] = '{not valid json';
+      },
+    ],
+    [
+      'a present-but-empty blob',
+      () => {
+        mockStore[WALLET_KEY] = '';
+      },
+    ],
+    [
+      'an unrecognized type',
+      () => {
+        mockStore[WALLET_KEY] = blob([{ id: 'x', type: 'bogus' }]);
+      },
+    ],
+    [
+      'accounts not an array',
+      () => {
+        mockStore[WALLET_KEY] = JSON.stringify({ accounts: {} });
+      },
+    ],
+  ])('fails closed on %s', async (_label, arrange) => {
+    arrange();
+    await expect(
+      MultiAccountWalletService.getBlobAccountIdsStrict()
+    ).rejects.toThrow();
+  });
+});

@@ -2250,6 +2250,51 @@ export class MultiAccountWalletService {
   }
 
   /**
+   * STRICT read of the blob's account ids for the boot reconcile (TASK-419):
+   * `standardIds` (phantom candidates, as before) and `allIds`, every account of
+   * ANY type. A secret is owned by any blob account with its id, not only a
+   * STANDARD one: rekeying converts STANDARD → REKEYED in the blob only and the
+   * original key is deliberately retained (rekeyManager converts back when it
+   * still finds it). Same fail-closed validation as getStandardAccountIdsStrict.
+   */
+  static async getBlobAccountIdsStrict(): Promise<{
+    standardIds: string[];
+    allIds: string[];
+  }> {
+    const rawPrimary = await storage.getItem(this.WALLET_KEY);
+    if (rawPrimary === '') {
+      throw new Error('Corrupt wallet blob: present but empty');
+    }
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (walletData == null) {
+      return { standardIds: [], allIds: [] };
+    }
+    const parsed = JSON.parse(walletData) as Wallet;
+    if (!Array.isArray(parsed.accounts)) {
+      throw new Error(
+        'Corrupt wallet blob: `accounts` is present but not an array'
+      );
+    }
+    const validTypes = new Set<string>(Object.values(AccountType));
+    for (const acc of parsed.accounts) {
+      if (
+        acc == null ||
+        typeof acc.id !== 'string' ||
+        acc.id === '' ||
+        !validTypes.has(acc.type)
+      ) {
+        throw new Error('Corrupt wallet blob: malformed account entry');
+      }
+    }
+    return {
+      standardIds: parsed.accounts
+        .filter((acc) => acc.type === AccountType.STANDARD)
+        .map((acc) => acc.id),
+      allIds: parsed.accounts.map((acc) => acc.id),
+    };
+  }
+
+  /**
    * Remove the given STANDARD account ids from the wallet blob only (TASK-222
    * reconcile: phantom-metadata repair — a blob STANDARD account whose secret is
    * strictly absent). Touches ONLY the wallet metadata blob; the secure store is
