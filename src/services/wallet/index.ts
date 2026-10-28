@@ -22,6 +22,8 @@ import {
   DetectRekeyedAccountRequest,
   ImportRemoteSignerAccountRequest,
   AccountNotFoundError,
+  AccountDeletionPreconditionError,
+  AccountDeletionExpectation,
   AccountExistsError,
   InvalidAddressError,
   InvalidMnemonicError,
@@ -1408,7 +1410,16 @@ export class MultiAccountWalletService {
     return await AccountSecureStorage.getPrivateKey(accountId);
   }
 
-  static async deleteAccount(accountId: string): Promise<void> {
+  /**
+   * TASK-424: `expected` is what the caller checked before confirming. It is
+   * re-validated here, against this read, and (for a keyless deletion) inside
+   * the key-mutation mutex before the secret delete, so a check made in the UI
+   * can't go stale between the confirmation and the delete.
+   */
+  static async deleteAccount(
+    accountId: string,
+    expected: AccountDeletionExpectation
+  ): Promise<void> {
     // TASK-192: cancel any in-flight deferred notification subscribe pass. That
     // pass holds a wallet snapshot from app start and finishes with one batched
     // write, so a deletion inside its window would otherwise let it write a
@@ -1426,8 +1437,19 @@ export class MultiAccountWalletService {
       throw new Error('No wallet found');
     }
 
+    const stored = wallet.accounts.find((acc) => acc.id === accountId);
+    if (
+      !stored ||
+      stored.address !== expected.address ||
+      stored.type !== expected.type
+    ) {
+      throw new AccountDeletionPreconditionError();
+    }
+
     // Remove from secure storage
-    await AccountSecureStorage.deleteAccount(accountId);
+    await AccountSecureStorage.deleteAccount(accountId, {
+      requireNoSecret: expected.keyless,
+    });
 
     // Remove from wallet
     wallet.accounts = wallet.accounts.filter((acc) => acc.id !== accountId);

@@ -40,11 +40,14 @@ jest.mock('@/services/ledger/transport', () => ({
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
 jest.mock('@/services/network', () => ({ NetworkService: {} }));
 
-const mockSecureDeleteAccount = jest.fn(async (_id: string) => {});
+const mockSecureDeleteAccount = jest.fn(
+  async (_id: string, _options?: { requireNoSecret?: boolean }) => {}
+);
 
 jest.mock('../../secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
-    deleteAccount: (id: string) => mockSecureDeleteAccount(id),
+    deleteAccount: (id: string, options?: { requireNoSecret?: boolean }) =>
+      mockSecureDeleteAccount(id, options),
   },
 }));
 
@@ -52,6 +55,7 @@ import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 
 import { MultiAccountWalletService } from '../index';
+import { AccountType } from '@/types/wallet';
 import {
   isAccountSubscribeTokenCurrent,
   takeAccountSubscribeToken,
@@ -59,8 +63,11 @@ import {
 
 const WALLET_KEY = 'voi_wallet_metadata';
 
+let seededAddress = '';
+
 const seedWallet = (): void => {
   const account = algosdk.generateAccount();
+  seededAddress = account.addr.toString();
   mockStore[WALLET_KEY] = JSON.stringify({
     id: 'wallet-1',
     version: '1.0',
@@ -99,7 +106,11 @@ describe('MultiAccountWalletService.deleteAccount — cancels the deferred subsc
     });
 
     // Exactly what AccountImportPreviewScreen's watch→standard upgrade does.
-    await MultiAccountWalletService.deleteAccount('acc-1');
+    await MultiAccountWalletService.deleteAccount('acc-1', {
+      address: seededAddress,
+      type: AccountType.WATCH,
+      keyless: true,
+    });
 
     expect(tokenLiveDuringDeletion).toBe(false);
     expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(false);
@@ -112,7 +123,11 @@ describe('MultiAccountWalletService.deleteAccount — cancels the deferred subsc
     const inFlightToken = takeAccountSubscribeToken();
 
     await expect(
-      MultiAccountWalletService.deleteAccount('acc-1')
+      MultiAccountWalletService.deleteAccount('acc-1', {
+        address: seededAddress,
+        type: AccountType.WATCH,
+        keyless: true,
+      })
     ).rejects.toThrow('secure delete failed');
 
     expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(false);

@@ -438,6 +438,27 @@ export class AccountStorageError extends AccountError {
   }
 }
 
+/**
+ * TASK-424: a deletion's caller-stated expectation (identity, type, or no own
+ * key) no longer holds for the stored account, so nothing was deleted.
+ */
+export class AccountDeletionPreconditionError extends AccountError {
+  constructor(
+    message: string = 'This account changed before it could be deleted. Please start again.'
+  ) {
+    super(message, 'ACCOUNT_DELETION_PRECONDITION');
+    this.name = 'AccountDeletionPreconditionError';
+  }
+}
+
+/** TASK-424: what a caller checked before asking to delete an account. */
+export interface AccountDeletionExpectation {
+  address: string;
+  type: AccountType;
+  /** True when the caller confirmed the deletion as an account with no key. */
+  keyless: boolean;
+}
+
 export class AccountRetrievalError extends AccountError {
   constructor(message: string = 'Account retrieval error') {
     super(message, 'ACCOUNT_RETRIEVAL_ERROR');

@@ -118,7 +118,12 @@ it.each([
       await typeDelete(view);
       await fireEvent.press(view.getByLabelText('Delete account'));
     } else await pressAlert(alert, 'Delete');
-    expect(mockDelete).toHaveBeenCalledWith('original');
+    // TASK-424: the service re-checks what this flow confirmed.
+    expect(mockDelete).toHaveBeenCalledWith('original', {
+      address: 'ORIGINAL_ADDRESS',
+      type,
+      keyless: !protectedAccount,
+    });
   }
 );
 
@@ -209,8 +214,12 @@ it('deletes the pinned account after switching active accounts', async () => {
   await view.rerender(<SettingsScreen />);
   await typeDelete(view);
   await fireEvent.press(view.getByLabelText('Delete account'));
-  expect(mockDelete).toHaveBeenCalledWith('original');
-  expect(mockDelete).not.toHaveBeenCalledWith('other');
+  expect(mockDelete).toHaveBeenCalledWith('original', {
+    address: 'ORIGINAL_ADDRESS',
+    type: AccountType.STANDARD,
+    keyless: false,
+  });
+  expect(mockDelete).not.toHaveBeenCalledWith('other', expect.anything());
 });
 
 it.each(['removed', 'type', 'address'])(

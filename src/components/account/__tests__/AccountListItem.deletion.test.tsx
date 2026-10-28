@@ -43,6 +43,12 @@ const account = (overrides: object = {}): AccountMetadata =>
     ...overrides,
   }) as AccountMetadata;
 const onDelete = jest.fn();
+// TASK-424: the list only deletes accounts it found keyless.
+const EXPECTED = {
+  address: 'ORIGINAL_ADDRESS',
+  type: AccountType.REKEYED,
+  keyless: true,
+};
 const row = (metadata: AccountMetadata) => (
   <AccountListItem
     account={metadata}
@@ -97,7 +103,7 @@ it('hides while pending, then preserves the deletion confirmation and callback',
   await act(async () => {
     await alert.mock.calls[0][2]?.[1].onPress?.();
   });
-  expect(onDelete).toHaveBeenCalledWith('rekeyed');
+  expect(onDelete).toHaveBeenCalledWith('rekeyed', EXPECTED);
 });
 
 it.each([
@@ -152,7 +158,7 @@ describe('open confirmation re-checks current protection', () => {
     await act(async () => {
       await destructive.onPress!();
     });
-    expect(onDelete).toHaveBeenCalledWith('rekeyed');
+    expect(onDelete).toHaveBeenCalledWith('rekeyed', EXPECTED);
   });
 
   it('refuses when the account became originalOwner while the alert was open', async () => {

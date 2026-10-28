@@ -14,7 +14,9 @@
  * only the deletion path carries behaviour here.
  */
 
-const mockDeleteAccount = jest.fn(async (_id: string) => {});
+const mockDeleteAccount = jest.fn(
+  async (_id: string, _expected?: unknown) => {}
+);
 const mockGetCurrentWallet = jest.fn(async () => ({
   id: 'wallet-1',
   accounts: [] as unknown[],
@@ -33,7 +35,8 @@ jest.mock('@/services/network', () => ({
 
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
-    deleteAccount: (id: string) => mockDeleteAccount(id),
+    deleteAccount: (id: string, expected: unknown) =>
+      mockDeleteAccount(id, expected),
     getCurrentWallet: () => mockGetCurrentWallet(),
     getAccount: jest.fn(async () => null),
     updateAccountMetadata: jest.fn(async () => {}),
@@ -83,12 +86,18 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 import { useWalletStore } from '../walletStore';
+import { AccountType } from '@/types/wallet';
 import {
   isAccountSubscribeTokenCurrent,
   takeAccountSubscribeToken,
 } from '@/services/notifications/subscribePass';
 
 const ADDRESS = 'A'.repeat(58);
+const EXPECTED = {
+  address: ADDRESS,
+  type: AccountType.WATCH,
+  keyless: true,
+};
 
 describe('walletStore.deleteAccount — cancels the deferred subscribe pass (TASK-192)', () => {
   beforeEach(() => {
@@ -121,9 +130,9 @@ describe('walletStore.deleteAccount — cancels the deferred subscribe pass (TAS
         isAccountSubscribeTokenCurrent(inFlightToken);
     });
 
-    await useWalletStore.getState().deleteAccount('acct-1');
+    await useWalletStore.getState().deleteAccount('acct-1', EXPECTED);
 
-    expect(mockDeleteAccount).toHaveBeenCalledWith('acct-1');
+    expect(mockDeleteAccount).toHaveBeenCalledWith('acct-1', EXPECTED);
     expect(mockUnsubscribeAccount).toHaveBeenCalledWith(ADDRESS);
     // Already stale when the deletion began...
     expect(tokenLiveWhenDeletionStarted).toBe(false);
@@ -140,14 +149,14 @@ describe('walletStore.deleteAccount — cancels the deferred subscribe pass (TAS
     const inFlightToken = takeAccountSubscribeToken();
 
     await expect(
-      useWalletStore.getState().deleteAccount('acct-1')
+      useWalletStore.getState().deleteAccount('acct-1', EXPECTED)
     ).rejects.toThrow('storage write failed');
 
     expect(isAccountSubscribeTokenCurrent(inFlightToken)).toBe(false);
   });
 
   it('does not leave future passes permanently blocked', async () => {
-    await useWalletStore.getState().deleteAccount('acct-1');
+    await useWalletStore.getState().deleteAccount('acct-1', EXPECTED);
 
     // A pass launched after the deletion takes a fresh token and is live.
     const nextToken = takeAccountSubscribeToken();

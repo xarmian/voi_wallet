@@ -25,7 +25,12 @@ import {
   useActiveAccount,
   useWalletStore,
 } from '@/store/walletStore';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import {
+  AccountDeletionExpectation,
+  AccountDeletionPreconditionError,
+  AccountMetadata,
+  AccountType,
+} from '@/types/wallet';
 import AccountListItem from './AccountListItem';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -126,13 +131,18 @@ export default function AccountListModal({
 
   // Handle account deletion
   const handleDeleteAccount = useCallback(
-    async (accountId: string) => {
+    async (accountId: string, expected: AccountDeletionExpectation) => {
       try {
-        await deleteAccount(accountId);
+        await deleteAccount(accountId, expected);
         Alert.alert('Success', 'Account deleted successfully');
       } catch (error) {
         console.error('Failed to delete account:', error);
-        Alert.alert('Error', 'Failed to delete account');
+        Alert.alert(
+          'Error',
+          error instanceof AccountDeletionPreconditionError
+            ? error.message
+            : 'Failed to delete account'
+        );
       }
     },
     [deleteAccount]
