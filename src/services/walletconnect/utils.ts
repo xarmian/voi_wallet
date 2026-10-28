@@ -7,11 +7,8 @@ import {
   SessionProposal,
 } from './types';
 import type { WalletConnectV1PeerMeta } from './v1/types';
-import {
-  AccountType,
-  AccountMetadata,
-  RekeyedAccountMetadata,
-} from '@/types/wallet';
+import { AccountType, AccountMetadata } from '@/types/wallet';
+import { getRekeyStateStrict } from '@/store/walletStore';
 import { NetworkId } from '@/types/network';
 import { VOI_CHAIN_DATA, ALGORAND_MAINNET_CHAIN_DATA } from './config';
 
@@ -248,15 +245,59 @@ export function getSignableAccounts(
       case AccountType.REMOTE_SIGNER:
         return true;
       case AccountType.REKEYED:
-        // Can sign if we have the signing authority
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        return rekeyedAccount.canSign === true;
+        // Candidate only: proposal eligibility must probe each chain.
+        return true;
       case AccountType.WATCH:
         return false;
       default:
         return false;
     }
   });
+}
+
+export async function resolveProposalEligibility(
+  accounts: AccountMetadata[],
+  chainIds: string[]
+) {
+  return Promise.all(
+    accounts.map(async (account) => {
+      const eligibleChains: string[] = [];
+      const errorChains: string[] = [];
+      for (const chain of chainIds) {
+        if (account.type === AccountType.REKEYED) {
+          const network = getNetworkByChainId(chain);
+          if (!network) continue;
+          try {
+            if ((await getRekeyStateStrict(account.address, network)).canSign)
+              eligibleChains.push(chain);
+          } catch {
+            errorChains.push(chain);
+          }
+        } else if (getSignableAccounts([account]).length) {
+          eligibleChains.push(chain);
+        }
+      }
+      return { account, eligibleChains, errorChains };
+    })
+  );
+}
+
+/** Shared approval chain policy; unsupported required chains are rejected by the service. */
+export function getProposalChains(
+  proposal: SessionProposal,
+  allowUnsupportedNetworks: boolean
+): string[] {
+  const chains = allowUnsupportedNetworks
+    ? [
+        ...new Set([
+          ...(proposal.requiredNamespaces?.algorand?.chains ?? []),
+          ...(proposal.optionalNamespaces?.algorand?.chains ?? []),
+        ]),
+      ]
+    : detectRequestedChains(proposal);
+  return chains.length
+    ? chains
+    : [VOI_CHAIN_DATA.chainId, ALGORAND_MAINNET_CHAIN_DATA.chainId];
 }
 
 export function formatChainId(genesisHash: string): string {

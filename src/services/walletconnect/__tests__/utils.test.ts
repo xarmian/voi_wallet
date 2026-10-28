@@ -1,3 +1,4 @@
+jest.mock('@/store/walletStore', () => ({ getRekeyStateStrict: jest.fn() }));
 import { Buffer } from 'buffer';
 import algosdk from 'algosdk';
 import {
@@ -585,11 +586,11 @@ describe('getSignableAccounts', () => {
     expect(getSignableAccounts([watch])).toEqual([]);
   });
 
-  it('includes a REKEYED account only when canSign is true', () => {
+  it('keeps REKEYED candidates for the async chain probe', () => {
     const canSign = rekeyedAccount(ADDR_A, true, AUTH_ADDR);
     const cannot = rekeyedAccount(ADDR_B, false, AUTH_ADDR);
     const result = getSignableAccounts([canSign, cannot]);
-    expect(result).toEqual([canSign]);
+    expect(result).toEqual([canSign, cannot]);
   });
 
   it('filters a mixed set down to exactly the signable accounts', () => {
@@ -599,7 +600,7 @@ describe('getSignableAccounts', () => {
       rekeyedAccount(AUTH_ADDR, false, ADDR_A),
     ];
     const result = getSignableAccounts(accounts);
-    expect(result).toHaveLength(1);
+    expect(result).toHaveLength(2);
     expect(result[0].address).toBe(ADDR_A);
   });
 
