@@ -28,6 +28,7 @@
  */
 
 import React from 'react';
+import { SecureKeyManager } from '@/services/secure/keyManager';
 import { render, fireEvent, act } from '@testing-library/react-native';
 import type { AccountBalance } from '@/types/wallet';
 
@@ -180,9 +181,22 @@ jest.mock('@/components/common/UniversalHeader', () => ({
   __esModule: true,
   default: () => null,
 }));
-jest.mock('@/components/common/GlassButton', () => ({
-  GlassButton: () => null,
-}));
+jest.mock('@/components/common/GlassButton', () => {
+  const { Pressable, Text } = require('react-native');
+  return {
+    GlassButton: ({
+      label,
+      disabled,
+    }: {
+      label: string;
+      disabled: boolean;
+    }) => (
+      <Pressable accessibilityRole="button" disabled={disabled}>
+        <Text>{label}</Text>
+      </Pressable>
+    ),
+  };
+});
 jest.mock('@/components/account/AccountListModal', () => ({
   __esModule: true,
   default: () => null,
@@ -312,6 +326,15 @@ beforeEach(() => {
   mockRouteParams = undefined;
   mockBalances = {};
   mockTokenMappings = [];
+  jest.mocked(SecureKeyManager.getSigningInfo).mockReset().mockResolvedValue({
+    canSign: false,
+    signingAddress: 'WATCH',
+    isRekeyed: true,
+  });
+  jest
+    .mocked(SecureKeyManager.getLedgerSigningInfo)
+    .mockReset()
+    .mockRejectedValue(new Error('No Ledger signer'));
 
   mockGetAccountBalance.mockReset();
   mockGetAccountBalance.mockImplementation((networkId: string) =>
@@ -568,4 +591,40 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
     expect(screen.getByDisplayValue('1')).toBeTruthy();
     await settle();
   });
+});
+
+it('retries a failed WATCH authority lookup without showing watch-only status', async () => {
+  mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+  const retry =
+    makeDeferred<Awaited<ReturnType<typeof SecureKeyManager.getSigningInfo>>>();
+  jest
+    .mocked(SecureKeyManager.getSigningInfo)
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockReturnValueOnce(retry.promise);
+  const screen = await render(<SendScreen />);
+  await settle();
+  expect(screen.getByText("Couldn't check signing authority")).toBeTruthy();
+  expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Send Transaction' })
+  ).toBeDisabled();
+  jest
+    .mocked(SecureKeyManager.getLedgerSigningInfo)
+    .mockResolvedValueOnce({} as never);
+  await fireEvent.press(screen.getByText('Retry'));
+  await settle();
+  expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Send Transaction' })
+  ).toBeDisabled();
+  await act(async () =>
+    retry.resolve({ canSign: true, signingAddress: 'LEDGER', isRekeyed: true })
+  );
+  expect(screen.queryByText("Couldn't check signing authority")).toBeNull();
+  expect(screen.getByText(/Ledger signer detected/)).toBeTruthy();
+  expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledTimes(2);
+  expect(SecureKeyManager.getSigningInfo).toHaveBeenLastCalledWith(
+    'WATCH',
+    VOI
+  );
 });
