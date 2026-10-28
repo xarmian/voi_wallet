@@ -720,3 +720,34 @@ it('passes validation cost estimation the request network', async () => {
     estimate.mockRestore();
   }
 });
+
+// The request network, rather than persisted account kind/authority, owns this verdict.
+it.each([false, true])(
+  'rekey duplicate check uses chain state (%s)',
+  async (isRekeyed) => {
+    mockGetAccountBalance.mockResolvedValue({
+      amount: 1000000n,
+      minBalance: 100000n,
+      rekeyInfo: { isRekeyed, authAddress: isRekeyed ? RECIPIENT : undefined },
+    });
+    const errors = await TransactionService.validateRekeyTransaction(
+      SENDER,
+      RECIPIENT,
+      {
+        accounts: [
+          {
+            address: SENDER,
+            type: isRekeyed ? AccountType.STANDARD : AccountType.REKEYED,
+            authAddress: RECIPIENT,
+            canSign: false,
+          },
+          { address: RECIPIENT, type: AccountType.STANDARD },
+        ],
+      }
+    );
+    expect(errors.includes('Account is already rekeyed to this address')).toBe(
+      isRekeyed
+    );
+    expect(errors).not.toContain('Failed to validate transaction requirements');
+  }
+);

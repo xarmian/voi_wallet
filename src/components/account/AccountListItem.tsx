@@ -4,15 +4,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import * as Clipboard from 'expo-clipboard';
+import { AccountMetadata, AccountType } from '@/types/wallet';
 import {
-  AccountMetadata,
-  AccountType,
-  RekeyedAccountMetadata,
-} from '@/types/wallet';
-import { useWalletStore, useAccountBalance } from '@/store/walletStore';
+  useWalletStore,
+  useAccountBalance,
+  useRekeyState,
+} from '@/store/walletStore';
 import AccountAvatar from './AccountAvatar';
 import { formatNativeBalance } from '@/utils/bigint';
-import { useCurrentNetworkConfig } from '@/store/networkStore';
+import {
+  useCurrentNetworkConfig,
+  useCurrentNetwork,
+} from '@/store/networkStore';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 
 interface AccountListItemProps {
@@ -41,6 +44,7 @@ export default function AccountListItem({
   const setActiveAccount = useWalletStore((state) => state.setActiveAccount);
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
   const accountBalanceData = useAccountBalance(account.id);
+  const rekeyState = useRekeyState(account.address, useCurrentNetwork());
   const currentNetworkConfig = useCurrentNetworkConfig();
   const [deletionProtection, setDeletionProtection] = useState<{
     account: AccountMetadata;
@@ -89,6 +93,15 @@ export default function AccountListItem({
   };
 
   const getAccountTypeLabel = (account: AccountMetadata) => {
+    if (rekeyState.status !== 'loaded') return '';
+    if (rekeyState.isRekeyed) {
+      const signer = walletAccounts?.find(
+        (candidate) => candidate.address === rekeyState.authAddress
+      );
+      if (signer?.type === AccountType.LEDGER) return 'Ledger';
+      if (signer?.type === AccountType.REMOTE_SIGNER) return 'Airgap';
+      return rekeyState.canSign ? 'Rekeyed' : 'Rekeyed (No Key)';
+    }
     switch (account.type) {
       case AccountType.STANDARD:
         return '';
@@ -98,36 +111,6 @@ export default function AccountListItem({
         return 'Ledger';
       case AccountType.REMOTE_SIGNER:
         return 'Airgap';
-      case AccountType.REKEYED:
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        const hasLedgerSigner =
-          walletAccounts?.some(
-            (candidate) =>
-              candidate.type === AccountType.LEDGER &&
-              candidate.address === rekeyedAccount.authAddress
-          ) ?? false;
-
-        if (hasLedgerSigner) {
-          return 'Ledger';
-        }
-
-        // Check if rekeyed to a remote signer account
-        const hasRemoteSignerAuth =
-          walletAccounts?.some(
-            (candidate) =>
-              candidate.type === AccountType.REMOTE_SIGNER &&
-              candidate.address === rekeyedAccount.authAddress
-          ) ?? false;
-
-        if (hasRemoteSignerAuth) {
-          return 'Airgap';
-        }
-
-        if (rekeyedAccount.canSign) {
-          return 'Rekeyed';
-        }
-
-        return 'Rekeyed (No Key)';
       default:
         return '';
     }
