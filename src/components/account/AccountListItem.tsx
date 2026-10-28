@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
@@ -13,6 +13,7 @@ import { useWalletStore, useAccountBalance } from '@/store/walletStore';
 import AccountAvatar from './AccountAvatar';
 import { formatNativeBalance } from '@/utils/bigint';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
+import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 
 interface AccountListItemProps {
   account: AccountMetadata;
@@ -41,6 +42,30 @@ export default function AccountListItem({
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
   const accountBalanceData = useAccountBalance(account.id);
   const currentNetworkConfig = useCurrentNetworkConfig();
+  const [deletionProtection, setDeletionProtection] = useState<{
+    account: AccountMetadata;
+    protected: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (account.type !== AccountType.REKEYED) return;
+    let cancelled = false;
+    void isListDeletionProtected(account).then((protectedAccount) => {
+      if (!cancelled) {
+        setDeletionProtection({ account, protected: protectedAccount });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  // A result belongs only to the metadata it checked; pending stays hidden.
+  const canDelete =
+    account.type !== AccountType.STANDARD &&
+    (account.type !== AccountType.REKEYED ||
+      (deletionProtection?.account === account &&
+        !deletionProtection.protected));
 
   // Extract values without destructuring to avoid infinite loops
   const centralizedBalance = accountBalanceData.balance;
@@ -137,7 +162,7 @@ export default function AccountListItem({
   };
 
   const handleDelete = () => {
-    if (onDelete && account.type !== AccountType.STANDARD) {
+    if (onDelete && canDelete) {
       Alert.alert(
         'Delete Account',
         `Are you sure you want to delete "${account.label || 'this account'}"?`,
@@ -225,7 +250,7 @@ export default function AccountListItem({
               </TouchableOpacity>
             )}
 
-            {onDelete && account.type !== AccountType.STANDARD && (
+            {onDelete && canDelete && (
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={handleDelete}
