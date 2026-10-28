@@ -2172,25 +2172,37 @@ export class MultiAccountWalletService {
     if (!walletData) {
       return false;
     }
+    let rekeyedIds: string[] = [];
     try {
       const parsed = JSON.parse(walletData) as Wallet;
       if (!Array.isArray(parsed.accounts)) {
         return false;
       }
-      // TASK-419: a REKEYED account counts too. Rekeying converts STANDARD →
-      // REKEYED in the blob only and retains the original key, so a REKEYED-only
-      // wallet can hold local key material. Over-counting an imported REKEYED
-      // (no local key) only routes "no PIN" to resume/recovery: fail closed.
-      return parsed.accounts.some(
-        (acc) =>
-          acc?.type === AccountType.STANDARD ||
-          acc?.type === AccountType.REKEYED
-      );
+      if (parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD)) {
+        return true;
+      }
+      rekeyedIds = parsed.accounts
+        .filter(
+          (acc) =>
+            acc?.type === AccountType.REKEYED &&
+            typeof acc.id === 'string' &&
+            acc.id !== ''
+        )
+        .map((acc) => acc.id);
     } catch {
       // A corrupt blob is handled (thrown) by hasWalletWithAccountsStrict; here we
       // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
       return false;
     }
+    // TASK-419: a REKEYED account is key-bearing only if it still holds its
+    // original key (rekeying converts STANDARD → REKEYED in the blob and keeps
+    // the key; discovered/imported REKEYED accounts hold none). A probe failure
+    // PROPAGATES (fail closed, like the sibling strict reads). Concurrent, so
+    // the AuthContext read stays one probe deep under its outer timeout.
+    const present = await Promise.all(
+      rekeyedIds.map((id) => AccountSecureStorage.probeSecretPresenceStrict(id))
+    );
+    return present.some(Boolean);
   }
 
   /**
