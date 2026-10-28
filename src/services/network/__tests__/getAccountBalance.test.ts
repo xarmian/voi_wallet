@@ -1,3 +1,4 @@
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import { NetworkService } from '../index';
 import { NetworkId } from '@/types/network';
@@ -360,6 +361,29 @@ describe('NetworkService.getAccountRekeyInfo (independent fetch, DR-1)', () => {
     expect(indexerCalls).toBe(0);
   });
 
+  it('invalidates cached authority and rejects caching a response from before invalidation', async () => {
+    let finish!: (info: object) => void;
+    const fetch = jest.fn(
+      () =>
+        new Promise<object>((resolve) => {
+          finish = resolve;
+        })
+    );
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: fetch }),
+    };
+    const pending = service.getAccountRekeyInfo(ADDRESS, true);
+    invalidateRekeyStatus();
+    finish({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    await pending;
+    expect((service as any).rekeyInfoCache.has(ADDRESS)).toBe(false);
+    fetch.mockResolvedValue({});
+    await service.getAccountRekeyInfo(ADDRESS, true);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    invalidateRekeyStatus();
+    await service.getAccountRekeyInfo(ADDRESS, true);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
   it('returns a fresh cache entry without a network fetch (cache semantics preserved)', async () => {
     const cachedInfo = { isRekeyed: false };
     (service as any).rekeyInfoCache.set(ADDRESS, {

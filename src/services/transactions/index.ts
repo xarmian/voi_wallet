@@ -1,3 +1,4 @@
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import {
   networkService as defaultNetworkService,
@@ -1563,6 +1564,7 @@ export class TransactionService {
         signedTxnBlob,
         params.networkId
       );
+      invalidateRekeyStatus();
       callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction
@@ -1712,6 +1714,7 @@ export class TransactionService {
         signedTxnBlob,
         params.networkId
       );
+      invalidateRekeyStatus();
       callbacks?.onNetworkConfirmed?.(txId, confirmed);
 
       // Record successful transaction

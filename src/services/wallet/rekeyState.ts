@@ -21,7 +21,8 @@ export function deriveRekeyState(
   address: string,
   info: RekeyInfo,
   accounts: AccountMetadata[]
-): Extract<RekeyState, { status: 'loaded' }> {
+): Exclude<RekeyState, { status: 'loading' }> {
+  if (info.unavailable) return { status: 'error' };
   const authAddress = info.isRekeyed ? info.authAddress : undefined;
   const signingAddress = info.isRekeyed ? authAddress : address;
   const matches = accounts.filter((a) => a.address === signingAddress);

@@ -1,4 +1,5 @@
 import { withTimeout } from '@/utils/withTimeout';
+import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import {
   AccountBalance,
@@ -65,6 +66,7 @@ export class NetworkService {
   private mimirService?: MimirApiService;
   private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> =
     new Map();
+  private rekeyCacheEpoch = getRekeyStatusEpoch();
   private rekeyInfoCacheTTL: number = 10000; // 10 second cache
   // Cache of immutable ASA params (decimals/name/unitName). Cleared on
   // switchNetwork (this instance is reused across networks). Keyed by the asset
@@ -1395,6 +1397,11 @@ export class NetworkService {
         throw new Error('Invalid Algorand address');
       }
 
+      const epoch = getRekeyStatusEpoch();
+      if (this.rekeyCacheEpoch !== epoch) {
+        this.rekeyInfoCache.clear();
+        this.rekeyCacheEpoch = epoch;
+      }
       // Check cache first
       const cached = this.rekeyInfoCache.get(address);
       const now = Date.now();
@@ -1430,10 +1437,11 @@ export class NetworkService {
       if (!isRekeyed) {
         const result = { isRekeyed: false };
         // Cache the result
-        this.rekeyInfoCache.set(address, {
-          info: result,
-          timestamp: Date.now(),
-        });
+        if (epoch === getRekeyStatusEpoch())
+          this.rekeyInfoCache.set(address, {
+            info: result,
+            timestamp: Date.now(),
+          });
         return result;
       }
 
@@ -1478,7 +1486,11 @@ export class NetworkService {
       };
 
       // Cache the result
-      this.rekeyInfoCache.set(address, { info: result, timestamp: Date.now() });
+      if (epoch === getRekeyStatusEpoch())
+        this.rekeyInfoCache.set(address, {
+          info: result,
+          timestamp: Date.now(),
+        });
 
       return result;
     } catch (error) {

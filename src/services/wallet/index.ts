@@ -1,3 +1,4 @@
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 import { storage, secureStorage } from '../../platform';
@@ -1408,6 +1409,7 @@ export class MultiAccountWalletService {
   }
 
   static async clearAllWallets(): Promise<void> {
+    invalidateRekeyStatus();
     // TASK-192: cancel any in-flight deferred notification subscribe pass, for
     // the same reason deleteAccount does — that pass holds a wallet snapshot
     // from app start and finishes with one batched write, so a wipe inside its

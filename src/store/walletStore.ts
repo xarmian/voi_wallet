@@ -3786,11 +3786,13 @@ export async function getRekeyStateStrict(
     address,
     true
   );
-  return deriveRekeyState(
+  const state = deriveRekeyState(
     address,
     info,
     useWalletStore.getState().wallet?.accounts ?? []
   );
+  if (state.status !== 'loaded') throw new Error('Rekey status unavailable');
+  return state;
 }
 
 // Shallow equality keeps the discriminated result stable across store updates,
