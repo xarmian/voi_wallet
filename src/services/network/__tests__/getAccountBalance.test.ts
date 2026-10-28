@@ -90,6 +90,15 @@ describe('NetworkService.getAccountBalance (batch + dedupe, TASK-46)', () => {
 
   // TASK-421 (c): a failed rekey lookup must be distinguishable from "not
   // rekeyed", so nothing persists a metadata conversion from the fallback.
+  it('flags a failed bulk rekey lookup unavailable, never plain not-rekeyed', async () => {
+    jest
+      .spyOn(service, 'getAccountRekeyInfo')
+      .mockRejectedValue(new Error('algod 503'));
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await service.getMultipleAccountRekeyInfo([ADDRESS]);
+    expect(result[ADDRESS]).toEqual({ isRekeyed: false, unavailable: true });
+  });
+
   it('flags the rekey fallback unavailable when the rekey lookup fails', async () => {
     let callCount = 0;
     (service as any).algodClient = {

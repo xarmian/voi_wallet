@@ -1541,7 +1541,8 @@ export class NetworkService {
             `Failed to check rekey status for ${redactAddress(address)}:`,
             redactError(result.reason)
           );
-          rekeyInfo[address] = { isRekeyed: false };
+          // A failed lookup is unknown, never "not rekeyed" (TASK-421).
+          rekeyInfo[address] = { isRekeyed: false, unavailable: true };
         }
       });
 
