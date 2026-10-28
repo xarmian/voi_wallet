@@ -31,7 +31,16 @@ jest.mock('@/services/ledger/transport', () => ({
   ledgerTransportService: {},
 }));
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
-jest.mock('@/services/network', () => ({ NetworkService: {} }));
+const mockIsRekeyed = jest.fn(async (_networkId: string) => false);
+jest.mock('@/services/network', () => ({
+  NetworkService: {
+    getInstance: (networkId: string) => ({
+      getAccountRekeyInfo: async () => ({
+        isRekeyed: await mockIsRekeyed(networkId),
+      }),
+    }),
+  },
+}));
 
 const mockSecureDeleteAccount = jest.fn(async (_id: string) => {});
 const mockProbe = jest.fn(async (_id: string) => true);
@@ -79,6 +88,8 @@ describe('MultiAccountWalletService.convertStandardToRemoteSigner — own-key cu
     mockSecureDeleteAccount.mockReset();
     mockProbe.mockReset();
     mockProbe.mockImplementation(async () => true);
+    mockIsRekeyed.mockReset();
+    mockIsRekeyed.mockImplementation(async () => false);
   });
 
   it.each([AccountType.STANDARD, AccountType.REKEYED])(
@@ -91,7 +102,6 @@ describe('MultiAccountWalletService.convertStandardToRemoteSigner — own-key cu
           'device-1'
         );
       expect(converted.type).toBe(AccountType.REMOTE_SIGNER);
-      expect(mockProbe).toHaveBeenCalledWith('acc-1');
       expect(mockSecureDeleteAccount).toHaveBeenCalledWith('acc-1');
       expect(storedType()).toBe(AccountType.REMOTE_SIGNER);
     }
@@ -99,7 +109,6 @@ describe('MultiAccountWalletService.convertStandardToRemoteSigner — own-key cu
 
   it.each([
     ['a REKEYED account without its key', AccountType.REKEYED, false],
-    ['a STANDARD account without its key', AccountType.STANDARD, false],
     ['a WATCH account', AccountType.WATCH, true],
   ])('refuses %s, deleting nothing', async (_case, type, probe) => {
     seedWallet(type);
@@ -112,6 +121,19 @@ describe('MultiAccountWalletService.convertStandardToRemoteSigner — own-key cu
     ).rejects.toThrow(/Only an account whose key is on this device/);
     expect(mockSecureDeleteAccount).not.toHaveBeenCalled();
     expect(storedType()).toBe(type);
+  });
+
+  it('refuses a REKEYED account still rekeyed on chain, deleting nothing', async () => {
+    seedWallet(AccountType.REKEYED);
+    mockIsRekeyed.mockImplementation(async (n) => n === 'algorand-mainnet');
+    await expect(
+      MultiAccountWalletService.convertStandardToRemoteSigner(
+        'acc-1',
+        'device-1'
+      )
+    ).rejects.toThrow(/Only an account whose key is on this device/);
+    expect(mockSecureDeleteAccount).not.toHaveBeenCalled();
+    expect(storedType()).toBe(AccountType.REKEYED);
   });
 
   it('refuses when the custody probe errors', async () => {

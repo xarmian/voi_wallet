@@ -11,6 +11,7 @@ import { getCrypto } from '@/platform';
 import { NetworkService } from '../network';
 import { NetworkId } from '@/types/network';
 import { SecureKeyManager } from '../secure/keyManager';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import {
   RemoteSignerRequest,
   RemoteSignerResponse,
@@ -76,6 +77,10 @@ export async function signPairingMessage(
       { address, purpose: 'verification' },
       pin
     );
+    // TASK-425 U2: a pairing proof is signed only with the address's own key.
+    if (!keyBelongsToAddress(sk, address)) {
+      throw new Error('The stored key does not belong to this account');
+    }
     return nacl.sign.detached(messageBytes, sk);
   } finally {
     if (sk) {

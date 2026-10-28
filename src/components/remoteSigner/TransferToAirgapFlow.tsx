@@ -1,7 +1,8 @@
 /**
  * TransferToAirgapFlow Component
  *
- * Multi-step flow for transferring a STANDARD account to an airgap signer device.
+ * Multi-step flow for transferring an account whose own key this device holds
+ * (canTransferOwnKey) to an airgap signer device.
  * The flow:
  * 1. Show disclaimer (recommending new keys on airgap device)
  * 2. Authenticate with PIN/biometric

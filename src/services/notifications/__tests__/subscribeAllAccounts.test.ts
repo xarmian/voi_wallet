@@ -193,9 +193,12 @@ jest.mock('../../../platform', () => ({
 
 // TASK-425 U2: whether a REKEYED record kept its own key is a secret-store
 // probe; each test sets the answer.
-const mockHoldsOwnKey = jest.fn(async (_account: unknown) => true);
+const mockProbeOwnKey = jest.fn(
+  async (_account: unknown): Promise<'present' | 'absent' | 'unresolved'> =>
+    'present'
+);
 jest.mock('@/services/wallet/ownKeyCustody', () => ({
-  holdsOwnKey: (account: unknown) => mockHoldsOwnKey(account),
+  probeOwnKey: (account: unknown) => mockProbeOwnKey(account),
 }));
 
 import { notificationService } from '../index';
@@ -264,8 +267,8 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  mockHoldsOwnKey.mockReset();
-  mockHoldsOwnKey.mockImplementation(async () => true);
+  mockProbeOwnKey.mockReset();
+  mockProbeOwnKey.mockImplementation(async () => 'present');
   mockDb.rows.clear();
   mockDb.selectCalls = [];
   mockDb.upsertCalls = [];
@@ -389,8 +392,8 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
   });
 
   it('disables messages for a REKEYED account that has not kept its own key (TASK-425)', async () => {
-    mockHoldsOwnKey.mockImplementation(
-      async (acc) => (acc as { address: string }).address === STANDARD_A
+    mockProbeOwnKey.mockImplementation(async (acc) =>
+      (acc as { address: string }).address === STANDARD_A ? 'present' : 'absent'
     );
 
     await notificationService.subscribeAllAccounts([
@@ -403,7 +406,23 @@ describe('subscribeAllAccounts — defaults are decided per account', () => {
     expect(writtenRow(STANDARD_B)?.notify_messages).toBe(false);
     // Only REKEYED is probed: a LEDGER default is unchanged.
     expect(writtenRow(LEDGER_A)?.notify_messages).toBe(true);
-    expect(mockHoldsOwnKey).toHaveBeenCalledTimes(2);
+    expect(mockProbeOwnKey).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a REKEYED account whose probe is unresolved, rather than storing false (TASK-425)', async () => {
+    mockProbeOwnKey.mockImplementation(async (acc) =>
+      (acc as { address: string }).address === STANDARD_B
+        ? 'unresolved'
+        : 'present'
+    );
+
+    await notificationService.subscribeAllAccounts([
+      account(STANDARD_A, AccountType.STANDARD),
+      account(STANDARD_B, AccountType.REKEYED),
+    ]);
+
+    expect(writtenAddresses()).toEqual([STANDARD_A]);
+    expect(mockDb.rows.has(STANDARD_B)).toBe(false);
   });
 });
 

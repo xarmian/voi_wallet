@@ -37,7 +37,10 @@ import {
 import { useAccounts, useWalletStore } from '@/store/walletStore';
 import { AppMode } from '@/types/remoteSigner';
 import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
-import { OwnKeyAccount } from '@/services/wallet/ownKeyCustody';
+import {
+  filterTransferableAccounts,
+  OwnKeyAccount,
+} from '@/services/wallet/ownKeyCustody';
 import * as Updates from 'expo-updates';
 import AccountListModal from '@/components/account/AccountListModal';
 import { TransferToAirgapFlow } from '@/components/remoteSigner/TransferToAirgapFlow';
@@ -86,9 +89,10 @@ export default function RemoteSignerSettingsScreen() {
   const accounts = useAccounts();
   const refresh = useWalletStore((state) => state.refresh);
 
-  // The accounts whose own key we hold, which can be transferred to airgap
-  // (TASK-425 U2: a REKEYED account that kept its key included).
-  const transferableAccounts = useOwnKeyAccounts(accounts) ?? NO_ACCOUNTS;
+  // The accounts whose own key we hold and which that key controls, so they
+  // can be transferred to airgap (TASK-425 U2: an undone rekey included).
+  const transferableAccounts =
+    useOwnKeyAccounts(accounts, filterTransferableAccounts) ?? NO_ACCOUNTS;
   const transferableIds = useMemo(
     () => new Set(transferableAccounts.map((acc) => acc.id)),
     [transferableAccounts]

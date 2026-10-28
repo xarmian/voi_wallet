@@ -37,7 +37,7 @@ import {
   classifyKeyHolding,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
-import { holdsOwnKey } from './ownKeyCustody';
+import { canTransferOwnKey } from './ownKeyCustody';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
@@ -814,7 +814,8 @@ export class MultiAccountWalletService {
    * This removes the private key and converts the account type.
    * Used when transferring an account to an airgap device.
    *
-   * @param accountId - The ID of the STANDARD account to convert
+   * @param accountId - The ID of the account to convert: one whose own key
+   *   this device holds and which that key controls (canTransferOwnKey)
    * @param signerDeviceId - The device ID of the airgap signer
    * @param signerDeviceName - Optional friendly name for the signer device
    * @returns The new RemoteSignerAccountMetadata
@@ -841,9 +842,9 @@ export class MultiAccountWalletService {
 
     const existingAccount = wallet.accounts[accountIndex];
 
-    // TASK-425 U2: any account whose own key this device holds, a REKEYED
-    // account that kept its key included.
-    if (!(await holdsOwnKey(existingAccount))) {
+    // TASK-425 U2: an account whose own key this device holds and controls
+    // it on chain (a REKEYED account whose rekey was undone included).
+    if (!(await canTransferOwnKey(existingAccount))) {
       throw new Error(
         `Cannot convert account type ${existingAccount.type} to remote signer. Only an account whose key is on this device can be converted.`
       );

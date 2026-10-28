@@ -32,7 +32,7 @@ import {
 } from './subscribePass';
 import Toast from 'react-native-toast-message';
 import { AccountMetadata, AccountType } from '@/types/wallet';
-import { holdsOwnKey } from '@/services/wallet/ownKeyCustody';
+import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { deviceId } from '../../platform';
 import { redactAddress } from '@/utils/logRedaction';
 
@@ -416,17 +416,20 @@ class NotificationService {
     // decrypt, the device can decrypt, so `messages` ORs across duplicates.
     const pending = new Map<string, { messages: boolean }>();
     // TASK-425 U2: a REKEYED record may or may not have kept its own key, so
-    // probe it rather than trusting the type.
-    const rekeyedHoldsKey = new Map(
+    // probe it rather than trusting the type. An unresolved probe skips that
+    // account this pass: defaults are insert-if-absent, so writing `false` on
+    // a transient error would stick.
+    const rekeyedKey = new Map(
       await Promise.all(
         accounts
           .filter((account) => account.type === AccountType.REKEYED)
           .map(
-            async (account) => [account.id, await holdsOwnKey(account)] as const
+            async (account) => [account.id, await probeOwnKey(account)] as const
           )
       )
     );
     for (const account of accounts) {
+      if (rekeyedKey.get(account.id) === 'unresolved') continue;
       const address = this.validateAddress(
         account.address,
         'subscribeAllAccounts'
@@ -435,7 +438,7 @@ class NotificationService {
 
       const canDecryptMessages =
         account.type === AccountType.REKEYED
-          ? rekeyedHoldsKey.get(account.id) === true
+          ? rekeyedKey.get(account.id) === 'present'
           : account.type !== AccountType.WATCH;
       const existing = pending.get(address);
       if (existing) {

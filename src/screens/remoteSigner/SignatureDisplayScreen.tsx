@@ -32,6 +32,7 @@ import {
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
 import { filterOwnKeyAccounts } from '@/services/wallet/ownKeyCustody';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
 import { redactError } from '@/utils/logRedaction';
@@ -126,6 +127,13 @@ export default function SignatureDisplayScreen() {
           if (!privateKey) {
             throw new Error(
               `Could not retrieve private key for account: ${account.label || account.address}`
+            );
+          }
+          // TASK-425 U2: sign only with the account's OWN key.
+          if (!keyBelongsToAddress(privateKey, account.address)) {
+            privateKey.fill(0);
+            throw new Error(
+              `The stored key does not belong to account: ${account.label || account.address}`
             );
           }
 
