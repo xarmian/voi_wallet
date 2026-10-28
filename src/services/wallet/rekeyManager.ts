@@ -14,6 +14,7 @@ import {
 import { networkService, RekeyInfo } from '@/services/network';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import { redactError } from '@/utils/logRedaction';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 
 export interface SigningAuthorityCheck {
   accountAddress: string;
@@ -184,19 +185,44 @@ export class RekeyManager {
     wallet: Wallet
   ): Promise<AccountMetadata> {
     try {
+      // TASK-421 (c): a failed rekey lookup is not evidence of anything; never
+      // convert (and so never persist) from its display fallback.
+      if (rekeyInfo.unavailable) {
+        return account;
+      }
       if (!rekeyInfo.isRekeyed || !rekeyInfo.authAddress) {
         // Account is not rekeyed according to network - check if we should auto-convert
         // Only process REKEYED accounts - WATCH accounts stay as-is
         if (account.type === AccountType.REKEYED) {
-          // Check if we have a private key for this account - if so, it's a STANDARD account
-          let hasPrivateKey = false;
+          // TASK-421 (c): decide from the strict presence probe, not from whether
+          // getPrivateKey succeeds. getPrivateKey also throws when the vault is
+          // locked or the keychain hiccups, and treating that as "no key" PERSISTED
+          // a REKEYED → WATCH downgrade that dropped originalOwner while the key
+          // was still stored. On a probe failure the record stays as it is.
+          let hasPrivateKey: boolean;
           try {
-            const { AccountSecureStorage } =
-              await import('@/services/secure/AccountSecureStorage');
-            await AccountSecureStorage.getPrivateKey(account.id);
-            hasPrivateKey = true;
-          } catch {
-            hasPrivateKey = false;
+            hasPrivateKey =
+              await AccountSecureStorage.probeSecretPresenceStrict(account.id);
+          } catch (error) {
+            console.warn(
+              '[RekeyManager] Key presence unknown; keeping the account as REKEYED:',
+              redactError(error)
+            );
+            return account;
+          }
+          // A present record isn't proof of a usable key: a keyless legacy
+          // metadata record also probes as present. originalOwner (a converted
+          // STANDARD account) is; otherwise the key must actually read, and a
+          // failed read keeps the record rather than demoting it.
+          if (
+            hasPrivateKey &&
+            (account as RekeyedAccountMetadata).originalOwner !== true
+          ) {
+            try {
+              await AccountSecureStorage.getPrivateKey(account.id);
+            } catch {
+              return account;
+            }
           }
 
           if (hasPrivateKey) {
