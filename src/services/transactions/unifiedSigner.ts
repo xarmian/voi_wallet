@@ -458,39 +458,9 @@ export class UnifiedTransactionSigner {
 
     try {
       const total = params.transactions.length;
-      const binding = params.sessionBinding;
-
-      // The network the batch is bound to. For a dApp request this is resolved
-      // from the SESSION's chain; for an in-app batch it is the network the
-      // caller built the group on. Threaded into SecureKeyManager so rekey
-      // authority is resolved on the transaction's chain, not the active one.
-      const boundNetworkId = binding?.networkId ?? request.networkId;
-
-      // DR-5/DR-14 fail-closed guard: an absent / disconnected / topic-
-      // mismatched session resolves to an EMPTY approved set. Reject the whole
-      // request rather than silently declining every entry — and never
-      // substitute the wallet's local accounts for the session's.
-      const effectiveBinding = binding
-        ? {
-            ...binding,
-            approvedAccounts: await this.revalidateBinding(binding),
-          }
-        : null;
-
-      // ---------------------------------------------------------------------
-      // PREFLIGHT (DR-2/5/7/8/13/14/16). Runs to completion BEFORE a single key
-      // is touched, so one bad entry fails the WHOLE batch with no partial
-      // signatures and no partially-signed response handed back to a dApp.
-      // ---------------------------------------------------------------------
-      const plans = params.transactions.map((wtxn, index) =>
-        this.planBatchEntry(
-          wtxn,
-          index,
-          params,
-          effectiveBinding,
-          boundNetworkId
-        )
-      );
+      const plans = await this.planBatch(request);
+      const boundNetworkId =
+        params.sessionBinding?.networkId ?? request.networkId;
 
       // Track signing progress for each transaction. `null` = declined (DR-1).
       const signedTxns: (string | null)[] = [];
@@ -609,6 +579,43 @@ export class UnifiedTransactionSigner {
       AccountSecureStorage.clearPrivateKeyCache();
       throw error;
     }
+  }
+
+  /** Shared local/remote preflight; never touches keys or submits. */
+  public async planBatch(
+    request: UnifiedTransactionRequest
+  ): Promise<BatchEntryPlan[]> {
+    const params = request.walletConnectParams;
+    if (!params) throw new Error('Batch transactions required');
+    const binding = params.sessionBinding;
+
+    // The network the batch is bound to. For a dApp request this is resolved
+    // from the SESSION's chain; for an in-app batch it is the network the
+    // caller built the group on. Threaded into SecureKeyManager so rekey
+    // authority is resolved on the transaction's chain, not the active one.
+    const boundNetworkId = binding?.networkId ?? request.networkId;
+
+    // DR-5/DR-14 fail-closed guard: an absent / disconnected / topic-
+    // mismatched session resolves to an EMPTY approved set. Reject the whole
+    // request rather than silently declining every entry — and never
+    // substitute the wallet's local accounts for the session's.
+    const effectiveBinding = binding
+      ? {
+          ...binding,
+          approvedAccounts: await this.revalidateBinding(binding),
+        }
+      : null;
+
+    // ---------------------------------------------------------------------
+    // PREFLIGHT (DR-2/5/7/8/13/14/16). Runs to completion BEFORE a single key
+    // is touched, so one bad entry fails the WHOLE batch with no partial
+    // signatures and no partially-signed response handed back to a dApp.
+    // ---------------------------------------------------------------------
+    const plans = params.transactions.map((wtxn, index) =>
+      this.planBatchEntry(wtxn, index, params, effectiveBinding, boundNetworkId)
+    );
+
+    return plans;
   }
 
   /**
