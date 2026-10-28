@@ -5,7 +5,13 @@
  * the batch claim transaction.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
@@ -38,10 +44,7 @@ import { GlassButton } from '@/components/common/GlassButton';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useActiveAccount } from '@/store/walletStore';
 import { fromSerializableClaimableItem } from '@/types/claimable';
-import {
-  Arc200TransactionService,
-  Arc200ClaimParams,
-} from '@/services/transactions/arc200';
+import { Arc200TransactionService } from '@/services/transactions/arc200';
 import { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
@@ -55,7 +58,7 @@ import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
-import { redactError } from '@/utils/logRedaction';
+import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
@@ -95,7 +98,10 @@ export default function ClaimAllConfirmationScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ClaimAllRouteProp>();
 
-  const items = route.params.items.map(fromSerializableClaimableItem);
+  const items = useMemo(
+    () => route.params.items.map(fromSerializableClaimableItem),
+    [route.params.items]
+  );
   const activeAccount = useActiveAccount();
 
   const [sendToSelf, setSendToSelf] = useState(true);
@@ -107,7 +113,6 @@ export default function ClaimAllConfirmationScreen() {
     null
   );
   const [isClaiming, setIsClaiming] = useState(false);
-  const [estimatedFee, setEstimatedFee] = useState<number>(0);
   const [isRecipientModalVisible, setIsRecipientModalVisible] = useState(false);
   const [searchResults, setSearchResults] = useState<EnvoiSearchResult[]>([]);
   const [isSearchingNames, setIsSearchingNames] = useState(false);
@@ -269,58 +274,25 @@ export default function ClaimAllConfirmationScreen() {
     []
   );
 
-  // Estimate transaction fee (including MBR where needed)
-  useEffect(() => {
-    const estimateFee = async () => {
-      if (
-        !finalRecipientAddress ||
-        !algosdk.isValidAddress(finalRecipientAddress)
-      ) {
-        // Default estimate assuming all need MBR (worst case)
-        try {
-          const costEstimate = await Arc200TransactionService.estimateClaimCost(
-            items.length,
-            items.length,
-            CLAIM_NETWORK_ID
-          );
-          setEstimatedFee(costEstimate.total);
-        } catch {
-          setEstimatedFee(1000 * items.length);
-        }
-        return;
-      }
-
-      try {
-        // Check which tokens need MBR for the recipient
-        const uniqueContractIds = [
-          ...new Set(items.map((item) => item.contractId)),
-        ];
-        let needsMbrCount = 0;
-
-        for (const contractId of uniqueContractIds) {
-          const hasBalance =
-            await Arc200TransactionService.checkRecipientBalance(
-              finalRecipientAddress,
-              contractId
-            );
-          if (!hasBalance) {
-            needsMbrCount++;
-          }
-        }
-
-        const costEstimate = await Arc200TransactionService.estimateClaimCost(
-          items.length,
-          needsMbrCount,
-          CLAIM_NETWORK_ID
-        );
-        setEstimatedFee(costEstimate.total);
-      } catch (error) {
-        console.error('Failed to estimate fee:', redactError(error));
-        setEstimatedFee(1000 * items.length);
-      }
-    };
-    estimateFee();
-  }, [items, finalRecipientAddress]);
+  const buildClaim = useCallback(() => {
+    if (
+      !activeAccount?.address ||
+      !algosdk.isValidAddress(finalRecipientAddress)
+    )
+      return undefined;
+    return Arc200TransactionService.buildBatchClaimTransactionGroup(
+      items.map((item) => ({
+        contractId: item.contractId,
+        from: item.owner,
+        to: finalRecipientAddress,
+        amount: item.amount,
+        sender: activeAccount.address,
+      })),
+      CLAIM_NETWORK_ID
+    );
+  }, [activeAccount, finalRecipientAddress, items]);
+  const { group: txnGroup, fee: estimatedFee } =
+    useArc200Confirmation(buildClaim);
 
   // Handle batch claim - navigate to universal signing screen
   const handleClaimAll = useCallback(async () => {
@@ -337,21 +309,8 @@ export default function ClaimAllConfirmationScreen() {
     setIsClaiming(true);
 
     try {
-      // Build claim params for each item
-      const claimParams: Arc200ClaimParams[] = items.map((item) => ({
-        contractId: item.contractId,
-        from: item.owner,
-        to: finalRecipientAddress,
-        amount: item.amount,
-        sender: activeAccount.address,
-      }));
-
-      // Build the batch transaction group (always on Voi network)
-      const txnGroup =
-        await Arc200TransactionService.buildBatchClaimTransactionGroup(
-          claimParams,
-          CLAIM_NETWORK_ID
-        );
+      if (!txnGroup) return;
+      hasSubmittedRef.current = false;
 
       // Encode transactions as base64 for UniversalTransactionSigning
       const base64Transactions = txnGroup.txnBytes.map((txnBytes) =>
@@ -434,12 +393,13 @@ export default function ClaimAllConfirmationScreen() {
     } finally {
       setIsClaiming(false);
     }
-  }, [activeAccount, finalRecipientAddress, items, navigation]);
+  }, [activeAccount, finalRecipientAddress, items, navigation, txnGroup]);
 
   const canClaim =
     activeAccount?.address &&
     finalRecipientAddress &&
     algosdk.isValidAddress(finalRecipientAddress) &&
+    !!txnGroup &&
     !isClaiming &&
     !isResolvingName;
 

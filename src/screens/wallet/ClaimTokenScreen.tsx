@@ -5,7 +5,13 @@
  * Supports sending to self or a custom recipient address.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
@@ -51,7 +57,7 @@ import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
-import { redactError } from '@/utils/logRedaction';
+import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 
 // Claimable tokens are always on Voi network
 const CLAIM_NETWORK_ID = NetworkId.VOI_MAINNET;
@@ -88,8 +94,9 @@ export default function ClaimTokenScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ClaimTokenRouteProp>();
 
-  const claimableItem = fromSerializableClaimableItem(
-    route.params.claimableItem
+  const claimableItem = useMemo(
+    () => fromSerializableClaimableItem(route.params.claimableItem),
+    [route.params.claimableItem]
   );
   const activeAccount = useActiveAccount();
 
@@ -102,7 +109,6 @@ export default function ClaimTokenScreen() {
     null
   );
   const [isClaiming, setIsClaiming] = useState(false);
-  const [estimatedFee, setEstimatedFee] = useState<number>(0);
   const [imageError, setImageError] = useState(false);
   const [isRecipientModalVisible, setIsRecipientModalVisible] = useState(false);
   const [searchResults, setSearchResults] = useState<EnvoiSearchResult[]>([]);
@@ -265,47 +271,24 @@ export default function ClaimTokenScreen() {
     []
   );
 
-  // Estimate transaction fee (including MBR if needed)
-  useEffect(() => {
-    const estimateFee = async () => {
-      if (
-        !finalRecipientAddress ||
-        !algosdk.isValidAddress(finalRecipientAddress)
-      ) {
-        // Default estimate without MBR check
-        try {
-          const costEstimate = await Arc200TransactionService.estimateClaimCost(
-            1,
-            1,
-            CLAIM_NETWORK_ID
-          );
-          setEstimatedFee(costEstimate.total);
-        } catch {
-          setEstimatedFee(1000);
-        }
-        return;
-      }
-
-      try {
-        // Check if recipient needs MBR for this token
-        const hasBalance = await Arc200TransactionService.checkRecipientBalance(
-          finalRecipientAddress,
-          claimableItem.contractId
-        );
-        const needsMbr = hasBalance ? 0 : 1;
-        const costEstimate = await Arc200TransactionService.estimateClaimCost(
-          1,
-          needsMbr,
-          CLAIM_NETWORK_ID
-        );
-        setEstimatedFee(costEstimate.total);
-      } catch (error) {
-        console.error('Failed to estimate fee:', redactError(error));
-        setEstimatedFee(1000);
-      }
-    };
-    estimateFee();
-  }, [finalRecipientAddress, claimableItem.contractId]);
+  const buildClaim = useCallback(() => {
+    if (
+      !activeAccount?.address ||
+      !algosdk.isValidAddress(finalRecipientAddress)
+    )
+      return undefined;
+    return Arc200TransactionService.buildArc200TransferFromGroup({
+      contractId: claimableItem.contractId,
+      from: claimableItem.owner,
+      to: finalRecipientAddress,
+      amount: claimableItem.amount,
+      sender: activeAccount.address,
+      note: `Claiming ${claimableItem.tokenSymbol} from approval`,
+      networkId: CLAIM_NETWORK_ID,
+    });
+  }, [activeAccount, finalRecipientAddress, claimableItem]);
+  const { group: txnGroup, fee: estimatedFee } =
+    useArc200Confirmation(buildClaim);
 
   // Handle claim - navigate to universal signing screen
   const handleClaim = useCallback(async () => {
@@ -322,17 +305,8 @@ export default function ClaimTokenScreen() {
     setIsClaiming(true);
 
     try {
-      // Build the transferFrom transaction (always on Voi network)
-      const txnGroup =
-        await Arc200TransactionService.buildArc200TransferFromGroup({
-          contractId: claimableItem.contractId,
-          from: claimableItem.owner,
-          to: finalRecipientAddress,
-          amount: claimableItem.amount,
-          sender: activeAccount.address,
-          note: `Claiming ${claimableItem.tokenSymbol} from approval`,
-          networkId: CLAIM_NETWORK_ID,
-        });
+      if (!txnGroup) return;
+      hasSubmittedRef.current = false;
 
       // Encode transactions as base64 for UniversalTransactionSigning
       const base64Transactions = txnGroup.txnBytes.map((txnBytes) =>
@@ -416,12 +390,19 @@ export default function ClaimTokenScreen() {
     } finally {
       setIsClaiming(false);
     }
-  }, [activeAccount, finalRecipientAddress, claimableItem, navigation]);
+  }, [
+    activeAccount,
+    finalRecipientAddress,
+    claimableItem,
+    navigation,
+    txnGroup,
+  ]);
 
   const canClaim =
     activeAccount?.address &&
     finalRecipientAddress &&
     algosdk.isValidAddress(finalRecipientAddress) &&
+    !!txnGroup &&
     !isClaiming &&
     !isResolvingName;
 

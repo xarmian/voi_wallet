@@ -3,7 +3,6 @@ import {
   networkService as defaultNetworkService,
   NetworkService,
 } from '@/services/network';
-import MimirApiService from '@/services/mimir';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { checkRemoteSigningRequired } from '@/services/remoteSigner/signingRouter';
@@ -186,54 +185,6 @@ export class Arc200TransactionService {
           : 0),
       0
     );
-  }
-
-  /**
-   * Check if recipient has a balance > 0 for the ARC-200 token
-   * If they do, no MBR payment is needed
-   */
-  static async checkRecipientBalance(
-    recipientAddress: string,
-    contractId: number,
-    networkService?: any
-  ): Promise<boolean> {
-    try {
-      // If address is invalid or placeholder, assume MBR is needed
-      if (!recipientAddress || !algosdk.isValidAddress(recipientAddress)) {
-        console.log(
-          '[ARC200] checkRecipientBalance: invalid address',
-          recipientAddress
-        );
-        return false;
-      }
-
-      // Always use MimirApiService for ARC-200 balance check (more reliable)
-      const assets =
-        await MimirApiService.getAllAccountAssets(recipientAddress);
-
-      // Find the specific ARC-200 token
-      const arc200Asset = assets.find(
-        (asset) =>
-          asset.assetType === 'arc200' && asset.contractId === contractId
-      );
-
-      const hasBalance = arc200Asset && parseFloat(arc200Asset.balance) > 0;
-      console.log(
-        '[ARC200] checkRecipientBalance:',
-        recipientAddress,
-        'contractId:',
-        contractId,
-        'hasBalance:',
-        hasBalance
-      );
-
-      // If asset exists and has balance > 0, recipient is already opted in
-      return !!hasBalance;
-    } catch (error) {
-      // Silently assume MBR payment is needed if we can't check
-      console.log('[ARC200] checkRecipientBalance error:', error);
-      return false;
-    }
   }
 
   /**
@@ -864,8 +815,7 @@ export class Arc200TransactionService {
    * Returns fee per transaction and total estimated cost
    */
   static async estimateClaimCost(
-    claimCount: number | Arc200ClaimParams[] | Arc200TransactionGroup,
-    needsMbrPayments: number = 0,
+    claimCount: Arc200ClaimParams[] | Arc200TransactionGroup,
     networkId?: string
   ): Promise<{
     feePerTxn: number;
@@ -873,39 +823,19 @@ export class Arc200TransactionService {
     totalMbr: number;
     total: number;
   }> {
-    if (typeof claimCount !== 'number') {
-      const group = Array.isArray(claimCount)
-        ? await this.buildBatchClaimTransactionGroup(claimCount, networkId)
-        : claimCount;
-      const totalFees = group.transactions.reduce(
-        (sum, txn) => sum + Number(txn.fee),
-        0
-      );
-      const total = this.groupCost(group);
-      return {
-        feePerTxn: Number(group.transactions[0]?.fee || 0),
-        totalFees,
-        totalMbr: total - totalFees,
-        total,
-      };
-    }
-    // Legacy count-based callers are migrated to retained groups in unit 2.
-    const networkService = networkId
-      ? NetworkService.getInstance(networkId as any)
-      : defaultNetworkService;
-
-    const baseFee = await networkService.estimateTransactionFee();
-
-    // Each claim needs 1 txn (or 2 if MBR is needed)
-    const totalTxns = claimCount + needsMbrPayments;
-    const totalFees = baseFee * totalTxns;
-    const totalMbr = ARC200_MBR_AMOUNT * needsMbrPayments;
-
+    const group = Array.isArray(claimCount)
+      ? await this.buildBatchClaimTransactionGroup(claimCount, networkId)
+      : claimCount;
+    const totalFees = group.transactions.reduce(
+      (sum, txn) => sum + Number(txn.fee),
+      0
+    );
+    const total = this.groupCost(group);
     return {
-      feePerTxn: baseFee,
+      feePerTxn: Number(group.transactions[0]?.fee || 0),
       totalFees,
-      totalMbr,
-      total: totalFees + totalMbr,
+      totalMbr: total - totalFees,
+      total,
     };
   }
 }

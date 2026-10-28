@@ -20,7 +20,7 @@ import {
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { TransactionTracker } from '@/services/security/transactionTracker';
-import { Arc200TransactionService } from './arc200';
+import { Arc200TransactionService, Arc200TransactionGroup } from './arc200';
 import { Arc72TransactionService } from './arc72';
 import {
   toLedgerFriendlyError,
@@ -32,6 +32,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
 
 export interface TransactionParams {
+  preparedArc200Group?: Arc200TransactionGroup;
   from: string;
   to: string;
   amount: number | bigint;
@@ -183,6 +184,10 @@ export class TransactionService {
   static getCachedUnsignedTransaction(
     params: TransactionParams
   ): UnsignedTransaction | UnsignedTransactionGroup | null {
+    // ARC-200 decisions depend on current escrow state; never reuse the cache.
+    if (TransactionService.determineAssetType(params) === 'arc200') {
+      return params.preparedArc200Group ?? null;
+    }
     const cacheKey = TransactionService.getTransactionCacheKey(params);
     const cached = TransactionService.getCachedTransaction(cacheKey);
     return cached;
@@ -235,6 +240,9 @@ export class TransactionService {
   static async buildTransaction(
     params: TransactionParams
   ): Promise<UnsignedTransaction | UnsignedTransactionGroup> {
+    if (TransactionService.determineAssetType(params) === 'arc200') {
+      return TransactionService.buildArc200Transaction(params);
+    }
     const cacheKey = TransactionService.getTransactionCacheKey(params);
     const cached = TransactionService.getCachedTransaction(cacheKey);
     if (cached) {
@@ -407,7 +415,8 @@ export class TransactionService {
       };
 
       const result =
-        await Arc200TransactionService.buildArc200TransferGroup(arc200Params);
+        params.preparedArc200Group ??
+        (await Arc200TransactionService.buildArc200TransferGroup(arc200Params));
 
       return {
         transactions: result.transactions,

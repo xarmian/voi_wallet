@@ -555,7 +555,6 @@ describe('TASK-416 simulation MBR decision and service fee parity', () => {
             ? await Arc200TransactionService.estimateArc200TransferCost(params)
             : await Arc200TransactionService.estimateClaimCost(
                 [{ ...params }],
-                0,
                 'voi-mainnet'
               );
         expect(estimate.total).toBe(cost);
