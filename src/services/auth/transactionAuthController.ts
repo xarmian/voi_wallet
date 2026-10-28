@@ -458,6 +458,7 @@ export class TransactionAuthController {
     request: UnifiedTransactionRequest
   ): Promise<void> {
     this.currentRequest = request;
+    this.remoteBatchPlan = null;
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
     this.activeFlowGeneration = this.cancelledFlowGeneration;
     this.hasSubmittedToNetwork = false;
@@ -2004,6 +2005,7 @@ export class TransactionAuthController {
     try {
       ledgerTransportService.cancelConnect();
     } catch {}
+    this.remoteBatchPlan = null;
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
 
@@ -2051,6 +2053,7 @@ export class TransactionAuthController {
       this.signingAbortController = null;
     }
 
+    this.remoteBatchPlan = null;
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
     this.connectingDeviceId = null;
@@ -2314,12 +2317,19 @@ export class TransactionAuthController {
       throw new Error('No active remote signer flow');
     }
 
+    const request = this.currentState.remoteSignerRequest;
+    const transactionRequest = this.currentRequest;
+    const requestType = transactionRequest?.type;
+    const batchPlan = this.remoteBatchPlan;
+    const generation = this.cancelledFlowGeneration;
+    const isStale = () => generation !== this.cancelledFlowGeneration;
+
     this.updateState({
       remoteSignerStatus: 'processing_response',
     });
 
     try {
-      const request = this.currentState.remoteSignerRequest;
+      if (isStale()) return;
 
       // Validate the response matches our request
       if (response.id !== request.id) {
@@ -2349,8 +2359,10 @@ export class TransactionAuthController {
       // (never the single global authAddress on wallet metadata, which is
       // overwritten by whichever network's balance loaded last).
       const { NetworkService } = await import('@/services/network');
+      if (isStale()) return;
       const netService = NetworkService.getInstance(request.net as NetworkId);
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      if (isStale()) return;
       const pairedRemoteSigners = new Set(
         allAccounts
           .filter((acc) => acc.type === AccountType.REMOTE_SIGNER)
@@ -2360,10 +2372,12 @@ export class TransactionAuthController {
       const verification = await verifyRemoteSignerResponse(request, response, {
         resolveExpectedSigner: async (sender) => {
           const info = await netService.getAccountRekeyInfo(sender, true);
+          if (isStale()) throw new Error('Stale signing response');
           return info.isRekeyed && info.authAddress ? info.authAddress : sender;
         },
         isPairedRemoteSigner: (address) => pairedRemoteSigners.has(address),
       });
+      if (isStale()) return;
       if (!verification.valid) {
         throw new Error(
           `Signed response verification failed: ${verification.error ?? 'unknown reason'}`
@@ -2379,8 +2393,8 @@ export class TransactionAuthController {
       }
 
       if (
-        this.currentRequest?.type === 'batch_transaction' ||
-        this.currentRequest?.type === 'walletconnect_batch'
+        requestType === 'batch_transaction' ||
+        requestType === 'walletconnect_batch'
       ) {
         // Batch callers own submission. Return the same ARC-0001 shape as
         // local signing, restoring declined/passthrough slots in request order.
@@ -2388,7 +2402,7 @@ export class TransactionAuthController {
           Buffer.from(txn).toString('base64')
         );
         let index = 0;
-        const signedTransactions = this.remoteBatchPlan!.map((plan) =>
+        const signedTransactions = batchPlan!.map((plan) =>
           plan.action === 'sign'
             ? signatures[index++]
             : plan.action === 'passthrough'
@@ -2405,6 +2419,7 @@ export class TransactionAuthController {
 
       // Submit to network
       this.updateState({ state: 'processing' });
+      if (isStale()) return;
 
       // Submit on the REQUEST's network (the same instance verification used),
       // NOT the globally-active one — if the user switched networks during the
@@ -2417,6 +2432,8 @@ export class TransactionAuthController {
         await networkService.submitTransaction(
           signedTxns.length === 1 ? signedTxns[0] : signedTxns
         );
+
+      if (isStale()) return;
 
       // Success! `confirmed === false` means the tx was submitted but not yet
       // confirmed within the round window (pending, not failed); the result
@@ -2434,6 +2451,7 @@ export class TransactionAuthController {
         result: successResult,
       });
     } catch (error) {
+      if (isStale()) return;
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -2453,6 +2471,8 @@ export class TransactionAuthController {
   public cancelRemoteSignerFlow(): void {
     if (!this.currentState.isRemoteSignerFlow) return;
 
+    this.cancelledFlowGeneration += 1;
+    this.remoteBatchPlan = null;
     this.userExplicitlyRejected = true;
     this.updateState({
       state: 'error',
@@ -2475,6 +2495,7 @@ export class TransactionAuthController {
    * Clean up resources
    */
   public cleanup(): void {
+    this.cancelledFlowGeneration += 1;
     this.clearLedgerConnectionTimeout();
 
     // Abort any active signing process
@@ -2484,6 +2505,7 @@ export class TransactionAuthController {
     }
 
     this.stateListeners.length = 0;
+    this.remoteBatchPlan = null;
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
     this.userExplicitlyRejected = false;

@@ -366,7 +366,6 @@ export default function ClaimAllConfirmationScreen() {
             console.log('Transaction already submitted, skipping duplicate');
             return;
           }
-          hasSubmittedRef.current = true;
 
           // Submit the signed transactions to Voi network
           try {
@@ -385,6 +384,7 @@ export default function ClaimAllConfirmationScreen() {
             const signedTxns = rawSigned.map(
               (txn) => new Uint8Array(Buffer.from(txn as string, 'base64'))
             );
+            hasSubmittedRef.current = true;
             await algodClient.sendRawTransaction(signedTxns).do();
 
             // Navigate back to claimable tokens list with pending refresh
@@ -404,6 +404,7 @@ export default function ClaimAllConfirmationScreen() {
               })
             );
           } catch (submitError) {
+            hasSubmittedRef.current = false;
             const message =
               submitError instanceof Error
                 ? submitError.message

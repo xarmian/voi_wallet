@@ -447,8 +447,10 @@ describe('remote batch submission ownership (TASK-418)', () => {
     txId: 'batch-tx',
     confirmed: true,
   }));
-  const respond = jest.fn();
+  const respondV1 = jest.fn();
+  const respondV2 = jest.fn();
   const net = {
+    getSuggestedParams: jest.fn(),
     getCurrentNetworkId: () => netId,
     getAccountRekeyInfo: jest.fn(async () => ({ isRekeyed: false })),
     submitTransaction: submit,
@@ -535,10 +537,10 @@ describe('remote batch submission ownership (TASK-418)', () => {
       settledRef: { current: false },
       requestEvent: { id: 418, topic: 'dapp' },
       WalletConnectService: {
-        getInstance: () => ({ respondToRequest: respond }),
+        getInstance: () => ({ respondToRequest: respondV2 }),
       },
       WalletConnectV1Client: {
-        getInstance: () => ({ approveRequest: respond }),
+        getInstance: () => ({ approveRequest: respondV1 }),
       },
       takeNextRequest: async () => null,
       forgetUnanswered: noop,
@@ -600,7 +602,13 @@ describe('remote batch submission ownership (TASK-418)', () => {
         'handleWalletConnectSuccess',
         env
       )(controller.getState().result);
-      expect(respond.mock.calls[0].at(-1)).toEqual([signed, null]);
+      if (version === 1) {
+        expect(respondV1).toHaveBeenCalledWith(418, [signed, null]);
+        expect(respondV2).not.toHaveBeenCalled();
+      } else {
+        expect(respondV2).toHaveBeenCalledWith('dapp', 418, [signed, null]);
+        expect(respondV1).not.toHaveBeenCalled();
+      }
       expect(submit).not.toHaveBeenCalled();
       expect(env.navigation.navigate).not.toHaveBeenCalled();
     }
@@ -623,31 +631,182 @@ describe('remote batch submission ownership (TASK-418)', () => {
         handleWalletConnectSuccess: handler,
       }
     )(true, controller.getState().result);
-    expect(respond.mock.calls[0].at(-1)).toEqual([signed, null]);
+    expect(respondV2).toHaveBeenCalledWith('dapp', 418, [signed, null]);
+    expect(respondV1).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    'voi_transfer',
-    'asa_transfer',
-    'arc200_transfer',
-    'arc72_transfer',
-    'rekey',
-    'rekey_reverse',
-    'keyreg',
-    'appl',
-  ])('%s retains controller submission', async (type) => {
-    const { controller, response } = await flow();
-    // Isolate response dispatch from the unrelated unsigned builders.
-    (controller as any).currentRequest.type = type;
-    await controller.processRemoteSignerResponse(response);
+  async function transferFlow(controller = new TransactionAuthController()) {
+    const { TransactionService } = require('@/services/transactions');
+    const realService = jest.requireActual(
+      '@/services/transactions'
+    ).TransactionService;
+    (TransactionService.buildTransaction as jest.Mock).mockImplementation(
+      realService.buildTransaction.bind(realService)
+    );
+    net.getSuggestedParams = jest.fn(async () => ({
+      ...SUGGESTED_PARAMS,
+      genesisID: NETWORK_CONFIGURATIONS[netId as NetworkId].genesisId,
+      genesisHash: new Uint8Array(
+        Buffer.from(
+          NETWORK_CONFIGURATIONS[netId as NetworkId].genesisHash,
+          'base64'
+        )
+      ),
+    }));
+    await controller.initializeSigningFlow({
+      type: 'voi_transfer',
+      networkId: netId,
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      transferParams: {
+        from: owner.addr,
+        to: wrong.addr,
+        amount: 7,
+        networkId: netId,
+      },
+    } as any);
+    return controller;
+  }
+
+  it('voi_transfer built by TransactionService retains controller submission', async () => {
+    const controller = await transferFlow();
+    const request = controller.getRemoteSignerRequest()!;
+    const algosdk = require('algosdk');
+    const bytes = algosdk
+      .decodeUnsignedTransaction(Buffer.from(request.txns[0].b, 'base64'))
+      .signTxn(owner.sk);
+    await controller.processRemoteSignerResponse(
+      RemoteSignerService.createSuccessResponse(request.id, [bytes])
+    );
     expect(submit).toHaveBeenCalledTimes(1);
-    expect(submit).toHaveBeenCalledWith(Buffer.from(signed, 'base64'));
+    expect(submit).toHaveBeenCalledWith(bytes);
     expect(controller.getState().result).toMatchObject({
       transactionId: 'batch-tx',
       confirmed: true,
     });
   });
+
+  it.each(['cancel', 'resetAfterDismiss', 'cancelRemoteSignerFlow', 'replace'])(
+    'discards a response when %s occurs during verification',
+    async (action) => {
+      const { controller, response } = await flow();
+      let release!: (value: { isRekeyed: boolean }) => void;
+      let entered!: () => void;
+      const pending = new Promise<{ isRekeyed: boolean }>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      net.getAccountRekeyInfo.mockImplementationOnce(() => {
+        entered();
+        return pending;
+      });
+      const processing = controller.processRemoteSignerResponse(response);
+      await started;
+      if (action === 'replace') await transferFlow(controller);
+      else
+        controller[
+          action as 'cancel' | 'resetAfterDismiss' | 'cancelRemoteSignerFlow'
+        ]();
+      const state = controller.getState();
+      const request = controller.getRemoteSignerRequest();
+      expect((controller as any).remoteBatchPlan).toBeNull();
+      release({ isRekeyed: false });
+      await processing;
+      expect(submit).not.toHaveBeenCalled();
+      expect(controller.getState()).toEqual(state);
+      expect(controller.getState().state).not.toBe('completed');
+      expect(controller.getRemoteSignerRequest()).toBe(request);
+    }
+  );
+
+  it('uses the captured batch type and plan even if currentRequest is cleared', async () => {
+    const { controller, response } = await flow();
+    net.getAccountRekeyInfo.mockImplementationOnce(async () => {
+      (controller as any).currentRequest = null;
+      (controller as any).remoteBatchPlan = null;
+      return { isRekeyed: false };
+    });
+    await controller.processRemoteSignerResponse(response);
+    expect(submit).not.toHaveBeenCalled();
+    expect(controller.getState().result).toEqual({
+      success: true,
+      signedTransactions: [signed],
+    });
+  });
+
+  it('restores distinct interleaved sign, passthrough and declined slots exactly', async () => {
+    const distinct = [1, 2, 3, 4].map((amount) =>
+      paymentTxn(owner.addr, {
+        amount,
+        suggestedParams: {
+          ...SUGGESTED_PARAMS,
+          genesisID: txn.genesisID,
+          genesisHash: txn.genesisHash,
+        },
+      })
+    );
+    const blobs = distinct.map((entry) =>
+      Buffer.from(entry.signTxn(owner.sk)).toString('base64')
+    );
+    const controller = new TransactionAuthController();
+    await controller.initializeSigningFlow({
+      type: 'walletconnect_batch',
+      networkId: netId,
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      walletConnectParams: {
+        transactions: distinct.map((entry, i) => ({
+          txn:
+            i === 1 ? blobs[i] : Buffer.from(entry.toByte()).toString('base64'),
+          ...(i === 1 || i === 2 ? { signers: [] } : {}),
+        })),
+        reviewedSigners: [owner.addr],
+        sessionBinding: null,
+      },
+    } as any);
+    const request = controller.getRemoteSignerRequest()!;
+    expect(request.txns).toHaveLength(2);
+    const response = RemoteSignerService.createSuccessResponse(request.id, [
+      distinct[0].signTxn(owner.sk),
+      distinct[3].signTxn(owner.sk),
+    ]);
+    response.sigs!.reverse(); // Indexed responses may arrive in any order.
+    await controller.processRemoteSignerResponse(response);
+    expect(controller.getState().result).toEqual({
+      success: true,
+      signedTransactions: [blobs[0], blobs[1], null, blobs[3]],
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s retries with the same ref after validation or submit failure and blocks in-flight duplicates',
+    async (screen) => {
+      const env = scope();
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      await handler({ signedTransactions: [null] });
+      expect(env.hasSubmittedRef.current).toBe(false);
+      expect(submit).not.toHaveBeenCalled();
+      submit.mockRejectedValueOnce(new Error('offline'));
+      await handler({ signedTransactions: [signed] });
+      expect(env.hasSubmittedRef.current).toBe(false);
+      let release!: (value: { txId: string; confirmed: boolean }) => void;
+      submit.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          })
+      );
+      const retry = handler({ signedTransactions: [signed] });
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
+      expect(env.hasSubmittedRef.current).toBe(true);
+      release({ txId: 'retry', confirmed: true });
+      await retry;
+      expect(env.navigation.dispatch).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it.each(['signer', 'network', 'genesis'])(
     'still rejects mismatched %s',
