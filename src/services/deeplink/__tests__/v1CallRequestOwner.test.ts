@@ -39,7 +39,10 @@ jest.mock('@/services/network/config', () => ({
 }));
 
 import { DeepLinkService } from '../index';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import {
+  QueueFullError,
+  TransactionRequestQueue,
+} from '@/services/walletconnect/TransactionRequestQueue';
 
 class FakeV1Client extends EventEmitter {
   constructor(private handshakeTopic: string) {
@@ -84,6 +87,7 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
   });
 
   afterEach(async () => {
+    TransactionRequestQueue.setDroppedRequestHandler(null);
     service.cleanup();
     await TransactionRequestQueue.clear();
     jest.restoreAllMocks();
@@ -185,5 +189,80 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     expect((await TransactionRequestQueue.takeNext(show)).request).toBeNull();
     expect(show).not.toHaveBeenCalled();
     expect(await TransactionRequestQueue.size()).toBe(0);
+  });
+
+  describe('a v1 request the queue cannot take (TASK-394)', () => {
+    const onScreen = () =>
+      nav.getCurrentRoute.mockReturnValue({
+        name: 'WalletConnectTransactionRequest',
+      });
+
+    it("queue full: reported 'full' as v1 and marked displayed, not released", async () => {
+      const handler = jest.fn();
+      TransactionRequestQueue.setDroppedRequestHandler(handler);
+      const releaseClaim = jest.spyOn(TransactionRequestQueue, 'releaseClaim');
+      const client = new FakeV1Client('handshake-5');
+      service.attachV1CallRequests(client as any, 'pair-topic');
+      onScreen();
+      jest
+        .spyOn(TransactionRequestQueue, 'enqueue')
+        .mockRejectedValueOnce(new QueueFullError());
+
+      client.emit('call_request', callRequest(5001));
+      await flush();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(
+        [
+          {
+            id: 5001,
+            topic: 'handshake-5',
+            params: {
+              request: {
+                method: 'algo_signTxn',
+                params: [[{ txn: 'opaque' }]],
+              },
+              chainId: 416101,
+            },
+            timestamp: expect.any(Number),
+            version: 1,
+          },
+        ],
+        'full'
+      );
+      expect(releaseClaim).not.toHaveBeenCalled();
+      expect(TransactionRequestQueue.markDisplayed(5001, 'handshake-5')).toBe(
+        false
+      );
+
+      // A relay redelivery of the answered request is not queued again.
+      client.emit('call_request', callRequest(5001));
+      await flush();
+      expect(await TransactionRequestQueue.size()).toBe(0);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('any other enqueue failure still releases the claim', async () => {
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+      const handler = jest.fn();
+      TransactionRequestQueue.setDroppedRequestHandler(handler);
+      const client = new FakeV1Client('handshake-6');
+      service.attachV1CallRequests(client as any, 'pair-topic');
+      onScreen();
+      jest
+        .spyOn(TransactionRequestQueue, 'enqueue')
+        .mockRejectedValueOnce(new Error('storage unavailable'));
+
+      client.emit('call_request', callRequest(6001));
+      await flush();
+      expect(handler).not.toHaveBeenCalled();
+
+      // Released: the redelivery is queued.
+      client.emit('call_request', callRequest(6001));
+      await flush();
+      expect((await TransactionRequestQueue.getAll()).map((r) => r.id)).toEqual(
+        [6001]
+      );
+    });
   });
 });

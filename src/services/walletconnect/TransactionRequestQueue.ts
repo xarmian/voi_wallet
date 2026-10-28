@@ -32,12 +32,48 @@ type DeliveryState = 'claimed' | 'displayed';
 const requestKey = (id: number | string, topic: string): string =>
   JSON.stringify([topic, id]);
 
+/**
+ * Thrown by `enqueue` when the queue already holds MAX_QUEUE_SIZE requests.
+ * Callers answer the request through `reportDropped(..., 'full')` instead of
+ * releasing its claim (TASK-394).
+ */
+export class QueueFullError extends Error {
+  constructor() {
+    super(
+      'Transaction request queue is full. Please process pending requests first.'
+    );
+    this.name = 'QueueFullError';
+    // Keep `instanceof` working if the class is ever down-levelled to ES5.
+    Object.setPrototypeOf(this, QueueFullError.prototype);
+  }
+}
+
+/** Why a request was dropped without being shown (TASK-394). */
+export type DroppedRequestReason = 'full' | 'expired';
+
+/**
+ * Answers dropped requests to the dApp. Fire-and-forget: it must not throw
+ * and is never awaited. Installed by the service boot, so this module does
+ * not import the WalletConnect services.
+ */
+export type DroppedRequestHandler = (
+  entries: QueuedTransactionRequest[],
+  reason: DroppedRequestReason
+) => void;
+
 class TransactionRequestQueueService {
   private static instance: TransactionRequestQueueService;
   private queueMutex: Promise<void> = Promise.resolve();
   private processingStateCache: boolean | null = null;
   /** (topic, id) -> delivery state for this app session (TASK-257). */
   private delivery = new Map<string, DeliveryState>();
+  /** Answers requests dropped unshown (TASK-394); null = none installed. */
+  private droppedRequestHandler: DroppedRequestHandler | null = null;
+  /**
+   * Stale requests removed by getAllInternal under the lock, reported by
+   * withLock once the lock is released (never network code under the lock).
+   */
+  private pendingExpired: QueuedTransactionRequest[] = [];
 
   private constructor() {}
 
@@ -64,6 +100,49 @@ class TransactionRequestQueueService {
       return await fn();
     } finally {
       resolveLock!();
+      // Outside the lock: answer the stale requests this operation removed.
+      if (this.pendingExpired.length > 0) {
+        const expired = this.pendingExpired;
+        this.pendingExpired = [];
+        this.reportDropped(expired, 'expired');
+      }
+    }
+  }
+
+  /**
+   * Install (or clear, with null) the handler that answers requests dropped
+   * without being shown: a full queue or a stale entry (TASK-394).
+   */
+  setDroppedRequestHandler(handler: DroppedRequestHandler | null): void {
+    this.droppedRequestHandler = handler;
+  }
+
+  /**
+   * Hand requests dropped without being shown to the installed handler, which
+   * answers them to the dApp, and mark them displayed so a relay redelivery
+   * of an answered request is not shown again (TASK-394). With no handler
+   * installed nothing can answer them, so their claims are released instead
+   * and a redelivery may still surface. Never throws; must not be called
+   * with the queue lock held.
+   */
+  reportDropped(
+    entries: QueuedTransactionRequest[],
+    reason: DroppedRequestReason
+  ): void {
+    if (entries.length === 0) return;
+    const handler = this.droppedRequestHandler;
+    if (!handler) {
+      for (const entry of entries) this.releaseClaim(entry.id, entry.topic);
+      return;
+    }
+    for (const entry of entries) this.markDisplayed(entry.id, entry.topic);
+    try {
+      handler(entries, reason);
+    } catch (error) {
+      console.error(
+        '[TransactionRequestQueue] Dropped-request handler failed:',
+        error instanceof Error ? error.name : 'unknown error'
+      );
     }
   }
 
@@ -125,8 +204,9 @@ class TransactionRequestQueueService {
       // Evict the request displayed longest ago. A 'claimed' entry (queued,
       // not yet shown) is never evicted: forgetting it would let a
       // redelivery show it while its queued copy is still waiting. Claimed
-      // entries are bounded by the queue itself (MAX_QUEUE_SIZE, and a stale
-      // or failed one releases its claim).
+      // entries are bounded by the queue itself (MAX_QUEUE_SIZE; a failed one
+      // releases its claim and a stale one is answered and marked displayed,
+      // or released when no dropped-request handler is installed).
       for (const [oldKey, oldState] of this.delivery) {
         if (oldState === 'displayed' && oldKey !== key) {
           this.delivery.delete(oldKey);
@@ -239,9 +319,7 @@ class TransactionRequestQueueService {
           console.warn(
             '[TransactionRequestQueue] Maximum queue size reached, rejecting request'
           );
-          throw new Error(
-            'Transaction request queue is full. Please process pending requests first.'
-          );
+          throw new QueueFullError();
         }
 
         // Check if request already exists (prevent duplicates)
@@ -313,6 +391,7 @@ class TransactionRequestQueueService {
 
       // Filter out stale requests (older than timeout)
       const now = Date.now();
+      const stale: QueuedTransactionRequest[] = [];
       const validQueue = queue.filter((request) => {
         const age = now - request.timestamp;
         if (age > REQUEST_TIMEOUT_MS) {
@@ -323,8 +402,9 @@ class TransactionRequestQueueService {
             Math.round(age / 1000),
             'seconds'
           );
-          // No longer queued: a redelivery of it may surface again.
-          this.releaseClaim(request.id, request.topic);
+          // Answered (or, with no handler, its claim released) by withLock
+          // once the lock is released: see reportDropped.
+          stale.push(request);
           return false;
         }
         return true;
@@ -336,6 +416,9 @@ class TransactionRequestQueueService {
           QUEUE_STORAGE_KEY,
           JSON.stringify(validQueue)
         );
+        // Only once they are gone from storage, so a failed write cannot
+        // answer the same request twice.
+        this.pendingExpired.push(...stale);
       }
 
       return validQueue;

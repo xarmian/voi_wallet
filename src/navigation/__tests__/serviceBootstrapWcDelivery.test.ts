@@ -22,7 +22,11 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { initializeServices } from '../serviceBootstrap';
-import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+import {
+  QueueFullError,
+  TransactionRequestQueue,
+} from '@/services/walletconnect/TransactionRequestQueue';
+import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 
 type Listener = (event: any) => unknown;
 
@@ -84,6 +88,11 @@ jest.mock('@/services/deeplink', () => ({
   get DeepLinkService() {
     return { getInstance: () => mockDeepLinkService };
   },
+}));
+// The handler the boot installs on the queue (TASK-394); mocked at the queue
+// boundary, so no WalletConnect client is involved.
+jest.mock('@/services/walletconnect/droppedRequestResponder', () => ({
+  answerDroppedRequests: jest.fn(),
 }));
 jest.mock('@/services/deeplink/extensionHandler', () => ({
   extensionDeepLinkHandler: { initialize: jest.fn(), cleanup: jest.fn() },
@@ -171,6 +180,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  TransactionRequestQueue.setDroppedRequestHandler(null);
+  (answerDroppedRequests as jest.Mock).mockReset();
   jest.restoreAllMocks();
 });
 
@@ -434,5 +445,65 @@ describe('duplicate signing requests (TASK-257)', () => {
       await emit('session_request', request(721)); // relay redelivery
       expect(navigatedIds()).toEqual([721]);
     });
+  });
+});
+
+describe('a request the queue cannot take is answered, not dropped (TASK-394)', () => {
+  it('the boot installs the dropped-request handler', async () => {
+    const install = jest.spyOn(
+      TransactionRequestQueue,
+      'setDroppedRequestHandler'
+    );
+    await boot();
+    expect(install).toHaveBeenCalledWith(answerDroppedRequests);
+  });
+
+  it("queue full: reported 'full' and marked displayed, not released", async () => {
+    mockReady = true;
+    await boot();
+    mockRoute = 'WalletConnectTransactionRequest';
+    const releaseClaim = jest.spyOn(TransactionRequestQueue, 'releaseClaim');
+    jest
+      .spyOn(TransactionRequestQueue, 'enqueue')
+      .mockRejectedValueOnce(new QueueFullError());
+    const requestEvent = request(741);
+
+    await emit('session_request', requestEvent);
+
+    expect(answerDroppedRequests).toHaveBeenCalledTimes(1);
+    expect(answerDroppedRequests).toHaveBeenCalledWith(
+      [
+        {
+          id: 741,
+          topic: 'topic-a',
+          params: requestEvent.params,
+          timestamp: expect.any(Number),
+        },
+      ],
+      'full'
+    );
+    expect(releaseClaim).not.toHaveBeenCalled();
+    expect(TransactionRequestQueue.markDisplayed(741, 'topic-a')).toBe(false);
+
+    // A relay redelivery of the answered request is not shown or queued.
+    await emit('session_request', request(741));
+    expect(await queuedIds()).toEqual([]);
+    expect(navigatedIds()).toEqual([]);
+    expect(answerDroppedRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it('any other enqueue failure still releases the claim', async () => {
+    mockReady = true;
+    await boot();
+    mockRoute = 'WalletConnectTransactionRequest';
+    const releaseClaim = jest.spyOn(TransactionRequestQueue, 'releaseClaim');
+    jest
+      .spyOn(TransactionRequestQueue, 'enqueue')
+      .mockRejectedValueOnce(new Error('storage unavailable'));
+
+    await emit('session_request', request(751));
+
+    expect(releaseClaim).toHaveBeenCalledWith(751, 'topic-a');
+    expect(answerDroppedRequests).not.toHaveBeenCalled();
   });
 });
