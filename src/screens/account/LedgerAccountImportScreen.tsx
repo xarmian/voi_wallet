@@ -3,7 +3,6 @@ import React, {
   useEffect,
   useMemo,
   useReducer,
-  useRef,
   useState,
 } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -35,7 +34,12 @@ import {
 } from '@/services/ledger/algorand';
 import { useWalletStore } from '@/store/walletStore';
 import AuthAccountDiscovery from '@/components/auth-account/AuthAccountDiscovery';
-import { onboardingNeedsSecuritySetup } from '@/services/secure/orphanPin';
+import { AccountSecureStorage } from '@/services/secure';
+import {
+  clearOrphanPin,
+  onboardingNeedsSecuritySetup,
+  withStrictReadTimeout,
+} from '@/services/secure/orphanPin';
 
 type ImportState = {
   accounts: LedgerAccountDiscoveryResult[];
@@ -173,8 +177,6 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     importReducer,
     INITIAL_IMPORT_STATE
   );
-  // Preserve the pre-import verdict through Continue and auth discovery.
-  const needsSecuritySetupRef = useRef(false);
   const [showAuthDiscovery, setShowAuthDiscovery] = useState(false);
   const [importedLedgerAccounts, setImportedLedgerAccounts] = useState<
     LedgerAccountDiscoveryResult[]
@@ -245,7 +247,7 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
-    if (needsSecuritySetupRef.current) {
+    if (await onboardingNeedsSecuritySetup()) {
       navigation.replace('SecuritySetup', { source: 'ledger' });
     } else {
       navigation.navigate('Main');
@@ -400,11 +402,16 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     };
 
     try {
-      // Decide before the first store write: importing a Ledger account makes
-      // the wallet nonempty. A rejected read must leave all accounts untouched.
-      needsSecuritySetupRef.current = isOnboarding
-        ? await onboardingNeedsSecuritySetup()
-        : false;
+      // Heal before any store write makes the wallet nonempty. Persisting PIN
+      // removal keeps later batches and restarts on the normal no-PIN path.
+      // The onboarding check excludes every existing wallet account type.
+      if (
+        isOnboarding &&
+        (await onboardingNeedsSecuritySetup()) &&
+        (await withStrictReadTimeout(AccountSecureStorage.hasPinStrict()))
+      ) {
+        await clearOrphanPin();
+      }
       // Store the accounts being imported for auth discovery.
       setImportedLedgerAccounts(toImport);
       for (const account of toImport) {
@@ -589,6 +596,7 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
                 navigation.goBack();
               }
             }}
+            accessibilityLabel="Back"
             style={styles.backButton}
           >
             <Ionicons name="chevron-back" size={24} color={colors.text} />

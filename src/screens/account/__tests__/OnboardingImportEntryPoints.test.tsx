@@ -54,7 +54,9 @@ jest.mock('@/services/secure/AccountSecureStorage', () =>
   jest.requireMock('@/services/secure')
 );
 jest.mock('@/services/secure/orphanPin', () => ({
+  ...jest.requireActual('@/services/secure/orphanPin'),
   onboardingNeedsSecuritySetup: jest.fn(),
+  clearOrphanPin: jest.fn(),
 }));
 jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
@@ -91,8 +93,20 @@ jest.mock('@/components/ledger/AccountPreview', () => {
   const { Button } = require('react-native');
   return {
     __esModule: true,
-    default: ({ onImportAccounts }: { onImportAccounts: () => void }) => (
-      <Button title="Import Ledger selection" onPress={onImportAccounts} />
+    default: ({
+      onImportAccounts,
+      isImporting,
+      importDisabled,
+    }: {
+      onImportAccounts: () => void;
+      isImporting: boolean;
+      importDisabled: boolean;
+    }) => (
+      <Button
+        title="Import Ledger selection"
+        onPress={onImportAccounts}
+        disabled={isImporting || importDisabled}
+      />
     ),
   };
 });
@@ -133,7 +147,11 @@ import AddWatchAccountScreen from '../AddWatchAccountScreen';
 import LedgerAccountImportScreen from '../LedgerAccountImportScreen';
 import QRAccountImportScreen from '../QRAccountImportScreen';
 import { AccountSecureStorage } from '@/services/secure';
-import { onboardingNeedsSecuritySetup } from '@/services/secure/orphanPin';
+import {
+  clearOrphanPin,
+  onboardingNeedsSecuritySetup,
+  ORPHAN_PIN_UNVERIFIABLE_MESSAGE,
+} from '@/services/secure/orphanPin';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountType } from '@/types/wallet';
 import {
@@ -463,30 +481,135 @@ function expectOnlyLedgerImport() {
 }
 
 describe('Ledger onboarding completion decision', () => {
-  it('replaces with SecuritySetup for an orphan PIN without importing again', async () => {
+  let pinPresent: boolean;
+  let accountCount: number;
+  let events: string[];
+
+  beforeEach(() => {
+    pinPresent = true;
+    accountCount = 0;
+    events = [];
+    jest
+      .mocked(AccountSecureStorage.hasPinStrict)
+      .mockImplementation(async () => pinPresent);
+    jest
+      .mocked(MultiAccountWalletService.hasWalletWithAccountsStrict)
+      .mockImplementation(async () => accountCount > 0);
+    jest
+      .mocked(onboardingNeedsSecuritySetup)
+      .mockImplementation(
+        jest.requireActual('@/services/secure/orphanPin')
+          .onboardingNeedsSecuritySetup
+      );
+    jest.mocked(clearOrphanPin).mockImplementation(async () => {
+      events.push('heal');
+      pinPresent = false;
+    });
+    jest
+      .mocked(MultiAccountWalletService.importLedgerAccount)
+      .mockImplementation(async () => {
+        events.push('import');
+        accountCount += 1;
+        return {} as never;
+      });
+  });
+
+  it('heals an orphan PIN before importing, then replaces with SecuritySetup', async () => {
     await renderLedger(true);
+    expect(events).toEqual(['heal', 'import']);
+    expect(pinPresent).toBe(false);
+    expect(clearOrphanPin).toHaveBeenCalledTimes(1);
+    expect(mockNavigation.replace).not.toHaveBeenCalled();
     await pressAlert('Ledger Import Complete', 'Continue');
     expect(mockNavigation.replace).toHaveBeenCalledTimes(1);
     expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
       source: 'ledger',
     });
     expect(mockNavigation.navigate).not.toHaveBeenCalled();
-    expect(onboardingNeedsSecuritySetup).toHaveBeenCalledTimes(1);
-    expect(AccountSecureStorage.hasPin).not.toHaveBeenCalled();
     expectOnlyLedgerImport();
   });
 
-  it('continues to Main with a key-bearing PIN', async () => {
-    jest.mocked(onboardingNeedsSecuritySetup).mockResolvedValue(false);
+  it('imports a fresh no-PIN wallet without invoking the healer', async () => {
+    pinPresent = false;
     await renderLedger(true);
+    expect(clearOrphanPin).not.toHaveBeenCalled();
     await pressAlert('Ledger Import Complete', 'Continue');
-    expect(mockNavigation.navigate).toHaveBeenCalledTimes(1);
-    expect(mockNavigation.navigate).toHaveBeenCalledWith('Main');
-    expect(mockNavigation.replace).not.toHaveBeenCalled();
+    expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
+      source: 'ledger',
+    });
     expectOnlyLedgerImport();
   });
 
-  it('a rejected pre-import check imports nothing and shows the existing error', async () => {
+  it('a second batch uses normal no-PIN setup after the first batch heals', async () => {
+    const screen = await renderLedger(true);
+    await pressAlert('Ledger Import Complete', 'Search for Rekeyed Accounts');
+    await fireEvent.press(screen.getByLabelText('Back'));
+    await fireEvent.press(screen.getByText('Import Ledger selection'));
+    expect(accountCount).toBe(2);
+    expect(pinPresent).toBe(false);
+    expect(events).toEqual(['heal', 'import', 'import']);
+    expect(clearOrphanPin).toHaveBeenCalledTimes(1);
+    await pressAlert('Ledger Import Complete', 'Continue');
+    expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
+      source: 'ledger',
+    });
+    expect(mockNavigation.navigate).not.toHaveBeenCalled();
+  });
+
+  it('an interrupted completion can resume from persisted no-PIN state', async () => {
+    const screen = await renderLedger(true);
+    await screen.unmount();
+    jest.mocked(MultiAccountWalletService.detectLedgerAccounts).mockClear();
+    await renderLedger(true);
+    expect(clearOrphanPin).toHaveBeenCalledTimes(1);
+    expect(pinPresent).toBe(false);
+    await pressAlert('Ledger Import Complete', 'Continue');
+    expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
+      source: 'ledger',
+    });
+  });
+
+  it.each([true, false])(
+    'never heals a wallet with accounts (PIN present: %s)',
+    async (hasPin) => {
+      pinPresent = hasPin;
+      accountCount = 1;
+      await renderLedger(true);
+      expect(clearOrphanPin).not.toHaveBeenCalled();
+      await pressAlert('Ledger Import Complete', 'Continue');
+      if (hasPin) {
+        expect(mockNavigation.navigate).toHaveBeenCalledWith('Main');
+        expect(mockNavigation.replace).not.toHaveBeenCalled();
+      } else {
+        expect(mockNavigation.replace).toHaveBeenCalledWith('SecuritySetup', {
+          source: 'ledger',
+        });
+      }
+      expectOnlyLedgerImport();
+    }
+  );
+
+  it('healer rejection imports nothing and shows the unverifiable message', async () => {
+    jest
+      .mocked(clearOrphanPin)
+      .mockRejectedValueOnce(new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE));
+    const screen = await renderLedger(true);
+    expect(
+      MultiAccountWalletService.importLedgerAccount
+    ).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(pinPresent).toBe(true);
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Failed',
+      ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+    );
+    expect(mockNavigation.replace).not.toHaveBeenCalled();
+    expect(mockNavigation.navigate).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByText('Import Ledger selection'));
+    expect(events).toEqual(['heal', 'import']);
+  });
+
+  it('a rejected pre-import check imports nothing and releases loading for retry', async () => {
     jest
       .mocked(onboardingNeedsSecuritySetup)
       .mockRejectedValueOnce(new Error('strict read failed'));
@@ -494,6 +617,7 @@ describe('Ledger onboarding completion decision', () => {
     expect(
       MultiAccountWalletService.importLedgerAccount
     ).not.toHaveBeenCalled();
+    expect(clearOrphanPin).not.toHaveBeenCalled();
     expect(mockRefresh).not.toHaveBeenCalled();
     expect(Alert.alert).toHaveBeenCalledWith(
       'Import Failed',
@@ -501,29 +625,14 @@ describe('Ledger onboarding completion decision', () => {
     );
     expect(mockNavigation.replace).not.toHaveBeenCalled();
     expect(mockNavigation.navigate).not.toHaveBeenCalled();
-    // Loading was released and a subsequent attempt can import.
     await fireEvent.press(screen.getByText('Import Ledger selection'));
-    expect(MultiAccountWalletService.importLedgerAccount).toHaveBeenCalledTimes(
-      1
-    );
+    expectOnlyLedgerImport();
   });
 
   it.each(['Continue', 'Skip and Continue', 'discovery complete'])(
-    'decides before persisting and retains the verdict through %s',
+    'uses persisted no-PIN state through %s',
     async (completion) => {
-      let persisted = false;
-      jest
-        .mocked(onboardingNeedsSecuritySetup)
-        .mockImplementation(async () => !persisted);
-      jest
-        .mocked(MultiAccountWalletService.importLedgerAccount)
-        .mockImplementation(async () => {
-          persisted = true;
-          return {} as never;
-        });
       const screen = await renderLedger(true);
-      expect(persisted).toBe(true);
-      expect(onboardingNeedsSecuritySetup).toHaveBeenCalledTimes(1);
       if (completion === 'Continue') {
         await pressAlert('Ledger Import Complete', 'Continue');
       } else {
@@ -543,12 +652,12 @@ describe('Ledger onboarding completion decision', () => {
         source: 'ledger',
       });
       expect(mockNavigation.navigate).not.toHaveBeenCalled();
-      expect(onboardingNeedsSecuritySetup).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(['heal', 'import']);
       expectOnlyLedgerImport();
     }
   );
 
-  it('outside onboarding preserves back without a PIN check', async () => {
+  it('outside onboarding preserves back without checking or healing the PIN', async () => {
     const screen = await renderLedger(false);
     await pressAlert('Ledger Import Complete', 'Search for Rekeyed Accounts');
     await fireEvent.press(screen.getByText('Skip discovery'));
@@ -557,6 +666,7 @@ describe('Ledger onboarding completion decision', () => {
     expect(mockNavigation.navigate).not.toHaveBeenCalled();
     expect(mockNavigation.replace).not.toHaveBeenCalled();
     expect(onboardingNeedsSecuritySetup).not.toHaveBeenCalled();
+    expect(clearOrphanPin).not.toHaveBeenCalled();
     expect(AccountSecureStorage.hasPin).not.toHaveBeenCalled();
     expectOnlyLedgerImport();
   });

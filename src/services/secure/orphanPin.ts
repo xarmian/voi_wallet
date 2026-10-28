@@ -30,7 +30,7 @@ export const withStrictReadTimeout = <T>(promise: Promise<T>): Promise<T> =>
   });
 
 // TASK-417: onboarding entry points that skip SecuritySetup when a PIN exists
-// must route there for an orphan PIN too, so its healer (clearOrphanPin) runs.
+// must handle an orphan PIN too: route to setup, or heal before importing.
 // Onboarding history can remain reachable for a real wallet. A PIN is orphaned
 // only when there are no accounts at all, including watch/Ledger/remote accounts.
 // Strict and bounded; a read failure rejects (callers fail closed).
