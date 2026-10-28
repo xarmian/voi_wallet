@@ -170,6 +170,43 @@ describe('open confirmation re-checks current protection', () => {
     );
   });
 
+  it('refuses when the account changes WHILE the confirm-time probe is pending', async () => {
+    const alert = jest.spyOn(Alert, 'alert');
+    const view = await render(row(account()));
+    await act(async () => {});
+    await fireEvent.press(view.getByText('trash-outline'));
+    const destructive = alert.mock.calls[0][2]!.find(
+      (b) => b.style === 'destructive'
+    )!;
+    let resolve!: (present: boolean) => void;
+    probe.mockReturnValue(new Promise((done) => (resolve = done)));
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = destructive.onPress!() as Promise<void>;
+    });
+    mockStoreAccounts = [account({ originalOwner: true })];
+    await act(async () => {
+      resolve(false);
+      await pending;
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the confirm-time probe fails', async () => {
+    const alert = jest.spyOn(Alert, 'alert');
+    const view = await render(row(account()));
+    await act(async () => {});
+    await fireEvent.press(view.getByText('trash-outline'));
+    const destructive = alert.mock.calls[0][2]!.find(
+      (b) => b.style === 'destructive'
+    )!;
+    probe.mockRejectedValue(new Error('keychain'));
+    await act(async () => {
+      await destructive.onPress!();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
   it('refuses when the key appeared while the alert was open', async () => {
     const alert = await pressConfirmedDelete();
     const view = await render(row(account()));

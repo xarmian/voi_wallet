@@ -174,14 +174,18 @@ export default function AccountListItem({
             // The account can change (or gain its key) while the alert is
             // open: re-check its CURRENT metadata before deleting.
             onPress: async () => {
-              const latest =
+              const current = () =>
                 useWalletStore
                   .getState()
                   .wallet?.accounts.find((a) => a.id === account.id) ?? account;
-              if (await isListDeletionProtected(latest)) {
+              const checked = current();
+              const isProtected = await isListDeletionProtected(checked);
+              // The verdict only holds for the metadata it checked: if the
+              // account changed during the probe, don't act on a stale answer.
+              if (isProtected || current() !== checked) {
                 Alert.alert(
                   'Account not deleted',
-                  'This account holds its own key, so it can’t be deleted from the account list.'
+                  'This account holds its own key, or it changed while you were confirming, so it wasn’t deleted from the account list.'
                 );
                 return;
               }
