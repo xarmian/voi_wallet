@@ -162,6 +162,20 @@ describe('hasKeyBearingAccountStrict — STANDARD-account signal (TASK-213)', ()
     ).resolves.toBe(true);
   });
 
+  // TASK-419: rekeying converts STANDARD → REKEYED in the blob only and keeps
+  // the original key, so a REKEYED-only wallet can hold local key material.
+  it('resolves TRUE for a REKEYED-only wallet (retained original key)', async () => {
+    mockStore[WALLET_KEY] = JSON.stringify({
+      accounts: [
+        { id: 'k', type: 'rekeyed' },
+        { id: 'w', type: 'watch' },
+      ],
+    });
+    await expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict()
+    ).resolves.toBe(true);
+  });
+
   it('resolves FALSE for a watch-only / ledger / remote-signer wallet (no local key ⇒ PIN-less is legit)', async () => {
     mockStore[WALLET_KEY] = JSON.stringify({
       accounts: [

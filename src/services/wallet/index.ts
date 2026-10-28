@@ -2177,7 +2177,15 @@ export class MultiAccountWalletService {
       if (!Array.isArray(parsed.accounts)) {
         return false;
       }
-      return parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD);
+      // TASK-419: a REKEYED account counts too. Rekeying converts STANDARD →
+      // REKEYED in the blob only and retains the original key, so a REKEYED-only
+      // wallet can hold local key material. Over-counting an imported REKEYED
+      // (no local key) only routes "no PIN" to resume/recovery: fail closed.
+      return parsed.accounts.some(
+        (acc) =>
+          acc?.type === AccountType.STANDARD ||
+          acc?.type === AccountType.REKEYED
+      );
     } catch {
       // A corrupt blob is handled (thrown) by hasWalletWithAccountsStrict; here we
       // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
