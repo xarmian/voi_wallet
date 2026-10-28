@@ -1,3 +1,9 @@
+import { MultiAccountWalletService } from '@/services/wallet';
+import { SecureKeyManager as Keys } from '@/services/secure/keyManager';
+import { resolveProposalEligibility } from '../utils';
+jest.mock('@/services/secure/keyManager', () => ({
+  SecureKeyManager: { getSigningInfo: jest.fn() },
+}));
 /**
  * TASK-240 / HT-249 — config-gated WalletConnect chain approval.
  *
@@ -55,11 +61,10 @@ jest.mock('../client', () => ({
 // returns a recognizable object so we can check the rejection reason.
 jest.mock('@walletconnect/utils', () => ({
   getSdkError: (key: string) => ({ code: 5100, message: key }),
-  buildApprovedNamespaces: ({
-    supportedNamespaces,
-  }: {
-    supportedNamespaces: unknown;
-  }) => supportedNamespaces,
+  buildApprovedNamespaces: jest.fn(
+    ({ supportedNamespaces }: { supportedNamespaces: unknown }) =>
+      supportedNamespaces
+  ),
 }));
 
 // The flag under test, flipped per-test.
@@ -78,7 +83,7 @@ jest.mock('@/store/experimentalStore', () => ({
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { getAllAccounts: jest.fn(async () => []) },
 }));
-jest.mock('@/services/secure/keyManager', () => ({ SecureKeyManager: {} }));
+
 jest.mock('@/services/walletconnect/v1', () => ({
   WalletConnectV1Client: {
     getInstance: () => ({ getSessionData: () => null }),
@@ -129,6 +134,11 @@ describe('WalletConnectService.approveSession — config-gated chain policy', ()
     // clear explicitly too so each assertion reads only its own test's calls.
     jest.clearAllMocks();
     mockAllowUnsupportedNetworks = false;
+    jest.mocked(Keys.getSigningInfo).mockResolvedValue({
+      canSign: true,
+      signingAddress: 'AAAA',
+      isRekeyed: false,
+    });
     service = WalletConnectService.getInstance();
   });
 
@@ -209,4 +219,103 @@ describe('WalletConnectService.approveSession — config-gated chain policy', ()
       expect(chains).toContain(VOI);
     });
   });
+});
+
+describe('proposal signing authority', () => {
+  beforeEach(() => {
+    mockAllowUnsupportedNetworks = false;
+    jest.mocked(Keys.getSigningInfo).mockReset();
+  });
+  const rekeyed = {
+    ...account('RK'),
+    type: AccountType.REKEYED,
+    canSign: false,
+  } as AccountMetadata;
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    'strict answer overrides persisted canSign=%s, fallback=%s',
+    async (canSign, fallback) => {
+      jest
+        .mocked(Keys.getSigningInfo)
+        .mockImplementation(async (_, network) => ({
+          signingAddress: 'RK',
+          isRekeyed: true,
+          canSign: network === 'voi-mainnet',
+        }));
+      const selected = [{ ...rekeyed, canSign } as AccountMetadata];
+      jest
+        .mocked(MultiAccountWalletService.getAllAccounts)
+        .mockResolvedValue(selected);
+      await WalletConnectService.getInstance().approveSession(
+        proposalWith([VOI], [ALGO]),
+        fallback ? undefined : selected
+      );
+      expect(Keys.getSigningInfo).toHaveBeenCalledWith('RK', 'voi-mainnet');
+      expect(Keys.getSigningInfo).toHaveBeenCalledWith(
+        'RK',
+        'algorand-mainnet'
+      );
+      expect(
+        (mockApprove.mock.calls as any)[0][0].namespaces.algorand.accounts
+      ).toEqual([`${VOI}:RK`]);
+    }
+  );
+  it('excludes and records probe errors; rejects an empty required chain before SDK approval', async () => {
+    jest.mocked(Keys.getSigningInfo).mockRejectedValue(new Error('offline'));
+    jest.mocked(Keys.getSigningInfo).mockImplementation(async (_, network) => {
+      if (network === 'algorand-mainnet') throw new Error('offline');
+      return { signingAddress: 'RK', isRekeyed: true, canSign: true };
+    });
+    expect(await resolveProposalEligibility([rekeyed], [VOI, ALGO])).toEqual([
+      { account: rekeyed, eligibleChains: [VOI], errorChains: [ALGO] },
+    ]);
+    await WalletConnectService.getInstance().approveSession(
+      proposalWith([VOI], [ALGO]),
+      [rekeyed]
+    );
+    expect(
+      (mockApprove.mock.calls as any)[0][0].namespaces.algorand.accounts
+    ).toEqual([`${VOI}:RK`]);
+    mockApprove.mockClear();
+    await expect(
+      WalletConnectService.getInstance().approveSession(proposalWith([ALGO]), [
+        rekeyed,
+      ])
+    ).rejects.toThrow('No signable accounts available for required chain');
+    expect(mockApprove).not.toHaveBeenCalled();
+  });
+  it('includes STANDARD but excludes REKEYED on unknown chains in permissive mode', async () => {
+    mockAllowUnsupportedNetworks = true;
+    await WalletConnectService.getInstance().approveSession(
+      proposalWith([UNSUPPORTED]),
+      [rekeyed, account('STD')]
+    );
+    expect(
+      (mockApprove.mock.calls as any)[0][0].namespaces.algorand.accounts
+    ).toEqual([`${UNSUPPORTED}:STD`]);
+    expect(Keys.getSigningInfo).not.toHaveBeenCalled();
+  });
+});
+
+it('approves only covered Voi using the real SDK namespace builder', async () => {
+  jest.mocked(Keys.getSigningInfo).mockImplementation(async (_, network) => ({
+    canSign: network === 'voi-mainnet',
+    signingAddress: 'RK',
+    isRekeyed: true,
+  }));
+  const { buildApprovedNamespaces } = require('@walletconnect/utils');
+  buildApprovedNamespaces.mockImplementationOnce(
+    jest.requireActual('@walletconnect/utils').buildApprovedNamespaces
+  );
+  await WalletConnectService.getInstance().approveSession(
+    proposalWith([VOI], [ALGO]),
+    [account('RK')]
+  );
+  expect(approvedChains()).toEqual([VOI]);
+  expect(
+    (mockApprove.mock.calls as any)[0][0].namespaces.algorand.accounts
+  ).toEqual([`${VOI}:RK`]);
 });

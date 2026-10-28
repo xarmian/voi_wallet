@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,11 +22,16 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
+import { resolveV1Chain } from '@/services/walletconnect/v1/config';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import { getSignableAccounts } from '@/services/walletconnect/utils';
+import {
+  getProposalChains,
+  resolveProposalEligibility,
+} from '@/services/walletconnect/utils';
+import { useExperimentalStore } from '@/store/experimentalStore';
 import AccountSelectionItem from '@/components/walletconnect/AccountSelectionItem';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -58,11 +63,19 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   // Determine which version we're handling
   const isV1 = version === 1 || v1SessionRequest;
 
+  const [probing, setProbing] = useState(true);
+  const [eligibility, setEligibility] = useState<
+    Awaited<ReturnType<typeof resolveProposalEligibility>>
+  >([]);
+  const [approvedChains, setApprovedChains] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(
     new Set()
   );
+
+  const generation = useRef(0);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     // Only load accounts when there's actually a proposal to act on. The
@@ -71,13 +84,31 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     // Alerts — would fire on the "No proposal data" screen too.
     if (!proposal && !v1SessionRequest) return;
     loadAccounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; proposal/v1SessionRequest are stable route params
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the proposal changes
+  }, [proposal, v1SessionRequest]);
 
   const loadAccounts = async () => {
+    const current = ++generation.current;
+    inFlight.current = true;
+    setProbing(true);
     try {
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
-      const signableAccounts = getSignableAccounts(allAccounts);
+      const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
+      const chains = isV1
+        ? v1Chain
+          ? [v1Chain.chainId]
+          : []
+        : getProposalChains(
+            proposal!,
+            useExperimentalStore.getState().allowUnsupportedNetworks
+          );
+      const result = await resolveProposalEligibility(allAccounts, chains);
+      if (current !== generation.current) return;
+      setApprovedChains(chains);
+      setEligibility(result);
+      const signableAccounts = result
+        .filter((entry) => entry.eligibleChains.length)
+        .map((entry) => entry.account);
       setAccounts(signableAccounts);
       // Pre-select all signable accounts by default
       const initialSelection = new Set(
@@ -85,8 +116,14 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       );
       setSelectedAccountIds(initialSelection);
     } catch (error) {
+      if (current !== generation.current) return;
       console.error('Failed to load accounts:', error);
       Alert.alert('Error', 'Failed to load accounts');
+    } finally {
+      if (current === generation.current) {
+        inFlight.current = false;
+        setProbing(false);
+      }
     }
   };
 
@@ -356,13 +393,48 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         </View>
       )}
 
+      {probing && (
+        <ActivityIndicator accessibilityLabel="Checking signing authority" />
+      )}
+      {eligibility.some((entry) => entry.errorChains.length > 0) && (
+        <View>
+          <Text style={styles.permissionText}>
+            {"Couldn't check signing authority for "}
+            {
+              eligibility.filter((entry) => entry.errorChains.length > 0).length
+            }{' '}
+            account(s)
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              if (!inFlight.current) void loadAccounts();
+            }}
+            disabled={probing || isLoading}
+          >
+            <Text style={styles.selectAllText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {accounts.map((account) => (
-        <AccountSelectionItem
-          key={account.id}
-          account={account}
-          isSelected={selectedAccountIds.has(account.id)}
-          onToggleSelection={handleToggleAccountSelection}
-        />
+        <View key={account.id}>
+          <AccountSelectionItem
+            account={account}
+            isSelected={selectedAccountIds.has(account.id)}
+            onToggleSelection={handleToggleAccountSelection}
+          />
+          {(() => {
+            const chains =
+              eligibility.find((entry) => entry.account.id === account.id)
+                ?.eligibleChains ?? [];
+            return (
+              chains.length < approvedChains.length && (
+                <Text style={styles.permissionText}>
+                  Only on {chains.map(getNetworkNameByChainId).join(', ')}
+                </Text>
+              )
+            );
+          })()}
+        </View>
       ))}
     </View>
   );
@@ -427,13 +499,18 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         </TouchableOpacity>
 
         <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Connect"
           style={[styles.button, styles.approveButton]}
           onPress={handleApprove}
           disabled={
-            isLoading || accounts.length === 0 || selectedAccountIds.size === 0
+            probing ||
+            isLoading ||
+            accounts.length === 0 ||
+            selectedAccountIds.size === 0
           }
         >
-          {isLoading ? (
+          {isLoading || probing ? (
             <ActivityIndicator color={theme.colors.buttonText} />
           ) : (
             <Text style={styles.approveButtonText}>Connect</Text>

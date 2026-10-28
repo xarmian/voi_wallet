@@ -18,21 +18,17 @@ import {
   WalletConnectRequestEvent,
 } from './types';
 import {
-  getSignableAccounts,
   formatAccountAddress,
   validateAlgorandTransaction,
   sanitizeMetadata,
   isSessionExpired,
-  detectRequestedChains,
+  getProposalChains,
+  resolveProposalEligibility,
   areAllRequiredChainsSupported,
   normalizeV1Metadata,
   parseAccountAddress,
 } from './utils';
-import {
-  DEFAULT_NAMESPACES,
-  VOI_CHAIN_DATA,
-  ALGORAND_MAINNET_CHAIN_DATA,
-} from './config';
+import { DEFAULT_NAMESPACES } from './config';
 import { useExperimentalStore } from '@/store/experimentalStore';
 import {
   isRestorableV1Session,
@@ -585,7 +581,7 @@ export class WalletConnectService extends EventEmitter {
       const accounts =
         selectedAccounts && selectedAccounts.length > 0
           ? selectedAccounts
-          : await this.getSignableAccounts();
+          : await MultiAccountWalletService.getAllAccounts();
 
       if (accounts.length === 0) {
         throw new Error('No signable accounts available');
@@ -597,35 +593,7 @@ export class WalletConnectService extends EventEmitter {
       const allowUnsupportedNetworks =
         useExperimentalStore.getState().allowUnsupportedNetworks;
 
-      // Decide which chains to include in the approved namespaces.
-      const defaultChains = [
-        VOI_CHAIN_DATA.chainId,
-        ALGORAND_MAINNET_CHAIN_DATA.chainId,
-      ];
-      let chainsToInclude: string[];
-
-      if (allowUnsupportedNetworks) {
-        // Developer / permissive mode: union ALL requested chains (required +
-        // optional), including ones we don't recognize (e.g. a local devnet).
-        const allRequestedChains = new Set<string>();
-
-        if (proposal.requiredNamespaces?.algorand?.chains) {
-          proposal.requiredNamespaces.algorand.chains.forEach((chain: string) =>
-            allRequestedChains.add(chain)
-          );
-        }
-
-        if (proposal.optionalNamespaces?.algorand?.chains) {
-          proposal.optionalNamespaces.algorand.chains.forEach((chain: string) =>
-            allRequestedChains.add(chain)
-          );
-        }
-
-        chainsToInclude =
-          allRequestedChains.size > 0
-            ? Array.from(allRequestedChains)
-            : defaultChains;
-      } else {
+      if (!allowUnsupportedNetworks) {
         // Default / strict mode: a proposal that REQUIRES any chain this wallet
         // does not support is rejected outright — approving it would publish the
         // wallet's addresses as signable on an unrecognized chain. Note this is
@@ -651,25 +619,44 @@ export class WalletConnectService extends EventEmitter {
               'enable "Allow unsupported networks" in Experimental Features.'
           );
         }
-
-        // Required chains are all supported: approve only the SUPPORTED chains,
-        // dropping any unsupported OPTIONAL chains rather than approving them.
-        const supportedRequestedChains = detectRequestedChains(proposal);
-        chainsToInclude =
-          supportedRequestedChains.length > 0
-            ? supportedRequestedChains
-            : defaultChains;
       }
-
-      // Format accounts for the chains we are approving.
-      const formattedAccounts: string[] = [];
-      for (const chainId of chainsToInclude) {
-        for (const account of accounts) {
-          formattedAccounts.push(
-            formatAccountAddress(chainId, account.address)
+      let chainsToInclude = getProposalChains(
+        proposal,
+        allowUnsupportedNetworks
+      );
+      const eligibility = await resolveProposalEligibility(
+        accounts,
+        chainsToInclude
+      );
+      const formattedAccounts = eligibility.flatMap(
+        ({ account, eligibleChains }) =>
+          eligibleChains.map((chain) =>
+            formatAccountAddress(chain, account.address)
+          )
+      );
+      const errors = eligibility.filter((result) => result.errorChains.length);
+      if (errors.length)
+        console.error(
+          'Signing authority probe failed',
+          errors.map(({ account, errorChains }) => ({
+            accountId: account.id,
+            chains: errorChains,
+          }))
+        );
+      for (const chain of proposal.requiredNamespaces?.algorand?.chains ?? []) {
+        if (
+          !eligibility.some((result) => result.eligibleChains.includes(chain))
+        ) {
+          throw new Error(
+            `No signable accounts available for required chain ${chain}`
           );
         }
       }
+      chainsToInclude = chainsToInclude.filter((chain) =>
+        eligibility.some((result) => result.eligibleChains.includes(chain))
+      );
+      if (!formattedAccounts.length)
+        throw new Error('No signable accounts available');
 
       // Build supported namespaces from the chains selected above (all requested
       // chains when the flag is ON, supported-only when OFF).
@@ -921,11 +908,6 @@ export class WalletConnectService extends EventEmitter {
       );
       return [];
     }
-  }
-
-  async getSignableAccounts(): Promise<AccountMetadata[]> {
-    const allAccounts = await MultiAccountWalletService.getAllAccounts();
-    return getSignableAccounts(allAccounts);
   }
 
   async signTransactions(
