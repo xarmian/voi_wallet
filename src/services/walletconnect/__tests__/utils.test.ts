@@ -1,4 +1,6 @@
-jest.mock('@/store/walletStore', () => ({ getRekeyStateStrict: jest.fn() }));
+jest.mock('@/services/secure/keyManager', () => ({
+  SecureKeyManager: { getSigningInfo: jest.fn() },
+}));
 import { Buffer } from 'buffer';
 import algosdk from 'algosdk';
 import {

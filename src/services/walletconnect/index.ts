@@ -620,7 +620,7 @@ export class WalletConnectService extends EventEmitter {
           );
         }
       }
-      const chainsToInclude = getProposalChains(
+      let chainsToInclude = getProposalChains(
         proposal,
         allowUnsupportedNetworks
       );
@@ -652,6 +652,9 @@ export class WalletConnectService extends EventEmitter {
           );
         }
       }
+      chainsToInclude = chainsToInclude.filter((chain) =>
+        eligibility.some((result) => result.eligibleChains.includes(chain))
+      );
       if (!formattedAccounts.length)
         throw new Error('No signable accounts available');
 

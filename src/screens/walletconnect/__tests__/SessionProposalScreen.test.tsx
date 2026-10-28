@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { getRekeyStateStrict } from '@/store/walletStore';
+import { SecureKeyManager as Keys } from '@/services/secure/keyManager';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import {
@@ -9,7 +9,9 @@ import {
 } from '@/services/walletconnect/config';
 
 const mockApprove = jest.fn();
-jest.mock('@/store/walletStore', () => ({ getRekeyStateStrict: jest.fn() }));
+jest.mock('@/services/secure/keyManager', () => ({
+  SecureKeyManager: { getSigningInfo: jest.fn() },
+}));
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { getAllAccounts: jest.fn() },
 }));
@@ -78,13 +80,24 @@ it('disables approval while probing, shows partial eligibility and errors, and r
     .mockResolvedValue([rekeyed, standard]);
   let release!: (state: any) => void;
   jest
-    .mocked(getRekeyStateStrict)
+    .mocked(Keys.getSigningInfo)
+    .mockReset()
+    .mockImplementation(async (address) => ({
+      canSign: true,
+      signingAddress: address,
+      isRekeyed: false,
+    }))
     .mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           release = resolve;
         })
     )
+    .mockImplementationOnce(async () => ({
+      canSign: true,
+      signingAddress: 'STD',
+      isRekeyed: false,
+    }))
     .mockRejectedValueOnce(new Error('offline'));
   const screen = await render(
     <SessionProposalScreen
@@ -94,7 +107,7 @@ it('disables approval while probing, shows partial eligibility and errors, and r
   );
   expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
   await act(async () => {
-    release({ status: 'loaded', canSign: true, isRekeyed: true });
+    release({ signingAddress: 'RK', canSign: true, isRekeyed: true });
   });
   expect(screen.getByText('Only on Voi Network')).toBeTruthy();
   expect(
@@ -106,12 +119,64 @@ it('disables approval while probing, shows partial eligibility and errors, and r
   await fireEvent.press(screen.getByRole('button', { name: 'Connect' }));
   expect(mockApprove).toHaveBeenCalledWith(proposal, [rekeyed, standard]);
 
-  jest
-    .mocked(getRekeyStateStrict)
-    .mockResolvedValue({ status: 'loaded', canSign: true, isRekeyed: true });
+  jest.mocked(Keys.getSigningInfo).mockResolvedValue({
+    signingAddress: 'RK',
+    canSign: true,
+    isRekeyed: true,
+  });
   await fireEvent.press(screen.getByText('Retry'));
   await waitFor(() => expect(screen.queryByText('Retry')).toBeNull());
-  expect(getRekeyStateStrict).toHaveBeenCalledTimes(4);
+  expect(Keys.getSigningInfo).toHaveBeenCalledTimes(8);
   expect(screen.queryByText('Only on Voi Network')).toBeNull();
   expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
 });
+
+const view = (params: object) => (
+  <SessionProposalScreen navigation={{} as any} route={{ params } as any} />
+);
+const signingInfo = (canSign: boolean) => ({
+  canSign,
+  signingAddress: 'RK',
+  isRekeyed: false,
+});
+it.each([true, false])(
+  'keeps latest probe authoritative (older first: %s)',
+  async (olderFirst) => {
+    jest
+      .mocked(MultiAccountWalletService.getAllAccounts)
+      .mockResolvedValue([rekeyed]);
+    const probe = jest
+      .mocked(Keys.getSigningInfo)
+      .mockReset()
+      .mockRejectedValue(new Error('offline'));
+    const screen = await render(view({ proposal }));
+    await waitFor(() => expect(screen.getByText('Retry')).toBeTruthy());
+    const releases: ((value: ReturnType<typeof signingInfo>) => void)[] = [];
+    probe
+      .mockImplementationOnce(
+        () => new Promise((resolve) => releases.push(resolve))
+      )
+      .mockImplementationOnce(
+        () => new Promise((resolve) => releases.push(resolve))
+      )
+      .mockResolvedValue(signingInfo(false));
+    let node = screen.getByText('Retry');
+    while (!node.props.onClick) node = node.parent!;
+    await act(async () => {
+      node.props.onClick();
+      node.props.onClick();
+    });
+    expect(probe).toHaveBeenCalledTimes(3);
+    await screen.rerender(view({ proposal: { ...proposal } }));
+    const finish = async (index: number) =>
+      act(async () => releases[index](signingInfo(index === 0)));
+    await finish(olderFirst ? 0 : 1);
+    if (olderFirst) {
+      expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+      expect(screen.getByLabelText('Checking signing authority')).toBeTruthy();
+    }
+    await finish(olderFirst ? 1 : 0);
+    expect(screen.queryByText('Rekeyed')).toBeNull();
+    expect(screen.queryByLabelText('Checking signing authority')).toBeNull();
+  }
+);

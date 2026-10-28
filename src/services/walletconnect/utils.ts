@@ -8,7 +8,6 @@ import {
 } from './types';
 import type { WalletConnectV1PeerMeta } from './v1/types';
 import { AccountType, AccountMetadata } from '@/types/wallet';
-import { getRekeyStateStrict } from '@/store/walletStore';
 import { NetworkId } from '@/types/network';
 import { VOI_CHAIN_DATA, ALGORAND_MAINNET_CHAIN_DATA } from './config';
 
@@ -259,21 +258,27 @@ export async function resolveProposalEligibility(
   accounts: AccountMetadata[],
   chainIds: string[]
 ) {
+  const { SecureKeyManager } = await import('@/services/secure/keyManager');
   return Promise.all(
     accounts.map(async (account) => {
       const eligibleChains: string[] = [];
       const errorChains: string[] = [];
       for (const chain of chainIds) {
-        if (account.type === AccountType.REKEYED) {
-          const network = getNetworkByChainId(chain);
-          if (!network) continue;
+        const network = getNetworkByChainId(chain);
+        if (network) {
           try {
-            if ((await getRekeyStateStrict(account.address, network)).canSign)
+            if (
+              (await SecureKeyManager.getSigningInfo(account.address, network))
+                .canSign
+            )
               eligibleChains.push(chain);
           } catch {
             errorChains.push(chain);
           }
-        } else if (getSignableAccounts([account]).length) {
+        } else if (
+          account.type !== AccountType.REKEYED &&
+          getSignableAccounts([account]).length
+        ) {
           eligibleChains.push(chain);
         }
       }

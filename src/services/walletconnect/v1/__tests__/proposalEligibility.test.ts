@@ -1,10 +1,12 @@
 import { WalletConnectV1Client } from '../client';
-import { getRekeyStateStrict } from '@/store/walletStore';
+import { SecureKeyManager as Keys } from '@/services/secure/keyManager';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { createSessionApprovalResponse } from '../protocol';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 
-jest.mock('@/store/walletStore', () => ({ getRekeyStateStrict: jest.fn() }));
+jest.mock('@/services/secure/keyManager', () => ({
+  SecureKeyManager: { getSigningInfo: jest.fn() },
+}));
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { getAllAccounts: jest.fn() },
 }));
@@ -16,8 +18,8 @@ jest.mock('../protocol', () => ({
   encryptResponse: jest.fn(async () => 'encrypted'),
 }));
 
-it.each(['eligible', 'ineligible', 'error'])(
-  'v1 probes Voi and fails closed when %s',
+it.each(['eligible', 'ineligible', 'error', 'unsupported'])(
+  'v1 probes Algorand and fails closed when %s',
   async (answer) => {
     const selected = {
       id: 'rk',
@@ -28,12 +30,12 @@ it.each(['eligible', 'ineligible', 'error'])(
     jest
       .mocked(MultiAccountWalletService.getAllAccounts)
       .mockResolvedValue([selected]);
-    jest.mocked(getRekeyStateStrict).mockReset();
+    jest.mocked(Keys.getSigningInfo).mockReset();
     if (answer === 'error') {
-      jest.mocked(getRekeyStateStrict).mockRejectedValue(new Error('offline'));
+      jest.mocked(Keys.getSigningInfo).mockRejectedValue(new Error('offline'));
     } else {
-      jest.mocked(getRekeyStateStrict).mockResolvedValue({
-        status: 'loaded',
+      jest.mocked(Keys.getSigningInfo).mockResolvedValue({
+        signingAddress: 'RK',
         isRekeyed: true,
         canSign: answer === 'eligible',
       });
@@ -48,7 +50,10 @@ it.each(['eligible', 'ineligible', 'error'])(
       config: { key: 'placeholder' },
       socket,
       clientId: 'client',
-      sessionData: { chainId: 123, peerId: 'peer' },
+      sessionData: {
+        chainId: answer === 'unsupported' ? 123 : 416001,
+        peerId: 'peer',
+      },
       storeSession: jest.fn(),
     });
     if (answer === 'eligible') {
@@ -56,7 +61,7 @@ it.each(['eligible', 'ineligible', 'error'])(
       expect(createSessionApprovalResponse).toHaveBeenCalledWith(
         0,
         true,
-        123,
+        416001,
         ['RK'],
         expect.anything(),
         'client'
@@ -64,10 +69,18 @@ it.each(['eligible', 'ineligible', 'error'])(
       expect(socket.publishToTopic).toHaveBeenCalledTimes(1);
     } else {
       await expect(client.approveSession(['RK'])).rejects.toThrow(
-        'No signable accounts available'
+        answer === 'unsupported'
+          ? 'Unsupported v1 chain'
+          : 'No signable accounts available'
       );
       expect(socket.publishToTopic).not.toHaveBeenCalled();
     }
-    expect(getRekeyStateStrict).toHaveBeenCalledWith('RK', 'voi-mainnet');
+    if (answer === 'unsupported')
+      expect(Keys.getSigningInfo).not.toHaveBeenCalled();
+    else
+      expect(Keys.getSigningInfo).toHaveBeenCalledWith(
+        'RK',
+        'algorand-mainnet'
+      );
   }
 );

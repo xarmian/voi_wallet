@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
+import { resolveV1Chain } from '@/services/walletconnect/v1/config';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata } from '@/types/wallet';
@@ -73,6 +74,9 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     new Set()
   );
 
+  const generation = useRef(0);
+  const inFlight = useRef(false);
+
   useEffect(() => {
     // Only load accounts when there's actually a proposal to act on. The
     // no-proposal early return now sits below the hooks (to keep hook order
@@ -80,20 +84,26 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     // Alerts — would fire on the "No proposal data" screen too.
     if (!proposal && !v1SessionRequest) return;
     loadAccounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; proposal/v1SessionRequest are stable route params
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the proposal changes
+  }, [proposal, v1SessionRequest]);
 
   const loadAccounts = async () => {
+    const current = ++generation.current;
+    inFlight.current = true;
     setProbing(true);
     try {
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
       const chains = isV1
-        ? [VOI_CHAIN_DATA.chainId]
+        ? v1Chain
+          ? [v1Chain.chainId]
+          : []
         : getProposalChains(
             proposal!,
             useExperimentalStore.getState().allowUnsupportedNetworks
           );
       const result = await resolveProposalEligibility(allAccounts, chains);
+      if (current !== generation.current) return;
       setApprovedChains(chains);
       setEligibility(result);
       const signableAccounts = result
@@ -106,10 +116,14 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       );
       setSelectedAccountIds(initialSelection);
     } catch (error) {
+      if (current !== generation.current) return;
       console.error('Failed to load accounts:', error);
       Alert.alert('Error', 'Failed to load accounts');
     } finally {
-      setProbing(false);
+      if (current === generation.current) {
+        inFlight.current = false;
+        setProbing(false);
+      }
     }
   };
 
@@ -379,7 +393,9 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         </View>
       )}
 
-      {probing && <ActivityIndicator />}
+      {probing && (
+        <ActivityIndicator accessibilityLabel="Checking signing authority" />
+      )}
       {eligibility.some((entry) => entry.errorChains.length > 0) && (
         <View>
           <Text style={styles.permissionText}>
@@ -390,7 +406,9 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
             account(s)
           </Text>
           <TouchableOpacity
-            onPress={loadAccounts}
+            onPress={() => {
+              if (!inFlight.current) void loadAccounts();
+            }}
             disabled={probing || isLoading}
           >
             <Text style={styles.selectAllText}>Retry</Text>
