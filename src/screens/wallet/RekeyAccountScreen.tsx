@@ -39,9 +39,11 @@ import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
 import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
 import {
+  filterOwnKeyAccounts,
   filterUsableOwnKeyAccounts,
   OwnKeyAccount,
 } from '@/services/wallet/ownKeyCustody';
+import { useAuth } from '@/contexts/AuthContext';
 
 type RekeyAccountScreenRouteProp = RouteProp<
   SettingsStackParamList,
@@ -104,11 +106,19 @@ export default function RekeyAccountScreen() {
   // rekey is removed, receives authority for good, so its key must also read
   // and belong to it (holdsUsableOwnKey). Both are null until the first probe
   // resolves. (TASK-425 U3.)
+  // A key read fails while the vault is locked, so unlocking re-probes.
+  const { authState } = useAuth();
+  const unlocked = authState.isAuthenticated && !authState.isLocked;
   const accounts = wallet?.accounts ?? NO_ACCOUNTS;
-  const ownKeyAccounts = useOwnKeyAccounts(accounts);
+  const ownKeyAccounts = useOwnKeyAccounts(
+    accounts,
+    filterOwnKeyAccounts,
+    unlocked
+  );
   const usableOwnKeyAccounts = useOwnKeyAccounts(
     accounts,
-    filterUsableOwnKeyAccounts
+    filterUsableOwnKeyAccounts,
+    unlocked
   );
   const custodyLoading =
     ownKeyAccounts === null || usableOwnKeyAccounts === null;
@@ -183,6 +193,8 @@ export default function RekeyAccountScreen() {
           : true;
   const isProceedDisabled =
     (rekeyFlow !== 'reverse' && !hasTargetSelection) ||
+    // Custody can drop after the reverse flow was entered (TASK-425 U3).
+    (rekeyFlow === 'reverse' && !canReverseRekey) ||
     validationErrors.length > 0 ||
     isValidating;
   // Show "Verify Airgap Signer" when not yet verified, otherwise "Rekey to Airgap Signer"
@@ -313,6 +325,9 @@ export default function RekeyAccountScreen() {
     wallet,
     isLedgerReady,
     selectedNetworkId,
+    // Validation reads custody too; re-run it when a probe changes the answer.
+    ownKeyAccounts,
+    usableOwnKeyAccounts,
   ]);
 
   // Auto-select the sole Ledger / airgap target account when exactly one is
@@ -385,6 +400,13 @@ export default function RekeyAccountScreen() {
     }
 
     if (rekeyFlow === 'reverse') {
+      if (!canReverseRekey) {
+        Alert.alert(
+          'Cannot Remove Rekey',
+          "Removing the rekey returns control to this account's own key, which is not in your wallet."
+        );
+        return;
+      }
       Alert.alert(
         'Confirm Reverse Rekey',
         `Are you sure you want to remove the rekey from this account?\n\nThis will return signing authority back to:\n${formatAddress(sourceAccount.address)}\n\nYou will regain full control of this account.`,

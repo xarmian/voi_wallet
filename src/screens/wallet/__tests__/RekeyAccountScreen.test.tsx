@@ -65,6 +65,7 @@ const mockGetPrivateKey = jest.fn(async (_id: string): Promise<Uint8Array> => {
   throw new Error('no key');
 });
 let mockFocused = true;
+let mockAuthState = { isAuthenticated: true, isLocked: false };
 
 function mockUseWalletStore(selector: (state: unknown) => unknown) {
   return selector(mockWalletState);
@@ -116,6 +117,10 @@ jest.mock('@/services/auth/transactionAuthController', () => ({
     cleanup: jest.fn(),
     resetAfterDismiss: jest.fn(),
   }),
+}));
+
+jest.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ authState: mockAuthState }),
 }));
 
 jest.mock('@/utils/address', () => ({
@@ -256,6 +261,7 @@ beforeEach(() => {
   mockGetPrivateKey.mockReset();
   mockGetPrivateKey.mockRejectedValue(new Error('no key'));
   mockFocused = true;
+  mockAuthState = { isAuthenticated: true, isLocked: false };
 });
 
 afterEach(() => {
@@ -481,5 +487,51 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
 
     expect(screen.queryByText('Retained Key')).toBeNull();
     expect(screen.getByText('Rekey Account')).toBeDisabled();
+  });
+
+  it('disables Remove Rekey when a refocus probe finds the source key gone', async () => {
+    const keptSource = {
+      ...retained,
+      id: 'src',
+      address: 'SOURCE_ADDR',
+      label: 'Source Account',
+    };
+    const controller = { ...retained, id: 'ctl', label: 'Controller' };
+    mockWalletState.wallet = { accounts: [keptSource, controller] };
+    mockRekeyInfo = { isRekeyed: true, authAddress: 'KEPT_ADDR' };
+    mockProbe.mockResolvedValue(true);
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await fireEvent.press(screen.getByText('Remove Rekey (Return to Self)'));
+    await settle();
+    const proceed = () => screen.getAllByText('Remove Rekey').at(-1)!;
+    await waitFor(() => expect(proceed()).toBeEnabled());
+
+    // The source's key goes; the controller's stays.
+    mockFocused = false;
+    await screen.rerender(<RekeyAccountScreen />);
+    mockProbe.mockImplementation(async (id: string) => id === 'ctl');
+    mockFocused = true;
+    await screen.rerender(<RekeyAccountScreen />);
+    await settle();
+
+    expect(proceed()).toBeDisabled();
+  });
+
+  it('re-probes custody when the app unlocks', async () => {
+    mockWalletState.wallet = { accounts: [mockSourceAccount, retained] };
+    mockAuthState = { isAuthenticated: true, isLocked: true };
+    // Locked: the custody read fails.
+    mockProbe.mockRejectedValue(new Error('vault locked'));
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    expect(screen.queryByText('Retained Key')).toBeNull();
+
+    mockProbe.mockResolvedValue(true);
+    mockAuthState = { isAuthenticated: true, isLocked: false };
+    await screen.rerender(<RekeyAccountScreen />);
+    await settle();
+
+    expect(screen.getByText('Retained Key')).toBeTruthy();
   });
 });
