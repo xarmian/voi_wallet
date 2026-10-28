@@ -96,18 +96,21 @@ export function useControlledByNotice() {
   }, [active]);
   useEffect(() => {
     const current = generation.current;
+    // This generation's markers: a late rejection from an earlier active
+    // account must never clear a marker for the current one.
+    const flights = inFlight.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const frame = requestAnimationFrame(() => {
       timer = setTimeout(() => {
         for (const account of candidates) {
           if (classifyKeyHolding(account) !== 'unresolved') continue;
           const key = probeKey(account);
-          if (inFlight.current.has(key)) continue;
-          inFlight.current.add(key);
+          if (flights.has(key)) continue;
+          flights.add(key);
           void AccountSecureStorage.probeSecretPresenceStrict(account.id)
             // A failed read may be retried on a later candidate change.
             .catch(() => {
-              inFlight.current.delete(key);
+              flights.delete(key);
               return false;
             })
             .then((present) => {

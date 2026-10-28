@@ -265,3 +265,33 @@ it('collects probes that resolve in reverse order', async () => {
   ]);
   await unmount();
 });
+
+it('a late rejection from an earlier A never unblocks a duplicate probe of the current A', async () => {
+  const pending: { id: string; reject: (e: Error) => void }[] = [];
+  probe.mockImplementation(
+    (id: string) =>
+      new Promise((_resolve, reject) => {
+        pending.push({ id, reject });
+      })
+  );
+  select('ACTIVE', account('AUTH', AccountType.REKEYED));
+  const { unmount } = await renderHook(useControlledByNotice);
+  await paint();
+  await paint();
+  expect(probe).toHaveBeenCalledTimes(1);
+  // A -> B -> A: the first A probe is still pending; the new A starts its own.
+  await act(async () => select('OTHER', account('AUTH', AccountType.REKEYED)));
+  await paint();
+  await act(async () => select('ACTIVE', account('AUTH', AccountType.REKEYED)));
+  await paint();
+  await paint();
+  const calls = probe.mock.calls.length;
+  // The OLD probe rejects late, then the controller briefly drops and returns.
+  await act(async () => pending[0].reject(new Error('late')));
+  await act(async () => networkRekeyStatus.invalidate());
+  await paint();
+  await paint();
+  // The new A probe is still in flight, so no duplicate read starts.
+  expect(probe).toHaveBeenCalledTimes(calls);
+  await unmount();
+});
