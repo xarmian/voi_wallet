@@ -877,6 +877,33 @@ describe('remote batch submission ownership (TASK-418)', () => {
     }
   );
 
+  // Codex focused confirm (#208): while recover() is still awaiting, a second
+  // success callback for the OLD group must not submit.
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s blocks an old-group submit while recovery is pending, then accepts the reconfirm',
+    async (screen) => {
+      const env = scope();
+      let finishRecovery!: (value: unknown) => void;
+      env.recover.mockImplementationOnce(
+        () => new Promise((resolve) => (finishRecovery = resolve)) as never
+      );
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      submit.mockRejectedValueOnce(new Error('below min'));
+      const first = handler({ signedTransactions: [signed] });
+      // Let the failed submit reach the pending recovery.
+      for (let i = 0; i < 5 && env.recover.mock.calls.length === 0; i += 1)
+        await Promise.resolve();
+      expect(env.recover).toHaveBeenCalledTimes(1);
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(1);
+      finishRecovery('rebuilt');
+      await first;
+      expect(env.hasSubmittedRef.current).toBe(false);
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it.each(['signer', 'network', 'genesis'])(
     'still rejects mismatched %s',
     async (mismatch) => {

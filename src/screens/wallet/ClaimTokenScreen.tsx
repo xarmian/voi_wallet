@@ -371,11 +371,12 @@ export default function ClaimTokenScreen() {
               })
             );
           } catch (submitError) {
-            // Release the latch FIRST, on every failure path: after a
-            // recovery the user confirms again, and this same callback must
-            // then be allowed to submit the rebuilt group (TASK-418 + TASK-416).
-            hasSubmittedRef.current = false;
+            // Hold the latch THROUGH recovery (a second success callback for
+            // the old group must not submit while recover() awaits), then
+            // release it on every path, so the reconfirmed group can submit
+            // through this same callback (TASK-418 + TASK-416).
             const recoveryResult = await recover(submitError, txnGroup);
+            hasSubmittedRef.current = false;
             if (recoveryResult) {
               navigation.goBack();
               if (recoveryResult === 'rebuilt')
