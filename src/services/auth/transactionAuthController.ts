@@ -2137,6 +2137,12 @@ export class TransactionAuthController {
       throw new Error('No transaction request available');
     }
 
+    // TASK-418: a replaced or cancelled flow must not publish its plan or
+    // results onto the next one. Every await below re-checks the generation.
+    const generation = this.cancelledFlowGeneration;
+    const isStale = () => generation !== this.cancelledFlowGeneration;
+    const request = this.currentRequest;
+
     try {
       this.updateState({
         state: 'signing',
@@ -2144,7 +2150,10 @@ export class TransactionAuthController {
       });
 
       // Build the unsigned transactions based on request type
-      const unsignedTxns = await this.buildUnsignedTransactions();
+      const built: Parameters<typeof this.buildUnsignedTransactions>[0] = {};
+      const unsignedTxns = await this.buildUnsignedTransactions(built);
+      if (isStale()) return;
+      this.remoteBatchPlan = built.batchPlan ?? null;
 
       if (this.remoteBatchPlan && unsignedTxns.length === 0) {
         this.updateState({
@@ -2161,11 +2170,11 @@ export class TransactionAuthController {
       }
       const networkId = this.getRequestNetworkId();
       const rekey = await getRekeyStateStrict(
-        this.currentRequest.account.address,
+        request.account.address,
         networkId
       );
-      const signerAddress =
-        rekey.authAddress ?? this.currentRequest.account.address;
+      if (isStale()) return;
+      const signerAddress = rekey.authAddress ?? request.account.address;
 
       // Create the remote signer request
       const signerRequest = await RemoteSignerService.createSigningRequest(
@@ -2178,11 +2187,13 @@ export class TransactionAuthController {
         }
       );
 
+      if (isStale()) return;
       this.updateState({
         remoteSignerRequest: signerRequest,
         remoteSignerStatus: 'displaying_request',
       });
     } catch (error) {
+      if (isStale()) return;
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -2199,14 +2210,17 @@ export class TransactionAuthController {
   /**
    * Build unsigned transactions from the current request
    */
-  private async buildUnsignedTransactions(): Promise<algosdk.Transaction[]> {
+  private async buildUnsignedTransactions(
+    out: {
+      batchPlan?: Awaited<ReturnType<UnifiedTransactionSigner['planBatch']>>;
+    } = {}
+  ): Promise<algosdk.Transaction[]> {
     if (!this.currentRequest) {
       throw new Error('No transaction request available');
     }
 
     const { TransactionService } = await import('@/services/transactions');
 
-    this.remoteBatchPlan = null;
     switch (this.currentRequest.type) {
       case 'voi_transfer':
       case 'asa_transfer':
@@ -2252,10 +2266,10 @@ export class TransactionAuthController {
 
       case 'batch_transaction':
       case 'walletconnect_batch':
-        this.remoteBatchPlan = await this.unifiedSigner.planBatch(
-          this.currentRequest
-        );
-        return this.remoteBatchPlan.flatMap((plan) =>
+        // The plan is published by the caller only if the flow is still
+        // current (TASK-418): a stale planning call must not overwrite it.
+        out.batchPlan = await this.unifiedSigner.planBatch(this.currentRequest);
+        return out.batchPlan.flatMap((plan) =>
           plan.action === 'sign' ? [plan.txn] : []
         );
 

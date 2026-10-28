@@ -721,6 +721,48 @@ describe('remote batch submission ownership (TASK-418)', () => {
     }
   );
 
+  // Codex confirm (TASK-418): a stale INITIALIZATION (batch planning still
+  // pending) must not publish its plan or an all-declined result onto the next
+  // request.
+  it('a replaced flow never publishes its pending batch plan onto the next request', async () => {
+    const controller = new TransactionAuthController();
+    const realPlan = (controller as any).unifiedSigner.planBatch.bind(
+      (controller as any).unifiedSigner
+    );
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const planning = new Promise<void>((resolve) => (entered = resolve));
+    (controller as any).unifiedSigner.planBatch = async (request: unknown) => {
+      entered();
+      await gate;
+      return realPlan(request);
+    };
+    const first = controller.initializeSigningFlow({
+      type: 'walletconnect_batch',
+      networkId: netId,
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      walletConnectParams: {
+        transactions: [{ txn: encoded, signers: [] }],
+        reviewedSigners: [owner.addr],
+        sessionBinding: null,
+      },
+    } as any);
+    // Wait until A is actually inside batch planning, then replace it.
+    await planning;
+    await transferFlow(controller);
+    const afterReplace = controller.getState();
+    release();
+    await first;
+    expect(controller.getState()).toEqual(afterReplace);
+    expect(controller.getState().result).not.toEqual({
+      success: true,
+      signedTransactions: [null],
+    });
+    expect((controller as any).remoteBatchPlan).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it('uses the captured batch type and plan even if currentRequest is cleared', async () => {
     const { controller, response } = await flow();
     net.getAccountRekeyInfo.mockImplementationOnce(async () => {
