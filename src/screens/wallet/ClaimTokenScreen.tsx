@@ -57,6 +57,7 @@ import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
+import { ARC200_RECONFIRM_MESSAGE } from '@/services/transactions/arc200MbrRace';
 import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 
 // Claimable tokens are always on Voi network
@@ -271,24 +272,31 @@ export default function ClaimTokenScreen() {
     []
   );
 
-  const buildClaim = useCallback(() => {
-    if (
-      !activeAccount?.address ||
-      !algosdk.isValidAddress(finalRecipientAddress)
-    )
-      return undefined;
-    return Arc200TransactionService.buildArc200TransferFromGroup({
-      contractId: claimableItem.contractId,
-      from: claimableItem.owner,
-      to: finalRecipientAddress,
-      amount: claimableItem.amount,
-      sender: activeAccount.address,
-      note: `Claiming ${claimableItem.tokenSymbol} from approval`,
-      networkId: CLAIM_NETWORK_ID,
-    });
-  }, [activeAccount, finalRecipientAddress, claimableItem]);
-  const { group: txnGroup, fee: estimatedFee } =
-    useArc200Confirmation(buildClaim);
+  const buildClaim = useCallback(
+    (forceMbrPayment = false) => {
+      if (
+        !activeAccount?.address ||
+        !algosdk.isValidAddress(finalRecipientAddress)
+      )
+        return undefined;
+      return Arc200TransactionService.buildArc200TransferFromGroup({
+        contractId: claimableItem.contractId,
+        from: claimableItem.owner,
+        to: finalRecipientAddress,
+        amount: claimableItem.amount,
+        sender: activeAccount.address,
+        note: `Claiming ${claimableItem.tokenSymbol} from approval`,
+        networkId: CLAIM_NETWORK_ID,
+        forceMbrPayment,
+      });
+    },
+    [activeAccount, finalRecipientAddress, claimableItem]
+  );
+  const {
+    group: txnGroup,
+    fee: estimatedFee,
+    recover,
+  } = useArc200Confirmation(buildClaim);
 
   // Handle claim - navigate to universal signing screen
   const handleClaim = useCallback(async () => {
@@ -360,7 +368,15 @@ export default function ClaimTokenScreen() {
               })
             );
           } catch (submitError) {
+            // Release the latch FIRST, on every failure path: after a
+            // recovery the user confirms again, and this same callback must
+            // then be allowed to submit the rebuilt group (TASK-418 + TASK-416).
             hasSubmittedRef.current = false;
+            if (await recover(submitError, txnGroup)) {
+              navigation.goBack();
+              Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+              return;
+            }
             const message =
               submitError instanceof Error
                 ? submitError.message
@@ -397,6 +413,7 @@ export default function ClaimTokenScreen() {
     claimableItem,
     navigation,
     txnGroup,
+    recover,
   ]);
 
   const canClaim =

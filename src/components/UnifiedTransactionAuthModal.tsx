@@ -37,6 +37,7 @@ interface UnifiedTransactionAuthModalProps {
   onCancel: () => void;
   title?: string;
   message?: string;
+  formatErrorMessage?: (error: Error) => string | undefined;
 }
 
 export default function UnifiedTransactionAuthModal({
@@ -47,6 +48,7 @@ export default function UnifiedTransactionAuthModal({
   onCancel,
   title = 'Transaction Authentication',
   message = 'Authenticate to complete this transaction',
+  formatErrorMessage,
 }: UnifiedTransactionAuthModalProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -348,6 +350,7 @@ export default function UnifiedTransactionAuthModal({
       return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
     return (
+      (authState.error && formatErrorMessage?.(authState.error)) ||
       authState.error?.message ||
       authState.ledgerError ||
       'An unknown error occurred.'

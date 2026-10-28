@@ -11,6 +11,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Arc200TransactionService } from '@/services/transactions/arc200';
+import {
+  ARC200_RECONFIRM_MESSAGE,
+  isArc200MbrRace,
+} from '@/services/transactions/arc200MbrRace';
 import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 import { formatAddress } from '@/utils/address';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
@@ -96,7 +100,7 @@ export default function TransactionConfirmationScreen() {
   );
 
   const buildTransfer = useCallback(
-    () =>
+    (forceMbrPayment = false) =>
       params.assetType === 'arc200'
         ? Arc200TransactionService.buildArc200TransferGroup({
             from: params.fromAccount.address,
@@ -108,11 +112,16 @@ export default function TransactionConfirmationScreen() {
             contractId: params.contractId!,
             note: params.note,
             networkId: selectedNetworkId,
+            forceMbrPayment,
           })
         : undefined,
     [params, selectedNetworkId]
   );
-  const { group, fee: builtFee } = useArc200Confirmation(buildTransfer);
+  const {
+    group,
+    fee: builtFee,
+    recover,
+  } = useArc200Confirmation(buildTransfer);
   const confirmationFee =
     params.assetType === 'arc200' ? builtFee : params.estimatedFee;
 
@@ -316,9 +325,20 @@ export default function TransactionConfirmationScreen() {
     navigation.goBack();
   };
 
-  const handleAuthComplete = (success: boolean, result?: any) => {
+  const handleAuthComplete = async (success: boolean, result?: any) => {
     setShowAuthModal(false);
     setCurrentRequest(null);
+
+    if (
+      !success &&
+      (await recover(
+        result?.error ?? result,
+        currentRequest?.transferParams?.preparedArc200Group
+      ))
+    ) {
+      Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+      return;
+    }
 
     if (success && result?.transactionId) {
       // Replace this screen with result to keep stack cleaner.
@@ -467,6 +487,11 @@ export default function TransactionConfirmationScreen() {
         controller={authController}
         request={currentRequest}
         onComplete={handleAuthComplete}
+        formatErrorMessage={(error) =>
+          group && !group.needsMbrPayment && isArc200MbrRace(error, group)
+            ? ARC200_RECONFIRM_MESSAGE
+            : undefined
+        }
         onCancel={handleAuthCancel}
         title="Authorize Transaction"
         message={`Authenticate to send ${params.amount} ${params.assetSymbol} to ${getDisplayName()}`}
