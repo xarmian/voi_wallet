@@ -1208,8 +1208,20 @@ export const useWalletStore = create<WalletState>()(
         return {
           wallet: {
             ...state.wallet,
+            // Merge ONLY the backup fields, and only onto the same identity:
+            // replacing the whole record could regress a conversion or rekey
+            // update that reached the store while the write was queued.
             accounts: state.wallet.accounts.map((account) =>
-              account.id === persistedAccount.id ? persistedAccount : account
+              account.id === persistedAccount.id &&
+              account.address === persistedAccount.address &&
+              (account.type === AccountType.STANDARD ||
+                account.type === AccountType.REKEYED)
+                ? {
+                    ...account,
+                    backupVerified: persistedAccount.backupVerified,
+                    backupCreatedAt: persistedAccount.backupCreatedAt,
+                  }
+                : account
             ),
           },
         };

@@ -499,6 +499,33 @@ describe('local-key verification eligibility', () => {
     }
   );
 
+  it('returns the committed record when a conversion lands between the reads', async () => {
+    const target = await seed();
+    // A rekey back to self converts the account to STANDARD after the initial
+    // read but before the serialized write.
+    probe.mockImplementationOnce(async () => {
+      const accounts = storedAccounts();
+      const { authAddress: _auth, canSign: _canSign, ...rest } = accounts[0];
+      accounts[0] = { ...rest, type: AccountType.STANDARD };
+      persistBlob(accounts);
+      return true;
+    });
+    const result = await MultiAccountWalletService.markBackupVerified(
+      target.id,
+      target.address
+    );
+    expect(result).toMatchObject({
+      id: target.id,
+      type: AccountType.STANDARD,
+      backupVerified: true,
+    });
+    expect(result).not.toHaveProperty('authAddress');
+    expect(storedAccounts()[0]).toMatchObject({
+      type: AccountType.STANDARD,
+      backupVerified: true,
+    });
+  });
+
   it('rejects an expected-address mismatch before writing', async () => {
     const target = await seed();
     await expect(

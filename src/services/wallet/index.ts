@@ -1335,51 +1335,55 @@ export class MultiAccountWalletService {
     // an active-account change) that landed in between — or be discarded by one,
     // losing a verification the user just earned. Re-reading inside the chain
     // makes this mutation touch exactly one field of the CURRENT blob.
-    const applied = await this.enqueueWalletWrite(async () => {
-      // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
-      if (readEpoch !== walletResetEpoch) return false;
-      const raw = await storage.getItem(this.WALLET_KEY);
-      // Primary absent = wiped (or never written). Deliberately stricter than
-      // storeWallet: this mutation never (re)creates a wallet blob, and it never
-      // clears the wipe tombstone.
-      if (raw == null) return false;
+    // Resolves to the record as committed inside the chain (null = not
+    // applied), so callers never see the initial snapshot after a concurrent
+    // conversion (TASK-421 U4d review).
+    const committed = await this.enqueueWalletWrite(
+      async (): Promise<
+        StandardAccountMetadata | RekeyedAccountMetadata | null
+      > => {
+        // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
+        if (readEpoch !== walletResetEpoch) return null;
+        const raw = await storage.getItem(this.WALLET_KEY);
+        // Primary absent = wiped (or never written). Deliberately stricter than
+        // storeWallet: this mutation never (re)creates a wallet blob, and it never
+        // clears the wipe tombstone.
+        if (raw == null) return null;
 
-      const current = JSON.parse(raw) as Wallet;
-      const index = current.accounts.findIndex((acc) => acc.id === accountId);
-      if (index === -1) return false;
+        const current = JSON.parse(raw) as Wallet;
+        const index = current.accounts.findIndex((acc) => acc.id === accountId);
+        if (index === -1) return null;
 
-      const target = await this.eligibleBackupVerificationTarget(
-        current.accounts[index],
-        expectedAddress
-      );
-      if (!target || readEpoch !== walletResetEpoch) return false;
-      // Someone else already recorded it — nothing to do, and no write.
-      if (target.backupVerified === true) return true;
+        const target = await this.eligibleBackupVerificationTarget(
+          current.accounts[index],
+          expectedAddress
+        );
+        if (!target || readEpoch !== walletResetEpoch) return null;
+        // Someone else already recorded it — nothing to do, and no write.
+        if (target.backupVerified === true) return target;
 
-      current.accounts[index] = {
-        ...target,
-        backupVerified: true,
-        backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
-      };
+        const updated = {
+          ...target,
+          backupVerified: true,
+          backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
+        };
+        current.accounts[index] = updated;
 
-      await storage.setItem(
-        this.WALLET_KEY,
-        JSON.stringify(this.sanitizeWalletForPersistence(current))
-      );
-      return true;
-    });
+        await storage.setItem(
+          this.WALLET_KEY,
+          JSON.stringify(this.sanitizeWalletForPersistence(current))
+        );
+        return updated;
+      }
+    );
 
-    if (!applied) {
+    if (!committed) {
       throw new Error(
         'Could not record backup verification: the wallet changed or was reset'
       );
     }
 
-    return {
-      ...account,
-      backupVerified: true,
-      backupCreatedAt,
-    };
+    return committed;
   }
 
   static async setActiveAccount(accountId: string): Promise<void> {
