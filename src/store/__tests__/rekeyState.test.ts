@@ -211,6 +211,21 @@ describe('network-scoped rekey accessors', () => {
     expect(mockGetInstance).toHaveBeenCalledWith(otherNetwork);
     expect(mockGetRekeyInfo).toHaveBeenCalledWith('SOURCE', true);
   });
+  it('unavailable is an error and strict signing lookup rejects it', async () => {
+    const info = { isRekeyed: false, unavailable: true };
+    const { deriveRekeyState } = jest.requireActual(
+      '@/services/wallet/rekeyState'
+    );
+    expect(deriveRekeyState('SOURCE', info, wallet.accounts)).toEqual({
+      status: 'error',
+    });
+    seed({ balance: { ...balance, rekeyInfo: info } });
+    expect(getRekeyState('SOURCE', network)).toEqual({ status: 'error' });
+    mockGetRekeyInfo.mockResolvedValueOnce(info);
+    await expect(getRekeyStateStrict('SOURCE', network)).rejects.toThrow(
+      'unavailable'
+    );
+  });
   it('strict throws on fetch failure', async () => {
     const error = new Error('offline');
     mockGetRekeyInfo.mockRejectedValueOnce(error);

@@ -121,6 +121,7 @@ import {
 } from '@/__tests__/fixtures/algorand';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { NetworkService } from '@/services/network';
+import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { getRekeyStateStrict } from '@/store/walletStore';
 import { NetworkId } from '@/types/network';
@@ -640,7 +641,10 @@ describe('remote batch submission ownership (TASK-418)', () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
-  async function transferFlow(controller = new TransactionAuthController()) {
+  async function transferFlow(
+    controller = new TransactionAuthController(),
+    type = 'voi_transfer'
+  ) {
     const { TransactionService } = require('@/services/transactions');
     const realService = jest.requireActual(
       '@/services/transactions'
@@ -648,6 +652,10 @@ describe('remote batch submission ownership (TASK-418)', () => {
     (TransactionService.buildTransaction as jest.Mock).mockImplementation(
       realService.buildTransaction.bind(realService)
     );
+    TransactionService.buildRekeyTransaction =
+      realService.buildRekeyTransaction.bind(realService);
+    TransactionService.buildRekeyReverseTransaction =
+      realService.buildRekeyReverseTransaction.bind(realService);
     net.getSuggestedParams = jest.fn(async () => ({
       ...SUGGESTED_PARAMS,
       genesisID: NETWORK_CONFIGURATIONS[netId as NetworkId].genesisId,
@@ -659,7 +667,12 @@ describe('remote batch submission ownership (TASK-418)', () => {
       ),
     }));
     await controller.initializeSigningFlow({
-      type: 'voi_transfer',
+      type,
+      rekeyParams: {
+        fromAddress: owner.addr,
+        rekeyToAddress: wrong.addr,
+        networkId: netId,
+      },
       networkId: netId,
       account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
       transferParams: {
@@ -671,6 +684,32 @@ describe('remote batch submission ownership (TASK-418)', () => {
     } as any);
     return controller;
   }
+
+  it.each(['rekey', 'rekey_reverse', 'voi_transfer'])(
+    '%s invalidates only after successful remote rekey submission',
+    async (type) => {
+      const controller = await transferFlow(
+        new TransactionAuthController(),
+        type
+      );
+      const request = controller.getRemoteSignerRequest()!;
+      const bytes = require('algosdk')
+        .decodeUnsignedTransaction(Buffer.from(request.txns[0].b, 'base64'))
+        .signTxn(owner.sk);
+      const response = RemoteSignerService.createSuccessResponse(request.id, [
+        bytes,
+      ]);
+      const before = getRekeyStatusEpoch();
+      submit.mockRejectedValueOnce(new Error('offline'));
+      await controller.processRemoteSignerResponse(response);
+      expect(getRekeyStatusEpoch()).toBe(before);
+      await controller.processRemoteSignerResponse(response);
+      expect(controller.getState().result?.success).toBe(true);
+      expect(getRekeyStatusEpoch()).toBe(
+        before + (type === 'voi_transfer' ? 0 : 1)
+      );
+    }
+  );
 
   it('voi_transfer built by TransactionService retains controller submission', async () => {
     const controller = await transferFlow();

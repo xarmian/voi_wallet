@@ -1,4 +1,5 @@
 import { withTimeout } from '@/utils/withTimeout';
+import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import {
   AccountBalance,
@@ -65,6 +66,7 @@ export class NetworkService {
   private mimirService?: MimirApiService;
   private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> =
     new Map();
+  private rekeyCacheEpoch = getRekeyStatusEpoch();
   private rekeyInfoCacheTTL: number = 10000; // 10 second cache
   // Cache of immutable ASA params (decimals/name/unitName). Cleared on
   // switchNetwork (this instance is reused across networks). Keyed by the asset
@@ -1388,17 +1390,37 @@ export class NetworkService {
    */
   async getAccountRekeyInfo(
     address: string,
-    skipTimestamp: boolean = false
+    skipTimestamp: boolean = false,
+    bypassCache: boolean = false
   ): Promise<RekeyInfo> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
       }
 
+      const networkId = this.currentNetworkId;
+      const generation = this.assetCacheGeneration;
+      const cacheKey = `${networkId}:${address}`;
+      const assertCurrentNetwork = () => {
+        if (
+          networkId !== this.currentNetworkId ||
+          generation !== this.assetCacheGeneration
+        )
+          throw new Error('Network changed during rekey lookup');
+      };
+      const epoch = getRekeyStatusEpoch();
+      if (this.rekeyCacheEpoch !== epoch) {
+        this.rekeyInfoCache.clear();
+        this.rekeyCacheEpoch = epoch;
+      }
       // Check cache first
-      const cached = this.rekeyInfoCache.get(address);
+      const cached = this.rekeyInfoCache.get(cacheKey);
       const now = Date.now();
-      if (cached && now - cached.timestamp < this.rekeyInfoCacheTTL) {
+      if (
+        !bypassCache &&
+        cached &&
+        now - cached.timestamp < this.rekeyInfoCacheTTL
+      ) {
         return cached.info;
       }
 
@@ -1413,6 +1435,8 @@ export class NetworkService {
       const accountInfo = await this.algodClient
         .accountInformation(address)
         .do();
+
+      assertCurrentNetwork();
 
       // Check if account has auth-addr field (indicating it's been rekeyed)
       let authAddress: string | undefined;
@@ -1430,10 +1454,11 @@ export class NetworkService {
       if (!isRekeyed) {
         const result = { isRekeyed: false };
         // Cache the result
-        this.rekeyInfoCache.set(address, {
-          info: result,
-          timestamp: Date.now(),
-        });
+        if (epoch === getRekeyStatusEpoch())
+          this.rekeyInfoCache.set(cacheKey, {
+            info: result,
+            timestamp: Date.now(),
+          });
         return result;
       }
 
@@ -1477,8 +1502,13 @@ export class NetworkService {
         rekeyedAt,
       };
 
+      assertCurrentNetwork();
       // Cache the result
-      this.rekeyInfoCache.set(address, { info: result, timestamp: Date.now() });
+      if (epoch === getRekeyStatusEpoch())
+        this.rekeyInfoCache.set(cacheKey, {
+          info: result,
+          timestamp: Date.now(),
+        });
 
       return result;
     } catch (error) {
@@ -1511,7 +1541,8 @@ export class NetworkService {
             `Failed to check rekey status for ${redactAddress(address)}:`,
             redactError(result.reason)
           );
-          rekeyInfo[address] = { isRekeyed: false };
+          // A failed lookup is unknown, never "not rekeyed" (TASK-421).
+          rekeyInfo[address] = { isRekeyed: false, unavailable: true };
         }
       });
 

@@ -29,6 +29,7 @@ import { MultiAccountWalletService } from '@/services/wallet';
 import { verifyRemoteSignerResponse } from '@/utils/signatureVerification';
 import { NetworkId } from '@/types/network';
 import { NetworkService } from '@/services/network';
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import { getRekeyStateStrict } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
 
@@ -2447,6 +2448,9 @@ export class TransactionAuthController {
           signedTxns.length === 1 ? signedTxns[0] : signedTxns
         );
 
+      if (requestType === 'rekey' || requestType === 'rekey_reverse') {
+        invalidateRekeyStatus();
+      }
       if (isStale()) return;
 
       // Success! `confirmed === false` means the tx was submitted but not yet
