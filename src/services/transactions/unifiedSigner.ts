@@ -979,6 +979,10 @@ export class UnifiedTransactionSigner {
             'Keyreg parameters required for key registration transactions'
           );
         }
+        // TASK-425: the account checked above is the one that signs.
+        if (request.keyregParams.address !== request.account.address) {
+          throw new Error('Keyreg sender does not match the signing account');
+        }
         break;
 
       case 'appl':
@@ -989,6 +993,10 @@ export class UnifiedTransactionSigner {
         }
         if (!request.applParams.appId) {
           throw new Error('Application ID required for app call transactions');
+        }
+        // TASK-425: the account checked above is the one that signs.
+        if (request.applParams.senderAddress !== request.account.address) {
+          throw new Error('App call sender does not match the signing account');
         }
         break;
     }
@@ -1153,10 +1161,13 @@ export class UnifiedTransactionSigner {
       callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
 
       // Sign the transaction
+      // TASK-425: resolve the signing route on the network the txn was
+      // built for and is submitted to, not the app's active network.
       const signedTxnBlob = await SecureKeyManager.signTransaction(
         txn,
         request.keyregParams.address,
-        request.pin
+        request.pin,
+        networkId
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
@@ -1220,10 +1231,13 @@ export class UnifiedTransactionSigner {
       callbacks?.onLedgerPrompt?.({ index: 1, total: 1 });
 
       // Sign the transaction
+      // TASK-425: resolve the signing route on the network the txn was
+      // built for and is submitted to, not the app's active network.
       const signedTxnBlob = await SecureKeyManager.signTransaction(
         txn,
         request.applParams.senderAddress,
-        request.pin
+        request.pin,
+        networkId
       );
 
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
