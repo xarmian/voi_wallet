@@ -24,12 +24,22 @@ export interface NotificationPreferences {
   arc72Transfers: boolean;
   outgoingConfirmations: boolean;
   priceAlerts: boolean;
-  /** Minimum VOI amount to trigger notification (normalized, e.g., 1.5 VOI) */
+  /** Minimum VOI amount in micro-VOI (1 VOI = 1,000,000 micro-VOI). */
   minVoiAmount: number;
-  /** Minimum ARC-200 amount to trigger notification (normalized) */
+  /** Minimum ARC-200 amount in normalized token units (adjusted for decimals). */
   minArc200Amount: number;
   /** Price change percentage to trigger alert */
   priceAlertThreshold: number;
+}
+
+/** Convert VOI to the stored micro-VOI unit. */
+export function voiToMicroVoi(voi: number): number {
+  return Math.round(voi * 1_000_000);
+}
+
+/** Convert stored micro-VOI to VOI for display. */
+export function microVoiToVoi(micro: number): number {
+  return micro / 1_000_000;
 }
 
 /**

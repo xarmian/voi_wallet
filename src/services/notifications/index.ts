@@ -590,15 +590,19 @@ class NotificationService {
       updates.price_alert_threshold_percent = preferences.priceAlertThreshold;
     }
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .schema('voiwallet')
       .from('account_subscriptions')
       .update(updates)
       .eq('device_id', this.deviceId)
-      .eq('account_address', validatedAddress);
+      .eq('account_address', validatedAddress)
+      .select('account_address');
 
-    if (error) {
-      console.error('Failed to update preferences:', error);
+    if (error || !data?.length) {
+      console.warn(
+        'Failed to update preferences:',
+        error ?? 'update matched no rows'
+      );
       return false;
     }
 
