@@ -47,6 +47,7 @@ import {
 } from '@/services/transactions/arc200';
 
 const CLAIMER = makeAddress('arc200-batch:claimer');
+const OTHER_SENDER = makeAddress('arc200-batch:other-sender');
 const OWNER_1 = makeAddress('arc200-batch:owner-1');
 const OWNER_2 = makeAddress('arc200-batch:owner-2');
 const CONTRACT_A = 390001;
@@ -280,15 +281,29 @@ describe('buildBatchClaimTransactionGroup (TASK-392, GH #20)', () => {
   });
 });
 
-// Captured from the original e0d0613 builder before adding TASK-397 guards.
-// Fixed suggested params and empty simulation resources come from the mocks above.
-const ORIGINAL_BATCH_BASE64 = [
-  'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCA/C89YVGJDOorffz3opSGZJuU6EebwBcrXB0dHkVaZTKNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
-  'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
-  'iaRhcGFhlMQESpaPj8QgrEa7ykzAWlgeSYuBRkMzDJA1+LYsDh3rtcQFV2j7VfzEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
-  'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCCf7tVnsBDRwJzhj0VdRjdsjbmivTuaRrTAJ2gNxKiX86NzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
-  'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB6RhcGlkzgLPRRSjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
-];
+// Captured by running `git show e0d0613:src/services/transactions/arc200.ts`
+// as a temporary module with this suite's fixed params and empty simulation mocks.
+// See the round 2 report and r2-original-bytes.json for capture details.
+const ORIGINAL_BATCH_BASE64 = {
+  allMbr: [
+    'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCA/C89YVGJDOorffz3opSGZJuU6EebwBcrXB0dHkVaZTKNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
+    'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+    'iaRhcGFhlMQESpaPj8QgrEa7ykzAWlgeSYuBRkMzDJA1+LYsDh3rtcQFV2j7VfzEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+    'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCCf7tVnsBDRwJzhj0VdRjdsjbmivTuaRrTAJ2gNxKiX86NzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
+    'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB6RhcGlkzgLPRRSjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCCeVhSgEWMTpqKtDTELsINulen7p6YdcbVVHhATITJ70aJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+  ],
+  noMbr: [
+    'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDugjEjzUkdE6UUBQhqAnp5VBTRHcB8/ciYHwib5xVFL6Jsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+    'iaRhcGFhlMQESpaPj8QgrEa7ykzAWlgeSYuBRkMzDJA1+LYsDh3rtcQFV2j7VfzEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDugjEjzUkdE6UUBQhqAnp5VBTRHcB8/ciYHwib5xVFL6Jsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+    'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB6RhcGlkzgLPRRSjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDugjEjzUkdE6UUBQhqAnp5VBTRHcB8/ciYHwib5xVFL6Jsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+  ],
+  mixedMbr: [
+    'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDd01MDA0Xv9QRjwB5HPXR1tw8xjMEHRJZUgJIckaOnQaJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+    'iaRhcGFhlMQESpaPj8QgrEa7ykzAWlgeSYuBRkMzDJA1+LYsDh3rtcQFV2j7VfzEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATiKRhcGlkzgAF83GjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDd01MDA0Xv9QRjwB5HPXR1tw8xjMEHRJZUgJIckaOnQaJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+    'iqNhbXTNb1SjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDd01MDA0Xv9QRjwB5HPXR1tw8xjMEHRJZUgJIckaOnQaJsds0D6aRub3RlxBVNQlIgZm9yIEFSQy0yMDAgY2xhaW2jcmN2xCCf7tVnsBDRwJzhj0VdRjdsjbmivTuaRrTAJ2gNxKiX86NzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWjcGF5',
+    'iaRhcGFhlMQESpaPj8QgfTbaGYKEgFJEtOZrvmw6zb1RhHD5RXCfrE/56iLAzR3EIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NAxCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB6RhcGlkzgLPRRSjZmVlzQPoomZ2AaNnZW6rdm9pLXRlc3QtdjGjZ3JwxCDd01MDA0Xv9QRjwB5HPXR1tw8xjMEHRJZUgJIckaOnQaJsds0D6aNzbmTEIJrZBHqRqKjFueFFOPqRp7unGCbTF+k3EOb65Czl94NApHR5cGWkYXBwbA==',
+  ],
+};
 
 const validFixtureClaims = (): Arc200ClaimParams[] => [
   {
@@ -322,7 +337,7 @@ function expectNoNetworkCalls() {
 
 describe('TASK-397 claim builder guards', () => {
   it.each([5000n, 1n])(
-    'rejects a duplicate owner/token before network access (amount %s)',
+    'rejects the same owner and sender before network access (amount %s)',
     async (amount) => {
       const claims = validFixtureClaims();
       // Append after other valid claims to require a full preflight pass.
@@ -334,11 +349,75 @@ describe('TASK-397 claim builder guards', () => {
           'voi-mainnet'
         )
       ).rejects.toThrow(
-        new Error(`Duplicate claim for token ${CONTRACT_A} from ${OWNER_1}`)
+        new Error(
+          `Duplicate claim for token ${CONTRACT_A} from ${OWNER_1} by ${CLAIMER}`
+        )
       );
       expectNoNetworkCalls();
     }
   );
+
+  it('allows the same owner with two different senders and builds the group', async () => {
+    const first = validFixtureClaims()[0];
+    const claims = [first, { ...first, sender: OTHER_SENDER }];
+    const group =
+      await Arc200TransactionService.buildBatchClaimTransactionGroup(claims);
+
+    expectNoDuplicates(group.txnBytes);
+    expectOneMbrPerContract(group.txnBytes, [CONTRACT_A]);
+    expectCanonicalGroup(group.txnBytes);
+    expect(
+      decodeGroup(group.txnBytes)
+        .filter((t) => t.type === algosdk.TransactionType.appl)
+        .map(claimOf)
+    ).toEqual(
+      claims.map((c) => ({
+        contractId: c.contractId,
+        selector: transferFromSelector,
+        from: c.from,
+        to: c.to,
+        amount: c.amount,
+        sender: c.sender,
+        fee: BigInt(SUGGESTED_PARAMS.fee),
+      }))
+    );
+  });
+
+  it('rejects a string contractId duplicate before network access', async () => {
+    const first = validFixtureClaims()[0];
+    const duplicate = {
+      ...first,
+      contractId: String(first.contractId) as unknown as number,
+    };
+    await expect(
+      Arc200TransactionService.buildBatchClaimTransactionGroup([
+        first,
+        duplicate,
+      ])
+    ).rejects.toThrow(
+      new Error(
+        `Duplicate claim for token ${CONTRACT_A} from ${OWNER_1} by ${CLAIMER}`
+      )
+    );
+    expectNoNetworkCalls();
+  });
+
+  it('rejects different recipients with a string contractId before network access', async () => {
+    const claims = validFixtureClaims();
+    claims[1] = {
+      ...claims[1],
+      contractId: String(CONTRACT_A) as unknown as number,
+      to: OWNER_2,
+    };
+    await expect(
+      Arc200TransactionService.buildBatchClaimTransactionGroup(claims)
+    ).rejects.toThrow(
+      new Error(
+        `All claims for token ${CONTRACT_A} must go to the same recipient`
+      )
+    );
+    expectNoNetworkCalls();
+  });
 
   it('rejects different recipients for one contract before network access', async () => {
     const claims = validFixtureClaims();
@@ -354,18 +433,32 @@ describe('TASK-397 claim builder guards', () => {
     expectNoNetworkCalls();
   });
 
-  it('encodes a valid batch byte-identically to the original builder', async () => {
-    const group =
-      await Arc200TransactionService.buildBatchClaimTransactionGroup(
-        validFixtureClaims(),
-        'voi-mainnet'
+  it.each([
+    ['allMbr', []],
+    ['noMbr', [CONTRACT_A, CONTRACT_B]],
+    ['mixedMbr', [CONTRACT_A]],
+  ] as const)(
+    'encodes a valid %s batch byte-identically to the original builder',
+    async (scenario, held) => {
+      mockGetAllAccountAssets.mockResolvedValue(
+        held.map((contractId) => ({
+          assetType: 'arc200',
+          contractId,
+          balance: '1',
+        }))
       );
-    const encoded = group.transactions.map((txn) =>
-      Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')
-    );
-    expect(encoded).toEqual(ORIGINAL_BATCH_BASE64);
-    expect(
-      group.txnBytes.map((bytes) => Buffer.from(bytes).toString('base64'))
-    ).toEqual(ORIGINAL_BATCH_BASE64);
-  });
+      const group =
+        await Arc200TransactionService.buildBatchClaimTransactionGroup(
+          validFixtureClaims(),
+          'voi-mainnet'
+        );
+      const encoded = group.transactions.map((txn) =>
+        Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')
+      );
+      expect(encoded).toEqual(ORIGINAL_BATCH_BASE64[scenario]);
+      expect(
+        group.txnBytes.map((bytes) => Buffer.from(bytes).toString('base64'))
+      ).toEqual(ORIGINAL_BATCH_BASE64[scenario]);
+    }
+  );
 });

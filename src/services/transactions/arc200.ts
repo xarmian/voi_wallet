@@ -658,28 +658,30 @@ export class Arc200TransactionService {
     }
 
     // TASK-397: validate the whole batch before network access or construction.
-    const ownersByContract = new Map<number, Set<string>>();
+    const claimsByContract = new Map<number, Set<string>>();
     const recipientsByContract = new Map<number, string>();
     for (const claim of claims) {
-      const owners =
-        ownersByContract.get(claim.contractId) ?? new Set<string>();
-      if (owners.has(claim.from)) {
+      const contractId = Number(claim.contractId);
+      // The app call uses claim.sender directly, with no default fallback.
+      const ownerAndSender = JSON.stringify([claim.from, claim.sender]);
+      const seenClaims = claimsByContract.get(contractId) ?? new Set<string>();
+      if (seenClaims.has(ownerAndSender)) {
         throw new Error(
-          `Duplicate claim for token ${claim.contractId} from ${claim.from}`
+          `Duplicate claim for token ${contractId} from ${claim.from} by ${claim.sender}`
         );
       }
-      owners.add(claim.from);
-      ownersByContract.set(claim.contractId, owners);
+      seenClaims.add(ownerAndSender);
+      claimsByContract.set(contractId, seenClaims);
 
       if (
-        recipientsByContract.has(claim.contractId) &&
-        recipientsByContract.get(claim.contractId) !== claim.to
+        recipientsByContract.has(contractId) &&
+        recipientsByContract.get(contractId) !== claim.to
       ) {
         throw new Error(
-          `All claims for token ${claim.contractId} must go to the same recipient`
+          `All claims for token ${contractId} must go to the same recipient`
         );
       }
-      recipientsByContract.set(claim.contractId, claim.to);
+      recipientsByContract.set(contractId, claim.to);
     }
 
     const networkService = networkId
