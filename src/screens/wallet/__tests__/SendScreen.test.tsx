@@ -732,6 +732,25 @@ describe('WATCH accounts follow the signing route (TASK-425)', () => {
     ).toBeDisabled();
   });
 
+  it('an NFT send resolves the route on the NFT network, not the current one', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    mockCurrentNetwork = VOI;
+    mockRouteParams = {
+      nftToken: {
+        contractId: 1,
+        tokenId: '1',
+        networkId: ALGO,
+        metadata: { name: 'Test NFT' },
+      },
+    } as never;
+    await render(<SendScreen />);
+    await settle();
+    expect(SecureKeyManager.resolveSigningRoute).toHaveBeenLastCalledWith(
+      'WATCH',
+      ALGO
+    );
+  });
+
   it('a non-WATCH account adds no route lookup', async () => {
     await render(<SendScreen />);
     await settle();

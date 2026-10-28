@@ -845,9 +845,12 @@ export default function SendScreen() {
           return;
         }
 
+        // An NFT send is built and signed on the NFT's network, every
+        // other send on effectiveNetworkId.
         const route = await SecureKeyManager.resolveSigningRoute(
           activeAccount.address,
-          effectiveNetworkId
+          (contextNftToken?.networkId as NetworkId | undefined) ??
+            effectiveNetworkId
         );
         if (!isCancelled) setWatchSigner(route.kind);
       } catch {
@@ -869,6 +872,7 @@ export default function SendScreen() {
     activeAccount?.address,
     activeAccount?.type,
     effectiveNetworkId,
+    contextNftToken?.networkId,
     signingAttempt,
   ]);
 
