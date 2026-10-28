@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -28,12 +28,13 @@ import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import RenameAccountModal from '@/components/account/RenameAccountModal';
+import DeleteAccountModal from '@/components/account/DeleteAccountModal';
 import ThemeSwitcher from '@/components/common/ThemeSwitcher';
 import LocaleSwitcher from '@/components/common/LocaleSwitcher';
 import NFTThemeSelector from '@/components/common/NFTThemeSelector';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 import { formatAddress } from '@/utils/address';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import { AccountMetadata, AccountType, isBackupVerified } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
 import NetworkSwitcher from '@/components/network/NetworkSwitcher';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
@@ -253,6 +254,10 @@ export default function SettingsScreen() {
     (activeAccount?.type === AccountType.REKEYED &&
       (activeAccount.originalOwner === true ||
         (phraseAccess?.account === activeAccount && phraseAccess.available)));
+  const deletionBusy = useRef(false);
+  const [deletionTarget, setDeletionTarget] = useState<AccountMetadata | null>(
+    null
+  );
   const accounts = useAccounts();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
   const updateAccountLabel = useWalletStore(
@@ -389,8 +394,8 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleShowRecoveryPhrase = () => {
-    if (!activeAccount) {
+  const handleShowRecoveryPhrase = (account = activeAccount) => {
+    if (!account) {
       Alert.alert(
         'Error',
         'No active account found. Please select an account first.'
@@ -408,7 +413,7 @@ export default function SettingsScreen() {
           text: 'Continue',
           onPress: () => {
             navigation.navigate('ShowRecoveryPhrase', {
-              accountAddress: activeAccount.address,
+              accountAddress: account.address,
             });
           },
         },
@@ -444,42 +449,106 @@ export default function SettingsScreen() {
     setIsNetworkSwitcherVisible(false);
   };
 
-  const handleDeleteActiveAccount = () => {
+  const cancelDeletion = () => {
+    deletionBusy.current = false;
+    setDeletionTarget(null);
+  };
+
+  const confirmDeletion = async (
+    target: AccountMetadata,
+    keyHolding: boolean
+  ) => {
+    const current = () =>
+      useWalletStore
+        .getState()
+        .wallet?.accounts.find((a) => a.id === target.id);
+    const checked = current();
+    // A formerly keyless account may have acquired a key while the alert was open.
+    const gainedKey =
+      !keyHolding && checked && (await isListDeletionProtected(checked));
+    if (
+      !checked ||
+      checked.address !== target.address ||
+      checked.type !== target.type ||
+      current() !== checked ||
+      gainedKey
+    ) {
+      cancelDeletion();
+      Alert.alert(
+        'Account not deleted',
+        'This account was removed or changed while you were confirming. Please start again.'
+      );
+      return;
+    }
+    setDeletionTarget(null);
+    try {
+      await deleteAccount(target.id);
+      Alert.alert(
+        'Account Deleted',
+        `${target.label?.trim() || formatAddress(target.address)} has been removed.`
+      );
+    } catch (error) {
+      Alert.alert(
+        'Delete Failed',
+        error instanceof Error ? error.message : 'Failed to delete the account.'
+      );
+    }
+    deletionBusy.current = false;
+  };
+
+  const handleDeleteActiveAccount = async () => {
+    if (deletionBusy.current) return;
     if (!activeAccount) {
       Alert.alert('No Active Account', 'Please select an account to delete.');
       return;
     }
-
-    const accountId = activeAccount.id;
-    const accountName =
-      activeAccount.label?.trim() || formatAddress(activeAccount.address);
-
-    Alert.alert(
-      'Delete Account',
-      `Are you sure you want to delete ${accountName}? This action cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteAccount(accountId);
-              Alert.alert(
-                'Account Deleted',
-                `${accountName} has been removed.`
-              );
-            } catch (error) {
-              const message =
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to delete the account.';
-              Alert.alert('Delete Failed', message);
-            }
+    deletionBusy.current = true;
+    const target = { ...activeAccount };
+    const accountName = target.label?.trim() || formatAddress(target.address);
+    const phraseAvailable = canShowPhrase;
+    const keyHolding = await isListDeletionProtected(target);
+    if (keyHolding) {
+      Alert.alert(
+        'Back up your recovery phrase first',
+        `Deleting ${accountName} removes its private key from this device. Without its 25-word recovery phrase, you'll permanently lose access to this account.` +
+          (isBackupVerified(target)
+            ? ''
+            : " You haven't confirmed a backup of this phrase yet."),
+        [
+          { text: 'Cancel', style: 'cancel', onPress: cancelDeletion },
+          ...(phraseAvailable
+            ? [
+                {
+                  text: 'Show recovery phrase',
+                  onPress: () => {
+                    cancelDeletion();
+                    handleShowRecoveryPhrase(target);
+                  },
+                },
+              ]
+            : []),
+          {
+            text: 'I have my phrase',
+            onPress: () => setDeletionTarget(target),
           },
-        },
-      ]
-    );
+        ],
+        { cancelable: true, onDismiss: cancelDeletion }
+      );
+    } else {
+      Alert.alert(
+        'Delete Account',
+        `Are you sure you want to delete ${accountName}? This action cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: cancelDeletion },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => confirmDeletion(target, false),
+          },
+        ],
+        { cancelable: true, onDismiss: cancelDeletion }
+      );
+    }
   };
 
   const handleAbout = () => {
@@ -604,7 +673,7 @@ export default function SettingsScreen() {
             <SettingsRow
               icon="document-text-outline"
               label="Show Recovery Phrase"
-              onPress={handleShowRecoveryPhrase}
+              onPress={() => handleShowRecoveryPhrase()}
               disabled={!canShowPhrase}
               subtitle={
                 !canShowPhrase
@@ -747,7 +816,7 @@ export default function SettingsScreen() {
                   ? `Delete "${activeAccount.label?.trim() || formatAddress(activeAccount.address)}"`
                   : 'Delete Account'
               }
-              onPress={handleDeleteActiveAccount}
+              onPress={() => void handleDeleteActiveAccount()}
               danger
               showChevron={false}
             />
@@ -813,6 +882,16 @@ export default function SettingsScreen() {
           }}
         />
 
+        {deletionTarget && (
+          <DeleteAccountModal
+            accountName={
+              deletionTarget.label?.trim() ||
+              formatAddress(deletionTarget.address)
+            }
+            onCancel={cancelDeletion}
+            onConfirm={() => void confirmDeletion(deletionTarget, true)}
+          />
+        )}
         <RenameAccountModal
           visible={!!accountToRename}
           initialName={accountToRename?.label ?? ''}
