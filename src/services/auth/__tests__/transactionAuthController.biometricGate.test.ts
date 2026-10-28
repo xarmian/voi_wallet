@@ -515,6 +515,10 @@ describe('remote batch submission ownership (TASK-418)', () => {
       CLAIM_NETWORK_ID: netId,
       selectedNetwork: netId,
       hasSubmittedRef: { current: false },
+      // TASK-416 unit 3's recovery hook, closed over by the claim callbacks.
+      recover: jest.fn(async (_error: unknown, _group: unknown) => false),
+      txnGroup: [],
+      ARC200_RECONFIRM_MESSAGE: 'Network state changed, please confirm again.',
       navigation: {
         dispatch: jest.fn(),
         navigate: jest.fn(),
@@ -847,6 +851,76 @@ describe('remote batch submission ownership (TASK-418)', () => {
       release({ txId: 'retry', confirmed: true });
       await retry;
       expect(env.navigation.dispatch).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  // TASK-418 + TASK-416: after a recovery rebuild, the user confirms again and
+  // the SAME mounted callback must submit (the latch is released first).
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s submits the reconfirmed group after a recovery rebuild',
+    async (screen) => {
+      const env = scope();
+      env.recover.mockResolvedValueOnce('rebuilt' as never);
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      submit.mockRejectedValueOnce(new Error('below min'));
+      await handler({ signedTransactions: [signed] });
+      expect(env.recover).toHaveBeenCalledTimes(1);
+      expect(env.navigation.goBack).toHaveBeenCalledTimes(1);
+      expect(env.Alert.alert).toHaveBeenCalledWith(
+        'Confirm Again',
+        'Network state changed, please confirm again.'
+      );
+      expect(env.hasSubmittedRef.current).toBe(false);
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
+      expect(env.navigation.dispatch).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  // Codex focused confirm (#208): while recover() is still awaiting, a second
+  // success callback for the OLD group must not submit.
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s blocks an old-group submit while recovery is pending, then accepts the reconfirm',
+    async (screen) => {
+      const env = scope();
+      let finishRecovery!: (value: unknown) => void;
+      env.recover.mockImplementationOnce(
+        () => new Promise((resolve) => (finishRecovery = resolve)) as never
+      );
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      submit.mockRejectedValueOnce(new Error('below min'));
+      const first = handler({ signedTransactions: [signed] });
+      // Let the failed submit reach the pending recovery.
+      for (let i = 0; i < 5 && env.recover.mock.calls.length === 0; i += 1)
+        await Promise.resolve();
+      expect(env.recover).toHaveBeenCalledTimes(1);
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(1);
+      finishRecovery('rebuilt');
+      await first;
+      expect(env.hasSubmittedRef.current).toBe(false);
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  // Codex focused confirm 2 (#208): a THROWING recovery must not leave the
+  // latch set (that would silently swallow every later submit).
+  it.each(['ClaimTokenScreen', 'ClaimAllConfirmationScreen'])(
+    '%s releases the latch and shows the original error when recovery throws',
+    async (screen) => {
+      const env = scope();
+      env.recover.mockRejectedValueOnce(new Error('rebuild exploded'));
+      const handler = screenHandler(`wallet/${screen}`, 'onSuccess', env);
+      submit.mockRejectedValueOnce(new Error('below min'));
+      await handler({ signedTransactions: [signed] });
+      expect(env.hasSubmittedRef.current).toBe(false);
+      expect(env.Alert.alert).toHaveBeenCalledWith(
+        'Submission Failed',
+        'below min'
+      );
+      await handler({ signedTransactions: [signed] });
+      expect(submit).toHaveBeenCalledTimes(2);
     }
   );
 

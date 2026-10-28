@@ -1,15 +1,23 @@
 import React from 'react';
 import {
+  Alert,
   Text as MockText,
   TouchableOpacity as MockTouchableOpacity,
   View as MockView,
   ScrollView as MockScrollView,
 } from 'react-native';
-import { render, fireEvent } from '@testing-library/react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 import { makeAddress, SUGGESTED_PARAMS } from '@/__tests__/fixtures/algorand';
 import { Arc200TransactionService as Arc } from '@/services/transactions/arc200';
 import { TransactionService } from '@/services/transactions';
+import { getNavigationCallbacks } from '@/services/navigation/callbackRegistry';
+import { networkService } from '@/services/network';
+import {
+  isArc200MbrRace,
+  isArc200ExpiredGroup,
+  ARC200_RECONFIRM_MESSAGE,
+} from '@/services/transactions/arc200MbrRace';
 import Send from '../TransactionConfirmationScreen';
 import Claim from '../ClaimTokenScreen';
 import All from '../ClaimAllConfirmationScreen';
@@ -22,8 +30,13 @@ jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
 jest.mock('@/services/network', () => ({
-  networkService: {},
-  NetworkService: { getInstance: () => ({}) },
+  networkService: {
+    submitTransaction: jest.fn(),
+    getAlgodClient: () => ({ sendRawTransaction: () => ({ do: mockSubmit }) }),
+  },
+  NetworkService: {
+    getInstance: () => require('@/services/network').networkService,
+  },
 }));
 jest.mock('@/services/secure/keyManager', () => ({ SecureKeyManager: {} }));
 jest.mock('@/services/wallet', () => ({ MultiAccountWalletService: {} }));
@@ -37,11 +50,19 @@ jest.mock('@/services/security/transactionTracker', () => ({
 
 let mockParams: any;
 const mockNavigate = jest.fn();
+const mockReplace = jest.fn();
+const mockGoBack = jest.fn();
+const mockSubmit = jest.fn();
+let mockAuthProps: any;
 let mockRequest: any;
 const mockAccount = { id: 'a', address: makeAddress(1) };
 jest.mock('@react-navigation/native', () => ({
   useRoute: () => ({ params: mockParams }),
-  useNavigation: () => ({ navigate: mockNavigate }),
+  useNavigation: () => ({
+    navigate: mockNavigate,
+    replace: mockReplace,
+    goBack: mockGoBack,
+  }),
 }));
 jest.mock('@/store/walletStore', () => ({
   useActiveAccount: () => mockAccount,
@@ -56,6 +77,7 @@ jest.mock('@/services/auth/transactionAuthController', () => ({
 }));
 jest.mock('@/components/UnifiedTransactionAuthModal', () => (p: any) => {
   mockRequest = p.request;
+  mockAuthProps = p;
   return null;
 });
 jest.mock(
@@ -199,3 +221,341 @@ it.each([
     }
   }
 );
+
+const makeGroup = (
+  funded: boolean,
+  mixed = false,
+  fundBoth = false,
+  suggestedParams = SUGGESTED_PARAMS
+) => {
+  const transactions = [
+    algosdk.makeApplicationNoOpTxnFromObject({
+      sender: mockAccount.address,
+      appIndex: 123,
+      suggestedParams,
+    }),
+  ];
+  if (funded)
+    transactions.unshift(
+      algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: mockAccount.address,
+        receiver: algosdk.getApplicationAddress(123),
+        amount: 28500,
+        suggestedParams,
+      })
+    );
+  if (mixed && fundBoth)
+    transactions.push(
+      algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: mockAccount.address,
+        receiver: algosdk.getApplicationAddress(456),
+        amount: 28500,
+        suggestedParams,
+      })
+    );
+  if (mixed)
+    transactions.push(
+      algosdk.makeApplicationNoOpTxnFromObject({
+        sender: mockAccount.address,
+        appIndex: 456,
+        suggestedParams,
+      })
+    );
+  algosdk.assignGroupID(transactions);
+  return {
+    transactions,
+    txnBytes: transactions.map(algosdk.encodeUnsignedTransaction),
+    needsMbrPayment: funded,
+  };
+};
+const belowMin = (address = algosdk.getApplicationAddress(123).toString()) =>
+  `TransactionPool.Remember: transaction ABC: account ${address} balance 100000 below min 128500 (0 assets)`;
+
+it.each([
+  belowMin(mockAccount.address),
+  belowMin(algosdk.getApplicationAddress(456).toString()),
+  'logic eval error: invalid Box reference 0x1234. Details: app=123, pc=45',
+  'logic eval error: box not found. Details: app=123, pc=45',
+  'logic eval error: assert failed pc=45',
+  'Network request error. Received status 503 (Service Unavailable)',
+  'overspend (account balance 1000, tried to spend 2000)',
+  'txn dead: round 0 outside of 1--1001',
+  'txn dead: round 5000 outside of 2--3',
+  'transaction expired',
+])('does not classify unrelated rejection: %s', (message) => {
+  expect(isArc200MbrRace(new Error(message), makeGroup(false))).toBe(false);
+  expect(isArc200ExpiredGroup(new Error(message), makeGroup(false))).toBe(
+    false
+  );
+});
+it.each([
+  '',
+  'Network request error. Received status 400 (Bad Request): ',
+  'Transaction failed: Network submission failed after 3 attempts: Transaction failed: ',
+])(
+  'classifies the escrow rejection through SDK/service wrappers: %s',
+  (prefix) => {
+    expect(
+      isArc200MbrRace(new Error(prefix + belowMin()), makeGroup(false))
+    ).toBe(true);
+  }
+);
+
+it.each(['send', 'claim', 'all'] as const)(
+  '%s recovers once and requires renewed confirmation',
+  async (flow) => {
+    const item = {
+      contractId: 123,
+      owner: makeAddress(2),
+      amount: '1',
+      ownerBalance: '1',
+      tokenDecimals: 0,
+      tokenSymbol: 'T',
+      tokenName: 'Token',
+    };
+    mockParams = {
+      claimableItem: item,
+      items: [item],
+      fromAccount: mockAccount,
+      recipient: makeAddress(2),
+      amount: '1',
+      assetType: 'arc200',
+      assetDecimals: 0,
+      contractId: 123,
+      estimatedFee: 999999,
+      assetSymbol: 'T',
+    };
+    const Screen = flow === 'send' ? Send : flow === 'claim' ? Claim : All;
+    const builder = (
+      flow === 'send'
+        ? Arc.buildArc200TransferGroup
+        : flow === 'claim'
+          ? Arc.buildArc200TransferFromGroup
+          : Arc.buildBatchClaimTransactionGroup
+    ) as jest.Mock;
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const sign = jest
+      .spyOn(TransactionService as any, 'signTransactionWithRecovery')
+      .mockResolvedValue(new Uint8Array([1]));
+    const delay = jest
+      .spyOn(TransactionService as any, 'delay')
+      .mockResolvedValue(undefined);
+    const submit =
+      flow === 'send'
+        ? (networkService.submitTransaction as jest.Mock)
+        : mockSubmit;
+    const pressLabel =
+      flow === 'send'
+        ? 'Confirm & Send'
+        : flow === 'claim'
+          ? 'Claim Tokens'
+          : 'Claim 1 Token';
+    try {
+      for (const scenario of [
+        'race',
+        'expired',
+        'mixed',
+        'buildFailure',
+        'initialFailure',
+        'other',
+        'funded',
+        'mixedFunded',
+      ] as const) {
+        if (scenario.startsWith('mixed') && flow !== 'all') continue;
+        mockParams.items = scenario.startsWith('mixed')
+          ? [item, { ...item, contractId: 456 }]
+          : [item];
+        const original = makeGroup(
+          ['funded', 'mixed', 'mixedFunded', 'expired'].includes(scenario),
+          scenario === 'mixed' || scenario === 'mixedFunded'
+        );
+        const rebuilt = makeGroup(
+          scenario !== 'expired',
+          scenario.startsWith('mixed'),
+          true,
+          scenario === 'expired'
+            ? { ...SUGGESTED_PARAMS, firstValid: 1002, lastValid: 2002 }
+            : SUGGESTED_PARAMS
+        );
+        builder
+          .mockReset()
+          .mockResolvedValueOnce(original)
+          .mockResolvedValue(rebuilt);
+        if (scenario === 'buildFailure')
+          builder
+            .mockReset()
+            .mockResolvedValueOnce(original)
+            .mockRejectedValueOnce(new Error('build failed'))
+            .mockResolvedValue(rebuilt);
+        if (scenario === 'initialFailure')
+          builder
+            .mockReset()
+            .mockRejectedValueOnce(new Error('build failed'))
+            .mockResolvedValue(original);
+        alert.mockClear();
+        mockReplace.mockClear();
+        mockNavigate.mockClear();
+        mockGoBack.mockClear();
+        const error = new Error(
+          scenario === 'other'
+            ? 'logic eval error: invalid Box reference'
+            : scenario === 'expired'
+              ? expiredMessage(original)
+              : scenario === 'mixed'
+                ? belowMin(algosdk.getApplicationAddress(456).toString())
+                : belowMin()
+        );
+        submit.mockReset().mockRejectedValue(error);
+        const view = await render(<Screen />);
+        if (scenario === 'initialFailure') {
+          expect(
+            await view.findByText(
+              'Unable to prepare transaction. Please retry.'
+            )
+          ).toBeTruthy();
+          await act(async () => {
+            fireEvent.press(view.getByText('Retry'));
+          });
+          expect(builder).toHaveBeenCalledTimes(2);
+          await view.findByText(
+            `${(Arc.groupCost(original) / 1e6).toFixed(6)} VOI`
+          );
+          await view.unmount();
+          continue;
+        }
+        expect(
+          await view.findByText(
+            `${(Arc.groupCost(original) / 1e6).toFixed(6)} VOI`
+          )
+        ).toBeTruthy();
+        const confirm = async () => {
+          await act(async () => {
+            await fireEvent.press(
+              view.getByText(
+                flow === 'all'
+                  ? `Claim ${mockParams.items.length} Token${mockParams.items.length > 1 ? 's' : ''}`
+                  : pressLabel
+              )
+            );
+          });
+        };
+        const fail = async () => {
+          await act(async () => {
+            if (flow === 'send') {
+              let failure;
+              try {
+                await TransactionService.sendTransaction(
+                  mockRequest.transferParams,
+                  mockAccount as any
+                );
+              } catch (caught) {
+                failure = caught;
+              }
+              expect(failure).toBeInstanceOf(Error);
+              await mockAuthProps.onComplete(false, { error: failure });
+            } else {
+              const callbackId = mockNavigate.mock.calls.at(-1)![1].callbackId;
+              await getNavigationCallbacks(callbackId)!.onSuccess!({
+                signedTransactions: ['AQ=='],
+              });
+            }
+          });
+        };
+        await confirm();
+        const signedBefore = sign.mock.calls.length;
+        if (flow === 'send')
+          expect(mockAuthProps.formatErrorMessage(error)).toBe(
+            ['race', 'expired', 'mixed', 'buildFailure'].includes(scenario)
+              ? ARC200_RECONFIRM_MESSAGE
+              : undefined
+          );
+        await fail();
+        if (scenario === 'buildFailure') {
+          expect(
+            await view.findByText(
+              'Unable to prepare transaction. Please retry.'
+            )
+          ).toBeTruthy();
+          expect(alert).not.toHaveBeenCalled();
+          expect(mockReplace).not.toHaveBeenCalled();
+          await act(async () => {
+            fireEvent.press(view.getByText('Retry'));
+          });
+          expect(
+            await view.findByText(
+              `${(Arc.groupCost(rebuilt) / 1e6).toFixed(6)} VOI`
+            )
+          ).toBeTruthy();
+          expect(builder).toHaveBeenCalledTimes(3);
+          await view.unmount();
+          continue;
+        }
+        if (['race', 'expired', 'mixed'].includes(scenario)) {
+          expect(builder).toHaveBeenCalledTimes(2);
+          if (flow === 'all')
+            expect(builder.mock.calls[1][2]).toBe(scenario !== 'expired');
+          else
+            expect(builder.mock.calls[1][0].forceMbrPayment).toBe(
+              scenario !== 'expired'
+            );
+          expect(alert).toHaveBeenLastCalledWith(
+            'Confirm Again',
+            ARC200_RECONFIRM_MESSAGE
+          );
+          expect(
+            await view.findByText(
+              `${(Arc.groupCost(rebuilt) / 1e6).toFixed(6)} VOI`
+            )
+          ).toBeTruthy();
+          expect(mockReplace).not.toHaveBeenCalled();
+          expect(mockNavigate).toHaveBeenCalledTimes(flow === 'send' ? 0 : 1);
+          expect(mockGoBack).toHaveBeenCalledTimes(flow === 'send' ? 0 : 1);
+          expect(sign.mock.calls.length).toBe(
+            signedBefore + (flow === 'send' ? 1 : 0)
+          );
+          const submits = submit.mock.calls.length;
+          expect(submits).toBe(flow === 'send' ? 3 : 1);
+          await confirm();
+          expect(mockReplace).not.toHaveBeenCalled();
+          if (flow === 'send')
+            expect(mockRequest.transferParams.preparedArc200Group).toBe(
+              rebuilt
+            );
+          else
+            expect(mockNavigate.mock.calls.at(-1)![1].transactions).toEqual(
+              rebuilt.txnBytes.map((bytes) =>
+                Buffer.from(bytes).toString('base64')
+              )
+            );
+          // Cross rejection types to prove MBR and expiry share the same latch.
+          error.message =
+            scenario === 'expired' ? belowMin() : expiredMessage(rebuilt);
+          submit.mockRejectedValue(error);
+          await fail();
+          expect(builder).toHaveBeenCalledTimes(2);
+          expect(submit.mock.calls.length).toBe(submits * 2);
+        } else expect(builder).toHaveBeenCalledTimes(1);
+        if (flow === 'send')
+          expect(mockReplace).toHaveBeenLastCalledWith(
+            'TransactionResult',
+            expect.objectContaining({ isSuccess: false })
+          );
+        else
+          expect(alert).toHaveBeenLastCalledWith(
+            'Submission Failed',
+            error.message
+          );
+        await view.unmount();
+      }
+    } finally {
+      alert.mockRestore();
+      sign.mockRestore();
+      delay.mockRestore();
+    }
+  }
+);
+
+const expiredMessage = (group = makeGroup(false)) => {
+  const txn = group.transactions[0];
+  return `TransactionPool.Remember: txn dead: round ${txn.lastValid + 1n} outside of ${txn.firstValid}--${txn.lastValid}`;
+};

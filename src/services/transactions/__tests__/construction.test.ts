@@ -23,6 +23,7 @@
  */
 
 import algosdk from 'algosdk';
+import { AccountType } from '@/types/wallet';
 
 import {
   makeAddress,
@@ -46,6 +47,7 @@ jest.mock('@/services/network', () => {
     getSuggestedParams: (...args: unknown[]) => mockGetSuggestedParams(...args),
     getAlgodClient: (...args: unknown[]) => mockGetAlgodClient(...args),
     getAccountBalance: (...args: unknown[]) => mockGetAccountBalance(...args),
+    estimateTransactionFee: async () => 1000,
   };
   return {
     __esModule: true,
@@ -100,7 +102,7 @@ jest.mock('@/services/secure/keyManager', () => ({
 }));
 jest.mock('@/services/security/transactionTracker', () => ({
   __esModule: true,
-  TransactionTracker: {},
+  TransactionTracker: { validateNewTransaction: async () => [] },
 }));
 
 const mockSender = () => SENDER;
@@ -657,4 +659,64 @@ test('signing preflight uses the request network and fails closed on strict look
   expect(errors).toEqual([
     'Unable to verify signing authority. Please try again.',
   ]);
+});
+
+it('bounds each ARC-200 simulation to 10 seconds and funds on timeout', async () => {
+  jest.useFakeTimers();
+  const simulate = jest.fn(() => new Promise(() => {}));
+  mockGetAlgodClient.mockReturnValue({
+    simulateTransactions: () => ({ do: simulate }),
+  });
+  try {
+    const pending = TransactionService.buildTransaction({
+      from: SENDER,
+      to: RECIPIENT,
+      amount: 1,
+      contractId: FIXTURE_APP_ID,
+      assetType: 'arc200',
+    });
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(simulate).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(10000);
+    const result = (await pending) as { txnBytes: Uint8Array[] };
+    expect(decodeBytes(result.txnBytes[0]).payment?.amount).toBe(28500n);
+    expect(jest.getTimerCount()).toBe(0);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('passes validation cost estimation the request network', async () => {
+  const {
+    Arc200TransactionService: Arc,
+  } = require('@/services/transactions/arc200');
+  const { SecureKeyManager } = require('@/services/secure/keyManager');
+  const { NetworkId } = require('@/types/network');
+  const estimate = jest.spyOn(Arc, 'estimateArc200TransferCost');
+  mockGetAccountBalance.mockResolvedValue({
+    amount: 1000000,
+    assets: [{ assetType: 'arc200', contractId: FIXTURE_APP_ID, amount: 10 }],
+  });
+  try {
+    await TransactionService.validateTransaction(
+      {
+        from: SENDER,
+        to: RECIPIENT,
+        amount: 1,
+        assetType: 'arc200',
+        contractId: FIXTURE_APP_ID,
+        networkId: NetworkId.ALGORAND_MAINNET,
+      },
+      { address: SENDER, type: AccountType.STANDARD }
+    );
+    expect(estimate).toHaveBeenCalledWith(
+      expect.objectContaining({ networkId: NetworkId.ALGORAND_MAINNET })
+    );
+    expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledWith(
+      SENDER,
+      NetworkId.ALGORAND_MAINNET
+    );
+  } finally {
+    estimate.mockRestore();
+  }
 });

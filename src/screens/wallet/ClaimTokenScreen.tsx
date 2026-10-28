@@ -1,3 +1,4 @@
+import { ErrorStateView } from '@/components/common/ErrorStateView';
 /**
  * ClaimTokenScreen - Screen for claiming a single approved token
  *
@@ -57,6 +58,7 @@ import { NetworkId } from '@/types/network';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import type { WalletStackParamList } from '@/navigation/AppNavigator';
+import { ARC200_RECONFIRM_MESSAGE } from '@/services/transactions/arc200MbrRace';
 import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 
 // Claimable tokens are always on Voi network
@@ -271,24 +273,33 @@ export default function ClaimTokenScreen() {
     []
   );
 
-  const buildClaim = useCallback(() => {
-    if (
-      !activeAccount?.address ||
-      !algosdk.isValidAddress(finalRecipientAddress)
-    )
-      return undefined;
-    return Arc200TransactionService.buildArc200TransferFromGroup({
-      contractId: claimableItem.contractId,
-      from: claimableItem.owner,
-      to: finalRecipientAddress,
-      amount: claimableItem.amount,
-      sender: activeAccount.address,
-      note: `Claiming ${claimableItem.tokenSymbol} from approval`,
-      networkId: CLAIM_NETWORK_ID,
-    });
-  }, [activeAccount, finalRecipientAddress, claimableItem]);
-  const { group: txnGroup, fee: estimatedFee } =
-    useArc200Confirmation(buildClaim);
+  const buildClaim = useCallback(
+    (forceMbrPayment = false) => {
+      if (
+        !activeAccount?.address ||
+        !algosdk.isValidAddress(finalRecipientAddress)
+      )
+        return undefined;
+      return Arc200TransactionService.buildArc200TransferFromGroup({
+        contractId: claimableItem.contractId,
+        from: claimableItem.owner,
+        to: finalRecipientAddress,
+        amount: claimableItem.amount,
+        sender: activeAccount.address,
+        note: `Claiming ${claimableItem.tokenSymbol} from approval`,
+        networkId: CLAIM_NETWORK_ID,
+        forceMbrPayment,
+      });
+    },
+    [activeAccount, finalRecipientAddress, claimableItem]
+  );
+  const {
+    group: txnGroup,
+    fee: estimatedFee,
+    recover,
+    buildError,
+    retry,
+  } = useArc200Confirmation(buildClaim);
 
   // Handle claim - navigate to universal signing screen
   const handleClaim = useCallback(async () => {
@@ -360,7 +371,25 @@ export default function ClaimTokenScreen() {
               })
             );
           } catch (submitError) {
-            hasSubmittedRef.current = false;
+            // Hold the latch THROUGH recovery (a second success callback for
+            // the old group must not submit while recover() awaits), then
+            // release it on every path, so the reconfirmed group can submit
+            // through this same callback (TASK-418 + TASK-416).
+            let recoveryResult: Awaited<ReturnType<typeof recover>> = false;
+            try {
+              recoveryResult = await recover(submitError, txnGroup);
+            } catch {
+              // A failed recovery is no recovery: show the original error.
+              recoveryResult = false;
+            } finally {
+              hasSubmittedRef.current = false;
+            }
+            if (recoveryResult) {
+              navigation.goBack();
+              if (recoveryResult === 'rebuilt')
+                Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+              return;
+            }
             const message =
               submitError instanceof Error
                 ? submitError.message
@@ -397,6 +426,7 @@ export default function ClaimTokenScreen() {
     claimableItem,
     navigation,
     txnGroup,
+    recover,
   ]);
 
   const canClaim =
@@ -608,6 +638,14 @@ export default function ClaimTokenScreen() {
             )}
           </GlassCard>
 
+          {!!buildError && (
+            <ErrorStateView
+              error={buildError}
+              onRetry={retry}
+              variant="inline"
+              fallbackMessage="Unable to prepare transaction. Please retry."
+            />
+          )}
           {/* Fee Estimate */}
           <View style={styles.feeContainer}>
             <Text style={styles.feeLabel}>Estimated Fee</Text>

@@ -875,6 +875,7 @@ export class TransactionService {
               to: params.to,
               amount: params.amount,
               contractId: params.contractId || 0,
+              networkId: params.networkId,
             });
 
           if (
