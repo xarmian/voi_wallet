@@ -406,10 +406,11 @@ describe('checkSigningAuthority — authority branches', () => {
 
 describe('checkSigningAuthority — retained REKEYED authority (TASK-425 U3)', () => {
   // After U4 an undone rekey stays REKEYED; its own key may still be held.
-  const retained = () => ({
-    ...standardAccount(STD_AUTH, 'rk-1'),
-    type: AccountType.REKEYED,
-  });
+  const retained = () =>
+    ({
+      ...standardAccount(STD_AUTH, 'rk-1'),
+      type: AccountType.REKEYED,
+    }) as unknown as AccountMetadata;
   let probe: jest.SpyInstance;
   afterEach(() => probe.mockRestore());
 
