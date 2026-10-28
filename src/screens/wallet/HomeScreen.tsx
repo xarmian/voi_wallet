@@ -77,6 +77,7 @@ import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsMod
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
 import { useHomeBackupReminder } from '@/store/useHomeBackupReminder';
 import BackupWarningBanner from '@/components/wallet/BackupWarningBanner';
+import ControlledByNotice from '@/components/wallet/ControlledByNotice';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { toErrorAlert } from '@/utils/errorMapping';
@@ -1710,6 +1711,8 @@ export default function HomeScreen() {
               {showBackupWarning && (
                 <BackupWarningBanner onPress={handleBackupBannerPress} />
               )}
+
+              <ControlledByNotice />
 
               {/* Claimable Tokens Banner */}
               {visibleClaimableCount > 0 && (
