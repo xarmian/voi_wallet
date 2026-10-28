@@ -206,6 +206,30 @@ describe('hasKeyBearingAccountStrict — STANDARD-account signal (TASK-213)', ()
       ).rejects.toThrow('keychain');
     });
 
+    // The pre-sentinel Android keystore break reads the secret as null like the
+    // PIN, so a converted account must count WITHOUT a secure read.
+    it('resolves TRUE for originalOwner REKEYED without probing (keystore-independent)', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [{ id: 'k', type: 'rekeyed', originalOwner: true }],
+      });
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).not.toHaveBeenCalled();
+    });
+
+    it('probes a REKEYED account with originalOwner false', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [{ id: 'k', type: 'rekeyed', originalOwner: false }],
+      });
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(false);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('k');
+    });
+
     it('does not probe when a STANDARD account already answers', async () => {
       mockStore[WALLET_KEY] = JSON.stringify({
         accounts: [

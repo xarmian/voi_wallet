@@ -2181,6 +2181,19 @@ export class MultiAccountWalletService {
       if (parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD)) {
         return true;
       }
+      // TASK-419: `originalOwner: true` is the durable, keystore-independent
+      // signal that rekeyManager converted a STANDARD account and kept its key.
+      // It must not depend on a secure read: a pre-sentinel Android keystore
+      // failure reads the secret as null exactly like the PIN.
+      if (
+        parsed.accounts.some(
+          (acc) =>
+            acc?.type === AccountType.REKEYED &&
+            (acc as RekeyedAccountMetadata).originalOwner === true
+        )
+      ) {
+        return true;
+      }
       rekeyedIds = parsed.accounts
         .filter(
           (acc) =>
@@ -2194,9 +2207,8 @@ export class MultiAccountWalletService {
       // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
       return false;
     }
-    // TASK-419: a REKEYED account is key-bearing only if it still holds its
-    // original key (rekeying converts STANDARD → REKEYED in the blob and keeps
-    // the key; discovered/imported REKEYED accounts hold none). A probe failure
+    // Any other REKEYED account is key-bearing only if a secret is present
+    // (discovered/imported REKEYED accounts hold none). A probe failure
     // PROPAGATES (fail closed, like the sibling strict reads). Concurrent, so
     // the AuthContext read stays one probe deep under its outer timeout.
     const present = await Promise.all(
