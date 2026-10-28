@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   AccountType,
@@ -9,6 +9,12 @@ import { NetworkId } from '@/types/network';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { useWalletStore } from './walletStore';
 import { useNetworkRekeyStatus } from './useNetworkRekeyStatus';
+
+const probeKey = (account: {
+  id: string;
+  address: string;
+  type: AccountType;
+}) => `${account.id}:${account.address}:${account.type}`;
 
 export function useControlledByNotice() {
   const active = useWalletStore(
@@ -69,39 +75,55 @@ export function useControlledByNotice() {
     }
     return accounts;
   }, [fields]);
-  const [probe, setProbe] = useState<{
+  // Probe results live for the active account, keyed by each controller's
+  // identity and custody type, so a status-cache expiry that briefly drops a
+  // controller doesn't cancel or repeat its secure read (U4f review Low).
+  // Switching the active account discards them.
+  const [probed, setProbed] = useState<{
     active: typeof active;
-    candidates: typeof candidates;
-    present: string[];
+    present: ReadonlySet<string>;
   } | null>(null);
+  const generation = useRef(0);
+  const inFlight = useRef(new Set<string>());
   useEffect(() => {
-    let live = true;
+    const gen = generation;
+    gen.current++;
+    inFlight.current = new Set();
+    // Retire this active account's probes on a switch or unmount.
+    return () => {
+      gen.current++;
+    };
+  }, [active]);
+  useEffect(() => {
+    const current = generation.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const frame = requestAnimationFrame(() => {
       timer = setTimeout(() => {
         for (const account of candidates) {
           if (classifyKeyHolding(account) !== 'unresolved') continue;
+          const key = probeKey(account);
+          if (inFlight.current.has(key)) continue;
+          inFlight.current.add(key);
           void AccountSecureStorage.probeSecretPresenceStrict(account.id)
-            .catch(() => false)
+            // A failed read may be retried on a later candidate change.
+            .catch(() => {
+              inFlight.current.delete(key);
+              return false;
+            })
             .then((present) => {
-              if (live && present)
-                setProbe((previous) => ({
-                  active,
-                  candidates,
-                  present: [
-                    ...(previous?.active === active &&
-                    previous.candidates === candidates
-                      ? previous.present
-                      : []),
-                    account.address,
-                  ],
-                }));
+              if (generation.current !== current || !present) return;
+              setProbed((previous) => ({
+                active,
+                present: new Set([
+                  ...(previous?.active === active ? previous.present : []),
+                  key,
+                ]),
+              }));
             });
         }
       }, 0);
     });
     return () => {
-      live = false;
       cancelAnimationFrame(frame);
       clearTimeout(timer);
     };
@@ -112,9 +134,9 @@ export function useControlledByNotice() {
       return (
         classifyKeyHolding(
           account,
-          probe?.active === active &&
-            probe?.candidates === candidates &&
-            probe.present.includes(address)
+          account &&
+            probed?.active === active &&
+            probed.present.has(probeKey(account))
             ? 'present'
             : 'unresolved'
         ) === 'present'

@@ -212,3 +212,56 @@ it('retains auth projections on unrelated wallet edits and cancels before paint'
   await paint();
   expect(probe).not.toHaveBeenCalled();
 });
+
+it('keeps a probe result when a status refresh briefly drops the controller', async () => {
+  select('ACTIVE', account('AUTH', AccountType.REKEYED));
+  const { result, unmount } = await renderHook(useControlledByNotice);
+  await paint();
+  await paint();
+  expect(result.current.map((n) => n.address)).toEqual(['AUTH']);
+  expect(probe).toHaveBeenCalledTimes(1);
+  // A cache expiry: statuses read UNKNOWN until the refetch lands.
+  await act(async () => networkRekeyStatus.invalidate());
+  expect(result.current).toEqual([]);
+  await paint();
+  await paint();
+  expect(result.current.map((n) => n.address)).toEqual(['AUTH']);
+  expect(probe).toHaveBeenCalledTimes(1);
+  await unmount();
+});
+
+it('collects probes that resolve in reverse order', async () => {
+  useWalletStore.setState({
+    wallet: {
+      activeAccountId: 'ACTIVE',
+      accounts: [
+        account('ACTIVE', AccountType.REKEYED, { backupVerified: true }),
+        account('AUTH', AccountType.REKEYED),
+        account('AUTH2', AccountType.REKEYED),
+      ],
+    } as Wallet,
+  });
+  mockLookup.mockImplementation(async (_address, network) => ({
+    isRekeyed: true,
+    authAddress: network === 'voi-mainnet' ? 'AUTH' : 'AUTH2',
+  }));
+  const finish: Record<string, (present: boolean) => void> = {};
+  probe.mockImplementation(
+    (id: string) =>
+      new Promise((resolve) => {
+        finish[id] = resolve;
+      })
+  );
+  const { result, unmount } = await renderHook(useControlledByNotice);
+  await paint();
+  await paint();
+  expect(Object.keys(finish).sort()).toEqual(['AUTH', 'AUTH2']);
+  await act(async () => finish.AUTH2(true));
+  expect(result.current.map((n) => n.address)).toEqual(['AUTH2']);
+  await act(async () => finish.AUTH(true));
+  expect(result.current.map((n) => n.address).sort()).toEqual([
+    'AUTH',
+    'AUTH2',
+  ]);
+  await unmount();
+});
