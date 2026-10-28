@@ -232,6 +232,9 @@ function SectionHeader({
   );
 }
 
+const deletionErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : 'Failed to delete the account.';
+
 export default function SettingsScreen() {
   const navigation = useNavigation<SettingsScreenNavigationProp>();
   const activeAccount = useActiveAccount();
@@ -255,6 +258,8 @@ export default function SettingsScreen() {
       (activeAccount.originalOwner === true ||
         (phraseAccess?.account === activeAccount && phraseAccess.available)));
   const deletionBusy = useRef(false);
+  // Latches one confirmation: rapid taps on the modal's button run it once.
+  const deletionConfirming = useRef(false);
   const [deletionTarget, setDeletionTarget] = useState<AccountMetadata | null>(
     null
   );
@@ -451,6 +456,7 @@ export default function SettingsScreen() {
 
   const cancelDeletion = () => {
     deletionBusy.current = false;
+    deletionConfirming.current = false;
     setDeletionTarget(null);
   };
 
@@ -458,6 +464,8 @@ export default function SettingsScreen() {
     target: AccountMetadata,
     keyHolding: boolean
   ) => {
+    if (deletionConfirming.current) return;
+    deletionConfirming.current = true;
     const current = () =>
       useWalletStore
         .getState()
@@ -481,19 +489,16 @@ export default function SettingsScreen() {
       return;
     }
     setDeletionTarget(null);
+    // Computed outside the try: the React Compiler can't lower these
+    // expressions inside a try block.
+    const accountName = target.label?.trim() || formatAddress(target.address);
     try {
       await deleteAccount(target.id);
-      Alert.alert(
-        'Account Deleted',
-        `${target.label?.trim() || formatAddress(target.address)} has been removed.`
-      );
+      Alert.alert('Account Deleted', `${accountName} has been removed.`);
     } catch (error) {
-      Alert.alert(
-        'Delete Failed',
-        error instanceof Error ? error.message : 'Failed to delete the account.'
-      );
+      Alert.alert('Delete Failed', deletionErrorMessage(error));
     }
-    deletionBusy.current = false;
+    cancelDeletion();
   };
 
   const handleDeleteActiveAccount = async () => {

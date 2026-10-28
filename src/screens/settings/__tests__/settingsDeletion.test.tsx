@@ -246,3 +246,40 @@ it('reports deletion failure', async () => {
   await fireEvent.press(view.getByLabelText('Delete account'));
   expect(alert).toHaveBeenLastCalledWith('Delete Failed', 'storage failed');
 });
+
+it('runs a rapid double confirmation only once', async () => {
+  let finish!: () => void;
+  mockDelete.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  const { view, alert } = await open();
+  await pressAlert(alert, 'I have my phrase');
+  await typeDelete(view);
+  const button = view.getByLabelText('Delete account');
+  await act(async () => {
+    fireEvent.press(button);
+    fireEvent.press(button);
+  });
+  await act(async () => finish());
+  expect(mockDelete).toHaveBeenCalledTimes(1);
+});
+
+it('a dismissed alert and a finished deletion both leave Delete usable', async () => {
+  const { view, alert } = await open();
+  const options = alert.mock.calls.at(-1)?.[3] as { onDismiss?: () => void };
+  await act(async () => options.onDismiss?.());
+  expect(mockDelete).not.toHaveBeenCalled();
+  await fireEvent.press(view.getByText(/^Delete "/));
+  await pressAlert(alert, 'I have my phrase');
+  await typeDelete(view);
+  await fireEvent.press(view.getByLabelText('Delete account'));
+  expect(mockDelete).toHaveBeenCalledTimes(1);
+  await fireEvent.press(view.getByText(/^Delete "/));
+  await pressAlert(alert, 'I have my phrase');
+  await typeDelete(view);
+  await fireEvent.press(view.getByLabelText('Delete account'));
+  expect(mockDelete).toHaveBeenCalledTimes(2);
+});
