@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -81,10 +81,46 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
     backupVerified: backupVerifiedParam,
   } = route.params;
   const [accountLabel, setAccountLabel] = useState(initialAccountLabel ?? '');
+  // Synchronous in-flight guard. `submitting` is state, so a second tap can land
+  // before the re-render; this ref is checked and set in the same tick.
+  const submittingRef = useRef(false);
+  const mountedRef = useRef(true);
+  // Set once authSetupPin has committed in THIS screen session, so a retry after
+  // an import failure does not run first-secret setup a second time over the
+  // credential it just created (see handleComplete). Holds the same PIN the
+  // `pin` state already holds; dropped on success and on unmount.
+  const committedSecretRef = useRef<{
+    secret: string;
+    mode: SecretSource;
+  } | null>(null);
 
   React.useEffect(() => {
     checkBiometricAvailability();
   }, []);
+
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      committedSecretRef.current = null;
+    };
+  }, []);
+
+  // While a submit is in flight, leaving would strand a half-done setup (e.g. a
+  // PIN committed with no account). Block every pop path: header back is hidden,
+  // the iOS swipe gesture is disabled, and beforeRemove (hardware back, any
+  // programmatic pop) is prevented.
+  React.useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !submitting });
+  }, [navigation, submitting]);
+
+  React.useEffect(() => {
+    return navigation.addListener('beforeRemove', (e) => {
+      if (submittingRef.current) {
+        e.preventDefault();
+      }
+    });
+  }, [navigation]);
 
   React.useEffect(() => {
     return () => {
@@ -94,7 +130,11 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       // TASK-224: unmount (back, swipe-dismiss, hardware back, completion)
       // releases the recovery phrase too. The source screen stores a fresh id
       // on every navigate, so returning and continuing again still works.
-      clearAccountSecret(mnemonicSecretId);
+      // Skipped while a submit is in flight: that submit's own finally releases
+      // it once the import has run (it checks mountedRef).
+      if (!submittingRef.current) {
+        clearAccountSecret(mnemonicSecretId);
+      }
     };
   }, [accounts, mnemonicSecretId]);
 
@@ -114,8 +154,41 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
   const isPassphrase = mode === 'passphrase';
   const secretLabel = isPassphrase ? 'passphrase' : 'PIN';
 
+  // Store the secret first — atomic first-secret setup (DOC-137 §5.4). Re-wraps
+  // any pre-existing device-key accounts under the new secret before committing
+  // the credential (verify-before-delete), so onboarding never strands keys.
+  const setUpSecretAndBiometrics = async () => {
+    setSetupStep(`Setting up ${secretLabel}...`);
+    await authSetupPin(pin, mode);
+    committedSecretRef.current = { secret: pin, mode };
+
+    // Store biometric preference. When the user opts into biometrics at
+    // onboarding, capture the just-set PIN behind the write-time auth gate
+    // (DOC-137 §3.3) so the biometric-convenience item exists on first launch
+    // and biometric unlock can populate the session vault — otherwise the very
+    // first biometric unlock would find no item and fall back to PIN. The
+    // convenience write is best-effort: if it fails (e.g. the OS auth is
+    // cancelled at write), biometrics is left disabled and onboarding proceeds.
+    setSetupStep('Configuring security...');
+    if (biometricEnabled) {
+      try {
+        await AccountSecureStorage.setBiometricSecret(
+          pin,
+          mode,
+          'Enable biometric unlock'
+        );
+        await AccountSecureStorage.setBiometricEnabled(true);
+      } catch {
+        console.warn('Failed to enable biometric convenience during setup');
+        await AccountSecureStorage.setBiometricEnabled(false);
+      }
+    } else {
+      await AccountSecureStorage.setBiometricEnabled(false);
+    }
+  };
+
   const handleComplete = async () => {
-    if (submitting) return;
+    if (submittingRef.current) return;
     if (isPassphrase) {
       if (pin.length < PASSPHRASE_MIN) {
         Alert.alert(
@@ -142,37 +215,28 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       return;
     }
 
+    // Retry after an import failure: the credential was already committed by
+    // this screen. AccountSecureStorage.setupPin is FIRST-secret setup (it
+    // rewraps with no current secret and overwrites the credential without
+    // verifying the old one), so it must not run again. Require the same
+    // secret so the user can't believe a different PIN took effect.
+    const committed = committedSecretRef.current;
+    if (committed && (committed.secret !== pin || committed.mode !== mode)) {
+      const committedLabel =
+        committed.mode === 'passphrase' ? 'passphrase' : 'PIN';
+      Alert.alert(
+        'Error',
+        `Your ${committedLabel} is already set. Enter the same ${committedLabel} to continue.`
+      );
+      return;
+    }
+
+    submittingRef.current = true;
     try {
       setSubmitting(true);
 
-      // Store the secret first — atomic first-secret setup (DOC-137 §5.4). Re-wraps
-      // any pre-existing device-key accounts under the new secret before committing
-      // the credential (verify-before-delete), so onboarding never strands keys.
-      setSetupStep(`Setting up ${secretLabel}...`);
-      await authSetupPin(pin, mode);
-
-      // Store biometric preference. When the user opts into biometrics at
-      // onboarding, capture the just-set PIN behind the write-time auth gate
-      // (DOC-137 §3.3) so the biometric-convenience item exists on first launch
-      // and biometric unlock can populate the session vault — otherwise the very
-      // first biometric unlock would find no item and fall back to PIN. The
-      // convenience write is best-effort: if it fails (e.g. the OS auth is
-      // cancelled at write), biometrics is left disabled and onboarding proceeds.
-      setSetupStep('Configuring security...');
-      if (biometricEnabled) {
-        try {
-          await AccountSecureStorage.setBiometricSecret(
-            pin,
-            mode,
-            'Enable biometric unlock'
-          );
-          await AccountSecureStorage.setBiometricEnabled(true);
-        } catch {
-          console.warn('Failed to enable biometric convenience during setup');
-          await AccountSecureStorage.setBiometricEnabled(false);
-        }
-      } else {
-        await AccountSecureStorage.setBiometricEnabled(false);
+      if (!committed) {
+        await setUpSecretAndBiometrics();
       }
 
       // Handle different onboarding sources
@@ -180,6 +244,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
         // Standard wallet creation flow
         setSetupStep('Creating wallet...');
         const normalizedLabel = accountLabel.trim();
+        let imported = false;
         try {
           // TASK-224: read the phrase from the in-memory holder at import time.
           // Re-checked here (not just in the pre-check above) because the entry
@@ -202,10 +267,16 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
               backupVerified:
                 source === 'create' && backupVerifiedParam === true,
             });
+          imported = true;
           console.log('Successfully created account:', importedAccount.address);
         } finally {
-          // Consumed: release it on success AND failure.
-          clearAccountSecret(mnemonicSecretId);
+          // Consumed: release it on success. On an import FAILURE keep it so a
+          // same-screen retry works; the unmount cleanup still guarantees
+          // release. If the screen already unmounted mid-submit (the unmount
+          // cleanup skipped it because we were in flight), release it here.
+          if (imported || !mountedRef.current) {
+            clearAccountSecret(mnemonicSecretId);
+          }
         }
       } else if ((source === 'qr' || source === 'watch') && accounts) {
         // QR import or watch account flow - import the scanned accounts
@@ -271,6 +342,10 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       }
 
       setSetupStep('Finalizing...');
+      committedSecretRef.current = null;
+      // Done: drop the in-flight guard before leaving so beforeRemove can't
+      // block this navigation.
+      submittingRef.current = false;
       navigation.navigate('Main');
     } catch (error) {
       console.error('Security setup error:', error);
@@ -280,6 +355,7 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
           (error instanceof Error ? error.message : 'Unknown error')
       );
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
       setSetupStep('');
     }
@@ -290,8 +366,10 @@ export default function SecuritySetupScreen({ navigation, route }: Props) {
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <UniversalHeader
           title="Security Setup"
-          showBackButton
-          onBackPress={() => navigation.goBack()}
+          showBackButton={!submitting}
+          onBackPress={() => {
+            if (!submittingRef.current) navigation.goBack();
+          }}
           showAccountSelector={false}
           onAccountSelectorPress={() => {}}
         />

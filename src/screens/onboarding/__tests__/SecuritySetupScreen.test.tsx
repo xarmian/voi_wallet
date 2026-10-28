@@ -4,7 +4,9 @@
  *
  * Contracts pinned here:
  * - the phrase is read from the holder at import time and the entry is
- *   cleared on success AND on import failure;
+ *   cleared on success; on an import failure it is kept so a same-screen retry
+ *   works (without a second first-secret setup), and released on unmount;
+ * - back is blocked while a submit is in flight, and a double-tap submits once;
  * - unmounting without submitting (back / swipe / hardware back) clears it;
  * - a missing entry (e.g. TASK-213 cold boot: params rehydrate, memory does
  *   not) shows an error and never calls importStandardAccount, and never sets a
@@ -14,7 +16,7 @@
  */
 
 import React from 'react';
-import { render, fireEvent } from '@testing-library/react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
 
 const mockImportStandardAccount = jest.fn();
 jest.mock('@/services/wallet', () => ({
@@ -34,6 +36,10 @@ jest.mock('@/services/secure', () => ({
 }));
 
 const mockAuthSetupPin = jest.fn();
+// Latest Complete-Setup handler, so a test can fire two taps in ONE tick.
+const mockCompleteOnPress: { current: null | (() => unknown) } = {
+  current: null,
+};
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ setupPin: mockAuthSetupPin }),
 }));
@@ -76,10 +82,24 @@ jest.mock('@/components/common/KeyboardAwareScrollView', () => {
   };
 });
 
-jest.mock('@/components/common/UniversalHeader', () => ({
-  __esModule: true,
-  default: () => null,
-}));
+jest.mock('@/components/common/UniversalHeader', () => {
+  const { Text, TouchableOpacity } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({
+      showBackButton,
+      onBackPress,
+    }: {
+      showBackButton?: boolean;
+      onBackPress: () => void;
+    }) =>
+      showBackButton ? (
+        <TouchableOpacity testID="header-back" onPress={onBackPress}>
+          <Text>back</Text>
+        </TouchableOpacity>
+      ) : null,
+  };
+});
 
 jest.mock('@/components/common/GlassCard', () => {
   const { View } = require('react-native');
@@ -120,11 +140,14 @@ jest.mock('@/components/common/GlassButton', () => {
     }: {
       label: string;
       onPress: () => void;
-    }) => (
-      <TouchableOpacity testID="complete-setup" onPress={onPress}>
-        <Text>{label}</Text>
-      </TouchableOpacity>
-    ),
+    }) => {
+      mockCompleteOnPress.current = onPress;
+      return (
+        <TouchableOpacity testID="complete-setup" onPress={onPress}>
+          <Text>{label}</Text>
+        </TouchableOpacity>
+      );
+    },
   };
 });
 
@@ -140,8 +163,49 @@ import {
 const FAKE_MNEMONIC = Array(25).fill('fake-word-not-real').join(' ');
 const UNAVAILABLE = /recovery phrase is no longer available/;
 
+type BeforeRemove = (e: { preventDefault: () => void }) => void;
+
 function makeNavigation() {
-  return { navigate: jest.fn(), goBack: jest.fn() };
+  let beforeRemove: BeforeRemove[] = [];
+  return {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    setOptions: jest.fn(),
+    addListener: jest.fn((event: string, cb: BeforeRemove) => {
+      if (event === 'beforeRemove') beforeRemove.push(cb);
+      return () => {
+        beforeRemove = beforeRemove.filter((l) => l !== cb);
+      };
+    }),
+    /** Simulate a pop (hardware back / swipe / programmatic). */
+    emitBeforeRemove(): boolean {
+      let prevented = false;
+      beforeRemove.forEach((cb) =>
+        cb({
+          preventDefault: () => {
+            prevented = true;
+          },
+        })
+      );
+      return prevented;
+    },
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+async function enterPin(
+  screen: Awaited<ReturnType<typeof render>>,
+  value = '123456'
+) {
+  await fireEvent.changeText(screen.getByPlaceholderText('Enter PIN'), value);
+  await fireEvent.changeText(screen.getByPlaceholderText('Confirm PIN'), value);
 }
 
 async function renderScreen(params: Record<string, unknown>) {
@@ -155,15 +219,11 @@ async function renderScreen(params: Record<string, unknown>) {
   return { navigation, screen };
 }
 
-async function submitPin(screen: Awaited<ReturnType<typeof render>>) {
-  await fireEvent.changeText(
-    screen.getByPlaceholderText('Enter PIN'),
-    '123456'
-  );
-  await fireEvent.changeText(
-    screen.getByPlaceholderText('Confirm PIN'),
-    '123456'
-  );
+async function submitPin(
+  screen: Awaited<ReturnType<typeof render>>,
+  value = '123456'
+) {
+  await enterPin(screen, value);
   await fireEvent.press(screen.getByTestId('complete-setup'));
 }
 
@@ -208,8 +268,8 @@ describe('SecuritySetupScreen — mnemonic secret carrier (TASK-224)', () => {
     await screen.unmount();
   });
 
-  it('clears the secret when the import fails', async () => {
-    mockImportStandardAccount.mockRejectedValue(new Error('import boom'));
+  it('keeps the secret on import failure so a same-screen retry works', async () => {
+    mockImportStandardAccount.mockRejectedValueOnce(new Error('import boom'));
     const id = storeMnemonicSecret(FAKE_MNEMONIC);
     const { navigation, screen } = await renderScreen({
       mnemonicSecretId: id,
@@ -219,12 +279,153 @@ describe('SecuritySetupScreen — mnemonic secret carrier (TASK-224)', () => {
     await submitPin(screen);
 
     expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
-    expect(getAccountSecret(id)).toBeUndefined();
     expect(Alert.alert).toHaveBeenCalledWith(
       'Error',
       expect.stringContaining('import boom')
     );
     expect(navigation.navigate).not.toHaveBeenCalled();
+    // Kept for the retry (the unmount cleanup still guarantees release).
+    expect(getAccountSecret(id)?.mnemonic).toBe(FAKE_MNEMONIC);
+
+    // Retry with the same PIN: no second first-secret setup, import succeeds,
+    // secret released.
+    await fireEvent.press(screen.getByTestId('complete-setup'));
+
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(2);
+    expect(mockImportStandardAccount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mnemonic: FAKE_MNEMONIC })
+    );
+    expect(getAccountSecret(id)).toBeUndefined();
+    expect(navigation.navigate).toHaveBeenCalledWith('Main');
+    await screen.unmount();
+  });
+
+  it('refuses a retry with a different PIN than the one already committed', async () => {
+    mockImportStandardAccount.mockRejectedValueOnce(new Error('import boom'));
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+    });
+
+    await submitPin(screen, '123456');
+    (Alert.alert as jest.Mock).mockClear();
+
+    await submitPin(screen, '654321');
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Error',
+      expect.stringMatching(/PIN is already set/)
+    );
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it('releases the secret on unmount after an import failure', async () => {
+    mockImportStandardAccount.mockRejectedValue(new Error('import boom'));
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'mnemonic',
+    });
+
+    await submitPin(screen);
+    expect(getAccountSecret(id)?.mnemonic).toBe(FAKE_MNEMONIC);
+
+    await screen.unmount();
+    expect(getAccountSecret(id)).toBeUndefined();
+  });
+
+  it('blocks back while setupPin is pending, then imports and releases the phrase', async () => {
+    const pending = deferred();
+    mockAuthSetupPin.mockImplementation(() => pending.promise);
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { navigation, screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+    });
+
+    // Not submitting yet: back is allowed.
+    expect(navigation.emitBeforeRemove()).toBe(false);
+    expect(screen.getByTestId('header-back')).toBeTruthy();
+
+    await enterPin(screen);
+    // Fire the press without awaiting the handler: setupPin stays pending.
+    await act(async () => {
+      void mockCompleteOnPress.current!();
+    });
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+
+    // Hardware back / swipe / programmatic pop while setupPin is in flight.
+    expect(navigation.emitBeforeRemove()).toBe(true);
+    // Header back is hidden and the swipe gesture disabled.
+    expect(screen.queryByTestId('header-back')).toBeNull();
+    expect(navigation.setOptions).toHaveBeenLastCalledWith({
+      gestureEnabled: false,
+    });
+    expect(navigation.goBack).not.toHaveBeenCalled();
+    expect(getAccountSecret(id)?.mnemonic).toBe(FAKE_MNEMONIC);
+
+    await act(async () => {
+      pending.resolve();
+    });
+
+    expect(mockImportStandardAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ mnemonic: FAKE_MNEMONIC })
+    );
+    expect(getAccountSecret(id)).toBeUndefined();
+    expect(navigation.navigate).toHaveBeenCalledWith('Main');
+    await screen.unmount();
+  });
+
+  it('an unmount mid-setupPin does not strand the PIN: the import still runs, then releases', async () => {
+    const pending = deferred();
+    mockAuthSetupPin.mockImplementation(() => pending.promise);
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+    });
+
+    await enterPin(screen);
+    await act(async () => {
+      void mockCompleteOnPress.current!();
+    });
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    await screen.unmount();
+    // Unmount cleanup skipped the clear because a submit is in flight.
+    expect(getAccountSecret(id)?.mnemonic).toBe(FAKE_MNEMONIC);
+
+    await act(async () => {
+      pending.resolve();
+    });
+
+    expect(mockImportStandardAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ mnemonic: FAKE_MNEMONIC })
+    );
+    expect(getAccountSecret(id)).toBeUndefined();
+  });
+
+  it('a double-tap runs setupPin and the import once', async () => {
+    const id = storeMnemonicSecret(FAKE_MNEMONIC);
+    const { screen } = await renderScreen({
+      mnemonicSecretId: id,
+      source: 'create',
+    });
+    await enterPin(screen);
+
+    await act(async () => {
+      const onPress = mockCompleteOnPress.current!;
+      // Two taps in the same tick, before any re-render.
+      void onPress();
+      void onPress();
+    });
+
+    expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
+    expect(mockImportStandardAccount).toHaveBeenCalledTimes(1);
     await screen.unmount();
   });
 
