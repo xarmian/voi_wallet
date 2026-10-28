@@ -61,18 +61,13 @@ jest.mock('@/services/network', () => ({
 }));
 
 // NOTE: updateAccountWithRekeyInfo's rekeyed→standard/watch auto-conversion
-// probes AccountSecureStorage via a runtime `await import(...)`. That dynamic
-// import resolves OUTSIDE jest's module registry, so neither a jest.mock factory
-// nor a jest.spyOn on a static import of AccountSecureStorage reaches it
-// (verified: both record zero calls). The "key present → STANDARD" half is thus
-// structurally uncoverable at unit scope — injecting a recoverable key would
-// need a full SecureStore + encryption + PIN integration harness. The "key
-// absent → WATCH" half IS deterministic (the real AccountSecureStorage genuinely
-// has no key for a fixture id, so getPrivateKey rejects) and is covered below
-// against the real module, not a stand-in.
+// decides from AccountSecureStorage.probeSecretPresenceStrict, statically
+// imported since TASK-421 (c), so a jest.spyOn reaches it. The probe-failure
+// case is the one that matters: it must never persist a downgrade.
 
 // Import AFTER the mocks are registered so the manager binds to them.
 import { RekeyManager } from '../rekeyManager';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 
 // --- Fixtures & builders ----------------------------------------------------
 
@@ -913,10 +908,12 @@ describe('updateAccountWithRekeyInfo', () => {
   });
 
   it('demotes a REKEYED account to WATCH when the network shows no rekey and no key is stored', async () => {
-    // The rekey has been undone on-chain. With no private key recoverable for
-    // this account (real AccountSecureStorage has none for a fixture id), the
-    // account must fall back to watch-only — never silently keep a signable
-    // authority it no longer has.
+    // The rekey has been undone on-chain. With no key stored for this account
+    // (a genuine absence from the strict probe, not an error), it must fall
+    // back to watch-only and never silently keep a signable authority.
+    const probe = jest
+      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+      .mockResolvedValue(false);
     const source = rekeyedAccount(REKEYED, 'src-1', STD_AUTH.addr, false);
     const wallet = makeWallet([source]);
 
@@ -927,6 +924,72 @@ describe('updateAccountWithRekeyInfo', () => {
     );
 
     expect(result.type).toBe(AccountType.WATCH);
+    probe.mockRestore();
+  });
+
+  describe('key presence decides the un-rekey conversion (TASK-421 c)', () => {
+    const source = () => ({
+      ...rekeyedAccount(REKEYED, 'src-1', STD_AUTH.addr, true),
+      originalOwner: true,
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    it('converts back to STANDARD when the key is present', async () => {
+      jest
+        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+        .mockResolvedValue(true);
+      const result = await manager.updateAccountWithRekeyInfo(
+        source(),
+        { isRekeyed: false },
+        makeWallet([source()])
+      );
+      expect(result.type).toBe(AccountType.STANDARD);
+    });
+
+    it('demotes to WATCH only when the key is genuinely absent', async () => {
+      jest
+        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+        .mockResolvedValue(false);
+      const result = await manager.updateAccountWithRekeyInfo(
+        source(),
+        { isRekeyed: false },
+        makeWallet([source()])
+      );
+      expect(result.type).toBe(AccountType.WATCH);
+    });
+
+    it('keeps the REKEYED record (and originalOwner) when the probe fails', async () => {
+      // E.g. a keychain error, or the vault locked mid-refresh: never downgrade.
+      jest
+        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+        .mockRejectedValue(new Error('keychain unavailable'));
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const original = source();
+      const result = await manager.updateAccountWithRekeyInfo(
+        original,
+        { isRekeyed: false },
+        makeWallet([original])
+      );
+      expect(result).toBe(original);
+      expect((result as RekeyedAccountMetadata).originalOwner).toBe(true);
+    });
+
+    it('needs no unlock: a locked vault does not affect the decision', async () => {
+      const probe = jest
+        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+        .mockResolvedValue(true);
+      const getKey = jest
+        .spyOn(AccountSecureStorage, 'getPrivateKey')
+        .mockRejectedValue(new Error('vault locked'));
+      const result = await manager.updateAccountWithRekeyInfo(
+        source(),
+        { isRekeyed: false },
+        makeWallet([source()])
+      );
+      expect(result.type).toBe(AccountType.STANDARD);
+      expect(probe).toHaveBeenCalledWith('src-1');
+      expect(getKey).not.toHaveBeenCalled();
+    });
   });
 });
 
