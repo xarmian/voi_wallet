@@ -34,7 +34,7 @@ import {
 } from '@/services/ledger/algorand';
 import { useWalletStore } from '@/store/walletStore';
 import AuthAccountDiscovery from '@/components/auth-account/AuthAccountDiscovery';
-import { AccountSecureStorage } from '@/services/secure';
+import { onboardingNeedsSecuritySetup } from '@/services/secure/orphanPin';
 
 type ImportState = {
   accounts: LedgerAccountDiscoveryResult[];
@@ -243,8 +243,8 @@ const LedgerAccountImportScreen: React.FC<Props> = ({ navigation, route }) => {
     }
 
     try {
-      const hasPin = await AccountSecureStorage.hasPin();
-      if (!hasPin) {
+      // An orphan PIN routes through SecuritySetup's healer too (TASK-417).
+      if (await onboardingNeedsSecuritySetup()) {
         navigation.replace('SecuritySetup', { source: 'ledger' });
       } else {
         navigation.navigate('Main');

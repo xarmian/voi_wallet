@@ -1,11 +1,16 @@
 import { AccountSecureStorage } from '../AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
-import { clearOrphanPin, ORPHAN_PIN_UNVERIFIABLE_MESSAGE } from '../orphanPin';
+import {
+  clearOrphanPin,
+  onboardingNeedsSecuritySetup,
+  ORPHAN_PIN_UNVERIFIABLE_MESSAGE,
+} from '../orphanPin';
 
 jest.mock('../AccountSecureStorage', () => ({
   AccountSecureStorage: {
     deletePin: jest.fn(),
+    hasPinStrict: jest.fn(),
     deleteAccount: jest.fn(),
     dropPendingCreateEntries: jest.fn(),
     readAccountListStrict: jest.fn(),
@@ -373,3 +378,67 @@ it.each(['hasKeyBearingAccountStrict', 'readAccountListStrict'] as const)(
     }
   }
 );
+
+describe('onboardingNeedsSecuritySetup (TASK-417)', () => {
+  it('is true with no PIN, without reading accounts', async () => {
+    jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(false);
+    await expect(onboardingNeedsSecuritySetup()).resolves.toBe(true);
+    expect(
+      MultiAccountWalletService.hasKeyBearingAccountStrict
+    ).not.toHaveBeenCalled();
+  });
+
+  it('is true for an orphan PIN (no key-bearing account)', async () => {
+    jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+    await expect(onboardingNeedsSecuritySetup()).resolves.toBe(true);
+  });
+
+  it('is false for a PIN guarding a key-bearing account', async () => {
+    jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+    jest
+      .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+      .mockResolvedValue(true);
+    await expect(onboardingNeedsSecuritySetup()).resolves.toBe(false);
+  });
+
+  it.each([undefined, null, 'yes'])(
+    'is false for a non-boolean key-bearing verdict %s',
+    async (verdict) => {
+      jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+      jest
+        .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+        .mockResolvedValue(verdict as never);
+      await expect(onboardingNeedsSecuritySetup()).resolves.toBe(false);
+    }
+  );
+
+  it.each(['hasPinStrict', 'hasKeyBearingAccountStrict'] as const)(
+    'rejects when %s fails',
+    async (method) => {
+      jest.mocked(AccountSecureStorage.hasPinStrict).mockResolvedValue(true);
+      if (method === 'hasPinStrict')
+        jest
+          .mocked(AccountSecureStorage.hasPinStrict)
+          .mockRejectedValue(new Error('keychain'));
+      else
+        jest
+          .mocked(MultiAccountWalletService.hasKeyBearingAccountStrict)
+          .mockRejectedValue(new Error('keychain'));
+      await expect(onboardingNeedsSecuritySetup()).rejects.toThrow();
+    }
+  );
+
+  it('rejects when the PIN read never settles', async () => {
+    jest.useFakeTimers();
+    try {
+      jest
+        .mocked(AccountSecureStorage.hasPinStrict)
+        .mockReturnValue(new Promise<never>(() => {}));
+      const settled = expect(onboardingNeedsSecuritySetup()).rejects.toThrow();
+      await jest.advanceTimersByTimeAsync(1500);
+      await settled;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});

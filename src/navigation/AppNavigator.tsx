@@ -260,8 +260,12 @@ export type RootStackParamList = {
     };
   };
   QRScanner: undefined;
-  QRAccountImport: undefined;
-  AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
+  QRAccountImport: { isOnboarding?: boolean } | undefined;
+  AccountImportPreview: {
+    accounts: ScannedAccount[];
+    source: 'qr';
+    isOnboarding?: boolean;
+  };
   LedgerAccountImport:
     { deviceId?: string; isOnboarding?: boolean } | undefined;
   // Remote Signer signing flow screens

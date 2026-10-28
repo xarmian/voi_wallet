@@ -35,7 +35,7 @@ interface Props {
   route: QRAccountImportScreenRouteProp;
 }
 
-export default function QRAccountImportScreen({ navigation }: Props) {
+export default function QRAccountImportScreen({ navigation, route }: Props) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -135,6 +135,7 @@ export default function QRAccountImportScreen({ navigation }: Props) {
       navigation.navigate('AccountImportPreview', {
         accounts: result.accounts,
         source: 'qr',
+        isOnboarding: route.params?.isOnboarding,
       });
     } catch (error) {
       console.error('QR Account Import error:', error);
