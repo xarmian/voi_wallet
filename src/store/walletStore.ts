@@ -328,7 +328,10 @@ interface WalletState {
    * quiz for `accountId`. Persist-then-set (no optimistic update): the Home
    * warning banner must never disappear before the flag is durably written.
    */
-  markBackupVerified: (accountId: string) => Promise<void>;
+  markBackupVerified: (
+    accountId: string,
+    expectedAddress: string
+  ) => Promise<void>;
   updateAccountColor: (accountId: string, color: string) => Promise<void>;
   toggleAccountVisibility: (accountId: string) => Promise<void>;
 
@@ -1188,12 +1191,15 @@ export const useWalletStore = create<WalletState>()(
       }
     },
 
-    markBackupVerified: async (accountId: string) => {
+    markBackupVerified: async (accountId: string, expectedAddress: string) => {
       // Persist FIRST. If the write fails the banner stays up, which is the safe
       // direction — better a redundant prompt than a silently-cleared warning on
       // an account whose phrase was never confirmed.
       const persistedAccount =
-        await MultiAccountWalletService.markBackupVerified(accountId);
+        await MultiAccountWalletService.markBackupVerified(
+          accountId,
+          expectedAddress
+        );
 
       set((state) => {
         if (!state.wallet) {
@@ -1202,8 +1208,20 @@ export const useWalletStore = create<WalletState>()(
         return {
           wallet: {
             ...state.wallet,
+            // Merge ONLY the backup fields, and only onto the same identity:
+            // replacing the whole record could regress a conversion or rekey
+            // update that reached the store while the write was queued.
             accounts: state.wallet.accounts.map((account) =>
-              account.id === persistedAccount.id ? persistedAccount : account
+              account.id === persistedAccount.id &&
+              account.address === persistedAccount.address &&
+              (account.type === AccountType.STANDARD ||
+                account.type === AccountType.REKEYED)
+                ? {
+                    ...account,
+                    backupVerified: persistedAccount.backupVerified,
+                    backupCreatedAt: persistedAccount.backupCreatedAt,
+                  }
+                : account
             ),
           },
         };

@@ -1263,20 +1263,41 @@ export class MultiAccountWalletService {
     return updatedAccount;
   }
 
+  /** Verification requires positive custody evidence; probe errors fail closed. */
+  private static async eligibleBackupVerificationTarget(
+    account: AccountMetadata,
+    expectedAddress: string
+  ): Promise<StandardAccountMetadata | RekeyedAccountMetadata | null> {
+    if (account.address !== expectedAddress) return null;
+    if (account.type === AccountType.STANDARD) return account;
+    if (account.type !== AccountType.REKEYED) return null;
+    if (account.originalOwner === true) return account;
+    try {
+      return (await AccountSecureStorage.probeSecretPresenceStrict(
+        account.id
+      )) === true
+        ? account
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * TASK-45 — record that the user has confirmed this account's recovery phrase
    * by completing the verification quiz.
    *
    * Deliberately narrow: it takes no phrase, no key, and only ever sets the flag
    * to `true` (there is no "un-verify" — a user who has proven they hold the
-   * phrase cannot un-prove it). STANDARD accounts only; anything else is a
+   * phrase cannot un-prove it). Local-key accounts only; anything else is a
    * programming error and throws rather than silently no-op'ing.
    *
    * Idempotent: re-verifying an already-verified account performs no write.
    */
   static async markBackupVerified(
-    accountId: string
-  ): Promise<StandardAccountMetadata> {
+    accountId: string,
+    expectedAddress: string
+  ): Promise<StandardAccountMetadata | RekeyedAccountMetadata> {
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
@@ -1291,10 +1312,13 @@ export class MultiAccountWalletService {
       throw new AccountNotFoundError(`Account not found: ${accountId}`);
     }
 
-    const account = wallet.accounts[accountIndex];
-    if (account.type !== AccountType.STANDARD) {
+    const account = await this.eligibleBackupVerificationTarget(
+      wallet.accounts[accountIndex],
+      expectedAddress
+    );
+    if (!account || readEpoch !== walletResetEpoch) {
       throw new Error(
-        'Only standard accounts have a recovery phrase to verify'
+        'Account has no recovery phrase to verify or has changed'
       );
     }
 
@@ -1311,48 +1335,55 @@ export class MultiAccountWalletService {
     // an active-account change) that landed in between — or be discarded by one,
     // losing a verification the user just earned. Re-reading inside the chain
     // makes this mutation touch exactly one field of the CURRENT blob.
-    const applied = await this.enqueueWalletWrite(async () => {
-      // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
-      if (readEpoch !== walletResetEpoch) return false;
-      const raw = await storage.getItem(this.WALLET_KEY);
-      // Primary absent = wiped (or never written). Deliberately stricter than
-      // storeWallet: this mutation never (re)creates a wallet blob, and it never
-      // clears the wipe tombstone.
-      if (raw == null) return false;
+    // Resolves to the record as committed inside the chain (null = not
+    // applied), so callers never see the initial snapshot after a concurrent
+    // conversion (TASK-421 U4d review).
+    const committed = await this.enqueueWalletWrite(
+      async (): Promise<
+        StandardAccountMetadata | RekeyedAccountMetadata | null
+      > => {
+        // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
+        if (readEpoch !== walletResetEpoch) return null;
+        const raw = await storage.getItem(this.WALLET_KEY);
+        // Primary absent = wiped (or never written). Deliberately stricter than
+        // storeWallet: this mutation never (re)creates a wallet blob, and it never
+        // clears the wipe tombstone.
+        if (raw == null) return null;
 
-      const current = JSON.parse(raw) as Wallet;
-      const index = current.accounts.findIndex((acc) => acc.id === accountId);
-      if (index === -1) return false;
+        const current = JSON.parse(raw) as Wallet;
+        const index = current.accounts.findIndex((acc) => acc.id === accountId);
+        if (index === -1) return null;
 
-      const target = current.accounts[index];
-      if (target.type !== AccountType.STANDARD) return false;
-      // Someone else already recorded it — nothing to do, and no write.
-      if (target.backupVerified === true) return true;
+        const target = await this.eligibleBackupVerificationTarget(
+          current.accounts[index],
+          expectedAddress
+        );
+        if (!target || readEpoch !== walletResetEpoch) return null;
+        // Someone else already recorded it — nothing to do, and no write.
+        if (target.backupVerified === true) return target;
 
-      current.accounts[index] = {
-        ...target,
-        backupVerified: true,
-        backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
-      };
+        const updated = {
+          ...target,
+          backupVerified: true,
+          backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
+        };
+        current.accounts[index] = updated;
 
-      await storage.setItem(
-        this.WALLET_KEY,
-        JSON.stringify(this.sanitizeWalletForPersistence(current))
-      );
-      return true;
-    });
+        await storage.setItem(
+          this.WALLET_KEY,
+          JSON.stringify(this.sanitizeWalletForPersistence(current))
+        );
+        return updated;
+      }
+    );
 
-    if (!applied) {
+    if (!committed) {
       throw new Error(
         'Could not record backup verification: the wallet changed or was reset'
       );
     }
 
-    return {
-      ...account,
-      backupVerified: true,
-      backupCreatedAt,
-    };
+    return committed;
   }
 
   static async setActiveAccount(accountId: string): Promise<void> {

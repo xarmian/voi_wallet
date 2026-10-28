@@ -68,9 +68,11 @@ export default function VerifyBackupScreen() {
       ? accounts?.find(
           (account) =>
             account.address === accountAddress &&
-            account.type === AccountType.STANDARD
+            (account.type === AccountType.STANDARD ||
+              account.type === AccountType.REKEYED)
         )
-      : activeAccount?.type === AccountType.STANDARD
+      : activeAccount?.type === AccountType.STANDARD ||
+          activeAccount?.type === AccountType.REKEYED
         ? activeAccount
         : undefined;
     if (resolved) {
@@ -127,10 +129,10 @@ export default function VerifyBackupScreen() {
   const handleVerified = useCallback(async () => {
     if (!target) return;
     // The service re-checks, inside its serialized write, that this exact
-    // account still exists and is STANDARD — so a deleted account or a wallet
-    // reset fails closed instead of marking something else.
+    // account still exists at the same address and holds its own key. A deleted
+    // account or a wallet reset fails closed instead of marking something else.
     try {
-      await markBackupVerified(target.id);
+      await markBackupVerified(target.id, target.address);
       setMnemonic('');
       Alert.alert(
         'Backup confirmed',

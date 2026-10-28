@@ -42,12 +42,16 @@ jest.mock('@/services/ledger/transport', () => ({
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
 jest.mock('@/services/network', () => ({ NetworkService: {} }));
 jest.mock('../../secure/AccountSecureStorage', () => ({
-  AccountSecureStorage: { getResetGeneration: () => 0 },
+  AccountSecureStorage: {
+    getResetGeneration: () => 0,
+    probeSecretPresenceStrict: jest.fn(),
+  },
 }));
 
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 import { storage } from '@/platform';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import {
   AccountType,
   StandardAccountMetadata,
@@ -293,7 +297,10 @@ describe('markBackupVerified', () => {
   it('flips the flag to true and persists it', async () => {
     persistBlob([legacyStandardAccount('acc-1', true)]);
 
-    const updated = await MultiAccountWalletService.markBackupVerified('acc-1');
+    const updated = await MultiAccountWalletService.markBackupVerified(
+      'acc-1',
+      String(storedAccounts()[0].address)
+    );
     expect(updated.backupVerified).toBe(true);
     expect(updated.backupCreatedAt).toBeDefined();
     expect(storedAccounts()[0].backupVerified).toBe(true);
@@ -307,7 +314,10 @@ describe('markBackupVerified', () => {
     await MultiAccountWalletService.getCurrentWallet();
     const writesBefore = (storage.setItem as jest.Mock).mock.calls.length;
 
-    const updated = await MultiAccountWalletService.markBackupVerified('acc-1');
+    const updated = await MultiAccountWalletService.markBackupVerified(
+      'acc-1',
+      String(storedAccounts()[0].address)
+    );
     expect(updated.backupVerified).toBe(true);
     expect((storage.setItem as jest.Mock).mock.calls.length).toBe(writesBefore);
   });
@@ -315,14 +325,17 @@ describe('markBackupVerified', () => {
   it('refuses a non-standard account', async () => {
     persistBlob([legacyWatchAccount('watch-1')]);
     await expect(
-      MultiAccountWalletService.markBackupVerified('watch-1')
+      MultiAccountWalletService.markBackupVerified(
+        'watch-1',
+        String(storedAccounts()[0].address)
+      )
     ).rejects.toThrow(/recovery phrase/i);
   });
 
   it('throws for an unknown account id', async () => {
     persistBlob([legacyStandardAccount('acc-1', true)]);
     await expect(
-      MultiAccountWalletService.markBackupVerified('nope')
+      MultiAccountWalletService.markBackupVerified('nope', 'missing')
     ).rejects.toThrow(/not found/i);
   });
 
@@ -354,7 +367,10 @@ describe('markBackupVerified', () => {
       return value;
     });
 
-    await MultiAccountWalletService.markBackupVerified('acc-1');
+    await MultiAccountWalletService.markBackupVerified(
+      'acc-1',
+      String(storedAccounts()[0].address)
+    );
     realGetItem.mockImplementation(originalImpl);
 
     const persisted = JSON.parse(mockStore[WALLET_KEY]);
@@ -381,11 +397,201 @@ describe('markBackupVerified', () => {
     });
 
     await expect(
-      MultiAccountWalletService.markBackupVerified('acc-1')
+      MultiAccountWalletService.markBackupVerified(
+        'acc-1',
+        String(storedAccounts()[0].address)
+      )
     ).rejects.toThrow(/could not record/i);
     realGetItem.mockImplementation(originalImpl);
 
     // No blob was written back.
     expect(mockStore[WALLET_KEY]).toBeUndefined();
   });
+});
+
+describe('local-key verification eligibility', () => {
+  const probe = AccountSecureStorage.probeSecretPresenceStrict as jest.Mock;
+
+  async function seed(originalOwner = false) {
+    const target = {
+      ...rekeyedAccount('target'),
+      originalOwner,
+      backupVerified: false,
+    };
+    const signer = {
+      ...legacyStandardAccount('signer', true),
+      backupVerified: false,
+    };
+    target.authAddress = signer.address;
+    persistBlob([target, signer]);
+    await MultiAccountWalletService.getCurrentWallet();
+    jest.clearAllMocks();
+    probe.mockReset().mockResolvedValue(true);
+    return target;
+  }
+
+  it.each([true, false])(
+    'verifies only the REKEYED target (originalOwner=%s)',
+    async (owner) => {
+      const target = await seed(owner);
+      const before = storedAccounts();
+      const result = await MultiAccountWalletService.markBackupVerified(
+        target.id,
+        target.address
+      );
+      expect(result).toMatchObject({
+        id: target.id,
+        type: AccountType.REKEYED,
+        backupVerified: true,
+      });
+      expect(storedAccounts()[0]).toEqual({
+        ...before[0],
+        backupVerified: true,
+        backupCreatedAt: result.backupCreatedAt,
+      });
+      expect(storedAccounts()[1]).toEqual(before[1]);
+      if (owner) expect(probe).not.toHaveBeenCalled();
+      else expect(probe.mock.calls).toEqual([[target.id], [target.id]]);
+      const writes = (storage.setItem as jest.Mock).mock.calls.length;
+      await MultiAccountWalletService.markBackupVerified(
+        target.id,
+        target.address
+      );
+      expect(storage.setItem).toHaveBeenCalledTimes(writes);
+    }
+  );
+
+  it.each(['absent', 'error'])(
+    'rejects initial probe %s even if already verified',
+    async (state) => {
+      const target = await seed();
+      if (state === 'error')
+        probe.mockRejectedValue(new Error('vault unavailable'));
+      else probe.mockResolvedValue(false);
+      for (const verified of [false, true]) {
+        const accounts = storedAccounts();
+        accounts[0].backupVerified = verified;
+        persistBlob(accounts);
+        await expect(
+          MultiAccountWalletService.markBackupVerified(
+            target.id,
+            target.address
+          )
+        ).rejects.toThrow();
+      }
+      expect(storage.setItem).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['absent', 'error'])(
+    'rejects serialized probe %s after initial presence',
+    async (state) => {
+      const target = await seed();
+      probe.mockReset().mockResolvedValueOnce(true);
+      if (state === 'error')
+        probe.mockRejectedValueOnce(new Error('vault unavailable'));
+      else probe.mockResolvedValueOnce(false);
+      await expect(
+        MultiAccountWalletService.markBackupVerified(target.id, target.address)
+      ).rejects.toThrow(/could not record/i);
+      expect(storage.setItem).not.toHaveBeenCalled();
+      expect(storedAccounts()[0].backupVerified).toBe(false);
+    }
+  );
+
+  it('returns the committed record when a conversion lands between the reads', async () => {
+    const target = await seed();
+    // A rekey back to self converts the account to STANDARD after the initial
+    // read but before the serialized write.
+    probe.mockImplementationOnce(async () => {
+      const accounts = storedAccounts();
+      const { authAddress: _auth, canSign: _canSign, ...rest } = accounts[0];
+      accounts[0] = { ...rest, type: AccountType.STANDARD };
+      persistBlob(accounts);
+      return true;
+    });
+    const result = await MultiAccountWalletService.markBackupVerified(
+      target.id,
+      target.address
+    );
+    expect(result).toMatchObject({
+      id: target.id,
+      type: AccountType.STANDARD,
+      backupVerified: true,
+    });
+    expect(result).not.toHaveProperty('authAddress');
+    expect(storedAccounts()[0]).toMatchObject({
+      type: AccountType.STANDARD,
+      backupVerified: true,
+    });
+  });
+
+  it('rejects an expected-address mismatch before writing', async () => {
+    const target = await seed();
+    await expect(
+      MultiAccountWalletService.markBackupVerified(target.id, 'different')
+    ).rejects.toThrow();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'address',
+    'id',
+    AccountType.WATCH,
+    AccountType.LEDGER,
+    AccountType.REMOTE_SIGNER,
+  ])('rejects a concurrent identity/type change: %s', async (change) => {
+    const target = await seed();
+    probe.mockImplementationOnce(async () => {
+      const accounts = storedAccounts();
+      if (change === 'address') accounts[0].address = accounts[1].address;
+      else if (change === 'id') accounts[0].id = 'replacement';
+      else accounts[0].type = change;
+      persistBlob(accounts);
+      return true;
+    });
+    await expect(
+      MultiAccountWalletService.markBackupVerified(target.id, target.address)
+    ).rejects.toThrow(/could not record/i);
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(storedAccounts()[0].backupVerified).toBe(false);
+  });
+
+  it.each([AccountType.WATCH, AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
+    'rejects %s initially',
+    async (type) => {
+      const target = await seed();
+      const accounts = storedAccounts();
+      accounts[0].type = type;
+      persistBlob(accounts);
+      await expect(
+        MultiAccountWalletService.markBackupVerified(target.id, target.address)
+      ).rejects.toThrow();
+      expect(storage.setItem).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([1, 2])(
+    'rejects a reset during eligibility check %s',
+    async (check) => {
+      const target = await seed();
+      let reset: Promise<void> | undefined;
+      if (check === 2) probe.mockResolvedValueOnce(true);
+      probe.mockImplementationOnce(async () => {
+        reset = MultiAccountWalletService.clearAllWallets();
+        return true;
+      });
+      await expect(
+        MultiAccountWalletService.markBackupVerified(target.id, target.address)
+      ).rejects.toThrow();
+      await reset;
+      expect(mockStore[WALLET_KEY]).toBeUndefined();
+      expect(
+        (storage.setItem as jest.Mock).mock.calls.filter(
+          ([key]) => key === WALLET_KEY
+        )
+      ).toEqual([]);
+    }
+  );
 });
