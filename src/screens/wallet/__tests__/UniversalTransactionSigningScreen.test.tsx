@@ -20,12 +20,14 @@
  */
 
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { AppState, type AppStateStatus } from 'react-native';
+import { render, waitFor, fireEvent, act } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 
 import { makeAccount } from '@/__tests__/fixtures/algorand';
 import { NetworkId } from '@/types/network';
+import { truncateAddress } from '@/services/walletconnect/utils';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 
 const VOI = NetworkId.VOI_MAINNET;
@@ -36,6 +38,31 @@ const ALGO = NetworkId.ALGORAND_MAINNET;
 // over them; the factories read them lazily at call time).
 // ---------------------------------------------------------------------------
 type AssetParamsStub = { decimals: number; name?: string; unitName?: string };
+
+let mockLocked = false;
+let mockModalProps: any;
+jest.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({
+    authState: {
+      isLocked: mockLocked,
+      isAuthenticated: !mockLocked,
+      biometricEnabled: false,
+    },
+  }),
+}));
+jest.mock('@/services/secure/sessionTeardown', () => ({
+  clearSessionSecurity: jest.fn(() =>
+    require('@/services/secure/SessionKeyVault').SessionKeyVault.clear()
+  ),
+}));
+jest.mock('@/services/secure/AccountSecureStorage', () => ({
+  AccountSecureStorage: {
+    getCredentialSource: jest.fn(async () => 'pin'),
+    verifyPin: jest.fn(),
+    getBiometricSecret: jest.fn(),
+    isBiometricEnabled: jest.fn(),
+  },
+}));
 
 let mockAssetParams: Record<string, Record<string, AssetParamsStub | null>>;
 let mockAccounts: {
@@ -48,11 +75,20 @@ let mockRoutes: Record<string, unknown>;
 const mockGetCachedAssetParams = jest.fn();
 const mockResolveSigningRoute = jest.fn();
 /** Registry callbacks by id (TASK-257: onDismiss on unmount). */
-let mockRegistry: Record<string, { onDismiss?: () => void }> = {};
+let mockRegistry: Record<
+  string,
+  { onDismiss?: () => void; onReject?: () => Promise<void> }
+> = {};
 
 // `@/utils/bigint` re-exports through `@/utils/formatting`, which pulls in the
 // zustand wallet store (and therefore AsyncStorage). Only the locale lookup is
 // involved, so a minimal store stub keeps this a pure display test.
+jest.mock('expo-local-authentication', () => ({
+  supportedAuthenticationTypesAsync: jest.fn(async () => []),
+  authenticateAsync: jest.fn(),
+  AuthenticationType: { FACIAL_RECOGNITION: 2 },
+}));
+
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: { getState: () => ({ wallet: undefined }) },
 }));
@@ -72,6 +108,17 @@ jest.mock('@/services/wallet', () => ({
   },
 }));
 
+const mockPreventCapture = jest.fn();
+const mockEnableAppSwitcherProtection = jest.fn(
+  async (_intensity?: number) => {}
+);
+jest.mock('expo-screen-capture', () => ({
+  usePreventScreenCapture: (key?: string) => mockPreventCapture(key),
+  enableAppSwitcherProtectionAsync: (intensity?: number) =>
+    mockEnableAppSwitcherProtection(intensity),
+  disableAppSwitcherProtectionAsync: async () => {},
+}));
+
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
     resolveSigningRoute: (address: string, networkId?: string) =>
@@ -80,7 +127,10 @@ jest.mock('@/services/secure/keyManager', () => ({
 }));
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
-  useTransactionAuthController: () => ({ cleanup: jest.fn() }),
+  useTransactionAuthController: () => ({
+    cleanup: jest.fn(),
+    cancel: jest.fn(),
+  }),
 }));
 
 jest.mock('@/services/navigation/callbackRegistry', () => ({
@@ -90,7 +140,10 @@ jest.mock('@/services/navigation/callbackRegistry', () => ({
 
 jest.mock('@/components/UnifiedTransactionAuthModal', () => ({
   __esModule: true,
-  default: () => null,
+  default: (props: any) => {
+    mockModalProps = props;
+    return null;
+  },
 }));
 
 jest.mock('@/components/common/UniversalHeader', () => ({
@@ -154,13 +207,15 @@ function axfer(
 function pay(
   networkId: NetworkId,
   sender: string,
-  amount: number
+  amount: number,
+  note?: string
 ): algosdk.Transaction {
   return algosdk.makePaymentTxnWithSuggestedParamsFromObject({
     sender,
     receiver: sender,
     amount,
     suggestedParams: paramsFor(networkId),
+    note: note ? Buffer.from(note) : undefined,
   });
 }
 
@@ -229,6 +284,8 @@ function renderScreen(options: {
   if (walletConnect) {
     params.walletConnect = {
       transactions: entries,
+      requestKey: 'topic-under-test:437',
+      dapp: { name: 'Example dApp', url: 'https://example.org' },
       binding: {
         topic: 'topic-under-test',
         chainId,
@@ -247,6 +304,7 @@ function renderScreen(options: {
 }
 
 beforeEach(() => {
+  mockLocked = false;
   mockRegistry = {};
   mockBeforeRemove = [];
   mockAssetParams = {};
@@ -562,4 +620,158 @@ describe('UniversalTransactionSigningScreen — leaving the screen', () => {
     mockBeforeRemove.forEach((listener) => listener());
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+});
+
+// TASK-437 negative control: no request data may be mounted before authentication.
+it('shows only the locked request gate and rejects without authentication', async () => {
+  mockLocked = true;
+  const sender = makeAccount('locked-review').addr.toString();
+  mockAccounts = [walletAccount('Private account label', sender)];
+  const onReject = jest.fn(async () => {});
+  mockRegistry.locked = { onReject } as any;
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 12500000, 'Private note')) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Private account label' },
+    callbackId: 'locked',
+  });
+  expect(view.queryByText(/12.5 VOI/)).toBeNull();
+  expect(view.queryByText('Private account label')).toBeNull();
+  expect(view.queryByText('Private note')).toBeNull();
+  expect(view.queryAllByText(truncateAddress(sender))).toHaveLength(0);
+  expect(view.getByText('Unlock to review')).toBeTruthy();
+  expect(view.getByText('Example dApp')).toBeTruthy();
+  expect(view.getByText('example.org')).toBeTruthy();
+  expect(view.queryByText(/Signing Accounts/)).toBeNull();
+  expect(view.getByText(NETWORK_CONFIGURATIONS[VOI].name)).toBeTruthy();
+  await fireEvent.press(view.getByText('Reject'));
+  expect(onReject).toHaveBeenCalledTimes(1);
+  expect(
+    require('@/services/secure/AccountSecureStorage').AccountSecureStorage
+      .verifyPin
+  ).not.toHaveBeenCalled();
+  expect(
+    require('@/services/secure/AccountSecureStorage').AccountSecureStorage
+      .getBiometricSecret
+  ).not.toHaveBeenCalled();
+  expect(
+    require('expo-local-authentication').authenticateAsync
+  ).not.toHaveBeenCalled();
+});
+
+it.each(['beforeRemove', 'unmount', 'cancel', 'background'])(
+  'clears review keys and hides details on %s (TASK-437)',
+  async (exit) => {
+    const { reviewGrant } = require('@/services/auth/reviewGrant');
+    const { AppLockSignal } = require('@/services/secure/appLockState');
+    const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+    const {
+      AccountSecureStorage,
+    } = require('@/services/secure/AccountSecureStorage');
+    AppLockSignal.setUnlocked(false);
+    reviewGrant.revoke();
+    AccountSecureStorage.verifyPin.mockResolvedValue(true);
+    mockLocked = true;
+    const sender = makeAccount('review-lifecycle').addr;
+    mockAccounts = [walletAccount('Private review account', sender)];
+    const appStateListeners: ((state: AppStateStatus) => void)[] = [];
+    const spy = jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, listener) => {
+        appStateListeners.push((state) => listener(state));
+        return { remove: jest.fn() };
+      });
+    const view = await renderScreen({
+      networkId: VOI,
+      entries: [{ txn: b64(pay(VOI, sender, 12500000)) }],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Private review account' },
+    });
+    await act(async () => {
+      expect(
+        await reviewGrant.unlock('topic-under-test:437', { pin: '123456' })
+      ).toBe(true);
+    });
+    await waitFor(() => expect(view.getByText('12.5 VOI')).toBeTruthy());
+    expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
+    if (exit === 'beforeRemove')
+      await act(() => mockBeforeRemove.forEach((fn) => fn()));
+    if (exit === 'unmount') await view.unmount();
+    if (exit === 'cancel') await act(() => mockModalProps.onCancel());
+    if (exit === 'background')
+      await act(() => appStateListeners.forEach((fn) => fn('background')));
+    expect(SessionKeyVault.isUnlocked()).toBe(false);
+    expect(AppLockSignal.isUnlocked()).toBe(false);
+    if (exit !== 'unmount') expect(view.queryByText('12.5 VOI')).toBeNull();
+    spy.mockRestore();
+  }
+);
+
+// TASK-437 (Luna P2): before review is unlocked nothing about the request is
+// decoded, fetched or logged — no asset metadata lookup (it logs the asset
+// id), no signer-route resolution, no account read.
+it('looks nothing up before review is unlocked', async () => {
+  jest.restoreAllMocks();
+  // jest-expo's AppState.addEventListener returns no subscription; stub it
+  // as the lifecycle tests above do.
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation(() => ({ remove: jest.fn() }) as any);
+  require('@/services/auth/reviewGrant').reviewGrant.revoke();
+  require('@/services/secure/appLockState').AppLockSignal.setUnlocked(false);
+  mockGetCachedAssetParams.mockClear();
+  mockResolveSigningRoute.mockClear();
+  mockPreventCapture.mockClear();
+  mockEnableAppSwitcherProtection.mockClear();
+  mockLocked = true;
+  const sender = makeAccount('locked-lookups').addr.toString();
+  mockAccounts = [walletAccount('Locked lookups', sender)];
+  const wallet = require('@/services/wallet').MultiAccountWalletService;
+  const getAllAccounts = jest.spyOn(wallet, 'getAllAccounts');
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(axfer(VOI, sender, USDC, 10000000n)) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Locked lookups' },
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(view.getByText('Unlock to review')).toBeTruthy();
+  expect(mockGetCachedAssetParams).not.toHaveBeenCalled();
+  expect(mockResolveSigningRoute).not.toHaveBeenCalled();
+  expect(getAllAccounts).not.toHaveBeenCalled();
+});
+
+// TASK-437 (Luna P2): a WalletConnect review is kept out of screenshots and
+// the app-switcher snapshot while mounted; in-app signing is unchanged.
+it('guards a WalletConnect review against screen capture and the app switcher', async () => {
+  jest.restoreAllMocks();
+  // jest-expo's AppState.addEventListener returns no subscription; stub it
+  // as the lifecycle tests above do.
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation(() => ({ remove: jest.fn() }) as any);
+  require('@/services/auth/reviewGrant').reviewGrant.revoke();
+  require('@/services/secure/appLockState').AppLockSignal.setUnlocked(false);
+  mockGetCachedAssetParams.mockClear();
+  mockResolveSigningRoute.mockClear();
+  mockPreventCapture.mockClear();
+  mockEnableAppSwitcherProtection.mockClear();
+  mockLocked = true;
+  const sender = makeAccount('capture-guard').addr.toString();
+  mockAccounts = [walletAccount('Capture guard', sender)];
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000)) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Capture guard' },
+  });
+
+  expect(mockPreventCapture).toHaveBeenCalled();
+  if (require('react-native').Platform.OS === 'ios') {
+    expect(mockEnableAppSwitcherProtection).toHaveBeenCalledTimes(1);
+  }
 });

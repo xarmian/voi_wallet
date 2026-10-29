@@ -1,6 +1,10 @@
-import { useId } from 'react';
+import { useEffect, useId } from 'react';
 import { Platform } from 'react-native';
-import { usePreventScreenCapture } from 'expo-screen-capture';
+import {
+  disableAppSwitcherProtectionAsync,
+  enableAppSwitcherProtectionAsync,
+  usePreventScreenCapture,
+} from 'expo-screen-capture';
 
 /**
  * useSecureScreen
@@ -44,6 +48,36 @@ export function useSecureScreen(): void {
   // idempotent.
   const key = useId();
   usePreventCapture(key);
+}
+
+// iOS app-switcher blur is one global switch, so it is ref-counted: a second
+// guarded screen pushed over the first must not lift the blur when it leaves.
+let appSwitcherProtectionUsers = 0;
+
+/**
+ * useAppSwitcherProtection (TASK-437)
+ *
+ * Keeps the screen out of the app-switcher snapshot while mounted, without
+ * relying on a background-event rerender (which can land after the OS has
+ * taken the snapshot). Android: FLAG_SECURE via useSecureScreen already blanks
+ * the recent-apps preview, so this adds nothing there. iOS: screen-capture
+ * prevention does NOT cover the app switcher, so this enables
+ * expo-screen-capture's app-switcher blur for as long as any user is mounted.
+ */
+export function useAppSwitcherProtection(): void {
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    appSwitcherProtectionUsers++;
+    if (appSwitcherProtectionUsers === 1) {
+      enableAppSwitcherProtectionAsync(1).catch(() => {});
+    }
+    return () => {
+      appSwitcherProtectionUsers--;
+      if (appSwitcherProtectionUsers === 0) {
+        disableAppSwitcherProtectionAsync().catch(() => {});
+      }
+    };
+  }, []);
 }
 
 export default useSecureScreen;

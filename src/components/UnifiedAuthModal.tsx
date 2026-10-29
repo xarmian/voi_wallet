@@ -227,7 +227,7 @@ export default function UnifiedAuthModal({
         promptMessage: getAuthMessage(purpose),
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
-        requireConfirmation: false,
+        requireConfirmation: true,
       });
 
       if (result.success) {

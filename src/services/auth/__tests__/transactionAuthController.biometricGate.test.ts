@@ -20,6 +20,10 @@
 // factory closing over an outer const would capture `undefined` (TDZ). Handles
 // are recovered from the mocked module imports and configured in beforeEach.
 
+jest.mock('@/services/messaging/keyDerivation', () => ({
+  clearMessagingKeyCache: jest.fn(),
+}));
+
 jest.mock('expo-local-authentication', () => ({
   __esModule: true,
   hasHardwareAsync: jest.fn(),
@@ -31,6 +35,8 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
     hasPin: jest.fn(),
     isBiometricEnabled: jest.fn(),
     verifyPin: jest.fn(),
+    getBiometricSecret: jest.fn(),
+    clearPrivateKeyCache: jest.fn(),
   },
 }));
 jest.mock('@/services/secure/biometricUnlock', () => ({
@@ -619,7 +625,7 @@ describe('remote batch submission ownership (TASK-418)', () => {
     }
   );
 
-  it('walletconnect_batch fallback returns base64/null without broadcasting', async () => {
+  it('legacy walletconnect_batch returns base64/null through the response callback without broadcasting', async () => {
     const { controller, response } = await flow('walletconnect_batch', true);
     await controller.processRemoteSignerResponse(response);
     const env = { ...scope(), version: 2 };
@@ -628,14 +634,7 @@ describe('remote batch submission ownership (TASK-418)', () => {
       'handleWalletConnectSuccess',
       env
     );
-    await screenHandler(
-      'walletconnect/TransactionRequestScreen',
-      'handleAuthComplete',
-      {
-        ...env,
-        handleWalletConnectSuccess: handler,
-      }
-    )(true, controller.getState().result);
+    await handler(controller.getState().result);
     expect(respondV2).toHaveBeenCalledWith('dapp', 418, [signed, null]);
     expect(respondV1).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
@@ -1051,4 +1050,120 @@ describe('remote batch submission ownership (TASK-418)', () => {
       expect(submit).not.toHaveBeenCalled();
     }
   );
+});
+
+it('uses the supplied signing summary for software biometrics (TASK-437)', async () => {
+  mockASS.isBiometricEnabled.mockResolvedValue(true);
+  const controller = new TransactionAuthController();
+  await initFlow(controller);
+  await controller.authenticateWithBiometrics('Send 12.5 VOI to ABCD…WXYZ');
+  expect(mockUnlock).toHaveBeenCalledWith('Send 12.5 VOI to ABCD…WXYZ');
+});
+it('requests confirmation on the Ledger biometric gate (TASK-437)', async () => {
+  const controller = new TransactionAuthController();
+  (controller as any).currentState = {
+    ...controller.getState(),
+    biometricAvailable: true,
+    isLedgerFlow: true,
+    ledgerStatus: 'ready',
+  };
+  (controller as any).startSigning = jest.fn();
+  mockLA.authenticateAsync.mockResolvedValue({ success: true });
+  await controller.authenticateWithBiometrics(
+    'Sign 3 transactions for example.org'
+  );
+  expect(mockLA.authenticateAsync).toHaveBeenCalledWith(
+    expect.objectContaining({
+      promptMessage: 'Sign 3 transactions for example.org',
+      requireConfirmation: true,
+    })
+  );
+});
+
+it('clears a real biometric vault after a locked signing flow (TASK-437 negative control)', async () => {
+  const { SessionKeyVault } = require('@/services/secure/SessionKeyVault');
+  const { AppLockSignal } = require('@/services/secure/appLockState');
+  const realUnlock = jest.requireActual(
+    '@/services/secure/biometricUnlock'
+  ).unlockVaultWithBiometrics;
+  AppLockSignal.setUnlocked(false);
+  mockASS.isBiometricEnabled.mockResolvedValue(true);
+  (AccountSecureStorage.getBiometricSecret as jest.Mock).mockResolvedValue({
+    secret: 'fixture',
+    secretSource: 'pin',
+  });
+  mockUnlock.mockImplementation(realUnlock);
+  const controller = new TransactionAuthController();
+  await initFlow(controller);
+  await controller.authenticateWithBiometrics();
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
+  expect(AppLockSignal.isUnlocked()).toBe(false);
+});
+
+it('unlocks review once, then signs via a grant without authenticating again (TASK-437)', async () => {
+  const { reviewGrant } = require('../reviewGrant');
+  const { AppLockSignal } = require('@/services/secure/appLockState');
+  AppLockSignal.setUnlocked(false);
+  mockASS.isBiometricEnabled.mockResolvedValue(true);
+  (AccountSecureStorage.getBiometricSecret as jest.Mock).mockResolvedValue({
+    secret: 'fixture',
+    secretSource: 'pin',
+  });
+  mockUnlock.mockImplementation(
+    jest.requireActual('@/services/secure/biometricUnlock')
+      .unlockVaultWithBiometrics
+  );
+  expect(await reviewGrant.unlock('topic:437', { biometric: true })).toBe(true);
+  const controller = new TransactionAuthController();
+  await initFlow(controller);
+  (controller as any).currentRequest.reviewGrantKey = 'topic:437';
+  expect(await controller.authenticateWithReviewGrant('topic:437')).toBe(true);
+  expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
+  expect(AccountSecureStorage.verifyPin).not.toHaveBeenCalled();
+  expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+  expect(await controller.authenticateWithReviewGrant('topic:437')).toBe(false);
+  reviewGrant.revoke();
+});
+
+it('lets a failed Sign be retried inside the review sitting (TASK-437 Luna P3)', async () => {
+  const { reviewGrant } = require('../reviewGrant');
+  const { AppLockSignal } = require('@/services/secure/appLockState');
+  AppLockSignal.setUnlocked(false);
+  mockASS.isBiometricEnabled.mockResolvedValue(true);
+  (AccountSecureStorage.getBiometricSecret as jest.Mock).mockResolvedValue({
+    secret: 'fixture',
+    secretSource: 'pin',
+  });
+  mockUnlock.mockImplementation(
+    jest.requireActual('@/services/secure/biometricUnlock')
+      .unlockVaultWithBiometrics
+  );
+  const signErr = new Error('node unavailable');
+  mockSignTransaction.mockImplementationOnce(
+    async (_req: any, callbacks: any) => {
+      callbacks?.onError?.(signErr);
+      callbacks?.onComplete?.({ success: false, error: signErr });
+      return { success: false, error: signErr };
+    }
+  );
+  expect(await reviewGrant.unlock('topic:retry', { biometric: true })).toBe(
+    true
+  );
+  const controller = new TransactionAuthController();
+  await initFlow(controller);
+  (controller as any).currentRequest.reviewGrantKey = 'topic:retry';
+
+  expect(await controller.authenticateWithReviewGrant('topic:retry')).toBe(
+    true
+  );
+  await flush();
+  // The failed attempt handed the Sign back: a fresh claim signs again,
+  // with no second auth.
+  (controller as any).currentState.state = 'authenticating';
+  expect(await controller.authenticateWithReviewGrant('topic:retry')).toBe(
+    true
+  );
+  expect(mockSignTransaction).toHaveBeenCalledTimes(2);
+  expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
+  reviewGrant.revoke();
 });

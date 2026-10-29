@@ -507,3 +507,16 @@ describe('a request the queue cannot take is answered, not dropped (TASK-394)', 
     expect(answerDroppedRequests).not.toHaveBeenCalled();
   });
 });
+
+it('delivers a request while locked without unlocking the wallet (TASK-437)', async () => {
+  const { AppLockSignal } = require('@/services/secure/appLockState');
+  AppLockSignal.setUnlocked(false);
+  mockReady = true;
+  await boot();
+  await emit('session_request', request(437));
+  expect(mockNav.navigate).toHaveBeenCalledWith(
+    'WalletConnectTransactionRequest',
+    expect.anything()
+  );
+  expect(AppLockSignal.isUnlocked()).toBe(false);
+});
