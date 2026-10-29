@@ -2,6 +2,7 @@ import { NetworkService } from '../index';
 import {
   NetworkId,
   TransactionExpiredError,
+  TransactionMaybeSubmittedError,
   TransactionRejectedError,
 } from '@/types/network';
 import { mapError } from '@/utils/errorMapping';
@@ -309,33 +310,164 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
       expect((outcome as TransactionRejectedError).reason).toMatch(/overspend/);
       expect(algod.pendingTransactionInformation).not.toHaveBeenCalled();
     });
+  });
 
-    it('"already in ledger" (a 400) is not a rejection: it is left to the reconcile', async () => {
-      const algod = fakeAlgod(async () => CONFIRMED);
-      algod.sendRawTransaction.mockImplementation(() => ({
-        do: async () => {
-          throw httpError(400, 'transaction already in ledger');
-        },
-      }));
-      install(algod);
-      const outcome = await settle(service.submitTransaction(BLOB));
-      expect(outcome).not.toBeInstanceOf(TransactionRejectedError);
-      expect((outcome as Error).message).toMatch(
-        /^Transaction failed: .*already in ledger/
-      );
+  /**
+   * #244 P1a/P1b (director 10-29): every send outcome is classified in
+   * submitTransaction, so its direct callers (asa.ts, SwapScreen, the remote
+   * signer, unifiedSigner) and submitWithRetries share it. One row per send
+   * sequence; "may still land" is { confirmed: false }, never a failure.
+   */
+  describe('submitTransaction: send outcomes (#244 P1a/P1b)', () => {
+    const OK = 'ok' as const;
+    const ALREADY = () => httpError(400, 'transaction already in ledger');
+    const REFUSED = () => httpError(400, 'overspend (account X)');
+    const DEAD = () =>
+      httpError(400, 'txn dead: round 1002 outside of 1--1001');
+    const UNAVAILABLE = () => httpError(503, 'unavailable');
+    // No HTTP status: a dropped connection or the client-side timeout.
+    const DROPPED = () => new Error('socket hang up');
+    const NOT_FOUND = async () => {
+      throw httpError(404, 'txn not found');
+    };
+    // Bytes that don't decode, so there is no txid to reconcile by.
+    const UNDECODABLE = new Uint8Array([1, 2, 3]);
+
+    beforeEach(() => {
+      jest
+        .spyOn(NetworkService as any, 'retryDelay')
+        .mockResolvedValue(undefined);
     });
 
-    it('a 5xx is not a rejection (a transient failure, retried by the caller)', async () => {
-      const algod = fakeAlgod(async () => CONFIRMED);
+    const sends = (
+      outcomes: (typeof OK | (() => Error))[],
+      pending: () => Promise<Record<string, unknown>> = async () => CONFIRMED,
+      status?: () => Promise<Record<string, unknown>>
+    ) => {
+      const algod = fakeAlgod(pending, status);
+      let i = 0;
       algod.sendRawTransaction.mockImplementation(() => ({
         do: async () => {
-          throw httpError(503, 'unavailable');
+          const next = outcomes[Math.min(i++, outcomes.length - 1)];
+          if (next === OK) return { txid: TX_ID };
+          throw next();
         },
       }));
       install(algod);
-      const outcome = await settle(service.submitTransaction(BLOB));
+      return algod;
+    };
+
+    const ROWS: {
+      name: string;
+      outcomes: (typeof OK | (() => Error))[];
+      pending?: () => Promise<Record<string, unknown>>;
+      status?: () => Promise<Record<string, unknown>>;
+      blob?: Uint8Array;
+      sent: number;
+      expect: (outcome: unknown) => void;
+    }[] = [
+      {
+        name: 'already in ledger, confirmed by txid',
+        outcomes: [ALREADY],
+        sent: 1,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: true }),
+      },
+      {
+        name: 'already in ledger, still pending by txid: may still land',
+        outcomes: [ALREADY],
+        pending: async () => ({ confirmedRound: 0n }),
+        sent: 1,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: false }),
+      },
+      {
+        name: 'already in ledger, unconfirmed past lastValid: expired',
+        outcomes: [ALREADY],
+        pending: async () => POOL_ERROR,
+        status: async () => ({ lastRound: PAST_LAST_VALID }),
+        sent: 1,
+        expect: expectExpired,
+      },
+      {
+        name: 'a 5xx, then accepted: the resend lands it',
+        outcomes: [UNAVAILABLE, OK],
+        sent: 2,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: true }),
+      },
+      {
+        name: 'P1a: every attempt a 5xx, not found by txid: may still land',
+        outcomes: [UNAVAILABLE],
+        pending: NOT_FOUND,
+        sent: 3,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: false }),
+      },
+      {
+        name: 'P1a: every attempt dropped, then confirmed by txid',
+        outcomes: [DROPPED],
+        sent: 3,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: true }),
+      },
+      {
+        name: 'P1a: every attempt dropped, unconfirmed past lastValid: expired',
+        outcomes: [DROPPED],
+        pending: async () => ({ confirmedRound: 0n }),
+        status: async () => ({ lastRound: PAST_LAST_VALID }),
+        sent: 3,
+        expect: expectExpired,
+      },
+      {
+        name: 'dropped, then a 4xx: the first may have landed, so not rejected',
+        outcomes: [DROPPED, DEAD],
+        pending: NOT_FOUND,
+        sent: 2,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: false }),
+      },
+      {
+        name: 'dropped, then already in ledger: confirmed by txid',
+        outcomes: [DROPPED, ALREADY],
+        sent: 2,
+        expect: (o) => expect(o).toEqual({ txId: TX_ID, confirmed: true }),
+      },
+      {
+        name: 'already in ledger, no txid to reconcile: may have been submitted',
+        outcomes: [ALREADY],
+        blob: UNDECODABLE,
+        sent: 1,
+        expect: (o) => expect(o).toBeInstanceOf(TransactionMaybeSubmittedError),
+      },
+      {
+        name: 'every attempt a 5xx, no txid to reconcile: may have been submitted',
+        outcomes: [UNAVAILABLE],
+        blob: UNDECODABLE,
+        sent: 3,
+        expect: (o) => expect(o).toBeInstanceOf(TransactionMaybeSubmittedError),
+      },
+    ];
+
+    it.each(ROWS)('$name', async (row) => {
+      const algod = sends(row.outcomes, row.pending, row.status);
+      const outcome = await settle(service.submitTransaction(row.blob ?? BLOB));
       expect(outcome).not.toBeInstanceOf(TransactionRejectedError);
-      expect((outcome as Error).message).toMatch(/^Transaction failed:/);
+      row.expect(outcome);
+      expect(algod.sendRawTransaction).toHaveBeenCalledTimes(row.sent);
+    });
+
+    it('a first-attempt 4xx is still the hard rejection, with no resend (control)', async () => {
+      const algod = sends([REFUSED, OK]);
+      const outcome = await settle(service.submitTransaction(BLOB));
+      expect(outcome).toBeInstanceOf(TransactionRejectedError);
+      expect(algod.sendRawTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('backs off between resends of the same bytes', async () => {
+      const algod = sends([UNAVAILABLE]);
+      await settle(service.submitTransaction(BLOB));
+      expect((NetworkService as any).retryDelay.mock.calls).toEqual([
+        [500],
+        [1000],
+      ]);
+      for (const [bytes] of algod.sendRawTransaction.mock.calls) {
+        expect(bytes).toBe(BLOB);
+      }
     });
   });
 

@@ -232,8 +232,9 @@ function makeAlgod(overrides: Record<string, unknown> = {}) {
       flatFee: true,
       minFee: 1000,
     }),
-    sendRawTransaction: jest.fn().mockResolvedValue('TXID_NETWORK'),
-    waitForConfirmation: jest.fn().mockResolvedValue({ confirmedRound: 1 }),
+    submitTransaction: jest
+      .fn()
+      .mockResolvedValue({ txId: 'TXID_NETWORK', confirmed: true }),
     ...overrides,
   };
 }
@@ -339,8 +340,9 @@ beforeEach(() => {
       flatFee: true,
       minFee: 1000,
     }),
-    sendRawTransaction: jest.fn().mockResolvedValue('TXID_NETWORK'),
-    waitForConfirmation: jest.fn().mockResolvedValue({ confirmedRound: 42 }),
+    submitTransaction: jest
+      .fn()
+      .mockResolvedValue({ txId: 'TXID_NETWORK', confirmed: true }),
   });
 });
 
@@ -1603,9 +1605,8 @@ describe('signTransaction — keyreg routing', () => {
     let submittedBlob: Uint8Array | undefined;
     const sendRaw = jest.fn(async (blob: Uint8Array) => {
       submittedBlob = blob;
-      return 'TXID_KEYREG';
+      return { txId: 'TXID_KEYREG', confirmed: true };
     });
-    const waitConfirm = jest.fn().mockResolvedValue({ confirmedRound: 7 });
     mockGetInstance.mockReturnValue({
       getSuggestedParams: jest.fn().mockResolvedValue({
         fee: 1000,
@@ -1616,8 +1617,7 @@ describe('signTransaction — keyreg routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: sendRaw,
-      waitForConfirmation: waitConfirm,
+      submitTransaction: sendRaw,
     });
     const { cb, fns } = makeCallbacks();
 
@@ -1641,7 +1641,6 @@ describe('signTransaction — keyreg routing', () => {
 
     expect(result).toEqual({ success: true, transactionId: 'TXID_KEYREG' });
     expect(sendRaw).toHaveBeenCalledTimes(1);
-    expect(waitConfirm).toHaveBeenCalledWith('TXID_KEYREG');
     expect(fns.onNetworkConfirmed).toHaveBeenCalledWith('TXID_KEYREG');
 
     // The submitted blob is a REAL keyreg signature by the account.
@@ -1687,7 +1686,10 @@ describe('signTransaction — keyreg routing', () => {
   // never carry nonpart=true, which on Algorand/Voi permanently bars the
   // account from going online again.
   const offlineKeyregNetwork = () => {
-    const sendRaw = jest.fn(async (_blob: Uint8Array) => 'TXID_KEYREG_OFF');
+    const sendRaw = jest.fn(async (_blob: Uint8Array) => ({
+      txId: 'TXID_KEYREG_OFF',
+      confirmed: true,
+    }));
     mockGetInstance.mockReturnValue({
       getSuggestedParams: jest.fn().mockResolvedValue({
         fee: 1000,
@@ -1698,8 +1700,7 @@ describe('signTransaction — keyreg routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: sendRaw,
-      waitForConfirmation: jest.fn().mockResolvedValue({}),
+      submitTransaction: sendRaw,
     });
     return sendRaw;
   };
@@ -1821,8 +1822,7 @@ describe('signTransaction — keyreg routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: jest.fn().mockRejectedValue(boom),
-      waitForConfirmation: jest.fn(),
+      submitTransaction: jest.fn().mockRejectedValue(boom),
     });
 
     const result = await signer.signTransaction({
@@ -1834,10 +1834,11 @@ describe('signTransaction — keyreg routing', () => {
     expect(result).toEqual({ success: false, error: boom });
   });
 
-  it('propagates a confirmation failure (submitted, then wait rejects)', async () => {
+  it('reports submitted-but-unconfirmed as "may still be committed", not a plain failure', async () => {
     const account = accountOf('keyreg-confirm-fail', AccountType.STANDARD);
-    const boom = new Error('confirmation timeout');
-    const sendRaw = jest.fn().mockResolvedValue('TXID_KEYREG_PENDING');
+    const sendRaw = jest
+      .fn()
+      .mockResolvedValue({ txId: 'TXID_KEYREG_PENDING', confirmed: false });
     mockGetInstance.mockReturnValue({
       getSuggestedParams: jest.fn().mockResolvedValue({
         fee: 1000,
@@ -1848,8 +1849,7 @@ describe('signTransaction — keyreg routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: sendRaw,
-      waitForConfirmation: jest.fn().mockRejectedValue(boom),
+      submitTransaction: sendRaw,
     });
     const { cb, fns } = makeCallbacks();
 
@@ -1862,12 +1862,16 @@ describe('signTransaction — keyreg routing', () => {
       cb
     );
 
-    // Submitted (onNetworkSubmit fired) but confirmation threw -> failResult.
+    // Submitted (onNetworkSubmit fired) but not confirmed -> failResult whose
+    // error says it may still land (rendering it as pending is audit #12).
     expect(sendRaw).toHaveBeenCalledTimes(1);
     expect(fns.onNetworkSubmit).toHaveBeenCalledTimes(1);
     expect(fns.onNetworkConfirmed).not.toHaveBeenCalled();
-    expect(result).toEqual({ success: false, error: boom });
-    expect(fns.onError).toHaveBeenCalledWith(boom);
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(
+      /TXID_KEYREG_PENDING is not confirmed yet and may still be committed/
+    );
+    expect(fns.onError).toHaveBeenCalledWith(result.error);
   });
 
   it('propagates a signer rejection BEFORE any submit/confirm', async () => {
@@ -1889,8 +1893,7 @@ describe('signTransaction — keyreg routing', () => {
 
     expect(result).toEqual({ success: false, error: boom });
     // Signing failed, so nothing is ever submitted or confirmed.
-    expect(algod.sendRawTransaction).not.toHaveBeenCalled();
-    expect(algod.waitForConfirmation).not.toHaveBeenCalled();
+    expect(algod.submitTransaction).not.toHaveBeenCalled();
     expect(fns.onNetworkSubmit).not.toHaveBeenCalled();
     expect(fns.onNetworkConfirmed).not.toHaveBeenCalled();
     // keyreg routes signer failures through the generic catch -> onError; unlike
@@ -1910,7 +1913,7 @@ describe('signTransaction — appl routing', () => {
     let submittedBlob: Uint8Array | undefined;
     const sendRaw = jest.fn(async (blob: Uint8Array) => {
       submittedBlob = blob;
-      return 'TXID_APPL';
+      return { txId: 'TXID_APPL', confirmed: true };
     });
     mockGetInstance.mockReturnValue({
       getSuggestedParams: jest.fn().mockResolvedValue({
@@ -1922,8 +1925,7 @@ describe('signTransaction — appl routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: sendRaw,
-      waitForConfirmation: jest.fn().mockResolvedValue({}),
+      submitTransaction: sendRaw,
     });
 
     const result = await signer.signTransaction({
@@ -1972,8 +1974,7 @@ describe('signTransaction — appl routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: jest.fn().mockRejectedValue(boom),
-      waitForConfirmation: jest.fn(),
+      submitTransaction: jest.fn().mockRejectedValue(boom),
     });
     const { cb, fns } = makeCallbacks();
 
@@ -2017,8 +2018,7 @@ describe('signTransaction — appl routing', () => {
     );
 
     expect(result).toEqual({ success: false, error: boom });
-    expect(algod.sendRawTransaction).not.toHaveBeenCalled();
-    expect(algod.waitForConfirmation).not.toHaveBeenCalled();
+    expect(algod.submitTransaction).not.toHaveBeenCalled();
     expect(fns.onNetworkSubmit).not.toHaveBeenCalled();
     expect(fns.onNetworkConfirmed).not.toHaveBeenCalled();
     expect(fns.onError).toHaveBeenCalledWith(boom);
@@ -2245,8 +2245,9 @@ describe('signTransaction — WATCH accounts follow the signing route (TASK-425)
           flatFee: true,
           minFee: 1000,
         }),
-        sendRawTransaction: jest.fn().mockResolvedValue('TXID'),
-        waitForConfirmation: jest.fn().mockResolvedValue({}),
+        submitTransaction: jest
+          .fn()
+          .mockResolvedValue({ txId: 'TXID', confirmed: true }),
       });
 
       const result = await signer.signTransaction({

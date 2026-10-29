@@ -146,6 +146,21 @@ export class TransactionExpiredError extends Error {
   }
 }
 
+/**
+ * A send that the node may have accepted (it answered "already in the
+ * ledger/pool", or every attempt failed ambiguously) whose transaction id
+ * can't be derived from the signed bytes, so it can't be reconciled. Not a
+ * failure: sending it again is unsafe until its history is checked.
+ */
+export class TransactionMaybeSubmittedError extends Error {
+  constructor() {
+    super(
+      'This transaction may already have been submitted. Check your transaction history before sending it again.'
+    );
+    this.name = 'TransactionMaybeSubmittedError';
+  }
+}
+
 export class NetworkUnavailableError extends NetworkError {
   constructor(networkId: NetworkId, service?: string) {
     const message = service

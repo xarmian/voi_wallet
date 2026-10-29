@@ -14,6 +14,7 @@ import {
   NetworkError,
   TransactionRejectedError,
   TransactionExpiredError,
+  TransactionMaybeSubmittedError,
 } from '@/types/network';
 import { getNetworkConfig, DEFAULT_NETWORK_ID } from './config';
 import { isAlreadySubmittedError } from './alreadySubmitted';
@@ -1134,59 +1135,82 @@ export class NetworkService {
     }
   }
 
+  /**
+   * Submit a signed transaction (or group) and wait for it to confirm.
+   * Resolves `confirmed: false` when it is submitted, or may have been, but is
+   * not confirmed yet: it may still land, so the caller must not resend.
+   *
+   * Every send outcome is classified here, so every caller gets the same
+   * treatment (TASK-440 #8, director 10-29):
+   * - a 4xx that isn't "already in the ledger/pool" is the only hard
+   *   rejection, and only while no earlier attempt in this call was ambiguous;
+   * - "already in the ledger/pool" means a prior send landed: reconcile by
+   *   txid, never resend;
+   * - anything else (a timeout, a dropped connection, a 5xx) is ambiguous: the
+   *   node may have taken it. The same bytes are resent, which is safe (algod
+   *   answers "already in the ledger/pool"), and if every attempt fails the
+   *   end state is the reconcile by txid, never a failure.
+   * Throws TransactionExpiredError once it can no longer land.
+   */
   async submitTransaction(
-    signedTxn: Uint8Array | Uint8Array[]
+    signedTxn: Uint8Array | Uint8Array[],
+    maxAttempts: number = 3
   ): Promise<{ txId: string; confirmed: boolean }> {
     try {
-      // NOTE: sendRawTransaction is now wrapped with a client-side timeout.
-      // A timeout after the node accepted the tx is safe because
-      // TransactionService.submitWithRetries detects "already in ledger" /
-      // "already in the pool" responses on retry and treats them as success
-      // instead of resubmitting, so a lost-response commit can no longer cause
-      // either a false failure or a double-send.
-      let res: unknown;
-      try {
-        res = await this.withTimeout(
-          this.algodClient.sendRawTransaction(signedTxn).do(),
-          'submit transaction',
-          30000
-        );
-      } catch (sendError) {
-        // A 4xx means algod refused it: it never entered the pool, so it
-        // can't land. The only hard rejection (director 10-29). "Already in
-        // the ledger/pool" is a 400 too, but means the opposite: it is left to
-        // submitWithRetries' reconcile.
-        const status = (sendError as { response?: { status?: number } })
-          ?.response?.status;
-        if (
-          status !== undefined &&
-          status >= 400 &&
-          status < 500 &&
-          !isAlreadySubmittedError(sendError)
-        ) {
-          throw new TransactionRejectedError(
-            NetworkService.signedTxnFacts(signedTxn).txId ?? '',
-            sendError instanceof Error ? sendError.message : String(sendError)
+      const facts = NetworkService.signedTxnFacts(signedTxn);
+      let ambiguous = false;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let res: unknown;
+        try {
+          res = await this.withTimeout(
+            this.algodClient.sendRawTransaction(signedTxn).do(),
+            'submit transaction',
+            30000
           );
+        } catch (sendError) {
+          lastError = sendError;
+          if (isAlreadySubmittedError(sendError)) {
+            return await this.reconcileSubmitted(facts, sendError);
+          }
+          const status = (sendError as { response?: { status?: number } })
+            ?.response?.status;
+          if (status !== undefined && status >= 400 && status < 500) {
+            // After an ambiguous attempt, a 4xx on the same bytes can't prove
+            // the first one didn't land (e.g. "txn dead" once it committed).
+            if (ambiguous) {
+              return await this.reconcileSubmitted(facts, sendError);
+            }
+            throw new TransactionRejectedError(
+              facts.txId ?? '',
+              sendError instanceof Error ? sendError.message : String(sendError)
+            );
+          }
+          ambiguous = true;
+          if (attempt < maxAttempts) {
+            await NetworkService.retryDelay(500 * 2 ** (attempt - 1));
+          }
+          continue;
         }
-        throw sendError;
+        const txId =
+          (res as { txId?: string; txid?: string }).txId ??
+          (res as { txid?: string }).txid ??
+          '';
+        // Wait for confirmation. A false result means the tx is still pending
+        // (not confirmed within the round window), NOT a failure.
+        const confirmed = await this.waitForConfirmationInternal(
+          txId,
+          facts.lastValid
+        );
+        return { txId, confirmed };
       }
-      const txId =
-        (res as { txId?: string; txid?: string }).txId ??
-        (res as { txid?: string }).txid ??
-        '';
-      // Wait for confirmation. A false result means the tx is still pending
-      // (not confirmed within the round window), NOT a failure.
-      const confirmed = await this.waitForConfirmationInternal(
-        txId,
-        NetworkService.signedTxnFacts(signedTxn).lastValid
-      );
-      return { txId, confirmed };
+      return await this.reconcileSubmitted(facts, lastError);
     } catch (error) {
       console.error('Failed to submit transaction:', redactError(error));
       if (
         error instanceof TransactionRejectedError ||
-        error instanceof TransactionExpiredError
+        error instanceof TransactionExpiredError ||
+        error instanceof TransactionMaybeSubmittedError
       ) {
         throw error;
       }
@@ -1194,6 +1218,42 @@ export class NetworkService {
         `Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * The end state of a send the node may have taken: a short wait by txid.
+   * Confirmed, still pending ("may still land"), or TransactionExpiredError;
+   * never a failure, so the caller can't be led to resend it.
+   */
+  private async reconcileSubmitted(
+    facts: { txId?: string; lastValid?: bigint },
+    sendError: unknown
+  ): Promise<{ txId: string; confirmed: boolean }> {
+    console.warn(
+      'Submit may have reached the node; reconciling by txid:',
+      redactError(sendError)
+    );
+    if (!facts.txId) {
+      throw new TransactionMaybeSubmittedError();
+    }
+    try {
+      return {
+        txId: facts.txId,
+        confirmed: await this.isTransactionConfirmed(
+          facts.txId,
+          facts.lastValid
+        ),
+      };
+    } catch (reconcileError) {
+      if (reconcileError instanceof TransactionExpiredError) {
+        throw reconcileError;
+      }
+      return { txId: facts.txId, confirmed: false };
+    }
+  }
+
+  private static retryDelay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
