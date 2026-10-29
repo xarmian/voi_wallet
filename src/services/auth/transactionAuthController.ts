@@ -1755,6 +1755,13 @@ export class TransactionAuthController {
             });
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
+            // TASK-437 (Luna P3): a failed Sign inside a review sitting is
+            // retryable. Hand the request its one Sign back, and require the
+            // next tap to claim it again.
+            if (reviewKey) {
+              reviewGrant.release(reviewKey);
+              this.reviewAuthorized = false;
+            }
             if (!this.currentState.isLedgerFlow) {
               // SOFTWARE flow: onError already routed to PIN entry; keep it
               // PIN-shaped and NEVER Ledger-shape it here (PR6.1) — the signer

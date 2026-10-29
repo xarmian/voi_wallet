@@ -136,6 +136,16 @@ export const reviewGrant = {
     this.touch();
     return true;
   },
+  /**
+   * A Sign attempt failed before anything was signed or answered: give the
+   * request its Sign back so the user can retry within the sitting (Luna P3).
+   * No-op when the sitting has ended or the request isn't in it.
+   */
+  release(key: string): void {
+    if (!this.isValid(key)) return;
+    grant!.used.delete(key);
+    this.touch();
+  },
   /** Queue advance: the next request replaces the finished one's screen. */
   continueTo(key: string): void {
     if (this.isLive()) {

@@ -51,6 +51,10 @@ import {
 import { formatBaseUnitsToAmount } from '@/utils/bigint';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import {
+  useAppSwitcherProtection,
+  useSecureScreen,
+} from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
 import {
@@ -156,6 +160,17 @@ function decodeNoteForDisplay(note: Uint8Array): string | undefined {
   return text.length > NOTE_DISPLAY_LIMIT
     ? `${text.slice(0, NOTE_DISPLAY_LIMIT)}…`
     : text;
+}
+
+/**
+ * TASK-437 (Luna P2): a WalletConnect review stays out of screenshots and the
+ * app-switcher snapshot for as long as it is mounted. Rendered only for dApp
+ * requests, so in-app signing screens keep their current capture behaviour.
+ */
+function WalletConnectPrivacyGuard(): null {
+  useSecureScreen();
+  useAppSwitcherProtection();
+  return null;
 }
 
 /**
@@ -446,9 +461,13 @@ export default function UniversalTransactionSigningScreen({
     };
   }, [boundNetworkId, chainId]);
 
+  // TASK-437 (Luna P2): nothing about the request is decoded before review is
+  // allowed. Everything below (asset metadata fetches, which log the asset id;
+  // signer-route resolution) derives from this list, so an empty list until
+  // canReview means no request detail is parsed, fetched or logged pre-auth.
   const { parsed: parsedTransactions, decoded: decodedTransactions } = useMemo(
-    () => parseBatch(transactionBytes),
-    [transactionBytes]
+    () => parseBatch(canReview ? transactionBytes : []),
+    [canReview, transactionBytes]
   );
 
   // -------------------------------------------------------------------------
@@ -1088,6 +1107,7 @@ export default function UniversalTransactionSigningScreen({
         onAccountSelectorPress={() => {}}
         showAccountSelector={false}
       />
+      {walletConnect && <WalletConnectPrivacyGuard />}
 
       {!canReview ? (
         <LockedRequestGate

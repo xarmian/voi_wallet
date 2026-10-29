@@ -1124,3 +1124,46 @@ it('unlocks review once, then signs via a grant without authenticating again (TA
   expect(await controller.authenticateWithReviewGrant('topic:437')).toBe(false);
   reviewGrant.revoke();
 });
+
+it('lets a failed Sign be retried inside the review sitting (TASK-437 Luna P3)', async () => {
+  const { reviewGrant } = require('../reviewGrant');
+  const { AppLockSignal } = require('@/services/secure/appLockState');
+  AppLockSignal.setUnlocked(false);
+  mockASS.isBiometricEnabled.mockResolvedValue(true);
+  (AccountSecureStorage.getBiometricSecret as jest.Mock).mockResolvedValue({
+    secret: 'fixture',
+    secretSource: 'pin',
+  });
+  mockUnlock.mockImplementation(
+    jest.requireActual('@/services/secure/biometricUnlock')
+      .unlockVaultWithBiometrics
+  );
+  const signErr = new Error('node unavailable');
+  mockSignTransaction.mockImplementationOnce(
+    async (_req: any, callbacks: any) => {
+      callbacks?.onError?.(signErr);
+      callbacks?.onComplete?.({ success: false, error: signErr });
+      return { success: false, error: signErr };
+    }
+  );
+  expect(await reviewGrant.unlock('topic:retry', { biometric: true })).toBe(
+    true
+  );
+  const controller = new TransactionAuthController();
+  await initFlow(controller);
+  (controller as any).currentRequest.reviewGrantKey = 'topic:retry';
+
+  expect(await controller.authenticateWithReviewGrant('topic:retry')).toBe(
+    true
+  );
+  await flush();
+  // The failed attempt handed the Sign back: a fresh claim signs again,
+  // with no second auth.
+  (controller as any).currentState.state = 'authenticating';
+  expect(await controller.authenticateWithReviewGrant('topic:retry')).toBe(
+    true
+  );
+  expect(mockSignTransaction).toHaveBeenCalledTimes(2);
+  expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
+  reviewGrant.revoke();
+});

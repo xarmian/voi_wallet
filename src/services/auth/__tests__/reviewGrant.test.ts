@@ -207,3 +207,16 @@ it('aborts a request’s own in-flight unlock when its screen leaves', async () 
   expect(await pending).toBe(false);
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
+
+it('gives a request its Sign back after a failed attempt, only while the sitting is live', async () => {
+  await reviewGrant.unlock('a:1', { pin: '123456' });
+  expect(reviewGrant.consume('a:1')).toBe(true);
+  expect(reviewGrant.consume('a:1')).toBe(false);
+
+  reviewGrant.release('a:1');
+  expect(reviewGrant.consume('a:1')).toBe(true);
+
+  reviewGrant.revoke();
+  reviewGrant.release('a:1');
+  expect(reviewGrant.consume('a:1')).toBe(false);
+});

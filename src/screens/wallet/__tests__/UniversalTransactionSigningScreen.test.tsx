@@ -108,6 +108,17 @@ jest.mock('@/services/wallet', () => ({
   },
 }));
 
+const mockPreventCapture = jest.fn();
+const mockEnableAppSwitcherProtection = jest.fn(
+  async (_intensity?: number) => {}
+);
+jest.mock('expo-screen-capture', () => ({
+  usePreventScreenCapture: (key?: string) => mockPreventCapture(key),
+  enableAppSwitcherProtectionAsync: (intensity?: number) =>
+    mockEnableAppSwitcherProtection(intensity),
+  disableAppSwitcherProtectionAsync: async () => {},
+}));
+
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
     resolveSigningRoute: (address: string, networkId?: string) =>
@@ -696,3 +707,71 @@ it.each(['beforeRemove', 'unmount', 'cancel', 'background'])(
     spy.mockRestore();
   }
 );
+
+// TASK-437 (Luna P2): before review is unlocked nothing about the request is
+// decoded, fetched or logged — no asset metadata lookup (it logs the asset
+// id), no signer-route resolution, no account read.
+it('looks nothing up before review is unlocked', async () => {
+  jest.restoreAllMocks();
+  // jest-expo's AppState.addEventListener returns no subscription; stub it
+  // as the lifecycle tests above do.
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation(() => ({ remove: jest.fn() }) as any);
+  require('@/services/auth/reviewGrant').reviewGrant.revoke();
+  require('@/services/secure/appLockState').AppLockSignal.setUnlocked(false);
+  mockGetCachedAssetParams.mockClear();
+  mockResolveSigningRoute.mockClear();
+  mockPreventCapture.mockClear();
+  mockEnableAppSwitcherProtection.mockClear();
+  mockLocked = true;
+  const sender = makeAccount('locked-lookups').addr.toString();
+  mockAccounts = [walletAccount('Locked lookups', sender)];
+  const wallet = require('@/services/wallet').MultiAccountWalletService;
+  const getAllAccounts = jest.spyOn(wallet, 'getAllAccounts');
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(axfer(VOI, sender, USDC, 10000000n)) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Locked lookups' },
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(view.getByText('Unlock to review')).toBeTruthy();
+  expect(mockGetCachedAssetParams).not.toHaveBeenCalled();
+  expect(mockResolveSigningRoute).not.toHaveBeenCalled();
+  expect(getAllAccounts).not.toHaveBeenCalled();
+});
+
+// TASK-437 (Luna P2): a WalletConnect review is kept out of screenshots and
+// the app-switcher snapshot while mounted; in-app signing is unchanged.
+it('guards a WalletConnect review against screen capture and the app switcher', async () => {
+  jest.restoreAllMocks();
+  // jest-expo's AppState.addEventListener returns no subscription; stub it
+  // as the lifecycle tests above do.
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation(() => ({ remove: jest.fn() }) as any);
+  require('@/services/auth/reviewGrant').reviewGrant.revoke();
+  require('@/services/secure/appLockState').AppLockSignal.setUnlocked(false);
+  mockGetCachedAssetParams.mockClear();
+  mockResolveSigningRoute.mockClear();
+  mockPreventCapture.mockClear();
+  mockEnableAppSwitcherProtection.mockClear();
+  mockLocked = true;
+  const sender = makeAccount('capture-guard').addr.toString();
+  mockAccounts = [walletAccount('Capture guard', sender)];
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000)) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Capture guard' },
+  });
+
+  expect(mockPreventCapture).toHaveBeenCalled();
+  if (require('react-native').Platform.OS === 'ios') {
+    expect(mockEnableAppSwitcherProtection).toHaveBeenCalledTimes(1);
+  }
+});

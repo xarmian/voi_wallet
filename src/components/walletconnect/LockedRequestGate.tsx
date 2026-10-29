@@ -11,6 +11,10 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { reviewGrant } from '@/services/auth/reviewGrant';
 import { safeDappText } from '@/utils/signingSummary';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import {
+  useAppSwitcherProtection,
+  useSecureScreen,
+} from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 
 export interface RequestDapp {
@@ -39,6 +43,10 @@ export default function LockedRequestGate({
   biometricEnabled: boolean;
   onReject: () => void;
 }) {
+  // TASK-437 (Luna P2): keep the gate (and the PIN entry on it) out of
+  // screenshots and the app-switcher snapshot.
+  useSecureScreen();
+  useAppSwitcherProtection();
   const styles = useThemedStyles(createStyles);
   const [credential, setCredential] = useState('');
   const [source, setSource] = useState<'pin' | 'passphrase'>('pin');
