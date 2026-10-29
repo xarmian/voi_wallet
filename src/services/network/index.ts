@@ -1180,7 +1180,8 @@ export class NetworkService {
    * confirmed, or null when it is still pending (not confirmed in time, or the
    * node could not be read: the tx may still confirm later). Throws
    * TransactionRejectedError, with algod's reason, when the network
-   * definitively rejected it. Never turns a rejection into "pending".
+   * definitively rejected it. Never turns a rejection into "pending", and an
+   * observed confirmation outranks an observed pool error.
    */
   private async confirmOrClassify(
     txId: string,
@@ -1215,31 +1216,32 @@ export class NetworkService {
       }
       // Timed out, not confirmed within the rounds, or the node was
       // unreachable: one bounded look before calling it pending.
+      let look: algosdk.modelsv2.PendingTransactionResponse | undefined;
       try {
-        const info = await this.withTimeout(
+        look = await this.withTimeout(
           this.algodClient.pendingTransactionInformation(txId).do(),
           `pending transaction ${txId}`
         );
-        if (info.confirmedRound && info.confirmedRound > 0n) {
-          return info;
-        }
-        if (info.poolError) {
-          throw new TransactionRejectedError(txId, info.poolError);
-        }
       } catch (lookError) {
-        if (lookError instanceof TransactionRejectedError) {
-          throw lookError;
-        }
         console.warn(
           'Could not inspect pending transaction after confirmation wait:',
           redactError(lookError)
         );
       }
-      if (late.reason !== undefined) {
-        throw new TransactionRejectedError(txId, late.reason);
+      // A confirmed round is a ledger fact; a pool error is one node's view,
+      // and behind a load balancer the look and algosdk's loop may read
+      // different nodes. So any observed confirmation outranks any observed
+      // pool error (algosdk orders its own check the same way): calling a
+      // committed transaction rejected would invite a resend.
+      if (look?.confirmedRound && look.confirmedRound > 0n) {
+        return look;
       }
       if (late.info) {
         return late.info;
+      }
+      const poolError = look?.poolError || late.reason;
+      if (poolError) {
+        throw new TransactionRejectedError(txId, poolError);
       }
       console.warn(
         'Transaction submitted but not yet confirmed:',

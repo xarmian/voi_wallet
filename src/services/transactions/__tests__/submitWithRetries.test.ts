@@ -115,6 +115,7 @@ describe('TransactionService.submitWithRetries (TASK-440 #8)', () => {
       );
       const error = await submit().catch((e: unknown) => e);
       expect(error).toBeInstanceOf(TransactionRejectedError);
+      expect((error as TransactionRejectedError).reason).toBe(REASON);
       expect(mockIsTransactionConfirmed).toHaveBeenCalledWith(EXPECTED_TX_ID);
       expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
     });

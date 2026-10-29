@@ -208,6 +208,60 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
         await jest.advanceTimersByTimeAsync(deadline + 10000);
         expect(await run).toEqual(wait.confirmed);
       });
+
+      // Codex confirm: the loop and the look may read different nodes and
+      // disagree. A confirmed round is a ledger fact and outranks a pool
+      // error, whichever side saw which (decision on the TASK-440 trail).
+      it('a late loop rejection is outranked by a look that shows a confirmed round', async () => {
+        let calls = 0;
+        install(
+          fakeAlgod(() =>
+            ++calls === 1
+              ? after(deadline + 3000, { poolError: REASON })
+              : after(10000, CONFIRMED)
+          )
+        );
+        const run = settle(wait.run());
+        await jest.advanceTimersByTimeAsync(deadline + 10000);
+        expect(await run).toEqual(wait.confirmed);
+      });
+
+      it('a late loop confirmation outranks a look that shows a pool error', async () => {
+        let calls = 0;
+        install(
+          fakeAlgod(() =>
+            ++calls === 1
+              ? after(deadline + 3000, CONFIRMED)
+              : after(10000, { poolError: REASON })
+          )
+        );
+        const run = settle(wait.run());
+        await jest.advanceTimersByTimeAsync(deadline + 10000);
+        expect(await run).toEqual(wait.confirmed);
+      });
+
+      it('a hung block wait reads as pending at the deadline plus the look', async () => {
+        const algod = fakeAlgod(async () => ({}));
+        algod.statusAfterBlock.mockImplementation(() => ({ do: never }));
+        install(algod);
+        let outcome: unknown = 'unsettled';
+        const run = settle(wait.run()).then((o) => (outcome = o));
+        await jest.advanceTimersByTimeAsync(deadline - 1);
+        expect(outcome).toBe('unsettled');
+        // The look answers at once, still pending.
+        await jest.advanceTimersByTimeAsync(1);
+        await run;
+        wait.expectPending(outcome);
+      });
+    });
+
+    it('a node that 404s through the final look reads as pending', async () => {
+      install(
+        fakeAlgod(async () => {
+          throw new Error('404 not found');
+        })
+      );
+      wait.expectPending(await settle(wait.run()));
     });
   });
 
