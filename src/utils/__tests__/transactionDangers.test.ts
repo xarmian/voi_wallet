@@ -204,3 +204,103 @@ describe('detectTransactionDangers - no regression to other dangers', () => {
     expect(hasAnyDanger(detectTransactionDangers(null))).toBe(false);
   });
 });
+
+// TASK-440 audit #1 and #2: every dangerous operation, including asset
+// authority changes on an existing asset.
+describe('describeTransactionDangers', () => {
+  const { describeTransactionDangers } = require('../transactionDangers');
+  const SENDER = algosdk.generateAccount().addr.toString();
+  const A = algosdk.generateAccount().addr.toString();
+  const B = algosdk.generateAccount().addr.toString();
+  const roundTrip = (txn: algosdk.Transaction) =>
+    algosdk.decodeUnsignedTransaction(algosdk.encodeUnsignedTransaction(txn));
+  const acfg = (fields: Record<string, string | undefined>) =>
+    roundTrip(
+      algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+        sender: SENDER,
+        assetIndex: 42,
+        suggestedParams: SUGGESTED_PARAMS as any,
+        strictEmptyAddressChecking: false,
+        ...fields,
+      } as any)
+    );
+
+  it('names the sender and target of a rekey and a close in one txn', () => {
+    const txn = roundTrip(
+      algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: SENDER,
+        receiver: SENDER,
+        amount: 0,
+        closeRemainderTo: A,
+        rekeyTo: B,
+        suggestedParams: SUGGESTED_PARAMS as any,
+      })
+    );
+    expect(describeTransactionDangers(txn)).toEqual([
+      { sender: SENDER, kind: 'rekey', target: B },
+      { sender: SENDER, kind: 'closeAccount', target: A },
+    ]);
+  });
+
+  it('lists each authority a reconfiguration hands over or removes', () => {
+    expect(
+      describeTransactionDangers(acfg({ manager: A, clawback: B }))
+    ).toEqual([
+      {
+        sender: SENDER,
+        kind: 'assetAuthority',
+        assetId: 42n,
+        role: 'manager',
+        target: A,
+      },
+      {
+        sender: SENDER,
+        kind: 'assetAuthorityRemoved',
+        assetId: 42n,
+        role: 'reserve',
+      },
+      {
+        sender: SENDER,
+        kind: 'assetAuthorityRemoved',
+        assetId: 42n,
+        role: 'freeze',
+      },
+      {
+        sender: SENDER,
+        kind: 'assetAuthority',
+        assetId: 42n,
+        role: 'clawback',
+        target: B,
+      },
+    ]);
+  });
+
+  it('flags a reconfiguration with no authorities as destroying the asset', () => {
+    expect(describeTransactionDangers(acfg({}))).toEqual([
+      { sender: SENDER, kind: 'assetDestroy', assetId: 42n },
+    ]);
+  });
+
+  it('does not flag asset creation or an ordinary payment', () => {
+    const create = roundTrip(
+      algosdk.makeAssetCreateTxnWithSuggestedParamsFromObject({
+        sender: SENDER,
+        total: 1,
+        decimals: 0,
+        defaultFrozen: false,
+        manager: A,
+        suggestedParams: SUGGESTED_PARAMS as any,
+      })
+    );
+    const pay = roundTrip(
+      algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: SENDER,
+        receiver: A,
+        amount: 1,
+        suggestedParams: SUGGESTED_PARAMS as any,
+      })
+    );
+    expect(describeTransactionDangers(create)).toEqual([]);
+    expect(describeTransactionDangers(pay)).toEqual([]);
+  });
+});

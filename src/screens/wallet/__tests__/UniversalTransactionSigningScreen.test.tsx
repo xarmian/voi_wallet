@@ -775,3 +775,38 @@ it('guards a WalletConnect review against screen capture and the app switcher', 
     expect(mockEnableAppSwitcherProtection).toHaveBeenCalledTimes(1);
   }
 });
+
+// TASK-440 audit #1 (negative control): the old per-kind aggregate kept only
+// the FIRST rekey target, so a second, attacker-chosen rekey in the same batch
+// was signed under a warning that named the first. Every dangerous operation
+// is listed, with its transaction number and full destination.
+it('lists every rekey in a batch, each with its transaction and full target', async () => {
+  const sender = makeAccount('danger-batch').addr.toString();
+  const first = makeAccount('danger-first').addr.toString();
+  const attacker = makeAccount('danger-attacker').addr.toString();
+  mockAccounts = [walletAccount('Danger batch', sender)];
+  const rekeyTo = (to: string, amount: number) =>
+    algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender,
+      receiver: sender,
+      amount,
+      rekeyTo: to,
+      suggestedParams: paramsFor(VOI),
+    });
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [
+      { txn: b64(rekeyTo(first, 1)) },
+      { txn: b64(rekeyTo(attacker, 2)) },
+    ],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Danger batch' },
+  });
+
+  expect(
+    view.getByText(new RegExp(`Transaction 1: REKEYS .*${first}`))
+  ).toBeTruthy();
+  expect(
+    view.getByText(new RegExp(`Transaction 2: REKEYS .*${attacker}`))
+  ).toBeTruthy();
+});

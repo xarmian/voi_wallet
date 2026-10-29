@@ -58,10 +58,8 @@ import {
 import { Theme } from '@/constants/themes';
 import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
 import {
-  detectTransactionDangers,
-  aggregateDangers,
-  hasAnyDanger,
-  TransactionDangers,
+  describeTransactionDangers,
+  DangerItem,
 } from '@/utils/transactionDangers';
 import {
   getNavigationCallbacks,
@@ -97,7 +95,8 @@ interface ParsedTransaction {
   /** ASA index from the type-specific field; `undefined` means native currency. */
   assetId?: bigint;
   type: string;
-  dangers?: TransactionDangers;
+  /** Every dangerous operation in this entry; undefined for a pre-signed one. */
+  dangers?: DangerItem[];
 }
 
 /** How a single account will produce its signature, resolved on chain. */
@@ -274,7 +273,7 @@ function parseBatch(transactionBytes: string[]): {
         assetId,
         type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
         // Only surface danger fields for transactions we are about to sign.
-        dangers: isAlreadySigned ? undefined : detectTransactionDangers(txn),
+        dangers: isAlreadySigned ? undefined : describeTransactionDangers(txn),
       });
     } catch (error) {
       console.error('Failed to parse transaction:', error);
@@ -795,13 +794,14 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
-  // S-01: aggregate authority-transfer / balance-sweep dangers across all
-  // transactions. Declared before handleApprove so the guard and the render
-  // gating share the same scope.
-  const aggregatedDangers = aggregateDangers(
-    parsedTransactions.map((t) => t.dangers ?? {})
+  // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
+  // each with its transaction index (not the first target of each kind).
+  // Declared before handleApprove so the guard and the render gating share
+  // the same scope.
+  const dangerList = parsedTransactions.flatMap((t, txnIndex) =>
+    (t.dangers ?? []).map((item) => ({ ...item, txnIndex }))
   );
-  const hasDanger = hasAnyDanger(aggregatedDangers);
+  const hasDanger = dangerList.length > 0;
 
   const handleApprove = () => {
     if (
@@ -1164,7 +1164,7 @@ export default function UniversalTransactionSigningScreen({
 
             {hasDanger && (
               <TransactionDangerBanner
-                dangers={aggregatedDangers}
+                dangers={dangerList}
                 acknowledged={dangerAcknowledged}
                 onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
               />

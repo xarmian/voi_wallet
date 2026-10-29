@@ -6,18 +6,41 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { truncateAddress } from '@/services/walletconnect/utils';
-import { TransactionDangers } from '@/utils/transactionDangers';
+import { DangerItem } from '@/utils/transactionDangers';
 
 interface Props {
-  dangers: TransactionDangers; // aggregated
+  /** Every dangerous operation in the batch, with its transaction index. */
+  dangers: (DangerItem & { txnIndex: number })[];
   acknowledged: boolean;
   onToggleAcknowledged: () => void;
 }
 
 /**
- * Presentational danger banner for authority-transfer / balance-sweep fields
- * (S-01). Renders a prominent error-colored warning for each present danger and
- * an acknowledgment checkbox. All gating/state is owned by the parent screen.
+ * What one dangerous operation does. Destinations are shown in full: a
+ * truncated address can be matched by an attacker's vanity address.
+ */
+function describe(item: DangerItem): string {
+  const account = item.sender ? truncateAddress(item.sender) : 'this account';
+  switch (item.kind) {
+    case 'rekey':
+      return `REKEYS ${account}: signing authority is transferred to ${item.target}. Whoever controls that address controls the account.`;
+    case 'closeAccount':
+      return `CLOSES ${account}: its entire remaining balance is sent to ${item.target}.`;
+    case 'closeAsset':
+      return `CLOSES OUT an asset held by ${account}: the entire remaining asset balance is sent to ${item.target}.`;
+    case 'assetAuthority':
+      return `Gives the ${item.role} authority of asset #${item.assetId} to ${item.target}.`;
+    case 'assetAuthorityRemoved':
+      return `Permanently REMOVES the ${item.role} authority of asset #${item.assetId}.`;
+    case 'assetDestroy':
+      return `DESTROYS asset #${item.assetId}.`;
+  }
+}
+
+/**
+ * Presentational danger banner (S-01, TASK-440 audit #1/#2): one line for EVERY
+ * dangerous operation in the batch, each naming its transaction, plus an
+ * acknowledgment checkbox. All gating/state is owned by the parent screen.
  */
 export default function TransactionDangerBanner({
   dangers,
@@ -36,27 +59,11 @@ export default function TransactionDangerBanner({
         </Text>
       </View>
 
-      {dangers.rekeyTo ? (
-        <Text style={styles.dangerLine}>
-          This REKEYS your account: signing authority is transferred to{' '}
-          {truncateAddress(dangers.rekeyTo)}. Whoever controls that address
-          controls your account.
+      {dangers.map((item, index) => (
+        <Text key={index} style={styles.dangerLine} selectable>
+          Transaction {item.txnIndex + 1}: {describe(item)}
         </Text>
-      ) : null}
-
-      {dangers.closeRemainderTo ? (
-        <Text style={styles.dangerLine}>
-          This CLOSES your account: your entire remaining balance is sent to{' '}
-          {truncateAddress(dangers.closeRemainderTo)}.
-        </Text>
-      ) : null}
-
-      {dangers.assetCloseTo ? (
-        <Text style={styles.dangerLine}>
-          This CLOSES OUT the asset: your entire remaining asset balance is sent
-          to {truncateAddress(dangers.assetCloseTo)}.
-        </Text>
-      ) : null}
+      ))}
 
       <TouchableOpacity
         style={styles.acknowledgeRow}
@@ -72,8 +79,7 @@ export default function TransactionDangerBanner({
           color={theme.colors.error}
         />
         <Text style={styles.acknowledgeText}>
-          I understand this transfers control of / drains my account and want to
-          proceed.
+          I understand what these operations do and want to proceed.
         </Text>
       </TouchableOpacity>
     </View>
