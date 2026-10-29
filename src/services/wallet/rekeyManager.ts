@@ -17,6 +17,7 @@ import { ledgerTransportService } from '@/services/ledger/transport';
 import { redactError } from '@/utils/logRedaction';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { findOwnKeySigner } from './ownKeyCustody';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 
 // Conversions preserve only the source account's own backup history.
 function sourceBackupMetadata(account: AccountMetadata): BackupMetadata {
@@ -228,17 +229,20 @@ export class RekeyManager {
             return account;
           }
           // A present record isn't proof of a usable key: a keyless legacy
-          // metadata record also probes as present. originalOwner (a converted
-          // STANDARD account) is; otherwise the key must actually read, and a
-          // failed read keeps the record rather than demoting it.
-          if (
-            hasPrivateKey &&
-            (account as RekeyedAccountMetadata).originalOwner !== true
-          ) {
+          // metadata record also probes as present, and originalOwner can
+          // outlive the key (TASK-425 U4). The key must actually read; a failed
+          // read or a foreign key (a locked vault included) keeps the record rather than
+          // converting or demoting it.
+          if (hasPrivateKey) {
+            let key: Uint8Array | null = null;
             try {
-              (await AccountSecureStorage.getPrivateKey(account.id)).fill(0);
+              key = await AccountSecureStorage.getPrivateKey(account.id);
+              // A key for another address is no custody either (U4 hunter).
+              if (!keyBelongsToAddress(key, account.address)) return account;
             } catch {
               return account;
+            } finally {
+              key?.fill(0);
             }
           }
 

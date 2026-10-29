@@ -725,7 +725,9 @@ export class MultiAccountWalletService {
         importedAt: new Date().toISOString(),
         lastUsed: new Date().toISOString(),
         authAddress: request.authAddress,
-        originalOwner: canSign,
+        // A detected account's own key is never stored here, so it is not a
+        // converted STANDARD account (TASK-425 U4).
+        originalOwner: false,
         canSign,
         rekeyedFrom: request.rekeyedFrom,
       };
