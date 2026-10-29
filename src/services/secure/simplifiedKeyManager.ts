@@ -14,6 +14,7 @@ import {
 } from '@/services/ledger/simpleLedgerSigner';
 import algosdk, { Transaction } from 'algosdk';
 import { redactError } from '@/utils/logRedaction';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 /**
  * Simplified Key Manager
@@ -70,6 +71,11 @@ export class SimplifiedKeyManager {
     networkId: NetworkId
   ): Promise<Uint8Array> {
     try {
+      // TASK-439: never sign a permanent non-participation keyreg.
+      if (transaction) {
+        assertSignableKeyreg(transaction);
+      }
+
       const wallet = await MultiAccountWalletService.getCurrentWallet();
       if (!wallet) {
         throw new Error('No wallet found');

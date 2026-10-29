@@ -27,7 +27,11 @@ import algosdk from 'algosdk';
 import nacl from 'tweetnacl';
 import { Buffer } from 'buffer';
 
-import { makeAccount, paymentTxn } from '@/__tests__/fixtures/algorand';
+import {
+  makeAccount,
+  paymentTxn,
+  SUGGESTED_PARAMS,
+} from '@/__tests__/fixtures/algorand';
 import { AccountType } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
@@ -1645,11 +1649,45 @@ describe('signTransaction — keyreg routing', () => {
     expect(blobIsSignedBy(submittedBlob!, account.address)).toBe(true);
     const decoded = algosdk.decodeSignedTransaction(submittedBlob!);
     expect(decoded.txn.type).toBe('keyreg');
+    // The keys the request carried are the keys on the chain txn: a keyless
+    // regression (which algosdk would encode as an offline keyreg) fails here.
+    const keyreg = decoded.txn.keyreg!;
+    expect(keyreg.nonParticipation).toBe(false);
+    expect(keyreg.voteKey).toEqual(new Uint8Array(32).fill(1));
+    expect(keyreg.selectionKey).toEqual(new Uint8Array(32).fill(2));
+    expect(keyreg.stateProofKey).toEqual(new Uint8Array(64).fill(3));
+    expect(keyreg.voteFirst).toBe(BigInt(1));
+    expect(keyreg.voteLast).toBe(BigInt(1000));
+    expect(keyreg.voteKeyDilution).toBe(BigInt(100));
   });
 
-  it('builds an offline (nonParticipation) keyreg', async () => {
-    const account = accountOf('keyreg-off', AccountType.STANDARD);
-    let submittedBlob: Uint8Array | undefined;
+  it('refuses an online keyreg without a state proof key', async () => {
+    const account = accountOf('keyreg-on-no-sprf', AccountType.STANDARD);
+    const sendRaw = offlineKeyregNetwork();
+
+    const result = await signer.signTransaction({
+      type: 'keyreg',
+      account,
+      keyregParams: {
+        address: account.address,
+        voteKey: new Uint8Array(32).fill(1),
+        selectionKey: new Uint8Array(32).fill(2),
+        voteFirst: 1,
+        voteLast: 1000,
+        voteKeyDilution: 100,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+    expect(sendRaw).not.toHaveBeenCalled();
+  });
+
+  // TASK-439: an offline keyreg is "no participation fields at all". It must
+  // never carry nonpart=true, which on Algorand/Voi permanently bars the
+  // account from going online again.
+  const offlineKeyregNetwork = () => {
+    const sendRaw = jest.fn(async (_blob: Uint8Array) => 'TXID_KEYREG_OFF');
     mockGetInstance.mockReturnValue({
       getSuggestedParams: jest.fn().mockResolvedValue({
         fee: 1000,
@@ -1660,21 +1698,114 @@ describe('signTransaction — keyreg routing', () => {
         flatFee: true,
         minFee: 1000,
       }),
-      sendRawTransaction: jest.fn(async (blob: Uint8Array) => {
-        submittedBlob = blob;
-        return 'TXID_KEYREG_OFF';
-      }),
+      sendRawTransaction: sendRaw,
       waitForConfirmation: jest.fn().mockResolvedValue({}),
     });
+    return sendRaw;
+  };
+  const expectOfflineKeyreg = (blob: Uint8Array, address: string) => {
+    expect(blobIsSignedBy(blob, address)).toBe(true);
+    const { txn } = algosdk.decodeSignedTransaction(blob);
+    expect(txn.type).toBe('keyreg');
+    expect(txn.keyreg?.nonParticipation).toBe(false);
+    expect(txn.keyreg?.voteKey).toBeUndefined();
+    expect(txn.keyreg?.selectionKey).toBeUndefined();
+    expect(txn.keyreg?.stateProofKey).toBeUndefined();
+    expect(txn.keyreg?.voteFirst).toBeUndefined();
+    expect(txn.keyreg?.voteLast).toBeUndefined();
+    expect(txn.keyreg?.voteKeyDilution).toBeUndefined();
+    // The wire form has no nonpart key at all (msgpack omits false).
+    expect(Buffer.from(algosdk.encodeMsgpack(txn)).includes('nonpart')).toBe(
+      false
+    );
+  };
+
+  it('refuses a WalletConnect batch carrying a dApp-built nonpart=true keyreg, before signing anything', async () => {
+    const account = accountOf('wc-nonpart', AccountType.STANDARD);
+    const permanentOffline =
+      algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
+        sender: account.address,
+        suggestedParams: SUGGESTED_PARAMS,
+        nonParticipation: true,
+      });
+
+    const result = await signer.signTransaction({
+      type: 'walletconnect_batch',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [
+          { txn: unsignedB64(paymentTxn(account.address, { amount: 1 })) },
+          { txn: unsignedB64(permanentOffline) },
+        ],
+        reviewedSigners: [account.address],
+        sessionBinding: null,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toMatch(/permanently/);
+    // Preflight refuses the whole batch: not even the payment is signed.
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
+  it('builds an offline keyreg with no keys and no nonParticipation flag', async () => {
+    const account = accountOf('keyreg-off', AccountType.STANDARD);
+    const sendRaw = offlineKeyregNetwork();
 
     const result = await signer.signTransaction({
       type: 'keyreg',
       account,
-      keyregParams: { address: account.address, nonParticipation: true },
+      keyregParams: { address: account.address, goOffline: true },
     });
 
     expect(result.success).toBe(true);
-    expect(blobIsSignedBy(submittedBlob!, account.address)).toBe(true);
+    expect(sendRaw).toHaveBeenCalledTimes(1);
+    expectOfflineKeyreg(sendRaw.mock.calls[0][0], account.address);
+  });
+
+  it('drops participation keys carried on an offline request', async () => {
+    const account = accountOf('keyreg-off-keys', AccountType.STANDARD);
+    const sendRaw = offlineKeyregNetwork();
+
+    const result = await signer.signTransaction({
+      type: 'keyreg',
+      account,
+      keyregParams: {
+        address: account.address,
+        goOffline: true,
+        voteKey: new Uint8Array(32).fill(1),
+        selectionKey: new Uint8Array(32).fill(2),
+        stateProofKey: new Uint8Array(64).fill(3),
+        voteFirst: 1,
+        voteLast: 1000,
+        voteKeyDilution: 100,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expectOfflineKeyreg(sendRaw.mock.calls[0][0], account.address);
+  });
+
+  it('never submits nonpart=true, even for a legacy nonParticipation request (negative control)', async () => {
+    const account = accountOf('keyreg-legacy-nonpart', AccountType.STANDARD);
+    const sendRaw = offlineKeyregNetwork();
+
+    // The pre-TASK-439 request shape. Before the fix this built and submitted
+    // nonpart=true; now it is neither offline (no goOffline) nor online (no
+    // keys), so it is refused before anything is signed or submitted.
+    const result = await signer.signTransaction({
+      type: 'keyreg',
+      account,
+      keyregParams: {
+        address: account.address,
+        nonParticipation: true,
+      },
+    } as unknown as UnifiedTransactionRequest);
+
+    expect(result.success).toBe(false);
+    expect(sendRaw).not.toHaveBeenCalled();
+    expect(mockSignTransaction).not.toHaveBeenCalled();
   });
 
   it('propagates a submit failure on the keyreg path', async () => {
@@ -1697,7 +1828,7 @@ describe('signTransaction — keyreg routing', () => {
     const result = await signer.signTransaction({
       type: 'keyreg',
       account,
-      keyregParams: { address: account.address, nonParticipation: true },
+      keyregParams: { address: account.address, goOffline: true },
     });
 
     expect(result).toEqual({ success: false, error: boom });
@@ -1726,7 +1857,7 @@ describe('signTransaction — keyreg routing', () => {
       {
         type: 'keyreg',
         account,
-        keyregParams: { address: account.address, nonParticipation: true },
+        keyregParams: { address: account.address, goOffline: true },
       },
       cb
     );
@@ -1751,7 +1882,7 @@ describe('signTransaction — keyreg routing', () => {
       {
         type: 'keyreg',
         account,
-        keyregParams: { address: account.address, nonParticipation: true },
+        keyregParams: { address: account.address, goOffline: true },
       },
       cb
     );
@@ -2084,7 +2215,7 @@ describe('signTransaction — WATCH accounts follow the signing route (TASK-425)
         type: 'keyreg' as const,
         keyregParams: {
           address,
-          nonParticipation: true,
+          goOffline: true,
           networkId: 'voi-testnet' as never,
         },
       }),
@@ -2135,7 +2266,7 @@ describe('signTransaction — WATCH accounts follow the signing route (TASK-425)
       'keyreg',
       {
         type: 'keyreg' as const,
-        keyregParams: { address: 'SOMEONE_ELSE', nonParticipation: true },
+        keyregParams: { address: 'SOMEONE_ELSE', goOffline: true },
       },
     ],
     [

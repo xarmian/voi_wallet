@@ -36,6 +36,7 @@ import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
 import { redactError } from '@/utils/logRedaction';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 type RouteParams = {
   SignatureDisplay: {
@@ -95,6 +96,12 @@ export default function SignatureDisplayScreen() {
         // TASK-425 U2: the accounts whose own key we hold, a REKEYED account
         // that kept its key included.
         const ownKeyAccounts = await filterOwnKeyAccounts(accounts);
+
+        // TASK-439: refuse the whole request, before any key is loaded, if
+        // any transaction is a permanent non-participation keyreg.
+        for (const txnData of request.txns) {
+          assertSignableKeyreg(Buffer.from(txnData.b, 'base64'));
+        }
 
         for (let i = 0; i < request.txns.length; i++) {
           setSigningProgress({ current: i + 1, total: request.txns.length });

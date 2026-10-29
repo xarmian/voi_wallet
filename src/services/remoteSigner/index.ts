@@ -36,6 +36,7 @@ import {
 } from './pairing';
 import { isPlainObject, validateResponseEnvelope } from './responseValidation';
 import { detectTransactionDangers } from '@/utils/transactionDangers';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 // ============================================================================
 // Authenticated pairing crypto core (v2) — signer-side (key-touching)
@@ -467,6 +468,12 @@ class RemoteSignerServiceClass {
     try {
       const signedTxns: Uint8Array[] = [];
       const total = request.txns.length;
+
+      // TASK-439: refuse the whole request, before any key is loaded, if any
+      // transaction is a permanent non-participation keyreg.
+      for (const txnData of request.txns) {
+        assertSignableKeyreg(Buffer.from(txnData.b, 'base64'));
+      }
 
       for (let i = 0; i < total; i++) {
         const txnData = request.txns[i];
