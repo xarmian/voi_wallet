@@ -1,5 +1,5 @@
 /**
- * TASK-246 — NFTScreen stale-ownership bug (sibling of the NFTThemeSelector one).
+ * TASK-246 — NFTScreen stale-ownership bug (sibling of the NFT theme picker one, now NFTThemeSettingsScreen).
  *
  * NFTScreen's collection-tokens load effect had the same defect: keyed only on
  * [selectedCollection, viewMode] while loadCollectionTokens builds the owned-

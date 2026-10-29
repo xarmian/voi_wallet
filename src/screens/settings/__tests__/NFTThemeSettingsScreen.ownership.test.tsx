@@ -1,5 +1,6 @@
 /**
- * TASK-246 — NFTThemeSelector stale-ownership bug.
+ * TASK-246 — NFT theme picker stale-ownership bug (the picker became
+ * NFTThemeSettingsScreen in TASK-435; the behaviour under test is unchanged).
  *
  * The bug: the collection-tokens load effect keyed only on
  * [selectedCollection, viewMode]. loadCollectionTokens builds the "owned" badge
@@ -16,7 +17,6 @@
 
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
-import { lightTheme } from '@/constants/themes';
 
 // Active account is swapped between renders via this mutable fixture.
 let mockActiveAccount: { id: string; address: string } = {
@@ -29,12 +29,29 @@ jest.mock('@/store/walletStore', () => ({
 }));
 
 jest.mock('@/contexts/ThemeContext', () => ({
-  useTheme: () => ({ setNFTTheme: jest.fn() }),
+  useTheme: () => ({
+    theme: require('@/constants/themes').lightTheme,
+    setNFTTheme: jest.fn(),
+  }),
 }));
 
-jest.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+jest.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ goBack: jest.fn() }),
 }));
+
+jest.mock('react-native-safe-area-context', () => {
+  const { View } = require('react-native');
+  return {
+    SafeAreaView: View,
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+  };
+});
+
+jest.mock('@/components/common/NFTBackground', () => ({
+  NFTBackground: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+jest.mock('@/components/common/UniversalHeader', () => () => null);
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }), {
   virtual: true,
@@ -101,9 +118,9 @@ jest.mock('@/components/nft/NFTGridView', () => {
   };
 });
 
-import NFTThemeSelector from '../NFTThemeSelector';
+import NFTThemeSettingsScreen from '../NFTThemeSettingsScreen';
 
-describe('NFTThemeSelector ownership map (TASK-246)', () => {
+describe('NFTThemeSettingsScreen ownership map (TASK-246)', () => {
   beforeEach(() => {
     mockActiveAccount = { id: 'a', address: 'ADDR_A' };
     mockFetchUserNFTs.mockClear();
@@ -111,7 +128,7 @@ describe('NFTThemeSelector ownership map (TASK-246)', () => {
 
   it('rebuilds the ownership map when the account switches with a collection open', async () => {
     const { getByText, getByTestId, rerender } = await render(
-      <NFTThemeSelector visible onClose={jest.fn()} theme={lightTheme} />
+      <NFTThemeSettingsScreen />
     );
 
     // Open a collection: Browse Collections tab -> pick a collection.
@@ -126,9 +143,7 @@ describe('NFTThemeSelector ownership map (TASK-246)', () => {
 
     // Switch to account B with the collection still open.
     mockActiveAccount = { id: 'b', address: 'ADDR_B' };
-    await rerender(
-      <NFTThemeSelector visible onClose={jest.fn()} theme={lightTheme} />
-    );
+    await rerender(<NFTThemeSettingsScreen />);
 
     // Ownership must rebuild for account B (pre-fix it stayed 1:a1).
     await waitFor(() =>
