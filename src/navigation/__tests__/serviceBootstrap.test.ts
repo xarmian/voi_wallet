@@ -286,6 +286,24 @@ describe('serviceBootstrap.initializeServices — deferred subscribe abort token
     mockNotificationService.registerPushToken.mockResolvedValue('expo-token');
   });
 
+  it('registers without prompting and skips account subscriptions when no token is available (TASK-433)', async () => {
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
+    const cleanupRef = makeCleanupRef();
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef,
+    });
+    await flush();
+
+    expect(mockNotificationService.registerPushToken).toHaveBeenCalledWith({
+      prompt: false,
+    });
+    expect(mockNotificationService.subscribeAllAccounts).not.toHaveBeenCalled();
+    cleanupRef.current!();
+  });
+
   it('hands the deferred subscribe a live token, which the teardown then invalidates', async () => {
     const cleanupRef = makeCleanupRef();
 
