@@ -9,6 +9,9 @@ import {
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
+import { reviewGrant } from '@/services/auth/reviewGrant';
+import { AppLockSignal } from '@/services/secure/appLockState';
+import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { isSoftwareAuthError } from '@/services/secure/authErrors';
 import { LedgerSigningInfo, WalletAccount, AccountType } from '@/types/wallet';
 import {
@@ -458,10 +461,12 @@ export class TransactionAuthController {
   public async initializeSigningFlow(
     request: UnifiedTransactionRequest
   ): Promise<void> {
+    this.reviewAuthorized = false;
     this.currentRequest = request;
     this.remoteBatchPlan = null;
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
     this.activeFlowGeneration = this.cancelledFlowGeneration;
+    const generation = this.cancelledFlowGeneration;
     this.hasSubmittedToNetwork = false;
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
@@ -493,6 +498,7 @@ export class TransactionAuthController {
       // Determine authentication requirements BEFORE transitioning to authenticating state
       // This ensures the correct flow flags are set before the UI renders
       await this.determineAuthRequirements(request.account);
+      if (generation !== this.cancelledFlowGeneration) return;
 
       // Now transition to authenticating state with correct flow flags already set
       this.updateState({
@@ -502,6 +508,7 @@ export class TransactionAuthController {
       // If no PIN required and no biometric required (and not ledger/remote signer flow),
       // auto-proceed to signing since user has already confirmed the transaction
       if (
+        !request.reviewGrantKey &&
         !this.currentState.requiresPin &&
         !this.currentState.requiresBiometric &&
         !this.currentState.isLedgerFlow &&
@@ -1365,7 +1372,9 @@ export class TransactionAuthController {
   /**
    * Authenticate with biometrics
    */
-  public async authenticateWithBiometrics(): Promise<boolean> {
+  public async authenticateWithBiometrics(
+    prompt = 'Authenticate to sign transaction'
+  ): Promise<boolean> {
     if (!this.currentState.biometricAvailable) {
       throw new Error('Biometric authentication not available');
     }
@@ -1376,10 +1385,10 @@ export class TransactionAuthController {
       // unlock). Unchanged from prior behavior.
       if (this.currentState.isLedgerFlow) {
         const result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Authenticate to sign transaction',
+          promptMessage: prompt,
           fallbackLabel: 'Use PIN',
           cancelLabel: 'Cancel',
-          requireConfirmation: false,
+          requireConfirmation: true,
         });
 
         if (!result.success) {
@@ -1404,13 +1413,21 @@ export class TransactionAuthController {
       // unlockVaultWithBiometrics owns the OS prompt (the auth-gated read IS the
       // prompt) AND the invariant that an enrollment-change invalidation falls
       // back to PIN, NEVER the mnemonic (HT-133).
-      const outcome = await unlockVaultWithBiometrics(
-        'Authenticate to sign transaction'
-      );
+      const wasLocked = !AppLockSignal.isUnlocked();
+      const generation = this.cancelledFlowGeneration;
+      const outcome = await unlockVaultWithBiometrics(prompt);
+      if (generation !== this.cancelledFlowGeneration) {
+        if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
+        return false;
+      }
 
       if (outcome.status === 'unlocked') {
         this.updateState({ state: 'signing' });
-        await this.startSigning();
+        try {
+          await this.startSigning();
+        } finally {
+          if (wasLocked && !AppLockSignal.isUnlocked()) clearSessionSecurity();
+        }
         return true;
       }
 
@@ -1446,10 +1463,53 @@ export class TransactionAuthController {
   /**
    * Start the actual signing process
    */
+  private reviewAuthorized = false;
+
+  public async authenticateWithReviewGrant(key: string): Promise<boolean> {
+    if (
+      this.currentState.state !== 'authenticating' ||
+      this.currentRequest?.reviewGrantKey !== key ||
+      !reviewGrant.consume(key)
+    ) {
+      this.updateState({
+        state: 'error',
+        error: new Error('Unlock to review this request again.'),
+      });
+      return false;
+    }
+    this.reviewAuthorized = true;
+    if (this.currentState.isRemoteSignerFlow) return true;
+    if (
+      this.currentState.isLedgerFlow &&
+      this.currentState.ledgerStatus !== 'ready'
+    ) {
+      this.pendingStartAfterReady = true;
+      await this.ensureLedgerDeviceReady();
+      return true;
+    }
+    await this.startSigning();
+    return true;
+  }
+
   private async startSigning(pin?: string): Promise<void> {
     if (!this.currentRequest) {
       throw new Error('No transaction request to sign');
     }
+
+    if (
+      this.currentRequest.reviewGrantKey &&
+      (!this.reviewAuthorized ||
+        !reviewGrant.isValid(this.currentRequest.reviewGrantKey))
+    ) {
+      this.updateState({
+        state: 'error',
+        error: new Error('Unlock to review this request again.'),
+      });
+      return;
+    }
+
+    const flowGeneration = this.cancelledFlowGeneration;
+    const reviewKey = this.currentRequest.reviewGrantKey;
 
     // Update request with PIN if provided
     if (pin) {
@@ -1682,6 +1742,11 @@ export class TransactionAuthController {
         },
 
         onComplete: (result) => {
+          if (
+            flowGeneration !== this.cancelledFlowGeneration ||
+            (reviewKey && !reviewGrant.isValid(reviewKey))
+          )
+            return;
           this.isSigningInProgress = false;
           if (__DEV__) {
             console.log('Signing onComplete', {
@@ -1887,6 +1952,7 @@ export class TransactionAuthController {
    */
   private async maybeStartSigningIfReady(): Promise<void> {
     if (!this.currentState.isLedgerFlow) return;
+    if (this.currentRequest?.reviewGrantKey && !this.reviewAuthorized) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
     if (this.hasStartedSigning) return;
 

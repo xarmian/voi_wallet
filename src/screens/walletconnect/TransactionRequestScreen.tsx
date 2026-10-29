@@ -1,16 +1,14 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
-  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
 import Toast from 'react-native-toast-message';
 
@@ -23,16 +21,13 @@ import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata, WalletAccount } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
-import { useTransactionAuthController } from '@/services/auth/transactionAuthController';
 import {
-  UnifiedTransactionRequest,
-  WalletConnectSessionBinding,
-} from '@/services/transactions/unifiedSigner';
+  reviewGrant,
+  walletConnectRequestKey,
+} from '@/services/auth/reviewGrant';
+import { WalletConnectSessionBinding } from '@/services/transactions/unifiedSigner';
 import {
-  truncateAddress,
   getNetworkNameByChainId,
-  getNetworkCurrencyByChainId,
   getNetworkByChainId,
   formatAccountAddress,
 } from '@/services/walletconnect/utils';
@@ -46,13 +41,6 @@ import {
   TransactionRequestQueue,
 } from '@/services/walletconnect/TransactionRequestQueue';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
-import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
-import {
-  detectTransactionDangers,
-  aggregateDangers,
-  hasAnyDanger,
-  TransactionDangers,
-} from '@/utils/transactionDangers';
 
 type TransactionRequestScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -71,20 +59,12 @@ interface Props {
 export default function TransactionRequestScreen({ navigation, route }: Props) {
   const { requestEvent } = route.params;
   const version = (route.params as any)?.version as number | undefined;
-  const autoRetry = (route.params as any)?.autoRetry as boolean | undefined;
+  const requestKey = walletConnectRequestKey(
+    (requestEvent as any)?.topic ?? '',
+    (requestEvent as any)?.id ?? ''
+  );
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [currentRequest, setCurrentRequest] =
-    useState<UnifiedTransactionRequest | null>(null);
-  const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
-  const [selectedAccount, setSelectedAccount] =
-    useState<AccountMetadata | null>(null);
-  const [networkName, setNetworkName] = useState<string>('Unknown Network');
-  const [networkCurrency, setNetworkCurrency] = useState<string>('TOKEN');
-  const [sessionBinding, setSessionBinding] =
-    useState<WalletConnectSessionBinding | null>(null);
-  const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
   // True while a rejection is being sent and the next request taken.
   const rejectingRef = useRef(false);
 
@@ -114,26 +94,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     if (!settledRef.current) forgetUnanswered();
   };
 
-  // Use the unified auth controller
-  const authController = useTransactionAuthController();
-
-  // S-01: derive authority-transfer / balance-sweep dangers directly from the
-  // WalletConnect transactions that would be signed on this screen's direct path.
-  const aggregatedDangers = useMemo<TransactionDangers>(() => {
-    const list: TransactionDangers[] = [];
-    for (const wtxn of transactions) {
-      try {
-        const txnBytes = Buffer.from(wtxn.txn, 'base64');
-        const decoded = algosdk.decodeUnsignedTransaction(txnBytes);
-        list.push(detectTransactionDangers(decoded));
-      } catch {
-        // Pre-signed / undecodable transaction — no danger fields surfaced.
-      }
-    }
-    return aggregateDangers(list);
-  }, [transactions]);
-  const hasDanger = hasAnyDanger(aggregatedDangers);
-
   useEffect(() => {
     loadAccountsAndTransactions();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount; loadAccountsAndTransactions is read at the mount commit.
@@ -141,9 +101,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     return () => {
-      authController.cleanup();
+      if (!handedOffRef.current) reviewGrant.leave(requestKey);
     };
-  }, [authController]);
+  }, [requestKey]);
 
   // Leaving this screen (OS back, swipe-back) with no answer attempted clears
   // the mark. A navigation event, not an unmount cleanup, so an effect replay
@@ -152,24 +112,20 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     () =>
       navigation.addListener('beforeRemove', () => {
         // Once handed off, the signing screen's onDismiss decides instead.
-        if (!handedOffRef.current) forgetIfAbandoned();
+        if (!handedOffRef.current) {
+          reviewGrant.leave(requestKey);
+          forgetIfAbandoned();
+        }
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetIfAbandoned reads only refs and the immutable route param; re-subscribing on its identity each render is pointless.
     [navigation]
   );
 
-  useEffect(() => {
-    // If autoRetry flag is passed, immediately start the auth flow
-    if (autoRetry && selectedAccount) {
-      handleApprove();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot auto-retry trigger keyed on autoRetry/selectedAccount; handleApprove is read at that commit and must not re-fire on its own identity.
-  }, [autoRetry, selectedAccount]);
-
   const loadAccountsAndTransactions = async () => {
     try {
       // Load accounts
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      if (settledRef.current) return;
 
       const eventParams = (requestEvent as any).params;
       if (!eventParams) {
@@ -191,8 +147,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         if (!txns || !Array.isArray(txns)) {
           throw new Error('Malformed request: missing transactions array');
         }
-
-        setTransactions(txns);
 
         // DR-7 / DR-11 / DR-14 — resolve the chain the REQUEST is scoped to.
         // This is deliberately the chain the dApp/session declares, never one
@@ -228,9 +182,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           chainNetworkId = resolved;
         }
 
-        setNetworkName(getNetworkNameByChainId(chainId));
-        setNetworkCurrency(getNetworkCurrencyByChainId(chainId));
-
         // DR-5 / DR-14 — the accounts the LIVE session approved for THIS chain,
         // as full CAIP-10 strings. Empty means absent / expired / disconnected /
         // topic-mismatched, which is a rejection: local accounts are never
@@ -256,7 +207,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           networkId: chainNetworkId,
           approvedAccounts,
         };
-        setSessionBinding(binding);
 
         // Choose the account to review. DR-13 keeps signing eligibility narrow —
         // only the REVIEWED account signs — so this must pick an account that is
@@ -307,8 +257,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           throw new Error('No account available to sign this request');
         }
 
-        setSelectedAccount(signingAccount);
-
         // Register callbacks in the callback registry to avoid serialization warnings
         const callbackId = registerNavigationCallbacks({
           onSuccess: async (result: any) => {
@@ -336,7 +284,25 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           callbackId,
           // DR-15: the real ARC-0001 entries (signers / authAddr / msig) plus
           // the session + chain the signer must bind every entry to.
-          walletConnect: { transactions: txns, binding },
+          walletConnect: {
+            transactions: txns,
+            binding,
+            requestKey,
+            dapp: (() => {
+              const metadata = WalletConnectService.getInstance()
+                .getActiveSessions()
+                .find(
+                  (session) => session.topic === requestTopic
+                )?.peerMetadata;
+              return metadata
+                ? {
+                    name: metadata.name,
+                    url: metadata.url,
+                    icon: metadata.icons?.[0],
+                  }
+                : undefined;
+            })(),
+          },
         });
       } else {
         // The normal path (algo_signTxn) always navigates away to
@@ -345,6 +311,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         throw new Error(`Unsupported request method: ${request.method}`);
       }
     } catch (error) {
+      reviewGrant.leave(requestKey);
       console.error('Failed to load transaction request:', error);
       const message =
         error instanceof Error
@@ -356,51 +323,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       // to this now-empty screen) rather than showing an alert on a blank page.
       navigation.replace('WalletConnectError', { error: message });
     }
-  };
-
-  const handleApprove = () => {
-    if (hasDanger && !dangerAcknowledged) {
-      Alert.alert(
-        'Confirmation required',
-        'Please acknowledge the highlighted account-security warning before signing.'
-      );
-      return;
-    }
-
-    if (!selectedAccount) {
-      Alert.alert('Error', 'Please select an account to sign with');
-      return;
-    }
-
-    if (!sessionBinding) {
-      // Fail closed: without a resolved session + chain there is nothing to bind
-      // the signature to, so there is no safe way to sign here.
-      Alert.alert(
-        'Error',
-        'This request is not bound to an active session. Reconnect the dApp and try again.'
-      );
-      return;
-    }
-
-    // Create unified transaction request for WalletConnect batch
-    const request: UnifiedTransactionRequest = {
-      type: 'walletconnect_batch',
-      account: selectedAccount,
-      networkId: sessionBinding.networkId,
-      walletConnectParams: {
-        transactions,
-        // Only the account this screen names. The multi-account signer list
-        // lives on `UniversalTransactionSigningScreen`, which is where the
-        // normal path always ends up (this screen `replace`s itself into it);
-        // this fallback path shows exactly one account, so it may authorize
-        // exactly one.
-        reviewedSigners: [selectedAccount.address],
-        sessionBinding,
-      },
-    };
-
-    setCurrentRequest(request);
-    setShowAuthModal(true);
   };
 
   /**
@@ -419,13 +341,16 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   ): Promise<QueuedTransactionRequest | null> => {
     let taken: Awaited<ReturnType<typeof TransactionRequestQueue.takeNext>>;
     try {
-      taken = await TransactionRequestQueue.takeNext((req) =>
+      taken = await TransactionRequestQueue.takeNext((req) => {
+        reviewGrant.continueTo(walletConnectRequestKey(req.topic, req.id));
         navigation.replace('WalletConnectTransactionRequest', {
           requestEvent: req,
           version: req.version,
-        })
-      );
+        });
+      });
+      if (!taken.request) reviewGrant.revoke();
     } catch (error) {
+      reviewGrant.revoke();
       toast(await TransactionRequestQueue.size());
       throw error;
     }
@@ -485,6 +410,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           // The dApp never got the signed response.
           forgetUnanswered();
         }
+        reviewGrant.revoke();
         console.error('Failed to respond to WalletConnect:', error);
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to respond to dApp';
@@ -493,24 +419,8 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     } else {
       // Handle signing failure: nothing was sent to the dApp.
       forgetUnanswered();
+      reviewGrant.revoke();
       const errorMessage = 'Failed to sign transactions';
-      navigation.navigate('WalletConnectError', { error: errorMessage });
-    }
-  };
-
-  const handleAuthComplete = async (success: boolean, result?: any) => {
-    setShowAuthModal(false);
-    setCurrentRequest(null);
-
-    if (success && result?.signedTransactions) {
-      await handleWalletConnectSuccess(result);
-    } else {
-      // Handle signing failure: nothing was sent to the dApp.
-      forgetUnanswered();
-      const errorMessage =
-        result instanceof Error
-          ? result.message
-          : 'Failed to sign transactions';
       navigation.navigate('WalletConnectError', { error: errorMessage });
     }
   };
@@ -588,266 +498,33 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     }
   };
 
-  const renderAccountSelector = () => (
-    <View style={styles.accountContainer}>
-      <Text style={styles.sectionTitle}>Sign with Account</Text>
-      {selectedAccount && (
-        <View style={styles.selectedAccount}>
-          <View
-            style={[
-              styles.accountColor,
-              { backgroundColor: selectedAccount.color },
-            ]}
-          />
-          <View style={styles.accountInfo}>
-            <Text style={styles.accountLabel}>{selectedAccount.label}</Text>
-            <Text style={styles.accountAddress}>
-              {truncateAddress(selectedAccount.address)}
-            </Text>
-          </View>
-          <Text style={styles.accountType}>{selectedAccount.type}</Text>
-        </View>
-      )}
-    </View>
-  );
-
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <UniversalHeader
-        title="Sign Transaction"
+        title="WalletConnect Request"
         onAccountSelectorPress={() => {}}
         showAccountSelector={false}
       />
-
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.dappContainer}>
-          <Text style={styles.dappName}>Transaction Request</Text>
-          <Text style={styles.requestMethod}>
-            {(requestEvent as any)?.params?.request?.method ?? 'Unknown'}
-          </Text>
-        </View>
-
-        <View style={styles.networkContainer}>
-          <View style={styles.networkHeader}>
-            <Ionicons name="globe" size={20} color={theme.colors.primary} />
-            <Text style={styles.networkTitle}>Network</Text>
-          </View>
-          <Text style={styles.networkName}>{networkName}</Text>
-          <Text style={styles.networkCurrency}>
-            Currency: {networkCurrency}
-          </Text>
-        </View>
-
-        {hasDanger && (
-          <TransactionDangerBanner
-            dangers={aggregatedDangers}
-            acknowledged={dangerAcknowledged}
-            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
-          />
-        )}
-
-        {renderAccountSelector()}
-
-        <View style={styles.warningContainer}>
-          <Ionicons name="warning" size={24} color={theme.colors.warning} />
-          <Text style={styles.warningText}>
-            Carefully review all transaction details before signing. This action
-            cannot be undone.
-          </Text>
-        </View>
-      </ScrollView>
-
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.rejectButton]}
-          onPress={handleReject}
-          disabled={false}
-        >
-          <Text style={styles.rejectButtonText}>Reject</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.approveButton]}
-          onPress={handleApprove}
-          disabled={!selectedAccount || (hasDanger && !dangerAcknowledged)}
-        >
-          <Text style={styles.approveButtonText}>Sign</Text>
+      <View style={styles.content}>
+        <ActivityIndicator color={theme.colors.primary} />
+        <Text style={styles.text}>Loading request…</Text>
+        <TouchableOpacity style={styles.button} onPress={handleReject}>
+          <Text style={styles.buttonText}>Reject</Text>
         </TouchableOpacity>
       </View>
-
-      <UnifiedTransactionAuthModal
-        visible={showAuthModal}
-        controller={authController}
-        request={currentRequest}
-        onComplete={handleAuthComplete}
-        onCancel={() => {
-          setShowAuthModal(false);
-          setCurrentRequest(null);
-        }}
-        title="Sign Transaction"
-        message="Authenticate to sign the transaction"
-      />
     </SafeAreaView>
   );
 }
 
 const createStyles = (theme: Theme) =>
   StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: theme.colors.background,
-    },
-    scrollView: {
-      flex: 1,
-      padding: 16,
-    },
-    scrollContent: {
-      paddingBottom: theme.spacing.xl + 96,
-    },
-    dappContainer: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: 12,
-      padding: 20,
-      marginBottom: 16,
-      alignItems: 'center',
-      ...theme.shadows.sm,
-    },
-    dappName: {
-      fontSize: 20,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginBottom: 4,
-    },
-    requestMethod: {
-      fontSize: 12,
-      color: theme.colors.primary,
-      textTransform: 'uppercase',
-    },
-    networkContainer: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
-      ...theme.shadows.sm,
-    },
-    networkHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 8,
-    },
-    networkTitle: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginLeft: 8,
-    },
-    networkName: {
-      fontSize: 18,
-      fontWeight: '700',
-      color: theme.colors.primary,
-      marginBottom: 4,
-    },
-    networkCurrency: {
-      fontSize: 14,
-      color: theme.colors.textMuted,
-    },
-    sectionTitle: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.text,
-      marginBottom: 12,
-    },
-    accountContainer: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
-      ...theme.shadows.sm,
-    },
-    selectedAccount: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingVertical: 8,
-    },
-    accountColor: {
-      width: 12,
-      height: 12,
-      borderRadius: 6,
-      marginRight: 12,
-    },
-    accountInfo: {
-      flex: 1,
-    },
-    accountLabel: {
-      fontSize: 14,
-      fontWeight: '500',
-      color: theme.colors.text,
-      marginBottom: 2,
-    },
-    accountAddress: {
-      fontSize: 12,
-      color: theme.colors.textMuted,
-    },
-    accountType: {
-      fontSize: 11,
-      color: theme.colors.primary,
-      textTransform: 'uppercase',
-    },
-    warningContainer: {
-      flexDirection: 'row',
-      backgroundColor:
-        theme.mode === 'light'
-          ? 'rgba(255,149,0,0.1)'
-          : 'rgba(255,159,10,0.15)',
-      borderWidth: 1,
-      borderColor: theme.colors.warning + '40', // Add a subtle border for better visibility
-      borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
-    },
-    warningText: {
-      flex: 1,
-      fontSize: 14,
-      color: theme.colors.warning,
-      marginLeft: 12,
-      lineHeight: 20,
-    },
-    buttonContainer: {
-      flexDirection: 'row',
-      padding: 16,
-      paddingTop: 8,
-      backgroundColor: theme.colors.surface,
-      borderTopWidth: 1,
-      borderTopColor: theme.colors.border,
-    },
+    container: { flex: 1, backgroundColor: theme.colors.background },
+    content: { flex: 1, padding: 24, gap: 16, justifyContent: 'center' },
+    text: { color: theme.colors.text, textAlign: 'center' },
     button: {
-      flex: 1,
-      height: 48,
-      borderRadius: 12,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginHorizontal: 8,
-    },
-    rejectButton: {
-      backgroundColor: theme.colors.card,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-    },
-    rejectButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.textMuted,
-    },
-    approveButton: {
+      padding: 16,
+      borderRadius: 8,
       backgroundColor: theme.colors.primary,
     },
-    approveButtonText: {
-      fontSize: 16,
-      fontWeight: '600',
-      color: theme.colors.buttonText,
-    },
+    buttonText: { color: theme.colors.buttonText, textAlign: 'center' },
   });

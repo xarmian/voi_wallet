@@ -25,7 +25,6 @@ import { makeAccount, paymentTxn } from '@/__tests__/fixtures/algorand';
 const mockRespondToRequest = jest.fn();
 const mockRejectRequest = jest.fn();
 const mockV1RejectRequest = jest.fn();
-let mockOnComplete: ((success: boolean, result?: any) => void) | undefined;
 const mockGetAllAccounts = jest.fn();
 let mockApprovedAccounts: string[] = [];
 let mockCallbacks:
@@ -46,6 +45,7 @@ jest.mock('@/services/walletconnect', () => ({
       respondToRequest: mockRespondToRequest,
       rejectRequest: mockRejectRequest,
       getApprovedAccountsForChain: () => mockApprovedAccounts,
+      getActiveSessions: () => [],
     }),
   },
 }));
@@ -63,6 +63,12 @@ jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { getAllAccounts: () => mockGetAllAccounts() },
 }));
 
+jest.mock('@/services/auth/reviewGrant', () => ({
+  reviewGrant: { leave: jest.fn(), revoke: jest.fn(), continueTo: jest.fn() },
+  walletConnectRequestKey: (topic: string, id: number) =>
+    JSON.stringify([topic, String(id)]),
+}));
+
 jest.mock('@/services/auth/transactionAuthController', () => ({
   useTransactionAuthController: () => ({ cleanup: jest.fn() }),
 }));
@@ -71,14 +77,6 @@ jest.mock('@/services/navigation/callbackRegistry', () => ({
   registerNavigationCallbacks: (callbacks: any) => {
     mockCallbacks = callbacks;
     return 'callback-id';
-  },
-}));
-
-jest.mock('@/components/UnifiedTransactionAuthModal', () => ({
-  __esModule: true,
-  default: (props: { onComplete: (s: boolean, r?: any) => void }) => {
-    mockOnComplete = props.onComplete;
-    return null;
   },
 }));
 
@@ -188,7 +186,6 @@ beforeEach(async () => {
   mockRespondToRequest.mockReset();
   mockRejectRequest.mockReset();
   mockV1RejectRequest.mockReset();
-  mockOnComplete = undefined;
   mockCallbacks = undefined;
   mockApprovedAccounts = [];
   mockGetAllAccounts.mockReset();
@@ -202,6 +199,29 @@ beforeEach(async () => {
 afterEach(() => {
   jest.restoreAllMocks();
 });
+
+const signer = makeAccount('wc-answer-signer');
+const handOff = async (id: number) => {
+  mockGetAllAccounts.mockResolvedValue([
+    { id: 'a1', address: signer.addr, type: 'standard', label: 'A' },
+  ]);
+  mockApprovedAccounts = [`${VOI_CHAIN_DATA.chainId}:${signer.addr}`];
+  const txn = Buffer.from(paymentTxn(signer.addr).toByte()).toString('base64');
+  const mounted = await mountOn(
+    id,
+    undefined,
+    { method: 'algo_signTxn', params: [[{ txn }]] },
+    VOI_CHAIN_DATA.chainId
+  );
+  await waitFor(() =>
+    expect(mounted.navigation.replace).toHaveBeenCalledWith(
+      'UniversalTransactionSigning',
+      expect.anything()
+    )
+  );
+  mounted.navigation.replace.mockClear();
+  return mounted;
+};
 
 describe('reject', () => {
   it('a failed rejection clears the delivery mark and still advances', async () => {
@@ -239,15 +259,15 @@ describe('reject', () => {
 
 describe('approve', () => {
   const approve = async () => {
-    expect(mockOnComplete).toBeDefined();
+    expect(mockCallbacks).toBeDefined();
     await act(async () => {
-      await mockOnComplete!(true, { signedTransactions: ['placeholder'] });
+      await mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] });
     });
   };
 
   it('a failed response clears the delivery mark and shows the error screen', async () => {
     mockRespondToRequest.mockRejectedValue(new Error('relay down'));
-    const { navigation } = await mountOn(21);
+    const { navigation } = await handOff(21);
     await enqueueNext(22);
 
     await approve();
@@ -267,7 +287,7 @@ describe('approve', () => {
 
   it('a sent response keeps the request marked and advances', async () => {
     mockRespondToRequest.mockResolvedValue(undefined);
-    const { navigation } = await mountOn(23);
+    const { navigation } = await handOff(23);
     await enqueueNext(24);
 
     await approve();
@@ -283,7 +303,7 @@ describe('approve', () => {
 
   it('a sent response whose advance fails keeps the answered request marked', async () => {
     mockRespondToRequest.mockResolvedValue(undefined);
-    const { navigation } = await mountOn(25);
+    const { navigation } = await handOff(25);
     await enqueueNext(26);
     navigation.replace.mockImplementation(() => {
       throw new Error('replace failed');
@@ -325,46 +345,7 @@ describe('every other exit without an answer clears the mark', () => {
     expect(redeliverySurfaces(31)).toBe(true);
   });
 
-  it('signing failed in the auth modal (error screen)', async () => {
-    const { navigation } = await mountOn(32);
-
-    await act(async () => {
-      await mockOnComplete!(false, new Error('auth failed'));
-    });
-
-    expect(navigation.navigate).toHaveBeenCalledWith('WalletConnectError', {
-      error: 'auth failed',
-    });
-    expect(mockRespondToRequest).not.toHaveBeenCalled();
-    expect(redeliverySurfaces(32)).toBe(true);
-  });
-
   describe('handed to the signing screen', () => {
-    const signer = makeAccount('wc-answer-signer');
-    const handOff = async (id: number) => {
-      mockGetAllAccounts.mockResolvedValue([
-        { id: 'a1', address: signer.addr, type: 'standard', label: 'A' },
-      ]);
-      mockApprovedAccounts = [`${VOI_CHAIN_DATA.chainId}:${signer.addr}`];
-      const txn = Buffer.from(paymentTxn(signer.addr).toByte()).toString(
-        'base64'
-      );
-      const mounted = await mountOn(
-        id,
-        undefined,
-        { method: 'algo_signTxn', params: [[{ txn }]] },
-        VOI_CHAIN_DATA.chainId
-      );
-      await waitFor(() =>
-        expect(mounted.navigation.replace).toHaveBeenCalledWith(
-          'UniversalTransactionSigning',
-          expect.anything()
-        )
-      );
-      mounted.navigation.replace.mockClear();
-      return mounted;
-    };
-
     it('the hand-off itself keeps the mark (the signing screen answers)', async () => {
       await handOff(33);
       expect(mockCallbacks).toBeDefined();
@@ -395,6 +376,9 @@ describe('every other exit without an answer clears the mark', () => {
 
       expect(mockRespondToRequest).toHaveBeenCalledTimes(1);
       expect(navigation.goBack).toHaveBeenCalled();
+      expect(
+        require('@/services/auth/reviewGrant').reviewGrant.revoke
+      ).toHaveBeenCalled();
       expect(redeliverySurfaces(35)).toBe(false);
     });
 
