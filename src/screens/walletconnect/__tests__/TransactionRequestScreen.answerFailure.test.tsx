@@ -64,7 +64,12 @@ jest.mock('@/services/wallet', () => ({
 }));
 
 jest.mock('@/services/auth/reviewGrant', () => ({
-  reviewGrant: { leave: jest.fn(), revoke: jest.fn(), continueTo: jest.fn() },
+  reviewGrant: {
+    leave: jest.fn(),
+    revoke: jest.fn(),
+    continueTo: jest.fn(),
+    join: jest.fn(),
+  },
   walletConnectRequestKey: (topic: string, id: number) =>
     JSON.stringify([topic, String(id)]),
 }));
@@ -376,9 +381,11 @@ describe('every other exit without an answer clears the mark', () => {
 
       expect(mockRespondToRequest).toHaveBeenCalledTimes(1);
       expect(navigation.goBack).toHaveBeenCalled();
+      // Queue empty: this request leaves the sitting (which ends it unless a
+      // request pushed under this one is still in it), rather than revoking.
       expect(
-        require('@/services/auth/reviewGrant').reviewGrant.revoke
-      ).toHaveBeenCalled();
+        require('@/services/auth/reviewGrant').reviewGrant.leave
+      ).toHaveBeenCalledWith(JSON.stringify([TOPIC, '35']));
       expect(redeliverySurfaces(35)).toBe(false);
     });
 

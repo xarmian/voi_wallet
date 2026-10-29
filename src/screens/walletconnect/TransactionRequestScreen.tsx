@@ -269,6 +269,11 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
 
         handedOffRef.current = true;
+        // A request pushed over one already under review (it isn't queued,
+        // because the current route is the signing screen) joins the live
+        // sitting: one unlock covers every request in it (TASK-437). No-op
+        // when no sitting is live.
+        reviewGrant.join(requestKey);
 
         navigation.replace('UniversalTransactionSigning', {
           // Display bytes. `walletConnect.transactions` below is the authority
@@ -348,7 +353,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           version: req.version,
         });
       });
-      if (!taken.request) reviewGrant.revoke();
+      // Queue empty: this request leaves the sitting. That ends it unless a
+      // request pushed under this one is still on screen in it.
+      if (!taken.request) reviewGrant.leave(requestKey);
     } catch (error) {
       reviewGrant.revoke();
       toast(await TransactionRequestQueue.size());

@@ -1,9 +1,14 @@
 import { AssetParams } from '@/types/wallet';
 import { formatBaseUnitsToAmount } from './bigint';
 
+// Control characters, bidi embeddings/overrides/isolates, and the bidi marks
+// (LRM/RLM, ALM) that can also reorder a dApp-chosen name.
 export function safeDappText(value: string): string {
   return value
-    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(
+      /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+      ' '
+    )
     .trim()
     .slice(0, 60);
 }

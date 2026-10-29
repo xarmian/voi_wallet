@@ -6,14 +6,19 @@ import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 
 // One sitting spans queued dApps, but never unlocks AuthContext / Main.
+// `keys` holds every request shown in the sitting: a request that arrives
+// while a sitting is live is pushed over the one under review rather than
+// queued, and joins the sitting without a second auth (TASK-437 review P2).
 export const REVIEW_IDLE_MS = 60_000;
-let grant: { key: string; epoch: number; used: Set<string> } | null = null;
+let grant: { keys: Set<string>; epoch: number; used: Set<string> } | null =
+  null;
 let generation = 0;
 let expiresAt = 0;
 let appStateSubscription:
   ReturnType<typeof AppState.addEventListener> | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let authenticating = false;
+let authenticatingKey: string | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
 
@@ -24,19 +29,22 @@ export const reviewGrant = {
       listeners.delete(listener);
     };
   },
-  isValid(key: string): boolean {
+  /** The sitting itself is live: unexpired, still locked, same vault epoch. */
+  isLive(): boolean {
     return (
       !!grant &&
-      grant.key === key &&
       grant.epoch === SessionKeyVault.currentEpoch() &&
       SessionKeyVault.isUnlocked() &&
       !AppLockSignal.isUnlocked() &&
       Date.now() < expiresAt
     );
   },
+  isValid(key: string): boolean {
+    return this.isLive() && grant!.keys.has(key);
+  },
   touch(): void {
     if (!grant) return;
-    if (!this.isValid(grant.key)) {
+    if (!this.isLive()) {
       this.revoke();
       return;
     }
@@ -60,11 +68,14 @@ export const reviewGrant = {
     key: string,
     credential: { pin: string } | { biometric: true }
   ): Promise<boolean> {
+    // A live sitting already covers this request: no second auth.
+    if (this.join(key)) return true;
     if (authenticating || AppLockSignal.isUnlocked()) return false;
     appStateSubscription ??= AppState.addEventListener('change', (state) => {
       if (state === 'background') this.revoke();
     });
     authenticating = true;
+    authenticatingKey = key;
     const started = generation;
     const epoch = SessionKeyVault.currentEpoch();
     try {
@@ -92,14 +103,32 @@ export const reviewGrant = {
         if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
         return false;
       }
-      grant = { key, epoch: SessionKeyVault.currentEpoch(), used: new Set() };
+      grant = {
+        keys: new Set([key]),
+        epoch: SessionKeyVault.currentEpoch(),
+        used: new Set(),
+      };
       expiresAt = Date.now() + REVIEW_IDLE_MS;
       this.touch();
       emit();
       return true;
     } finally {
       authenticating = false;
+      authenticatingKey = null;
     }
+  },
+  /**
+   * Add a request that is about to be shown to the live sitting. Returns false
+   * (and changes nothing) when no sitting is live. Each request still needs
+   * its own Sign tap (consume).
+   */
+  join(key: string): boolean {
+    if (!this.isLive()) return false;
+    if (!grant!.keys.has(key)) {
+      grant!.keys.add(key);
+      emit();
+    }
+    return true;
   },
   consume(key: string): boolean {
     if (!this.isValid(key) || grant!.used.has(key)) return false;
@@ -107,14 +136,27 @@ export const reviewGrant = {
     this.touch();
     return true;
   },
+  /** Queue advance: the next request replaces the finished one's screen. */
   continueTo(key: string): void {
-    if (grant && this.isValid(grant.key)) {
-      grant.key = key;
+    if (this.isLive()) {
+      grant!.keys = new Set([key]);
       emit();
     }
   },
+  /**
+   * A request's screen left. Ends the sitting only when it was the last
+   * request in it, or when it aborts that request's own in-flight unlock;
+   * a screen with no part in the sitting changes nothing.
+   */
   leave(key: string): void {
-    if (!grant || grant.key === key) this.revoke();
+    if (authenticating && authenticatingKey === key) {
+      this.revoke();
+      return;
+    }
+    if (!grant || !grant.keys.has(key)) return;
+    grant.keys.delete(key);
+    if (grant.keys.size === 0) this.revoke();
+    else emit();
   },
 };
 

@@ -30,3 +30,10 @@ it('summarizes groups and unreadable entries and sanitizes dApp text', () => {
     110
   );
 });
+it('strips every bidi control from dApp text, including LRM/RLM/ALM', () => {
+  for (const mark of ['؜', '‎', '‏', '‪', '‮', '⁦', '⁩']) {
+    expect(signingSummary([{}], 'VOI', {}, `evil${mark}gro.elpmaxe`)).toBe(
+      'Sign 1 transaction for evil gro.elpmaxe'
+    );
+  }
+});

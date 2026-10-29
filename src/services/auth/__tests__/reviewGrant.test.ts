@@ -128,3 +128,82 @@ it('does not extend the idle deadline when the queue advances automatically', as
   expect(reviewGrant.isValid('two:2')).toBe(false);
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
+
+// TASK-437 review P2: a request that arrives while one is under review is
+// pushed over it (not queued). Unlocking it re-authenticated, which bumped the
+// vault epoch, revoked the sitting and failed that first attempt.
+it('lets a request pushed over a live review join the sitting with no second auth', async () => {
+  expect(await reviewGrant.unlock('a:1', { pin: '123456' })).toBe(true);
+
+  expect(await reviewGrant.unlock('b:2', { pin: '123456' })).toBe(true);
+
+  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
+  expect(reviewGrant.isValid('a:1')).toBe(true);
+  expect(reviewGrant.isValid('b:2')).toBe(true);
+  // Each request still needs its own Sign tap.
+  expect(reviewGrant.consume('b:2')).toBe(true);
+  expect(reviewGrant.consume('b:2')).toBe(false);
+  expect(reviewGrant.consume('a:1')).toBe(true);
+});
+
+it('joins only a live sitting', async () => {
+  expect(reviewGrant.join('a:1')).toBe(false);
+  expect(reviewGrant.isValid('a:1')).toBe(false);
+
+  await reviewGrant.unlock('a:1', { pin: '123456' });
+  jest.advanceTimersByTime(REVIEW_IDLE_MS);
+  expect(reviewGrant.join('b:2')).toBe(false);
+  expect(reviewGrant.isValid('b:2')).toBe(false);
+});
+
+it('ends the sitting only when its last request leaves', async () => {
+  await reviewGrant.unlock('a:1', { pin: '123456' });
+  reviewGrant.join('b:2');
+
+  reviewGrant.leave('b:2');
+  expect(reviewGrant.isValid('a:1')).toBe(true);
+  expect(SessionKeyVault.isUnlocked()).toBe(true);
+
+  reviewGrant.leave('a:1');
+  expect(reviewGrant.isValid('a:1')).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
+});
+
+it('ignores a leave from a screen with no part in the sitting', async () => {
+  let verify!: (value: boolean) => void;
+  (AccountSecureStorage.verifyPin as jest.Mock).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        verify = resolve;
+      })
+  );
+  const pending = reviewGrant.unlock('b:2', { pin: '123456' });
+  await Promise.resolve();
+
+  // e.g. the previous request's screen unmounting after a replace, or an
+  // in-app signing screen (requestKey '').
+  reviewGrant.leave('a:1');
+  reviewGrant.leave('');
+  verify(true);
+
+  expect(await pending).toBe(true);
+  expect(reviewGrant.isValid('b:2')).toBe(true);
+});
+
+it('aborts a request’s own in-flight unlock when its screen leaves', async () => {
+  let verify!: (value: boolean) => void;
+  (AccountSecureStorage.verifyPin as jest.Mock).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        verify = resolve;
+      })
+  );
+  const pending = reviewGrant.unlock('b:2', { pin: '123456' });
+  await Promise.resolve();
+
+  reviewGrant.leave('b:2');
+  verify(true);
+
+  expect(await pending).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
+});
