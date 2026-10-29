@@ -255,6 +255,8 @@ export type RootStackParamList = {
      * Its absence means "in-app batch", i.e. a group this wallet built itself.
      */
     walletConnect?: {
+      requestKey: string;
+      dapp?: { name?: string; url?: string; icon?: string };
       transactions: WalletTransaction[];
       binding: WalletConnectSessionBinding;
     };

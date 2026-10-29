@@ -261,3 +261,45 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
     );
   });
 });
+
+it('does not start biometrics merely because the modal opened (TASK-437)', async () => {
+  const controller = makeController(
+    idleState({ state: 'authenticating', biometricAvailable: true })
+  );
+  await render(
+    <UnifiedTransactionAuthModal
+      visible
+      controller={asController(controller)}
+      request={{} as never}
+      onComplete={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  expect(controller.authenticateWithBiometrics).not.toHaveBeenCalled();
+});
+
+it('starts biometrics once when opened by the explicit Sign with Face ID tap (TASK-437)', async () => {
+  const controller = makeController();
+  controller.initializeSigningFlow.mockImplementation(async () => {
+    controller._emit(
+      idleState({ state: 'authenticating', biometricAvailable: true })
+    );
+  });
+  await render(
+    <UnifiedTransactionAuthModal
+      visible
+      biometricOnOpen
+      controller={asController(controller)}
+      request={{} as never}
+      message="Send 12.5 VOI to ABCD…WXYZ"
+      onComplete={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  await waitFor(() =>
+    expect(controller.authenticateWithBiometrics).toHaveBeenCalledWith(
+      'Send 12.5 VOI to ABCD…WXYZ'
+    )
+  );
+  expect(controller.authenticateWithBiometrics).toHaveBeenCalledTimes(1);
+});

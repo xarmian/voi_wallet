@@ -1346,3 +1346,33 @@ describe('AuthContext — unmount teardown (no leaks)', () => {
     expect(mockEnterLocked).not.toHaveBeenCalled();
   });
 });
+
+it.each(['PIN', 'biometrics'])(
+  'discards %s unlock when WalletConnect takes focus during authentication (TASK-437)',
+  async (method) => {
+    const { result } = await mountAuth();
+    let focused = true;
+    let finish!: (value: any) => void;
+    const deferred = new Promise<any>((resolve) => {
+      finish = resolve;
+    });
+    if (method === 'PIN') mockVerifyPin.mockReturnValueOnce(deferred);
+    else mockBiometricUnlock.mockReturnValueOnce(deferred);
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending =
+        method === 'PIN'
+          ? (result.current.unlock as any)(TEST_PIN, () => focused)
+          : (result.current.unlockWithBiometrics as any)(() => focused);
+      await Promise.resolve();
+    });
+    focused = false;
+    await act(async () => {
+      finish(method === 'PIN' ? true : { status: 'unlocked' });
+      expect(await pending).toBe(false);
+    });
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(mockSetUnlocked).not.toHaveBeenCalledWith(true);
+  }
+);

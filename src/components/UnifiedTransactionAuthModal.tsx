@@ -37,6 +37,8 @@ interface UnifiedTransactionAuthModalProps {
   onCancel: () => void;
   title?: string;
   message?: string;
+  /** Set only by the review screen's explicit Sign with biometrics tap. */
+  biometricOnOpen?: boolean;
   formatErrorMessage?: (error: Error) => string | undefined;
 }
 
@@ -49,6 +51,7 @@ export default function UnifiedTransactionAuthModal({
   title = 'Transaction Authentication',
   message = 'Authenticate to complete this transaction',
   formatErrorMessage,
+  biometricOnOpen = false,
 }: UnifiedTransactionAuthModalProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -59,24 +62,22 @@ export default function UnifiedTransactionAuthModal({
   const [isVerifying, setIsVerifying] = useState(false);
 
   // --- Auth-flow latches (TASK-241) --------------------------------------
-  // initialized / biometricAttempted / userCancelled are REFS, not state, so
+  // initialized / userCancelled are REFS, not state, so
   // the reset logic can never erase them on a stray re-render or when the
   // controller bounces back to `idle` via resetAfterDismiss(). Invariants they
   // protect on the shared transaction-signing auth modal:
   //   • initializeSigningFlow runs EXACTLY ONCE per open (visible false→true) —
   //     never again while `visible` stays true, even after a cancel/error drives
   //     the controller back to `idle`.
-  //   • The biometric auto-prompt fires EXACTLY ONCE per open.
   //   • An explicit-cancel latch (userCancelled) SURVIVES the intervening
   //     resetAfterDismiss()-driven `idle` until the modal genuinely closes/reopens
   //     — the bug the old useState + idle-keyed reset effect had (HT-254 Option A).
   // The visibility-transition effect below is the SOLE owner of these latches:
-  //   initialized/biometricAttempted reset on a genuine close (visible→false)
+  //   initialized resets on a genuine close (visible→false)
   //   AND a genuine open (false→true); userCancelled clears ONLY on a genuine
   //   open (false→true). Because these are refs (no re-render on write), NOTHING
   //   that renders may branch on their VALUES — they are control-flow only.
   const initializedRef = useRef(false);
-  const biometricAttemptedRef = useRef(false);
   const userCancelledRef = useRef(false);
   // Tracks previous visibility so the transition effect can distinguish a
   // genuine open/close from an in-place re-render.
@@ -102,7 +103,6 @@ export default function UnifiedTransactionAuthModal({
       // here (and never on close) is exactly what lets an explicit-cancel latch
       // survive a resetAfterDismiss()-driven `idle` while `visible` stays true.
       initializedRef.current = false;
-      biometricAttemptedRef.current = false;
       userCancelledRef.current = false;
       hasCalledOnComplete.current = false;
     } else if (wasVisible && !visible) {
@@ -111,7 +111,6 @@ export default function UnifiedTransactionAuthModal({
       // it is cleared on the next genuine open, above.
       controller.resetAfterDismiss();
       initializedRef.current = false;
-      biometricAttemptedRef.current = false;
       hasCalledOnComplete.current = false;
     }
     wasVisibleRef.current = visible;
@@ -136,7 +135,20 @@ export default function UnifiedTransactionAuthModal({
       // re-render inside the determineAuthRequirements window can't double-invoke.
       console.log('UnifiedTransactionAuthModal: initializeSigningFlow');
       initializedRef.current = true;
-      controller.initializeSigningFlow(request);
+      void (async () => {
+        await controller.initializeSigningFlow(request);
+        if (userCancelledRef.current || !wasVisibleRef.current) return;
+        if (request.reviewGrantKey) {
+          await controller.authenticateWithReviewGrant(request.reviewGrantKey);
+        } else if (
+          controller.getState().state === 'authenticating' &&
+          !controller.getState().isRemoteSignerFlow &&
+          biometricOnOpen &&
+          controller.getState().biometricAvailable
+        ) {
+          await controller.authenticateWithBiometrics(message);
+        }
+      })();
     }
   }, [
     visible,
@@ -145,6 +157,8 @@ export default function UnifiedTransactionAuthModal({
     authState.state,
     authState.error,
     authState.ledgerError,
+    biometricOnOpen,
+    message,
   ]);
 
   // Handle completion state - wait for result to be populated before calling onComplete
@@ -159,28 +173,6 @@ export default function UnifiedTransactionAuthModal({
       onComplete(true, authState.result);
     }
   }, [authState.state, authState.result, onComplete]);
-
-  // Auto-prompt for biometric auth when available (only once per open)
-  useEffect(() => {
-    if (
-      visible &&
-      authState.state === 'authenticating' &&
-      authState.biometricAvailable &&
-      !authState.isLocked &&
-      !biometricAttemptedRef.current &&
-      !authState.isLedgerFlow
-    ) {
-      biometricAttemptedRef.current = true;
-      handleBiometricAuth();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt, once per open (latched via biometricAttemptedRef); fires on the visible/authState gates, handleBiometricAuth is read at that commit and must not re-fire on its own identity.
-  }, [
-    visible,
-    authState.state,
-    authState.biometricAvailable,
-    authState.isLocked,
-    authState.isLedgerFlow,
-  ]);
 
   const handleNumberPress = (number: string) => {
     if (
@@ -221,7 +213,7 @@ export default function UnifiedTransactionAuthModal({
 
   const handleBiometricAuth = async () => {
     try {
-      await controller.authenticateWithBiometrics();
+      await controller.authenticateWithBiometrics(message);
     } catch (error) {
       console.error('Biometric authentication error:', redactError(error));
     }
@@ -232,7 +224,6 @@ export default function UnifiedTransactionAuthModal({
     controller.resetAfterDismiss();
     setPin('');
     initializedRef.current = false;
-    biometricAttemptedRef.current = false;
     // Latch the explicit cancel. resetAfterDismiss() above drives the controller
     // back to `idle`, but this ref survives it (the reset effect no longer keys
     // on `idle`), so the init effect will NOT restart the flow while `visible`

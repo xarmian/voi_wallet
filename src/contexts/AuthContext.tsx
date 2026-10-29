@@ -89,8 +89,8 @@ export interface AuthState {
 
 export interface AuthContextType {
   authState: AuthState;
-  unlock: (secret: string) => Promise<boolean>;
-  unlockWithBiometrics: () => Promise<boolean>;
+  unlock: (secret: string, isCurrent?: () => boolean) => Promise<boolean>;
+  unlockWithBiometrics: (isCurrent?: () => boolean) => Promise<boolean>;
   lock: () => void;
   updateActivity: () => void;
   setupPin: (secret: string, source?: SecretSource) => Promise<void>;
@@ -722,7 +722,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, timeoutMs);
   };
 
-  const unlock = async (secret: string): Promise<boolean> => {
+  const unlock = async (
+    secret: string,
+    isCurrent = () => true
+  ): Promise<boolean> => {
     try {
       // PR7: accept a PIN or a passphrase — verifyPin validates the format
       // against the STORED credential kind, so no 6-digit gate here (that would
@@ -739,6 +742,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // is tagged 'passphrase'. The vault is load-bearing for v2 reads.
         const source =
           (await AccountSecureStorage.getCredentialSource()) ?? 'pin';
+        // A WalletConnect request may have taken focus during PIN verification.
+        if (!isCurrent()) return false;
         SessionKeyVault.set(secret, source);
         // Flip the lock signal to UNLOCKED synchronously (mirrors lock()) so the
         // messaging poll/cache-write guard resumes immediately, not only after
@@ -769,9 +774,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const unlockWithBiometrics = async (): Promise<boolean> => {
+  const unlockWithBiometrics = async (
+    isCurrent = () => true
+  ): Promise<boolean> => {
     try {
-      if (!authState.biometricEnabled) {
+      if (!authState.biometricEnabled || !isCurrent()) {
         return false;
       }
 
@@ -785,6 +792,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const outcome = await unlockVaultWithBiometrics('Unlock your wallet');
 
       if (outcome.status === 'unlocked') {
+        // Discard a LockScreen prompt that finished underneath a WC request.
+        if (!isCurrent()) {
+          lock();
+          return false;
+        }
         // Flip the lock signal to UNLOCKED synchronously (mirrors the PIN path
         // and lock()) so the messaging poll/cache-write guard resumes at once.
         AppLockSignal.setUnlocked(true);

@@ -18,6 +18,7 @@
 // (hoisted above imports) may legally reference it.
 
 // In-memory backing for the two stores the adapter touches.
+const mockAuthReadOptions: unknown[] = [];
 const mockSecureBacking = new Map<string, string>();
 const mockAsyncBacking = new Map<string, string>();
 
@@ -42,7 +43,8 @@ const mockCtl = {
 
 jest.mock('expo-secure-store', () => ({
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
-  getItemAsync: jest.fn(async (key: string) => {
+  getItemAsync: jest.fn(async (key: string, options?: unknown) => {
+    mockAuthReadOptions.push({ key, options });
     if (mockCtl.iosNativeThrows) {
       throw new Error('KeyChainException: keychain unreadable');
     }
@@ -240,5 +242,16 @@ describe('MobileSecureStorageAdapter — iOS is pass-through (unchanged)', () =>
     // No Android sentinel bookkeeping on iOS.
     expect(mockAsyncBacking.size).toBe(0);
     await expect(adapter.getItem(PIN_KEY)).resolves.toBe('opaque-credential');
+  });
+});
+
+it('requires Android confirmation when reading the biometric secret (TASK-437)', async () => {
+  const adapter = loadAdapter('android');
+  await adapter.getItemWithAuth('biometric-fixture', {
+    prompt: 'Unlock to review WalletConnect requests',
+  });
+  expect(mockAuthReadOptions).toContainEqual({
+    key: 'biometric-fixture',
+    options: expect.objectContaining({ requireConfirmation: true }),
   });
 });
