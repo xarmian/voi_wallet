@@ -792,6 +792,24 @@ export function validateKeyregUri(uri: Arc0090KeyregUri): ValidationResult {
     errors.push('Address is required for key registration');
   }
 
+  // isOnline needs both votekey and selkey. A URI that carries some
+  // participation params without both keys is incomplete, not a request to go
+  // offline: treating it as offline would silently drop what it did send
+  // (TASK-439).
+  if (
+    !uri.isOnline &&
+    (uri.params.votekey ||
+      uri.params.selkey ||
+      uri.params.sprfkey ||
+      uri.params.votefst ||
+      uri.params.votelst ||
+      uri.params.votekd)
+  ) {
+    errors.push(
+      'Participation keys are incomplete: going online needs both a vote key and a selection key'
+    );
+  }
+
   // Online keyreg requires all participation keys
   if (uri.isOnline) {
     if (!uri.params.votekey)
