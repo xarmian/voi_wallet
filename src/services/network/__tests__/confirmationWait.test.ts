@@ -209,6 +209,20 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
         expect(await run).toEqual(wait.confirmed);
       });
 
+      it('a late loop rejection survives a readable but still-pending look (Codex table attack)', async () => {
+        let calls = 0;
+        install(
+          fakeAlgod(() =>
+            ++calls === 1
+              ? after(deadline + 3000, { poolError: REASON })
+              : after(10000, { confirmedRound: 0n })
+          )
+        );
+        const run = settle(wait.run());
+        await jest.advanceTimersByTimeAsync(deadline + 10000);
+        expectRejected(await run);
+      });
+
       // Codex confirm: the loop and the look may read different nodes and
       // disagree. A confirmed round is a ledger fact and outranks a pool
       // error, whichever side saw which (decision on the TASK-440 trail).
