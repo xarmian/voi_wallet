@@ -160,6 +160,7 @@ export default function NumberFormatSettingsScreen() {
           title="Number Format"
           showBackButton
           onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
         />
 
         {/* Locale List */}

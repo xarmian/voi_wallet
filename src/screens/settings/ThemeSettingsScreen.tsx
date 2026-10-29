@@ -150,6 +150,7 @@ export default function ThemeSettingsScreen() {
           title="Theme"
           showBackButton
           onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
         />
 
         <ScrollView

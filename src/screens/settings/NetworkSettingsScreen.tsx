@@ -242,6 +242,7 @@ export default function NetworkSettingsScreen() {
           title="Networks"
           showBackButton
           onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
           rightAction={
             <TouchableOpacity
               style={styles.refreshButton}

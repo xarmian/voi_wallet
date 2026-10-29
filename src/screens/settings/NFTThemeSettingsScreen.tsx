@@ -446,6 +446,7 @@ export default function NFTThemeSettingsScreen() {
           title="NFT Theme"
           showBackButton
           onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
         />
 
         {/* Tabs */}
