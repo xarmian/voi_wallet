@@ -155,7 +155,7 @@ export async function clearAllData(): Promise<void> {
   }
 }
 
-/** Validate custody before any destructive restore action; never trust payload identity. */
+/** Validate required standard phrases and retained keys before destructive work. */
 export function validateRetainedKeys(accounts: BackupAccountData[]): void {
   // A later record reusing an id would overwrite (or, metadata-only, delete)
   // the key an earlier record stored, so ids must be unique.
@@ -170,7 +170,11 @@ export function validateRetainedKeys(accounts: BackupAccountData[]): void {
     ids.add(account.id);
   }
   for (const account of accounts) {
-    if (account.type !== AccountType.REKEYED || account.mnemonic === undefined)
+    const standard = account.type === AccountType.STANDARD;
+    if (
+      !standard &&
+      (account.type !== AccountType.REKEYED || account.mnemonic === undefined)
+    )
       continue;
     let derived: algosdk.Account;
     try {
@@ -178,16 +182,19 @@ export function validateRetainedKeys(accounts: BackupAccountData[]): void {
       derived = algosdk.mnemonicToSecretKey(account.mnemonic);
     } catch {
       throw new BackupError(
-        'Retained key in the backup is not a valid recovery phrase',
+        standard
+          ? 'Standard account in the backup is missing a valid recovery phrase'
+          : 'Retained key in the backup is not a valid recovery phrase',
         'INVALID_FILE_FORMAT'
       );
     }
     try {
       if (
-        derived.addr.toString() !== account.address ||
-        (account.publicKey &&
-          Buffer.from(derived.sk.subarray(32)).toString('hex') !==
-            account.publicKey)
+        !standard &&
+        (derived.addr.toString() !== account.address ||
+          (account.publicKey &&
+            Buffer.from(derived.sk.subarray(32)).toString('hex') !==
+              account.publicKey))
       ) {
         throw new BackupError(
           'Retained key does not match the rekeyed account',
@@ -316,16 +323,9 @@ export async function restoreAccounts(
     for (const backupAccount of accounts) {
       switch (backupAccount.type) {
         case AccountType.STANDARD: {
-          if (!backupAccount.mnemonic) {
-            console.warn(
-              `Skipping standard account ${redactAddress(backupAccount.address)} - no mnemonic`
-            );
-            continue;
-          }
-
           // Derive account from mnemonic
           const algoAccount = algosdk.mnemonicToSecretKey(
-            backupAccount.mnemonic
+            backupAccount.mnemonic!
           );
 
           const standardAccount: StandardAccountMetadata = {
@@ -855,9 +855,12 @@ export async function performFullRestore(
   friends: Friend[],
   experimental: BackupExperimentalFlags
 ): Promise<RestoreResult> {
-  validateRetainedKeys(accounts);
+  // Stage a private copy so callers cannot change validated phrases while
+  // the destructive storage operations below are awaiting completion.
+  const stagedAccounts = accounts.map((account) => ({ ...account }));
+  validateRetainedKeys(stagedAccounts);
 
-  // Clear all existing data first
+  // Clear all existing data only after every required phrase has decoded.
   await clearAllData();
 
   // TASK-213 (restore-before-PIN false-lockout fix): set the durable plaintext
@@ -872,7 +875,7 @@ export async function performFullRestore(
   await markPinSetupPending();
 
   // Restore accounts
-  const accountCounts = await restoreAccounts(accounts);
+  const accountCounts = await restoreAccounts(stagedAccounts);
 
   // Restore settings
   await restoreSettings(settings);

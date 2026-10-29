@@ -2270,10 +2270,10 @@ export const useWalletStore = create<WalletState>()(
 
         if (shouldUpdateAvatar) {
           const updatedAccount = {
-            ...account,
+            id: account.id,
             avatarUrl: nextAvatarUrl,
             avatarUpdatedAt,
-          } as typeof account;
+          };
           await MultiAccountWalletService.updateAccountMetadata(updatedAccount);
         }
       } catch (error) {
@@ -2437,10 +2437,10 @@ export const useWalletStore = create<WalletState>()(
               }
 
               const updatedAccount = {
-                ...baseMetadata,
+                id: baseMetadata.id,
                 avatarUrl: update.nextAvatarUrl,
                 avatarUpdatedAt: update.avatarUpdatedAt,
-              } as AccountMetadata;
+              };
 
               await MultiAccountWalletService.updateAccountMetadata(
                 updatedAccount
