@@ -60,6 +60,12 @@ export default function AccountListModal({
   hideBalances = false,
 }: AccountListModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const {
+    onAnimate: handleSheetAnimate,
+    onChange: syncSheetVisibility,
+    onDismiss: handleSheetDismiss,
+  } = useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
@@ -104,11 +110,12 @@ export default function AccountListModal({
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -176,12 +183,6 @@ export default function AccountListModal({
       isVisible,
       hideBalances,
     ]
-  );
-
-  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
-  const { onDismiss: handleSheetDismiss } = useBottomSheetModalVisibility(
-    bottomSheetRef,
-    isVisible
   );
 
   // Batch load all account balances when modal opens (single state update)
@@ -265,6 +266,7 @@ export default function AccountListModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
+      onAnimate={handleSheetAnimate}
       onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose

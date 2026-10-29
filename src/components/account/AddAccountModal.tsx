@@ -34,15 +34,22 @@ export default function AddAccountModal({
   airgapMode = false,
 }: AddAccountModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const {
+    onAnimate: handleSheetAnimate,
+    onChange: syncSheetVisibility,
+    onDismiss: handleSheetDismiss,
+  } = useBottomSheetModalVisibility(bottomSheetRef, isVisible);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -63,12 +70,6 @@ export default function AddAccountModal({
     onClose();
     onCreateAccount(); // This will navigate to CreateAccountScreen
   }, [onClose, onCreateAccount]);
-
-  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
-  const { onDismiss: handleSheetDismiss } = useBottomSheetModalVisibility(
-    bottomSheetRef,
-    isVisible
-  );
 
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
@@ -145,6 +146,7 @@ export default function AddAccountModal({
       ref={bottomSheetRef}
       enableDynamicSizing
       onChange={handleSheetChanges}
+      onAnimate={handleSheetAnimate}
       onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose

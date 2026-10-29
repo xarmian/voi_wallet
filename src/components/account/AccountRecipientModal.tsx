@@ -46,6 +46,12 @@ export default function AccountRecipientModal({
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const {
+    onAnimate: handleSheetAnimate,
+    onChange: syncSheetVisibility,
+    onDismiss: handleSheetDismiss,
+  } = useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const friends = useSortedFriends();
@@ -108,13 +114,14 @@ export default function AccountRecipientModal({
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
         setSearchQuery(''); // Clear search when closing
         setActiveTab('accounts'); // Reset to accounts tab when closing
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -230,12 +237,6 @@ export default function AccountRecipientModal({
     [styles, themeColors, handleFriendSelect]
   );
 
-  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
-  const { onDismiss: handleSheetDismiss } = useBottomSheetModalVisibility(
-    bottomSheetRef,
-    isVisible
-  );
-
   const isAccountsTab = activeTab === 'accounts';
   const listData = (isAccountsTab ? filteredAccounts : filteredFriends) as (
     AccountMetadata | Friend
@@ -254,6 +255,7 @@ export default function AccountRecipientModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
+      onAnimate={handleSheetAnimate}
       onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose={false}
