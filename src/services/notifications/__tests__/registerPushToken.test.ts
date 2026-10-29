@@ -63,7 +63,7 @@ describe('notificationService.registerPushToken (TASK-433)', () => {
     Object.assign(notificationService, {
       deviceId: 'test-device',
       pushToken: null,
-      pushTokenWarningLogged: false,
+      pushTokenWarningsLogged: new Set<string>(),
     });
     jest.replaceProperty(Platform, 'OS', 'android');
     jest
@@ -146,10 +146,43 @@ describe('notificationService.registerPushToken (TASK-433)', () => {
     expect(console.warn).toHaveBeenCalledTimes(1);
     expect(console.warn).toHaveBeenCalledWith(
       '[Notifications] Push token unavailable:',
-      'code' in error ? error.code : 'FIS_ERROR'
+      'code' in error ? error.code : 'FIS_ERROR',
+      error.message
     );
     expect(console.error).not.toHaveBeenCalled();
     expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps the FIS reason in the warning and warns again for a different failure', async () => {
+    const fis = {
+      code: 'E_REGISTRATION_FAILED',
+      message: 'Fetching the token failed: FIS_AUTH_ERROR',
+    };
+    const unavailable = {
+      code: 'E_REGISTRATION_FAILED',
+      message: 'Fetching the token failed: SERVICE_NOT_AVAILABLE',
+    };
+    jest
+      .mocked(Notifications.getExpoPushTokenAsync)
+      .mockRejectedValueOnce(fis)
+      .mockRejectedValueOnce(fis)
+      .mockRejectedValueOnce(unavailable);
+
+    for (let i = 0; i < 3; i++) {
+      expect(
+        await notificationService.registerPushToken({ prompt: false })
+      ).toBeNull();
+    }
+
+    expect(console.warn).toHaveBeenCalledTimes(2);
+    expect(jest.mocked(console.warn).mock.calls).toEqual([
+      ['[Notifications] Push token unavailable:', fis.code, fis.message],
+      [
+        '[Notifications] Push token unavailable:',
+        unavailable.code,
+        unavailable.message,
+      ],
+    ]);
   });
 
   it.each(['Supabase', 'device ID'])(

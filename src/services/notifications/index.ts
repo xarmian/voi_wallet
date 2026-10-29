@@ -70,7 +70,7 @@ class NotificationService {
   private static instance: NotificationService;
   private deviceId: string | null = null;
   private pushToken: string | null = null;
-  private pushTokenWarningLogged = false;
+  private pushTokenWarningsLogged = new Set<string>();
   private notificationListener: Notifications.Subscription | null = null;
   private responseListener: Notifications.Subscription | null = null;
   private appStateSubscription: ReturnType<
@@ -295,12 +295,19 @@ class NotificationService {
           (typeof message === 'string' && message.includes('FIS_'))
         ) {
           // Native registration can fail with invalid Firebase credentials.
-          // Warn once per process, without the native error's verbose payload.
-          if (!this.pushTokenWarningLogged) {
-            this.pushTokenWarningLogged = true;
+          // Warn once per distinct failure, without the native error's verbose
+          // payload. The message is kept (truncated) because it carries the
+          // reason, e.g. FIS_AUTH_ERROR vs SERVICE_NOT_AVAILABLE (TASK-405).
+          const label = typeof code === 'string' ? code : 'FIS_ERROR';
+          const reason =
+            typeof message === 'string' ? message.slice(0, 160) : '';
+          const key = `${label}|${reason}`;
+          if (!this.pushTokenWarningsLogged.has(key)) {
+            this.pushTokenWarningsLogged.add(key);
             console.warn(
               '[Notifications] Push token unavailable:',
-              typeof code === 'string' ? code : 'FIS_ERROR'
+              label,
+              reason
             );
           }
           return null;
