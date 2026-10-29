@@ -15,6 +15,7 @@ import {
 import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 import {
   evaluateBatchEntryEligibility,
   type WalletConnectSessionBinding,
@@ -721,6 +722,11 @@ export class UnifiedTransactionSigner {
     // DR-7 (absorbs TASK-251): bind the bytes to a chain before anything else.
     this.assertChainBinding(txn, index, binding, boundNetworkId);
 
+    // TASK-439: a dApp-supplied permanent non-participation keyreg refuses
+    // the whole batch here, in preflight, before any key or Ledger is used.
+    // SecureKeyManager.signTransaction re-checks at signing time.
+    assertSignableKeyreg(txn);
+
     const txnSender = algosdk.encodeAddress(txn.sender.publicKey);
 
     const eligibility = evaluateBatchEntryEligibility({
@@ -1193,10 +1199,11 @@ export class UnifiedTransactionSigner {
         // must not reach the chain as one.
         if (
           !request.keyregParams.voteKey ||
-          !request.keyregParams.selectionKey
+          !request.keyregParams.selectionKey ||
+          !request.keyregParams.stateProofKey
         ) {
           throw new Error(
-            'Online key registration requires participation keys'
+            'Online key registration requires vote, selection and state proof keys'
           );
         }
         txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({

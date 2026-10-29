@@ -49,6 +49,9 @@ export interface Arc0090KeyregUri extends Arc0090BaseUri {
     xnote?: string;
   };
   isOnline: boolean; // true if participation keys present
+  // true if the raw query names any participation param, even with an empty
+  // or malformed value the parser dropped (TASK-439)
+  hasParticipationParams?: boolean;
 }
 
 // Application Call URI
@@ -142,6 +145,16 @@ const ZERO_ADDRESS =
 
 // Supported URI schemes
 const SUPPORTED_SCHEMES = ['algorand', 'voi', 'perawallet'];
+
+// Keyreg query params that only belong to an online (participation) keyreg.
+const PARTICIPATION_PARAMS = [
+  'votekey',
+  'selkey',
+  'sprfkey',
+  'votefst',
+  'votelst',
+  'votekd',
+] as const;
 
 // =============================================================================
 // Detection Functions
@@ -468,6 +481,12 @@ function parseKeyregUri(uri: string): Arc0090KeyregUri | null {
 
   // Determine if this is an online (participation) or offline keyreg
   const isOnline = !!(params.votekey && params.selkey);
+  // Presence, not truthiness: `votekey=` or `votefst=abc` still means the URI
+  // was about participation keys, not a plain go-offline (TASK-439).
+  const query = new URLSearchParams(queryString ?? '');
+  const hasParticipationParams = PARTICIPATION_PARAMS.some((key) =>
+    query.has(key)
+  );
 
   return {
     type: 'keyreg',
@@ -476,6 +495,7 @@ function parseKeyregUri(uri: string): Arc0090KeyregUri | null {
     address,
     params,
     isOnline,
+    hasParticipationParams,
     fragment,
   };
 }
@@ -792,18 +812,14 @@ export function validateKeyregUri(uri: Arc0090KeyregUri): ValidationResult {
     errors.push('Address is required for key registration');
   }
 
-  // isOnline needs both votekey and selkey. A URI that carries some
-  // participation params without both keys is incomplete, not a request to go
+  // isOnline needs both votekey and selkey. A URI that names any
+  // participation param without both keys is incomplete, not a request to go
   // offline: treating it as offline would silently drop what it did send
-  // (TASK-439).
+  // (TASK-439). Checked by presence, so an empty value counts.
   if (
     !uri.isOnline &&
-    (uri.params.votekey ||
-      uri.params.selkey ||
-      uri.params.sprfkey ||
-      uri.params.votefst ||
-      uri.params.votelst ||
-      uri.params.votekd)
+    (uri.hasParticipationParams ||
+      PARTICIPATION_PARAMS.some((key) => uri.params[key] !== undefined))
   ) {
     errors.push(
       'Participation keys are incomplete: going online needs both a vote key and a selection key'
@@ -816,6 +832,9 @@ export function validateKeyregUri(uri: Arc0090KeyregUri): ValidationResult {
       errors.push('Vote key is required for online keyreg');
     if (!uri.params.selkey)
       errors.push('Selection key is required for online keyreg');
+    // Every online keyreg sampled on Voi mainnet carries one (TASK-439).
+    if (!uri.params.sprfkey)
+      errors.push('State proof key is required for online keyreg');
     if (!uri.params.votefst)
       errors.push('First valid round is required for online keyreg');
     if (!uri.params.votelst)
