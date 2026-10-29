@@ -17,6 +17,7 @@ import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { NetworkService } from '@/services/network';
 import { findOwnKeySigner } from '@/services/wallet/ownKeyCustody';
 import { redactError } from '@/utils/logRedaction';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 /**
  * Secure Key Manager - Simplified version using AccountSecureStorage
@@ -219,6 +220,13 @@ export class SecureKeyManager {
     let privateKey: Uint8Array | null = null;
 
     try {
+      // TASK-439: never sign a permanent non-participation keyreg, whoever
+      // built it (WalletConnect, a remote-signer request, any caller). Checked
+      // before the route so no key is loaded and no Ledger is prompted.
+      if (transaction) {
+        assertSignableKeyreg(transaction);
+      }
+
       const route = await this.resolveSigningRoute(address, networkId);
 
       if (route.kind === 'unavailable') {

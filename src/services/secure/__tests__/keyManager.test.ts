@@ -125,8 +125,10 @@ import { SimplifiedKeyManager } from '../simplifiedKeyManager';
 import {
   makeAccount,
   paymentTxn,
+  SUGGESTED_PARAMS,
   type TestAccount,
 } from '@/__tests__/fixtures/algorand';
+import { PermanentNonParticipationError } from '@/utils/keyregSafety';
 
 // ---------------------------------------------------------------------------
 // Fixtures — real, deterministic, algosdk-derived accounts.
@@ -1340,5 +1342,57 @@ describe('SecureKeyManager — retained REKEYED key as a rekey authority (TASK-4
 
     expect(info.canSign).toBe(false);
     expect(info.signingAccountId).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// TASK-439 — never sign a permanent non-participation keyreg
+// ===========================================================================
+
+describe('SecureKeyManager.signTransaction refuses nonpart=true keyregs (TASK-439)', () => {
+  const nonpart = (sender: string) =>
+    algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
+      sender,
+      suggestedParams: SUGGESTED_PARAMS,
+      nonParticipation: true,
+    });
+
+  it.each([
+    ['a Transaction', (txn: algosdk.Transaction) => txn],
+    [
+      'unsigned bytes',
+      (txn: algosdk.Transaction) => algosdk.encodeUnsignedTransaction(txn),
+    ],
+  ])(
+    'refuses %s for a software account before loading the key',
+    async (_name, as) => {
+      setWallet([standardAccount(OWNER, 'acc-owner')]);
+
+      await expect(
+        SecureKeyManager.signTransaction(as(nonpart(OWNER.addr)), OWNER.addr)
+      ).rejects.toThrow(PermanentNonParticipationError);
+      expect(mockSecureGetPrivateKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses for a Ledger account before the device is used', async () => {
+    setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
+    mockGetConnectedDevice.mockReturnValue({ id: 'device-acc-ledger' });
+
+    await expect(
+      SecureKeyManager.signTransaction(nonpart(LEDGER.addr), LEDGER.addr)
+    ).rejects.toThrow(PermanentNonParticipationError);
+    expect(mockLedgerSignTransaction).not.toHaveBeenCalled();
+  });
+
+  it('still signs a plain offline keyreg (no false positive)', async () => {
+    setWallet([standardAccount(OWNER, 'acc-owner')]);
+    const offline = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject(
+      { sender: OWNER.addr, suggestedParams: SUGGESTED_PARAMS }
+    );
+
+    const blob = await SecureKeyManager.signTransaction(offline, OWNER.addr);
+
+    assertSignedBy(blob, offline, OWNER.pk, { notSignerPk: OTHER.pk });
   });
 });

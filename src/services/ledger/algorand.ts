@@ -28,6 +28,7 @@ import {
 } from './signingState';
 import { isLedgerTransportError } from '@/utils/errorMapping';
 import { redactError } from '@/utils/logRedaction';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 export interface LedgerAccountDerivation {
   address: string;
@@ -210,6 +211,9 @@ class LedgerAlgorandService {
       const app = await this.getApp({ requireAppOpen: true });
       const derivationPath = this.getDerivationPath(derivationIndex);
       const txn = this.ensureTransactionInstance(transaction);
+      // TASK-439: never put a permanent non-participation keyreg on the
+      // device, whichever caller got it here.
+      assertSignableKeyreg(txn);
 
       const txnBytes = algosdk.encodeUnsignedTransaction(txn);
       const txnHex = Buffer.from(txnBytes).toString('hex');
