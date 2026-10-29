@@ -1195,6 +1195,8 @@ export class NetworkService {
         const txId =
           (res as { txId?: string; txid?: string }).txId ??
           (res as { txid?: string }).txid ??
+          // A 2xx without an id still sent these bytes: wait on their txid.
+          facts.txId ??
           '';
         // Wait for confirmation. A false result means the tx is still pending
         // (not confirmed within the round window), NOT a failure.

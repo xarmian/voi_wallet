@@ -152,6 +152,24 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
       expect(await settle(wait.run())).toEqual(wait.confirmed);
     });
 
+    it('one response carrying both a confirmed round and a pool error reads as confirmed', async () => {
+      // Only the first read carries it (later reads 404), so the final look
+      // can't mask a loop that lets the pool error win (Codex P1 review).
+      let calls = 0;
+      install(
+        fakeAlgod(async () => {
+          if (++calls === 1) return { ...CONFIRMED, ...POOL_ERROR };
+          throw httpError(404, 'txn not found');
+        })
+      );
+      const outcome = await settle(wait.run());
+      if (typeof wait.confirmed === 'object' && wait.confirmed !== null) {
+        expect(outcome).toMatchObject(wait.confirmed);
+      } else {
+        expect(outcome).toBe(wait.confirmed);
+      }
+    });
+
     it('keeps polling after a pool error, and a later confirmation reads as confirmed', async () => {
       let calls = 0;
       install(fakeAlgod(async () => (++calls <= 2 ? POOL_ERROR : CONFIRMED)));
@@ -449,6 +467,16 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
       expect(outcome).not.toBeInstanceOf(TransactionRejectedError);
       row.expect(outcome);
       expect(algod.sendRawTransaction).toHaveBeenCalledTimes(row.sent);
+    });
+
+    it('a 2xx without an id in the response waits on the txid of the bytes', async () => {
+      const algod = sends([OK]);
+      algod.sendRawTransaction.mockImplementation(() => ({
+        do: async () => ({}),
+      }));
+      const outcome = await settle(service.submitTransaction(BLOB));
+      expect(outcome).toEqual({ txId: TX_ID, confirmed: true });
+      expect(algod.pendingTransactionInformation).toHaveBeenCalledWith(TX_ID);
     });
 
     it('a first-attempt 4xx is still the hard rejection, with no resend (control)', async () => {
