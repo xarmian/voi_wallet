@@ -39,6 +39,9 @@ const readWallet = (): Wallet => JSON.parse(mockStore[WALLET_KEY]);
 beforeEach(() => {
   mockStore = {};
   jest.clearAllMocks();
+  // clearAllMocks keeps implementations: a test that installs a legacy copy
+  // must not leak it into the next one.
+  jest.mocked(secureStorage.getItem).mockReset().mockResolvedValue(null);
 });
 
 afterEach(() => jest.restoreAllMocks());
@@ -264,4 +267,89 @@ it('never mutates an unmigrated legacy wallet copy', async () => {
     WALLET_KEY,
     expect.anything()
   );
+});
+
+// Audit 10-29, Luna P2 on #240: a create/import that stored its secret but
+// failed before the wallet metadata committed must not leave the secret
+// behind, whatever the failure (not only a raced reset).
+it('rolls back the create secret when the wallet write fails for any reason', async () => {
+  const { AccountSecureStorage } = require('../../secure/AccountSecureStorage');
+  // A present-but-corrupt wallet blob: the strict in-chain read throws.
+  mockStore[WALLET_KEY] = '{"accounts":';
+
+  await expect(
+    Service.createStandardAccount({ type: AccountType.STANDARD, label: 'X' })
+  ).rejects.toThrow();
+
+  expect(AccountSecureStorage.storeAccountForCreation).toHaveBeenCalledTimes(1);
+  expect(
+    AccountSecureStorage.deleteAccountIfAttemptMatches
+  ).toHaveBeenCalledTimes(1);
+  expect(AccountSecureStorage.commitPendingCreate).not.toHaveBeenCalled();
+});
+
+it('rolls back the import secret when the in-chain write rejects it', async () => {
+  const algosdk = require('algosdk');
+  const { AccountSecureStorage } = require('../../secure/AccountSecureStorage');
+  await Service.createStandardAccount({
+    type: AccountType.STANDARD,
+    label: 'First',
+  });
+  jest.clearAllMocks();
+  const imported = algosdk.generateAccount();
+  // A concurrent add of the same address lands between the duplicate
+  // pre-check and the in-chain write, which rejects the duplicate.
+  jest
+    .mocked(AccountSecureStorage.storeAccountForCreation)
+    .mockImplementationOnce(async () => {
+      const wallet = readWallet();
+      wallet.accounts.push({
+        ...wallet.accounts[0],
+        id: 'concurrent',
+        address: imported.addr.toString(),
+      });
+      mockStore[WALLET_KEY] = JSON.stringify(wallet);
+      return 'token';
+    });
+
+  await expect(
+    Service.importStandardAccount({
+      type: AccountType.STANDARD,
+      mnemonic: algosdk.secretKeyToMnemonic(imported.sk),
+      label: 'Imported',
+    } as never)
+  ).rejects.toThrow();
+
+  expect(
+    AccountSecureStorage.deleteAccountIfAttemptMatches
+  ).toHaveBeenCalledTimes(1);
+  expect(AccountSecureStorage.commitPendingCreate).not.toHaveBeenCalled();
+});
+
+it('fails an import closed, before storing a secret, when the legacy read hangs', async () => {
+  jest.useFakeTimers();
+  try {
+    jest
+      .mocked(secureStorage.getItem)
+      .mockImplementationOnce(() => new Promise(() => {}));
+    const {
+      AccountSecureStorage,
+    } = require('../../secure/AccountSecureStorage');
+    const outcome = Service.importStandardAccount({
+      type: AccountType.STANDARD,
+      mnemonic: require('algosdk').secretKeyToMnemonic(
+        require('algosdk').generateAccount().sk
+      ),
+      label: 'Imported',
+    } as never).then(
+      () => 'imported',
+      (error: Error) => error.message
+    );
+    await jest.advanceTimersByTimeAsync(5000);
+
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(AccountSecureStorage.storeAccountForCreation).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });

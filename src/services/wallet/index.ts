@@ -163,6 +163,9 @@ export class MultiAccountWalletService {
       // the cross-store creation is atomic against a concurrent full reset.
       const creationGen = AccountSecureStorage.getResetGeneration();
       let token: string | undefined;
+      // Set once the wallet metadata write has committed: after that, deleting
+      // the secret would leave a keyless record, so a later failure keeps it.
+      let metadataCommitted = false;
       try {
         token = await AccountSecureStorage.storeAccountForCreation(
           accountMetadata,
@@ -170,16 +173,19 @@ export class MultiAccountWalletService {
           creationGen
         );
         await this.addAccountToWallet(accountMetadata, creationGen);
+        metadataCommitted = true;
         await AccountSecureStorage.commitPendingCreate(
           accountMetadata.id,
           token
         );
         return accountMetadata;
       } catch (error) {
-        // DR-2 (reset wins): a reset raced this creation → roll back the just-
-        // written secret (ownership-checked; a no-op if the reset already
-        // deleted it) so neither store keeps a half-created account.
-        if (error instanceof ResetRacedError && token !== undefined) {
+        // DR-2 (reset wins) and audit 10-29 (Luna P2): ANY failure before the
+        // metadata committed (a raced reset, a strict-read failure, a corrupt
+        // blob, a duplicate) rolls back the just-written secret
+        // (ownership-checked; a no-op if a reset already deleted it), so
+        // neither store keeps a half-created account.
+        if (token !== undefined && !metadataCommitted) {
           try {
             await AccountSecureStorage.deleteAccountIfAttemptMatches(
               accountMetadata.id,
@@ -242,8 +248,13 @@ export class MultiAccountWalletService {
         throw new Error('Either mnemonic or private key must be provided');
       }
 
-      // Check if account already exists
-      const existingAccount = await this.findAccountByAddress(
+      // Check if account already exists. Strict and bounded (audit 10-29,
+      // Luna P2): findAccountByAddress -> getCurrentWallet can wait on the
+      // legacy keychain without limit and turns a read failure into "no
+      // wallet". A read error, a corrupt blob, a slow keychain or an
+      // unmigrated legacy copy fails the import before any secret is stored.
+      // (addAccountToWallet re-checks for duplicates inside the write chain.)
+      const existingAccount = await this.findAccountByAddressStrict(
         account.addr.toString()
       );
       if (existingAccount) {
@@ -291,6 +302,9 @@ export class MultiAccountWalletService {
       // TASK-220: guard the cross-store creation against a concurrent full reset.
       const creationGen = AccountSecureStorage.getResetGeneration();
       let token: string | undefined;
+      // Set once the wallet metadata write has committed: after that, deleting
+      // the secret would leave a keyless record, so a later failure keeps it.
+      let metadataCommitted = false;
       try {
         token = await AccountSecureStorage.storeAccountForCreation(
           accountMetadata,
@@ -298,13 +312,16 @@ export class MultiAccountWalletService {
           creationGen
         );
         await this.addAccountToWallet(accountMetadata, creationGen);
+        metadataCommitted = true;
         await AccountSecureStorage.commitPendingCreate(
           accountMetadata.id,
           token
         );
         return accountMetadata;
       } catch (error) {
-        if (error instanceof ResetRacedError && token !== undefined) {
+        // Same rollback rule as createStandardAccount: any failure before the
+        // metadata committed removes the secret this import wrote.
+        if (token !== undefined && !metadataCommitted) {
           try {
             await AccountSecureStorage.deleteAccountIfAttemptMatches(
               accountMetadata.id,
@@ -1805,6 +1822,25 @@ export class MultiAccountWalletService {
     const wallet = await this.getCurrentWallet();
     if (!wallet) {
       return null;
+    }
+    return wallet.accounts.find((acc) => acc.address === address) || null;
+  }
+
+  /**
+   * findAccountByAddress for a decision that must not fail open: a strict,
+   * bounded read (readWalletForMutation) that throws instead of reading as
+   * "no wallet". It never enqueues on the write chain.
+   */
+  private static async findAccountByAddressStrict(
+    address: string
+  ): Promise<AccountMetadata | null> {
+    const raw = await this.readWalletForMutation();
+    if (raw == null) {
+      return null;
+    }
+    const wallet = JSON.parse(raw) as Wallet;
+    if (!Array.isArray(wallet?.accounts)) {
+      throw new Error('Corrupt wallet blob: accounts is not an array');
     }
     return wallet.accounts.find((acc) => acc.address === address) || null;
   }
