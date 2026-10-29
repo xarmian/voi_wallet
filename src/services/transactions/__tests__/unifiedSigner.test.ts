@@ -61,7 +61,10 @@ jest.mock('@/services/walletconnect', () => ({
 }));
 
 jest.mock('@/services/secure/keyManager', () => ({
-  SecureKeyManager: { signTransaction: jest.fn() },
+  SecureKeyManager: {
+    signTransaction: jest.fn(),
+    resolveSigningRoute: jest.fn(),
+  },
 }));
 
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
@@ -93,6 +96,8 @@ const mockTxService = TransactionService as unknown as {
 };
 const mockSignTransaction =
   SecureKeyManager.signTransaction as unknown as jest.Mock;
+const mockResolveSigningRoute =
+  SecureKeyManager.resolveSigningRoute as unknown as jest.Mock;
 const mockClearCache =
   AccountSecureStorage.clearPrivateKeyCache as unknown as jest.Mock;
 const mockGetInstance = NetworkService.getInstance as unknown as jest.Mock;
@@ -291,6 +296,11 @@ beforeEach(() => {
     () => liveApprovedAccounts
   );
   signer = new UnifiedTransactionSigner();
+  // What the real resolver says for a WATCH account that isn't rekeyed.
+  mockResolveSigningRoute.mockResolvedValue({
+    kind: 'unavailable',
+    reason: 'Cannot sign transactions for watch-only accounts',
+  });
 
   // Default happy-path leaf behaviour (clearMocks resets call data each test).
   mockTxService.sendTransaction.mockResolvedValue({
@@ -1921,17 +1931,152 @@ describe('signTransaction — account-type routing guards', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error?.message).toMatch(/watch accounts cannot sign/i);
+    expect(result.error?.message).toMatch(/watch-only accounts/i);
     expect(mockTxService.sendTransaction).not.toHaveBeenCalled();
   });
 });
 
 // ===========================================================================
-// TASK-425: keyreg and app calls sign on the network they were built for,
-// and only for their own sender.
+// TASK-425: a persisted WATCH account signs when chain state says it can
 // ===========================================================================
 
-describe('signTransaction — keyreg/appl signing network (TASK-425)', () => {
+describe('signTransaction — WATCH accounts follow the signing route (TASK-425)', () => {
+  // Stands in for the account's own address in the table below.
+  const SELF = '__SELF__';
+
+  const transferParams = (networkId?: string) =>
+    ({ toAddress: 'x', amount: 1, networkId }) as never;
+
+  it('signs a WATCH account rekeyed on chain to a key we hold', async () => {
+    const account = accountOf('watch-rekeyed', AccountType.WATCH);
+    mockResolveSigningRoute.mockResolvedValueOnce({
+      kind: 'software',
+      signingAddress: 'AUTH_WE_HOLD',
+      rekeyedTo: 'AUTH_WE_HOLD',
+    });
+
+    const result = await signer.signTransaction({
+      type: 'voi_transfer',
+      account,
+      pin: '1234',
+      transferParams: transferParams('voi-mainnet'),
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockResolveSigningRoute).toHaveBeenCalledWith(
+      account.address,
+      'voi-mainnet'
+    );
+    // The sender stays the WATCH address; key choice is the signer's route.
+    expect(mockTxService.sendTransaction.mock.calls[0][1]).toBe(account);
+  });
+
+  it('refuses a WATCH account whose auth key we do not hold, with the route reason', async () => {
+    const account = accountOf('watch-foreign', AccountType.WATCH);
+    mockResolveSigningRoute.mockResolvedValueOnce({
+      kind: 'unavailable',
+      reason:
+        'Cannot sign transactions for this rekeyed account - signing key not available',
+    });
+
+    const result = await signer.signTransaction({
+      type: 'voi_transfer',
+      account,
+      transferParams: transferParams(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/signing key not available/i);
+    expect(mockTxService.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the route lookup itself fails', async () => {
+    const account = accountOf('watch-offline', AccountType.WATCH);
+    mockResolveSigningRoute.mockRejectedValueOnce(new Error('network down'));
+
+    const result = await signer.signTransaction({
+      type: 'voi_transfer',
+      account,
+      transferParams: transferParams(),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toBe('network down');
+    expect(mockTxService.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'rekey',
+      {
+        type: 'rekey',
+        networkId: 'algorand-mainnet',
+        rekeyParams: {
+          fromAddress: 'x',
+          rekeyToAddress: 'y',
+          networkId: 'voi-testnet',
+        },
+      },
+      'voi-testnet',
+    ],
+    [
+      'rekey falls back to the request network',
+      {
+        type: 'rekey',
+        networkId: 'algorand-mainnet',
+        rekeyParams: { fromAddress: 'x', rekeyToAddress: 'y' },
+      },
+      'algorand-mainnet',
+    ],
+    [
+      'batch uses the session binding',
+      {
+        type: 'walletconnect_batch',
+        networkId: 'algorand-mainnet',
+        walletConnectParams: {
+          transactions: [],
+          sessionBinding: { networkId: 'voi-mainnet' },
+        },
+      },
+      'voi-mainnet',
+    ],
+    [
+      'keyreg',
+      {
+        type: 'keyreg',
+        networkId: 'algorand-mainnet',
+        keyregParams: { address: SELF, networkId: 'voi-testnet' },
+      },
+      'voi-testnet',
+    ],
+    [
+      'appl',
+      {
+        type: 'appl',
+        networkId: 'algorand-mainnet',
+        applParams: { senderAddress: SELF, appId: 1, networkId: 'voi-testnet' },
+      },
+      'voi-testnet',
+    ],
+  ])(
+    'asks the route for the network the %s path signs on',
+    async (_name, request, expectedNetwork) => {
+      const account = accountOf(`watch-${_name}`, AccountType.WATCH);
+      await signer.signTransaction(
+        JSON.parse(
+          JSON.stringify({ ...(request as object), account }).replaceAll(
+            SELF,
+            account.address
+          )
+        ) as UnifiedTransactionRequest
+      );
+      expect(mockResolveSigningRoute).toHaveBeenCalledWith(
+        account.address,
+        expectedNetwork
+      );
+    }
+  );
+
   it.each([
     [
       'keyreg',
@@ -2013,6 +2158,16 @@ describe('signTransaction — keyreg/appl signing network (TASK-425)', () => {
       expect(mockSignTransaction).not.toHaveBeenCalled();
     }
   );
+
+  it('does not add a route lookup for non-WATCH accounts', async () => {
+    const account = accountOf('std-no-lookup', AccountType.STANDARD);
+    await signer.signTransaction({
+      type: 'voi_transfer',
+      account,
+      transferParams: transferParams(),
+    });
+    expect(mockResolveSigningRoute).not.toHaveBeenCalled();
+  });
 });
 
 // ===========================================================================
