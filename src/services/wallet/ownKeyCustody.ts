@@ -84,16 +84,15 @@ export async function findOwnKeySigner(
  * holdsOwnKey for an irreversible hand-over of authority TO this key (a rekey
  * target, or removing a rekey back to the account itself). A presence probe
  * also reads a keyless legacy blob as present, so a REKEYED record qualifies
- * only as a converted STANDARD account (originalOwner) or once its key reads
- * and belongs to its address, the rule rekeyManager applies before a
- * conversion (TASK-425 U3 hunter review). Any failure is not custody.
+ * only once its key reads and belongs to its address (TASK-425 U3 hunter
+ * review). originalOwner is not enough: it can outlive the key (U4). Any
+ * failure is not custody.
  */
 export async function holdsUsableOwnKey(
   account: AccountMetadata
 ): Promise<boolean> {
   if (!(await holdsOwnKey(account))) return false;
   if (account.type === AccountType.STANDARD) return true;
-  if ((account as RekeyedAccountMetadata).originalOwner === true) return true;
   let key: Uint8Array | null = null;
   try {
     key = await AccountSecureStorage.getPrivateKey(account.id);

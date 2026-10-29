@@ -804,7 +804,8 @@ describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
     mockGetPrivateKey.mockRejectedValue(new Error('no key'));
   });
 
-  it('accepts a REKEYED target that is a converted STANDARD account (originalOwner)', async () => {
+  // originalOwner can outlive the key, so it never replaces the read (TASK-425 U4).
+  it('rejects an originalOwner REKEYED target whose key does not read', async () => {
     funded({ isRekeyed: false });
     mockProbe.mockImplementation(async (id) => id === 'tgt');
     const errors = await validate([
@@ -816,7 +817,7 @@ describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
         originalOwner: true,
       },
     ]);
-    expect(errors).toEqual([]);
+    expect(errors).toContain(TARGET_ERROR);
   });
 
   it('accepts a REKEYED target whose key reads and is its own', async () => {
@@ -869,10 +870,10 @@ describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
     ['keyless REKEYED', AccountType.REKEYED, {}, false],
     ['STANDARD', AccountType.STANDARD, {}, true],
     [
-      'originalOwner REKEYED',
+      'originalOwner REKEYED whose key does not read',
       AccountType.REKEYED,
       { originalOwner: true },
-      true,
+      false,
     ],
     ['LEDGER', AccountType.LEDGER, {}, true],
     ['REMOTE_SIGNER', AccountType.REMOTE_SIGNER, {}, true],

@@ -450,8 +450,8 @@ describe('local-key verification eligibility', () => {
         backupCreatedAt: result.backupCreatedAt,
       });
       expect(storedAccounts()[1]).toEqual(before[1]);
-      if (owner) expect(probe).not.toHaveBeenCalled();
-      else expect(probe.mock.calls).toEqual([[target.id], [target.id]]);
+      // originalOwner can outlive the key: the probe runs either way (TASK-425 U4).
+      expect(probe.mock.calls).toEqual([[target.id], [target.id]]);
       const writes = (storage.setItem as jest.Mock).mock.calls.length;
       await MultiAccountWalletService.markBackupVerified(
         target.id,
@@ -461,10 +461,15 @@ describe('local-key verification eligibility', () => {
     }
   );
 
-  it.each(['absent', 'error'])(
-    'rejects initial probe %s even if already verified',
-    async (state) => {
-      const target = await seed();
+  it.each([
+    ['absent', false],
+    ['error', false],
+    ['absent', true],
+    ['error', true],
+  ] as const)(
+    'rejects initial probe %s even if already verified (originalOwner=%s)',
+    async (state, owner) => {
+      const target = await seed(owner);
       if (state === 'error')
         probe.mockRejectedValue(new Error('vault unavailable'));
       else probe.mockResolvedValue(false);

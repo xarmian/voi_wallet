@@ -833,6 +833,9 @@ describe('updateAccountWithRekeyInfo', () => {
       jest
         .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
         .mockResolvedValue(true);
+      jest
+        .spyOn(AccountSecureStorage, 'getPrivateKey')
+        .mockImplementation(async () => REKEYED.sk.slice());
       const result = await manager.updateAccountWithRekeyInfo(
         source(),
         { isRekeyed: false },
@@ -894,7 +897,8 @@ describe('updateAccountWithRekeyInfo', () => {
           .mockResolvedValue(true);
         jest
           .spyOn(AccountSecureStorage, 'getPrivateKey')
-          .mockResolvedValue(new Uint8Array(64));
+          // The account's own key: a read must also match its address (U4).
+          .mockImplementation(async () => REKEYED.sk.slice());
         const result = await manager.updateAccountWithRekeyInfo(
           keylessCandidate(),
           { isRekeyed: false },
@@ -921,21 +925,52 @@ describe('updateAccountWithRekeyInfo', () => {
       });
     });
 
-    it('needs no unlock: a locked vault does not affect the decision', async () => {
-      const probe = jest
+    // originalOwner can outlive the key, so the key must read before the record
+    // converts; a locked vault keeps it REKEYED, which still signs with its own
+    // key (TASK-425 U3), until a later load reads it (TASK-425 U4).
+    it.each([
+      ['a locked vault', new Error('vault locked')],
+      [
+        'a stale flag over a keyless legacy record',
+        new Error('no private key in record'),
+      ],
+    ])(
+      'keeps the record when the key does not read: %s',
+      async (_label, readError) => {
+        const probe = jest
+          .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+          .mockResolvedValue(true);
+        const getKey = jest
+          .spyOn(AccountSecureStorage, 'getPrivateKey')
+          .mockRejectedValue(readError);
+        const original = source();
+        const result = await manager.updateAccountWithRekeyInfo(
+          original,
+          { isRekeyed: false },
+          makeWallet([original])
+        );
+        expect(result).toBe(original);
+        expect(probe).toHaveBeenCalledWith('src-1');
+        expect(getKey).toHaveBeenCalledWith('src-1');
+      }
+    );
+
+    it('keeps the record when the key reads but belongs to another address', async () => {
+      jest
         .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
         .mockResolvedValue(true);
-      const getKey = jest
+      const foreign = DECOY.sk.slice();
+      jest
         .spyOn(AccountSecureStorage, 'getPrivateKey')
-        .mockRejectedValue(new Error('vault locked'));
+        .mockResolvedValue(foreign);
+      const original = source();
       const result = await manager.updateAccountWithRekeyInfo(
-        source(),
+        original,
         { isRekeyed: false },
-        makeWallet([source()])
+        makeWallet([original])
       );
-      expect(result.type).toBe(AccountType.STANDARD);
-      expect(probe).toHaveBeenCalledWith('src-1');
-      expect(getKey).not.toHaveBeenCalled();
+      expect(result).toBe(original);
+      expect(foreign.every((byte) => byte === 0)).toBe(true);
     });
   });
 });
@@ -1010,6 +1045,9 @@ describe('per-account backup history through conversions', () => {
       jest
         .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
         .mockResolvedValue(true);
+      jest
+        .spyOn(AccountSecureStorage, 'getPrivateKey')
+        .mockImplementation(async () => REKEYED.sk.slice());
       const source = { ...standardAccount(REKEYED, 'src-1'), ...history };
       // Remove the builder's defaults for the missing-fields legacy case.
       if (!('hasBackup' in history)) {
