@@ -77,6 +77,7 @@ export type MappedErrorType =
   | 'not_opted_in'
   | 'transaction_expired'
   | 'duplicate_transaction'
+  | 'maybe_submitted'
   | 'fee_too_low'
   | 'app_rejected'
   | 'transaction_rejected'
@@ -429,6 +430,16 @@ const DUPLICATE_TRANSACTION: Rule = {
   userAction: 'Check your transaction history before sending it again.',
 };
 
+// The node may have taken it but there is no txid to check it by
+// (TransactionMaybeSubmittedError, TASK-440 #8). Never retryable, and the copy
+// must never invite a re-sign (director 10-29).
+const MAYBE_SUBMITTED: Rule = {
+  type: 'maybe_submitted',
+  message: 'This transaction may already have been submitted.',
+  retryable: false,
+  userAction: 'Check your transaction history to see whether it went through.',
+};
+
 const FEE_TOO_LOW: Rule = {
   type: 'fee_too_low',
   message: 'The network fee was too low for current conditions.',
@@ -627,6 +638,10 @@ const MESSAGE_RULES: { pattern: RegExp; rule: Rule }[] = [
     pattern:
       /already in ledger|transactionpool\.remember: txn already|duplicate transaction/,
     rule: DUPLICATE_TRANSACTION,
+  },
+  {
+    pattern: /may already have been submitted/,
+    rule: MAYBE_SUBMITTED,
   },
   {
     pattern: /fee \d* ?below threshold|fee too (small|low)/,
@@ -852,6 +867,7 @@ const TITLE_BY_TYPE: Partial<Record<MappedErrorType, string>> = {
   not_opted_in: 'Opt-In Required',
   transaction_expired: 'Transaction Expired',
   duplicate_transaction: 'Already Submitted',
+  maybe_submitted: 'May Have Been Sent',
   fee_too_low: 'Fee Too Low',
   app_rejected: 'Rejected by Contract',
   transaction_rejected: 'Transaction Rejected',
