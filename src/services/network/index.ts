@@ -1186,18 +1186,32 @@ export class NetworkService {
     txId: string,
     rounds: number
   ): Promise<algosdk.modelsv2.PendingTransactionResponse | null> {
+    // The deadline only stops us awaiting algosdk's loop; the loop keeps
+    // running. Record how it ends, so an outcome it reaches while the look
+    // below is in flight is not lost (Codex pass A, TASK-440 #8).
+    const late: {
+      info?: algosdk.modelsv2.PendingTransactionResponse;
+      reason?: string;
+    } = {};
+    const wait = algosdk.waitForConfirmation(this.algodClient, txId, rounds);
+    wait.then(
+      (info) => {
+        late.info = info;
+      },
+      (waitError) => {
+        late.reason = NetworkService.rejectionReason(waitError);
+      }
+    );
     try {
       return await this.withTimeout(
-        algosdk.waitForConfirmation(this.algodClient, txId, rounds),
+        wait,
         `confirm transaction ${txId}`,
         NetworkService.confirmationDeadlineMs(rounds)
       );
     } catch (error) {
-      // algosdk rethrows only one error from inside its loop: the pool error.
-      const message = error instanceof Error ? error.message : '';
-      const rejected = /^Transaction Rejected: ([\s\S]*)$/.exec(message);
-      if (rejected) {
-        throw new TransactionRejectedError(txId, rejected[1]);
+      const reason = NetworkService.rejectionReason(error);
+      if (reason !== undefined) {
+        throw new TransactionRejectedError(txId, reason);
       }
       // Timed out, not confirmed within the rounds, or the node was
       // unreachable: one bounded look before calling it pending.
@@ -1221,12 +1235,28 @@ export class NetworkService {
           redactError(lookError)
         );
       }
+      if (late.reason !== undefined) {
+        throw new TransactionRejectedError(txId, late.reason);
+      }
+      if (late.info) {
+        return late.info;
+      }
       console.warn(
         'Transaction submitted but not yet confirmed:',
         redactError(error)
       );
       return null;
     }
+  }
+
+  /**
+   * algod's reason when `error` is algosdk's pool-error rejection, the only
+   * error its wait loop rethrows from a pending-info read; undefined for any
+   * other error (timeout, round exhaustion, an unreadable node).
+   */
+  private static rejectionReason(error: unknown): string | undefined {
+    const message = error instanceof Error ? error.message : '';
+    return /^Transaction Rejected: ([\s\S]*)$/.exec(message)?.[1];
   }
 
   /**
