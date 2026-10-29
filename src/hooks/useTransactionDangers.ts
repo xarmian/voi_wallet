@@ -14,12 +14,14 @@ export type IndexedDanger = DangerItem & { txnIndex: number };
 /** One transaction's dangers and the network its asset lookups resolve on. */
 export interface DangerEntry {
   /**
-   * Every danger item in the transaction, pre-signed ones included (their
-   * effects come before later entries). Undefined when it can't be decoded.
+   * Every danger item in the transaction, pre-signed ones included (they may
+   * touch the same asset). Undefined when it can't be decoded.
    */
   dangers?: DangerItem[];
   /** False for an entry this review does not sign: it is never listed. */
   signs?: boolean;
+  /** An application call: it may change any asset via inner transactions. */
+  opaque?: boolean;
   /** Undefined when the network can't be named: lookups then fail closed. */
   networkId?: NetworkId;
 }
@@ -66,8 +68,9 @@ const indexSigned = (
  * Every dangerous operation across a batch, for the signing reviews (the
  * WalletConnect/universal screen and the remote signer share it, TASK-440 /
  * TASK-445). Asset-authority items start out unverified and are narrowed to
- * the roles that actually change once each asset's current holders are read
- * and the batch is simulated in order (resolveAssetAuthorityDangers).
+ * the roles that actually change once each asset's current holders are read,
+ * where nothing else in the batch may touch the asset
+ * (resolveAssetAuthorityDangers).
  * Narrowing only removes items or their unverified mark, so an acknowledgment
  * given earlier never covers more than what is shown.
  */
@@ -98,6 +101,7 @@ export function useTransactionDangers(entries: DangerEntry[]): IndexedDanger[] {
       const lists = await resolveAssetAuthorityDangers(
         entries.map((entry) => ({
           items: entry.dangers,
+          opaque: entry.opaque,
           network: entry.networkId,
         })),
         (network, assetId) =>

@@ -168,30 +168,39 @@ const isAuthorityItem = (
   { kind: 'assetAuthority' | 'assetAuthorityRemoved' }
 > => item.kind === 'assetAuthority' || item.kind === 'assetAuthorityRemoved';
 
-/** One batch entry for resolveAssetAuthorityDangers, in execution order. */
+/** One batch entry for resolveAssetAuthorityDangers. */
 export interface AuthorityBatchEntry {
   /**
    * The entry's danger items, for EVERY decodable entry (pre-signed ones
-   * included: their effects precede later entries). Undefined when the entry
-   * can't be decoded, so its effects are unknown.
+   * included: they may touch the same asset). Undefined when the entry can't
+   * be decoded, so what it touches is unknown.
    */
   items?: DangerItem[];
+  /**
+   * True when the entry can change assets in ways its own fields don't show:
+   * an application call can reconfigure any asset through inner transactions.
+   */
+  opaque?: boolean;
   /** Key of the network its asset lookups run on; undefined = unknown. */
   network?: string;
 }
 
 /**
  * Drop the asset-authority items that change nothing (Luna r1 #3 on TASK-440):
- * a reconfiguration restates every role, so only a role whose holder differs
- * from the holder at that point in the batch is a hand-over or a removal.
+ * a reconfiguration restates every role, so a role whose holder equals the
+ * asset's CURRENT on-chain holder hands nothing over.
  *
- * The batch is simulated in execution order: holders start as `lookup`
- * reports them on chain, and each reconfiguration then sets all four (Codex
- * pass on 3c5fee0: comparing every entry to the same on-chain snapshot let
- * a C -> B change after an earlier B -> C read as unchanged). Where holders
- * are unknown (the lookup failed or returned null, the network is unknown,
- * or an earlier entry can't be decoded) every role is kept, marked
- * unverified. Returns the resolved items per entry, index-aligned.
+ * A role is dropped ONLY when that comparison is sound, i.e. nothing else in
+ * the batch may touch the asset: no other entry reconfigures or destroys it,
+ * and no entry is an application call (inner transactions) or undecodable.
+ * Otherwise every role of that asset is kept, marked unverified. Other
+ * entries can therefore only add warnings, never remove one, whatever order
+ * they run in or whether they run at all: a batch is not necessarily an
+ * atomic group (Codex passes on 3c5fee0 and 8494b2b: an in-order simulation
+ * dropped warnings when an earlier entry was discarded, or an app call
+ * changed the holders in between). A failed or null lookup, or an unknown
+ * network, also keeps every role, unverified. Returns the resolved items per
+ * entry, index-aligned.
  */
 export const resolveAssetAuthorityDangers = async (
   entries: AuthorityBatchEntry[],
@@ -200,64 +209,55 @@ export const resolveAssetAuthorityDangers = async (
   const keyOf = (network: string | undefined, assetId: bigint) =>
     network === undefined ? undefined : `${network}:${assetId}`;
 
-  const onChain = new Map<string, AssetAuthorities | null>();
-  await Promise.all(
-    entries.flatMap((entry) =>
-      (entry.items ?? []).filter(isAuthorityItem).map(async (item) => {
+  const anyOpaque = entries.some((entry) => !entry.items || entry.opaque);
+  // How many entries touch each asset (reconfigure or destroy it).
+  const touches = new Map<string, number>();
+  for (const entry of entries) {
+    const keys = new Set<string>();
+    for (const item of entry.items ?? []) {
+      if (isAuthorityItem(item) || item.kind === 'assetDestroy') {
         const key = keyOf(entry.network, item.assetId);
-        if (key === undefined || onChain.has(key)) return;
-        onChain.set(key, null);
-        try {
-          onChain.set(key, await lookup(entry.network!, item.assetId));
-        } catch {
-          onChain.set(key, null);
-        }
-      })
-    )
-  );
+        if (key !== undefined) keys.add(key);
+      }
+    }
+    for (const key of keys) touches.set(key, (touches.get(key) ?? 0) + 1);
+  }
 
-  // Holders at the current point in the batch; null = unknown.
-  const simulated = new Map<string, AssetAuthorities | null>();
-  let opaqueSeen = false;
-  const holdersAt = (key: string | undefined) => {
-    if (key === undefined) return null;
-    if (simulated.has(key)) return simulated.get(key)!;
-    return opaqueSeen ? null : (onChain.get(key) ?? null);
+  const onChain = new Map<string, Promise<AssetAuthorities | null>>();
+  const read = (network: string, assetId: bigint, key: string) => {
+    let pending = onChain.get(key);
+    if (!pending) {
+      pending = lookup(network, assetId).catch(() => null);
+      onChain.set(key, pending);
+    }
+    return pending;
   };
 
-  return entries.map((entry) => {
-    if (!entry.items) {
-      // Unknown effects: no holder read earlier can be trusted after this.
-      opaqueSeen = true;
-      for (const key of simulated.keys()) simulated.set(key, null);
-      return undefined;
-    }
-    const resolved: DangerItem[] = [];
-    const after = new Map<string, AssetAuthorities | null>();
-    for (const item of entry.items) {
-      if (item.kind === 'assetDestroy') {
+  return Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.items) return undefined;
+      const resolved: DangerItem[] = [];
+      for (const item of entry.items) {
+        if (!isAuthorityItem(item)) {
+          resolved.push(item);
+          continue;
+        }
         const key = keyOf(entry.network, item.assetId);
-        if (key !== undefined) after.set(key, null);
+        const comparable =
+          key !== undefined && !anyOpaque && touches.get(key) === 1;
+        const holders = comparable
+          ? await read(entry.network!, item.assetId, key)
+          : null;
+        if (!holders) {
+          resolved.push({ ...item, unverified: true });
+          continue;
+        }
+        const next = item.kind === 'assetAuthority' ? item.target : undefined;
+        if (authorityHolder(holders[item.role]) !== next) {
+          resolved.push(item);
+        }
       }
-      if (!isAuthorityItem(item)) {
-        resolved.push(item);
-        continue;
-      }
-      const key = keyOf(entry.network, item.assetId);
-      const holders = holdersAt(key);
-      const next = item.kind === 'assetAuthority' ? item.target : undefined;
-      if (key !== undefined) {
-        const set = after.get(key) ?? {};
-        set[item.role] = next;
-        after.set(key, set);
-      }
-      if (!holders) {
-        resolved.push({ ...item, unverified: true });
-      } else if (authorityHolder(holders[item.role]) !== next) {
-        resolved.push(item);
-      }
-    }
-    for (const [key, holders] of after) simulated.set(key, holders);
-    return resolved;
-  });
+      return resolved;
+    })
+  );
 };

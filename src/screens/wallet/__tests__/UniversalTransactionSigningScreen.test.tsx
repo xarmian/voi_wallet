@@ -866,6 +866,7 @@ describe('asset reconfiguration review', () => {
   // Codex pass on 3c5fee0 (HIGH): a pre-signed entry that moves clawback to
   // the attacker, followed by an entry that moves it back, compared each
   // entry to the on-chain snapshot, so the review showed no banner at all.
+  // Two entries on one asset now keep every role of the signed one, unverified.
   it('counts a pre-signed reconfiguration earlier in the batch', async () => {
     mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
     const managerAccount = makeAccount('acfg-manager');
@@ -896,7 +897,7 @@ describe('asset reconfiguration review', () => {
     expect(
       await view.findByText(
         new RegExp(
-          `Transaction 2: ${sender} gives the clawback authority of asset #777 to ${holders.clawback}\\.$`
+          `Transaction 2: ${sender} gives the clawback authority of asset #777 to ${holders.clawback}\\. .*unverified`
         )
       )
     ).toBeTruthy();

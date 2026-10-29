@@ -274,6 +274,7 @@ export default function TransactionReviewScreen() {
     () =>
       decodedTransactions.map((txn) => ({
         dangers: txn.dangers,
+        opaque: txn.type === 'app_call',
         networkId: networkIdForGenesisHash(txn.genesisHash),
       })),
     [decodedTransactions]

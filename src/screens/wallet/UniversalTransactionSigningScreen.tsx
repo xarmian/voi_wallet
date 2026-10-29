@@ -100,6 +100,8 @@ interface ParsedTransaction {
   dangers?: DangerItem[];
   /** False for a pre-signed or undecodable entry: this review doesn't sign it. */
   signs?: boolean;
+  /** An application call: it may change any asset via inner transactions. */
+  mayTouchAssets?: boolean;
 }
 
 /** How a single account will produce its signature, resolved on chain. */
@@ -276,10 +278,11 @@ function parseBatch(transactionBytes: string[]): {
         note: decodeNoteForDisplay(txn.note),
         assetId,
         type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
-        // Pre-signed entries are not listed, but their effects (e.g. an
-        // earlier reconfiguration) shape how later ones are resolved.
+        // Pre-signed entries are not listed, but whether they may touch an
+        // asset decides whether its authority changes can be narrowed.
         dangers: describeTransactionDangers(txn),
         signs: !isAlreadySigned,
+        mayTouchAssets: !!txn.applicationCall,
       });
     } catch (error) {
       console.error('Failed to parse transaction:', error);
@@ -810,6 +813,7 @@ export default function UniversalTransactionSigningScreen({
       parsedTransactions.map((t) => ({
         dangers: t.dangers,
         signs: t.signs,
+        opaque: t.mayTouchAssets,
         networkId: boundNetworkId,
       })),
     [parsedTransactions, boundNetworkId]

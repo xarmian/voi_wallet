@@ -436,10 +436,13 @@ describe('resolveAssetAuthorityDangers', () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  // Codex pass on 3c5fee0 (HIGH): every entry was compared to the same
-  // on-chain snapshot, so in "clawback B -> NEW, then NEW -> B" the second
-  // hand-over read as unchanged and was dropped.
-  it('simulates the batch in order: a later change back is still a change', async () => {
+  const allUnverified = (items: any[]) =>
+    items.length === 4 && items.every((i) => i.unverified === true);
+
+  // Codex pass on 3c5fee0 (HIGH): in "clawback B -> NEW, then NEW -> B" the
+  // second entry matched the on-chain holder and was dropped. Two entries on
+  // one asset make the comparison unsound, so both keep every role.
+  it('keeps every role, unverified, when another entry touches the same asset', async () => {
     const lookup = jest.fn(async () => ({ manager: M, clawback: R }));
     const [first, second] = await resolveAssetAuthorityDangers(
       [
@@ -448,28 +451,60 @@ describe('resolveAssetAuthorityDangers', () => {
       ],
       lookup
     );
-    expect(lookup).toHaveBeenCalledTimes(1);
-    expect(first.map((i: any) => [i.kind, i.role, i.target])).toEqual([
-      ['assetAuthority', 'clawback', NEW],
-    ]);
-    expect(second.map((i: any) => [i.kind, i.role, i.target])).toEqual([
-      ['assetAuthority', 'clawback', R],
-    ]);
+    expect(allUnverified(first)).toBe(true);
+    expect(allUnverified(second)).toBe(true);
   });
 
-  it('after an undecodable entry, holders are unknown until a reconfiguration sets them', async () => {
+  // Codex pass on 8494b2b (HIGH #1): a batch is not necessarily an atomic
+  // group, so an earlier entry that sets the same holder may never run.
+  it('does not let an identical earlier entry clear a real change', async () => {
     const lookup = async () => ({ manager: M, clawback: R });
-    const [, afterOpaque, afterThat] = await resolveAssetAuthorityDangers(
+    const [, second] = await resolveAssetAuthorityDangers(
       [
-        { items: undefined },
-        { items: reconfig({ manager: M, clawback: R }), network: 'n' },
+        { items: reconfig({ manager: M, clawback: NEW }), network: 'n' },
+        { items: reconfig({ manager: M, clawback: NEW }), network: 'n' },
+      ],
+      lookup
+    );
+    expect(second.some((i: any) => i.role === 'clawback')).toBe(true);
+  });
+
+  // Codex pass on 8494b2b (HIGH #2): an application call can reconfigure
+  // assets through inner transactions that no decoder sees.
+  it('keeps every role, unverified, when the batch has an app call or an undecodable entry', async () => {
+    const lookup = async () => ({ manager: M, clawback: R });
+    for (const other of [{ items: [], opaque: true }, { items: undefined }]) {
+      const [, result] = await resolveAssetAuthorityDangers(
+        [other, { items: reconfig({ manager: M, clawback: R }), network: 'n' }],
+        lookup
+      );
+      expect(allUnverified(result)).toBe(true);
+    }
+  });
+
+  it('narrows assets no other entry touches, even when another asset is contested', async () => {
+    const other = describeTransactionDangers(
+      algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+        sender: SENDER,
+        assetIndex: 43,
+        manager: M,
+        suggestedParams: SUGGESTED_PARAMS as any,
+        strictEmptyAddressChecking: false,
+      } as any)
+    );
+    const lookup = jest.fn(async (_n: string, id: bigint) =>
+      id === 43n ? { manager: M } : { manager: M, clawback: R }
+    );
+    const [first, , third] = await resolveAssetAuthorityDangers(
+      [
+        { items: other, network: 'n' },
+        { items: reconfig({ manager: M, clawback: NEW }), network: 'n' },
         { items: reconfig({ manager: M, clawback: R }), network: 'n' },
       ],
       lookup
     );
-    expect(afterOpaque).toHaveLength(4);
-    expect(afterOpaque.every((i: any) => i.unverified === true)).toBe(true);
-    // The second reconfiguration restates exactly what the first set.
-    expect(afterThat).toEqual([]);
+    expect(first).toEqual([]);
+    expect(allUnverified(third)).toBe(true);
+    expect(lookup).toHaveBeenCalledTimes(1);
   });
 });

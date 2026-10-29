@@ -201,3 +201,34 @@ it('shows no banner and does not gate a plain payment', async () => {
   await fireEvent.press(view.getByText(/^Sign/));
   await waitFor(() => expect(mockAuthVisible).toBe(true));
 });
+
+// Codex pass on 8494b2b (HIGH #2): an app call in the request may reconfigure
+// the asset through inner transactions, so no role is narrowed away.
+it('keeps every authority role, unverified, when the request has an app call', async () => {
+  const [reconfig] = reconfigRequest().txns;
+  mockRequest = {
+    txns: [
+      {
+        b: b64(
+          algosdk.makeApplicationNoOpTxnFromObject({
+            sender: manager,
+            appIndex: 99n,
+            suggestedParams: PARAMS,
+          })
+        ),
+      },
+      reconfig,
+    ],
+  };
+  const view = await render(<TransactionReviewScreen />);
+
+  for (const role of ['manager', 'reserve', 'freeze', 'clawback']) {
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 2: .*${role} authority of asset #4242 .*unverified`
+        )
+      )
+    ).toBeTruthy();
+  }
+});
