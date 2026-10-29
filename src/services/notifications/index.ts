@@ -70,6 +70,7 @@ class NotificationService {
   private static instance: NotificationService;
   private deviceId: string | null = null;
   private pushToken: string | null = null;
+  private pushTokenWarningsLogged = new Set<string>();
   private notificationListener: Notifications.Subscription | null = null;
   private responseListener: Notifications.Subscription | null = null;
   private appStateSubscription: ReturnType<
@@ -227,9 +228,10 @@ class NotificationService {
 
   /**
    * Request notification permissions
+   * @param options.prompt Whether to prompt if permission is not already granted
    * @returns true if permissions granted
    */
-  async requestPermissions(): Promise<boolean> {
+  async requestPermissions({ prompt = true } = {}): Promise<boolean> {
     if (!Device.isDevice) {
       console.warn('Push notifications only work on physical devices');
       return false;
@@ -239,7 +241,7 @@ class NotificationService {
       await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
-    if (existingStatus !== 'granted') {
+    if (existingStatus !== 'granted' && prompt) {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
@@ -259,14 +261,15 @@ class NotificationService {
 
   /**
    * Register push token with the server
+   * @param options.prompt Whether to prompt for permission (false during startup)
    * @returns The Expo push token or null if failed
    */
-  async registerPushToken(): Promise<string | null> {
-    const hasPermission = await this.requestPermissions();
-    if (!hasPermission) return null;
-
+  async registerPushToken({ prompt = true } = {}): Promise<string | null> {
     const supabase = getSupabaseClient();
     if (!supabase || !this.deviceId) return null;
+
+    const hasPermission = await this.requestPermissions({ prompt });
+    if (!hasPermission) return null;
 
     try {
       // Get Expo push token
@@ -279,9 +282,38 @@ class NotificationService {
         return null;
       }
 
-      const tokenData = await Notifications.getExpoPushTokenAsync({
-        projectId,
-      });
+      let tokenData: Notifications.ExpoPushToken;
+      try {
+        tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+      } catch (error) {
+        const { code, message } = (error ?? {}) as {
+          code?: unknown;
+          message?: unknown;
+        };
+        if (
+          code === 'E_REGISTRATION_FAILED' ||
+          (typeof message === 'string' && message.includes('FIS_'))
+        ) {
+          // Native registration can fail with invalid Firebase credentials.
+          // Warn once per distinct failure, without the native error's verbose
+          // payload. The message is kept (truncated) because it carries the
+          // reason, e.g. FIS_AUTH_ERROR vs SERVICE_NOT_AVAILABLE (TASK-405).
+          const label = typeof code === 'string' ? code : 'FIS_ERROR';
+          const reason =
+            typeof message === 'string' ? message.slice(0, 160) : '';
+          const key = `${label}|${reason}`;
+          if (!this.pushTokenWarningsLogged.has(key)) {
+            this.pushTokenWarningsLogged.add(key);
+            console.warn(
+              '[Notifications] Push token unavailable:',
+              label,
+              reason
+            );
+          }
+          return null;
+        }
+        throw error;
+      }
       this.pushToken = tokenData.data;
 
       // Register with server (using voiwallet schema)

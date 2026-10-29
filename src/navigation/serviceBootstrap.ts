@@ -338,8 +338,10 @@ export const initializeServices = async ({
           // Check if user has a wallet, then register the push token
           const wallet = await MultiAccountWalletService.getCurrentWallet();
           if (wallet && wallet.accounts.length > 0) {
-            // Register push token if permissions granted
-            const token = await notificationService.registerPushToken();
+            // Refresh an opted-in user's token without prompting at startup.
+            const token = await notificationService.registerPushToken({
+              prompt: false,
+            });
             if (token) {
               // Defer the per-account subscribe off the critical path; it
               // re-reads the wallet at run time so startup-created accounts
