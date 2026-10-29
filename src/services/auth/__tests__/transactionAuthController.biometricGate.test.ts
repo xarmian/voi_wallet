@@ -656,6 +656,9 @@ describe('remote batch submission ownership (TASK-418)', () => {
       realService.buildRekeyTransaction.bind(realService);
     TransactionService.buildRekeyReverseTransaction =
       realService.buildRekeyReverseTransaction.bind(realService);
+    // The pre-submit custody re-check (TASK-425 U3).
+    TransactionService.assertSignsAfterRekey =
+      realService.assertSignsAfterRekey.bind(realService);
     net.getSuggestedParams = jest.fn(async () => ({
       ...SUGGESTED_PARAMS,
       genesisID: NETWORK_CONFIGURATIONS[netId as NetworkId].genesisId,
@@ -666,6 +669,15 @@ describe('remote batch submission ownership (TASK-418)', () => {
         )
       ),
     }));
+    // The rekey builders check the receiving key is held (TASK-425 U3).
+    (MultiAccountWalletService.getCurrentWallet as jest.Mock).mockResolvedValue(
+      {
+        accounts: [
+          { id: 'owner', address: owner.addr, type: AccountType.REMOTE_SIGNER },
+          { id: 'wrong', address: wrong.addr, type: AccountType.STANDARD },
+        ],
+      }
+    );
     await controller.initializeSigningFlow({
       type,
       rekeyParams: {
@@ -708,6 +720,34 @@ describe('remote batch submission ownership (TASK-418)', () => {
       expect(getRekeyStatusEpoch()).toBe(
         before + (type === 'voi_transfer' ? 0 : 1)
       );
+    }
+  );
+
+  it.each(['rekey', 'rekey_reverse'])(
+    '%s is not submitted when the receiving key is lost during the QR round trip (TASK-425 U3)',
+    async (type) => {
+      const controller = await transferFlow(
+        new TransactionAuthController(),
+        type
+      );
+      const request = controller.getRemoteSignerRequest()!;
+      const bytes = require('algosdk')
+        .decodeUnsignedTransaction(Buffer.from(request.txns[0].b, 'base64'))
+        .signTxn(owner.sk);
+      // While the QR request is out, the receiving record loses its key.
+      (
+        MultiAccountWalletService.getCurrentWallet as jest.Mock
+      ).mockResolvedValue({
+        accounts: [
+          { id: 'owner', address: owner.addr, type: AccountType.WATCH },
+          { id: 'wrong', address: wrong.addr, type: AccountType.WATCH },
+        ],
+      });
+      await controller.processRemoteSignerResponse(
+        RemoteSignerService.createSuccessResponse(request.id, [bytes])
+      );
+      expect(submit).not.toHaveBeenCalled();
+      expect(controller.getState().result?.success).not.toBe(true);
     }
   );
 

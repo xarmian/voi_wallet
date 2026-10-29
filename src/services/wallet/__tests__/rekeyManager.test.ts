@@ -404,6 +404,50 @@ describe('checkSigningAuthority — authority branches', () => {
   });
 });
 
+describe('checkSigningAuthority — retained REKEYED authority (TASK-425 U3)', () => {
+  // After U4 an undone rekey stays REKEYED; its own key may still be held.
+  const retained = () =>
+    ({
+      ...standardAccount(STD_AUTH, 'rk-1'),
+      type: AccountType.REKEYED,
+    }) as unknown as AccountMetadata;
+  let probe: jest.SpyInstance;
+  afterEach(() => probe.mockRestore());
+
+  it('can sign when the record still holds its own key', async () => {
+    probe = jest
+      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+      .mockResolvedValue(true);
+    const result = await manager.checkSigningAuthority(
+      REKEYED.addr,
+      STD_AUTH.addr,
+      makeWallet([retained()])
+    );
+    expect(result).toEqual({
+      accountAddress: REKEYED.addr,
+      canSign: true,
+      signingAccountId: 'rk-1',
+      signingAddress: STD_AUTH.addr,
+    });
+    expect(probe).toHaveBeenCalledWith('rk-1');
+  });
+
+  it.each([
+    ['its key is gone', () => Promise.resolve(false)],
+    ['the probe errors', () => Promise.reject(new Error('keychain busy'))],
+  ])('cannot sign when %s', async (_label, answer) => {
+    probe = jest
+      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+      .mockImplementation(answer);
+    const result = await manager.checkSigningAuthority(
+      REKEYED.addr,
+      STD_AUTH.addr,
+      makeWallet([retained()])
+    );
+    expect(result).toEqual({ accountAddress: REKEYED.addr, canSign: false });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // detectRekeyedAccounts — rekeyed vs non-rekeyed detection
 // ---------------------------------------------------------------------------

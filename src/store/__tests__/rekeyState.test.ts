@@ -110,6 +110,7 @@ import {
 import { AccountBalance, AccountType, Wallet } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import { renderHook, act } from '@testing-library/react-native';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 
 const network = NetworkId.VOI_MAINNET;
 const otherNetwork = NetworkId.ALGORAND_MAINNET;
@@ -309,6 +310,61 @@ describe('canSign parity with updateAccountWithRekeyInfo', () => {
       });
     }
   );
+});
+
+describe('retained REKEYED auth key (TASK-425 U3)', () => {
+  // AUTH's record stays REKEYED after an undone rekey (U4); its own key may or
+  // may not still be on the device.
+  const retained = {
+    ...wallet,
+    accounts: [
+      wallet.accounts[0],
+      { id: 'signer', address: 'AUTH', type: AccountType.REKEYED },
+    ],
+  } as unknown as Wallet;
+  let probe: jest.SpyInstance;
+  beforeEach(() => {
+    useWalletStore.setState({ wallet: retained });
+    probe = jest.spyOn(AccountSecureStorage, 'probeSecretPresenceStrict');
+  });
+  afterEach(() => probe.mockRestore());
+
+  it('strict counts it as the signer once its key is probed present', async () => {
+    probe.mockResolvedValue(true);
+    await expect(getRekeyStateStrict('SOURCE', network)).resolves.toMatchObject(
+      { isRekeyed: true, authAddress: 'AUTH', canSign: true }
+    );
+    expect(probe).toHaveBeenCalledWith('signer');
+  });
+
+  it('strict reads it as not signing when the key is gone', async () => {
+    probe.mockResolvedValue(false);
+    await expect(getRekeyStateStrict('SOURCE', network)).resolves.toMatchObject(
+      { canSign: false }
+    );
+  });
+
+  it('strict propagates a probe error instead of guessing', async () => {
+    probe.mockRejectedValue(new Error('keychain busy'));
+    await expect(getRekeyStateStrict('SOURCE', network)).rejects.toThrow(
+      'Signer custody unavailable'
+    );
+  });
+
+  it('the sync display path does not probe and reads it as not signing', () => {
+    useWalletStore.setState({
+      wallet: retained,
+      accountStates: {
+        source: {
+          balance,
+          balanceNetworkId: network,
+          balanceError: null,
+        } as never,
+      },
+    });
+    expect(getRekeyState('SOURCE', network)).toMatchObject({ canSign: false });
+    expect(probe).not.toHaveBeenCalled();
+  });
 });
 
 describe('balance stamp commit paths', () => {

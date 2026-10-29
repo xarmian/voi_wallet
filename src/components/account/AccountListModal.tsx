@@ -42,6 +42,8 @@ interface AccountListModalProps {
   onAccountSelect?: (accountId: string) => void;
   /** Only show accounts that can sign (STANDARD, LEDGER) - used in airgap mode */
   filterSignable?: boolean;
+  /** When set, show only these account ids (overrides filterSignable). */
+  onlyAccountIds?: ReadonlySet<string>;
   /** Don't display balance information - used in airgap mode */
   hideBalances?: boolean;
 }
@@ -53,6 +55,7 @@ export default function AccountListModal({
   onEditAccount,
   onAccountSelect,
   filterSignable = false,
+  onlyAccountIds,
   hideBalances = false,
 }: AccountListModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
@@ -74,8 +77,10 @@ export default function AccountListModal({
   const filteredAccounts = useMemo(() => {
     let result = accounts;
 
-    // Filter to signable accounts only (STANDARD, LEDGER) if requested
-    if (filterSignable) {
+    if (onlyAccountIds) {
+      result = result.filter((account) => onlyAccountIds.has(account.id));
+    } else if (filterSignable) {
+      // Filter to signable accounts only (STANDARD, LEDGER) if requested
       result = result.filter(
         (account) =>
           account.type === AccountType.STANDARD ||
@@ -93,7 +98,7 @@ export default function AccountListModal({
     }
 
     return result;
-  }, [accounts, searchQuery, filterSignable]);
+  }, [accounts, searchQuery, filterSignable, onlyAccountIds]);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(

@@ -16,17 +16,25 @@ export type RekeyState =
  * Mirrors rekeyManager.checkSigningAuthority (used by updateAccountWithRekeyInfo):
  * STANDARD membership suffices; LEDGER requires a connected/available device;
  * REMOTE_SIGNER signs via QR. No persisted authAddress/canSign is consulted.
+ * `ownKeyIds` names the REKEYED records whose own secret was probed present;
+ * the sync display path can't probe and passes none, so it reads a retained
+ * REKEYED signer as not signing (TASK-425 U3).
  */
 export function deriveRekeyState(
   address: string,
   info: RekeyInfo,
-  accounts: AccountMetadata[]
+  accounts: AccountMetadata[],
+  ownKeyIds: ReadonlySet<string> = new Set()
 ): Exclude<RekeyState, { status: 'loading' }> {
   if (info.unavailable) return { status: 'error' };
   const authAddress = info.isRekeyed ? info.authAddress : undefined;
   const signingAddress = info.isRekeyed ? authAddress : address;
   const matches = accounts.filter((a) => a.address === signingAddress);
-  let canSign = matches.some((a) => a.type === AccountType.STANDARD);
+  let canSign = matches.some(
+    (a) =>
+      a.type === AccountType.STANDARD ||
+      (a.type === AccountType.REKEYED && ownKeyIds.has(a.id))
+  );
   if (!canSign) {
     const ledger = matches.find((a) => a.type === AccountType.LEDGER);
     if (ledger?.type === AccountType.LEDGER) {

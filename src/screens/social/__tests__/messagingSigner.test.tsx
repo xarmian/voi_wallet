@@ -192,6 +192,8 @@ describe.each([NewMessageScreen, ChatScreen, MessagesInboxScreen])(
       ['direct REMOTE_SIGNER', Q, false, undefined, false, false],
       ['direct WATCH', W, false, undefined, false, false],
       ['rekeyed to held STANDARD', R, true, S, true, false],
+      // TASK-425 U3: a retained REKEYED auth key signs too.
+      ['rekeyed to a retained REKEYED key', R, true, R, true, false],
       ['rekeyed to LEDGER', R, true, L, false, true],
       ['retained key, unrekeyed on Voi', R, false, undefined, true, false],
       ['rekeyed to missing key', R, true, undefined, false, false],
@@ -219,6 +221,21 @@ describe.each([NewMessageScreen, ChatScreen, MessagesInboxScreen])(
           expect.any(Array)
         );
       if (allowed) expect(secret).toHaveBeenCalledWith('source');
+    });
+
+    it('requires the retained REKEYED auth key to be present', async () => {
+      mockAccount.type = R;
+      mockAccounts = [mockAccount, { ...auth(), type: R }];
+      secret.mockImplementation(async (id) => id !== 'auth');
+      probe.mockResolvedValue({
+        status: 'loaded',
+        isRekeyed: true,
+        authAddress: 'CHAIN',
+        canSign: true,
+      });
+      const view = await render(<Screen />);
+      assertCapability(view, Screen, false);
+      expect(view.getByText(explanation)).toBeTruthy();
     });
 
     it.each(['source', 'auth'])(
