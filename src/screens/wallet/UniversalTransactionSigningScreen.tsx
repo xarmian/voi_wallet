@@ -61,6 +61,7 @@ import {
   describeTransactionDangers,
   DangerItem,
 } from '@/utils/transactionDangers';
+import { useTransactionDangers } from '@/hooks/useTransactionDangers';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -796,11 +797,18 @@ export default function UniversalTransactionSigningScreen({
 
   // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
   // each with its transaction index (not the first target of each kind).
-  // Declared before handleApprove so the guard and the render gating share
-  // the same scope.
-  const dangerList = parsedTransactions.flatMap((t, txnIndex) =>
-    (t.dangers ?? []).map((item) => ({ ...item, txnIndex }))
+  // Asset-authority items are narrowed against the asset's current holders on
+  // the bound network (Luna r1 #3). Declared before handleApprove so the guard
+  // and the render gating share the same scope.
+  const dangerEntries = useMemo(
+    () =>
+      parsedTransactions.map((t) => ({
+        dangers: t.dangers,
+        networkId: boundNetworkId,
+      })),
+    [parsedTransactions, boundNetworkId]
   );
+  const dangerList = useTransactionDangers(dangerEntries);
   const hasDanger = dangerList.length > 0;
 
   const handleApprove = () => {

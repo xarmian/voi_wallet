@@ -73,6 +73,7 @@ let mockAccounts: {
 }[];
 let mockRoutes: Record<string, unknown>;
 const mockGetCachedAssetParams = jest.fn();
+const mockGetAssetInfo = jest.fn();
 const mockResolveSigningRoute = jest.fn();
 /** Registry callbacks by id (TASK-257: onDismiss on unmount). */
 let mockRegistry: Record<
@@ -98,6 +99,7 @@ jest.mock('@/services/network', () => ({
     getInstance: (networkId: string) => ({
       getCachedAssetParams: (assetId: number) =>
         mockGetCachedAssetParams(networkId, assetId),
+      getAssetInfo: (assetId: number) => mockGetAssetInfo(networkId, assetId),
     }),
   },
 }));
@@ -809,4 +811,69 @@ it('lists every rekey in a batch, each with its transaction and full target', as
   expect(
     view.getByText(new RegExp(`Transaction 2: REKEYS .*${attacker}`))
   ).toBeTruthy();
+});
+
+// TASK-440 Luna r1 #3/#4: a reconfiguration restates every authority, so only
+// the roles that differ from the asset's current holders (read on the bound
+// network) are listed, each naming the full affected account. Negative
+// control: at 50993c5 all four roles were listed and no lookup was made.
+describe('asset reconfiguration review', () => {
+  const ASSET = 777n;
+  const holders = {
+    manager: makeAccount('acfg-manager').addr.toString(),
+    reserve: makeAccount('acfg-reserve').addr.toString(),
+    freeze: makeAccount('acfg-freeze').addr.toString(),
+    clawback: makeAccount('acfg-clawback').addr.toString(),
+  };
+  const attacker = makeAccount('acfg-attacker').addr.toString();
+
+  const renderReconfig = () => {
+    const sender = holders.manager;
+    mockAccounts = [walletAccount('Asset manager', sender)];
+    const txn = algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+      sender,
+      assetIndex: ASSET,
+      ...holders,
+      clawback: attacker,
+      strictEmptyAddressChecking: false,
+      suggestedParams: paramsFor(VOI),
+    });
+    return renderScreen({
+      networkId: VOI,
+      entries: [{ txn: b64(txn) }],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Asset manager' },
+    });
+  };
+
+  it('lists only the authority that changes, with the full affected account', async () => {
+    mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
+    const view = await renderReconfig();
+
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 1: ${holders.manager} gives the clawback authority of asset #777 to ${attacker}\\.$`
+        )
+      )
+    ).toBeTruthy();
+    expect(view.queryByText(/manager authority/)).toBeNull();
+    expect(view.queryByText(/reserve authority/)).toBeNull();
+    expect(view.queryByText(/freeze authority/)).toBeNull();
+    expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 777);
+  });
+
+  it('keeps every role, marked unverified, when the asset cannot be read', async () => {
+    mockGetAssetInfo.mockRejectedValue(new Error('offline'));
+    const view = await renderReconfig();
+
+    await waitFor(() => expect(mockGetAssetInfo).toHaveBeenCalled());
+    for (const role of ['manager', 'reserve', 'freeze', 'clawback']) {
+      expect(
+        await view.findByText(
+          new RegExp(`gives the ${role} authority of asset #777 .*unverified`)
+        )
+      ).toBeTruthy();
+    }
+  });
 });

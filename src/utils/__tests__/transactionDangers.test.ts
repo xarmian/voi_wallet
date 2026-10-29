@@ -304,3 +304,130 @@ describe('describeTransactionDangers', () => {
     expect(describeTransactionDangers(pay)).toEqual([]);
   });
 });
+
+// TASK-440 Luna r1 #1: a clawback (asset transfer with an asset sender) moves
+// another account's holding using the sender's clawback authority. Negative
+// control: at 50993c5 describeTransactionDangers returned [] for it.
+describe('describeTransactionDangers - clawback', () => {
+  const { describeTransactionDangers } = require('../transactionDangers');
+  const AUTHORITY = algosdk.generateAccount().addr.toString();
+  const VICTIM = algosdk.generateAccount().addr.toString();
+  const TO = algosdk.generateAccount().addr.toString();
+
+  it('lists a clawback with the account it takes from and the receiver', () => {
+    const txn = algosdk.decodeUnsignedTransaction(
+      algosdk.encodeUnsignedTransaction(
+        makeAssetTransfer(AUTHORITY, {
+          assetSender: VICTIM,
+          receiver: TO,
+          amount: 5,
+        })
+      )
+    );
+    expect(describeTransactionDangers(txn)).toEqual([
+      {
+        sender: AUTHORITY,
+        kind: 'clawback',
+        assetId: BigInt(ASSET_ID),
+        from: VICTIM,
+        target: TO,
+      },
+    ]);
+  });
+
+  it('does not flag an ordinary transfer as a clawback', () => {
+    const txn = makeAssetTransfer(AUTHORITY, { receiver: TO, amount: 5 });
+    expect(describeTransactionDangers(txn)).toEqual([]);
+  });
+});
+
+// TASK-440 Luna r1 #3: only roles that differ from the asset's current holders
+// are dangers; an unreadable asset keeps every role, marked unverified.
+describe('resolveAssetAuthorityDangers', () => {
+  const {
+    describeTransactionDangers,
+    resolveAssetAuthorityDangers,
+  } = require('../transactionDangers');
+  const SENDER = algosdk.generateAccount().addr.toString();
+  const M = algosdk.generateAccount().addr.toString();
+  const R = algosdk.generateAccount().addr.toString();
+  const NEW = algosdk.generateAccount().addr.toString();
+  const reconfig = (fields: Record<string, string | undefined>) =>
+    describeTransactionDangers(
+      algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+        sender: SENDER,
+        assetIndex: 42,
+        suggestedParams: SUGGESTED_PARAMS as any,
+        strictEmptyAddressChecking: false,
+        ...fields,
+      } as any)
+    );
+
+  it('drops unchanged roles and keeps hand-overs and real removals', async () => {
+    // Current: manager M, reserve R, no freeze, clawback R.
+    // Txn: manager M (same), reserve NEW (hand-over), no freeze (same),
+    // no clawback (removal).
+    const lookup = jest.fn(async () => ({
+      manager: M,
+      reserve: R,
+      clawback: R,
+    }));
+    const result = await resolveAssetAuthorityDangers(
+      reconfig({ manager: M, reserve: NEW }),
+      lookup
+    );
+    expect(lookup).toHaveBeenCalledWith(42n);
+    expect(result).toEqual([
+      {
+        sender: SENDER,
+        kind: 'assetAuthority',
+        assetId: 42n,
+        role: 'reserve',
+        target: NEW,
+      },
+      {
+        sender: SENDER,
+        kind: 'assetAuthorityRemoved',
+        assetId: 42n,
+        role: 'clawback',
+      },
+    ]);
+  });
+
+  it('keeps every role, unverified, when the lookup returns null or throws', async () => {
+    const items = reconfig({ manager: M });
+    for (const lookup of [
+      async () => null,
+      async () => {
+        throw new Error('offline');
+      },
+    ]) {
+      const result = await resolveAssetAuthorityDangers(items, lookup);
+      expect(result).toHaveLength(4);
+      expect(result.every((i: any) => i.unverified === true)).toBe(true);
+    }
+  });
+
+  // algosdk refuses to build a txn with a zero-address authority, so only the
+  // holder side can carry one.
+  it('treats a zero-address current holder as no holder', async () => {
+    const result = await resolveAssetAuthorityDangers(
+      reconfig({ manager: M }),
+      async () => ({
+        manager: M,
+        reserve: algosdk.ALGORAND_ZERO_ADDRESS_STRING,
+        freeze: '',
+      })
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('passes non-authority items and destroys through untouched', async () => {
+    const destroy = reconfig({});
+    const lookup = jest.fn(async () => null);
+    expect(await resolveAssetAuthorityDangers(destroy, lookup)).toEqual(
+      destroy
+    );
+    expect(lookup).not.toHaveBeenCalled();
+  });
+});

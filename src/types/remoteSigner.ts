@@ -5,6 +5,8 @@
  * between the wallet (online) and signer (offline/air-gapped) devices.
  */
 
+import type { DangerItem } from '@/utils/transactionDangers';
+
 /**
  * Transaction item in a signing request
  */
@@ -329,6 +331,12 @@ export interface DecodedTransactionInfo {
    * from; the sender is only the clawback authority.
    */
   assetSender?: string;
+  /**
+   * Every dangerous operation in this transaction (shared detector,
+   * TASK-440 / TASK-445). Asset-authority items are not yet narrowed against
+   * the asset's current holders; the review screen does that.
+   */
+  dangers: DangerItem[];
   /** Raw transaction for full details */
   raw: any;
 }

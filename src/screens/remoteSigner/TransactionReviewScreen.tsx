@@ -44,6 +44,8 @@ import {
 } from '@/services/network/config';
 import type { AssetParams } from '@/types/wallet';
 import type { NetworkId } from '@/types/network';
+import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
+import { useTransactionDangers } from '@/hooks/useTransactionDangers';
 
 // Cross-platform alert helper
 const showAlert = (
@@ -262,6 +264,25 @@ export default function TransactionReviewScreen() {
   const totalTxns = decodedTransactions.length;
   const isGroup = totalTxns > 1;
 
+  // TASK-440 / TASK-445: the same detector and banner as the wallet's signing
+  // review. Every dangerous operation in the request is listed with its
+  // transaction number and full addresses; asset-authority changes are
+  // checked against the asset on the transaction's own network, and an
+  // offline signer shows them as unverified. Signing waits for the
+  // acknowledgment, as it does in the wallet.
+  const dangerEntries = useMemo(
+    () =>
+      decodedTransactions.map((txn) => ({
+        dangers: txn.dangers,
+        networkId: networkIdForGenesisHash(txn.genesisHash),
+      })),
+    [decodedTransactions]
+  );
+  const dangerList = useTransactionDangers(dangerEntries);
+  const hasDanger = dangerList.length > 0;
+  const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
+  const signBlocked = isSigning || (hasDanger && !dangerAcknowledged);
+
   const handleReject = () => {
     showAlert(
       'Reject Transaction?',
@@ -281,6 +302,13 @@ export default function TransactionReviewScreen() {
   };
 
   const handleSign = () => {
+    if (hasDanger && !dangerAcknowledged) {
+      showAlert(
+        'Confirmation required',
+        'Please acknowledge the highlighted warning before signing.'
+      );
+      return;
+    }
     // Show auth modal for PIN/biometric authentication
     setShowAuthModal(true);
   };
@@ -392,47 +420,6 @@ export default function TransactionReviewScreen() {
             </View>
           )}
         </View>
-
-        {/* Warning indicators */}
-        {txn.rekeyTo && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning" size={20} color={theme.colors.warning} />
-            <Text style={styles.warningText}>
-              This transaction rekeys the account to{' '}
-              {formatAddress(txn.rekeyTo)}
-            </Text>
-          </View>
-        )}
-
-        {txn.closeRemainderTo && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning" size={20} color={theme.colors.error} />
-            <Text style={styles.warningText}>
-              This transaction closes the account to{' '}
-              {formatAddress(txn.closeRemainderTo)}
-            </Text>
-          </View>
-        )}
-
-        {txn.assetCloseTo && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning" size={20} color={theme.colors.error} />
-            <Text style={styles.warningText}>
-              This transaction sends your entire balance of this asset to{' '}
-              {formatAddress(txn.assetCloseTo)}
-            </Text>
-          </View>
-        )}
-
-        {txn.assetSender && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning" size={20} color={theme.colors.error} />
-            <Text style={styles.warningText}>
-              Clawback: this uses the clawback authority (sender) to take the
-              asset from {formatAddress(txn.assetSender)}
-            </Text>
-          </View>
-        )}
       </View>
     );
   };
@@ -586,6 +573,14 @@ export default function TransactionReviewScreen() {
           </View>
         )}
 
+        {hasDanger && (
+          <TransactionDangerBanner
+            dangers={dangerList}
+            acknowledged={dangerAcknowledged}
+            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
+          />
+        )}
+
         {/* Transaction Cards */}
         {isGroup
           ? // Show all transactions in group
@@ -640,9 +635,9 @@ export default function TransactionReviewScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.signButton, isSigning && styles.buttonDisabled]}
+          style={[styles.signButton, signBlocked && styles.buttonDisabled]}
           onPress={handleSign}
-          disabled={isSigning}
+          disabled={signBlocked}
         >
           {isSigning ? (
             <ActivityIndicator size="small" color={theme.colors.buttonText} />
@@ -808,20 +803,6 @@ const createStyles = (theme: Theme) =>
       fontSize: 14,
       color: theme.colors.text,
       fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    },
-    warningBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: theme.spacing.sm,
-      backgroundColor: `${theme.colors.warning}15`,
-      padding: theme.spacing.sm,
-      borderRadius: theme.borderRadius.md,
-      marginTop: theme.spacing.md,
-    },
-    warningText: {
-      flex: 1,
-      fontSize: 13,
-      color: theme.colors.warning,
     },
     toggleDetailsButton: {
       flexDirection: 'row',

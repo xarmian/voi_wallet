@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { truncateAddress } from '@/services/walletconnect/utils';
 import { DangerItem } from '@/utils/transactionDangers';
 
 interface Props {
@@ -15,12 +14,16 @@ interface Props {
   onToggleAcknowledged: () => void;
 }
 
+const UNVERIFIED =
+  " The asset's current settings could not be read, so this may already be how it is set (unverified).";
+
 /**
- * What one dangerous operation does. Destinations are shown in full: a
- * truncated address can be matched by an attacker's vanity address.
+ * What one dangerous operation does. Every address, the affected account
+ * included, is shown in full: a truncated address can be matched by an
+ * attacker's vanity address (TASK-440 Luna r1 #4).
  */
-function describe(item: DangerItem): string {
-  const account = item.sender ? truncateAddress(item.sender) : 'this account';
+export function describeDanger(item: DangerItem): string {
+  const account = item.sender ?? 'an unknown account';
   switch (item.kind) {
     case 'rekey':
       return `REKEYS ${account}: signing authority is transferred to ${item.target}. Whoever controls that address controls the account.`;
@@ -28,12 +31,14 @@ function describe(item: DangerItem): string {
       return `CLOSES ${account}: its entire remaining balance is sent to ${item.target}.`;
     case 'closeAsset':
       return `CLOSES OUT an asset held by ${account}: the entire remaining asset balance is sent to ${item.target}.`;
+    case 'clawback':
+      return `CLAWBACK: ${account} uses its clawback authority over asset #${item.assetId} to take holdings from ${item.from}${item.target ? ` and send them to ${item.target}` : ''}.`;
     case 'assetAuthority':
-      return `Gives the ${item.role} authority of asset #${item.assetId} to ${item.target}.`;
+      return `${account} gives the ${item.role} authority of asset #${item.assetId} to ${item.target}.${item.unverified ? UNVERIFIED : ''}`;
     case 'assetAuthorityRemoved':
-      return `Permanently REMOVES the ${item.role} authority of asset #${item.assetId}.`;
+      return `${account} permanently REMOVES the ${item.role} authority of asset #${item.assetId}.${item.unverified ? UNVERIFIED : ''}`;
     case 'assetDestroy':
-      return `DESTROYS asset #${item.assetId}.`;
+      return `${account} DESTROYS asset #${item.assetId}.`;
   }
 }
 
@@ -61,7 +66,7 @@ export default function TransactionDangerBanner({
 
       {dangers.map((item, index) => (
         <Text key={index} style={styles.dangerLine} selectable>
-          Transaction {item.txnIndex + 1}: {describe(item)}
+          Transaction {item.txnIndex + 1}: {describeDanger(item)}
         </Text>
       ))}
 
