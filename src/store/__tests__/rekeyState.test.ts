@@ -29,7 +29,6 @@ const mockRemoveItem = jest.fn(async (key: string) => {
 });
 const mockDeleteAccount = jest.fn();
 const mockUpdateAccountMetadata = jest.fn(async (_account: unknown) => {});
-const mockUpdateWithRekeyInfo = jest.fn();
 const mockGetCurrentWallet = jest.fn();
 const mockPersistRestoredWallet = jest.fn();
 
@@ -60,10 +59,7 @@ jest.mock('@/services/wallet', () => ({
 
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: {
-    updateAccountWithRekeyInfo: (...args: unknown[]) =>
-      mockUpdateWithRekeyInfo(...args),
-  },
+  default: {},
 }));
 
 jest.mock('@/services/envoi', () => ({ __esModule: true, default: {} }));
@@ -160,7 +156,6 @@ beforeEach(() => {
   mockConnected.mockReturnValue(null);
   mockDevices.mockReturnValue([]);
   mockGetRekeyInfo.mockResolvedValue(balance.rekeyInfo);
-  mockUpdateWithRekeyInfo.mockImplementation(async (account) => account);
   mockGetCurrentWallet.mockResolvedValue(wallet);
   mockPersistRestoredWallet.mockImplementation(async (restored: Wallet) => {
     mockGetCurrentWallet.mockResolvedValue(restored);
@@ -276,47 +271,6 @@ describe('network-scoped rekey accessors', () => {
     await act(() => seed({ balanceNetworkId: otherNetwork }));
     expect(result.current).toEqual({ status: 'loading' });
   });
-});
-
-describe('canSign parity with updateAccountWithRekeyInfo', () => {
-  const realManager = jest.requireActual(
-    '@/services/wallet/rekeyManager'
-  ).default;
-  it.each([
-    [AccountType.STANDARD, false, false, true],
-    [AccountType.LEDGER, false, false, false],
-    [AccountType.LEDGER, true, false, true],
-    [AccountType.LEDGER, false, true, true],
-    [AccountType.REMOTE_SIGNER, false, false, true],
-    [AccountType.WATCH, false, false, false],
-    [AccountType.REKEYED, false, false, false],
-  ])(
-    '%s connected=%s available=%s',
-    async (type, connected, available, expected) => {
-      const accounts = [
-        wallet.accounts[0],
-        { ...wallet.accounts[1], type, deviceId: 'device' },
-      ];
-      const currentWallet = { ...wallet, accounts } as Wallet;
-      useWalletStore.setState({ wallet: currentWallet });
-      mockConnected.mockReturnValue(
-        connected ? { id: 'device' } : { id: 'OTHER' }
-      );
-      mockDevices.mockReturnValue(available ? [{ id: 'device' }] : []);
-      const updated = await realManager.updateAccountWithRekeyInfo(
-        accounts[0],
-        balance.rekeyInfo,
-        currentWallet
-      );
-      expect(updated.canSign).toBe(expected);
-      expect(getRekeyState('SOURCE', network)).toMatchObject({
-        canSign: updated.canSign,
-      });
-      expect(await getRekeyStateStrict('SOURCE', network)).toMatchObject({
-        canSign: updated.canSign,
-      });
-    }
-  );
 });
 
 describe('retained REKEYED auth key (TASK-425 U3)', () => {
@@ -539,12 +493,6 @@ describe('balance loads never persist rekey metadata', () => {
         async (id: string) =>
           currentWallet.accounts.find((account) => account.id === id) as never
       );
-      mockUpdateWithRekeyInfo.mockImplementation(async (account, info) => ({
-        ...account,
-        type: AccountType.REKEYED,
-        authAddress: info.authAddress,
-        canSign: true,
-      }));
       const original = useWalletStore.getState().wallet;
       for (const networkId of [...Object.values(NetworkId), network]) {
         mockNetworkId = networkId;
@@ -560,7 +508,6 @@ describe('balance loads never persist rekey metadata', () => {
           expect(state().balance?.rekeyInfo).toEqual(rekeyInfo);
           expect(mockUpdateAccountMetadata).not.toHaveBeenCalled();
           expect(useWalletStore.getState().wallet).toBe(original);
-          expect(mockUpdateWithRekeyInfo).not.toHaveBeenCalled();
         }
       }
     }

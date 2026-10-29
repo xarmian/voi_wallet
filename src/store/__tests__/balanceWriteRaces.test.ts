@@ -45,7 +45,6 @@ const mockRemoveItem = jest.fn(async (key: string) => {
 });
 const mockDeleteAccount = jest.fn();
 const mockUpdateAccountMetadata = jest.fn(async (_account: unknown) => {});
-const mockUpdateWithRekeyInfo = jest.fn();
 const mockGetCurrentWallet = jest.fn();
 
 jest.mock('@/services/network', () => ({
@@ -69,10 +68,7 @@ jest.mock('@/services/wallet', () => ({
 
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: {
-    updateAccountWithRekeyInfo: (...args: unknown[]) =>
-      mockUpdateWithRekeyInfo(...args),
-  },
+  default: {},
 }));
 
 jest.mock('@/services/envoi', () => ({ __esModule: true, default: {} }));

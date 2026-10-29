@@ -110,7 +110,7 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
 
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: { updateAccountWithRekeyInfo: jest.fn() },
+  default: {},
 }));
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
@@ -209,7 +209,6 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
 
 import { Alert } from 'react-native';
 import RekeyAccountScreen from '../RekeyAccountScreen';
-import rekeyManager from '@/services/wallet/rekeyManager';
 import { MultiAccountWalletService } from '@/services/wallet';
 
 // ---------------------------------------------------------------------------
@@ -575,9 +574,6 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
       jest.useRealTimers();
     }
 
-    expect(
-      jest.mocked(rekeyManager.updateAccountWithRekeyInfo)
-    ).not.toHaveBeenCalled();
     expect(
       jest.mocked(MultiAccountWalletService.updateAccountMetadata)
     ).not.toHaveBeenCalled();

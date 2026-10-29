@@ -1,10 +1,10 @@
-// Unit tests for TASK-155: RekeyManager signing-authority resolution and rekey
-// detection.
+// Unit tests for TASK-155: RekeyManager's explicit rekey-to-Ledger and
+// rekey-to-airgap metadata. Signing-authority resolution and balance-load rekey
+// detection were removed in TASK-425 U5; signing authority is read from chain
+// state per network (keyManager.getSigningInfo / rekeyState).
 //
-// SCOPE: RekeyManager decides *who is allowed to sign* for a (possibly rekeyed)
-// account — the standard / Ledger / remote-signer authority branches — and
-// detects which accounts are currently rekeyed. These are pure metadata /
-// address-matching decisions; the manager itself performs no signing.
+// SCOPE: pure metadata / address-matching decisions; the manager itself
+// performs no signing.
 //
 // SECURITY / DR-3 (non-negotiable): every Algorand address used here is REAL,
 // deterministically derived through algosdk from a throwaway fixture seed
@@ -15,9 +15,8 @@
 // what production compares.
 //
 // The heavy/native leaves are module-mocked (the Ledger transport pulls in
-// untranspilable native ESM; the network + secure-storage modules touch native
-// storage), mirroring the DR-1 pattern in importFromPrivateKey.test.ts. Only the
-// leaves are mocked — the code under test (rekeyManager.ts) and algosdk are the
+// untranspilable native ESM), mirroring the DR-1 pattern in
+// importFromPrivateKey.test.ts. Only the leaves are mocked — the code under test (rekeyManager.ts) and algosdk are the
 // real implementations.
 
 import { Buffer } from 'buffer';
@@ -34,7 +33,6 @@ import {
   WatchAccountMetadata,
   Wallet,
 } from '@/types/wallet';
-import type { RekeyInfo } from '@/services/network';
 
 // --- Module mocks (leaves only) --------------------------------------------
 
@@ -50,24 +48,8 @@ jest.mock('@/services/ledger/transport', () => ({
   },
 }));
 
-// Controllable network rekey lookup (real one hits algod).
-const mockGetMultipleAccountRekeyInfo = jest.fn();
-jest.mock('@/services/network', () => ({
-  __esModule: true,
-  networkService: {
-    getMultipleAccountRekeyInfo: (addresses: string[]) =>
-      mockGetMultipleAccountRekeyInfo(addresses),
-  },
-}));
-
-// NOTE: updateAccountWithRekeyInfo's rekeyed→standard/watch auto-conversion
-// decides from AccountSecureStorage.probeSecretPresenceStrict, statically
-// imported since TASK-421 (c), so a jest.spyOn reaches it. The probe-failure
-// case is the one that matters: it must never persist a downgrade.
-
 // Import AFTER the mocks are registered so the manager binds to them.
 import { RekeyManager } from '../rekeyManager';
-import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 
 // --- Fixtures & builders ----------------------------------------------------
 
@@ -80,14 +62,9 @@ const REKEYED = makeAccount('rekey-manager:rekeyed-account');
 const STD_AUTH = makeAccount('rekey-manager:standard-authority');
 const LEDGER_AUTH = makeAccount('rekey-manager:ledger-authority');
 const REMOTE_AUTH = makeAccount('rekey-manager:remote-authority');
-const WATCH_AUTH = makeAccount('rekey-manager:watch-authority');
 const UNRELATED = makeAccount('rekey-manager:unrelated');
-// Same-type wrong-address decoy: proves resolution keys off authAddress, not
-// "first account of the matching type".
-const DECOY = makeAccount('rekey-manager:decoy');
 
 const LEDGER_DEVICE_ID = 'ledger-device-abc';
-const DECOY_DEVICE_ID = 'decoy-device-zzz';
 
 function baseMeta(acct: TestAccount, id: string) {
   return {
@@ -209,411 +186,6 @@ beforeEach(() => {
   mockGetDevices.mockReset();
   mockGetConnectedDevice.mockReturnValue(null);
   mockGetDevices.mockReturnValue([]);
-  mockGetMultipleAccountRekeyInfo.mockReset();
-});
-
-// ---------------------------------------------------------------------------
-// checkSigningAuthority — every authority branch
-// ---------------------------------------------------------------------------
-
-describe('checkSigningAuthority — authority branches', () => {
-  it('STANDARD authority: resolves to the in-wallet key holder and can sign', async () => {
-    const wallet = makeWallet([standardAccount(STD_AUTH, 'std-1')]);
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      STD_AUTH.addr,
-      wallet
-    );
-
-    expect(result).toEqual({
-      accountAddress: REKEYED.addr,
-      canSign: true,
-      signingAccountId: 'std-1',
-      signingAddress: STD_AUTH.addr,
-    });
-    // Must NOT be misreported as ledger / remote signer.
-    expect(result.isLedger).toBeUndefined();
-    expect(result.isRemoteSigner).toBeUndefined();
-  });
-
-  it('LEDGER authority, device connected: can sign with connected transport metadata', async () => {
-    // A decoy Ledger (different address + device) sits BEFORE the real holder to
-    // prove resolution keys off authAddress, not "first Ledger in the wallet".
-    const wallet = makeWallet([
-      ledgerAccount(DECOY, 'led-decoy', DECOY_DEVICE_ID),
-      ledgerAccount(LEDGER_AUTH, 'led-1'),
-    ]);
-    mockGetConnectedDevice.mockReturnValue(device(LEDGER_DEVICE_ID, 'ble'));
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      LEDGER_AUTH.addr,
-      wallet
-    );
-
-    expect(result.canSign).toBe(true);
-    expect(result.isLedger).toBe(true);
-    expect(result.signingAccountId).toBe('led-1'); // NOT the decoy
-    expect(result.signingAddress).toBe(LEDGER_AUTH.addr);
-    expect(result.deviceConnected).toBe(true);
-    expect(result.deviceAvailable).toBe(true);
-    expect(result.signingDeviceId).toBe(LEDGER_DEVICE_ID);
-    expect(result.transportType).toBe('ble');
-  });
-
-  it('LEDGER authority, device merely available (not connected): can sign, flagged not-connected', async () => {
-    const wallet = makeWallet([ledgerAccount(LEDGER_AUTH, 'led-1')]);
-    // A different device is the "connected" one; ours only shows up in the
-    // available-devices list.
-    mockGetConnectedDevice.mockReturnValue(device('some-other-device'));
-    mockGetDevices.mockReturnValue([device(LEDGER_DEVICE_ID, 'usb', false)]);
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      LEDGER_AUTH.addr,
-      wallet
-    );
-
-    expect(result.canSign).toBe(true);
-    expect(result.isLedger).toBe(true);
-    expect(result.deviceConnected).toBe(false);
-    expect(result.deviceAvailable).toBe(true);
-    expect(result.transportType).toBe('usb');
-  });
-
-  it('LEDGER authority, device neither connected nor available: cannot sign', async () => {
-    const wallet = makeWallet([ledgerAccount(LEDGER_AUTH, 'led-1')]);
-    mockGetConnectedDevice.mockReturnValue(null);
-    mockGetDevices.mockReturnValue([]);
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      LEDGER_AUTH.addr,
-      wallet
-    );
-
-    expect(result.canSign).toBe(false);
-    expect(result.isLedger).toBe(true);
-    expect(result.deviceConnected).toBe(false);
-    expect(result.deviceAvailable).toBe(false);
-  });
-
-  it('REMOTE_SIGNER authority: can sign via QR flow with signer device metadata', async () => {
-    const remote = remoteSignerAccount(REMOTE_AUTH, 'remote-1');
-    // Decoy remote signer (different address) placed first; must be skipped.
-    const wallet = makeWallet([
-      remoteSignerAccount(DECOY, 'remote-decoy'),
-      remote,
-    ]);
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      REMOTE_AUTH.addr,
-      wallet
-    );
-
-    expect(result.canSign).toBe(true);
-    expect(result.isRemoteSigner).toBe(true);
-    expect(result.signingAccountId).toBe('remote-1');
-    expect(result.signingAddress).toBe(REMOTE_AUTH.addr);
-    expect(result.signingDeviceId).toBe(remote.signerDeviceId);
-    expect(result.signingDeviceName).toBe(remote.signerDeviceName);
-    expect(result.isLedger).toBeUndefined();
-  });
-
-  it('no matching authority in wallet: cannot sign', async () => {
-    const wallet = makeWallet([standardAccount(UNRELATED, 'other-1')]);
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      STD_AUTH.addr,
-      wallet
-    );
-
-    expect(result).toEqual({ accountAddress: REKEYED.addr, canSign: false });
-  });
-
-  it('authority address present but WRONG type (watch-only): cannot sign', async () => {
-    // A watch account at the auth address must NOT confer signing authority —
-    // guards against matching on address alone.
-    const wallet = makeWallet([watchAccount(WATCH_AUTH, 'watch-1')]);
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      WATCH_AUTH.addr,
-      wallet
-    );
-
-    expect(result.canSign).toBe(false);
-    expect(result.signingAccountId).toBeUndefined();
-  });
-
-  it('picks the right holder when several account types coexist in the wallet', async () => {
-    const wallet = makeWallet([
-      watchAccount(UNRELATED, 'watch-1'),
-      ledgerAccount(LEDGER_AUTH, 'led-1'),
-      standardAccount(STD_AUTH, 'std-1'),
-      remoteSignerAccount(REMOTE_AUTH, 'remote-1'),
-    ]);
-
-    const std = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      STD_AUTH.addr,
-      wallet
-    );
-    expect(std.signingAccountId).toBe('std-1');
-    expect(std.isLedger).toBeUndefined();
-
-    const remote = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      REMOTE_AUTH.addr,
-      wallet
-    );
-    expect(remote.isRemoteSigner).toBe(true);
-    expect(remote.signingAccountId).toBe('remote-1');
-  });
-
-  it('re-throws a LedgerAccountError raised while probing the device', async () => {
-    const wallet = makeWallet([ledgerAccount(LEDGER_AUTH, 'led-1')]);
-    mockGetConnectedDevice.mockImplementation(() => {
-      throw new LedgerAccountError(
-        'device probe failed',
-        'LEDGER_ACCOUNT_ERROR'
-      );
-    });
-
-    await expect(
-      manager.checkSigningAuthority(REKEYED.addr, LEDGER_AUTH.addr, wallet)
-    ).rejects.toBeInstanceOf(LedgerAccountError);
-  });
-
-  it('swallows a non-Ledger error and reports cannot-sign', async () => {
-    const wallet = makeWallet([ledgerAccount(LEDGER_AUTH, 'led-1')]);
-    mockGetConnectedDevice.mockImplementation(() => {
-      throw new Error('unexpected transport failure');
-    });
-
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      LEDGER_AUTH.addr,
-      wallet
-    );
-
-    expect(result).toEqual({ accountAddress: REKEYED.addr, canSign: false });
-  });
-});
-
-describe('checkSigningAuthority — retained REKEYED authority (TASK-425 U3)', () => {
-  // After U4 an undone rekey stays REKEYED; its own key may still be held.
-  const retained = () =>
-    ({
-      ...standardAccount(STD_AUTH, 'rk-1'),
-      type: AccountType.REKEYED,
-    }) as unknown as AccountMetadata;
-  let probe: jest.SpyInstance;
-  afterEach(() => probe.mockRestore());
-
-  it('can sign when the record still holds its own key', async () => {
-    probe = jest
-      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-      .mockResolvedValue(true);
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      STD_AUTH.addr,
-      makeWallet([retained()])
-    );
-    expect(result).toEqual({
-      accountAddress: REKEYED.addr,
-      canSign: true,
-      signingAccountId: 'rk-1',
-      signingAddress: STD_AUTH.addr,
-    });
-    expect(probe).toHaveBeenCalledWith('rk-1');
-  });
-
-  it.each([
-    ['its key is gone', () => Promise.resolve(false)],
-    ['the probe errors', () => Promise.reject(new Error('keychain busy'))],
-  ])('cannot sign when %s', async (_label, answer) => {
-    probe = jest
-      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-      .mockImplementation(answer);
-    const result = await manager.checkSigningAuthority(
-      REKEYED.addr,
-      STD_AUTH.addr,
-      makeWallet([retained()])
-    );
-    expect(result).toEqual({ accountAddress: REKEYED.addr, canSign: false });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// detectRekeyedAccounts — rekeyed vs non-rekeyed detection
-// ---------------------------------------------------------------------------
-
-describe('detectRekeyedAccounts — detection', () => {
-  it('flags only the rekeyed accounts and resolves each authority', async () => {
-    const rekeyedStd = standardAccount(REKEYED, 'rk-1'); // rekeyed to STD_AUTH
-    const notRekeyed = standardAccount(UNRELATED, 'plain-1');
-    const stdAuth = standardAccount(STD_AUTH, 'std-1');
-    const wallet = makeWallet([rekeyedStd, notRekeyed, stdAuth]);
-
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: true, authAddress: STD_AUTH.addr },
-      [UNRELATED.addr]: { isRekeyed: false },
-      [STD_AUTH.addr]: { isRekeyed: false },
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([REKEYED.addr]);
-    expect(Object.keys(result.signingAuthorities)).toEqual([REKEYED.addr]);
-    expect(result.signingAuthorities[REKEYED.addr].canSign).toBe(true);
-    expect(result.signingAuthorities[REKEYED.addr].signingAccountId).toBe(
-      'std-1'
-    );
-    // The plain account must not be reported as rekeyed.
-    expect(result.signingAuthorities[UNRELATED.addr]).toBeUndefined();
-  });
-
-  it('resolves a LEDGER-delegated rekeyed account end-to-end through detection', async () => {
-    // Guards against a detection-path regression that resolves every authority
-    // as standard-only: the delegated authority here is a Ledger device.
-    const rekeyedStd = standardAccount(REKEYED, 'rk-1');
-    const led = ledgerAccount(LEDGER_AUTH, 'led-1');
-    // Decoy Ledger (different address + device) precedes the real holder.
-    const decoyLed = ledgerAccount(DECOY, 'led-decoy', DECOY_DEVICE_ID);
-    const wallet = makeWallet([rekeyedStd, decoyLed, led]);
-    mockGetConnectedDevice.mockReturnValue(device(LEDGER_DEVICE_ID));
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: true, authAddress: LEDGER_AUTH.addr },
-      [DECOY.addr]: { isRekeyed: false },
-      [LEDGER_AUTH.addr]: { isRekeyed: false },
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([REKEYED.addr]);
-    const auth = result.signingAuthorities[REKEYED.addr];
-    expect(auth.isLedger).toBe(true);
-    expect(auth.canSign).toBe(true);
-    expect(auth.signingAccountId).toBe('led-1'); // NOT the decoy
-    expect(auth.signingAddress).toBe(LEDGER_AUTH.addr);
-    expect(auth.isRemoteSigner).toBeUndefined();
-  });
-
-  it('resolves a REMOTE_SIGNER-delegated rekeyed account end-to-end through detection', async () => {
-    const rekeyedStd = standardAccount(REKEYED, 'rk-1');
-    const remote = remoteSignerAccount(REMOTE_AUTH, 'remote-1');
-    // Decoy remote signer (different address) precedes the real holder.
-    const decoyRemote = remoteSignerAccount(DECOY, 'remote-decoy');
-    const wallet = makeWallet([rekeyedStd, decoyRemote, remote]);
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: true, authAddress: REMOTE_AUTH.addr },
-      [DECOY.addr]: { isRekeyed: false },
-      [REMOTE_AUTH.addr]: { isRekeyed: false },
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([REKEYED.addr]);
-    const auth = result.signingAuthorities[REKEYED.addr];
-    expect(auth.isRemoteSigner).toBe(true);
-    expect(auth.canSign).toBe(true);
-    expect(auth.signingAccountId).toBe('remote-1'); // NOT the decoy
-    expect(auth.signingAddress).toBe(REMOTE_AUTH.addr);
-    expect(auth.isLedger).toBeUndefined();
-  });
-
-  it('detects a rekey on a WATCH-only account delegated to an in-wallet authority', async () => {
-    // Scanning must not skip watch-only accounts: a watch account can be
-    // rekeyed on-chain to an authority we DO control, making it signable.
-    const watched = watchAccount(REKEYED, 'watch-1');
-    const stdAuth = standardAccount(STD_AUTH, 'std-1');
-    const wallet = makeWallet([watched, stdAuth]);
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: true, authAddress: STD_AUTH.addr },
-      [STD_AUTH.addr]: { isRekeyed: false },
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([REKEYED.addr]);
-    expect(result.signingAuthorities[REKEYED.addr].canSign).toBe(true);
-    expect(result.signingAuthorities[REKEYED.addr].signingAccountId).toBe(
-      'std-1'
-    );
-  });
-
-  it('reports a rekeyed account whose authority is absent as rekeyed-but-unsignable', async () => {
-    const rekeyedStd = standardAccount(REKEYED, 'rk-1');
-    const wallet = makeWallet([rekeyedStd]); // no authority account present
-
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: true, authAddress: STD_AUTH.addr },
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([REKEYED.addr]);
-    expect(result.signingAuthorities[REKEYED.addr].canSign).toBe(false);
-  });
-
-  it('ignores a rekeyed=true record that carries no authAddress', async () => {
-    const wallet = makeWallet([standardAccount(REKEYED, 'rk-1')]);
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: true }, // authAddress missing
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([]);
-    expect(result.signingAuthorities).toEqual({});
-  });
-
-  it('returns empty results when no account is rekeyed', async () => {
-    const wallet = makeWallet([
-      standardAccount(REKEYED, 'a-1'),
-      standardAccount(UNRELATED, 'b-1'),
-    ]);
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: false },
-      [UNRELATED.addr]: { isRekeyed: false },
-    } as Record<string, RekeyInfo>);
-
-    const result = await manager.detectRekeyedAccounts(wallet);
-
-    expect(result.rekeyedAccounts).toEqual([]);
-    expect(result.signingAuthorities).toEqual({});
-  });
-
-  it('queries the network with exactly the wallet account addresses', async () => {
-    const wallet = makeWallet([
-      standardAccount(REKEYED, 'a-1'),
-      standardAccount(UNRELATED, 'b-1'),
-    ]);
-    mockGetMultipleAccountRekeyInfo.mockResolvedValue({
-      [REKEYED.addr]: { isRekeyed: false },
-      [UNRELATED.addr]: { isRekeyed: false },
-    } as Record<string, RekeyInfo>);
-
-    await manager.detectRekeyedAccounts(wallet);
-
-    expect(mockGetMultipleAccountRekeyInfo).toHaveBeenCalledWith([
-      REKEYED.addr,
-      UNRELATED.addr,
-    ]);
-  });
-
-  it('propagates a wrapped error when the network lookup fails', async () => {
-    const wallet = makeWallet([standardAccount(REKEYED, 'a-1')]);
-    mockGetMultipleAccountRekeyInfo.mockRejectedValue(new Error('algod down'));
-
-    await expect(manager.detectRekeyedAccounts(wallet)).rejects.toThrow(
-      'Failed to detect rekeyed accounts: algod down'
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -725,256 +297,6 @@ describe('rekeyToAirgap', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// updateAccountWithRekeyInfo — detection → metadata transitions
-// ---------------------------------------------------------------------------
-
-describe('updateAccountWithRekeyInfo', () => {
-  it('converts a STANDARD account into REKEYED and stamps canSign from the authority', async () => {
-    const source = standardAccount(REKEYED, 'src-1');
-    const stdAuth = standardAccount(STD_AUTH, 'std-1');
-    const wallet = makeWallet([source, stdAuth]);
-
-    const result = await manager.updateAccountWithRekeyInfo(
-      source,
-      {
-        isRekeyed: true,
-        authAddress: STD_AUTH.addr,
-        rekeyedAt: 1_700_000_000_000,
-      },
-      wallet
-    );
-
-    expect(result.type).toBe(AccountType.REKEYED);
-    const rk = result as RekeyedAccountMetadata;
-    expect(rk.authAddress).toBe(STD_AUTH.addr);
-    expect(rk.canSign).toBe(true);
-    expect(rk.originalOwner).toBe(true);
-    expect(rk.rekeyedAt).toBe(new Date(1_700_000_000_000).toISOString());
-  });
-
-  it('refreshes an existing REKEYED account to a NEW authority and re-resolves canSign', async () => {
-    // The account was previously rekeyed to a stale authority (UNRELATED) it
-    // could sign for; the network now reports a DIFFERENT authority (STD_AUTH).
-    // The refresh must adopt the new auth address, not leave the stale one, and
-    // re-resolve canSign against the new authority's presence in the wallet.
-    const source = rekeyedAccount(REKEYED, 'src-1', UNRELATED.addr, true);
-    const stdAuth = standardAccount(STD_AUTH, 'std-1');
-    const wallet = makeWallet([source, stdAuth]);
-
-    const result = await manager.updateAccountWithRekeyInfo(
-      source,
-      { isRekeyed: true, authAddress: STD_AUTH.addr },
-      wallet
-    );
-
-    expect(result.type).toBe(AccountType.REKEYED);
-    const rk = result as RekeyedAccountMetadata;
-    expect(rk.authAddress).toBe(STD_AUTH.addr); // adopted new authority
-    expect(rk.authAddress).not.toBe(UNRELATED.addr); // stale one dropped
-    expect(rk.canSign).toBe(true); // new authority is in-wallet
-  });
-
-  it('re-resolves an existing REKEYED account to canSign=false when the authority is gone', async () => {
-    const source = rekeyedAccount(REKEYED, 'src-1', STD_AUTH.addr, true);
-    const wallet = makeWallet([source]); // authority no longer present
-
-    const result = await manager.updateAccountWithRekeyInfo(
-      source,
-      { isRekeyed: true, authAddress: STD_AUTH.addr },
-      wallet
-    );
-
-    expect(result.type).toBe(AccountType.REKEYED);
-    expect((result as RekeyedAccountMetadata).canSign).toBe(false);
-  });
-
-  it('leaves a non-rekeyed STANDARD account untouched', async () => {
-    const source = standardAccount(REKEYED, 'src-1');
-    const wallet = makeWallet([source]);
-
-    const result = await manager.updateAccountWithRekeyInfo(
-      source,
-      { isRekeyed: false },
-      wallet
-    );
-
-    expect(result).toBe(source);
-  });
-
-  it('demotes a REKEYED account to WATCH when the network shows no rekey and no key is stored', async () => {
-    // The rekey has been undone on-chain. With no key stored for this account
-    // (a genuine absence from the strict probe, not an error), it must fall
-    // back to watch-only and never silently keep a signable authority.
-    const probe = jest
-      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-      .mockResolvedValue(false);
-    const source = rekeyedAccount(REKEYED, 'src-1', STD_AUTH.addr, false);
-    const wallet = makeWallet([source]);
-
-    const result = await manager.updateAccountWithRekeyInfo(
-      source,
-      { isRekeyed: false },
-      wallet
-    );
-
-    expect(result.type).toBe(AccountType.WATCH);
-    probe.mockRestore();
-  });
-
-  describe('key presence decides the un-rekey conversion (TASK-421 c)', () => {
-    const source = () => ({
-      ...rekeyedAccount(REKEYED, 'src-1', STD_AUTH.addr, true),
-      originalOwner: true,
-    });
-    afterEach(() => jest.restoreAllMocks());
-
-    it('converts back to STANDARD when the key is present', async () => {
-      jest
-        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-        .mockResolvedValue(true);
-      jest
-        .spyOn(AccountSecureStorage, 'getPrivateKey')
-        .mockImplementation(async () => REKEYED.sk.slice());
-      const result = await manager.updateAccountWithRekeyInfo(
-        source(),
-        { isRekeyed: false },
-        makeWallet([source()])
-      );
-      expect(result.type).toBe(AccountType.STANDARD);
-    });
-
-    it('demotes to WATCH only when the key is genuinely absent', async () => {
-      jest
-        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-        .mockResolvedValue(false);
-      const result = await manager.updateAccountWithRekeyInfo(
-        source(),
-        { isRekeyed: false },
-        makeWallet([source()])
-      );
-      expect(result.type).toBe(AccountType.WATCH);
-    });
-
-    it('keeps the REKEYED record (and originalOwner) when the probe fails', async () => {
-      // E.g. a keychain error, or the vault locked mid-refresh: never downgrade.
-      jest
-        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-        .mockRejectedValue(new Error('keychain unavailable'));
-      jest.spyOn(console, 'warn').mockImplementation(() => {});
-      const original = source();
-      const result = await manager.updateAccountWithRekeyInfo(
-        original,
-        { isRekeyed: false },
-        makeWallet([original])
-      );
-      expect(result).toBe(original);
-      expect((result as RekeyedAccountMetadata).originalOwner).toBe(true);
-    });
-
-    it('keeps the record when the rekey lookup itself failed (unavailable)', async () => {
-      const probe = jest.spyOn(
-        AccountSecureStorage,
-        'probeSecretPresenceStrict'
-      );
-      const original = source();
-      const result = await manager.updateAccountWithRekeyInfo(
-        original,
-        { isRekeyed: false, unavailable: true },
-        makeWallet([original])
-      );
-      expect(result).toBe(original);
-      expect(probe).not.toHaveBeenCalled();
-    });
-
-    describe('without originalOwner, presence alone is not a usable key', () => {
-      const keylessCandidate = () =>
-        rekeyedAccount(REKEYED, 'src-2', LEDGER_AUTH.addr, true);
-
-      it('converts to STANDARD only when the key actually reads', async () => {
-        jest
-          .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-          .mockResolvedValue(true);
-        jest
-          .spyOn(AccountSecureStorage, 'getPrivateKey')
-          // The account's own key: a read must also match its address (U4).
-          .mockImplementation(async () => REKEYED.sk.slice());
-        const result = await manager.updateAccountWithRekeyInfo(
-          keylessCandidate(),
-          { isRekeyed: false },
-          makeWallet([keylessCandidate()])
-        );
-        expect(result.type).toBe(AccountType.STANDARD);
-      });
-
-      it('keeps a keyless legacy record REKEYED instead of making it STANDARD', async () => {
-        // A legacy metadata record without encryptedPrivateKey probes present.
-        jest
-          .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-          .mockResolvedValue(true);
-        jest
-          .spyOn(AccountSecureStorage, 'getPrivateKey')
-          .mockRejectedValue(new Error('no private key in record'));
-        const original = keylessCandidate();
-        const result = await manager.updateAccountWithRekeyInfo(
-          original,
-          { isRekeyed: false },
-          makeWallet([original])
-        );
-        expect(result).toBe(original);
-      });
-    });
-
-    // originalOwner can outlive the key, so the key must read before the record
-    // converts; a locked vault keeps it REKEYED, which still signs with its own
-    // key (TASK-425 U3), until a later load reads it (TASK-425 U4).
-    it.each([
-      ['a locked vault', new Error('vault locked')],
-      [
-        'a stale flag over a keyless legacy record',
-        new Error('no private key in record'),
-      ],
-    ])(
-      'keeps the record when the key does not read: %s',
-      async (_label, readError) => {
-        const probe = jest
-          .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-          .mockResolvedValue(true);
-        const getKey = jest
-          .spyOn(AccountSecureStorage, 'getPrivateKey')
-          .mockRejectedValue(readError);
-        const original = source();
-        const result = await manager.updateAccountWithRekeyInfo(
-          original,
-          { isRekeyed: false },
-          makeWallet([original])
-        );
-        expect(result).toBe(original);
-        expect(probe).toHaveBeenCalledWith('src-1');
-        expect(getKey).toHaveBeenCalledWith('src-1');
-      }
-    );
-
-    it('keeps the record when the key reads but belongs to another address', async () => {
-      jest
-        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-        .mockResolvedValue(true);
-      const foreign = DECOY.sk.slice();
-      jest
-        .spyOn(AccountSecureStorage, 'getPrivateKey')
-        .mockResolvedValue(foreign);
-      const original = source();
-      const result = await manager.updateAccountWithRekeyInfo(
-        original,
-        { isRekeyed: false },
-        makeWallet([original])
-      );
-      expect(result).toBe(original);
-      expect(foreign.every((byte) => byte === 0)).toBe(true);
-    });
-  });
-});
-
 // TASK-419: `originalOwner` is the durable signal that the account still holds
 // its original key (hasKeyBearingAccountStrict counts it without a secure read),
 // so it must survive repeated rekeys.
@@ -1040,50 +362,6 @@ describe('per-account backup history through conversions', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it.each(histories)(
-    'preserves %j through STANDARD → REKEYED → STANDARD',
-    async (history) => {
-      jest
-        .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
-        .mockResolvedValue(true);
-      jest
-        .spyOn(AccountSecureStorage, 'getPrivateKey')
-        .mockImplementation(async () => REKEYED.sk.slice());
-      const source = { ...standardAccount(REKEYED, 'src-1'), ...history };
-      // Remove the builder's defaults for the missing-fields legacy case.
-      if (!('hasBackup' in history)) {
-        delete source.hasBackup;
-        delete source.backupVerified;
-      }
-      const auth = {
-        ...standardAccount(STD_AUTH, 'auth-1'),
-        hasBackup: !source.hasBackup,
-        backupVerified: !source.backupVerified,
-        backupCreatedAt: '2026-09-08T07:06:00.000Z',
-      };
-      const wallet = makeWallet([source, auth]);
-      const converted = await manager.updateAccountWithRekeyInfo(
-        source,
-        { isRekeyed: true, authAddress: auth.address },
-        wallet
-      );
-      expect(converted.type).toBe(AccountType.REKEYED);
-      const restored = await manager.updateAccountWithRekeyInfo(
-        converted,
-        { isRekeyed: false },
-        makeWallet([converted, auth])
-      );
-      expect(restored.type).toBe(AccountType.STANDARD);
-      for (const result of [converted, restored]) {
-        expect(result).toMatchObject({
-          hasBackup: source.hasBackup,
-          backupVerified: source.backupVerified,
-          backupCreatedAt: source.backupCreatedAt,
-        });
-      }
-    }
-  );
-
-  it.each(histories)(
     'keeps %j through Ledger and airgap rekeys in both orders',
     async (history) => {
       const source: StandardAccountMetadata = {
@@ -1121,7 +399,7 @@ describe('per-account backup history through conversions', () => {
     }
   );
 
-  it('gives WATCH sources no flags across all three REKEYED constructors', async () => {
+  it('gives WATCH sources no flags across both REKEYED constructors', async () => {
     const source = watchAccount(REKEYED, 'watch-1');
     const auth = {
       ...standardAccount(STD_AUTH, 'auth-1'),
@@ -1133,11 +411,6 @@ describe('per-account backup history through conversions', () => {
     const airgap = remoteSignerAccount(REMOTE_AUTH, 'air-1');
     const wallet = makeWallet([source, auth, ledger, airgap]);
     for (const result of [
-      await manager.updateAccountWithRekeyInfo(
-        source,
-        { isRekeyed: true, authAddress: auth.address },
-        wallet
-      ),
       await manager.rekeyToLedger(source, ledger, wallet),
       await manager.rekeyToAirgap(source, airgap, wallet),
     ]) {

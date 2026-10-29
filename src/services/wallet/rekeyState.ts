@@ -13,7 +13,7 @@ export type RekeyState =
     };
 
 /**
- * Mirrors rekeyManager.checkSigningAuthority (which no balance load calls since U5):
+ * Signing authority from chain state (TASK-425 U5 removed the rekeyManager copy):
  * STANDARD membership suffices; LEDGER requires a connected/available device;
  * REMOTE_SIGNER signs via QR. No persisted authAddress/canSign is consulted.
  * `ownKeyIds` names the REKEYED records whose own secret was probed present;
