@@ -1020,4 +1020,52 @@ describe('rekey builders re-check the receiving key (TASK-425 U3)', () => {
       TransactionService.buildRekeyReverseTransaction(params)
     ).rejects.toThrow(REFUSED);
   });
+
+  it.each([
+    ['sendRekeyTransaction', RECIPIENT],
+    ['sendRekeyReverseTransaction', SENDER],
+  ])(
+    '%s does not submit when the receiving key is lost while signing',
+    async (method, receiver) => {
+      const sign = jest
+        .spyOn(TransactionService as any, 'signTransactionWithRecovery')
+        .mockImplementation(async () => {
+          // A Ledger approval or PIN wait: meanwhile the receiver loses its key.
+          mockCurrentWallet.mockResolvedValue({
+            accounts: [
+              { id: 'sender', address: SENDER, type: AccountType.WATCH },
+              { id: 'recipient', address: receiver, type: AccountType.WATCH },
+            ],
+          });
+          return new Uint8Array([1]);
+        });
+      const submit = jest
+        .spyOn(TransactionService as any, 'submitWithRetries')
+        .mockResolvedValue({ txId: 'TX', confirmed: true });
+      try {
+        await expect(
+          (TransactionService as any)[method](
+            {
+              fromAddress: SENDER,
+              rekeyToAddress: RECIPIENT,
+              note: `u3-${method}`,
+            },
+            { address: SENDER }
+          )
+        ).rejects.toThrow(REFUSED);
+        expect(sign).toHaveBeenCalled();
+        expect(submit).not.toHaveBeenCalled();
+      } finally {
+        sign.mockRestore();
+        submit.mockRestore();
+        mockCurrentWallet.mockReset();
+        mockCurrentWallet.mockImplementation(async () => ({
+          accounts: [
+            { id: 'sender', address: SENDER, type: 'standard' },
+            { id: 'recipient', address: RECIPIENT, type: 'standard' },
+          ],
+        }));
+      }
+    }
+  );
 });

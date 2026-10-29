@@ -2442,6 +2442,19 @@ export class TransactionAuthController {
       // response we verified against request.net.
       const networkService = netService;
 
+      // A QR round trip can outlast the builder's custody check, so the key
+      // receiving authority is checked again right before submitting
+      // (TASK-425 U3 Codex confirm 3).
+      if (requestType === 'rekey' || requestType === 'rekey_reverse') {
+        const { TransactionService } = await import('@/services/transactions');
+        const rekey = transactionRequest?.rekeyParams;
+        const receiver =
+          requestType === 'rekey' ? rekey?.rekeyToAddress : rekey?.fromAddress;
+        if (!receiver) throw new Error('Rekey parameters missing');
+        await TransactionService.assertSignsAfterRekey(receiver);
+        if (isStale()) return;
+      }
+
       // Submit the signed transactions
       const { txId: transactionId, confirmed } =
         await networkService.submitTransaction(

@@ -1197,12 +1197,13 @@ export class TransactionService {
   }
 
   /**
-   * The builders are the last step before every signing path, so custody of
-   * the key that receives authority is checked here, fresh, and not only in
-   * the screen's earlier validation: a confirm dialog or a PIN/Ledger wait can
-   * outlast it (TASK-425 U3 Codex confirm 2).
+   * Custody of the key that receives authority, read fresh. The builders run
+   * it, since a confirm dialog or PIN wait can outlast the screen's checks
+   * (TASK-425 U3 Codex confirm 2), and every rekey submission runs it again
+   * just before submitting, since a Ledger approval or a QR round trip can
+   * outlast the build (confirm 3). Submission is the last local step.
    */
-  private static async assertSignsAfterRekey(address: string): Promise<void> {
+  static async assertSignsAfterRekey(address: string): Promise<void> {
     const wallet = await MultiAccountWalletService.getCurrentWallet();
     if (
       !wallet ||
@@ -1628,6 +1629,7 @@ export class TransactionService {
           params.networkId
         );
 
+      await TransactionService.assertSignsAfterRekey(params.rekeyToAddress);
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
@@ -1778,6 +1780,7 @@ export class TransactionService {
           params.networkId
         );
 
+      await TransactionService.assertSignsAfterRekey(params.fromAddress);
       // Submit to network with basic retry
       callbacks?.onNetworkSubmit?.();
       // submitWithRetries returns { txId, confirmed }; propagate `confirmed` so
