@@ -202,3 +202,42 @@ it('runs the balance-cache barrier even when no balance key exists yet (TASK-398
   }
   expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([]);
 });
+
+it.each([undefined, '', 'invalid phrase'])(
+  'rejects a missing or invalid standard phrase before any destructive work (#4): %s',
+  async (mnemonic) => {
+    const algosdk = jest.requireMock('algosdk').default;
+    const { AccountSecureStorage } = jest.requireMock(
+      '@/services/secure/AccountSecureStorage'
+    );
+    const { MultiAccountWalletService } = jest.requireMock('@/services/wallet');
+    algosdk.mnemonicToSecretKey.mockImplementation((phrase: string) => {
+      if (phrase !== 'valid test phrase') throw new Error('Invalid mnemonic');
+      return {
+        addr: { toString: () => 'RESTORED_ADDR' },
+        sk: new Uint8Array(64),
+      };
+    });
+    const records = ['valid test phrase', mnemonic].map(
+      (phrase, index) =>
+        ({
+          id: `standard-${index}`,
+          type: AccountType.STANDARD,
+          address: 'RESTORED_ADDR',
+          mnemonic: phrase,
+        }) as BackupAccountData
+    );
+    await expect(
+      performFullRestore(
+        records,
+        {} as BackupSettings,
+        [],
+        {} as Parameters<typeof performFullRestore>[3]
+      )
+    ).rejects.toThrow();
+    expect(AccountSecureStorage.clearAll).not.toHaveBeenCalled();
+    expect(MultiAccountWalletService.clearAllWallets).not.toHaveBeenCalled();
+    expect(AccountSecureStorage.storeAccountForCreation).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+  }
+);
