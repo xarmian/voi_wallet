@@ -73,7 +73,24 @@ jest.mock('@/store/walletStore', () => ({
       true
     );
     const wallet = await mockGetCurrentWallet();
-    return deriveRekeyState(address, info, wallet?.accounts ?? []);
+    const accounts = wallet?.accounts ?? [];
+    // Mirrors the real strict path: a REKEYED signer counts once its own key
+    // is probed present (TASK-425 U3).
+    const signingAddress = info.isRekeyed ? info.authAddress : address;
+    const ownKeyIds = new Set<string>();
+    for (const account of accounts) {
+      if (account.type === 'rekeyed' && account.address === signingAddress) {
+        // A probe error propagates, as in the real strict path.
+        let present: boolean;
+        try {
+          present = await mockProbeSecretPresence(account.id);
+        } catch {
+          throw new Error('Signer custody unavailable');
+        }
+        if (present) ownKeyIds.add(account.id);
+      }
+    }
+    return deriveRekeyState(address, info, accounts, ownKeyIds);
   },
 }));
 jest.mock('@/services/ledger/simpleLedgerSigner', () => ({
@@ -1110,9 +1127,11 @@ describe('SecureKeyManager.getSigningInfo', () => {
     mockGetAccountRekeyInfo.mockResolvedValue({ isRekeyed: false });
     mockProbeSecretPresence.mockRejectedValue(new Error('keychain'));
 
+    // Since TASK-425 U3 the strict rekey state probes the same record first
+    // and rejects there; either rejection fails closed.
     await expect(
       SecureKeyManager.getSigningInfo(REKEYED.addr, networkId)
-    ).rejects.toThrow('keychain');
+    ).rejects.toThrow(/keychain|Signer custody unavailable/);
   });
 
   it('propagates strict fetch failure for every signing preflight reader', async () => {
@@ -1233,4 +1252,93 @@ it('clearAll propagates secure storage failure', async () => {
   const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   await expect(SecureKeyManager.clearAll()).rejects.toBe(failure);
   errorSpy.mockRestore();
+});
+
+describe('SecureKeyManager — retained REKEYED key as a rekey authority (TASK-425 U3)', () => {
+  const networkId = NetworkId.VOI_MAINNET;
+  // AUTH's own key is retained, but its record stays REKEYED (after U4, an
+  // undone rekey no longer converts it back to STANDARD).
+  const retainedAuth = () => ({
+    ...standardAccount(AUTH, 'acc-auth'),
+    type: AccountType.REKEYED,
+  });
+
+  beforeEach(() => {
+    mockProbeSecretPresence.mockReset();
+    mockProbeSecretPresence.mockResolvedValue(false);
+    mockGetAccountRekeyInfo.mockResolvedValue({
+      isRekeyed: true,
+      authAddress: AUTH.addr,
+    });
+  });
+
+  it('signs with the retained auth key when its secret is present (verifies)', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-rekeyed'), retainedAuth()]);
+    mockProbeSecretPresence.mockImplementation(
+      async (id: unknown) => id === 'acc-auth'
+    );
+    const txn = paymentTxn(REKEYED.addr);
+
+    const blob = await SecureKeyManager.signTransaction(txn, REKEYED.addr);
+
+    assertSignedBy(blob, txn, AUTH.pk, {
+      notSignerPk: REKEYED.pk,
+      authAddr: AUTH.addr,
+    });
+    expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-auth', undefined);
+  });
+
+  it('reports unavailable when the retained auth record has no secret', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-rekeyed'), retainedAuth()]);
+    mockProbeSecretPresence.mockResolvedValue(false);
+
+    const route = await SecureKeyManager.resolveSigningRoute(REKEYED.addr);
+
+    expect(route.kind).toBe('unavailable');
+    expect(mockSecureGetPrivateKey).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the auth key probe errors', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-rekeyed'), retainedAuth()]);
+    mockProbeSecretPresence.mockRejectedValue(new Error('keychain busy'));
+
+    const route = await SecureKeyManager.resolveSigningRoute(REKEYED.addr);
+
+    expect(route.kind).toBe('unavailable');
+  });
+
+  it('getSigningInfo reports the retained auth key as the signer', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-watch'), retainedAuth()]);
+    mockProbeSecretPresence.mockImplementation(
+      async (id: unknown) => id === 'acc-auth'
+    );
+
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr, networkId);
+
+    expect(info).toMatchObject({
+      canSign: true,
+      signingAddress: AUTH.addr,
+      signingAccountId: 'acc-auth',
+      isRekeyed: true,
+    });
+  });
+
+  it('getSigningInfo propagates a failing auth key probe (fail closed)', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-watch'), retainedAuth()]);
+    mockProbeSecretPresence.mockRejectedValue(new Error('keychain busy'));
+
+    await expect(
+      SecureKeyManager.getSigningInfo(REKEYED.addr, networkId)
+    ).rejects.toThrow('Signer custody unavailable');
+  });
+
+  it('getSigningInfo names no signer when the retained auth record has no secret', async () => {
+    setWallet([watchAccount(REKEYED, 'acc-watch'), retainedAuth()]);
+    mockProbeSecretPresence.mockResolvedValue(false);
+
+    const info = await SecureKeyManager.getSigningInfo(REKEYED.addr, networkId);
+
+    expect(info.canSign).toBe(false);
+    expect(info.signingAccountId).toBeUndefined();
+  });
 });

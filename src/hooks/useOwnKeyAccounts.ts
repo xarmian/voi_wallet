@@ -13,12 +13,15 @@ import {
  * account set changes and whenever the screen regains focus, since a secret can
  * appear or go without the record changing. Between probes it keeps the last
  * answer, limited to accounts still present, so a screen isn't torn down.
+ * `refreshKey` re-probes when it changes (e.g. on unlock, since a key read
+ * fails while the vault is locked).
  */
 export function useOwnKeyAccounts<T extends AccountMetadata = OwnKeyAccount>(
   accounts: readonly AccountMetadata[],
   filter: (
     accounts: readonly AccountMetadata[]
-  ) => Promise<T[]> = filterOwnKeyAccounts as never
+  ) => Promise<T[]> = filterOwnKeyAccounts as never,
+  refreshKey?: unknown
 ): T[] | null {
   const isFocused = useIsFocused();
   const [heldIds, setHeldIds] = useState<ReadonlySet<string> | null>(null);
@@ -37,10 +40,10 @@ export function useOwnKeyAccounts<T extends AccountMetadata = OwnKeyAccount>(
     return () => {
       cancelled = true;
     };
-    // `key` and focus capture every input that changes the answer; `filter`
-    // is a module-level function.
+    // `key`, focus and `refreshKey` capture every input that changes the
+    // answer; `filter` is a module-level function.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, isFocused]);
+  }, [key, isFocused, refreshKey]);
 
   // Return the current records, so a label or colour change shows at once.
   return useMemo(

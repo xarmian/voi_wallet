@@ -237,6 +237,8 @@ export interface AccountBalance {
     isRekeyed: boolean;
     authAddress?: string;
     rekeyedAt?: number;
+    /** The rekey lookup failed; isRekeyed:false is only a display fallback. */
+    unavailable?: boolean;
   };
 }
 

@@ -8,6 +8,7 @@ import {
 import { NetworkId } from '@/types/network';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { NetworkService } from '@/services/network';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 
 /** The record types that can carry the account's own secret. */
 export type OwnKeyAccount = StandardAccountMetadata | RekeyedAccountMetadata;
@@ -54,6 +55,79 @@ export async function filterOwnKeyAccounts(
 ): Promise<OwnKeyAccount[]> {
   const held = await Promise.all(accounts.map(holdsOwnKey));
   return accounts.filter((account, i): account is OwnKeyAccount => held[i]);
+}
+
+/**
+ * The software record that signs AS `address` when it is a rekey authority:
+ * the record at that address whose own secret this device holds (TASK-425 U3).
+ * A rekey authority signs with its own key whatever its own rekey state, so a
+ * retained REKEYED key qualifies. After U4 an undone rekey stays REKEYED, so a
+ * STANDARD-only lookup would strand every account rekeyed to it.
+ */
+export async function findOwnKeySigner(
+  address: string,
+  accounts: readonly AccountMetadata[]
+): Promise<OwnKeyAccount | undefined> {
+  const target = address.toUpperCase();
+  for (const account of accounts) {
+    if (
+      account.address.toUpperCase() === target &&
+      (await holdsOwnKey(account))
+    ) {
+      return account as OwnKeyAccount;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * holdsOwnKey for an irreversible hand-over of authority TO this key (a rekey
+ * target, or removing a rekey back to the account itself). A presence probe
+ * also reads a keyless legacy blob as present, so a REKEYED record qualifies
+ * only as a converted STANDARD account (originalOwner) or once its key reads
+ * and belongs to its address, the rule rekeyManager applies before a
+ * conversion (TASK-425 U3 hunter review). Any failure is not custody.
+ */
+export async function holdsUsableOwnKey(
+  account: AccountMetadata
+): Promise<boolean> {
+  if (!(await holdsOwnKey(account))) return false;
+  if (account.type === AccountType.STANDARD) return true;
+  if ((account as RekeyedAccountMetadata).originalOwner === true) return true;
+  let key: Uint8Array | null = null;
+  try {
+    key = await AccountSecureStorage.getPrivateKey(account.id);
+    return keyBelongsToAddress(key, account.address);
+  } catch {
+    return false;
+  } finally {
+    key?.fill(0);
+  }
+}
+
+/** The accounts holdsUsableOwnKey admits, in input order. */
+export async function filterUsableOwnKeyAccounts(
+  accounts: readonly AccountMetadata[]
+): Promise<OwnKeyAccount[]> {
+  const ok = await Promise.all(accounts.map(holdsUsableOwnKey));
+  return accounts.filter((account, i): account is OwnKeyAccount => ok[i]);
+}
+
+/** findOwnKeySigner under holdsUsableOwnKey. */
+export async function findUsableOwnKey(
+  address: string,
+  accounts: readonly AccountMetadata[]
+): Promise<OwnKeyAccount | undefined> {
+  const target = address.toUpperCase();
+  for (const account of accounts) {
+    if (
+      account.address.toUpperCase() === target &&
+      (await holdsUsableOwnKey(account))
+    ) {
+      return account as OwnKeyAccount;
+    }
+  }
+  return undefined;
 }
 
 /**

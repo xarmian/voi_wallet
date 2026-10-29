@@ -54,6 +54,7 @@ import {
   RekeyState,
   subscribeRekeySigner,
 } from '@/services/wallet/rekeyState';
+import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -3802,7 +3803,11 @@ export function getRekeyState(
   return selectRekeyState(useWalletStore.getState(), address, networkId);
 }
 
-/** Uses the requested network's own cache; fetch failures propagate to callers. */
+/**
+ * Uses the requested network's own cache; fetch failures propagate to callers.
+ * A REKEYED record at the signing address counts as a signer only once its
+ * own key is probed present, and a probe error propagates too (TASK-425 U3).
+ */
 export async function getRekeyStateStrict(
   address: string,
   networkId: NetworkId
@@ -3811,11 +3816,20 @@ export async function getRekeyStateStrict(
     address,
     true
   );
-  const state = deriveRekeyState(
-    address,
-    info,
-    useWalletStore.getState().wallet?.accounts ?? []
-  );
+  const accounts = useWalletStore.getState().wallet?.accounts ?? [];
+  const signingAddress = info.isRekeyed ? info.authAddress : address;
+  const ownKeyIds = new Set<string>();
+  for (const account of accounts) {
+    if (
+      account.type !== AccountType.REKEYED ||
+      account.address !== signingAddress
+    )
+      continue;
+    const custody = await probeOwnKey(account);
+    if (custody === 'unresolved') throw new Error('Signer custody unavailable');
+    if (custody === 'present') ownKeyIds.add(account.id);
+  }
+  const state = deriveRekeyState(address, info, accounts, ownKeyIds);
   if (state.status !== 'loaded') throw new Error('Rekey status unavailable');
   return state;
 }

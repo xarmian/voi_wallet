@@ -17,7 +17,6 @@ import { useWalletStore } from '@/store/walletStore';
 import {
   AccountMetadata,
   AccountType,
-  StandardAccountMetadata,
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
   LedgerSigningInfo,
@@ -38,6 +37,13 @@ import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
+import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
+import {
+  filterOwnKeyAccounts,
+  filterUsableOwnKeyAccounts,
+  OwnKeyAccount,
+} from '@/services/wallet/ownKeyCustody';
+import { useAuth } from '@/contexts/AuthContext';
 
 type RekeyAccountScreenRouteProp = RouteProp<
   SettingsStackParamList,
@@ -54,6 +60,8 @@ interface RekeyAccountParams {
 
 type RekeyFlow = 'standard' | 'ledger' | 'reverse' | 'airgap';
 
+const NO_ACCOUNTS: AccountMetadata[] = [];
+
 export default function RekeyAccountScreen() {
   const route = useRoute<RekeyAccountScreenRouteProp>();
   const navigation = useNavigation<RekeyAccountScreenNavigationProp>();
@@ -68,8 +76,8 @@ export default function RekeyAccountScreen() {
     NetworkId.VOI_MAINNET
   );
   const [rekeyFlow, setRekeyFlow] = useState<RekeyFlow>('standard');
-  const [selectedStandardAccount, setSelectedStandardAccount] =
-    useState<StandardAccountMetadata | null>(null);
+  const [pickedStandardAccount, setSelectedStandardAccount] =
+    useState<OwnKeyAccount | null>(null);
   const [selectedLedgerAccount, setSelectedLedgerAccount] =
     useState<LedgerAccountMetadata | null>(null);
   const [selectedAirgapAccount, setSelectedAirgapAccount] =
@@ -93,9 +101,38 @@ export default function RekeyAccountScreen() {
   const sourceAccount = wallet?.accounts.find(
     (acc) => acc.id === params.accountId
   );
-  const standardAccounts = wallet?.accounts.filter(
-    (acc) => acc.type === AccountType.STANDARD && acc.id !== params.accountId
-  ) as StandardAccountMetadata[];
+  // A software controller is an account whose own key this device holds, a
+  // retained REKEYED key included. A software target, or the source when a
+  // rekey is removed, receives authority for good, so its key must also read
+  // and belong to it (holdsUsableOwnKey). Both are null until the first probe
+  // resolves. (TASK-425 U3.)
+  // A key read fails while the vault is locked, so unlocking re-probes.
+  const { authState } = useAuth();
+  const unlocked = authState.isAuthenticated && !authState.isLocked;
+  const accounts = wallet?.accounts ?? NO_ACCOUNTS;
+  const ownKeyAccounts = useOwnKeyAccounts(
+    accounts,
+    filterOwnKeyAccounts,
+    unlocked
+  );
+  const usableOwnKeyAccounts = useOwnKeyAccounts(
+    accounts,
+    filterUsableOwnKeyAccounts,
+    unlocked
+  );
+  const custodyLoading =
+    ownKeyAccounts === null || usableOwnKeyAccounts === null;
+  const standardAccounts = useMemo(
+    () =>
+      usableOwnKeyAccounts?.filter((acc) => acc.id !== params.accountId) ??
+      null,
+    [usableOwnKeyAccounts, params.accountId]
+  );
+  // A pick that a later custody probe drops is no longer selected, so the
+  // proceed button and validation follow the current answer.
+  const selectedStandardAccount =
+    standardAccounts?.find((acc) => acc.id === pickedStandardAccount?.id) ??
+    null;
   const ledgerAccounts = useMemo(
     () =>
       (wallet?.accounts.filter((acc) => acc.type === AccountType.LEDGER) ??
@@ -120,25 +157,28 @@ export default function RekeyAccountScreen() {
   // 2. The source account itself in our wallet to ensure we can control it after reverting
   const authSignerAccount =
     isSourceRekeyed && networkAuthAddress
-      ? wallet?.accounts.find(
+      ? (wallet?.accounts.find(
           (acc) =>
             acc.address.toUpperCase() === networkAuthAddress.toUpperCase() &&
-            (acc.type === AccountType.STANDARD ||
-              acc.type === AccountType.LEDGER ||
+            (acc.type === AccountType.LEDGER ||
               acc.type === AccountType.REMOTE_SIGNER)
-        )
+        ) ??
+        ownKeyAccounts?.find(
+          (acc) =>
+            acc.address.toUpperCase() === networkAuthAddress.toUpperCase()
+        ))
       : undefined;
 
-  // Check if we have the source account in our wallet (to maintain control after rekey)
-  const hasSourceAccount = !!sourceAccount;
+  // Removing the rekey hands authority back to the source's own key, so the
+  // source must sign as itself afterwards (TASK-425 U3 review).
+  const sourceSignsAfterwards =
+    !!sourceAccount &&
+    (sourceAccount.type === AccountType.LEDGER ||
+      sourceAccount.type === AccountType.REMOTE_SIGNER ||
+      !!usableOwnKeyAccounts?.some((acc) => acc.id === sourceAccount.id));
 
-  // We can reverse rekey if we have both the auth signer AND the source account
-  const canReverseRekey = !!authSignerAccount && hasSourceAccount;
-
-  const matchingLedgerSigner =
-    authSignerAccount?.type === AccountType.LEDGER
-      ? (authSignerAccount as LedgerAccountMetadata)
-      : undefined;
+  // We can reverse rekey if we hold the auth signer AND the source's own key
+  const canReverseRekey = !!authSignerAccount && sourceSignsAfterwards;
 
   const isReverseFlow = rekeyFlow === 'reverse';
   const isLedgerFlow = rekeyFlow === 'ledger';
@@ -153,6 +193,8 @@ export default function RekeyAccountScreen() {
           : true;
   const isProceedDisabled =
     (rekeyFlow !== 'reverse' && !hasTargetSelection) ||
+    // Custody can drop after the reverse flow was entered (TASK-425 U3).
+    (rekeyFlow === 'reverse' && !canReverseRekey) ||
     validationErrors.length > 0 ||
     isValidating;
   // Show "Verify Airgap Signer" when not yet verified, otherwise "Rekey to Airgap Signer"
@@ -283,6 +325,9 @@ export default function RekeyAccountScreen() {
     wallet,
     isLedgerReady,
     selectedNetworkId,
+    // Validation reads custody too; re-run it when a probe changes the answer.
+    ownKeyAccounts,
+    usableOwnKeyAccounts,
   ]);
 
   // Auto-select the sole Ledger / airgap target account when exactly one is
@@ -321,7 +366,7 @@ export default function RekeyAccountScreen() {
   ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  const handleStandardAccountSelect = (account: StandardAccountMetadata) => {
+  const handleStandardAccountSelect = (account: OwnKeyAccount) => {
     setSelectedStandardAccount(account);
   };
 
@@ -355,6 +400,13 @@ export default function RekeyAccountScreen() {
     }
 
     if (rekeyFlow === 'reverse') {
+      if (!canReverseRekey) {
+        Alert.alert(
+          'Cannot Remove Rekey',
+          "Removing the rekey returns control to this account's own key, which is not in your wallet."
+        );
+        return;
+      }
       Alert.alert(
         'Confirm Reverse Rekey',
         `Are you sure you want to remove the rekey from this account?\n\nThis will return signing authority back to:\n${formatAddress(sourceAccount.address)}\n\nYou will regain full control of this account.`,
@@ -425,8 +477,15 @@ export default function RekeyAccountScreen() {
       errors.push('Account is not currently rekeyed');
     }
 
-    if (!canReverseRekey && !matchingLedgerSigner) {
+    // Still probing custody: no verdict yet, so no refusal either.
+    if (custodyLoading) return;
+
+    if (!authSignerAccount) {
       errors.push('You do not have signing authority for this rekeyed account');
+    } else if (!sourceSignsAfterwards) {
+      errors.push(
+        "Removing the rekey returns control to this account's own key, which is not in your wallet."
+      );
     }
 
     if (errors.length > 0) {
@@ -1067,7 +1126,9 @@ export default function RekeyAccountScreen() {
               Choose which account in your wallet will have signing authority
             </Text>
 
-            {standardAccounts.length === 0 ? (
+            {standardAccounts === null ? (
+              <ActivityIndicator color={theme.colors.primary} />
+            ) : standardAccounts.length === 0 ? (
               <View
                 style={[
                   styles.noAccountsContainer,
@@ -1088,7 +1149,8 @@ export default function RekeyAccountScreen() {
                     { color: theme.colors.textSecondary },
                   ]}
                 >
-                  No other standard accounts available for rekeying
+                  No other accounts with a key in this wallet are available for
+                  rekeying
                 </Text>
               </View>
             ) : (
