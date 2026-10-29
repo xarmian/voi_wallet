@@ -112,6 +112,22 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * The network definitively rejected a submitted transaction (algod reported a
+ * pool error for it). Unlike a timeout or "not confirmed yet", this is final
+ * for that signed transaction: it must be reported as a failure with its
+ * reason, and never resubmitted (TASK-440 audit #8).
+ */
+export class TransactionRejectedError extends Error {
+  constructor(
+    public txId: string,
+    public reason: string
+  ) {
+    super(`Transaction rejected by the network: ${reason}`);
+    this.name = 'TransactionRejectedError';
+  }
+}
+
 export class NetworkUnavailableError extends NetworkError {
   constructor(networkId: NetworkId, service?: string) {
     const message = service

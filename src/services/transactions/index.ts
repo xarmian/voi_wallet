@@ -4,7 +4,7 @@ import {
   networkService as defaultNetworkService,
   NetworkService,
 } from '@/services/network';
-import { NetworkId } from '@/types/network';
+import { NetworkId, TransactionRejectedError } from '@/types/network';
 import {
   WalletAccount,
   LedgerSigningInfo,
@@ -1905,6 +1905,11 @@ export class TransactionService {
       try {
         return await networkService.submitTransaction(signedTxnBlob);
       } catch (error) {
+        // A definitive rejection is final for this signed transaction:
+        // report it with its reason, never resend it (TASK-440 audit #8).
+        if (error instanceof TransactionRejectedError) {
+          throw error;
+        }
         // If a prior attempt (or a lost-response commit) already landed this
         // exact tx, do NOT resubmit — reconcile confirmation and report success.
         if (TransactionService.isAlreadySubmittedError(error)) {
@@ -1913,7 +1918,12 @@ export class TransactionService {
           if (expectedTxId) {
             const confirmed = await networkService
               .isTransactionConfirmed(expectedTxId)
-              .catch(() => false);
+              .catch((reconcileError) => {
+                if (reconcileError instanceof TransactionRejectedError) {
+                  throw reconcileError;
+                }
+                return false;
+              });
             return { txId: expectedTxId, confirmed };
           }
           // Already accepted but the txId couldn't be derived (rare decode edge):
