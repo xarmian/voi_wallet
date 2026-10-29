@@ -3,7 +3,7 @@
   "totals": {
     "errors": 0,
     "warnings": 151,
-    "filesLinted": 576,
+    "filesLinted": 587,
     "filesWithFindings": 61
   },
   "rules": {
@@ -70,14 +70,6 @@
         "react-hooks/immutability": 4
       }
     },
-    "src/components/common/NFTThemeSelector.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
     "src/components/common/UniversalHeader.tsx": {
       "errors": 0,
       "warnings": 2,
@@ -104,13 +96,6 @@
       "warnings": 6,
       "rules": {
         "react-hooks/immutability": 6
-      }
-    },
-    "src/components/network/NetworkSwitcher.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/immutability": 1
       }
     },
     "src/components/nft/CollectionBrowser.tsx": {
@@ -248,6 +233,21 @@
       "warnings": 1,
       "rules": {
         "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/settings/NFTThemeSettingsScreen.tsx": {
+      "errors": 0,
+      "warnings": 2,
+      "rules": {
+        "react-hooks/immutability": 1,
+        "react-hooks/set-state-in-effect": 1
+      }
+    },
+    "src/screens/settings/NetworkSettingsScreen.tsx": {
+      "errors": 0,
+      "warnings": 1,
+      "rules": {
+        "react-hooks/immutability": 1
       }
     },
     "src/screens/settings/NotificationSettingsScreen.tsx": {

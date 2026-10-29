@@ -40,6 +40,10 @@ import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
 import NotificationSettingsScreen from '@/screens/settings/NotificationSettingsScreen';
 import ExperimentalFeaturesScreen from '@/screens/settings/ExperimentalFeaturesScreen';
+import NumberFormatSettingsScreen from '@/screens/settings/NumberFormatSettingsScreen';
+import NetworkSettingsScreen from '@/screens/settings/NetworkSettingsScreen';
+import ThemeSettingsScreen from '@/screens/settings/ThemeSettingsScreen';
+import NFTThemeSettingsScreen from '@/screens/settings/NFTThemeSettingsScreen';
 import BackupWalletScreen from '@/screens/settings/BackupWalletScreen';
 import RestoreWalletScreen from '@/screens/settings/RestoreWalletScreen';
 import AddWatchAccountScreen from '@/screens/account/AddWatchAccountScreen';
@@ -521,6 +525,11 @@ export type SettingsStackParamList = {
   AboutScreen: undefined;
   NotificationSettings: undefined;
   ExperimentalFeatures: undefined;
+  // Picker rows, pushed like every other Settings row (TASK-435)
+  NumberFormatSettings: undefined;
+  NetworkSettings: undefined;
+  ThemeSettings: undefined;
+  NFTThemeSettings: undefined;
   BackupWallet: undefined;
   RestoreWallet: { isOnboarding?: boolean } | undefined;
   WebView: {
@@ -722,6 +731,22 @@ function SettingsStackNavigator() {
         <SettingsStack.Screen
           name="ExperimentalFeatures"
           component={ExperimentalFeaturesScreen}
+        />
+        <SettingsStack.Screen
+          name="NumberFormatSettings"
+          component={NumberFormatSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="NetworkSettings"
+          component={NetworkSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="ThemeSettings"
+          component={ThemeSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="NFTThemeSettings"
+          component={NFTThemeSettingsScreen}
         />
         <SettingsStack.Screen
           name="BackupWallet"

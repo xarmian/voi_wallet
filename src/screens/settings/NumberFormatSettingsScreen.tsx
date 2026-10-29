@@ -1,23 +1,32 @@
-import React, { useMemo } from 'react';
+/**
+ * Number Format Screen
+ *
+ * Pushed Settings screen for the number-format locale (TASK-435: was a
+ * slide-up modal). Saving a choice returns to Settings; a failed save stays
+ * here with an alert.
+ */
+
+import React, { useMemo, useRef } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  Modal,
   FlatList,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { Theme } from '@/constants/themes';
-import { EdgeInsets, useSafeAreaInsets } from 'react-native-safe-area-context';
-
-interface LocaleSwitcherProps {
-  visible: boolean;
-  onClose: () => void;
-  currentLocale: string | null;
-  onLocaleSelect: (locale: string | null) => void;
-  theme: Theme;
-}
+import {
+  EdgeInsets,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import { useTheme } from '@/contexts/ThemeContext';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import UniversalHeader from '@/components/common/UniversalHeader';
+import { useWalletStore, useWalletSettings } from '@/store/walletStore';
 
 interface LocaleItemProps {
   localeValue: string | null;
@@ -114,34 +123,44 @@ const LocaleItem: React.FC<LocaleItemProps> = ({
   );
 };
 
-export default function LocaleSwitcher({
-  visible,
-  onClose,
-  currentLocale,
-  onLocaleSelect,
-  theme,
-}: LocaleSwitcherProps) {
+export default function NumberFormatSettingsScreen() {
+  const navigation = useNavigation();
+  const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
+  const updateWalletSettings = useWalletStore(
+    (state) => state.updateWalletSettings
+  );
+  const walletSettings = useWalletSettings();
+  const currentLocale = walletSettings?.numberLocale ?? null;
+  // One save at a time: a second tap while the first is in flight is ignored.
+  const savingRef = useRef(false);
+
+  const handleLocaleSelect = async (value: string | null) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      await updateWalletSettings({ numberLocale: value ?? null });
+      navigation.goBack();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to update number format setting.';
+      Alert.alert('Error', message);
+    } finally {
+      savingRef.current = false;
+    }
+  };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Number Format</Text>
-
-          <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-              <Ionicons name="close" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-          </View>
-        </View>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="Number Format"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+        />
 
         {/* Locale List */}
         <FlatList
@@ -153,15 +172,15 @@ export default function LocaleSwitcher({
               label={item.label}
               example={item.example}
               isSelected={item.value === currentLocale}
-              onSelect={onLocaleSelect}
+              onSelect={handleLocaleSelect}
               theme={theme}
               styles={styles}
             />
           )}
           contentContainerStyle={styles.listContainer}
         />
-      </View>
-    </Modal>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -169,32 +188,6 @@ const createStyles = (theme: Theme, insets: EdgeInsets) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
-      paddingTop: insets.top,
-    },
-    header: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingTop: 20,
-      paddingBottom: 16,
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-    },
-    title: {
-      fontSize: 24,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    headerActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 16,
-    },
-    closeButton: {
-      padding: 4,
     },
     listContainer: {
       paddingTop: 16,

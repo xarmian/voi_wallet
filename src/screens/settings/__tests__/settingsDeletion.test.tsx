@@ -37,10 +37,6 @@ jest.mock('@/components/common/UniversalHeader', () => () => null);
 jest.mock('@/components/account/AccountListModal', () => () => null);
 jest.mock('@/components/account/AddAccountModal', () => () => null);
 jest.mock('@/components/account/RenameAccountModal', () => () => null);
-jest.mock('@/components/common/ThemeSwitcher', () => () => null);
-jest.mock('@/components/common/LocaleSwitcher', () => () => null);
-jest.mock('@/components/common/NFTThemeSelector', () => () => null);
-jest.mock('@/components/network/NetworkSwitcher', () => () => null);
 jest.mock('@/components/network/NetworkIndicator', () => () => null);
 jest.mock('@/components/common/NFTBackground', () => ({
   NFTBackground: ({ children }: { children: React.ReactNode }) => children,

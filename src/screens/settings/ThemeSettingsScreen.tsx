@@ -1,27 +1,34 @@
+/**
+ * Theme Screen
+ *
+ * Pushed Settings screen for the base theme and NFT theme options (TASK-435:
+ * was a slide-up modal). Changes apply live, so the screen stays open; "Change
+ * NFT" pushes the NFT Theme screen.
+ */
+
 import React, { useMemo } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  Modal,
   Switch,
   ScrollView,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { SettingsStackParamList } from '@/navigation/AppNavigator';
 import { Theme, ThemeMode } from '@/constants/themes';
-import { EdgeInsets, useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  EdgeInsets,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-
-interface ThemeSwitcherProps {
-  visible: boolean;
-  onClose: () => void;
-  currentTheme: ThemeMode;
-  onThemeSelect: (theme: ThemeMode) => void;
-  onNFTThemeSelect?: () => void;
-  theme: Theme;
-}
+import { NFTBackground } from '@/components/common/NFTBackground';
+import UniversalHeader from '@/components/common/UniversalHeader';
 
 interface ThemeItemProps {
   themeValue: ThemeMode;
@@ -93,17 +100,14 @@ const ThemeItem: React.FC<ThemeItemProps> = ({
   );
 };
 
-export default function ThemeSwitcher({
-  visible,
-  onClose,
-  currentTheme,
-  onThemeSelect,
-  onNFTThemeSelect,
-  theme,
-}: ThemeSwitcherProps) {
+export default function ThemeSettingsScreen() {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<SettingsStackParamList>>();
   const insets = useSafeAreaInsets();
-  const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
   const {
+    theme,
+    themeMode,
+    setThemeMode,
     nftThemeData,
     nftThemeEnabled,
     setNFTThemeEnabled,
@@ -113,15 +117,14 @@ export default function ThemeSwitcher({
     nftBackgroundEnabled,
     setNFTBackgroundEnabled,
   } = useTheme();
+  const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
 
   const handleNFTToggle = async (enabled: boolean) => {
     await setNFTThemeEnabled(enabled);
   };
 
   const handleNFTButtonPress = () => {
-    if (onNFTThemeSelect) {
-      onNFTThemeSelect();
-    }
+    navigation.navigate('NFTThemeSettings');
   };
 
   const handlePaletteSelect = async (index: number) => {
@@ -141,23 +144,13 @@ export default function ThemeSwitcher({
   };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Theme</Text>
-
-          <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-              <Ionicons name="close" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-          </View>
-        </View>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="Theme"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+        />
 
         <ScrollView
           style={styles.scrollView}
@@ -171,8 +164,8 @@ export default function ThemeSwitcher({
                 key={option.value}
                 themeValue={option.value}
                 label={option.label}
-                isSelected={option.value === currentTheme}
-                onSelect={onThemeSelect}
+                isSelected={option.value === themeMode}
+                onSelect={setThemeMode}
                 theme={theme}
                 styles={styles}
               />
@@ -223,26 +216,24 @@ export default function ThemeSwitcher({
               {nftThemeEnabled && (
                 <View style={styles.nftExpandedContent}>
                   {/* Change NFT Button */}
-                  {onNFTThemeSelect && (
-                    <TouchableOpacity
-                      style={styles.changeNFTButton}
-                      onPress={handleNFTButtonPress}
-                    >
-                      <Ionicons
-                        name="images-outline"
-                        size={18}
-                        color={theme.colors.primary}
-                      />
-                      <Text style={styles.changeNFTButtonText}>
-                        {nftThemeData ? 'Change NFT' : 'Select NFT'}
-                      </Text>
-                      <Ionicons
-                        name="chevron-forward"
-                        size={18}
-                        color={theme.colors.textMuted}
-                      />
-                    </TouchableOpacity>
-                  )}
+                  <TouchableOpacity
+                    style={styles.changeNFTButton}
+                    onPress={handleNFTButtonPress}
+                  >
+                    <Ionicons
+                      name="images-outline"
+                      size={18}
+                      color={theme.colors.primary}
+                    />
+                    <Text style={styles.changeNFTButtonText}>
+                      {nftThemeData ? 'Change NFT' : 'Select NFT'}
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color={theme.colors.textMuted}
+                    />
+                  </TouchableOpacity>
 
                   {/* Theme Options - Only show if NFT is selected */}
                   {nftThemeData && nftPalettes.length > 0 && (
@@ -321,8 +312,8 @@ export default function ThemeSwitcher({
             </View>
           </View>
         </ScrollView>
-      </View>
-    </Modal>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -330,32 +321,6 @@ const createStyles = (theme: Theme, insets: EdgeInsets) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
-      paddingTop: insets.top,
-    },
-    header: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingTop: 20,
-      paddingBottom: 16,
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-    },
-    title: {
-      fontSize: 24,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    headerActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 16,
-    },
-    closeButton: {
-      padding: 4,
     },
     scrollView: {
       flex: 1,

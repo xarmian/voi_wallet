@@ -29,19 +29,15 @@ import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import RenameAccountModal from '@/components/account/RenameAccountModal';
 import DeleteAccountModal from '@/components/account/DeleteAccountModal';
-import ThemeSwitcher from '@/components/common/ThemeSwitcher';
-import LocaleSwitcher from '@/components/common/LocaleSwitcher';
-import NFTThemeSelector from '@/components/common/NFTThemeSelector';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { formatAddress } from '@/utils/address';
 import { AccountMetadata, AccountType, isBackupVerified } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
-import NetworkSwitcher from '@/components/network/NetworkSwitcher';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
-import { Theme, ThemeMode } from '@/constants/themes';
+import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { springConfigs } from '@/utils/animations';
@@ -275,15 +271,11 @@ export default function SettingsScreen() {
   const updateAccountLabel = useWalletStore(
     (state) => state.updateAccountLabel
   );
-  const updateWalletSettings = useWalletStore(
-    (state) => state.updateWalletSettings
-  );
   const walletSettings = useWalletSettings();
   const isNetworkHealthy = useIsCurrentNetworkHealthy();
   const {
     theme,
     themeMode,
-    setThemeMode,
     nftThemeData,
     nftThemeEnabled,
     nftBackgroundEnabled,
@@ -297,11 +289,6 @@ export default function SettingsScreen() {
   const [accountToRename, setAccountToRename] =
     useState<AccountMetadata | null>(null);
   const [isRenamingAccount, setIsRenamingAccount] = useState(false);
-  const [isNetworkSwitcherVisible, setIsNetworkSwitcherVisible] =
-    useState(false);
-  const [isLocaleModalVisible, setIsLocaleModalVisible] = useState(false);
-  const [isThemeModalVisible, setIsThemeModalVisible] = useState(false);
-  const [isNFTThemeModalVisible, setIsNFTThemeModalVisible] = useState(false);
   const currentLocaleValue = walletSettings?.numberLocale ?? null;
   const localeDisplayText = (() => {
     const options = [
@@ -448,11 +435,7 @@ export default function SettingsScreen() {
   };
 
   const handleNetworkPress = () => {
-    setIsNetworkSwitcherVisible(true);
-  };
-
-  const handleNetworkSwitcherClose = () => {
-    setIsNetworkSwitcherVisible(false);
+    navigation.navigate('NetworkSettings');
   };
 
   const cancelDeletion = () => {
@@ -593,7 +576,7 @@ export default function SettingsScreen() {
   };
 
   const handleThemePress = () => {
-    setIsThemeModalVisible(true);
+    navigation.navigate('ThemeSettings');
   };
 
   const getThemeDisplayText = () => {
@@ -621,42 +604,7 @@ export default function SettingsScreen() {
   };
 
   const handleLocalePress = () => {
-    setIsLocaleModalVisible(true);
-  };
-
-  const handleLocaleSelect = async (value: string | null) => {
-    setIsLocaleModalVisible(false);
-
-    try {
-      await updateWalletSettings({ numberLocale: value ?? null });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Failed to update number format setting.';
-      Alert.alert('Error', message);
-    }
-  };
-
-  const handleThemeSelect = (value: ThemeMode) => {
-    setThemeMode(value);
-  };
-
-  const handleOpenNFTSelector = () => {
-    // Close the theme switcher modal first, then open NFT selector
-    setIsThemeModalVisible(false);
-    // Use setTimeout to ensure the first modal closes before opening the second
-    setTimeout(() => {
-      setIsNFTThemeModalVisible(true);
-    }, 300);
-  };
-
-  const handleNFTThemeModalClose = () => {
-    setIsNFTThemeModalVisible(false);
-    // Reopen the theme modal after NFT selector closes
-    setTimeout(() => {
-      setIsThemeModalVisible(true);
-    }, 300);
+    navigation.navigate('NumberFormatSettings');
   };
 
   return (
@@ -848,29 +796,6 @@ export default function SettingsScreen() {
           </GlassCard>
         </ScrollView>
 
-        <LocaleSwitcher
-          visible={isLocaleModalVisible}
-          onClose={() => setIsLocaleModalVisible(false)}
-          currentLocale={currentLocaleValue}
-          onLocaleSelect={handleLocaleSelect}
-          theme={theme}
-        />
-
-        <ThemeSwitcher
-          visible={isThemeModalVisible}
-          onClose={() => setIsThemeModalVisible(false)}
-          currentTheme={themeMode}
-          onThemeSelect={handleThemeSelect}
-          onNFTThemeSelect={handleOpenNFTSelector}
-          theme={theme}
-        />
-
-        <NFTThemeSelector
-          visible={isNFTThemeModalVisible}
-          onClose={handleNFTThemeModalClose}
-          theme={theme}
-        />
-
         <AccountListModal
           isVisible={isAccountModalVisible}
           onClose={handleAccountModalClose}
@@ -927,36 +852,9 @@ export default function SettingsScreen() {
           onConfirm={handleConfirmAccountRename}
           isSubmitting={isRenamingAccount}
         />
-
-        {isNetworkSwitcherVisible && (
-          <SafeNetworkSwitcher
-            visible={isNetworkSwitcherVisible}
-            onClose={handleNetworkSwitcherClose}
-            theme={theme}
-          />
-        )}
       </SafeAreaView>
     </NFTBackground>
   );
-}
-
-// Safe wrapper for NetworkSwitcher that handles theme context errors
-function SafeNetworkSwitcher({
-  visible,
-  onClose,
-  theme,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  theme: Theme;
-}) {
-  // NetworkSwitcher receives `theme` as a prop and useTheme() no longer throws
-  // (ThemeContext falls back to lightTheme), so this render can't throw. The
-  // previous try/catch could not have caught a child render error anyway — a
-  // try/catch only wraps React element creation, not the later reconciliation
-  // where children actually render — so the catch was dead code (flagged by
-  // react-hooks/error-boundaries). Render directly.
-  return <NetworkSwitcher visible={visible} onClose={onClose} theme={theme} />;
 }
 
 const createStyles = (theme: Theme) =>
