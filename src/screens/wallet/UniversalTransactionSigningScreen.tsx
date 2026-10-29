@@ -58,11 +58,10 @@ import {
 import { Theme } from '@/constants/themes';
 import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
 import {
-  detectTransactionDangers,
-  aggregateDangers,
-  hasAnyDanger,
-  TransactionDangers,
+  describeTransactionDangers,
+  DangerItem,
 } from '@/utils/transactionDangers';
+import { useTransactionDangers } from '@/hooks/useTransactionDangers';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -97,7 +96,12 @@ interface ParsedTransaction {
   /** ASA index from the type-specific field; `undefined` means native currency. */
   assetId?: bigint;
   type: string;
-  dangers?: TransactionDangers;
+  /** Every dangerous operation in this entry; undefined if undecodable. */
+  dangers?: DangerItem[];
+  /** False for a pre-signed or undecodable entry: this review doesn't sign it. */
+  signs?: boolean;
+  /** An application call: it may change any asset via inner transactions. */
+  mayTouchAssets?: boolean;
 }
 
 /** How a single account will produce its signature, resolved on chain. */
@@ -194,6 +198,7 @@ function parseBatch(transactionBytes: string[]): {
       to: 'Protocol Transaction',
       fee: 0n,
       type: 'pre-signed / unreadable',
+      signs: false,
     });
     decoded.push(undefined);
   };
@@ -273,8 +278,11 @@ function parseBatch(transactionBytes: string[]): {
         note: decodeNoteForDisplay(txn.note),
         assetId,
         type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
-        // Only surface danger fields for transactions we are about to sign.
-        dangers: isAlreadySigned ? undefined : detectTransactionDangers(txn),
+        // Pre-signed entries are not listed, but whether they may touch an
+        // asset decides whether its authority changes can be narrowed.
+        dangers: describeTransactionDangers(txn),
+        signs: !isAlreadySigned,
+        mayTouchAssets: !!txn.applicationCall,
       });
     } catch (error) {
       console.error('Failed to parse transaction:', error);
@@ -795,13 +803,23 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
-  // S-01: aggregate authority-transfer / balance-sweep dangers across all
-  // transactions. Declared before handleApprove so the guard and the render
-  // gating share the same scope.
-  const aggregatedDangers = aggregateDangers(
-    parsedTransactions.map((t) => t.dangers ?? {})
+  // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
+  // each with its transaction index (not the first target of each kind).
+  // Asset-authority items are narrowed against the asset's current holders on
+  // the bound network (Luna r1 #3). Declared before handleApprove so the guard
+  // and the render gating share the same scope.
+  const dangerEntries = useMemo(
+    () =>
+      parsedTransactions.map((t) => ({
+        dangers: t.dangers,
+        signs: t.signs,
+        opaque: t.mayTouchAssets,
+        networkId: boundNetworkId,
+      })),
+    [parsedTransactions, boundNetworkId]
   );
-  const hasDanger = hasAnyDanger(aggregatedDangers);
+  const dangerList = useTransactionDangers(dangerEntries);
+  const hasDanger = dangerList.length > 0;
 
   const handleApprove = () => {
     if (
@@ -1164,7 +1182,7 @@ export default function UniversalTransactionSigningScreen({
 
             {hasDanger && (
               <TransactionDangerBanner
-                dangers={aggregatedDangers}
+                dangers={dangerList}
                 acknowledged={dangerAcknowledged}
                 onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
               />

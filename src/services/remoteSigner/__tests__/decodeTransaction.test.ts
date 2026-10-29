@@ -154,6 +154,39 @@ describe('RemoteSignerService.decodeTransaction (algosdk v3 fields)', () => {
     expect(d.amount).toBe(9n);
   });
 
+  // TASK-445 (folded into TASK-440 #243): the signer device's review gets the
+  // same danger list as the wallet. Negative control: at 50993c5 the decoded
+  // info had no danger list, so an acfg hand-over was never shown.
+  it('carries the shared danger list, including asset authority changes', () => {
+    const txn = algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+      sender: SENDER,
+      assetIndex: 302190n,
+      manager: REKEY_TO,
+      strictEmptyAddressChecking: false,
+      suggestedParams: PARAMS,
+    });
+
+    const d = RemoteSignerService.decodeTransaction(toB64(txn));
+
+    expect(d.dangers).toEqual(
+      expect.arrayContaining([
+        {
+          sender: SENDER,
+          kind: 'assetAuthority',
+          assetId: 302190n,
+          role: 'manager',
+          target: REKEY_TO,
+        },
+        {
+          sender: SENDER,
+          kind: 'assetAuthorityRemoved',
+          assetId: 302190n,
+          role: 'clawback',
+        },
+      ])
+    );
+  });
+
   it('decodes an app call id', () => {
     const txn = algosdk.makeApplicationNoOpTxnFromObject({
       sender: SENDER,

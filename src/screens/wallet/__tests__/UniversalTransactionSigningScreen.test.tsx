@@ -73,6 +73,7 @@ let mockAccounts: {
 }[];
 let mockRoutes: Record<string, unknown>;
 const mockGetCachedAssetParams = jest.fn();
+const mockGetAssetInfo = jest.fn();
 const mockResolveSigningRoute = jest.fn();
 /** Registry callbacks by id (TASK-257: onDismiss on unmount). */
 let mockRegistry: Record<
@@ -98,6 +99,7 @@ jest.mock('@/services/network', () => ({
     getInstance: (networkId: string) => ({
       getCachedAssetParams: (assetId: number) =>
         mockGetCachedAssetParams(networkId, assetId),
+      getAssetInfo: (assetId: number) => mockGetAssetInfo(networkId, assetId),
     }),
   },
 }));
@@ -774,4 +776,145 @@ it('guards a WalletConnect review against screen capture and the app switcher', 
   if (require('react-native').Platform.OS === 'ios') {
     expect(mockEnableAppSwitcherProtection).toHaveBeenCalledTimes(1);
   }
+});
+
+// TASK-440 audit #1 (negative control): the old per-kind aggregate kept only
+// the FIRST rekey target, so a second, attacker-chosen rekey in the same batch
+// was signed under a warning that named the first. Every dangerous operation
+// is listed, with its transaction number and full destination.
+it('lists every rekey in a batch, each with its transaction and full target', async () => {
+  const sender = makeAccount('danger-batch').addr.toString();
+  const first = makeAccount('danger-first').addr.toString();
+  const attacker = makeAccount('danger-attacker').addr.toString();
+  mockAccounts = [walletAccount('Danger batch', sender)];
+  const rekeyTo = (to: string, amount: number) =>
+    algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+      sender,
+      receiver: sender,
+      amount,
+      rekeyTo: to,
+      suggestedParams: paramsFor(VOI),
+    });
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [
+      { txn: b64(rekeyTo(first, 1)) },
+      { txn: b64(rekeyTo(attacker, 2)) },
+    ],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Danger batch' },
+  });
+
+  expect(
+    view.getByText(new RegExp(`Transaction 1: REKEYS .*${first}`))
+  ).toBeTruthy();
+  expect(
+    view.getByText(new RegExp(`Transaction 2: REKEYS .*${attacker}`))
+  ).toBeTruthy();
+});
+
+// TASK-440 Luna r1 #3/#4: a reconfiguration restates every authority, so only
+// the roles that differ from the asset's current holders (read on the bound
+// network) are listed, each naming the full affected account. Negative
+// control: at 50993c5 all four roles were listed and no lookup was made.
+describe('asset reconfiguration review', () => {
+  const ASSET = 777n;
+  const holders = {
+    manager: makeAccount('acfg-manager').addr.toString(),
+    reserve: makeAccount('acfg-reserve').addr.toString(),
+    freeze: makeAccount('acfg-freeze').addr.toString(),
+    clawback: makeAccount('acfg-clawback').addr.toString(),
+  };
+  const attacker = makeAccount('acfg-attacker').addr.toString();
+
+  const renderReconfig = () => {
+    const sender = holders.manager;
+    mockAccounts = [walletAccount('Asset manager', sender)];
+    const txn = algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+      sender,
+      assetIndex: ASSET,
+      ...holders,
+      clawback: attacker,
+      strictEmptyAddressChecking: false,
+      suggestedParams: paramsFor(VOI),
+    });
+    return renderScreen({
+      networkId: VOI,
+      entries: [{ txn: b64(txn) }],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Asset manager' },
+    });
+  };
+
+  it('lists only the authority that changes, with the full affected account', async () => {
+    mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
+    const view = await renderReconfig();
+
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 1: ${holders.manager} gives the clawback authority of asset #777 to ${attacker}\\.$`
+        )
+      )
+    ).toBeTruthy();
+    expect(view.queryByText(/manager authority/)).toBeNull();
+    expect(view.queryByText(/reserve authority/)).toBeNull();
+    expect(view.queryByText(/freeze authority/)).toBeNull();
+    expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 777);
+  });
+
+  // Codex pass on 3c5fee0 (HIGH): a pre-signed entry that moves clawback to
+  // the attacker, followed by an entry that moves it back, compared each
+  // entry to the on-chain snapshot, so the review showed no banner at all.
+  // Two entries on one asset now keep every role of the signed one, unverified.
+  it('counts a pre-signed reconfiguration earlier in the batch', async () => {
+    mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
+    const managerAccount = makeAccount('acfg-manager');
+    const sender = holders.manager;
+    mockAccounts = [walletAccount('Asset manager', sender)];
+    const config = (clawback: string) =>
+      algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+        sender,
+        assetIndex: ASSET,
+        ...holders,
+        clawback,
+        strictEmptyAddressChecking: false,
+        suggestedParams: paramsFor(VOI),
+      });
+    const presigned = Buffer.from(
+      config(attacker).signTxn(managerAccount.sk)
+    ).toString('base64');
+    const view = await renderScreen({
+      networkId: VOI,
+      entries: [
+        { txn: presigned, signers: [] },
+        { txn: b64(config(holders.clawback)) },
+      ],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Asset manager' },
+    });
+
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 2: ${sender} gives the clawback authority of asset #777 to ${holders.clawback}\\. .*unverified`
+        )
+      )
+    ).toBeTruthy();
+    expect(view.queryByText(/Transaction 1:/)).toBeNull();
+  });
+
+  it('keeps every role, marked unverified, when the asset cannot be read', async () => {
+    mockGetAssetInfo.mockRejectedValue(new Error('offline'));
+    const view = await renderReconfig();
+
+    await waitFor(() => expect(mockGetAssetInfo).toHaveBeenCalled());
+    for (const role of ['manager', 'reserve', 'freeze', 'clawback']) {
+      expect(
+        await view.findByText(
+          new RegExp(`gives the ${role} authority of asset #777 .*unverified`)
+        )
+      ).toBeTruthy();
+    }
+  });
 });

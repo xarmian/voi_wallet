@@ -35,7 +35,10 @@ import {
   assertCanonicalAddressSet,
 } from './pairing';
 import { isPlainObject, validateResponseEnvelope } from './responseValidation';
-import { detectTransactionDangers } from '@/utils/transactionDangers';
+import {
+  describeTransactionDangers,
+  detectTransactionDangers,
+} from '@/utils/transactionDangers';
 import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 // ============================================================================
@@ -441,6 +444,7 @@ class RemoteSignerServiceClass {
       closeRemainderTo: dangers.closeRemainderTo,
       assetCloseTo: dangers.assetCloseTo,
       assetSender: encodeAddr(axfer?.assetSender),
+      dangers: describeTransactionDangers(txn),
       raw: txn,
     };
   }
