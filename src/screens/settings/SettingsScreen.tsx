@@ -33,6 +33,7 @@ import ThemeSwitcher from '@/components/common/ThemeSwitcher';
 import LocaleSwitcher from '@/components/common/LocaleSwitcher';
 import NFTThemeSelector from '@/components/common/NFTThemeSelector';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
+import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { formatAddress } from '@/utils/address';
 import { AccountMetadata, AccountType, isBackupVerified } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
@@ -242,11 +243,17 @@ export default function SettingsScreen() {
     account: AccountMetadata;
     available: boolean;
   } | null>(null);
+  // Revealing the phrase needs the key present now: originalOwner can outlive
+  // it, and a probe error is not custody (TASK-425 U4).
   useEffect(() => {
     if (activeAccount?.type !== AccountType.REKEYED) return;
     let cancelled = false;
-    void isListDeletionProtected(activeAccount).then((available) => {
-      if (!cancelled) setPhraseAccess({ account: activeAccount, available });
+    void probeOwnKey(activeAccount).then((holding) => {
+      if (!cancelled)
+        setPhraseAccess({
+          account: activeAccount,
+          available: holding === 'present',
+        });
     });
     return () => {
       cancelled = true;
@@ -255,8 +262,8 @@ export default function SettingsScreen() {
   const canShowPhrase =
     activeAccount?.type === AccountType.STANDARD ||
     (activeAccount?.type === AccountType.REKEYED &&
-      (activeAccount.originalOwner === true ||
-        (phraseAccess?.account === activeAccount && phraseAccess.available)));
+      phraseAccess?.account === activeAccount &&
+      phraseAccess.available);
   const deletionBusy = useRef(false);
   // Latches one confirmation: rapid taps on the modal's button run it once.
   const deletionConfirming = useRef(false);

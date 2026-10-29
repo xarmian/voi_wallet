@@ -227,13 +227,43 @@ describe('holdsUsableOwnKey (TASK-425 U3 hunter review)', () => {
     expect(mockGetPrivateKey).not.toHaveBeenCalled();
   });
 
-  it('accepts an originalOwner REKEYED record on presence, without a read', async () => {
-    mockProbe.mockResolvedValue(true);
-    await expect(
-      holdsUsableOwnKey(rekeyed({ originalOwner: true }))
-    ).resolves.toBe(true);
-    expect(mockGetPrivateKey).not.toHaveBeenCalled();
-  });
+  // originalOwner can outlive the key, so it never skips the read (TASK-425 U4).
+  it.each([
+    [
+      'its key reads and is its own',
+      true,
+      () => Promise.resolve(OWN.sk.slice()),
+      true,
+    ],
+    [
+      'the probe says absent',
+      false,
+      () => Promise.resolve(OWN.sk.slice()),
+      false,
+    ],
+    [
+      'the key read fails',
+      true,
+      () => Promise.reject(new Error('no key')),
+      false,
+    ],
+    [
+      'the key belongs to another address',
+      true,
+      () => Promise.resolve(FOREIGN.sk.slice()),
+      false,
+    ],
+  ])(
+    'an originalOwner REKEYED record qualifies only when %s',
+    async (_label, present, read, ok) => {
+      mockProbe.mockResolvedValue(present);
+      mockGetPrivateKey.mockImplementation(read);
+      await expect(
+        holdsUsableOwnKey(rekeyed({ originalOwner: true }))
+      ).resolves.toBe(ok);
+      if (present) expect(mockGetPrivateKey).toHaveBeenCalled();
+    }
+  );
 
   it('accepts a REKEYED record whose key reads and is its own, and zeroes it', async () => {
     mockProbe.mockResolvedValue(true);

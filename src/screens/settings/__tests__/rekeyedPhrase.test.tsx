@@ -84,11 +84,15 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
+// originalOwner can outlive the key and a probe error is not custody, so
+// only a present probe opens the phrase (TASK-425 U4; TASK-430).
 it.each([
-  ['owner', true, false, true],
+  ['owner', true, true, true],
+  ['stale owner', true, false, false],
+  ['owner error', true, new Error('locked'), false],
   ['present', false, true, true],
   ['absent', false, false, false],
-  ['error', false, new Error('locked'), true],
+  ['error', false, new Error('locked'), false],
 ] as const)(
   'Settings phrase access for REKEYED %s',
   async (_name, owner, result, available) => {
@@ -105,7 +109,7 @@ it.each([
         accountAddress: mockActive.address,
       });
     }
-    if (owner) expect(probe).not.toHaveBeenCalled();
+    expect(probe).toHaveBeenCalledWith(mockActive.id);
   }
 );
 
