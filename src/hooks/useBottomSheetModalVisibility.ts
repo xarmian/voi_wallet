@@ -14,19 +14,31 @@
  * So this hook tracks the library's lifecycle and only acts from a settled
  * phase:
  *   closed     --present()-->  presenting
- *   presenting --onAnimate/onChange to an open index-->  open
+ *   presenting --onChange to an open index-->  open
  *   open       --dismiss()-->  closing
+ *   closing    --onChange to an open index-->  open (the close was a no-op)
  *   any        --onDismiss-->  closed
  * A visibility change that arrives mid-transition (presenting or closing) is
- * held and applied when the transition lands, never fired into the gap. By the
- * time the modal forwards onAnimate/onChange it has already left INITIAL, so a
- * held hide is safe to dismiss then. A held show is applied a render after
- * onDismiss, not inside it: the wrappers turn the close's onChange(-1) into
- * isVisible=false in the same batch, and presenting before that lands would
- * flash the sheet open.
+ * held and applied when the transition lands, never fired into the gap.
  *
- * Callers pass `onAnimate` and `onDismiss` to the modal and call `onChange`
- * from their own `onChange` handler.
+ * "Open" means the open animation has SETTLED (onChange), not started
+ * (onAnimate): a forceClose() issued before the sheet has moved off its closed
+ * position is a no-op in the library, the open then completes, and no close
+ * callback ever arrives. Dismissing from a settled position always animates.
+ * If a sheet nonetheless settles open while we are closing, the close was a
+ * no-op, so the hook re-enters open and reconciles again.
+ *
+ * A held show is applied a render after onDismiss, not inside it: the
+ * wrappers turn the close's onChange(-1) into isVisible=false in the same
+ * batch, and presenting before that lands would flash the sheet open.
+ *
+ * Supported configuration: the library defaults animateOnMount=true and
+ * enableDismissOnClose=true. With animateOnMount=false the open emits no
+ * onChange, and with enableDismissOnClose=false a close never fires onDismiss,
+ * so either would strand the phase.
+ *
+ * Callers pass `onDismiss` to the modal and call `onChange` from their own
+ * `onChange` handler.
  */
 
 import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
@@ -35,7 +47,6 @@ import type { BottomSheetModal } from '@gorhom/bottom-sheet';
 type Phase = 'closed' | 'presenting' | 'open' | 'closing';
 
 export interface BottomSheetModalVisibility {
-  onAnimate: (fromIndex: number, toIndex: number) => void;
   onChange: (index: number) => void;
   onDismiss: () => void;
 }
@@ -65,25 +76,14 @@ export function useBottomSheetModalVisibility(
     reconcile();
   }, [isVisible, dismissals, reconcile]);
 
-  const markOpen = useCallback(() => {
-    if (phaseRef.current === 'presenting') {
-      phaseRef.current = 'open';
-      reconcile();
-    }
-  }, [reconcile]);
-
-  const onAnimate = useCallback(
-    (_fromIndex: number, toIndex: number) => {
-      if (toIndex >= 0) markOpen();
-    },
-    [markOpen]
-  );
-
   const onChange = useCallback(
     (index: number) => {
-      if (index >= 0) markOpen();
+      if (index >= 0 && phaseRef.current !== 'closed') {
+        phaseRef.current = 'open';
+        reconcile();
+      }
     },
-    [markOpen]
+    [reconcile]
   );
 
   const onDismiss = useCallback(() => {
@@ -91,5 +91,5 @@ export function useBottomSheetModalVisibility(
     setDismissals((n) => n + 1);
   }, []);
 
-  return { onAnimate, onChange, onDismiss };
+  return { onChange, onDismiss };
 }

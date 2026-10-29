@@ -47,11 +47,8 @@ export default function AccountRecipientModal({
   const themeColors = useThemeColors();
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   // Open/close the bottom sheet based on visibility (guarded, TASK-432)
-  const {
-    onAnimate: handleSheetAnimate,
-    onChange: syncSheetVisibility,
-    onDismiss: handleSheetDismiss,
-  } = useBottomSheetModalVisibility(bottomSheetRef, isVisible);
+  const { onChange: syncSheetVisibility, onDismiss: handleSheetDismiss } =
+    useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const friends = useSortedFriends();
@@ -255,7 +252,6 @@ export default function AccountRecipientModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
-      onAnimate={handleSheetAnimate}
       onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose={false}

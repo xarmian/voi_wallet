@@ -40,7 +40,11 @@ const mockSheet: {
   props: SheetProps | null;
   forced: boolean;
   snaps: number;
-} = { props: null, forced: false, snaps: 0 };
+  forceCloses: number;
+  /** forceClose() returns without closing, as the real sheet does when it
+   * has not yet moved off its closed position. */
+  noopClose: boolean;
+} = { props: null, forced: false, snaps: 0, forceCloses: 0, noopClose: false };
 
 jest.mock('@gorhom/bottom-sheet/lib/commonjs/components/bottomSheet', () => {
   const ReactLib = jest.requireActual('react');
@@ -53,7 +57,8 @@ jest.mock('@gorhom/bottom-sheet/lib/commonjs/components/bottomSheet', () => {
           if (!mockSheet.forced) mockSheet.snaps += 1;
         },
         forceClose: () => {
-          mockSheet.forced = true;
+          mockSheet.forceCloses += 1;
+          if (!mockSheet.noopClose) mockSheet.forced = true;
         },
         close: () => {},
       }));
@@ -127,6 +132,8 @@ beforeEach(() => {
   mockSheet.props = null;
   mockSheet.forced = false;
   mockSheet.snaps = 0;
+  mockSheet.forceCloses = 0;
+  mockSheet.noopClose = false;
   frames = [];
   realRaf = global.requestAnimationFrame;
   global.requestAnimationFrame = ((cb: () => void) => {
@@ -157,7 +164,6 @@ const Host = forwardRef<Controls, { guarded: boolean; mirror: boolean }>(
       <BottomSheetModal
         ref={sheetRef}
         snapPoints={['85%']}
-        onAnimate={guarded ? sync.onAnimate : undefined}
         onDismiss={guarded ? sync.onDismiss : undefined}
         onChange={(index: number) => {
           if (guarded) sync.onChange(index);
@@ -246,8 +252,11 @@ describe('useBottomSheetModalVisibility (real BottomSheetModal 5.2.14)', () => {
     await s.show(true);
     await s.show(false); // e.g. Android Back right after the tap
     await s.frame();
-    // The held hide lands once the sheet has started animating.
+    // The held hide waits for the open to settle, not merely start: a
+    // forceClose() before the sheet moves is a no-op in the library.
     await s.startOpen();
+    expect(mockSheet.forceCloses).toBe(0);
+    await s.settle();
     expect(mockSheet.forced).toBe(true);
     await s.finishClose();
     expect(mockSheet.props).toBeNull();
@@ -281,6 +290,22 @@ describe('useBottomSheetModalVisibility (real BottomSheetModal 5.2.14)', () => {
     await s.frame();
     // No present() slips out after the close: nothing mounts while hidden.
     expect(s.visible()).toBe(false);
+    expect(mockSheet.props).toBeNull();
+
+    await s.open();
+  });
+
+  it('a close that turns out to be a no-op is retried when the sheet settles open', async () => {
+    const s = await setup();
+    await s.open();
+    mockSheet.noopClose = true;
+    await s.show(false);
+    expect(mockSheet.forceCloses).toBe(1);
+    // The sheet never closed; it reports itself settled open again.
+    mockSheet.noopClose = false;
+    await s.settle();
+    expect(mockSheet.forceCloses).toBe(2);
+    await s.finishClose();
     expect(mockSheet.props).toBeNull();
 
     await s.open();

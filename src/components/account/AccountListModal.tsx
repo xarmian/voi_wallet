@@ -61,11 +61,8 @@ export default function AccountListModal({
 }: AccountListModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   // Open/close the bottom sheet based on visibility (guarded, TASK-432)
-  const {
-    onAnimate: handleSheetAnimate,
-    onChange: syncSheetVisibility,
-    onDismiss: handleSheetDismiss,
-  } = useBottomSheetModalVisibility(bottomSheetRef, isVisible);
+  const { onChange: syncSheetVisibility, onDismiss: handleSheetDismiss } =
+    useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
@@ -266,7 +263,6 @@ export default function AccountListModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
-      onAnimate={handleSheetAnimate}
       onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose
