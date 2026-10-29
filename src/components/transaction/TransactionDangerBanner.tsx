@@ -15,7 +15,7 @@ interface Props {
 }
 
 const UNVERIFIED =
-  " The asset's current settings could not be read, so this may already be how it is set (unverified).";
+  " This could not be checked against the asset's settings at this point in the batch, so it may change nothing (unverified).";
 
 /**
  * What one dangerous operation does. Every address, the affected account

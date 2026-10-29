@@ -96,8 +96,10 @@ interface ParsedTransaction {
   /** ASA index from the type-specific field; `undefined` means native currency. */
   assetId?: bigint;
   type: string;
-  /** Every dangerous operation in this entry; undefined for a pre-signed one. */
+  /** Every dangerous operation in this entry; undefined if undecodable. */
   dangers?: DangerItem[];
+  /** False for a pre-signed or undecodable entry: this review doesn't sign it. */
+  signs?: boolean;
 }
 
 /** How a single account will produce its signature, resolved on chain. */
@@ -194,6 +196,7 @@ function parseBatch(transactionBytes: string[]): {
       to: 'Protocol Transaction',
       fee: 0n,
       type: 'pre-signed / unreadable',
+      signs: false,
     });
     decoded.push(undefined);
   };
@@ -273,8 +276,10 @@ function parseBatch(transactionBytes: string[]): {
         note: decodeNoteForDisplay(txn.note),
         assetId,
         type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
-        // Only surface danger fields for transactions we are about to sign.
-        dangers: isAlreadySigned ? undefined : describeTransactionDangers(txn),
+        // Pre-signed entries are not listed, but their effects (e.g. an
+        // earlier reconfiguration) shape how later ones are resolved.
+        dangers: describeTransactionDangers(txn),
+        signs: !isAlreadySigned,
       });
     } catch (error) {
       console.error('Failed to parse transaction:', error);
@@ -804,6 +809,7 @@ export default function UniversalTransactionSigningScreen({
     () =>
       parsedTransactions.map((t) => ({
         dangers: t.dangers,
+        signs: t.signs,
         networkId: boundNetworkId,
       })),
     [parsedTransactions, boundNetworkId]

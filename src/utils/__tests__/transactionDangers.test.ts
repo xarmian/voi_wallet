@@ -362,6 +362,8 @@ describe('resolveAssetAuthorityDangers', () => {
         ...fields,
       } as any)
     );
+  const one = async (items: unknown[], lookup: any) =>
+    (await resolveAssetAuthorityDangers([{ items, network: 'n' }], lookup))[0];
 
   it('drops unchanged roles and keeps hand-overs and real removals', async () => {
     // Current: manager M, reserve R, no freeze, clawback R.
@@ -372,11 +374,8 @@ describe('resolveAssetAuthorityDangers', () => {
       reserve: R,
       clawback: R,
     }));
-    const result = await resolveAssetAuthorityDangers(
-      reconfig({ manager: M, reserve: NEW }),
-      lookup
-    );
-    expect(lookup).toHaveBeenCalledWith(42n);
+    const result = await one(reconfig({ manager: M, reserve: NEW }), lookup);
+    expect(lookup).toHaveBeenCalledWith('n', 42n);
     expect(result).toEqual([
       {
         sender: SENDER,
@@ -402,32 +401,75 @@ describe('resolveAssetAuthorityDangers', () => {
         throw new Error('offline');
       },
     ]) {
-      const result = await resolveAssetAuthorityDangers(items, lookup);
+      const result = await one(items, lookup);
       expect(result).toHaveLength(4);
       expect(result.every((i: any) => i.unverified === true)).toBe(true);
     }
   });
 
+  it('keeps every role, unverified, on an unknown network', async () => {
+    const lookup = jest.fn(async () => ({ manager: M }));
+    const [result] = await resolveAssetAuthorityDangers(
+      [{ items: reconfig({ manager: M }) }],
+      lookup
+    );
+    expect(lookup).not.toHaveBeenCalled();
+    expect(result).toHaveLength(4);
+    expect(result.every((i: any) => i.unverified === true)).toBe(true);
+  });
+
   // algosdk refuses to build a txn with a zero-address authority, so only the
   // holder side can carry one.
   it('treats a zero-address current holder as no holder', async () => {
-    const result = await resolveAssetAuthorityDangers(
-      reconfig({ manager: M }),
-      async () => ({
-        manager: M,
-        reserve: algosdk.ALGORAND_ZERO_ADDRESS_STRING,
-        freeze: '',
-      })
-    );
+    const result = await one(reconfig({ manager: M }), async () => ({
+      manager: M,
+      reserve: algosdk.ALGORAND_ZERO_ADDRESS_STRING,
+      freeze: '',
+    }));
     expect(result).toEqual([]);
   });
 
   it('passes non-authority items and destroys through untouched', async () => {
     const destroy = reconfig({});
     const lookup = jest.fn(async () => null);
-    expect(await resolveAssetAuthorityDangers(destroy, lookup)).toEqual(
-      destroy
-    );
+    expect(await one(destroy, lookup)).toEqual(destroy);
     expect(lookup).not.toHaveBeenCalled();
+  });
+
+  // Codex pass on 3c5fee0 (HIGH): every entry was compared to the same
+  // on-chain snapshot, so in "clawback B -> NEW, then NEW -> B" the second
+  // hand-over read as unchanged and was dropped.
+  it('simulates the batch in order: a later change back is still a change', async () => {
+    const lookup = jest.fn(async () => ({ manager: M, clawback: R }));
+    const [first, second] = await resolveAssetAuthorityDangers(
+      [
+        { items: reconfig({ manager: M, clawback: NEW }), network: 'n' },
+        { items: reconfig({ manager: M, clawback: R }), network: 'n' },
+      ],
+      lookup
+    );
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(first.map((i: any) => [i.kind, i.role, i.target])).toEqual([
+      ['assetAuthority', 'clawback', NEW],
+    ]);
+    expect(second.map((i: any) => [i.kind, i.role, i.target])).toEqual([
+      ['assetAuthority', 'clawback', R],
+    ]);
+  });
+
+  it('after an undecodable entry, holders are unknown until a reconfiguration sets them', async () => {
+    const lookup = async () => ({ manager: M, clawback: R });
+    const [, afterOpaque, afterThat] = await resolveAssetAuthorityDangers(
+      [
+        { items: undefined },
+        { items: reconfig({ manager: M, clawback: R }), network: 'n' },
+        { items: reconfig({ manager: M, clawback: R }), network: 'n' },
+      ],
+      lookup
+    );
+    expect(afterOpaque).toHaveLength(4);
+    expect(afterOpaque.every((i: any) => i.unverified === true)).toBe(true);
+    // The second reconfiguration restates exactly what the first set.
+    expect(afterThat).toEqual([]);
   });
 });

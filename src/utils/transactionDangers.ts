@@ -161,58 +161,103 @@ export const describeTransactionDangers = (txn: any): DangerItem[] => {
   return items;
 };
 
+const isAuthorityItem = (
+  item: DangerItem
+): item is Extract<
+  DangerItem,
+  { kind: 'assetAuthority' | 'assetAuthorityRemoved' }
+> => item.kind === 'assetAuthority' || item.kind === 'assetAuthorityRemoved';
+
+/** One batch entry for resolveAssetAuthorityDangers, in execution order. */
+export interface AuthorityBatchEntry {
+  /**
+   * The entry's danger items, for EVERY decodable entry (pre-signed ones
+   * included: their effects precede later entries). Undefined when the entry
+   * can't be decoded, so its effects are unknown.
+   */
+  items?: DangerItem[];
+  /** Key of the network its asset lookups run on; undefined = unknown. */
+  network?: string;
+}
+
 /**
  * Drop the asset-authority items that change nothing (Luna r1 #3 on TASK-440):
  * a reconfiguration restates every role, so only a role whose holder differs
- * from the asset's CURRENT holder is a hand-over or a removal. `lookup`
- * returns the current holders, or null when they can't be read (offline,
- * unknown network, missing asset); then every role of that asset stays listed,
- * marked unverified, rather than guessing which ones are unchanged.
+ * from the holder at that point in the batch is a hand-over or a removal.
+ *
+ * The batch is simulated in execution order: holders start as `lookup`
+ * reports them on chain, and each reconfiguration then sets all four (Codex
+ * pass on 3c5fee0: comparing every entry to the same on-chain snapshot let
+ * a C -> B change after an earlier B -> C read as unchanged). Where holders
+ * are unknown (the lookup failed or returned null, the network is unknown,
+ * or an earlier entry can't be decoded) every role is kept, marked
+ * unverified. Returns the resolved items per entry, index-aligned.
  */
 export const resolveAssetAuthorityDangers = async (
-  items: DangerItem[],
-  lookup: (assetId: bigint) => Promise<AssetAuthorities | null>
-): Promise<DangerItem[]> => {
-  const assetIds = new Set<bigint>();
-  for (const item of items) {
-    if (
-      item.kind === 'assetAuthority' ||
-      item.kind === 'assetAuthorityRemoved'
-    ) {
-      assetIds.add(item.assetId);
-    }
-  }
-  const current = new Map<bigint, AssetAuthorities | null>();
+  entries: AuthorityBatchEntry[],
+  lookup: (network: string, assetId: bigint) => Promise<AssetAuthorities | null>
+): Promise<(DangerItem[] | undefined)[]> => {
+  const keyOf = (network: string | undefined, assetId: bigint) =>
+    network === undefined ? undefined : `${network}:${assetId}`;
+
+  const onChain = new Map<string, AssetAuthorities | null>();
   await Promise.all(
-    [...assetIds].map(async (assetId) => {
-      let holders: AssetAuthorities | null;
-      try {
-        holders = await lookup(assetId);
-      } catch {
-        holders = null;
-      }
-      current.set(assetId, holders);
-    })
+    entries.flatMap((entry) =>
+      (entry.items ?? []).filter(isAuthorityItem).map(async (item) => {
+        const key = keyOf(entry.network, item.assetId);
+        if (key === undefined || onChain.has(key)) return;
+        onChain.set(key, null);
+        try {
+          onChain.set(key, await lookup(entry.network!, item.assetId));
+        } catch {
+          onChain.set(key, null);
+        }
+      })
+    )
   );
-  const resolved: DangerItem[] = [];
-  for (const item of items) {
-    if (
-      item.kind !== 'assetAuthority' &&
-      item.kind !== 'assetAuthorityRemoved'
-    ) {
-      resolved.push(item);
-      continue;
+
+  // Holders at the current point in the batch; null = unknown.
+  const simulated = new Map<string, AssetAuthorities | null>();
+  let opaqueSeen = false;
+  const holdersAt = (key: string | undefined) => {
+    if (key === undefined) return null;
+    if (simulated.has(key)) return simulated.get(key)!;
+    return opaqueSeen ? null : (onChain.get(key) ?? null);
+  };
+
+  return entries.map((entry) => {
+    if (!entry.items) {
+      // Unknown effects: no holder read earlier can be trusted after this.
+      opaqueSeen = true;
+      for (const key of simulated.keys()) simulated.set(key, null);
+      return undefined;
     }
-    const holders = current.get(item.assetId);
-    if (!holders) {
-      resolved.push({ ...item, unverified: true });
-      continue;
+    const resolved: DangerItem[] = [];
+    const after = new Map<string, AssetAuthorities | null>();
+    for (const item of entry.items) {
+      if (item.kind === 'assetDestroy') {
+        const key = keyOf(entry.network, item.assetId);
+        if (key !== undefined) after.set(key, null);
+      }
+      if (!isAuthorityItem(item)) {
+        resolved.push(item);
+        continue;
+      }
+      const key = keyOf(entry.network, item.assetId);
+      const holders = holdersAt(key);
+      const next = item.kind === 'assetAuthority' ? item.target : undefined;
+      if (key !== undefined) {
+        const set = after.get(key) ?? {};
+        set[item.role] = next;
+        after.set(key, set);
+      }
+      if (!holders) {
+        resolved.push({ ...item, unverified: true });
+      } else if (authorityHolder(holders[item.role]) !== next) {
+        resolved.push(item);
+      }
     }
-    const now = authorityHolder(holders[item.role]);
-    const next = item.kind === 'assetAuthority' ? item.target : undefined;
-    if (now !== next) {
-      resolved.push(item);
-    }
-  }
-  return resolved;
+    for (const [key, holders] of after) simulated.set(key, holders);
+    return resolved;
+  });
 };

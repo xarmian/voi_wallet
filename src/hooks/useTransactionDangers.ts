@@ -13,8 +13,13 @@ export type IndexedDanger = DangerItem & { txnIndex: number };
 
 /** One transaction's dangers and the network its asset lookups resolve on. */
 export interface DangerEntry {
-  /** Undefined for a transaction this review does not sign (pre-signed). */
+  /**
+   * Every danger item in the transaction, pre-signed ones included (their
+   * effects come before later entries). Undefined when it can't be decoded.
+   */
   dangers?: DangerItem[];
+  /** False for an entry this review does not sign: it is never listed. */
+  signs?: boolean;
   /** Undefined when the network can't be named: lookups then fail closed. */
   networkId?: NetworkId;
 }
@@ -46,9 +51,15 @@ export const readAssetAuthorities = async (
   };
 };
 
-const indexAll = (lists: (DangerItem[] | undefined)[]): IndexedDanger[] =>
+/** The listed items: only entries this review signs, each with its index. */
+const indexSigned = (
+  entries: DangerEntry[],
+  lists: (DangerItem[] | undefined)[]
+): IndexedDanger[] =>
   lists.flatMap((items, txnIndex) =>
-    (items ?? []).map((item) => ({ ...item, txnIndex }))
+    entries[txnIndex].signs === false
+      ? []
+      : (items ?? []).map((item) => ({ ...item, txnIndex }))
   );
 
 /**
@@ -56,14 +67,15 @@ const indexAll = (lists: (DangerItem[] | undefined)[]): IndexedDanger[] =>
  * WalletConnect/universal screen and the remote signer share it, TASK-440 /
  * TASK-445). Asset-authority items start out unverified and are narrowed to
  * the roles that actually change once each asset's current holders are read
- * (resolveAssetAuthorityDangers). Narrowing only removes items or their
- * unverified mark, so an acknowledgment given earlier never covers more than
- * what is shown.
+ * and the batch is simulated in order (resolveAssetAuthorityDangers).
+ * Narrowing only removes items or their unverified mark, so an acknowledgment
+ * given earlier never covers more than what is shown.
  */
 export function useTransactionDangers(entries: DangerEntry[]): IndexedDanger[] {
   const pending = useMemo(
     () =>
-      indexAll(
+      indexSigned(
+        entries,
         entries.map((entry) =>
           entry.dangers?.map((item) =>
             item.kind === 'assetAuthority' ||
@@ -82,34 +94,17 @@ export function useTransactionDangers(entries: DangerEntry[]): IndexedDanger[] {
 
   useEffect(() => {
     let cancelled = false;
-    const reads = new Map<string, Promise<AssetAuthorities | null>>();
-    const lookupOn =
-      (networkId: NetworkId | undefined) =>
-      (assetId: bigint): Promise<AssetAuthorities | null> => {
-        if (!networkId) {
-          return Promise.resolve(null);
-        }
-        const key = `${networkId}:${assetId}`;
-        let read = reads.get(key);
-        if (!read) {
-          read = readAssetAuthorities(networkId, assetId);
-          reads.set(key, read);
-        }
-        return read;
-      };
     (async () => {
-      const lists = await Promise.all(
-        entries.map((entry) =>
-          entry.dangers
-            ? resolveAssetAuthorityDangers(
-                entry.dangers,
-                lookupOn(entry.networkId)
-              )
-            : Promise.resolve(undefined)
-        )
+      const lists = await resolveAssetAuthorityDangers(
+        entries.map((entry) => ({
+          items: entry.dangers,
+          network: entry.networkId,
+        })),
+        (network, assetId) =>
+          readAssetAuthorities(network as NetworkId, assetId)
       );
       if (!cancelled) {
-        setResolved({ entries, items: indexAll(lists) });
+        setResolved({ entries, items: indexSigned(entries, lists) });
       }
     })();
     return () => {

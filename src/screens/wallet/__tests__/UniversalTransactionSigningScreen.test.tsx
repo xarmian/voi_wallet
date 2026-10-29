@@ -863,6 +863,46 @@ describe('asset reconfiguration review', () => {
     expect(mockGetAssetInfo).toHaveBeenCalledWith(VOI, 777);
   });
 
+  // Codex pass on 3c5fee0 (HIGH): a pre-signed entry that moves clawback to
+  // the attacker, followed by an entry that moves it back, compared each
+  // entry to the on-chain snapshot, so the review showed no banner at all.
+  it('counts a pre-signed reconfiguration earlier in the batch', async () => {
+    mockGetAssetInfo.mockResolvedValue({ params: { ...holders } });
+    const managerAccount = makeAccount('acfg-manager');
+    const sender = holders.manager;
+    mockAccounts = [walletAccount('Asset manager', sender)];
+    const config = (clawback: string) =>
+      algosdk.makeAssetConfigTxnWithSuggestedParamsFromObject({
+        sender,
+        assetIndex: ASSET,
+        ...holders,
+        clawback,
+        strictEmptyAddressChecking: false,
+        suggestedParams: paramsFor(VOI),
+      });
+    const presigned = Buffer.from(
+      config(attacker).signTxn(managerAccount.sk)
+    ).toString('base64');
+    const view = await renderScreen({
+      networkId: VOI,
+      entries: [
+        { txn: presigned, signers: [] },
+        { txn: b64(config(holders.clawback)) },
+      ],
+      approved: [sender],
+      reviewedAccount: { address: sender, label: 'Asset manager' },
+    });
+
+    expect(
+      await view.findByText(
+        new RegExp(
+          `Transaction 2: ${sender} gives the clawback authority of asset #777 to ${holders.clawback}\\.$`
+        )
+      )
+    ).toBeTruthy();
+    expect(view.queryByText(/Transaction 1:/)).toBeNull();
+  });
+
   it('keeps every role, marked unverified, when the asset cannot be read', async () => {
     mockGetAssetInfo.mockRejectedValue(new Error('offline'));
     const view = await renderReconfig();
