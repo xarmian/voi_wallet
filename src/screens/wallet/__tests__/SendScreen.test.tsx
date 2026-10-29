@@ -105,6 +105,10 @@ jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
     getSigningInfo: jest.fn(async () => null),
     getLedgerSigningInfo: jest.fn(async () => null),
+    resolveSigningRoute: jest.fn(async () => ({
+      kind: 'unavailable',
+      reason: 'Cannot sign transactions for watch-only accounts',
+    })),
   },
 }));
 
@@ -335,6 +339,13 @@ beforeEach(() => {
     .mocked(SecureKeyManager.getLedgerSigningInfo)
     .mockReset()
     .mockRejectedValue(new Error('No Ledger signer'));
+  jest
+    .mocked(SecureKeyManager.resolveSigningRoute)
+    .mockReset()
+    .mockResolvedValue({
+      kind: 'unavailable',
+      reason: 'Cannot sign transactions for watch-only accounts',
+    });
 
   mockGetAccountBalance.mockReset();
   mockGetAccountBalance.mockImplementation((networkId: string) =>
@@ -596,9 +607,11 @@ describe('SendScreen ARC-0090 prefill network resolution (TASK-245 item 1)', () 
 it('retries a failed WATCH authority lookup without showing watch-only status', async () => {
   mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
   const retry =
-    makeDeferred<Awaited<ReturnType<typeof SecureKeyManager.getSigningInfo>>>();
+    makeDeferred<
+      Awaited<ReturnType<typeof SecureKeyManager.resolveSigningRoute>>
+    >();
   jest
-    .mocked(SecureKeyManager.getSigningInfo)
+    .mocked(SecureKeyManager.resolveSigningRoute)
     .mockRejectedValueOnce(new Error('offline'))
     .mockReturnValueOnce(retry.promise);
   const screen = await render(<SendScreen />);
@@ -608,9 +621,6 @@ it('retries a failed WATCH authority lookup without showing watch-only status', 
   expect(
     screen.getByRole('button', { name: 'Send Transaction' })
   ).toBeDisabled();
-  jest
-    .mocked(SecureKeyManager.getLedgerSigningInfo)
-    .mockResolvedValueOnce({} as never);
   await fireEvent.press(screen.getByText('Retry'));
   await settle();
   expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
@@ -618,13 +628,132 @@ it('retries a failed WATCH authority lookup without showing watch-only status', 
     screen.getByRole('button', { name: 'Send Transaction' })
   ).toBeDisabled();
   await act(async () =>
-    retry.resolve({ canSign: true, signingAddress: 'LEDGER', isRekeyed: true })
+    retry.resolve({
+      kind: 'ledger',
+      ledgerAccount: {} as never,
+      signerAddress: 'LEDGER',
+      viaRekey: true,
+    })
   );
   expect(screen.queryByText("Couldn't check signing authority")).toBeNull();
   expect(screen.getByText(/Ledger signer detected/)).toBeTruthy();
-  expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledTimes(2);
-  expect(SecureKeyManager.getSigningInfo).toHaveBeenLastCalledWith(
+  expect(SecureKeyManager.resolveSigningRoute).toHaveBeenCalledTimes(2);
+  expect(SecureKeyManager.resolveSigningRoute).toHaveBeenLastCalledWith(
     'WATCH',
     VOI
   );
+});
+
+// TASK-425: the screen allows a WATCH send exactly when the signer's route
+// would sign it.
+describe('WATCH accounts follow the signing route (TASK-425)', () => {
+  it('a WATCH rekeyed to a key we hold can send', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    jest.mocked(SecureKeyManager.resolveSigningRoute).mockResolvedValue({
+      kind: 'software',
+      signingAddress: 'AUTH',
+      rekeyedTo: 'AUTH',
+    });
+    const screen = await render(<SendScreen />);
+    await settle();
+    expect(screen.getByText(/rekeyed to a key in this wallet/)).toBeTruthy();
+    expect(screen.queryByText(/This is a watch-only account/)).toBeNull();
+    expect(SecureKeyManager.resolveSigningRoute).toHaveBeenCalledWith(
+      'WATCH',
+      VOI
+    );
+  });
+
+  // Fills a valid recipient and a spendable amount, so the only remaining
+  // reason the Send button could be disabled is the WATCH gate.
+  const fillSendable = async (screen: Awaited<ReturnType<typeof render>>) => {
+    const recipient = require('algosdk').generateAccount().addr.toString();
+    jest
+      .mocked(require('@/utils/address').resolveAddressOrName)
+      .mockResolvedValue(recipient);
+    await fireEvent.changeText(
+      screen.getByPlaceholderText('Enter address'),
+      recipient
+    );
+    // Recipient resolution is debounced by 500ms.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    await settle();
+    await fireEvent.changeText(
+      screen.getByPlaceholderText(AMOUNT_PLACEHOLDER),
+      '0.1'
+    );
+    await settle();
+  };
+
+  it.each([
+    ['software', { kind: 'software', signingAddress: 'AUTH' }, false],
+    [
+      'ledger',
+      {
+        kind: 'ledger',
+        ledgerAccount: {},
+        signerAddress: 'LEDGER',
+        viaRekey: true,
+      },
+      false,
+    ],
+    ['unavailable', { kind: 'unavailable', reason: 'no' }, true],
+  ])(
+    'a %s route decides whether a filled WATCH send is allowed',
+    async (_kind, route, disabled) => {
+      mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+      mockBalances[VOI] = bal(VOI, 5_000_000n, 900_000n);
+      mockMultiNetworkBalance = dualNativeMultiBalance({
+        voi: 5_000_000n,
+        algo: 3_000_000n,
+      });
+      mockTokenMappings = dualNativeMappings;
+      jest
+        .mocked(SecureKeyManager.resolveSigningRoute)
+        .mockResolvedValue(route as never);
+      const screen = await render(<SendScreen />);
+      await settle();
+      await fillSendable(screen);
+      const button = screen.getByRole('button', { name: 'Send Transaction' });
+      if (disabled) expect(button).toBeDisabled();
+      else expect(button).not.toBeDisabled();
+    }
+  );
+
+  it('a WATCH with no route stays watch-only', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    const screen = await render(<SendScreen />);
+    await settle();
+    expect(screen.getByText(/This is a watch-only account/)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Send Transaction' })
+    ).toBeDisabled();
+  });
+
+  it('an NFT send resolves the route on the NFT network, not the current one', async () => {
+    mockActiveAccount = { id: 'watch', address: 'WATCH', type: 'watch' };
+    mockCurrentNetwork = VOI;
+    mockRouteParams = {
+      nftToken: {
+        contractId: 1,
+        tokenId: '1',
+        networkId: ALGO,
+        metadata: { name: 'Test NFT' },
+      },
+    } as never;
+    await render(<SendScreen />);
+    await settle();
+    expect(SecureKeyManager.resolveSigningRoute).toHaveBeenLastCalledWith(
+      'WATCH',
+      ALGO
+    );
+  });
+
+  it('a non-WATCH account adds no route lookup', async () => {
+    await render(<SendScreen />);
+    await settle();
+    expect(SecureKeyManager.resolveSigningRoute).not.toHaveBeenCalled();
+  });
 });
