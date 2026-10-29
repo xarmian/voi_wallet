@@ -15,6 +15,7 @@ import {
   useThemeSpacing,
 } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useBottomSheetModalVisibility } from '@/hooks/useBottomSheetModalVisibility';
 import {
   BottomSheetModal,
   BottomSheetBackdrop,
@@ -229,14 +230,11 @@ export default function AccountRecipientModal({
     [styles, themeColors, handleFriendSelect]
   );
 
-  // Open/close the bottom sheet based on visibility
-  React.useEffect(() => {
-    if (isVisible) {
-      bottomSheetRef.current?.present();
-    } else {
-      bottomSheetRef.current?.dismiss();
-    }
-  }, [isVisible]);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const { onDismiss: handleSheetDismiss } = useBottomSheetModalVisibility(
+    bottomSheetRef,
+    isVisible
+  );
 
   const isAccountsTab = activeTab === 'accounts';
   const listData = (isAccountsTab ? filteredAccounts : filteredFriends) as (
@@ -256,6 +254,7 @@ export default function AccountRecipientModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
+      onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose={false}
       enableHandlePanningGesture={false}
