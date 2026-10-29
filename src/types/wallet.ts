@@ -134,7 +134,12 @@ export type KeyHolding = 'present' | 'absent' | 'unresolved';
 type BackupAccount = Pick<AccountMetadata, 'type'> &
   BackupMetadata & { originalOwner?: boolean };
 
-/** Shared per-account classifier. Signer capability and auth membership grant nothing. */
+/**
+ * Shared per-account classifier. Signer capability and auth membership grant nothing.
+ * PROTECTIVE only: originalOwner counts as present without a read (TASK-419,
+ * a keystore failure can read a present secret as null), but it can outlive
+ * the key, so a gate that uses the key must probe instead (TASK-425 U4).
+ */
 export function classifyKeyHolding(
   account: BackupAccount | null | undefined,
   secretPresence: KeyHolding = 'unresolved'

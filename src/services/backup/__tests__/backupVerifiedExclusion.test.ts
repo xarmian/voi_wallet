@@ -334,8 +334,9 @@ it.each([false, true])(
     }
     await restoreAccounts([record]);
     expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
+    // No key is restored, so no originalOwner claims one (TASK-425 U4).
     expect(secure.storeAccountMetadataForCreation).toHaveBeenCalledWith(
-      expect.objectContaining({ backupVerified: false }),
+      expect.objectContaining({ backupVerified: false, originalOwner: false }),
       0
     );
   }

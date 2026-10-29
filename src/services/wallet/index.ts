@@ -1269,7 +1269,11 @@ export class MultiAccountWalletService {
     return updatedAccount;
   }
 
-  /** Verification requires positive custody evidence; probe errors fail closed. */
+  /**
+   * Verification requires positive custody evidence; probe errors fail closed.
+   * A REKEYED record's originalOwner can outlive its key, so only the probe
+   * counts (TASK-425 U4).
+   */
   private static async eligibleBackupVerificationTarget(
     account: AccountMetadata,
     expectedAddress: string
@@ -1277,7 +1281,6 @@ export class MultiAccountWalletService {
     if (account.address !== expectedAddress) return null;
     if (account.type === AccountType.STANDARD) return account;
     if (account.type !== AccountType.REKEYED) return null;
-    if (account.originalOwner === true) return account;
     try {
       return (await AccountSecureStorage.probeSecretPresenceStrict(
         account.id

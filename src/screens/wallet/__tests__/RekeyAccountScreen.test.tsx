@@ -22,6 +22,7 @@
 
 import React from 'react';
 import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
+import algosdk from 'algosdk';
 import { AccountType } from '@/types/wallet';
 
 // ---------------------------------------------------------------------------
@@ -341,10 +342,19 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
 });
 
 describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)', () => {
-  // A converted STANDARD account, so its retained key counts as usable.
+  // A retained key that reads and is its own: originalOwner alone no longer
+  // counts (TASK-425 U4).
+  const KEPT = algosdk.generateAccount();
+  const KEPT_ADDR = KEPT.addr.toString();
+  beforeEach(() => {
+    mockGetPrivateKey.mockImplementation(async (id: string) => {
+      if (id === 'kept') return KEPT.sk.slice();
+      throw new Error('no key');
+    });
+  });
   const retained = {
     id: 'kept',
-    address: 'KEPT_ADDR',
+    address: KEPT_ADDR,
     label: 'Retained Key',
     type: AccountType.REKEYED,
     originalOwner: true,
@@ -398,7 +408,7 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
 
   it('lets a source rekeyed to a retained REKEYED key remove the rekey', async () => {
     mockWalletState.wallet = { accounts: [mockSourceAccount, retained] };
-    mockRekeyInfo = { isRekeyed: true, authAddress: 'KEPT_ADDR' };
+    mockRekeyInfo = { isRekeyed: true, authAddress: KEPT_ADDR };
     mockProbe.mockImplementation(async (id: string) => id === 'kept');
     const screen = await render(<RekeyAccountScreen />);
     await settle();
@@ -441,7 +451,7 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
   it('refuses to remove a rekey that would return control to a WATCH source', async () => {
     const watchSource = { ...watch, id: 'src', label: 'Source Account' };
     mockWalletState.wallet = { accounts: [watchSource, retained] };
-    mockRekeyInfo = { isRekeyed: true, authAddress: 'KEPT_ADDR' };
+    mockRekeyInfo = { isRekeyed: true, authAddress: KEPT_ADDR };
     mockProbe.mockImplementation(async (id: string) => id === 'kept');
     const screen = await render(<RekeyAccountScreen />);
     await settle();
@@ -456,7 +466,7 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
 
   it('does not refuse Remove Rekey while custody is still being probed', async () => {
     mockWalletState.wallet = { accounts: [mockSourceAccount, retained] };
-    mockRekeyInfo = { isRekeyed: true, authAddress: 'KEPT_ADDR' };
+    mockRekeyInfo = { isRekeyed: true, authAddress: KEPT_ADDR };
     mockProbe.mockImplementation(() => new Promise(() => {}));
     const screen = await render(<RekeyAccountScreen />);
     await settle();
@@ -490,15 +500,21 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
   });
 
   it('disables Remove Rekey when a refocus probe finds the source key gone', async () => {
+    const SRC = algosdk.generateAccount();
     const keptSource = {
       ...retained,
       id: 'src',
-      address: 'SOURCE_ADDR',
+      address: SRC.addr.toString(),
       label: 'Source Account',
     };
     const controller = { ...retained, id: 'ctl', label: 'Controller' };
+    mockGetPrivateKey.mockImplementation(async (id: string) => {
+      if (id === 'src') return SRC.sk.slice();
+      if (id === 'ctl') return KEPT.sk.slice();
+      throw new Error('no key');
+    });
     mockWalletState.wallet = { accounts: [keptSource, controller] };
-    mockRekeyInfo = { isRekeyed: true, authAddress: 'KEPT_ADDR' };
+    mockRekeyInfo = { isRekeyed: true, authAddress: KEPT_ADDR };
     mockProbe.mockResolvedValue(true);
     const screen = await render(<RekeyAccountScreen />);
     await settle();

@@ -421,9 +421,9 @@ export async function restoreAccounts(
             avatarUrl: backupAccount.avatarUrl,
             authAddress: backupAccount.authAddress || '',
             rekeyedAt: backupAccount.rekeyedAt,
-            originalOwner: backupAccount.mnemonic
-              ? true
-              : backupAccount.originalOwner,
+            // Restore wipes first, so without a mnemonic no key exists here:
+            // a backed-up originalOwner would claim one (TASK-425 U4).
+            originalOwner: !!backupAccount.mnemonic,
             hasBackup: backupAccount.hasBackup ?? false,
             backupVerified: false,
             canSign: backupAccount.canSign || false,
