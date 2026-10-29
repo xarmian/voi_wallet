@@ -45,6 +45,7 @@ import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
 import { redactAddress, redactError } from '@/utils/logRedaction';
+import { withTimeout } from '@/utils/withTimeout';
 
 /**
  * F-22 (TASK-179) — getCurrentWallet() memoization.
@@ -111,6 +112,8 @@ const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
  *      read-repair write did slip past the epoch check, the wipe enqueued after
  *      it still runs last and wins.
  */
+/** Bound on the legacy keychain read a mutation makes on the write chain. */
+const LEGACY_READ_ON_CHAIN_MS = 5000;
 let walletResetEpoch = 0;
 let walletWriteChain: Promise<unknown> = Promise.resolve();
 
@@ -2063,7 +2066,7 @@ export class MultiAccountWalletService {
       // read/repair work also queues writes and would deadlock this task.
       let serialized = snapshot!;
       if (typeof wallet === 'function') {
-        const raw = await this.getStoredValueStrict(this.WALLET_KEY);
+        const raw = await this.readWalletForMutation();
         const current = raw == null ? null : (JSON.parse(raw) as Wallet);
         if (raw != null && (!current || !Array.isArray(current.accounts))) {
           throw new Error('Corrupt wallet blob: accounts is not an array');
@@ -2405,7 +2408,7 @@ export class MultiAccountWalletService {
     invalidateAccountSubscribePasses();
     const readEpoch = walletResetEpoch;
     const wrote = await this.enqueueWalletWrite(async () => {
-      const raw = await this.getStoredValueStrict(this.WALLET_KEY);
+      const raw = await this.readWalletForMutation();
       if (raw == null || readEpoch !== walletResetEpoch) return false;
       const wallet = JSON.parse(raw) as Wallet;
       const toPrune = new Set(ids);
@@ -2448,6 +2451,39 @@ export class MultiAccountWalletService {
    * collapsing them to null. Resolves `null` ONLY for genuine absence (both
    * locations empty). No JSON parse, no migration WRITE, no cache side effect.
    */
+  /**
+   * The wallet blob for a mutation running INSIDE the write chain (audit
+   * #5/#6). A primary read error propagates and absence is null, as in
+   * getStoredValueStrict, with two differences on the legacy fallback:
+   * - The legacy secure-store read is bounded (LEGACY_READ_ON_CHAIN_MS) and a
+   *   timeout fails the mutation closed. TASK-212: a hanging keychain op must
+   *   never block every later write or wipe.
+   * - A legacy copy is never mutated here. It can still carry unmigrated
+   *   secrets that sanitizeWalletForPersistence would strip, so the mutation
+   *   aborts and getCurrentWallet migrates the copy off the chain first.
+   */
+  private static async readWalletForMutation(): Promise<string | null> {
+    const value = await storage.getItem(this.WALLET_KEY);
+    if (value != null) {
+      return value;
+    }
+    const wiped = await storage.getItem(this.WIPE_TOMBSTONE_KEY);
+    if (wiped != null) {
+      return null;
+    }
+    const legacy = await withTimeout(
+      secureStorage.getItem(this.WALLET_KEY),
+      LEGACY_READ_ON_CHAIN_MS,
+      () => new Error('Wallet storage did not respond; try again')
+    );
+    if (legacy != null) {
+      throw new Error(
+        'Wallet data has not been migrated yet; reopen the wallet and try again'
+      );
+    }
+    return null;
+  }
+
   private static async getStoredValueStrict(
     key: string
   ): Promise<string | null> {

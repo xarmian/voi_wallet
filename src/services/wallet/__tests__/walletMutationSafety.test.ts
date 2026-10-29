@@ -202,3 +202,66 @@ it('preserves a new account while reconciliation prunes the old account (#5)', a
     expect(mockStore[WALLET_KEY]).toBeUndefined();
   }
 });
+
+// Review follow-up (TASK-440): a mutation on the write chain must not wait
+// on the legacy keychain without bound, and must never mutate (and so
+// sanitize away the secrets of) an unmigrated legacy wallet copy.
+it('bounds the legacy keychain read a mutation makes on the write chain', async () => {
+  jest.useFakeTimers();
+  try {
+    jest
+      .mocked(secureStorage.getItem)
+      .mockImplementationOnce(() => new Promise(() => {}));
+    const pending = Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'First',
+    });
+    const outcome = pending.then(
+      () => 'created',
+      (error: Error) => error.message
+    );
+    await jest.advanceTimersByTimeAsync(5000);
+
+    expect(await outcome).toContain(
+      'Wallet storage did not respond; try again'
+    );
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+
+    // The chain is free again: the next write goes through.
+    await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Next',
+    });
+    expect(readWallet().accounts).toHaveLength(1);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('never mutates an unmigrated legacy wallet copy', async () => {
+  const legacy = JSON.stringify({
+    id: 'legacy',
+    version: '1.0',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    accounts: [
+      {
+        id: 'old',
+        address: 'OLD',
+        type: AccountType.STANDARD,
+        mnemonic: 'only copy of the phrase',
+      },
+    ],
+    activeAccountId: 'old',
+    settings: {},
+  });
+  jest.mocked(secureStorage.getItem).mockResolvedValue(legacy);
+
+  await expect(
+    Service.updateAccountMetadata({ id: 'old', label: 'Renamed' } as never)
+  ).rejects.toThrow('Wallet data has not been migrated yet');
+  expect(mockStore[WALLET_KEY]).toBeUndefined();
+  expect(storage.setItem).not.toHaveBeenCalledWith(
+    WALLET_KEY,
+    expect.anything()
+  );
+});
