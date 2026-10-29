@@ -353,3 +353,52 @@ it('fails an import closed, before storing a secret, when the legacy read hangs'
     jest.useRealTimers();
   }
 });
+
+// Luna confirm round on #240 (a): an import with no label derives its default
+// label from the same strict, bounded read as the duplicate check, not from
+// getAccountCount (getCurrentWallet -> an unbounded legacy keychain read).
+it('labels an unlabelled import from the strict read, not getAccountCount', async () => {
+  const algosdk = require('algosdk');
+  await Service.createStandardAccount({
+    type: AccountType.STANDARD,
+    label: 'First',
+  });
+  const getAccountCount = jest.spyOn(Service as any, 'getAccountCount');
+
+  const imported = await Service.importStandardAccount({
+    type: AccountType.STANDARD,
+    mnemonic: algosdk.secretKeyToMnemonic(algosdk.generateAccount().sk),
+  } as never);
+
+  expect(imported.label).toBe('Imported Account 2');
+  expect(getAccountCount).not.toHaveBeenCalled();
+});
+
+// Luna confirm round on #240 (b): once the wallet blob is written the add has
+// committed. A failure clearing the wipe tombstone afterwards must not fail
+// the create (whose catch would delete the secret of a persisted account).
+it('keeps the secret of an account whose metadata landed when the tombstone clear fails', async () => {
+  const { AccountSecureStorage } = require('../../secure/AccountSecureStorage');
+  const removeItem = jest.mocked(storage.removeItem);
+  const original = removeItem.getMockImplementation();
+  removeItem.mockImplementation(async (key: string) => {
+    if (key === 'voi_wallet_wiped') throw new Error('disk busy');
+    delete mockStore[key];
+  });
+  try {
+    const created = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Landed',
+    });
+
+    expect(readWallet().accounts.map((account) => account.id)).toEqual([
+      created.id,
+    ]);
+    expect(
+      AccountSecureStorage.deleteAccountIfAttemptMatches
+    ).not.toHaveBeenCalled();
+    expect(AccountSecureStorage.commitPendingCreate).toHaveBeenCalledTimes(1);
+  } finally {
+    removeItem.mockImplementation(original!);
+  }
+});

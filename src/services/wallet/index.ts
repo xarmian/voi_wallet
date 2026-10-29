@@ -254,8 +254,9 @@ export class MultiAccountWalletService {
       // wallet". A read error, a corrupt blob, a slow keychain or an
       // unmigrated legacy copy fails the import before any secret is stored.
       // (addAccountToWallet re-checks for duplicates inside the write chain.)
-      const existingAccount = await this.findAccountByAddressStrict(
-        account.addr.toString()
+      const currentWallet = await this.readWalletStrict();
+      const existingAccount = currentWallet?.accounts.find(
+        (acc) => acc.address === account.addr.toString()
       );
       if (existingAccount) {
         throw new AccountExistsError('Account already exists in wallet');
@@ -273,9 +274,11 @@ export class MultiAccountWalletService {
           (account as any).publicKey ?? account.sk.slice(32)
         ).toString('hex'),
         type: AccountType.STANDARD,
+        // From the strict read above, not getAccountCount (getCurrentWallet
+        // can wait on the legacy keychain without limit).
         label:
           request.label ||
-          `Imported Account ${(await this.getAccountCount()) + 1}`,
+          `Imported Account ${(currentWallet?.accounts.length ?? 0) + 1}`,
         color: request.color || this.generateAccountColor(),
         isHidden: false,
         createdAt: new Date().toISOString(),
@@ -1827,13 +1830,12 @@ export class MultiAccountWalletService {
   }
 
   /**
-   * findAccountByAddress for a decision that must not fail open: a strict,
-   * bounded read (readWalletForMutation) that throws instead of reading as
-   * "no wallet". It never enqueues on the write chain.
+   * The parsed wallet for a decision that must not fail open (import's
+   * duplicate check and default label): the strict, bounded read
+   * (readWalletForMutation), which throws instead of reading as "no wallet".
+   * It never enqueues on the write chain. null = no wallet.
    */
-  private static async findAccountByAddressStrict(
-    address: string
-  ): Promise<AccountMetadata | null> {
+  private static async readWalletStrict(): Promise<Wallet | null> {
     const raw = await this.readWalletForMutation();
     if (raw == null) {
       return null;
@@ -1842,7 +1844,7 @@ export class MultiAccountWalletService {
     if (!Array.isArray(wallet?.accounts)) {
       throw new Error('Corrupt wallet blob: accounts is not an array');
     }
-    return wallet.accounts.find((acc) => acc.address === address) || null;
+    return wallet;
   }
 
   private static async getAccountCount(): Promise<number> {
@@ -2126,9 +2128,22 @@ export class MultiAccountWalletService {
       // read, when needed, must finish before it can safely create a wallet.
       await storage.setItem(this.WALLET_KEY, serialized);
       // A primary blob now exists — the wiped state (if any) is over. Clear the
-      // durable tombstone atomically with the write so migrateLegacyValue is
-      // re-enabled and no stale "wiped" marker lingers past a create/restore.
-      await storage.removeItem(this.WIPE_TOMBSTONE_KEY);
+      // durable tombstone with the write so migrateLegacyValue is re-enabled
+      // and no stale "wiped" marker lingers past a create/restore.
+      // Best-effort (audit 10-29, Luna P2): the blob has landed, so this write
+      // has committed and must not report failure. A caller that rolls back
+      // on failure (account create/import) would otherwise delete the secret
+      // of an account whose metadata is persisted. A tombstone left beside a
+      // present primary is harmless: the primary read wins and mutations
+      // proceed (see the guard above).
+      try {
+        await storage.removeItem(this.WIPE_TOMBSTONE_KEY);
+      } catch (error) {
+        console.warn(
+          'Wipe tombstone not cleared after a committed wallet write:',
+          redactError(error)
+        );
+      }
       return true;
     });
     // Best-effort legacy secure-store cleanup, OUTSIDE the chain and
