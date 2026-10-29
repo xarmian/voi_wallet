@@ -4,7 +4,12 @@ import {
   networkService as defaultNetworkService,
   NetworkService,
 } from '@/services/network';
-import { NetworkId, TransactionRejectedError } from '@/types/network';
+import { isAlreadySubmittedError } from '@/services/network/alreadySubmitted';
+import {
+  NetworkId,
+  TransactionRejectedError,
+  TransactionExpiredError,
+} from '@/types/network';
 import {
   WalletAccount,
   LedgerSigningInfo,
@@ -1854,27 +1859,6 @@ export class TransactionService {
     return false;
   }
 
-  /**
-   * Detects algod responses that indicate the exact same signed transaction has
-   * already been accepted (committed to a block or sitting in the pool). When we
-   * see one of these on a retry it means a PRIOR attempt already landed the tx —
-   * possibly a first submit that committed but whose HTTP response was lost — so
-   * we must treat it as success and MUST NOT resubmit (double-send / fund-loss
-   * risk).
-   */
-  private static isAlreadySubmittedError(error: unknown): boolean {
-    const message =
-      error instanceof Error ? error.message : String(error ?? '');
-    const lower = message.toLowerCase();
-    return (
-      lower.includes('already in ledger') ||
-      lower.includes('already in the pool') ||
-      lower.includes('already present') ||
-      lower.includes('transaction already') ||
-      lower.includes('txn already')
-    );
-  }
-
   private static async submitWithRetries(
     signedTxnBlob: Uint8Array | Uint8Array[],
     networkId?: NetworkId,
@@ -1900,26 +1884,45 @@ export class TransactionService {
     } catch {
       /* group/edge — fall back to the response txId */
     }
+    // The group's last valid round (its smallest), so the reconcile can tell
+    // a transaction that can still land from one that has expired.
+    let expectedLastValid: bigint | undefined;
+    try {
+      const blobs = Array.isArray(signedTxnBlob)
+        ? signedTxnBlob
+        : [signedTxnBlob];
+      for (const blob of blobs) {
+        const { lastValid } = algosdk.decodeSignedTransaction(blob).txn;
+        if (expectedLastValid === undefined || lastValid < expectedLastValid) {
+          expectedLastValid = lastValid;
+        }
+      }
+    } catch {
+      expectedLastValid = undefined;
+    }
 
     while (attempt < maxAttempts) {
       try {
         return await networkService.submitTransaction(signedTxnBlob);
       } catch (error) {
-        // A definitive rejection is final for this signed transaction:
-        // report it with its reason, never resend it (TASK-440 audit #8).
-        if (error instanceof TransactionRejectedError) {
+        // Final for this signed transaction: algod refused it at submit, or
+        // it expired unconfirmed. Report it, never resend it (TASK-440 #8).
+        if (
+          error instanceof TransactionRejectedError ||
+          error instanceof TransactionExpiredError
+        ) {
           throw error;
         }
         // If a prior attempt (or a lost-response commit) already landed this
         // exact tx, do NOT resubmit — reconcile confirmation and report success.
-        if (TransactionService.isAlreadySubmittedError(error)) {
+        if (isAlreadySubmittedError(error)) {
           // The node already accepted this exact tx (a prior attempt, possibly a
           // commit whose HTTP response was lost). MUST NOT resubmit — double-send.
           if (expectedTxId) {
             const confirmed = await networkService
-              .isTransactionConfirmed(expectedTxId)
+              .isTransactionConfirmed(expectedTxId, expectedLastValid)
               .catch((reconcileError) => {
-                if (reconcileError instanceof TransactionRejectedError) {
+                if (reconcileError instanceof TransactionExpiredError) {
                   throw reconcileError;
                 }
                 return false;

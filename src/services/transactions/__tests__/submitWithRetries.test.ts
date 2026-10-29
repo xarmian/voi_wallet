@@ -1,15 +1,20 @@
 /**
- * TASK-440 audit #8: a definitive rejection (TransactionRejectedError) is final
- * for a signed transaction. submitWithRetries must surface it with its reason,
- * never resend the same blob, and the lost-response reconcile must propagate
- * it rather than report "pending".
+ * TASK-440 audit #8: a hard rejection at submit (TransactionRejectedError) and
+ * an expiry (TransactionExpiredError) are final for a signed transaction.
+ * submitWithRetries must surface them, never resend the same blob, and the
+ * lost-response reconcile must pass it lastValid and propagate an expiry
+ * rather than report "pending". Anything else on the reconcile stays pending:
+ * the transaction may still land (director 10-29).
  *
  * Only the NetworkService boundary is mocked; the signed blob is real (algosdk
  * fixture keys, never logged) so the expected txId is derived as in production.
  */
 
 import { makeAccount, paymentTxn } from '@/__tests__/fixtures/algorand';
-import { TransactionRejectedError } from '@/types/network';
+import {
+  TransactionExpiredError,
+  TransactionRejectedError,
+} from '@/types/network';
 
 const mockSubmitTransaction = jest.fn();
 const mockIsTransactionConfirmed = jest.fn();
@@ -91,6 +96,15 @@ describe('TransactionService.submitWithRetries (TASK-440 #8)', () => {
     expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
   });
 
+  it('surfaces an expiry and never resends the blob', async () => {
+    mockSubmitTransaction.mockRejectedValue(
+      new TransactionExpiredError(EXPECTED_TX_ID, TXN.lastValid)
+    );
+    const error = await submit().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransactionExpiredError);
+    expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
+  });
+
   it('still retries an ordinary submit failure (control)', async () => {
     mockSubmitTransaction
       .mockRejectedValueOnce(new Error('Transaction failed: socket hang up'))
@@ -109,15 +123,25 @@ describe('TransactionService.submitWithRetries (TASK-440 #8)', () => {
       );
     });
 
-    it('propagates a rejection found while reconciling', async () => {
+    it('passes lastValid to the reconcile and propagates an expiry', async () => {
       mockIsTransactionConfirmed.mockRejectedValue(
-        new TransactionRejectedError(EXPECTED_TX_ID, REASON)
+        new TransactionExpiredError(EXPECTED_TX_ID, TXN.lastValid)
       );
       const error = await submit().catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(TransactionRejectedError);
-      expect((error as TransactionRejectedError).reason).toBe(REASON);
-      expect(mockIsTransactionConfirmed).toHaveBeenCalledWith(EXPECTED_TX_ID);
+      expect(error).toBeInstanceOf(TransactionExpiredError);
+      expect(mockIsTransactionConfirmed).toHaveBeenCalledWith(
+        EXPECTED_TX_ID,
+        TXN.lastValid
+      );
       expect(mockSubmitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a confirmed reconcile as confirmed', async () => {
+      mockIsTransactionConfirmed.mockResolvedValue(true);
+      await expect(submit()).resolves.toEqual({
+        txId: EXPECTED_TX_ID,
+        confirmed: true,
+      });
     });
 
     it('reports pending (not failure) when the reconcile errors otherwise', async () => {

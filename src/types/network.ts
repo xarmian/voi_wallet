@@ -113,10 +113,11 @@ export class NetworkError extends Error {
 }
 
 /**
- * The network definitively rejected a submitted transaction (algod reported a
- * pool error for it). Unlike a timeout or "not confirmed yet", this is final
- * for that signed transaction: it must be reported as a failure with its
- * reason, and never resubmitted (TASK-440 audit #8).
+ * algod refused the transaction at submit (a 4xx on sendRawTransaction, other
+ * than "already in the ledger/pool"): it never entered the pool, so it can't
+ * land. This is the only hard rejection. A pool error read after a successful
+ * submit is one node's view and is NOT one: that transaction may still commit
+ * until its last valid round (TASK-440 audit #8; director 10-29).
  */
 export class TransactionRejectedError extends Error {
   constructor(
@@ -125,6 +126,23 @@ export class TransactionRejectedError extends Error {
   ) {
     super(`Transaction rejected by the network: ${reason}`);
     this.name = 'TransactionRejectedError';
+  }
+}
+
+/**
+ * A submitted transaction that never confirmed and can no longer land: the
+ * node's own round is past its last valid round, and the node still reads it
+ * as unconfirmed. Only from here is sending it again safe.
+ */
+export class TransactionExpiredError extends Error {
+  constructor(
+    public txId: string,
+    public lastValid: bigint
+  ) {
+    super(
+      `Transaction expired without being confirmed: its last valid round (${lastValid}) has passed, so it can no longer be committed`
+    );
+    this.name = 'TransactionExpiredError';
   }
 }
 
