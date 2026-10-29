@@ -89,6 +89,7 @@ import {
   AccountType,
   ResetRacedError,
   StandardAccountMetadata,
+  Wallet,
 } from '@/types/wallet';
 import { collectAccounts } from '../collectors';
 import { restoreAccounts, performFullRestore } from '../restorers';
@@ -491,3 +492,32 @@ it('a direct restoreAccounts call also rejects duplicate ids before storing', as
   expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
   expect(secure.storeAccountMetadataForCreation).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  'U4 backup preserves legacy REKEYED wire fields (canSign=%s)',
+  async (canSign) => {
+    const record = retained({ canSign, rekeyedAt: '2026-01-01T00:00:00.000Z' });
+    exportWallet(record);
+    const wire: BackupAccountData[] = JSON.parse(
+      JSON.stringify(await collectAccounts())
+    );
+    expect(wire[0]).toMatchObject({
+      type: AccountType.REKEYED,
+      authAddress: record.authAddress,
+      canSign,
+      rekeyedAt: record.rekeyedAt,
+      originalOwner: true,
+    });
+    expect(typeof wire[0].authAddress).toBe('string');
+    expect(typeof wire[0].canSign).toBe('boolean');
+    await restoreAccounts(wire);
+    expect(
+      (mockPersistRestoredWallet.mock.calls[0] as unknown as [Wallet])[0]
+        .accounts[0]
+    ).toMatchObject({
+      authAddress: record.authAddress,
+      canSign,
+      rekeyedAt: record.rekeyedAt,
+    });
+  }
+);

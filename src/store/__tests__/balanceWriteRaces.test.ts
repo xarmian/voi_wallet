@@ -255,43 +255,6 @@ describe('loadAccountBalance commit guard (TASK-59)', () => {
   });
 });
 
-describe('rekey metadata from a stale batch result (TASK-59)', () => {
-  it('is neither persisted nor applied when the network switches mid-rekey', async () => {
-    mockUpdateAccountMetadata.mockClear();
-    let resolveRekey!: (account: unknown) => void;
-    mockUpdateWithRekeyInfo.mockImplementation(
-      (account: { id: string }) =>
-        new Promise((resolve) => {
-          resolveRekey = () =>
-            resolve({ ...account, type: 'rekeyed', authAddress: 'AUTH' });
-        })
-    );
-    const pending = deferFetches();
-    const refresh = useWalletStore.getState().refreshAllBalances();
-    await flush();
-    pending.forEach(({ address, resolve }) =>
-      resolve({
-        ...balanceOf(1n),
-        ...(address === 'ADDR-acc-1'
-          ? { rekeyInfo: { isRekeyed: true, authAddress: 'AUTH' } }
-          : {}),
-      } as AccountBalance)
-    );
-    await flush();
-    expect(mockUpdateWithRekeyInfo).toHaveBeenCalledTimes(1);
-
-    switchNetwork('algorand-mainnet');
-    resolveRekey(undefined);
-    await refresh;
-
-    expect(mockUpdateAccountMetadata).not.toHaveBeenCalled();
-    expect(
-      useWalletStore.getState().wallet?.accounts.find((a) => a.id === 'acc-1')
-        ?.type
-    ).toBe('standard');
-  });
-});
-
 describe('persisted balance cache (TASK-59)', () => {
   it('a switch after commit but before the deferred persist writes nothing', async () => {
     const pending = deferFetches();

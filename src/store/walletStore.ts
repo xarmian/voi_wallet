@@ -24,7 +24,6 @@ import {
   TransactionInfo,
 } from '../types/wallet';
 import { MultiAccountWalletService } from '../services/wallet';
-import rekeyManager from '@/services/wallet/rekeyManager';
 import { NetworkService } from '../services/network';
 import { NetworkId } from '../types/network';
 import EnvoiService, { EnvoiNameInfo } from '../services/envoi';
@@ -1455,119 +1454,32 @@ export const useWalletStore = create<WalletState>()(
 
           // A fetch that straddled a network switch (or was superseded by a
           // newer fetch for this account) must not land: drop it before the
-          // rekey persist, the state write and the cache persist.
+          // state write and the cache persist.
           if (!isCurrentBalanceRequest(accountId, requestToken)) {
             settleStaleRequest();
             return;
           }
 
-          // Process rekey information if available (both rekeyed and non-rekeyed states)
-          const currentWallet = get().wallet;
-          if (balance.rekeyInfo && currentWallet) {
-            // Update the account with rekey information
-            const updatedAccount =
-              await rekeyManager.updateAccountWithRekeyInfo(
-                account,
-                balance.rekeyInfo,
-                currentWallet
-              );
+          // Rekey state is derived per network; balance loads never change
+          // persisted account kind or legacy rekey metadata.
+          patchAccountState({
+            balance,
+            balanceNetworkId: currentNetworkId,
+            isBalanceLoading: false,
+            isBackgroundRefreshing: false,
+            balanceLastUpdated: now,
+          });
 
-            // Re-checked after the await: stale rekey metadata must not be
-            // persisted or applied either.
-            if (!isCurrentBalanceRequest(accountId, requestToken)) {
-              settleStaleRequest();
-              return;
-            }
-
-            let shouldPersistMetadata = account.type !== updatedAccount.type;
-
-            if (
-              !shouldPersistMetadata &&
-              updatedAccount.type === AccountType.REKEYED &&
-              account.type === AccountType.REKEYED
-            ) {
-              const existingRekeyed = account as RekeyedAccountMetadata;
-              const newRekeyed = updatedAccount as RekeyedAccountMetadata;
-
-              shouldPersistMetadata =
-                existingRekeyed.authAddress !== newRekeyed.authAddress ||
-                existingRekeyed.canSign !== newRekeyed.canSign ||
-                existingRekeyed.rekeyedAt !== newRekeyed.rekeyedAt;
-            }
-
-            if (shouldPersistMetadata) {
-              try {
-                await MultiAccountWalletService.updateAccountMetadata(
-                  updatedAccount
-                );
-              } catch (persistError) {
-                console.warn(
-                  'Failed to persist rekey metadata update:',
-                  persistError
-                );
-              }
-            }
-
-            // Update the wallet with the new account metadata — functionally,
-            // against the latest wallet: the rekey awaits above could have
-            // interleaved another wallet change (label, new account, …).
-            set((state) =>
-              state.wallet
-                ? {
-                    wallet: {
-                      ...state.wallet,
-                      accounts: state.wallet.accounts.map((acc) =>
-                        acc.id === accountId ? updatedAccount : acc
-                      ),
-                    },
-                  }
-                : state
+          // Persist the updated balance cache with network ID
+          setTimeout(() => {
+            void persistBalanceToStorage(
+              accountId,
+              balance,
+              now,
+              currentNetworkId,
+              () => isCurrentBalanceRequest(accountId, requestToken)
             );
-
-            // The rekey awaits gave the network another chance to move on.
-            if (!isCurrentBalanceRequest(accountId, requestToken)) {
-              settleStaleRequest();
-              return;
-            }
-
-            patchAccountState({
-              balance,
-              balanceNetworkId: currentNetworkId,
-              isBalanceLoading: false,
-              isBackgroundRefreshing: false,
-              balanceLastUpdated: now,
-            });
-
-            // Persist the updated balance cache with network ID
-            setTimeout(() => {
-              void persistBalanceToStorage(
-                accountId,
-                balance,
-                now,
-                currentNetworkId,
-                () => isCurrentBalanceRequest(accountId, requestToken)
-              );
-            }, 0);
-          } else {
-            patchAccountState({
-              balance,
-              balanceNetworkId: currentNetworkId,
-              isBalanceLoading: false,
-              isBackgroundRefreshing: false,
-              balanceLastUpdated: now,
-            });
-
-            // Persist the updated balance cache with network ID
-            setTimeout(() => {
-              void persistBalanceToStorage(
-                accountId,
-                balance,
-                now,
-                currentNetworkId,
-                () => isCurrentBalanceRequest(accountId, requestToken)
-              );
-            }, 0);
-          }
+          }, 0);
         } catch (error) {
           // A failed balance load used to be completely silent: it wrote
           // balanceError into state, but nothing logged and — outside HomeScreen,
@@ -2224,15 +2136,10 @@ export const useWalletStore = create<WalletState>()(
       // Keep only results whose request is still current; a stale one (network
       // switched, or a newer fetch for that account was issued) is dropped.
       const patches = new Map<string, Partial<AccountUIState>>();
-      const rekeyUpdates: {
-        account: AccountMetadata;
-        balance: AccountBalance;
-        token: BalanceRequestToken;
-      }[] = [];
 
       for (const result of results) {
         if (result.status !== 'fulfilled') continue;
-        const { accountId, account, balance, error } = result.value;
+        const { accountId, balance, error } = result.value;
         const token = tokens.get(accountId);
         if (!token || !isCurrentBalanceRequest(accountId, token)) continue;
 
@@ -2253,11 +2160,6 @@ export const useWalletStore = create<WalletState>()(
             lastError: null,
             balanceError: null,
           });
-
-          // Collect rekey updates for later processing
-          if (balance.rekeyInfo) {
-            rekeyUpdates.push({ account, balance, token });
-          }
 
           // Persist balance to storage asynchronously
           setTimeout(() => {
@@ -2285,78 +2187,6 @@ export const useWalletStore = create<WalletState>()(
           }
           return { accountStates: nextAccountStates };
         });
-      }
-
-      // Process rekey updates if any
-      const updatedAccountsById = new Map<string, AccountMetadata>();
-      for (const { account, balance, token } of rekeyUpdates) {
-        const latestWallet = get().wallet;
-        if (!latestWallet || !balance.rekeyInfo) continue;
-        // Earlier iterations awaited: skip results that went stale meanwhile.
-        if (!isCurrentBalanceRequest(account.id, token)) continue;
-        // Each update sees the ones before it, as the old accumulating loop did.
-        const walletForRekey: Wallet = {
-          ...latestWallet,
-          accounts: latestWallet.accounts.map(
-            (acc) => updatedAccountsById.get(acc.id) ?? acc
-          ),
-        };
-
-        const updatedAccount = await rekeyManager.updateAccountWithRekeyInfo(
-          account,
-          balance.rekeyInfo,
-          walletForRekey
-        );
-        // Re-checked after the await, before anything is persisted.
-        if (!isCurrentBalanceRequest(account.id, token)) continue;
-
-        let shouldPersistMetadata = account.type !== updatedAccount.type;
-
-        if (
-          !shouldPersistMetadata &&
-          updatedAccount.type === AccountType.REKEYED &&
-          account.type === AccountType.REKEYED
-        ) {
-          const existingRekeyed = account as RekeyedAccountMetadata;
-          const newRekeyed = updatedAccount as RekeyedAccountMetadata;
-
-          shouldPersistMetadata =
-            existingRekeyed.authAddress !== newRekeyed.authAddress ||
-            existingRekeyed.canSign !== newRekeyed.canSign ||
-            existingRekeyed.rekeyedAt !== newRekeyed.rekeyedAt;
-        }
-
-        if (shouldPersistMetadata) {
-          try {
-            await MultiAccountWalletService.updateAccountMetadata(
-              updatedAccount
-            );
-          } catch (persistError) {
-            console.warn(
-              'Failed to persist rekey metadata update:',
-              persistError
-            );
-          }
-        }
-
-        updatedAccountsById.set(account.id, updatedAccount);
-      }
-
-      // Apply rekey metadata functionally against the latest wallet, so a wallet
-      // change made during the awaits above is kept.
-      if (updatedAccountsById.size > 0) {
-        set((state) =>
-          state.wallet
-            ? {
-                wallet: {
-                  ...state.wallet,
-                  accounts: state.wallet.accounts.map(
-                    (acc) => updatedAccountsById.get(acc.id) ?? acc
-                  ),
-                },
-              }
-            : state
-        );
       }
     },
 
