@@ -235,7 +235,10 @@ export interface UnifiedTransactionRequest {
     voteFirst?: number;
     voteLast?: number;
     voteKeyDilution?: number;
-    nonParticipation?: boolean; // true for going offline
+    // true for going offline. There is deliberately no nonParticipation
+    // field: on Algorand/Voi nonpart=true marks the account permanently
+    // unable to go online again, and this wallet never sets it (TASK-439).
+    goOffline?: boolean;
     fee?: number;
     note?: string;
     networkId?: NetworkId;
@@ -1173,18 +1176,29 @@ export class UnifiedTransactionSigner {
       // Build keyreg transaction
       let txn: algosdk.Transaction;
 
-      if (request.keyregParams.nonParticipation) {
-        // Go offline (non-participation)
+      if (request.keyregParams.goOffline) {
+        // Go offline: a keyreg with no participation fields at all. Never
+        // nonParticipation: true, which is irreversible (TASK-439). Any keys
+        // on the request are dropped, not forwarded.
         txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
           sender: request.keyregParams.address,
           suggestedParams,
-          nonParticipation: true,
           note: request.keyregParams.note
             ? new Uint8Array(Buffer.from(request.keyregParams.note))
             : undefined,
         });
       } else {
-        // Go online with participation keys
+        // Go online with participation keys. Without them algosdk would
+        // build an offline keyreg, so a request that didn't say goOffline
+        // must not reach the chain as one.
+        if (
+          !request.keyregParams.voteKey ||
+          !request.keyregParams.selectionKey
+        ) {
+          throw new Error(
+            'Online key registration requires participation keys'
+          );
+        }
         txn = algosdk.makeKeyRegistrationTxnWithSuggestedParamsFromObject({
           sender: request.keyregParams.address,
           voteKey: request.keyregParams.voteKey,
