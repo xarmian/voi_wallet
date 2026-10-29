@@ -62,9 +62,12 @@ jest.mock('@/services/auth/reviewGrant', () => ({
     leave: jest.fn(),
     revoke: jest.fn(),
     touch: jest.fn(),
+    join: jest.fn(),
   },
   walletConnectRequestKey: (a: string, b: string | number) =>
     JSON.stringify([a, String(b)]),
+  walletConnectProposalKey: (a: string, b: string | number) =>
+    JSON.stringify([a, `proposal-${b}`]),
 }));
 // The gate itself is covered by TASK-437's tests; render what it is given.
 jest.mock('@/components/walletconnect/LockedRequestGate', () => {
@@ -309,4 +312,29 @@ describe('locked wallet (TASK-438)', () => {
     expect(screen.queryByText('Unlock to review')).toBeNull();
     expect(MultiAccountWalletService.getAllAccounts).toHaveBeenCalled();
   });
+});
+
+it('joins a live review sitting when shown (TASK-438)', async () => {
+  const { reviewGrant } = require('@/services/auth/reviewGrant');
+  reviewGrant.join.mockClear();
+  mockLocked = true;
+  try {
+    await render(
+      <SessionProposalScreen
+        navigation={navigationStub()}
+        route={
+          {
+            params: {
+              proposal: { ...proposal, id: 7, pairingTopic: 'pairing-7' },
+            },
+          } as any
+        }
+      />
+    );
+    expect(reviewGrant.join).toHaveBeenCalledWith(
+      JSON.stringify(['pairing-7', 'proposal-7'])
+    );
+  } finally {
+    mockLocked = false;
+  }
 });

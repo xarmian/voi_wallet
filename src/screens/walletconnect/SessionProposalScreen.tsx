@@ -45,6 +45,7 @@ import { Theme } from '@/constants/themes';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   reviewGrant,
+  walletConnectProposalKey,
   walletConnectRequestKey,
 } from '@/services/auth/reviewGrant';
 import LockedRequestGate from '@/components/walletconnect/LockedRequestGate';
@@ -88,7 +89,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   useAppSwitcherProtection();
   const { authState } = useAuth();
   const requestKey = proposal
-    ? walletConnectRequestKey(proposal.pairingTopic, `proposal-${proposal.id}`)
+    ? walletConnectProposalKey(proposal.pairingTopic, proposal.id)
     : walletConnectRequestKey(
         'v1',
         `proposal-${v1SessionRequest?.peerId ?? ''}`
@@ -110,6 +111,13 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     });
     return () => subscription.remove();
   }, []);
+
+  // A proposal shown while a review sitting is live joins it: one unlock covers
+  // everything in the sitting (Connect still needs its own tap). The router
+  // usually joins first (serviceBootstrap); this covers any other way in.
+  useEffect(() => {
+    reviewGrant.join(requestKey);
+  }, [requestKey]);
 
   // However the screen is left, this proposal leaves the sitting.
   useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);

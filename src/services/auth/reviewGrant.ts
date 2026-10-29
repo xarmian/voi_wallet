@@ -183,6 +183,18 @@ export function walletConnectRequestKey(
   return JSON.stringify([topic, String(id)]);
 }
 
+/**
+ * The review-sitting key of a WalletConnect session proposal (TASK-438). One
+ * scheme for the router and the connect screen, so a proposal the router joins
+ * to a live sitting is the one the screen finds in it.
+ */
+export function walletConnectProposalKey(
+  pairingTopic: string,
+  id: string | number
+): string {
+  return walletConnectRequestKey(pairingTopic, `proposal-${id}`);
+}
+
 // A re-lock invalidates review before the vault teardown, including a wallet
 // that was already locked while a review grant was active.
 AppLockSignal.subscribe(() => {
