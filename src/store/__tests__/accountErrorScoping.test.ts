@@ -47,7 +47,7 @@ jest.mock('@/services/wallet', () => ({
 
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: { updateAccountWithRekeyInfo: jest.fn() },
+  default: {},
 }));
 
 jest.mock('@/services/envoi', () => ({ __esModule: true, default: {} }));

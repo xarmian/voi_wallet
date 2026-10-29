@@ -45,7 +45,6 @@ const mockRemoveItem = jest.fn(async (key: string) => {
 });
 const mockDeleteAccount = jest.fn();
 const mockUpdateAccountMetadata = jest.fn(async (_account: unknown) => {});
-const mockUpdateWithRekeyInfo = jest.fn();
 const mockGetCurrentWallet = jest.fn();
 
 jest.mock('@/services/network', () => ({
@@ -69,10 +68,7 @@ jest.mock('@/services/wallet', () => ({
 
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: {
-    updateAccountWithRekeyInfo: (...args: unknown[]) =>
-      mockUpdateWithRekeyInfo(...args),
-  },
+  default: {},
 }));
 
 jest.mock('@/services/envoi', () => ({ __esModule: true, default: {} }));
@@ -252,43 +248,6 @@ describe('loadAccountBalance commit guard (TASK-59)', () => {
     await Promise.all([stale, fresh]);
 
     expect(stateOf('acc-1')?.balance?.amount).toBe(2n);
-  });
-});
-
-describe('rekey metadata from a stale batch result (TASK-59)', () => {
-  it('is neither persisted nor applied when the network switches mid-rekey', async () => {
-    mockUpdateAccountMetadata.mockClear();
-    let resolveRekey!: (account: unknown) => void;
-    mockUpdateWithRekeyInfo.mockImplementation(
-      (account: { id: string }) =>
-        new Promise((resolve) => {
-          resolveRekey = () =>
-            resolve({ ...account, type: 'rekeyed', authAddress: 'AUTH' });
-        })
-    );
-    const pending = deferFetches();
-    const refresh = useWalletStore.getState().refreshAllBalances();
-    await flush();
-    pending.forEach(({ address, resolve }) =>
-      resolve({
-        ...balanceOf(1n),
-        ...(address === 'ADDR-acc-1'
-          ? { rekeyInfo: { isRekeyed: true, authAddress: 'AUTH' } }
-          : {}),
-      } as AccountBalance)
-    );
-    await flush();
-    expect(mockUpdateWithRekeyInfo).toHaveBeenCalledTimes(1);
-
-    switchNetwork('algorand-mainnet');
-    resolveRekey(undefined);
-    await refresh;
-
-    expect(mockUpdateAccountMetadata).not.toHaveBeenCalled();
-    expect(
-      useWalletStore.getState().wallet?.accounts.find((a) => a.id === 'acc-1')
-        ?.type
-    ).toBe('standard');
   });
 });
 

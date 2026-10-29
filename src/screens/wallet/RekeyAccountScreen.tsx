@@ -670,44 +670,8 @@ export default function RekeyAccountScreen() {
           }
         }
 
-        // Apply reverse rekey metadata update - convert back to standard account
-        if (rekeyFlow === 'reverse' && sourceAccount) {
-          try {
-            // Convert the rekeyed account back to standard
-            const rekeyInfo = { isRekeyed: false, authAddress: undefined };
-            const updatedAccount =
-              await rekeyManager.updateAccountWithRekeyInfo(
-                sourceAccount,
-                rekeyInfo,
-                wallet!
-              );
-
-            if (updatedAccount.type !== sourceAccount.type) {
-              await MultiAccountWalletService.updateAccountMetadata(
-                updatedAccount
-              );
-
-              const currentState = useWalletStore.getState();
-              if (currentState.wallet) {
-                useWalletStore.setState({
-                  wallet: {
-                    ...currentState.wallet,
-                    accounts: currentState.wallet.accounts.map((candidate) =>
-                      candidate.id === updatedAccount.id
-                        ? updatedAccount
-                        : candidate
-                    ),
-                  },
-                });
-              }
-            }
-          } catch (metadataError) {
-            console.warn(
-              'Failed to update reverse rekey metadata:',
-              metadataError
-            );
-          }
-        }
+        // A reverse rekey persists nothing: rekey state is per network and is
+        // read from chain state, and the record keeps its own key (TASK-425 U5).
 
         // Refresh account data
         if (sourceAccount) {

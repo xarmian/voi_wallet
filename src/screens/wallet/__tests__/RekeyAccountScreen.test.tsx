@@ -110,7 +110,7 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
 
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: { updateAccountWithRekeyInfo: jest.fn() },
+  default: {},
 }));
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
@@ -209,6 +209,7 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
 
 import { Alert } from 'react-native';
 import RekeyAccountScreen from '../RekeyAccountScreen';
+import { MultiAccountWalletService } from '@/services/wallet';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -532,6 +533,50 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
     await settle();
 
     expect(proceed()).toBeDisabled();
+  });
+
+  // Rekey state is per network: completing a reverse rekey on one network
+  // must not persist a type conversion for all of them (TASK-425 U5).
+  it('persists no metadata when a reverse rekey completes', async () => {
+    const SRC = algosdk.generateAccount();
+    const keptSource = {
+      ...retained,
+      id: 'src',
+      address: SRC.addr.toString(),
+      label: 'Source Account',
+    };
+    const controller = { ...retained, id: 'ctl', label: 'Controller' };
+    mockGetPrivateKey.mockImplementation(async (id: string) => {
+      if (id === 'src') return SRC.sk.slice();
+      if (id === 'ctl') return KEPT.sk.slice();
+      throw new Error('no key');
+    });
+    mockWalletState.wallet = { accounts: [keptSource, controller] };
+    mockRekeyInfo = { isRekeyed: true, authAddress: KEPT_ADDR };
+    mockProbe.mockResolvedValue(true);
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await fireEvent.press(screen.getByText('Remove Rekey (Return to Self)'));
+    await settle();
+    const proceed = () => screen.getAllByText('Remove Rekey').at(-1)!;
+    await waitFor(() => expect(proceed()).toBeEnabled());
+    await fireEvent.press(proceed());
+    await pressAlertButton('Remove Rekey');
+    expect(screen.getByTestId('auth-modal-open')).toBeTruthy();
+
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId('auth-complete-success'));
+      });
+      jest.clearAllTimers();
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(
+      jest.mocked(MultiAccountWalletService.updateAccountMetadata)
+    ).not.toHaveBeenCalled();
   });
 
   it('re-probes custody when the app unlocks', async () => {
