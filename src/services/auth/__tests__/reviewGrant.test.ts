@@ -220,3 +220,19 @@ it('gives a request its Sign back after a failed attempt, only while the sitting
   reviewGrant.release('a:1');
   expect(reviewGrant.consume('a:1')).toBe(false);
 });
+
+// TASK-438 (Luna P2 on #241): a session proposal that arrives during a signing
+// review joins the sitting before the signing screen is popped, so the
+// sitting survives that screen leaving and the proposal needs no second auth.
+it('keeps the sitting for a proposal that joins before the signing review leaves', async () => {
+  const { walletConnectProposalKey } = require('../reviewGrant');
+  const proposalKey = walletConnectProposalKey('pairing-1', 9);
+  expect(await reviewGrant.unlock('sign:1', { pin: '123456' })).toBe(true);
+
+  expect(reviewGrant.join(proposalKey)).toBe(true);
+  reviewGrant.leave('sign:1');
+
+  expect(reviewGrant.isValid(proposalKey)).toBe(true);
+  expect(await reviewGrant.unlock(proposalKey, { pin: '123456' })).toBe(true);
+  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
+});

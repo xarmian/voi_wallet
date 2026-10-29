@@ -203,6 +203,34 @@ describe('WalletConnect events before navigation is ready (TASK-382)', () => {
     );
   });
 
+  it('joins a proposal to a live review sitting before popping the screen on top (TASK-438)', async () => {
+    const { reviewGrant } = require('@/services/auth/reviewGrant');
+    const order: string[] = [];
+    const join = jest
+      .spyOn(reviewGrant, 'join')
+      .mockImplementation((key: unknown) => {
+        order.push(`join:${key}`);
+        return true;
+      });
+    mockNav.canGoBack.mockReturnValue(true);
+    mockNav.goBack.mockImplementation(() => order.push('goBack'));
+    await boot();
+    becomeReady();
+
+    await emit('session_proposal', { id: 102, pairingTopic: 'pairing-102' });
+    await flush();
+
+    expect(join).toHaveBeenCalledWith(
+      JSON.stringify(['pairing-102', 'proposal-102'])
+    );
+    expect(order).toEqual([
+      `join:${JSON.stringify(['pairing-102', 'proposal-102'])}`,
+      'goBack',
+    ]);
+    mockNav.canGoBack.mockReturnValue(false);
+    mockNav.goBack.mockReset();
+  });
+
   it('a signing request that arrives early is shown once navigation is ready', async () => {
     await boot();
     const requestEvent = request(201);
