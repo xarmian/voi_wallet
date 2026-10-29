@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useBottomSheetModalVisibility } from '@/hooks/useBottomSheetModalVisibility';
 import {
   BottomSheetModal,
   BottomSheetBackdrop,
@@ -33,15 +34,19 @@ export default function AddAccountModal({
   airgapMode = false,
 }: AddAccountModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const { onChange: syncSheetVisibility, onDismiss: handleSheetDismiss } =
+    useBottomSheetModalVisibility(bottomSheetRef, isVisible);
 
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -62,15 +67,6 @@ export default function AddAccountModal({
     onClose();
     onCreateAccount(); // This will navigate to CreateAccountScreen
   }, [onClose, onCreateAccount]);
-
-  // Open/close the bottom sheet based on visibility
-  React.useEffect(() => {
-    if (isVisible) {
-      bottomSheetRef.current?.present();
-    } else {
-      bottomSheetRef.current?.dismiss();
-    }
-  }, [isVisible]);
 
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
@@ -147,6 +143,7 @@ export default function AddAccountModal({
       ref={bottomSheetRef}
       enableDynamicSizing
       onChange={handleSheetChanges}
+      onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose
       handleIndicatorStyle={styles.indicator}

@@ -14,6 +14,7 @@ import {
   useThemeSpacing,
 } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useBottomSheetModalVisibility } from '@/hooks/useBottomSheetModalVisibility';
 import {
   BottomSheetModal,
   BottomSheetBackdrop,
@@ -59,6 +60,9 @@ export default function AccountListModal({
   hideBalances = false,
 }: AccountListModalProps) {
   const bottomSheetRef = useRef<BottomSheetModal>(null);
+  // Open/close the bottom sheet based on visibility (guarded, TASK-432)
+  const { onChange: syncSheetVisibility, onDismiss: handleSheetDismiss } =
+    useBottomSheetModalVisibility(bottomSheetRef, isVisible);
   const accounts = useAccounts();
   const activeAccount = useActiveAccount();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
@@ -103,11 +107,12 @@ export default function AccountListModal({
   // Handle sheet changes
   const handleSheetChanges = useCallback(
     (index: number) => {
+      syncSheetVisibility(index);
       if (index === -1) {
         onClose();
       }
     },
-    [onClose]
+    [onClose, syncSheetVisibility]
   );
 
   // Render backdrop
@@ -177,17 +182,11 @@ export default function AccountListModal({
     ]
   );
 
-  // Open/close the bottom sheet based on visibility
+  // Batch load all account balances when modal opens (single state update)
+  // Skip in airgap mode when balances are hidden (no network access)
   React.useEffect(() => {
-    if (isVisible) {
-      bottomSheetRef.current?.present();
-      // Batch load all account balances when modal opens (single state update)
-      // Skip in airgap mode when balances are hidden (no network access)
-      if (!hideBalances) {
-        refreshAllBalances();
-      }
-    } else {
-      bottomSheetRef.current?.dismiss();
+    if (isVisible && !hideBalances) {
+      refreshAllBalances();
     }
   }, [isVisible, refreshAllBalances, hideBalances]);
 
@@ -264,6 +263,7 @@ export default function AccountListModal({
       ref={bottomSheetRef}
       snapPoints={snapPoints}
       onChange={handleSheetChanges}
+      onDismiss={handleSheetDismiss}
       backdropComponent={renderBackdrop}
       enablePanDownToClose
       handleIndicatorStyle={styles.indicator}
