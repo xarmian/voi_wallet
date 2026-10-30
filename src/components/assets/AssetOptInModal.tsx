@@ -25,6 +25,7 @@ import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
+import { toUnsettledTransactionAlert } from '@/utils/errorMapping';
 
 interface AssetInfo {
   assetId: number;
@@ -257,6 +258,16 @@ export default function AssetOptInModal({
         },
       ]);
     } catch (err) {
+      // Submitted but not confirmed is not a failure, and the Opt In button
+      // must not invite a resend (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(err);
+      if (unsettled) {
+        setShowAuthModal(false);
+        Alert.alert(unsettled.title, unsettled.message, [
+          { text: 'OK', onPress: onClose },
+        ]);
+        return;
+      }
       setError(
         `Failed to opt-in: ${err instanceof Error ? err.message : String(err)}`
       );

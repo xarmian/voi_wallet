@@ -37,6 +37,10 @@ import { NetworkId } from '@/types/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
+import {
+  PENDING_TRANSACTION_ALERT,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
 import {
   filterOwnKeyAccounts,
@@ -684,6 +688,17 @@ export default function RekeyAccountScreen() {
           }, 3000);
         }
 
+        // Submitted but not confirmed: it may still land, so it is neither a
+        // success nor a failure yet (TASK-447).
+        if (result.confirmed === false) {
+          Alert.alert(
+            PENDING_TRANSACTION_ALERT.title,
+            PENDING_TRANSACTION_ALERT.message,
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
+          return;
+        }
+
         const title =
           rekeyFlow === 'reverse'
             ? 'Rekey Removed'
@@ -709,6 +724,14 @@ export default function RekeyAccountScreen() {
           },
         ]);
       } else {
+        const unsettled = toUnsettledTransactionAlert(result?.error);
+        if (unsettled) {
+          Alert.alert(unsettled.title, unsettled.message, [
+            { text: 'OK', onPress: () => navigation.goBack() },
+          ]);
+          return;
+        }
+
         // Handle error
         let errorMessage =
           result instanceof Error ? result.message : 'Unknown error occurred';

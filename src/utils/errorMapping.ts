@@ -930,6 +930,34 @@ export function toErrorAlert(
   };
 }
 
+/**
+ * The alert for a transaction that was, or may have been, submitted and is not
+ * confirmed (transaction_pending or maybe_submitted). Undefined for anything
+ * else, so the caller keeps its own failure rendering. Callers show this
+ * instead of their failure title: it may still be committed, so it is never a
+ * failure and never an invitation to retry (TASK-447).
+ */
+export function toUnsettledTransactionAlert(
+  error: unknown
+): ErrorAlertContent | undefined {
+  const { type } = mapError(error);
+  if (type !== 'transaction_pending' && type !== 'maybe_submitted') {
+    return undefined;
+  }
+  return toErrorAlert(error);
+}
+
+/**
+ * The same alert for a success result that says `confirmed: false`: submitted,
+ * still pending after the wait (TASK-447).
+ */
+export const PENDING_TRANSACTION_ALERT: ErrorAlertContent = {
+  title: TITLE_BY_TYPE.transaction_pending ?? 'Not Confirmed Yet',
+  message: [TRANSACTION_PENDING.message, TRANSACTION_PENDING.userAction].join(
+    '\n\n'
+  ),
+};
+
 // ---------------------------------------------------------------------------
 // Predicates — replacements for ad-hoc `error.message.includes(...)` branching
 // ---------------------------------------------------------------------------

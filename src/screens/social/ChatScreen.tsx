@@ -41,6 +41,7 @@ import MessageBubble from '@/components/social/MessageBubble';
 import MessageInput from '@/components/social/MessageInput';
 import MessagingInfoModal from '@/components/social/MessagingInfoModal';
 import { useIsMessagingEnabled } from '@/store/experimentalStore';
+import { toUnsettledTransactionAlert } from '@/utils/errorMapping';
 
 export default function ChatScreen() {
   const styles = useThemedStyles(createStyles);
@@ -207,6 +208,15 @@ export default function ChatScreen() {
         useMessagesStore.getState().addMessage(result.message);
       } catch (error) {
         console.error('Failed to send message:', error);
+        // It may already be on chain: a 'failed' bubble's retry button would
+        // send it twice. Drop the placeholder; the thread's next load from
+        // chain shows it if it landed (TASK-447).
+        const unsettled = toUnsettledTransactionAlert(error);
+        if (unsettled) {
+          useMessagesStore.getState().removePendingMessage(tempId);
+          Alert.alert(unsettled.title, unsettled.message);
+          return;
+        }
         updateMessageStatus(tempId, 'failed');
         if (!isRetry) {
           // Only show alert for first-time sends, not retries
@@ -250,6 +260,12 @@ export default function ChatScreen() {
       setIsSenderRegistered(true);
     } catch (error) {
       console.error('Failed to register messaging key:', error);
+      // Submitted but not confirmed is not a failure (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(error);
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message);
+        return;
+      }
       Alert.alert(
         'Registration Failed',
         'Failed to enable messaging. Please try again.'

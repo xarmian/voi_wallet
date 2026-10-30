@@ -46,7 +46,12 @@ import { NetworkId } from '@/types/network';
 import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import { getTokenImageSource } from '@/utils/tokenImages';
-import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
+import {
+  getUserFacingMessage,
+  PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import {
   parseAmountToBaseUnits,
   sanitizeAmountInput,
@@ -761,10 +766,14 @@ export default function SwapScreen() {
 
     try {
       let txId: string;
+      // False when it was submitted but not confirmed within the wait: it may
+      // still land, so it is announced as pending, not as done (TASK-447).
+      let confirmed = true;
 
       if (result?.transactionId) {
         // Preserve support for an already-submitted result.
         txId = result.transactionId;
+        confirmed = result.confirmed !== false;
       } else {
         // Local and remote batch signing both submit here.
         const networkService = NetworkService.getInstance(selectedNetwork);
@@ -793,6 +802,7 @@ export default function SwapScreen() {
         // Submit transaction group
         const submitRes = await networkService.submitTransaction(signedTxns);
         txId = submitRes.txId;
+        confirmed = submitRes.confirmed;
       }
 
       const shortTxId =
@@ -800,13 +810,23 @@ export default function SwapScreen() {
           ? `${txId.slice(0, 6)}...${txId.slice(-6)}`
           : txId;
 
-      Toast.show({
-        type: 'success',
-        text1: 'Swap submitted successfully',
-        text2: `Transaction ${shortTxId}`,
-        visibilityTime: 4500,
-        position: 'top',
-      });
+      Toast.show(
+        confirmed
+          ? {
+              type: 'success',
+              text1: 'Swap submitted successfully',
+              text2: `Transaction ${shortTxId}`,
+              visibilityTime: 4500,
+              position: 'top',
+            }
+          : {
+              type: 'info',
+              text1: PENDING_TRANSACTION_ALERT.title,
+              text2: `Transaction ${shortTxId} may still be committed. Check its status in your transaction history.`,
+              visibilityTime: 6000,
+              position: 'top',
+            }
+      );
 
       // Refresh balances once after a short delay to allow indexer updates
       if (delayedRefreshTimeout.current) {
@@ -872,6 +892,12 @@ export default function SwapScreen() {
       });
     } catch (error) {
       console.error('Error executing swap:', redactError(error));
+      // Submitted but not confirmed is not a failure (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(error);
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message);
+        return;
+      }
       // TASK-41: keep the "Swap Failed" framing but map the body — a raw
       // algod/aggregator string here is the least actionable message in the app.
       const { message } = toErrorAlert(error, {
