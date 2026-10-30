@@ -114,7 +114,10 @@ const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
  */
 /** Bound on the legacy keychain read a mutation makes on the write chain. */
 const LEGACY_READ_ON_CHAIN_MS = 5000;
-/** Same bound on getCurrentWallet's legacy migration read (TASK-443). */
+/**
+ * Same bound on the off-chain legacy reads: getCurrentWallet's migration read
+ * (TASK-443) and the strict boot probes' read (TASK-450).
+ */
 const LEGACY_READ_OFF_CHAIN_MS = 5000;
 let walletResetEpoch = 0;
 let walletWriteChain: Promise<unknown> = Promise.resolve();
@@ -2527,12 +2530,6 @@ export class MultiAccountWalletService {
   }
 
   /**
-   * Strict sibling of getStoredValue (TASK-213): reads the primary then the
-   * legacy secure-store location but PROPAGATES storage read errors instead of
-   * collapsing them to null. Resolves `null` ONLY for genuine absence (both
-   * locations empty). No JSON parse, no migration WRITE, no cache side effect.
-   */
-  /**
    * The wallet blob for a mutation running INSIDE the write chain (audit
    * #5/#6). A primary read error propagates and absence is null, as in
    * getStoredValueStrict, with two differences on the legacy fallback:
@@ -2565,6 +2562,12 @@ export class MultiAccountWalletService {
     return null;
   }
 
+  /**
+   * Strict sibling of getStoredValue (TASK-213): reads the primary then the
+   * legacy secure-store location but PROPAGATES storage read errors instead of
+   * collapsing them to null. Resolves `null` ONLY for genuine absence (both
+   * locations empty). No JSON parse, no migration WRITE, no cache side effect.
+   */
   private static async getStoredValueStrict(
     key: string
   ): Promise<string | null> {
@@ -2583,7 +2586,15 @@ export class MultiAccountWalletService {
         return null;
       }
     }
-    const legacy = await secureStorage.getItem(key);
+    // TASK-450: bounded. Every strict boot probe reaches this read when the
+    // primary blob is absent, and clearOrphanPin runs the reconcile (which reads
+    // through here) with no outer timeout. A timeout THROWS like any other read
+    // error, so each caller fails closed; it never reads as "no wallet".
+    const legacy = await withTimeout(
+      secureStorage.getItem(key),
+      LEGACY_READ_OFF_CHAIN_MS,
+      () => new Error('Legacy wallet storage did not respond')
+    );
     return legacy ?? null;
   }
 
