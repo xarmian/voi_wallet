@@ -9,13 +9,11 @@ import {
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
+import { reviewGrant } from '@/services/auth/reviewGrant';
+import { AppLockSignal } from '@/services/secure/appLockState';
+import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { isSoftwareAuthError } from '@/services/secure/authErrors';
-import {
-  LedgerSigningInfo,
-  WalletAccount,
-  AccountType,
-  RekeyedAccountMetadata,
-} from '@/types/wallet';
+import { LedgerSigningInfo, WalletAccount, AccountType } from '@/types/wallet';
 import {
   ledgerTransportService,
   LedgerDeviceInfo,
@@ -33,17 +31,16 @@ import { RemoteSignerService } from '@/services/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { verifyRemoteSignerResponse } from '@/utils/signatureVerification';
 import { NetworkId } from '@/types/network';
+import { NetworkService } from '@/services/network';
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
+import { getRekeyStateStrict } from '@/store/walletStore';
+import { redactError } from '@/utils/logRedaction';
 
 /**
  * Authentication states for transaction signing
  */
 export type TransactionAuthState =
-  | 'idle'
-  | 'authenticating'
-  | 'signing'
-  | 'processing'
-  | 'completed'
-  | 'error';
+  'idle' | 'authenticating' | 'signing' | 'processing' | 'completed' | 'error';
 
 /**
  * Ledger status during signing flow
@@ -122,6 +119,9 @@ export class TransactionAuthController {
     [];
   private currentState: TransactionAuthState_Interface;
   private currentRequest: UnifiedTransactionRequest | null = null;
+  private remoteBatchPlan: Awaited<
+    ReturnType<UnifiedTransactionSigner['planBatch']>
+  > | null = null;
   private ledgerSigningInfo: LedgerSigningInfo | null = null;
   // Tracks the device currently being connected during a Ledger flow; cleared on
   // reset(). Declared so the reset assignment type-checks.
@@ -461,9 +461,12 @@ export class TransactionAuthController {
   public async initializeSigningFlow(
     request: UnifiedTransactionRequest
   ): Promise<void> {
+    this.reviewAuthorized = false;
     this.currentRequest = request;
+    this.remoteBatchPlan = null;
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
     this.activeFlowGeneration = this.cancelledFlowGeneration;
+    const generation = this.cancelledFlowGeneration;
     this.hasSubmittedToNetwork = false;
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
@@ -495,6 +498,7 @@ export class TransactionAuthController {
       // Determine authentication requirements BEFORE transitioning to authenticating state
       // This ensures the correct flow flags are set before the UI renders
       await this.determineAuthRequirements(request.account);
+      if (generation !== this.cancelledFlowGeneration) return;
 
       // Now transition to authenticating state with correct flow flags already set
       this.updateState({
@@ -504,6 +508,7 @@ export class TransactionAuthController {
       // If no PIN required and no biometric required (and not ledger/remote signer flow),
       // auto-proceed to signing since user has already confirmed the transaction
       if (
+        !request.reviewGrantKey &&
         !this.currentState.requiresPin &&
         !this.currentState.requiresBiometric &&
         !this.currentState.isLedgerFlow &&
@@ -533,6 +538,19 @@ export class TransactionAuthController {
     }
   }
 
+  private getRequestNetworkId(): NetworkId {
+    const request = this.currentRequest;
+    return (
+      request?.walletConnectParams?.sessionBinding?.networkId ??
+      request?.transferParams?.networkId ??
+      request?.rekeyParams?.networkId ??
+      request?.keyregParams?.networkId ??
+      request?.applParams?.networkId ??
+      request?.networkId ??
+      NetworkService.getInstance().getCurrentNetworkId()
+    );
+  }
+
   /**
    * Determine what type of authentication is required
    */
@@ -545,39 +563,16 @@ export class TransactionAuthController {
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
       const biometricAvailable = hasHardware && isEnrolled;
 
-      // Check if this is a remote signer (air-gapped QR) account
-      // This takes precedence over other flow types
-      // Also look up the account from storage to handle cases where type might be lost
-      // during navigation param serialization (e.g., WalletConnect flows)
-      let isRemoteSigner = account.type === AccountType.REMOTE_SIGNER;
-
-      if (!isRemoteSigner && account.address) {
-        try {
-          const allAccounts = await MultiAccountWalletService.getAllAccounts();
-          const storedAccount = allAccounts.find(
-            (acc) => acc.address === account.address
-          );
-          if (storedAccount?.type === AccountType.REMOTE_SIGNER) {
-            isRemoteSigner = true;
-          }
-
-          // For rekeyed accounts, check if the auth address is a REMOTE_SIGNER
-          // This enables unrekey/re-rekey transactions to route through the airgap flow
-          if (!isRemoteSigner && storedAccount?.type === AccountType.REKEYED) {
-            const rekeyedAccount = storedAccount as RekeyedAccountMetadata;
-            if (rekeyedAccount.authAddress) {
-              const authAccount = allAccounts.find(
-                (acc) => acc.address === rekeyedAccount.authAddress
-              );
-              if (authAccount?.type === AccountType.REMOTE_SIGNER) {
-                isRemoteSigner = true;
-              }
-            }
-          }
-        } catch {
-          // Ignore lookup errors, continue with passed account type
-        }
-      }
+      const signingInfo = await SecureKeyManager.getSigningInfo(
+        account.address,
+        this.getRequestNetworkId()
+      );
+      const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      const isRemoteSigner = allAccounts.some(
+        (acc) =>
+          acc.address === signingInfo.signingAddress &&
+          acc.type === AccountType.REMOTE_SIGNER
+      );
 
       if (isRemoteSigner) {
         this.updateState({
@@ -596,10 +591,6 @@ export class TransactionAuthController {
       let ledgerInfo: LedgerSigningInfo | null = null;
 
       try {
-        const signingInfo = await SecureKeyManager.getSigningInfo(
-          account.address
-        );
-
         // Try to get Ledger signing info
         if (signingInfo.signingAccountId) {
           ledgerInfo = await SecureKeyManager.getLedgerSigningInfo(
@@ -1381,7 +1372,9 @@ export class TransactionAuthController {
   /**
    * Authenticate with biometrics
    */
-  public async authenticateWithBiometrics(): Promise<boolean> {
+  public async authenticateWithBiometrics(
+    prompt = 'Authenticate to sign transaction'
+  ): Promise<boolean> {
     if (!this.currentState.biometricAvailable) {
       throw new Error('Biometric authentication not available');
     }
@@ -1392,10 +1385,10 @@ export class TransactionAuthController {
       // unlock). Unchanged from prior behavior.
       if (this.currentState.isLedgerFlow) {
         const result = await LocalAuthentication.authenticateAsync({
-          promptMessage: 'Authenticate to sign transaction',
+          promptMessage: prompt,
           fallbackLabel: 'Use PIN',
           cancelLabel: 'Cancel',
-          requireConfirmation: false,
+          requireConfirmation: true,
         });
 
         if (!result.success) {
@@ -1420,13 +1413,21 @@ export class TransactionAuthController {
       // unlockVaultWithBiometrics owns the OS prompt (the auth-gated read IS the
       // prompt) AND the invariant that an enrollment-change invalidation falls
       // back to PIN, NEVER the mnemonic (HT-133).
-      const outcome = await unlockVaultWithBiometrics(
-        'Authenticate to sign transaction'
-      );
+      const wasLocked = !AppLockSignal.isUnlocked();
+      const generation = this.cancelledFlowGeneration;
+      const outcome = await unlockVaultWithBiometrics(prompt);
+      if (generation !== this.cancelledFlowGeneration) {
+        if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
+        return false;
+      }
 
       if (outcome.status === 'unlocked') {
         this.updateState({ state: 'signing' });
-        await this.startSigning();
+        try {
+          await this.startSigning();
+        } finally {
+          if (wasLocked && !AppLockSignal.isUnlocked()) clearSessionSecurity();
+        }
         return true;
       }
 
@@ -1462,10 +1463,53 @@ export class TransactionAuthController {
   /**
    * Start the actual signing process
    */
+  private reviewAuthorized = false;
+
+  public async authenticateWithReviewGrant(key: string): Promise<boolean> {
+    if (
+      this.currentState.state !== 'authenticating' ||
+      this.currentRequest?.reviewGrantKey !== key ||
+      !reviewGrant.consume(key)
+    ) {
+      this.updateState({
+        state: 'error',
+        error: new Error('Unlock to review this request again.'),
+      });
+      return false;
+    }
+    this.reviewAuthorized = true;
+    if (this.currentState.isRemoteSignerFlow) return true;
+    if (
+      this.currentState.isLedgerFlow &&
+      this.currentState.ledgerStatus !== 'ready'
+    ) {
+      this.pendingStartAfterReady = true;
+      await this.ensureLedgerDeviceReady();
+      return true;
+    }
+    await this.startSigning();
+    return true;
+  }
+
   private async startSigning(pin?: string): Promise<void> {
     if (!this.currentRequest) {
       throw new Error('No transaction request to sign');
     }
+
+    if (
+      this.currentRequest.reviewGrantKey &&
+      (!this.reviewAuthorized ||
+        !reviewGrant.isValid(this.currentRequest.reviewGrantKey))
+    ) {
+      this.updateState({
+        state: 'error',
+        error: new Error('Unlock to review this request again.'),
+      });
+      return;
+    }
+
+    const flowGeneration = this.cancelledFlowGeneration;
+    const reviewKey = this.currentRequest.reviewGrantKey;
 
     // Update request with PIN if provided
     if (pin) {
@@ -1698,6 +1742,11 @@ export class TransactionAuthController {
         },
 
         onComplete: (result) => {
+          if (
+            flowGeneration !== this.cancelledFlowGeneration ||
+            (reviewKey && !reviewGrant.isValid(reviewKey))
+          )
+            return;
           this.isSigningInProgress = false;
           if (__DEV__) {
             console.log('Signing onComplete', {
@@ -1706,6 +1755,13 @@ export class TransactionAuthController {
             });
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
+            // TASK-437 (Luna P3): a failed Sign inside a review sitting is
+            // retryable. Hand the request its one Sign back, and require the
+            // next tap to claim it again.
+            if (reviewKey) {
+              reviewGrant.release(reviewKey);
+              this.reviewAuthorized = false;
+            }
             if (!this.currentState.isLedgerFlow) {
               // SOFTWARE flow: onError already routed to PIN entry; keep it
               // PIN-shaped and NEVER Ledger-shape it here (PR6.1) — the signer
@@ -1808,7 +1864,7 @@ export class TransactionAuthController {
               if (__DEV__) {
                 console.warn(
                   'Failed to (re)start Ledger discovery during retry preparation',
-                  startError
+                  redactError(startError)
                 );
               }
             });
@@ -1826,7 +1882,7 @@ export class TransactionAuthController {
             if (__DEV__) {
               console.error(
                 'Failed to restart Ledger discovery after signing error',
-                initError
+                redactError(initError)
               );
             }
           });
@@ -1903,6 +1959,7 @@ export class TransactionAuthController {
    */
   private async maybeStartSigningIfReady(): Promise<void> {
     if (!this.currentState.isLedgerFlow) return;
+    if (this.currentRequest?.reviewGrantKey && !this.reviewAuthorized) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
     if (this.hasStartedSigning) return;
 
@@ -2004,7 +2061,10 @@ export class TransactionAuthController {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
       if (__DEV__) {
-        console.warn('Failed to stop Ledger discovery on cancel', stopError);
+        console.warn(
+          'Failed to stop Ledger discovery on cancel',
+          redactError(stopError)
+        );
       }
     }
 
@@ -2019,6 +2079,7 @@ export class TransactionAuthController {
     try {
       ledgerTransportService.cancelConnect();
     } catch {}
+    this.remoteBatchPlan = null;
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
 
@@ -2054,7 +2115,10 @@ export class TransactionAuthController {
       ledgerTransportService.stopDiscovery({ ble: true, usb: true });
     } catch (stopError) {
       if (__DEV__) {
-        console.warn('Failed to stop Ledger discovery during reset', stopError);
+        console.warn(
+          'Failed to stop Ledger discovery during reset',
+          redactError(stopError)
+        );
       }
     }
 
@@ -2063,6 +2127,7 @@ export class TransactionAuthController {
       this.signingAbortController = null;
     }
 
+    this.remoteBatchPlan = null;
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
     this.connectingDeviceId = null;
@@ -2146,6 +2211,12 @@ export class TransactionAuthController {
       throw new Error('No transaction request available');
     }
 
+    // TASK-418: a replaced or cancelled flow must not publish its plan or
+    // results onto the next one. Every await below re-checks the generation.
+    const generation = this.cancelledFlowGeneration;
+    const isStale = () => generation !== this.cancelledFlowGeneration;
+    const request = this.currentRequest;
+
     try {
       this.updateState({
         state: 'signing',
@@ -2153,38 +2224,50 @@ export class TransactionAuthController {
       });
 
       // Build the unsigned transactions based on request type
-      const unsignedTxns = await this.buildUnsignedTransactions();
+      const built: Parameters<typeof this.buildUnsignedTransactions>[0] = {};
+      const unsignedTxns = await this.buildUnsignedTransactions(built);
+      if (isStale()) return;
+      this.remoteBatchPlan = built.batchPlan ?? null;
 
-      // Determine the actual signer address
-      // For rekeyed accounts, we need to use the auth address as the signer
-      let signerAddress = this.currentRequest.account.address;
-      const account = this.currentRequest.account;
-
-      if (account.type === AccountType.REKEYED) {
-        const rekeyedAccount = account as RekeyedAccountMetadata;
-        if (rekeyedAccount.authAddress) {
-          signerAddress = rekeyedAccount.authAddress;
-        }
+      if (this.remoteBatchPlan && unsignedTxns.length === 0) {
+        this.updateState({
+          state: 'completed',
+          remoteSignerStatus: 'idle',
+          result: {
+            success: true,
+            signedTransactions: this.remoteBatchPlan.map((plan) =>
+              plan.action === 'passthrough' ? plan.value : null
+            ),
+          },
+        });
+        return;
       }
+      const networkId = this.getRequestNetworkId();
+      const rekey = await getRekeyStateStrict(
+        request.account.address,
+        networkId
+      );
+      if (isStale()) return;
+      const signerAddress = rekey.authAddress ?? request.account.address;
 
       // Create the remote signer request
       const signerRequest = await RemoteSignerService.createSigningRequest(
         unsignedTxns,
         [signerAddress], // signer addresses - use auth address for rekeyed accounts
         {
-          authAddresses:
-            account.type === AccountType.REKEYED
-              ? [(account as RekeyedAccountMetadata).authAddress]
-              : undefined,
+          networkId,
+          authAddresses: rekey.authAddress ? [rekey.authAddress] : undefined,
           description: this.getTransactionDescription(),
         }
       );
 
+      if (isStale()) return;
       this.updateState({
         remoteSignerRequest: signerRequest,
         remoteSignerStatus: 'displaying_request',
       });
     } catch (error) {
+      if (isStale()) return;
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -2201,7 +2284,11 @@ export class TransactionAuthController {
   /**
    * Build unsigned transactions from the current request
    */
-  private async buildUnsignedTransactions(): Promise<algosdk.Transaction[]> {
+  private async buildUnsignedTransactions(
+    out: {
+      batchPlan?: Awaited<ReturnType<UnifiedTransactionSigner['planBatch']>>;
+    } = {}
+  ): Promise<algosdk.Transaction[]> {
     if (!this.currentRequest) {
       throw new Error('No transaction request available');
     }
@@ -2253,15 +2340,11 @@ export class TransactionAuthController {
 
       case 'batch_transaction':
       case 'walletconnect_batch':
-        if (!this.currentRequest.walletConnectParams?.transactions) {
-          throw new Error('Batch transactions required');
-        }
-        // Decode the WalletConnect transactions
-        return this.currentRequest.walletConnectParams.transactions.map(
-          (wtxn) => {
-            const txnBytes = Buffer.from(wtxn.txn, 'base64');
-            return algosdk.decodeUnsignedTransaction(txnBytes);
-          }
+        // The plan is published by the caller only if the flow is still
+        // current (TASK-418): a stale planning call must not overwrite it.
+        out.batchPlan = await this.unifiedSigner.planBatch(this.currentRequest);
+        return out.batchPlan.flatMap((plan) =>
+          plan.action === 'sign' ? [plan.txn] : []
         );
 
       default:
@@ -2322,12 +2405,19 @@ export class TransactionAuthController {
       throw new Error('No active remote signer flow');
     }
 
+    const request = this.currentState.remoteSignerRequest;
+    const transactionRequest = this.currentRequest;
+    const requestType = transactionRequest?.type;
+    const batchPlan = this.remoteBatchPlan;
+    const generation = this.cancelledFlowGeneration;
+    const isStale = () => generation !== this.cancelledFlowGeneration;
+
     this.updateState({
       remoteSignerStatus: 'processing_response',
     });
 
     try {
-      const request = this.currentState.remoteSignerRequest;
+      if (isStale()) return;
 
       // Validate the response matches our request
       if (response.id !== request.id) {
@@ -2357,8 +2447,10 @@ export class TransactionAuthController {
       // (never the single global authAddress on wallet metadata, which is
       // overwritten by whichever network's balance loaded last).
       const { NetworkService } = await import('@/services/network');
+      if (isStale()) return;
       const netService = NetworkService.getInstance(request.net as NetworkId);
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
+      if (isStale()) return;
       const pairedRemoteSigners = new Set(
         allAccounts
           .filter((acc) => acc.type === AccountType.REMOTE_SIGNER)
@@ -2368,10 +2460,12 @@ export class TransactionAuthController {
       const verification = await verifyRemoteSignerResponse(request, response, {
         resolveExpectedSigner: async (sender) => {
           const info = await netService.getAccountRekeyInfo(sender, true);
+          if (isStale()) throw new Error('Stale signing response');
           return info.isRekeyed && info.authAddress ? info.authAddress : sender;
         },
         isPairedRemoteSigner: (address) => pairedRemoteSigners.has(address),
       });
+      if (isStale()) return;
       if (!verification.valid) {
         throw new Error(
           `Signed response verification failed: ${verification.error ?? 'unknown reason'}`
@@ -2386,8 +2480,34 @@ export class TransactionAuthController {
         throw new Error('No signed transactions in response');
       }
 
+      if (
+        requestType === 'batch_transaction' ||
+        requestType === 'walletconnect_batch'
+      ) {
+        // Batch callers own submission. Return the same ARC-0001 shape as
+        // local signing, restoring declined/passthrough slots in request order.
+        const signatures = signedTxns.map((txn) =>
+          Buffer.from(txn).toString('base64')
+        );
+        let index = 0;
+        const signedTransactions = batchPlan!.map((plan) =>
+          plan.action === 'sign'
+            ? signatures[index++]
+            : plan.action === 'passthrough'
+              ? plan.value
+              : null
+        );
+        this.updateState({
+          state: 'completed',
+          remoteSignerStatus: 'idle',
+          result: { success: true, signedTransactions },
+        });
+        return;
+      }
+
       // Submit to network
       this.updateState({ state: 'processing' });
+      if (isStale()) return;
 
       // Submit on the REQUEST's network (the same instance verification used),
       // NOT the globally-active one — if the user switched networks during the
@@ -2395,11 +2515,29 @@ export class TransactionAuthController {
       // response we verified against request.net.
       const networkService = netService;
 
+      // A QR round trip can outlast the builder's custody check, so the key
+      // receiving authority is checked again right before submitting
+      // (TASK-425 U3 Codex confirm 3).
+      if (requestType === 'rekey' || requestType === 'rekey_reverse') {
+        const { TransactionService } = await import('@/services/transactions');
+        const rekey = transactionRequest?.rekeyParams;
+        const receiver =
+          requestType === 'rekey' ? rekey?.rekeyToAddress : rekey?.fromAddress;
+        if (!receiver) throw new Error('Rekey parameters missing');
+        await TransactionService.assertSignsAfterRekey(receiver);
+        if (isStale()) return;
+      }
+
       // Submit the signed transactions
       const { txId: transactionId, confirmed } =
         await networkService.submitTransaction(
           signedTxns.length === 1 ? signedTxns[0] : signedTxns
         );
+
+      if (requestType === 'rekey' || requestType === 'rekey_reverse') {
+        invalidateRekeyStatus();
+      }
+      if (isStale()) return;
 
       // Success! `confirmed === false` means the tx was submitted but not yet
       // confirmed within the round window (pending, not failed); the result
@@ -2417,6 +2555,7 @@ export class TransactionAuthController {
         result: successResult,
       });
     } catch (error) {
+      if (isStale()) return;
       const errorMessage =
         error instanceof Error
           ? error.message
@@ -2436,6 +2575,8 @@ export class TransactionAuthController {
   public cancelRemoteSignerFlow(): void {
     if (!this.currentState.isRemoteSignerFlow) return;
 
+    this.cancelledFlowGeneration += 1;
+    this.remoteBatchPlan = null;
     this.userExplicitlyRejected = true;
     this.updateState({
       state: 'error',
@@ -2458,6 +2599,7 @@ export class TransactionAuthController {
    * Clean up resources
    */
   public cleanup(): void {
+    this.cancelledFlowGeneration += 1;
     this.clearLedgerConnectionTimeout();
 
     // Abort any active signing process
@@ -2467,6 +2609,7 @@ export class TransactionAuthController {
     }
 
     this.stateListeners.length = 0;
+    this.remoteBatchPlan = null;
     this.currentRequest = null;
     this.ledgerSigningInfo = null;
     this.userExplicitlyRejected = false;

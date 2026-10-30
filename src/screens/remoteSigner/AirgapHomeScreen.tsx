@@ -5,7 +5,7 @@
  * No network requests, no balance display - focused purely on transaction signing.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -43,12 +43,14 @@ import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import AccountAvatar from '@/components/account/AccountAvatar';
 import {
-  useSignableAccounts,
+  useAccounts,
   useActiveAccount,
   useWalletStore,
 } from '@/store/walletStore';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
+import { filterAirgapSignableAccounts } from '@/services/wallet/ownKeyCustody';
 
 // AirgapHomeScreen is the AirgapHome route of the Airgap stack, and can also
 // navigate up to the parent tab navigator (e.g. the Settings tab).
@@ -56,6 +58,8 @@ type NavigationProp = CompositeNavigationProp<
   NativeStackNavigationProp<AirgapStackParamList>,
   BottomTabNavigationProp<MainTabParamList>
 >;
+
+const NO_ACCOUNTS: AccountMetadata[] = [];
 
 export default function AirgapHomeScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -66,8 +70,15 @@ export default function AirgapHomeScreen() {
   const [isAccountListVisible, setIsAccountListVisible] = useState(false);
   const [isAddAccountVisible, setIsAddAccountVisible] = useState(false);
 
-  // Store data - only signable accounts (STANDARD, LEDGER)
-  const signableAccounts = useSignableAccounts();
+  // Accounts this signer can sign for: its own keys (TASK-425 U2: a REKEYED
+  // account that kept its key included) and Ledger accounts.
+  const accounts = useAccounts();
+  const signableAccounts =
+    useOwnKeyAccounts(accounts, filterAirgapSignableAccounts) ?? NO_ACCOUNTS;
+  const signableIds = useMemo(
+    () => new Set(signableAccounts.map((acc) => acc.id)),
+    [signableAccounts]
+  );
   const activeAccount = useActiveAccount();
   const initialize = useWalletStore((state) => state.initialize);
   const isWalletInitialized = useWalletStore((state) => state.isInitialized);
@@ -379,7 +390,7 @@ export default function AirgapHomeScreen() {
           }}
           onEditAccount={handleEditAccount}
           onAccountSelect={() => setIsAccountListVisible(false)}
-          filterSignable
+          onlyAccountIds={signableIds}
           hideBalances
         />
 

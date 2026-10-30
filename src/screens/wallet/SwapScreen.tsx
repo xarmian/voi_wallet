@@ -46,7 +46,12 @@ import { NetworkId } from '@/types/network';
 import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
 import { getTokenImageSource } from '@/utils/tokenImages';
-import { getUserFacingMessage, toErrorAlert } from '@/utils/errorMapping';
+import {
+  getUserFacingMessage,
+  PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import {
   parseAmountToBaseUnits,
   sanitizeAmountInput,
@@ -59,6 +64,7 @@ import NetworkSelector from '@/components/network/NetworkSelector';
 import { useIsSwapEnabled } from '@/store/experimentalStore';
 import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
+import { redactError } from '@/utils/logRedaction';
 
 interface SwapScreenRouteParams {
   assetName?: string;
@@ -164,7 +170,7 @@ export default function SwapScreen() {
         }
       } catch (error) {
         if (!isCancelled) {
-          console.error('Error loading network balance:', error);
+          console.error('Error loading network balance:', redactError(error));
           setNetworkBalanceError(
             error instanceof Error ? error.message : 'Failed to load balance'
           );
@@ -512,7 +518,7 @@ export default function SwapScreen() {
       } catch (error) {
         console.warn(
           '[handleNetworkChange] Failed to fetch new network balance:',
-          error
+          redactError(error)
         );
       }
     }
@@ -749,8 +755,7 @@ export default function SwapScreen() {
   };
 
   const handleSwapSuccess = async (result: any) => {
-    // Check if transaction was already submitted by auth controller (remote signer flow)
-    // or if we have signed transactions to submit (standard flow)
+    // Batch signing returns signatures for this caller to submit.
     if (!result?.transactionId && !result?.signedTransactions) {
       Alert.alert('Error', 'No signed transactions returned');
       return;
@@ -761,12 +766,16 @@ export default function SwapScreen() {
 
     try {
       let txId: string;
+      // False when it was submitted but not confirmed within the wait: it may
+      // still land, so it is announced as pending, not as done (TASK-447).
+      let confirmed = true;
 
       if (result?.transactionId) {
-        // Transaction already submitted by auth controller (remote signer flow)
+        // Preserve support for an already-submitted result.
         txId = result.transactionId;
+        confirmed = result.confirmed !== false;
       } else {
-        // Standard flow - need to submit signed transactions
+        // Local and remote batch signing both submit here.
         const networkService = NetworkService.getInstance(selectedNetwork);
 
         // DR-1: the signer returns ARC-0001 `null` for any entry it DECLINED to
@@ -774,9 +783,7 @@ export default function SwapScreen() {
         // existed, with raw unsigned bytes in that slot) is what produced the
         // `apaa` msgpack decode failure at algod. Fail loudly instead.
         const rawSigned = result.signedTransactions as (
-          | string
-          | Uint8Array
-          | null
+          string | Uint8Array | null
         )[];
         if (rawSigned.some((txn) => txn === null || txn === undefined)) {
           throw new Error(
@@ -795,6 +802,7 @@ export default function SwapScreen() {
         // Submit transaction group
         const submitRes = await networkService.submitTransaction(signedTxns);
         txId = submitRes.txId;
+        confirmed = submitRes.confirmed;
       }
 
       const shortTxId =
@@ -802,13 +810,23 @@ export default function SwapScreen() {
           ? `${txId.slice(0, 6)}...${txId.slice(-6)}`
           : txId;
 
-      Toast.show({
-        type: 'success',
-        text1: 'Swap submitted successfully',
-        text2: `Transaction ${shortTxId}`,
-        visibilityTime: 4500,
-        position: 'top',
-      });
+      Toast.show(
+        confirmed
+          ? {
+              type: 'success',
+              text1: 'Swap submitted successfully',
+              text2: `Transaction ${shortTxId}`,
+              visibilityTime: 4500,
+              position: 'top',
+            }
+          : {
+              type: 'info',
+              text1: PENDING_TRANSACTION_ALERT.title,
+              text2: `Transaction ${shortTxId} may still be committed. Check its status in your transaction history.`,
+              visibilityTime: 6000,
+              position: 'top',
+            }
+      );
 
       // Refresh balances once after a short delay to allow indexer updates
       if (delayedRefreshTimeout.current) {
@@ -873,7 +891,13 @@ export default function SwapScreen() {
         });
       });
     } catch (error) {
-      console.error('Error executing swap:', error);
+      console.error('Error executing swap:', redactError(error));
+      // Submitted but not confirmed is not a failure (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(error);
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message);
+        return;
+      }
       // TASK-41: keep the "Swap Failed" framing but map the body — a raw
       // algod/aggregator string here is the least actionable message in the app.
       const { message } = toErrorAlert(error, {
@@ -921,7 +945,7 @@ export default function SwapScreen() {
         });
       }
     } catch (error) {
-      console.error('Error getting balance:', error);
+      console.error('Error getting balance:', redactError(error));
     }
 
     return '0';

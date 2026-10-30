@@ -23,10 +23,15 @@ import type { RouteProp } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useMessagesStore, useThread } from '@/store/messagesStore';
+import {
+  PENDING_PLACEHOLDER_PREFIX,
+  useMessagesStore,
+  useThread,
+} from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
-import { useActiveAccount, useAccounts } from '@/store/walletStore';
-import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
+import { useActiveAccount } from '@/store/walletStore';
+import { useMessagingSigner } from './useMessagingSigner';
+import { MessagingSignerNotice } from './MessagingSignerNotice';
 import { Message, MESSAGE_FEE_MICRO } from '@/services/messaging/types';
 import MessagingService, {
   isMessagingKeyRegistered,
@@ -40,6 +45,10 @@ import MessageBubble from '@/components/social/MessageBubble';
 import MessageInput from '@/components/social/MessageInput';
 import MessagingInfoModal from '@/components/social/MessagingInfoModal';
 import { useIsMessagingEnabled } from '@/store/experimentalStore';
+import { toUnsettledTransactionAlert } from '@/utils/errorMapping';
+
+// How often an open chat re-checks an unsettled placeholder (TASK-454).
+const UNSETTLED_REFRESH_MS = 30000;
 
 export default function ChatScreen() {
   const styles = useThemedStyles(createStyles);
@@ -59,6 +68,8 @@ export default function ChatScreen() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const flatListRef = useRef<FlatList>(null);
+  // Placeholder ids with a send in flight (TASK-454).
+  const inFlightRef = useRef(new Set<string>());
 
   // Experimental feature guard - redirect if messaging is not enabled
   const isMessagingEnabled = useIsMessagingEnabled();
@@ -69,7 +80,8 @@ export default function ChatScreen() {
   }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
-  const allAccounts = useAccounts();
+  const signer = useMessagingSigner(activeAccount);
+  const { canUseMessaging } = signer;
   const thread = useThread(friendAddress);
   const {
     fetchThreadMessages,
@@ -90,30 +102,6 @@ export default function ChatScreen() {
 
   // Messages sorted newest first for inverted FlatList
   const messages = thread?.messages.slice().reverse() || [];
-
-  // Check if current account can use messaging (whitelist approach for future-proofing)
-  const canUseMessaging = (() => {
-    if (!activeAccount) return false;
-
-    // Standard accounts can always use messaging
-    if (activeAccount.type === AccountType.STANDARD) {
-      return true;
-    }
-
-    // Rekeyed accounts can use messaging if the auth account is a Standard account we control
-    if (activeAccount.type === AccountType.REKEYED) {
-      const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(
-        (acc) => acc.address === rekeyedAccount.authAddress
-      );
-      if (authAccount?.type === AccountType.STANDARD) {
-        return true;
-      }
-    }
-
-    // All other account types (Watch, Ledger, future types) cannot use messaging
-    return false;
-  })();
 
   // Check if sender and recipient can use messaging on mount
   useFocusEffect(
@@ -166,6 +154,23 @@ export default function ChatScreen() {
     ])
   );
 
+  // While this chat is open with an unsettled placeholder, age it out locally:
+  // nothing else polls an open chat, so without this it could spin forever.
+  // No network call: if the send landed, its chain record arrives on the next
+  // load as usual (TASK-454).
+  const hasUnsettled = !!thread?.messages.some(
+    (m) => m.unsettled && m.status === 'pending'
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasUnsettled) return undefined;
+      const timer = setInterval(() => {
+        useMessagesStore.getState().expireUnsettledPlaceholders(friendAddress);
+      }, UNSETTLED_REFRESH_MS);
+      return () => clearInterval(timer);
+    }, [hasUnsettled, friendAddress])
+  );
+
   // Mark as read when messages change
   useEffect(() => {
     if (thread?.unreadCount && thread.unreadCount > 0) {
@@ -191,8 +196,24 @@ export default function ChatScreen() {
         return;
       }
 
+      if (!canUseMessaging) return;
+
       const isRetry = !!existingMessageId;
-      const tempId = existingMessageId || `pending-${Date.now()}`;
+      const attemptedAt = Date.now();
+      const tempId =
+        existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
+
+      // One attempt per row at a time, and only a row that is still failed can
+      // be retried: a second tap must never race the first (TASK-454).
+      const currentThread =
+        useMessagesStore.getState().threads[friendAddress]?.messages ?? [];
+      if (isRetry) {
+        const row = currentThread.find((m) => m.id === tempId);
+        if (inFlightRef.current.has(tempId) || row?.status !== 'failed') {
+          return;
+        }
+      }
+      inFlightRef.current.add(tempId);
 
       // If not a retry, create and add optimistic message
       if (!isRetry) {
@@ -227,7 +248,21 @@ export default function ChatScreen() {
         useMessagesStore.getState().addMessage(result.message);
       } catch (error) {
         console.error('Failed to send message:', error);
-        updateMessageStatus(tempId, 'failed');
+        // It may already be on chain: a 'failed' bubble's retry button would
+        // send it twice. Keep the placeholder pending, with no retry: with a
+        // txid the chain load confirms it, without one it ages out (TASK-454).
+        if (toUnsettledTransactionAlert(error)) {
+          const txId = (error as { txId?: unknown }).txId;
+          useMessagesStore
+            .getState()
+            .settlePendingMessage(
+              tempId,
+              typeof txId === 'string' && txId ? txId : undefined,
+              attemptedAt
+            );
+          return;
+        }
+        useMessagesStore.getState().failPendingMessage(tempId);
         if (!isRetry) {
           // Only show alert for first-time sends, not retries
           Alert.alert(
@@ -238,12 +273,14 @@ export default function ChatScreen() {
           );
         }
       } finally {
+        inFlightRef.current.delete(tempId);
         if (!isRetry) {
           setIsSending(false);
         }
       }
     },
     [
+      canUseMessaging,
       activeAccount?.address,
       friendAddress,
       addPendingMessage,
@@ -261,7 +298,7 @@ export default function ChatScreen() {
 
   // Handle key registration
   const handleRegisterKey = useCallback(async () => {
-    if (!activeAccount?.address || isRegistering) return;
+    if (!activeAccount?.address || isRegistering || !canUseMessaging) return;
 
     setIsRegistering(true);
     try {
@@ -269,6 +306,12 @@ export default function ChatScreen() {
       setIsSenderRegistered(true);
     } catch (error) {
       console.error('Failed to register messaging key:', error);
+      // Submitted but not confirmed is not a failure (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(error);
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message);
+        return;
+      }
       Alert.alert(
         'Registration Failed',
         'Failed to enable messaging. Please try again.'
@@ -276,7 +319,12 @@ export default function ChatScreen() {
     } finally {
       setIsRegistering(false);
     }
-  }, [activeAccount?.address, isRegistering, registerMessagingKey]);
+  }, [
+    activeAccount?.address,
+    isRegistering,
+    registerMessagingKey,
+    canUseMessaging,
+  ]);
 
   // Handle retrying a failed message
   const handleRetry = useCallback(
@@ -354,15 +402,7 @@ export default function ChatScreen() {
         onAccountSelectorPress={() => {}}
       />
 
-      {/* Warning banner when account type doesn't support messaging */}
-      {!canUseMessaging && (
-        <View style={styles.warningBanner}>
-          <Ionicons name="alert-circle" size={16} color="white" />
-          <Text style={styles.warningText}>
-            Only standard accounts can use encrypted messaging
-          </Text>
-        </View>
-      )}
+      <MessagingSignerNotice signer={signer} />
 
       {/* Warning banner when recipient hasn't enabled messaging */}
       {!isCheckingRecipient && !recipientCanReceive && (
@@ -513,7 +553,7 @@ const createStyles = (theme: Theme) =>
       flex: 1,
     },
     backgroundOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
     },
     container: {
       flex: 1,

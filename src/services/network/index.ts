@@ -1,3 +1,11 @@
+import { withTimeout } from '@/utils/withTimeout';
+import { fetchBuffered } from '@/utils/fetchBuffered';
+import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
+import {
+  getRekeyObservation,
+  issueRekeyObservation,
+  stampRekeyInfo,
+} from './rekeyObservation';
 import algosdk from 'algosdk';
 import {
   AccountBalance,
@@ -10,17 +18,32 @@ import {
   NetworkConfiguration,
   NetworkStatus,
   NetworkError,
+  TransactionRejectedError,
+  TransactionExpiredError,
+  TransactionMaybeSubmittedError,
+  TransactionPendingError,
 } from '@/types/network';
 import { getNetworkConfig, DEFAULT_NETWORK_ID } from './config';
+import { isAlreadySubmittedError } from './alreadySubmitted';
 import { MimirApiService, MimirAsset } from '@/services/mimir';
 import VoiPriceService from '@/services/price';
 import AlgorandPriceService from '@/services/algorand-price';
 import EnvoiService from '@/services/envoi';
+import {
+  redactAddress,
+  redactError,
+  redactSensitiveForLog,
+} from '@/utils/logRedaction';
 
 export interface RekeyInfo {
   isRekeyed: boolean;
   authAddress?: string;
   rekeyedAt?: number;
+  /**
+   * TASK-421 (c): the rekey lookup FAILED and `isRekeyed: false` is only a
+   * display fallback. Nothing may persist a metadata change from it.
+   */
+  unavailable?: boolean;
 }
 
 // Resolved shape of `algodClient.accountInformation(address).do()`. Used to pass
@@ -54,6 +77,7 @@ export class NetworkService {
   private mimirService?: MimirApiService;
   private rekeyInfoCache: Map<string, { info: RekeyInfo; timestamp: number }> =
     new Map();
+  private rekeyCacheEpoch = getRekeyStatusEpoch();
   private rekeyInfoCacheTTL: number = 10000; // 10 second cache
   // Cache of immutable ASA params (decimals/name/unitName). Cleared on
   // switchNetwork (this instance is reused across networks). Keyed by the asset
@@ -273,22 +297,15 @@ export class NetworkService {
     label: string,
     timeoutMs: number = NetworkService.REQUEST_TIMEOUT_MS
   ): Promise<T> {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(
-        () =>
-          reject(
-            new NetworkError(
-              `${label} timed out after ${timeoutMs}ms`,
-              this.currentNetworkId
-            )
-          ),
-        timeoutMs
-      );
-    });
-    return Promise.race([promise, timeout]).finally(() =>
-      clearTimeout(timeoutId)
-    ) as Promise<T>;
+    return withTimeout(
+      promise,
+      timeoutMs,
+      () =>
+        new NetworkError(
+          `${label} timed out after ${timeoutMs}ms`,
+          this.currentNetworkId
+        )
+    );
   }
 
   /**
@@ -408,7 +425,10 @@ export class NetworkService {
           accountInfoPromise,
           this.getMimirAssets(address),
           this.getPricingData(address, accountInfoPromise),
-          this.getAccountRekeyInfo(address),
+          // TASK-458: always a fresh authority read, so a rekey made outside
+          // the wallet shows on the next refresh even inside the 10s cache
+          // TTL (Codex pass C #3). The cache still serves signing lookups.
+          this.getAccountRekeyInfo(address, false, true),
         ]);
 
       if (accountInfo.status === 'rejected') {
@@ -457,18 +477,18 @@ export class NetworkService {
           // which would inflate the displayed balance by 10^N (same
           // financial-correctness class as TASK-52). This mirrors the rejection
           // branch below: an unusable response resolves to null.
-          const decimals = this.normalizeDecimals(assetInfo.params.decimals);
+          const decimals = this.normalizeDecimals(assetInfo.params?.decimals);
           if (decimals === null) {
             console.warn(
               `Omitting asset ${asset.assetId}: algod returned no usable decimals`,
-              assetInfo.params.decimals
+              assetInfo.params?.decimals
             );
             return null;
           }
           const params = {
             decimals,
-            name: assetInfo.params.name,
-            unitName: assetInfo.params.unitName,
+            name: assetInfo.params?.name,
+            unitName: assetInfo.params?.unitName,
           };
           if (this.assetCacheGeneration === requestGeneration) {
             this.assetParamsCache.set(assetKey, params);
@@ -551,10 +571,10 @@ export class NetworkService {
         rekeyInfo:
           rekeyInfo.status === 'fulfilled'
             ? rekeyInfo.value
-            : { isRekeyed: false },
+            : { isRekeyed: false, unavailable: true },
       };
     } catch (error) {
-      console.error('Failed to fetch account balance:', error);
+      console.error('Failed to fetch account balance:', redactError(error));
       throw new Error(
         `Failed to fetch balance: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -746,9 +766,12 @@ export class NetworkService {
         // For Algorand, get prices for ALGO and all user's assets. Reuse the
         // caller's in-flight account request when provided so this path doesn't
         // issue a duplicate accountInformation call for the same address; fall
-        // back to fetching when called standalone.
+        // back to a bounded fetch when called standalone (TASK-448).
         const accountInfo = await (prefetchedAccountInfo ??
-          this.algodClient.accountInformation(address).do());
+          this.withTimeout(
+            this.algodClient.accountInformation(address).do(),
+            'pricing account info'
+          ));
         const assetIds: number[] = [0]; // Always include ALGO (asset ID 0)
 
         // Collect all asset IDs from user's assets
@@ -856,10 +879,10 @@ export class NetworkService {
         throw new Error('Invalid Algorand address');
       }
 
-      const algodResponse = await this.indexerClient
-        .lookupAccountTransactions(address)
-        .limit(limit)
-        .do();
+      const algodResponse = await this.withTimeout(
+        this.indexerClient.lookupAccountTransactions(address).limit(limit).do(),
+        'transaction history'
+      );
 
       const transactions: TransactionInfo[] = [];
 
@@ -924,7 +947,7 @@ export class NetworkService {
 
       return transactions.sort((a, b) => b.timestamp - a.timestamp);
     } catch (error) {
-      console.error('Failed to fetch transaction history:', error);
+      console.error('Failed to fetch transaction history:', redactError(error));
       throw new Error(
         `Failed to fetch transactions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1001,7 +1024,10 @@ export class NetworkService {
           indexerQuery = indexerQuery.nextToken(nextToken);
         }
 
-        const algodResponse = await indexerQuery.do();
+        const algodResponse = await this.withTimeout(
+          indexerQuery.do(),
+          'payment transaction history'
+        );
         const transactions: TransactionInfo[] = [];
 
         if (algodResponse.transactions) {
@@ -1045,7 +1071,10 @@ export class NetworkService {
           indexerQuery = indexerQuery.nextToken(nextToken);
         }
 
-        const algodResponse = await indexerQuery.do();
+        const algodResponse = await this.withTimeout(
+          indexerQuery.do(),
+          'asset transaction history'
+        );
         const transactions: TransactionInfo[] = [];
 
         if (algodResponse.transactions) {
@@ -1094,7 +1123,10 @@ export class NetworkService {
         };
       }
     } catch (error) {
-      console.error('Failed to fetch asset transaction history:', error);
+      console.error(
+        'Failed to fetch asset transaction history:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to fetch asset transactions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1122,67 +1154,306 @@ export class NetworkService {
     }
   }
 
+  /**
+   * Submit a signed transaction (or group) and wait for it to confirm.
+   * Resolves `confirmed: false` when it is submitted, or may have been, but is
+   * not confirmed yet: it may still land, so the caller must not resend.
+   *
+   * Every send outcome is classified here, so every caller gets the same
+   * treatment (TASK-440 #8, director 10-29):
+   * - a 4xx that isn't "already in the ledger/pool" is the only hard
+   *   rejection, and only while no earlier attempt in this call was ambiguous;
+   * - "already in the ledger/pool" means a prior send landed: reconcile by
+   *   txid, never resend;
+   * - anything else (a timeout, a dropped connection, a 5xx) is ambiguous: the
+   *   node may have taken it. The same bytes are resent, which is safe (algod
+   *   answers "already in the ledger/pool"), and if every attempt fails the
+   *   end state is the reconcile by txid, never a failure.
+   * Throws TransactionExpiredError once it can no longer land.
+   */
   async submitTransaction(
-    signedTxn: Uint8Array | Uint8Array[]
+    signedTxn: Uint8Array | Uint8Array[],
+    maxAttempts: number = 3
   ): Promise<{ txId: string; confirmed: boolean }> {
     try {
-      // NOTE: sendRawTransaction is now wrapped with a client-side timeout.
-      // A timeout after the node accepted the tx is safe because
-      // TransactionService.submitWithRetries detects "already in ledger" /
-      // "already in the pool" responses on retry and treats them as success
-      // instead of resubmitting, so a lost-response commit can no longer cause
-      // either a false failure or a double-send.
-      const res = await this.withTimeout(
-        this.algodClient.sendRawTransaction(signedTxn).do(),
-        'submit transaction',
-        30000
-      );
-      const txId =
-        (res as unknown as { txId?: string; txid?: string }).txId ??
-        (res as any).txid;
-      // Wait for confirmation. A false result means the tx is still pending
-      // (not confirmed within the round window), NOT a failure.
-      const confirmed = await this.waitForConfirmationInternal(txId);
-      return { txId, confirmed };
+      const facts = NetworkService.signedTxnFacts(signedTxn);
+      let ambiguous = false;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let res: unknown;
+        try {
+          res = await this.withTimeout(
+            this.algodClient.sendRawTransaction(signedTxn).do(),
+            'submit transaction',
+            30000
+          );
+        } catch (sendError) {
+          lastError = sendError;
+          if (isAlreadySubmittedError(sendError)) {
+            return await this.reconcileSubmitted(facts, sendError);
+          }
+          const status = (sendError as { response?: { status?: number } })
+            ?.response?.status;
+          if (status !== undefined && status >= 400 && status < 500) {
+            // After an ambiguous attempt, a 4xx on the same bytes can't prove
+            // the first one didn't land (e.g. "txn dead" once it committed).
+            if (ambiguous) {
+              return await this.reconcileSubmitted(facts, sendError);
+            }
+            throw new TransactionRejectedError(
+              facts.txId ?? '',
+              sendError instanceof Error ? sendError.message : String(sendError)
+            );
+          }
+          ambiguous = true;
+          if (attempt < maxAttempts) {
+            await NetworkService.retryDelay(500 * 2 ** (attempt - 1));
+          }
+          continue;
+        }
+        const txId =
+          (res as { txId?: string; txid?: string }).txId ??
+          (res as { txid?: string }).txid ??
+          // A 2xx without an id still sent these bytes: wait on their txid.
+          facts.txId ??
+          '';
+        // Wait for confirmation. A false result means the tx is still pending
+        // (not confirmed within the round window), NOT a failure.
+        const confirmed = await this.waitForConfirmationInternal(
+          txId,
+          facts.lastValid
+        );
+        return { txId, confirmed };
+      }
+      return await this.reconcileSubmitted(facts, lastError);
     } catch (error) {
-      console.error('Failed to submit transaction:', error);
+      console.error('Failed to submit transaction:', redactError(error));
+      if (
+        error instanceof TransactionRejectedError ||
+        error instanceof TransactionExpiredError ||
+        error instanceof TransactionMaybeSubmittedError
+      ) {
+        throw error;
+      }
       throw new Error(
         `Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
 
-  private async waitForConfirmationInternal(txId: string): Promise<boolean> {
+  /**
+   * The end state of a send the node may have taken: a short wait by txid.
+   * Confirmed, still pending ("may still land"), or TransactionExpiredError;
+   * never a failure, so the caller can't be led to resend it.
+   */
+  private async reconcileSubmitted(
+    facts: { txId?: string; lastValid?: bigint },
+    sendError: unknown
+  ): Promise<{ txId: string; confirmed: boolean }> {
+    console.warn(
+      'Submit may have reached the node; reconciling by txid:',
+      redactError(sendError)
+    );
+    if (!facts.txId) {
+      throw new TransactionMaybeSubmittedError();
+    }
     try {
-      // Wait up to 10 rounds for confirmation
-      await algosdk.waitForConfirmation(this.algodClient, txId, 10);
-      return true;
-    } catch (err) {
-      // Not confirmed within the round window. This is a PENDING state, not a
-      // failure: the tx may still confirm later. Surface a soft warning and let
-      // the caller report a pending (not failed) status to the user.
-      console.warn('Transaction submitted but not yet confirmed:', err);
-      return false;
+      return {
+        txId: facts.txId,
+        confirmed: await this.isTransactionConfirmed(
+          facts.txId,
+          facts.lastValid
+        ),
+      };
+    } catch (reconcileError) {
+      if (reconcileError instanceof TransactionExpiredError) {
+        throw reconcileError;
+      }
+      return { txId: facts.txId, confirmed: false };
+    }
+  }
+
+  private static retryDelay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * The first transaction's id and the group's last valid round (the
+   * smallest: a group can't commit once any member is dead), decoded from
+   * the signed bytes. Either is undefined when the bytes don't decode (e.g.
+   * one concatenated group blob).
+   */
+  static signedTxnFacts(signedTxn: Uint8Array | Uint8Array[]): {
+    txId?: string;
+    lastValid?: bigint;
+  } {
+    const blobs = Array.isArray(signedTxn) ? signedTxn : [signedTxn];
+    try {
+      const txns = blobs.map((b) => algosdk.decodeSignedTransaction(b).txn);
+      return {
+        txId: txns[0]?.txID(),
+        lastValid: txns.reduce<bigint | undefined>(
+          (min, t) =>
+            min === undefined || t.lastValid < min ? t.lastValid : min,
+          undefined
+        ),
+      };
+    } catch {
+      return {};
     }
   }
 
   /**
-   * Short, best-effort confirmation check used to reconcile a submit whose
-   * HTTP response was lost (algod returned "already in ledger"/"already in the
-   * pool" on retry). Returns true only if the tx is confirmed within a few
-   * rounds; false on any error or timeout.
+   * Wall-clock budget for a confirmation wait of `rounds` rounds: a wait
+   * bounded only in rounds never returns if a status or pending-info call
+   * hangs (TASK-440 audit #8).
    */
-  async isTransactionConfirmed(txId: string): Promise<boolean> {
+  private static confirmationDeadlineMs(rounds: number): number {
+    return 15000 + rounds * 5000;
+  }
+
+  /**
+   * Wait up to `rounds` rounds, and at most a wall-clock deadline, for a
+   * submitted transaction to confirm. Resolves with its info when it
+   * confirmed, or null when it is still pending: it may still land.
+   *
+   * A pool error is NOT a rejection here. After a successful submit it is one
+   * node's view, and another node can still commit the transaction before its
+   * last valid round (director 10-29, matching the voirewards double-pay fix).
+   * So the wait records it and keeps polling, and it never reads as
+   * "rejected, try again". The only failure is expiry: given `lastValid`,
+   * when the node's own round is past it and a readable look still shows the
+   * transaction unconfirmed, this throws TransactionExpiredError. A 404 or an
+   * unreadable node stays pending, because a long-confirmed transaction also
+   * reads 404 there.
+   */
+  private async confirmOrClassify(
+    txId: string,
+    rounds: number,
+    lastValid?: bigint
+  ): Promise<algosdk.modelsv2.PendingTransactionResponse | null> {
+    // The deadline only stops us awaiting the loop; an await in flight keeps
+    // running. Record what the loop sees, so a confirmation it reaches while
+    // the look below is in flight is not lost (Codex pass A).
+    const seen: {
+      info?: algosdk.modelsv2.PendingTransactionResponse;
+      poolError?: string;
+    } = {};
+    let stopped = false;
+    const loop = async () => {
+      const status = await this.algodClient.status().do();
+      let round = status.lastRound + 1n;
+      const stopRound = round + BigInt(rounds);
+      while (round < stopRound && !stopped) {
+        try {
+          const info = await this.algodClient
+            .pendingTransactionInformation(txId)
+            .do();
+          if (info.confirmedRound && info.confirmedRound > 0n) {
+            seen.info = info;
+            return info;
+          }
+          if (info.poolError) {
+            seen.poolError = info.poolError;
+          }
+        } catch {
+          // A 404 (a load-balanced algod that doesn't hold it) or an
+          // unreadable node: keep waiting.
+        }
+        if (stopped) break;
+        await this.algodClient.statusAfterBlock(round).do();
+        round += 1n;
+      }
+      return null;
+    };
+
+    let waitError: unknown;
     try {
-      await this.withTimeout(
-        algosdk.waitForConfirmation(this.algodClient, txId, 4),
-        'confirm transaction',
-        30000
+      const info = await this.withTimeout(
+        loop(),
+        `confirm transaction ${txId}`,
+        NetworkService.confirmationDeadlineMs(rounds)
       );
-      return true;
-    } catch {
-      return false;
+      if (info) return info;
+    } catch (error) {
+      waitError = error;
+    } finally {
+      stopped = true;
     }
+
+    // Not confirmed in time, out of rounds, or the node was unreachable:
+    // one bounded look before calling it pending.
+    let look: algosdk.modelsv2.PendingTransactionResponse | undefined;
+    try {
+      look = await this.withTimeout(
+        this.algodClient.pendingTransactionInformation(txId).do(),
+        `pending transaction ${txId}`
+      );
+    } catch (lookError) {
+      console.warn(
+        'Could not inspect pending transaction after confirmation wait:',
+        redactError(lookError)
+      );
+    }
+    // A confirmed round is a ledger fact and outranks any pool error.
+    if (look?.confirmedRound && look.confirmedRound > 0n) {
+      return look;
+    }
+    if (seen.info) {
+      return seen.info;
+    }
+    if (look && lastValid !== undefined) {
+      // The node still holds it, unconfirmed: is it past its last valid
+      // round, by the node's own count?
+      let lastRound: bigint | undefined;
+      try {
+        lastRound = (
+          await this.withTimeout(
+            this.algodClient.status().do(),
+            `status after confirming ${txId}`
+          )
+        ).lastRound;
+      } catch (statusError) {
+        console.warn(
+          'Could not read node round after confirmation wait:',
+          redactError(statusError)
+        );
+      }
+      if (lastRound !== undefined && lastRound > lastValid) {
+        throw new TransactionExpiredError(txId, lastValid);
+      }
+    }
+    console.warn(
+      'Transaction submitted but not yet confirmed (it may still land):',
+      redactError(waitError ?? look?.poolError ?? seen.poolError ?? 'pending')
+    );
+    return null;
+  }
+
+  /**
+   * True when confirmed within 10 rounds, false when still pending (a pending
+   * state, not a failure: the caller reports it as such). Throws
+   * TransactionExpiredError once it can no longer land.
+   */
+  private async waitForConfirmationInternal(
+    txId: string,
+    lastValid?: bigint
+  ): Promise<boolean> {
+    return (await this.confirmOrClassify(txId, 10, lastValid)) !== null;
+  }
+
+  /**
+   * Short confirmation check used to reconcile a submit whose HTTP response
+   * was lost (algod returned "already in ledger"/"already in the pool" on
+   * retry). True only if the tx confirmed within a few rounds; false when it
+   * is still pending or the node can't be read. Throws
+   * TransactionExpiredError once it can no longer land.
+   */
+  async isTransactionConfirmed(
+    txId: string,
+    lastValid?: bigint
+  ): Promise<boolean> {
+    return (await this.confirmOrClassify(txId, 4, lastValid)) !== null;
   }
 
   getNetworkStatus(): NetworkStatus {
@@ -1247,7 +1518,7 @@ export class NetworkService {
 
       // Fetch indexer transactions and ARC-200 transfers in parallel
       const promises: [Promise<any>, Promise<any>] = [
-        indexerQuery.do(),
+        this.withTimeout(indexerQuery.do(), 'all transaction history'),
         // Only fetch ARC-200 transfers if Mimir service is available
         this.mimirService
           ? this.mimirService.getArc200Transfers(
@@ -1354,7 +1625,10 @@ export class NetworkService {
         nextToken: algodResponse.nextToken || undefined,
       };
     } catch (error) {
-      console.error('Failed to fetch complete transaction history:', error);
+      console.error(
+        'Failed to fetch complete transaction history:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to fetch transactions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1375,17 +1649,37 @@ export class NetworkService {
    */
   async getAccountRekeyInfo(
     address: string,
-    skipTimestamp: boolean = false
+    skipTimestamp: boolean = false,
+    bypassCache: boolean = false
   ): Promise<RekeyInfo> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
       }
 
+      const networkId = this.currentNetworkId;
+      const generation = this.assetCacheGeneration;
+      const cacheKey = `${networkId}:${address}`;
+      const assertCurrentNetwork = () => {
+        if (
+          networkId !== this.currentNetworkId ||
+          generation !== this.assetCacheGeneration
+        )
+          throw new Error('Network changed during rekey lookup');
+      };
+      const epoch = getRekeyStatusEpoch();
+      if (this.rekeyCacheEpoch !== epoch) {
+        this.rekeyInfoCache.clear();
+        this.rekeyCacheEpoch = epoch;
+      }
       // Check cache first
-      const cached = this.rekeyInfoCache.get(address);
+      const cached = this.rekeyInfoCache.get(cacheKey);
       const now = Date.now();
-      if (cached && now - cached.timestamp < this.rekeyInfoCacheTTL) {
+      if (
+        !bypassCache &&
+        cached &&
+        now - cached.timestamp < this.rekeyInfoCacheTTL
+      ) {
         return cached.info;
       }
 
@@ -1397,9 +1691,24 @@ export class NetworkService {
       // behavior. Reusing a shared snapshot would change which round-consistent
       // view the rekey state is read from (e.g. across a rekey confirmation),
       // so the rekey fetch is intentionally NOT deduped against the balance load.
-      const accountInfo = await this.algodClient
-        .accountInformation(address)
-        .do();
+      // TASK-440 #7: bounded like every other algod read. getAccountBalance
+      // awaits this lookup, and a timeout rejects into its `unavailable` rekey
+      // state (never "not rekeyed"); nothing is cached on that path.
+      const observation = issueRekeyObservation();
+      // TASK-458: an older request landing late must not replace a newer
+      // cached answer, or the next cached read would replay it.
+      const cacheIfNewest = (info: RekeyInfo) => {
+        const current = this.rekeyInfoCache.get(cacheKey);
+        const currentSeq = getRekeyObservation(current?.info)?.seq ?? -1;
+        if (epoch === getRekeyStatusEpoch() && observation.seq > currentSeq)
+          this.rekeyInfoCache.set(cacheKey, { info, timestamp: Date.now() });
+      };
+      const accountInfo = await this.withTimeout(
+        this.algodClient.accountInformation(address).do(),
+        'rekey account info'
+      );
+
+      assertCurrentNetwork();
 
       // Check if account has auth-addr field (indicating it's been rekeyed)
       let authAddress: string | undefined;
@@ -1415,12 +1724,8 @@ export class NetworkService {
       const isRekeyed = Boolean(authAddress);
 
       if (!isRekeyed) {
-        const result = { isRekeyed: false };
-        // Cache the result
-        this.rekeyInfoCache.set(address, {
-          info: result,
-          timestamp: Date.now(),
-        });
+        const result = stampRekeyInfo({ isRekeyed: false }, observation);
+        cacheIfNewest(result);
         return result;
       }
 
@@ -1429,11 +1734,16 @@ export class NetworkService {
       let rekeyedAt: number | undefined;
       if (!skipTimestamp) {
         try {
-          const txnResponse = await this.indexerClient
-            .lookupAccountTransactions(address)
-            .txType('pay') // Rekey transactions are payment type with rekey-to field
-            .limit(50)
-            .do();
+          // TASK-440 #7: bounded; the timestamp is optional enrichment, so a
+          // timeout lands in the catch below and leaves rekeyedAt undefined.
+          const txnResponse = await this.withTimeout(
+            this.indexerClient
+              .lookupAccountTransactions(address)
+              .txType('pay') // Rekey transactions are payment type with rekey-to field
+              .limit(50)
+              .do(),
+            'rekey timestamp lookup'
+          );
 
           // Look for the most recent transaction with a rekey-to field.
           // algosdk v3 exposes it as `rekeyTo` (string or Address), not the
@@ -1454,22 +1764,21 @@ export class NetworkService {
             }
           }
         } catch (error) {
-          console.warn('Failed to fetch rekey timestamp:', error);
+          console.warn('Failed to fetch rekey timestamp:', redactError(error));
         }
       }
 
-      const result = {
-        isRekeyed: true,
-        authAddress,
-        rekeyedAt,
-      };
+      const result = stampRekeyInfo(
+        { isRekeyed: true, authAddress, rekeyedAt },
+        observation
+      );
 
-      // Cache the result
-      this.rekeyInfoCache.set(address, { info: result, timestamp: Date.now() });
+      assertCurrentNetwork();
+      cacheIfNewest(result);
 
       return result;
     } catch (error) {
-      console.error('Failed to check rekey status:', error);
+      console.error('Failed to check rekey status:', redactError(error));
       throw new Error(
         `Failed to check rekey status: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1495,16 +1804,20 @@ export class NetworkService {
           rekeyInfo[address] = result.value;
         } else {
           console.warn(
-            `Failed to check rekey status for ${address}:`,
-            result.reason
+            `Failed to check rekey status for ${redactAddress(address)}:`,
+            redactError(result.reason)
           );
-          rekeyInfo[address] = { isRekeyed: false };
+          // A failed lookup is unknown, never "not rekeyed" (TASK-421).
+          rekeyInfo[address] = { isRekeyed: false, unavailable: true };
         }
       });
 
       return rekeyInfo;
     } catch (error) {
-      console.error('Failed to check multiple rekey statuses:', error);
+      console.error(
+        'Failed to check multiple rekey statuses:',
+        redactError(error)
+      );
       throw new Error(
         `Failed to check rekey statuses: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1616,11 +1929,15 @@ export class NetworkService {
       const url = `${this.config.indexerUrl}/v2/assets?${params.toString()}`;
 
       // Make direct HTTP request
-      const response = await fetch(url, {
-        headers: {
-          'X-API-Key': this.config.token || '',
+      const response = await fetchBuffered(
+        url,
+        {
+          headers: {
+            'X-API-Key': this.config.token || '',
+          },
         },
-      });
+        NetworkService.REQUEST_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -1638,11 +1955,15 @@ export class NetworkService {
 
         const unitUrl = `${this.config.indexerUrl}/v2/assets?${unitParams.toString()}`;
 
-        const unitResponse = await fetch(unitUrl, {
-          headers: {
-            'X-API-Key': this.config.token || '',
+        const unitResponse = await fetchBuffered(
+          unitUrl,
+          {
+            headers: {
+              'X-API-Key': this.config.token || '',
+            },
           },
-        });
+          NetworkService.REQUEST_TIMEOUT_MS
+        );
 
         if (unitResponse.ok) {
           const unitData = await unitResponse.json();
@@ -1659,7 +1980,10 @@ export class NetworkService {
         nextToken: data.nextToken,
       };
     } catch (error) {
-      console.error(`Failed to search assets for "${query}":`, error);
+      console.error(
+        `Failed to search assets for "${redactSensitiveForLog(query)}":`,
+        redactError(error)
+      );
       throw new Error(
         `Failed to search assets: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1676,11 +2000,14 @@ export class NetworkService {
       }
 
       // Query with minRound=1 and limit=1 to get the earliest transaction
-      const algodResponse = await this.indexerClient
-        .lookupAccountTransactions(address)
-        .minRound(1)
-        .limit(1)
-        .do();
+      const algodResponse = await this.withTimeout(
+        this.indexerClient
+          .lookupAccountTransactions(address)
+          .minRound(1)
+          .limit(1)
+          .do(),
+        'first transaction'
+      );
 
       if (algodResponse.transactions && algodResponse.transactions.length > 0) {
         const txn = algodResponse.transactions[0];
@@ -1693,7 +2020,10 @@ export class NetworkService {
 
       return null;
     } catch (error) {
-      console.error(`Failed to fetch first transaction for ${address}:`, error);
+      console.error(
+        `Failed to fetch first transaction for ${redactAddress(address)}:`,
+        redactError(error)
+      );
       return null;
     }
   }
@@ -1707,12 +2037,16 @@ export class NetworkService {
         throw new Error('Invalid Algorand address');
       }
 
-      const accountInfo = await this.algodClient
-        .accountInformation(address)
-        .do();
+      const accountInfo = await this.withTimeout(
+        this.algodClient.accountInformation(address).do(),
+        'account info'
+      );
       return accountInfo;
     } catch (error) {
-      console.error(`Failed to fetch account info for ${address}:`, error);
+      console.error(
+        `Failed to fetch account info for ${redactAddress(address)}:`,
+        redactError(error)
+      );
 
       if (error instanceof NetworkError) {
         throw error;
@@ -1729,7 +2063,10 @@ export class NetworkService {
    */
   async getTransactionParams(): Promise<algosdk.SuggestedParams> {
     try {
-      const params = await this.algodClient.getTransactionParams().do();
+      const params = await this.withTimeout(
+        this.algodClient.getTransactionParams().do(),
+        'transaction params'
+      );
       return params;
     } catch (error) {
       console.error('Failed to fetch transaction params:', error);
@@ -1745,80 +2082,25 @@ export class NetworkService {
   }
 
   /**
-   * Send a raw transaction
+   * Wait for transaction confirmation. Resolves with the confirmed
+   * transaction's info. Throws TransactionExpiredError once it can no longer
+   * land (needs `lastValid`), and otherwise TransactionPendingError: not
+   * confirmed yet, may still land, never "rejected".
    */
-  async sendRawTransaction(signedTxn: Uint8Array): Promise<string> {
-    try {
-      const response = await this.algodClient
-        .sendRawTransaction(signedTxn)
-        .do();
-      const txId =
-        (response as { txId?: string }).txId ??
-        (response as { txid?: string }).txid ??
-        (response as unknown as Record<string, unknown>).txID;
-
-      if (!txId || typeof txId !== 'string') {
-        throw new Error(
-          'Transaction submission succeeded but no transaction ID was returned'
-        );
-      }
-
-      return txId;
-    } catch (error) {
-      console.error('Failed to send transaction:', error);
-
-      if (error instanceof NetworkError) {
-        throw error;
-      }
-
-      throw new Error(
-        `Failed to send transaction: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+  public async waitForConfirmation(
+    txId: string,
+    rounds = 4,
+    lastValid?: bigint
+  ): Promise<any> {
+    const info = await this.confirmOrClassify(
+      txId,
+      Math.max(rounds, 1),
+      lastValid
+    );
+    if (!info) {
+      throw new TransactionPendingError(txId);
     }
-  }
-
-  /**
-   * Wait for transaction confirmation
-   */
-  public async waitForConfirmation(txId: string, rounds = 4): Promise<any> {
-    const roundsToWait = Math.max(rounds, 1);
-
-    try {
-      return await algosdk.waitForConfirmation(
-        this.algodClient,
-        txId,
-        roundsToWait
-      );
-    } catch (error) {
-      // Before surfacing the error, check whether the transaction actually confirmed
-      try {
-        const pendingInfo = await this.algodClient
-          .pendingTransactionInformation(txId)
-          .do();
-
-        const confirmedRound = pendingInfo.confirmedRound;
-        if (confirmedRound && Number(confirmedRound) > 0) {
-          return pendingInfo;
-        }
-
-        const poolError = pendingInfo.poolError;
-        if (typeof poolError === 'string' && poolError.length > 0) {
-          throw new Error(`Transaction rejected: ${poolError}`);
-        }
-      } catch (pendingError) {
-        console.warn(
-          'Failed to inspect pending transaction after waitForConfirmation error:',
-          pendingError
-        );
-      }
-
-      if (error instanceof NetworkError) {
-        throw error;
-      }
-
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to confirm transaction ${txId}: ${message}`);
-    }
+    return info;
   }
 }
 

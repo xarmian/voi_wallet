@@ -25,11 +25,8 @@ export interface BaseAccountMetadata {
   avatarUpdatedAt?: string; // Last time avatarUrl was refreshed
 }
 
-// Standard Account (with private key)
-export interface StandardAccountMetadata extends BaseAccountMetadata {
-  type: AccountType.STANDARD;
-  mnemonic: string; // 25-word recovery phrase
-  derivationPath?: string; // HD derivation path if applicable
+/** Per-account backup metadata shared by STANDARD and REKEYED records. */
+export interface BackupMetadata {
   /**
    * LEGACY. Despite the historical name this means "a mnemonic was supplied for
    * this account", NOT "the user proved they have it" — `importStandardAccount`
@@ -37,12 +34,12 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
    * (DR-10); nothing in the app reads it today. Use `backupVerified` for any
    * "is this account safely backed up?" decision.
    */
-  hasBackup: boolean;
+  hasBackup?: boolean;
   /**
    * TASK-45 / DR-10 / DR-11 — whether the user has demonstrably confirmed this
    * account's recovery phrase by completing the word-verification quiz.
    *
-   * - `true` ONLY on quiz success. Plain creation, import, rekey conversion,
+   * - `true` ONLY on quiz success. Plain creation, import,
    *   restore-from-backup, and the "Skip for now" escape all leave it `false`.
    * - Pre-existing accounts (persisted before this field existed) migrate to
    *   `false`; it is NOT derived from `hasBackup`, which means something else.
@@ -51,9 +48,18 @@ export interface StandardAccountMetadata extends BaseAccountMetadata {
    *
    * Read it through `isBackupVerified()` so a legacy record that has not yet
    * been through the read-time migration can never be treated as verified.
+   * Each account owns these fields; an auth account grants no verification.
    */
-  backupVerified: boolean;
+  backupVerified?: boolean;
   backupCreatedAt?: string; // Backup creation timestamp
+}
+
+// Standard Account (with private key)
+export interface StandardAccountMetadata
+  extends BaseAccountMetadata, BackupMetadata {
+  type: AccountType.STANDARD;
+  mnemonic: string; // 25-word recovery phrase
+  derivationPath?: string; // HD derivation path if applicable
 }
 
 // Watch Account (read-only)
@@ -64,7 +70,8 @@ export interface WatchAccountMetadata extends BaseAccountMetadata {
 }
 
 // Rekeyed Account (delegated signing)
-export interface RekeyedAccountMetadata extends BaseAccountMetadata {
+export interface RekeyedAccountMetadata
+  extends BaseAccountMetadata, BackupMetadata {
   type: AccountType.REKEYED;
   authAddress: string; // Address that has signing authority
   rekeyedAt?: string; // When the account was rekeyed
@@ -122,32 +129,51 @@ export interface RemoteSignerAccountMetadata extends BaseAccountMetadata {
   authLevel?: RemoteSignerAuthLevel;
 }
 
-/**
- * TASK-45 — the ONLY sanctioned read of `backupVerified`.
- *
- * Fails closed in every ambiguous case: non-standard accounts (no phrase to
- * back up), and legacy standard records persisted before the field existed
- * (`undefined` at runtime even though the type declares it required, until the
- * read-time migration in MultiAccountWalletService rewrites them). Anything but
- * a literal `true` means "not verified", so the Home warning banner can never
- * be wrongly suppressed.
- */
-export function isBackupVerified(
-  account: Pick<AccountMetadata, 'type'> | null | undefined
-): boolean {
-  if (!account || account.type !== AccountType.STANDARD) return false;
-  return (account as Partial<StandardAccountMetadata>).backupVerified === true;
-}
+/** Local custody evidence; pending/failed strict probes remain unresolved. */
+export type KeyHolding = 'present' | 'absent' | 'unresolved';
+type BackupAccount = Pick<AccountMetadata, 'type'> &
+  BackupMetadata & { originalOwner?: boolean };
 
 /**
- * True when an account still needs its recovery phrase confirmed — i.e. it is a
- * key-bearing STANDARD account whose phrase the user has not proven they hold.
+ * Shared per-account classifier. Signer capability and auth membership grant nothing.
+ * PROTECTIVE only: originalOwner counts as present without a read (TASK-419,
+ * a keystore failure can read a present secret as null), but it can outlive
+ * the key, so a gate that uses the key must probe instead (TASK-425 U4).
  */
-export function needsBackupVerification(
-  account: Pick<AccountMetadata, 'type'> | null | undefined
+export function classifyKeyHolding(
+  account: BackupAccount | null | undefined,
+  secretPresence: KeyHolding = 'unresolved'
+): KeyHolding {
+  if (!account) return 'absent';
+  if (account.type === AccountType.STANDARD) return 'present';
+  if (account.type !== AccountType.REKEYED) return 'absent';
+  return account.originalOwner === true ? 'present' : secretPresence;
+}
+
+/** Only a literal true on this account establishes backup verification. */
+export function isBackupVerified(
+  account: BackupAccount | null | undefined
 ): boolean {
-  if (!account || account.type !== AccountType.STANDARD) return false;
-  return !isBackupVerified(account);
+  if (
+    !account ||
+    (account.type !== AccountType.STANDARD &&
+      account.type !== AccountType.REKEYED)
+  )
+    return false;
+  return account.backupVerified === true;
+}
+
+/** Home policy: unresolved custody reminds; only confirmed delegation suppresses. */
+export function needsBackupVerification(
+  account: BackupAccount | null | undefined,
+  keyHolding = classifyKeyHolding(account),
+  delegatedEverywhere = false
+): boolean {
+  return (
+    keyHolding !== 'absent' &&
+    !isBackupVerified(account) &&
+    !delegatedEverywhere
+  );
 }
 
 // Union type for all account metadata types
@@ -216,6 +242,8 @@ export interface AccountBalance {
     isRekeyed: boolean;
     authAddress?: string;
     rekeyedAt?: number;
+    /** The rekey lookup failed; isRekeyed:false is only a display fallback. */
+    unavailable?: boolean;
   };
 }
 
@@ -415,6 +443,27 @@ export class AccountStorageError extends AccountError {
   constructor(message: string = 'Account storage error') {
     super(message, 'ACCOUNT_STORAGE_ERROR');
   }
+}
+
+/**
+ * TASK-424: a deletion's caller-stated expectation (identity, type, or no own
+ * key) no longer holds for the stored account, so nothing was deleted.
+ */
+export class AccountDeletionPreconditionError extends AccountError {
+  constructor(
+    message: string = 'This account changed before it could be deleted. Please start again.'
+  ) {
+    super(message, 'ACCOUNT_DELETION_PRECONDITION');
+    this.name = 'AccountDeletionPreconditionError';
+  }
+}
+
+/** TASK-424: what a caller checked before asking to delete an account. */
+export interface AccountDeletionExpectation {
+  address: string;
+  type: AccountType;
+  /** True when the caller confirmed the deletion as an account with no key. */
+  keyless: boolean;
 }
 
 export class AccountRetrievalError extends AccountError {

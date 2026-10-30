@@ -60,9 +60,10 @@ interface ThemeProviderProps {
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const [themeMode, setThemeModeState] = useState<ThemeMode>('system');
-  const [systemColorScheme, setSystemColorScheme] = useState<ColorSchemeName>(
-    Appearance.getColorScheme()
-  );
+  // Appearance.getColorScheme() and the change listener return
+  // `ColorSchemeName | null`; RN 0.88's ColorSchemeName no longer includes null.
+  const [systemColorScheme, setSystemColorScheme] =
+    useState<ColorSchemeName | null>(Appearance.getColorScheme());
   const [nftThemeEnabled, setNftThemeEnabledState] = useState<boolean>(false);
   const [nftBackgroundEnabled, setNftBackgroundEnabledState] =
     useState<boolean>(true);

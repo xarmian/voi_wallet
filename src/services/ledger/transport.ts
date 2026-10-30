@@ -12,6 +12,7 @@ import {
 import { ledgerDeviceStorage, LedgerDeviceStorage } from './storage';
 import { isLedgerSigningInProgress } from '@/services/ledger/signingState';
 import { isPermissionDeniedError } from '@/utils/errorMapping';
+import { redactError } from '@/utils/logRedaction';
 
 // F-24: Lazy transport-module loaders. The BLE transport pulls in
 // react-native-ble-plx + rxjs and the HID transport its own native deps; both
@@ -362,9 +363,7 @@ export class LedgerTransportService {
 
             const freshRecord = this.devices.get(deviceId);
             bleDescriptor = freshRecord?.descriptor as
-              | BleDevice
-              | string
-              | undefined;
+              BleDevice | string | undefined;
 
             if (!bleDescriptor) {
               if (!discovered) {
@@ -610,7 +609,7 @@ export class LedgerTransportService {
       } catch (error) {
         console.error(
           `LedgerTransportService listener error for event ${event}:`,
-          error
+          redactError(error)
         );
       }
     });
@@ -966,8 +965,7 @@ export class LedgerTransportService {
     descriptor?: LedgerDeviceRecord['descriptor']
   ): Promise<Transport> {
     const usbDescriptor = descriptor as
-      | { vendorId: number; productId: number }
-      | undefined;
+      { vendorId: number; productId: number } | undefined;
     if (!usbDescriptor) {
       throw new LedgerDeviceNotConnectedError(
         'USB descriptor missing for Ledger device'
@@ -1384,7 +1382,10 @@ export class LedgerTransportService {
         this.emit('deviceDiscovered', deviceInfo);
       }
     } catch (error) {
-      console.error('Failed to load persisted Ledger devices:', error);
+      console.error(
+        'Failed to load persisted Ledger devices:',
+        redactError(error)
+      );
       // Don't throw - app should continue even if persistence fails
     }
   }
@@ -1409,7 +1410,7 @@ export class LedgerTransportService {
         await ledgerDeviceStorage.saveDevice(deviceInfo);
         this.saveThrottleTimers.delete(deviceId);
       } catch (error) {
-        console.error('Failed to persist Ledger device:', error);
+        console.error('Failed to persist Ledger device:', redactError(error));
         this.saveThrottleTimers.delete(deviceId);
         // Don't throw - persistence failures shouldn't break functionality
       }
@@ -1425,7 +1426,10 @@ export class LedgerTransportService {
     try {
       await ledgerDeviceStorage.updateLastConnected(deviceId);
     } catch (error) {
-      console.error('Failed to update last connected timestamp:', error);
+      console.error(
+        'Failed to update last connected timestamp:',
+        redactError(error)
+      );
       // Don't throw - persistence failures shouldn't break functionality
     }
   }

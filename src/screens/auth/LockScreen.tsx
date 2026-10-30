@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
@@ -58,6 +59,7 @@ const formatCountdown = (ms: number): string => {
 };
 
 export default function LockScreen() {
+  const navigation = useNavigation();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { authState, unlock, unlockWithBiometrics, recheckAuthState } =
@@ -155,15 +157,15 @@ export default function LockScreen() {
   }, [throttle.lockedUntil, refreshThrottle]);
 
   useEffect(() => {
-    if (authState.biometricEnabled) {
+    if (authState.biometricEnabled && navigation.isFocused()) {
       promptBiometric();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric prompt when biometrics become enabled, keyed on authState.biometricEnabled; promptBiometric is read at that commit and must not re-fire on its own identity.
-  }, [authState.biometricEnabled]);
+  }, [authState.biometricEnabled, navigation]);
 
   const promptBiometric = async () => {
     try {
-      const success = await unlockWithBiometrics();
+      const success = await unlockWithBiometrics(() => navigation.isFocused());
       if (success) {
         hapticNotify('success');
       }
@@ -195,7 +197,8 @@ export default function LockScreen() {
       // unlock() -> AccountSecureStorage.verifyPin() applies the persistent
       // throttle internally (and returns a plain boolean). We read the resulting
       // lockout/remaining-attempts back via the separate throttle-state query.
-      const success = await unlock(enteredPin);
+      const success = await unlock(enteredPin, () => navigation.isFocused());
+      if (!navigation.isFocused()) return;
       setPin('');
 
       if (success) {

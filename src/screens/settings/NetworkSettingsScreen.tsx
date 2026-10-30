@@ -1,15 +1,25 @@
+/**
+ * Network Screen
+ *
+ * Pushed Settings screen for switching networks (TASK-435: was a slide-up
+ * modal). A successful switch returns to Settings. Leaving is blocked while a
+ * switch is in flight.
+ */
+
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  Modal,
   FlatList,
   Alert,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { SettingsStackParamList } from '@/navigation/AppNavigator';
 import { NetworkId } from '@/types/network';
 import {
   getNetworkConfig,
@@ -23,14 +33,14 @@ import {
 } from '@/store/networkStore';
 import { useWalletStore } from '@/store/walletStore';
 import { Theme } from '@/constants/themes';
-import { EdgeInsets, useSafeAreaInsets } from 'react-native-safe-area-context';
-
-interface NetworkSwitcherProps {
-  visible: boolean;
-  onClose: () => void;
-  onNetworkSwitch?: (networkId: NetworkId) => void;
-  theme: Theme;
-}
+import {
+  EdgeInsets,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
+import { useTheme } from '@/contexts/ThemeContext';
+import { NFTBackground } from '@/components/common/NFTBackground';
+import UniversalHeader from '@/components/common/UniversalHeader';
 
 interface NetworkItemProps {
   networkId: NetworkId;
@@ -120,12 +130,10 @@ const NetworkItem: React.FC<NetworkItemProps> = ({
   );
 };
 
-export default function NetworkSwitcher({
-  visible,
-  onClose,
-  onNetworkSwitch,
-  theme,
-}: NetworkSwitcherProps) {
+export default function NetworkSettingsScreen() {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<SettingsStackParamList>>();
+  const { theme } = useTheme();
   const currentNetwork = useCurrentNetwork();
   const availableNetworks = useAvailableNetworks();
   const isNetworkSwitching = useIsNetworkSwitching();
@@ -139,12 +147,28 @@ export default function NetworkSwitcher({
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    if (visible) {
-      // Refresh network statuses when modal opens
-      handleRefresh();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh on open, keyed on visible; handleRefresh is read at that commit.
-  }, [visible]);
+    // Refresh network statuses when the screen opens
+    handleRefresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh once on mount; handleRefresh is read at that commit.
+  }, []);
+
+  // Block leaving mid-switch. beforeRemove covers the back button and Android
+  // Back; native-stack can't cancel a native swipe that way, so the gesture is
+  // switched off for the same window. The listener reads the store directly so
+  // it never acts on a stale render's flag.
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !isNetworkSwitching });
+  }, [navigation, isNetworkSwitching]);
+
+  useEffect(
+    () =>
+      navigation.addListener('beforeRemove', (event) => {
+        if (useNetworkStore.getState().isSwitching) {
+          event.preventDefault();
+        }
+      }),
+    [navigation]
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -181,8 +205,11 @@ export default function NetworkSwitcher({
                 await switchNetwork(networkId);
                 // Refresh all balances after network switch since balances will be different
                 await refreshAllBalances();
-                onNetworkSwitch?.(networkId);
-                onClose();
+                // The user may have left during the balance refresh; only pop
+                // a screen that is still the one showing.
+                if (navigation.isFocused()) {
+                  navigation.goBack();
+                }
               } catch (error) {
                 Alert.alert(
                   'Network Switch Failed',
@@ -209,22 +236,20 @@ export default function NetworkSwitcher({
   };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Networks</Text>
-
-          <View style={styles.headerActions}>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="Networks"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+          rightAction={
             <TouchableOpacity
               style={styles.refreshButton}
               onPress={handleRefresh}
               disabled={refreshing}
+              accessibilityRole="button"
+              accessibilityLabel="Refresh network status"
             >
               {refreshing ? (
                 <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -236,12 +261,8 @@ export default function NetworkSwitcher({
                 />
               )}
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-              <Ionicons name="close" size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-          </View>
-        </View>
+          }
+        />
 
         {/* Network List */}
         <FlatList
@@ -269,8 +290,8 @@ export default function NetworkSwitcher({
             </View>
           </View>
         )}
-      </View>
-    </Modal>
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
@@ -278,34 +299,8 @@ const createStyles = (theme: Theme, insets: EdgeInsets) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
-      paddingTop: insets.top,
-    },
-    header: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingTop: 20,
-      paddingBottom: 16,
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-    },
-    title: {
-      fontSize: 24,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    headerActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 16,
     },
     refreshButton: {
-      padding: 4,
-    },
-    closeButton: {
       padding: 4,
     },
     listContainer: {

@@ -1,3 +1,4 @@
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 import { storage, secureStorage } from '../../platform';
@@ -21,6 +22,8 @@ import {
   DetectRekeyedAccountRequest,
   ImportRemoteSignerAccountRequest,
   AccountNotFoundError,
+  AccountDeletionPreconditionError,
+  AccountDeletionExpectation,
   AccountExistsError,
   InvalidAddressError,
   InvalidMnemonicError,
@@ -31,14 +34,18 @@ import {
   Wallet,
   WalletSettings,
   withDefaultAuthLevel,
+  classifyKeyHolding,
 } from '@/types/wallet';
 import { AccountSecureStorage } from '../secure/AccountSecureStorage';
+import { canTransferOwnKey } from './ownKeyCustody';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { ledgerTransportService } from '@/services/ledger/transport';
 import type { LedgerDeviceInfo } from '@/services/ledger/transport';
 import { ledgerAlgorandService } from '@/services/ledger/algorand';
 import { NetworkService } from '@/services/network';
 import type { LedgerAccountDerivation } from '@/services/ledger/algorand';
+import { redactAddress, redactError } from '@/utils/logRedaction';
+import { withTimeout } from '@/utils/withTimeout';
 
 /**
  * F-22 (TASK-179) — getCurrentWallet() memoization.
@@ -105,6 +112,13 @@ const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
  *      read-repair write did slip past the epoch check, the wipe enqueued after
  *      it still runs last and wins.
  */
+/** Bound on the legacy keychain read a mutation makes on the write chain. */
+const LEGACY_READ_ON_CHAIN_MS = 5000;
+/**
+ * Same bound on the off-chain legacy reads: getCurrentWallet's migration read
+ * (TASK-443) and the strict boot probes' read (TASK-450).
+ */
+const LEGACY_READ_OFF_CHAIN_MS = 5000;
 let walletResetEpoch = 0;
 let walletWriteChain: Promise<unknown> = Promise.resolve();
 
@@ -154,6 +168,9 @@ export class MultiAccountWalletService {
       // the cross-store creation is atomic against a concurrent full reset.
       const creationGen = AccountSecureStorage.getResetGeneration();
       let token: string | undefined;
+      // Set once the wallet metadata write has committed: after that, deleting
+      // the secret would leave a keyless record, so a later failure keeps it.
+      let metadataCommitted = false;
       try {
         token = await AccountSecureStorage.storeAccountForCreation(
           accountMetadata,
@@ -161,20 +178,31 @@ export class MultiAccountWalletService {
           creationGen
         );
         await this.addAccountToWallet(accountMetadata, creationGen);
+        metadataCommitted = true;
         await AccountSecureStorage.commitPendingCreate(
           accountMetadata.id,
           token
         );
         return accountMetadata;
       } catch (error) {
-        // DR-2 (reset wins): a reset raced this creation → roll back the just-
-        // written secret (ownership-checked; a no-op if the reset already
-        // deleted it) so neither store keeps a half-created account.
-        if (error instanceof ResetRacedError && token !== undefined) {
-          await AccountSecureStorage.deleteAccountIfAttemptMatches(
-            accountMetadata.id,
-            token
-          );
+        // DR-2 (reset wins) and audit 10-29 (Luna P2): ANY failure before the
+        // metadata committed (a raced reset, a strict-read failure, a corrupt
+        // blob, a duplicate) rolls back the just-written secret
+        // (ownership-checked; a no-op if a reset already deleted it), so
+        // neither store keeps a half-created account.
+        if (token !== undefined && !metadataCommitted) {
+          try {
+            await AccountSecureStorage.deleteAccountIfAttemptMatches(
+              accountMetadata.id,
+              token
+            );
+          } catch (rollbackError) {
+            // TASK-415: retain the indexed, journaled id for reconciliation.
+            console.warn(
+              'Account rollback failed:',
+              redactError(rollbackError)
+            );
+          }
         }
         throw error;
       } finally {
@@ -225,9 +253,15 @@ export class MultiAccountWalletService {
         throw new Error('Either mnemonic or private key must be provided');
       }
 
-      // Check if account already exists
-      const existingAccount = await this.findAccountByAddress(
-        account.addr.toString()
+      // Check if account already exists. Strict and bounded (audit 10-29,
+      // Luna P2): findAccountByAddress -> getCurrentWallet can wait on the
+      // legacy keychain without limit and turns a read failure into "no
+      // wallet". A read error, a corrupt blob, a slow keychain or an
+      // unmigrated legacy copy fails the import before any secret is stored.
+      // (addAccountToWallet re-checks for duplicates inside the write chain.)
+      const currentWallet = await this.readWalletStrict();
+      const existingAccount = currentWallet?.accounts.find(
+        (acc) => acc.address === account.addr.toString()
       );
       if (existingAccount) {
         throw new AccountExistsError('Account already exists in wallet');
@@ -245,9 +279,11 @@ export class MultiAccountWalletService {
           (account as any).publicKey ?? account.sk.slice(32)
         ).toString('hex'),
         type: AccountType.STANDARD,
+        // From the strict read above, not getAccountCount (getCurrentWallet
+        // can wait on the legacy keychain without limit).
         label:
           request.label ||
-          `Imported Account ${(await this.getAccountCount()) + 1}`,
+          `Imported Account ${(currentWallet?.accounts.length ?? 0) + 1}`,
         color: request.color || this.generateAccountColor(),
         isHidden: false,
         createdAt: new Date().toISOString(),
@@ -274,6 +310,9 @@ export class MultiAccountWalletService {
       // TASK-220: guard the cross-store creation against a concurrent full reset.
       const creationGen = AccountSecureStorage.getResetGeneration();
       let token: string | undefined;
+      // Set once the wallet metadata write has committed: after that, deleting
+      // the secret would leave a keyless record, so a later failure keeps it.
+      let metadataCommitted = false;
       try {
         token = await AccountSecureStorage.storeAccountForCreation(
           accountMetadata,
@@ -281,17 +320,28 @@ export class MultiAccountWalletService {
           creationGen
         );
         await this.addAccountToWallet(accountMetadata, creationGen);
+        metadataCommitted = true;
         await AccountSecureStorage.commitPendingCreate(
           accountMetadata.id,
           token
         );
         return accountMetadata;
       } catch (error) {
-        if (error instanceof ResetRacedError && token !== undefined) {
-          await AccountSecureStorage.deleteAccountIfAttemptMatches(
-            accountMetadata.id,
-            token
-          );
+        // Same rollback rule as createStandardAccount: any failure before the
+        // metadata committed removes the secret this import wrote.
+        if (token !== undefined && !metadataCommitted) {
+          try {
+            await AccountSecureStorage.deleteAccountIfAttemptMatches(
+              accountMetadata.id,
+              token
+            );
+          } catch (rollbackError) {
+            // TASK-415: retain the indexed, journaled id for reconciliation.
+            console.warn(
+              'Account rollback failed:',
+              redactError(rollbackError)
+            );
+          }
         }
         throw error;
       } finally {
@@ -341,8 +391,6 @@ export class MultiAccountWalletService {
       );
     }
 
-    // TASK-212: guard the write against a reset racing this read.
-    const readEpoch = walletResetEpoch;
     // TASK-220: guard the no-wallet CREATION write (below) against a concurrent
     // full reset. Ledger accounts hold no secret, so there is nothing to roll
     // back — the guard just stops a reset being defeated by a resurrected wallet.
@@ -399,24 +447,7 @@ export class MultiAccountWalletService {
         lastDeviceConnection: now,
       };
 
-      if (!wallet) {
-        const newWallet: Wallet = {
-          id: this.generateWalletId(),
-          version: '1.0',
-          createdAt: now,
-          accounts: [accountMetadata],
-          activeAccountId: accountMetadata.id,
-          settings: this.getDefaultWalletSettings(),
-        };
-
-        // Creation write (no prior wallet existed) — guarded on the creation
-        // generation (TASK-220) so a concurrent reset aborts it instead of
-        // resurrecting a wallet; nothing to resurrect otherwise.
-        await this.storeWallet(newWallet, undefined, creationGen);
-      } else {
-        wallet.accounts.push(accountMetadata);
-        await this.storeWallet(wallet, readEpoch);
-      }
+      await this.addAccountToWallet(accountMetadata, creationGen);
 
       return accountMetadata;
     } catch (error) {
@@ -679,8 +710,14 @@ export class MultiAccountWalletService {
         throw new RekeyVerificationError('Cannot verify rekey relationship');
       }
 
-      // Check if we control the auth address
-      const authAccount = await this.findAccountByAddress(request.authAddress);
+      // Check if we control the auth address. Confirmed read (TASK-443): an
+      // unreadable wallet must fail the import, not persist a canSign: false
+      // derived from a read that timed out.
+      const confirmedWallet = await this.getCurrentWalletConfirmed();
+      const authAccount =
+        confirmedWallet?.accounts.find(
+          (acc) => acc.address === request.authAddress
+        ) ?? null;
       const canSign =
         request.canSign ??
         (!!authAccount && authAccount.type === AccountType.STANDARD);
@@ -703,7 +740,9 @@ export class MultiAccountWalletService {
         importedAt: new Date().toISOString(),
         lastUsed: new Date().toISOString(),
         authAddress: request.authAddress,
-        originalOwner: canSign,
+        // A detected account's own key is never stored here, so it is not a
+        // converted STANDARD account (TASK-425 U4).
+        originalOwner: false,
         canSign,
         rekeyedFrom: request.rekeyedFrom,
       };
@@ -792,7 +831,8 @@ export class MultiAccountWalletService {
    * This removes the private key and converts the account type.
    * Used when transferring an account to an airgap device.
    *
-   * @param accountId - The ID of the STANDARD account to convert
+   * @param accountId - The ID of the account to convert: one whose own key
+   *   this device holds and which that key controls (canTransferOwnKey)
    * @param signerDeviceId - The device ID of the airgap signer
    * @param signerDeviceName - Optional friendly name for the signer device
    * @returns The new RemoteSignerAccountMetadata
@@ -819,10 +859,11 @@ export class MultiAccountWalletService {
 
     const existingAccount = wallet.accounts[accountIndex];
 
-    // Validate it's a STANDARD account
-    if (existingAccount.type !== AccountType.STANDARD) {
+    // TASK-425 U2: an account whose own key this device holds and controls
+    // it on chain (a REKEYED account whose rekey was undone included).
+    if (!(await canTransferOwnKey(existingAccount, { fresh: true }))) {
       throw new Error(
-        `Cannot convert account type ${existingAccount.type} to remote signer. Only STANDARD accounts can be converted.`
+        `Cannot convert account type ${existingAccount.type} to remote signer. Only an account whose key is on this device can be converted.`
       );
     }
 
@@ -848,11 +889,15 @@ export class MultiAccountWalletService {
       authLevel: 'v1-unsigned',
     };
 
-    // Replace the account in the wallet
-    wallet.accounts[accountIndex] = remoteSignerAccount;
-
-    // Store the updated wallet
-    await this.storeWallet(wallet, readEpoch);
+    await this.storeWallet((current) => {
+      if (!current) throw new Error('No wallet found');
+      const index = current.accounts.findIndex(
+        (account) => account.id === accountId
+      );
+      if (index === -1) throw new AccountNotFoundError('Account not found');
+      current.accounts[index] = remoteSignerAccount;
+      return current;
+    }, readEpoch);
 
     return remoteSignerAccount;
   }
@@ -926,9 +971,13 @@ export class MultiAccountWalletService {
         );
 
         // Read-repair write: skipped if a wipe/reset raced this read (TASK-212).
-        await this.storeWallet(parsed, readEpoch);
+        await this.storeWallet(parsed, readEpoch, undefined, walletData);
 
-        const sanitized = await this.mergeSettingsAndHeal(parsed, readEpoch);
+        const sanitized = await this.mergeSettingsAndHeal(
+          parsed,
+          readEpoch,
+          JSON.stringify(this.sanitizeWalletForPersistence(parsed))
+        );
         if (this.resetRacedRead(readEpoch)) return null;
         return this.deepCloneWallet(sanitized);
       }
@@ -945,7 +994,11 @@ export class MultiAccountWalletService {
       }
 
       const loadPromise = (async () => {
-        const wallet = await this.mergeSettingsAndHeal(parsed, readEpoch);
+        const wallet = await this.mergeSettingsAndHeal(
+          parsed,
+          readEpoch,
+          walletData
+        );
         // Fail-closed: only memoize a wallet whose accounts hold NO secret
         // material, keyed on a secret-free raw string. hasSecretMaterial already
         // guaranteed this above; re-checking the healed result keeps the
@@ -976,7 +1029,7 @@ export class MultiAccountWalletService {
         getCurrentWalletParsesInFlight.delete(walletData);
       }
     } catch (error) {
-      console.error('Failed to get current wallet:', error);
+      console.error('Failed to get current wallet:', redactError(error));
       return null;
     }
   }
@@ -991,7 +1044,8 @@ export class MultiAccountWalletService {
    */
   private static async mergeSettingsAndHeal(
     wallet: Wallet,
-    readEpoch: number
+    readEpoch: number,
+    sourceRaw: string
   ): Promise<Wallet> {
     const defaultSettings = this.getDefaultWalletSettings();
     const persistedSettings = wallet.settings ?? {};
@@ -1011,20 +1065,19 @@ export class MultiAccountWalletService {
     // from an exactly-32-byte public key; it never weakens validation.
     let modified = false;
 
-    // TASK-45 / DR-10 — `backupVerified` migration. Every STANDARD account
-    // persisted before the field existed is normalized to `false`, NOT derived
-    // from `hasBackup` (which records "a mnemonic was supplied", not "the user
-    // proved they hold it"). Idempotent: after the first pass every standard
-    // account carries a boolean, so `modified` stays false on later reads and no
-    // further write is enqueued. Non-boolean junk (a hand-edited or corrupted
-    // blob) is coerced to `false` rather than trusted. The resulting write is
-    // the existing epoch-guarded read-repair write, so a concurrent wipe/reset
-    // still wins.
+    // TASK-45 / TASK-421 U4a — normalize STANDARD and REKEYED verification.
+    // Preserve literal booleans; missing/invalid values become false, never
+    // inferred from hasBackup or an auth account. No other flags are invented.
+    // Idempotent and persisted through the existing epoch-guarded read-repair
+    // write, so a concurrent wipe/reset still wins. No network/probe dependency.
     wallet.accounts = wallet.accounts.map((acc) => {
-      if (acc.type !== AccountType.STANDARD) return acc;
       if (
-        typeof (acc as StandardAccountMetadata).backupVerified === 'boolean'
+        acc.type !== AccountType.STANDARD &&
+        acc.type !== AccountType.REKEYED
       ) {
+        return acc;
+      }
+      if (typeof acc.backupVerified === 'boolean') {
         return acc;
       }
       modified = true;
@@ -1058,7 +1111,7 @@ export class MultiAccountWalletService {
 
     if (modified) {
       // Read-repair write: skipped if a wipe/reset raced this read (TASK-212).
-      await this.storeWallet(wallet, readEpoch);
+      await this.storeWallet(wallet, readEpoch, undefined, sourceRaw);
     }
 
     return wallet;
@@ -1177,33 +1230,25 @@ export class MultiAccountWalletService {
   }
 
   static async updateAccountMetadata(
-    updatedAccount: AccountMetadata
+    updatedAccount: Partial<AccountMetadata> & Pick<AccountMetadata, 'id'>,
+    readEpoch = walletResetEpoch
   ): Promise<void> {
-    // TASK-212: guard the write against a reset racing this read.
-    const readEpoch = walletResetEpoch;
-    const wallet = await this.getCurrentWallet();
-    if (!wallet) {
-      throw new Error('No wallet found');
-    }
-
-    const accountIndex = wallet.accounts.findIndex(
-      (acc) => acc.id === updatedAccount.id
-    );
-    if (accountIndex === -1) {
-      throw new AccountNotFoundError(`Account not found: ${updatedAccount.id}`);
-    }
-
-    const accounts = wallet.accounts.map((acc) =>
-      acc.id === updatedAccount.id ? updatedAccount : acc
-    );
-
-    await this.storeWallet(
-      {
-        ...wallet,
-        accounts,
-      },
-      readEpoch
-    );
+    await this.storeWallet((wallet) => {
+      if (!wallet) throw new Error('No wallet found');
+      const index = wallet.accounts.findIndex(
+        (acc) => acc.id === updatedAccount.id
+      );
+      if (index === -1) {
+        throw new AccountNotFoundError(
+          `Account not found: ${updatedAccount.id}`
+        );
+      }
+      wallet.accounts[index] = {
+        ...wallet.accounts[index],
+        ...updatedAccount,
+      } as AccountMetadata;
+      return wallet;
+    }, readEpoch);
   }
 
   static async updateAccountLabel(
@@ -1231,19 +1276,35 @@ export class MultiAccountWalletService {
       label: nextLabel.length > 0 ? nextLabel : undefined,
     };
 
-    const accounts = wallet.accounts.map((acc) =>
-      acc.id === accountId ? updatedAccount : acc
-    );
-
-    await this.storeWallet(
-      {
-        ...wallet,
-        accounts,
-      },
+    await this.updateAccountMetadata(
+      { id: accountId, label: updatedAccount.label },
       readEpoch
     );
 
     return updatedAccount;
+  }
+
+  /**
+   * Verification requires positive custody evidence; probe errors fail closed.
+   * A REKEYED record's originalOwner can outlive its key, so only the probe
+   * counts (TASK-425 U4).
+   */
+  private static async eligibleBackupVerificationTarget(
+    account: AccountMetadata,
+    expectedAddress: string
+  ): Promise<StandardAccountMetadata | RekeyedAccountMetadata | null> {
+    if (account.address !== expectedAddress) return null;
+    if (account.type === AccountType.STANDARD) return account;
+    if (account.type !== AccountType.REKEYED) return null;
+    try {
+      return (await AccountSecureStorage.probeSecretPresenceStrict(
+        account.id
+      )) === true
+        ? account
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1252,14 +1313,15 @@ export class MultiAccountWalletService {
    *
    * Deliberately narrow: it takes no phrase, no key, and only ever sets the flag
    * to `true` (there is no "un-verify" — a user who has proven they hold the
-   * phrase cannot un-prove it). STANDARD accounts only; anything else is a
+   * phrase cannot un-prove it). Local-key accounts only; anything else is a
    * programming error and throws rather than silently no-op'ing.
    *
    * Idempotent: re-verifying an already-verified account performs no write.
    */
   static async markBackupVerified(
-    accountId: string
-  ): Promise<StandardAccountMetadata> {
+    accountId: string,
+    expectedAddress: string
+  ): Promise<StandardAccountMetadata | RekeyedAccountMetadata> {
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
     const wallet = await this.getCurrentWallet();
@@ -1274,10 +1336,13 @@ export class MultiAccountWalletService {
       throw new AccountNotFoundError(`Account not found: ${accountId}`);
     }
 
-    const account = wallet.accounts[accountIndex];
-    if (account.type !== AccountType.STANDARD) {
+    const account = await this.eligibleBackupVerificationTarget(
+      wallet.accounts[accountIndex],
+      expectedAddress
+    );
+    if (!account || readEpoch !== walletResetEpoch) {
       throw new Error(
-        'Only standard accounts have a recovery phrase to verify'
+        'Account has no recovery phrase to verify or has changed'
       );
     }
 
@@ -1294,72 +1359,84 @@ export class MultiAccountWalletService {
     // an active-account change) that landed in between — or be discarded by one,
     // losing a verification the user just earned. Re-reading inside the chain
     // makes this mutation touch exactly one field of the CURRENT blob.
-    const applied = await this.enqueueWalletWrite(async () => {
-      // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
-      if (readEpoch !== walletResetEpoch) return false;
-      const raw = await storage.getItem(this.WALLET_KEY);
-      // Primary absent = wiped (or never written). Deliberately stricter than
-      // storeWallet: this mutation never (re)creates a wallet blob, and it never
-      // clears the wipe tombstone.
-      if (raw == null) return false;
+    // Resolves to the record as committed inside the chain (null = not
+    // applied), so callers never see the initial snapshot after a concurrent
+    // conversion (TASK-421 U4d review).
+    const committed = await this.enqueueWalletWrite(
+      async (): Promise<
+        StandardAccountMetadata | RekeyedAccountMetadata | null
+      > => {
+        // TASK-212: a wipe/reset raced this read — do not resurrect the wallet.
+        if (readEpoch !== walletResetEpoch) return null;
+        const raw = await storage.getItem(this.WALLET_KEY);
+        // Primary absent = wiped (or never written). Deliberately stricter than
+        // storeWallet: this mutation never (re)creates a wallet blob, and it never
+        // clears the wipe tombstone.
+        if (raw == null) return null;
 
-      const current = JSON.parse(raw) as Wallet;
-      const index = current.accounts.findIndex((acc) => acc.id === accountId);
-      if (index === -1) return false;
+        const current = JSON.parse(raw) as Wallet;
+        const index = current.accounts.findIndex((acc) => acc.id === accountId);
+        if (index === -1) return null;
 
-      const target = current.accounts[index];
-      if (target.type !== AccountType.STANDARD) return false;
-      // Someone else already recorded it — nothing to do, and no write.
-      if (target.backupVerified === true) return true;
+        const target = await this.eligibleBackupVerificationTarget(
+          current.accounts[index],
+          expectedAddress
+        );
+        if (!target || readEpoch !== walletResetEpoch) return null;
+        // Someone else already recorded it — nothing to do, and no write.
+        if (target.backupVerified === true) return target;
 
-      current.accounts[index] = {
-        ...target,
-        backupVerified: true,
-        backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
-      };
+        const updated = {
+          ...target,
+          backupVerified: true,
+          backupCreatedAt: target.backupCreatedAt ?? backupCreatedAt,
+        };
+        current.accounts[index] = updated;
 
-      await storage.setItem(
-        this.WALLET_KEY,
-        JSON.stringify(this.sanitizeWalletForPersistence(current))
-      );
-      return true;
-    });
+        await storage.setItem(
+          this.WALLET_KEY,
+          JSON.stringify(this.sanitizeWalletForPersistence(current))
+        );
+        return updated;
+      }
+    );
 
-    if (!applied) {
+    if (!committed) {
       throw new Error(
         'Could not record backup verification: the wallet changed or was reset'
       );
     }
 
-    return {
-      ...account,
-      backupVerified: true,
-      backupCreatedAt,
-    };
+    return committed;
   }
 
   static async setActiveAccount(accountId: string): Promise<void> {
     // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
-    const wallet = await this.getCurrentWallet();
-    if (!wallet) {
-      throw new Error('No wallet found');
-    }
-
-    const account = wallet.accounts.find((acc) => acc.id === accountId);
-    if (!account) {
-      throw new AccountNotFoundError(`Account not found: ${accountId}`);
-    }
-
-    wallet.activeAccountId = accountId;
-    await this.storeWallet(wallet, readEpoch);
+    await this.storeWallet((wallet) => {
+      if (!wallet) throw new Error('No wallet found');
+      if (!wallet.accounts.some((account) => account.id === accountId)) {
+        throw new AccountNotFoundError(`Account not found: ${accountId}`);
+      }
+      wallet.activeAccountId = accountId;
+      return wallet;
+    }, readEpoch);
   }
 
   static async getPrivateKey(accountId: string): Promise<Uint8Array> {
     return await AccountSecureStorage.getPrivateKey(accountId);
   }
 
-  static async deleteAccount(accountId: string): Promise<void> {
+  /**
+   * TASK-424: `expected` is what the caller checked before confirming. It is
+   * re-validated here, against this read, and (for a keyless deletion) inside
+   * the key-mutation mutex before the secret delete, so a check made in the UI
+   * can't go stale between the confirmation and the delete.
+   */
+  static async deleteAccount(
+    accountId: string,
+    expected: AccountDeletionExpectation
+  ): Promise<void> {
     // TASK-192: cancel any in-flight deferred notification subscribe pass. That
     // pass holds a wallet snapshot from app start and finishes with one batched
     // write, so a deletion inside its window would otherwise let it write a
@@ -1377,21 +1454,35 @@ export class MultiAccountWalletService {
       throw new Error('No wallet found');
     }
 
-    // Remove from secure storage
-    await AccountSecureStorage.deleteAccount(accountId);
-
-    // Remove from wallet
-    wallet.accounts = wallet.accounts.filter((acc) => acc.id !== accountId);
-
-    // If this was the active account, set a new one
-    if (wallet.activeAccountId === accountId && wallet.accounts.length > 0) {
-      wallet.activeAccountId = wallet.accounts[0].id;
+    const stored = wallet.accounts.find((acc) => acc.id === accountId);
+    if (
+      !stored ||
+      stored.address !== expected.address ||
+      stored.type !== expected.type
+    ) {
+      throw new AccountDeletionPreconditionError();
     }
 
-    await this.storeWallet(wallet, readEpoch);
+    // Remove from secure storage
+    await AccountSecureStorage.deleteAccount(accountId, {
+      requireNoSecret: expected.keyless,
+    });
+
+    await this.storeWallet((current) => {
+      if (!current) throw new Error('No wallet found');
+      current.accounts = current.accounts.filter((acc) => acc.id !== accountId);
+      if (
+        current.activeAccountId === accountId &&
+        current.accounts.length > 0
+      ) {
+        current.activeAccountId = current.accounts[0].id;
+      }
+      return current;
+    }, readEpoch);
   }
 
   static async clearAllWallets(): Promise<void> {
+    invalidateRekeyStatus();
     // TASK-192: cancel any in-flight deferred notification subscribe pass, for
     // the same reason deleteAccount does — that pass holds a wallet snapshot
     // from app start and finishes with one batched write, so a wipe inside its
@@ -1452,7 +1543,7 @@ export class MultiAccountWalletService {
       if (walletResetEpoch === bumpedEpoch) {
         walletResetEpoch = bumpedEpoch - 1;
       }
-      console.error('Failed to clear wallet data:', error);
+      console.error('Failed to clear wallet data:', redactError(error));
       throw new Error(
         `Failed to clear wallet data: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -1602,15 +1693,19 @@ export class MultiAccountWalletService {
         );
       }
 
-      // Check if we control the auth address (Ledger account)
-      const authAccountInWallet = await this.findAccountByAddress(
-        authAccount.authAddress
-      );
+      // Check if we control the auth address (Ledger account). Confirmed read
+      // (TASK-443): an unreadable wallet must fail the import, not persist a
+      // canSign: false derived from a read that timed out.
+      const confirmedWallet = await this.getCurrentWalletConfirmed();
+      const authAccountInWallet =
+        confirmedWallet?.accounts.find(
+          (acc) => acc.address === authAccount.authAddress
+        ) ?? null;
       const canSign = Boolean(authAccountInWallet);
 
       if (!canSign) {
         console.warn(
-          `Auth account ${authAccount.authAddress} not found in wallet. Import as watch-only.`
+          `Auth account ${redactAddress(authAccount.authAddress)} not found in wallet. Import as watch-only.`
         );
       }
 
@@ -1642,7 +1737,7 @@ export class MultiAccountWalletService {
 
       return accountMetadata;
     } catch (error) {
-      console.error('Failed to import auth account:', error);
+      console.error('Failed to import auth account:', redactError(error));
       throw error instanceof Error
         ? error
         : new Error('Failed to import auth account');
@@ -1738,6 +1833,24 @@ export class MultiAccountWalletService {
     return this.validateAndParseSecretKey(privateKeyHex);
   }
 
+  /**
+   * getCurrentWallet for a decision that must not fail open (TASK-443, Codex
+   * bug-hunter): getCurrentWallet still runs first so a legacy copy migrates,
+   * but its null is ambiguous (absent, a swallowed read error, or the bounded
+   * legacy read timing out). A null is confirmed with the strict read, which
+   * throws on any of those, so only a genuinely absent wallet reads as null.
+   */
+  static async getCurrentWalletConfirmed(): Promise<Wallet | null> {
+    const wallet = await this.getCurrentWallet();
+    if (wallet) {
+      return wallet;
+    }
+    if (await this.readWalletStrict()) {
+      throw new Error('Wallet could not be read; try again');
+    }
+    return null;
+  }
+
   // Public so auth-account-discovery can reuse the same lookup/dedup logic.
   static async findAccountByAddress(
     address: string
@@ -1747,6 +1860,24 @@ export class MultiAccountWalletService {
       return null;
     }
     return wallet.accounts.find((acc) => acc.address === address) || null;
+  }
+
+  /**
+   * The parsed wallet for a decision that must not fail open (import's
+   * duplicate check and default label): the strict, bounded read
+   * (readWalletForMutation), which throws instead of reading as "no wallet".
+   * It never enqueues on the write chain. null = no wallet.
+   */
+  private static async readWalletStrict(): Promise<Wallet | null> {
+    const raw = await this.readWalletForMutation();
+    if (raw == null) {
+      return null;
+    }
+    const wallet = JSON.parse(raw) as Wallet;
+    if (!Array.isArray(wallet?.accounts)) {
+      throw new Error('Corrupt wallet blob: accounts is not an array');
+    }
+    return wallet;
   }
 
   private static async getAccountCount(): Promise<number> {
@@ -1807,7 +1938,7 @@ export class MultiAccountWalletService {
 
       return reportedAuthAddress.toUpperCase() === normalizedAuth.toUpperCase();
     } catch (error) {
-      console.error('Failed to verify rekey relationship', error);
+      console.error('Failed to verify rekey relationship', redactError(error));
       return false;
     }
   }
@@ -1850,13 +1981,12 @@ export class MultiAccountWalletService {
       return account;
     }
 
-    const accounts = [...wallet.accounts];
-    accounts[accountIndex] = nextAccount;
-
-    await this.storeWallet(
+    await this.updateAccountMetadata(
       {
-        ...wallet,
-        accounts,
+        id: account.id,
+        deviceId: nextAccount.deviceId,
+        deviceName: nextAccount.deviceName,
+        lastDeviceConnection: nextAccount.lastDeviceConnection,
       },
       readEpoch
     );
@@ -1872,50 +2002,34 @@ export class MultiAccountWalletService {
     // rather than resurrecting a wiped wallet or orphaning the new key.
     creationGen: number
   ): Promise<void> {
-    // TASK-212: guard the write against a reset racing this read.
     const readEpoch = walletResetEpoch;
-    const wallet = await this.getCurrentWallet();
-    if (!wallet) {
-      // If no wallet exists, create one with this account
-      if (accountMetadata.type === AccountType.STANDARD) {
-        await this.createWallet(
-          accountMetadata as StandardAccountMetadata,
-          creationGen
-        );
-      } else if (
-        accountMetadata.type === AccountType.REMOTE_SIGNER ||
-        accountMetadata.type === AccountType.WATCH
-      ) {
-        // Create wallet with non-standard account (no mnemonic required)
-        await this.createWalletWithAccount(accountMetadata, creationGen);
-      } else {
-        throw new Error('Cannot create wallet with this account type');
-      }
-    } else {
-      wallet.accounts.push(accountMetadata);
-      // Pass BOTH the read epoch (don't resurrect a concurrently-wiped wallet)
-      // and the creation generation (abort + let the caller roll back a raced
-      // STANDARD key). For a STANDARD add either guard tripping throws
-      // ResetRacedError; for a non-secret add the wallet simply isn't resurrected.
-      await this.storeWallet(wallet, readEpoch, creationGen);
-    }
-  }
-
-  private static async createWalletWithAccount(
-    accountMetadata: AccountMetadata,
-    creationGen?: number
-  ): Promise<Wallet> {
-    const wallet: Wallet = {
-      id: this.generateWalletId(),
-      version: '1.0',
-      createdAt: new Date().toISOString(),
-      accounts: [accountMetadata],
-      activeAccountId: accountMetadata.id,
-      settings: this.getDefaultWalletSettings(),
-    };
-
-    await this.storeWallet(wallet, undefined, creationGen);
-    return wallet;
+    await this.storeWallet(
+      (wallet) => {
+        if (!wallet) {
+          return {
+            id: this.generateWalletId(),
+            version: '1.0',
+            createdAt: new Date().toISOString(),
+            accounts: [accountMetadata],
+            activeAccountId: accountMetadata.id,
+            settings: this.getDefaultWalletSettings(),
+          };
+        }
+        if (
+          wallet.accounts.some(
+            (account) =>
+              account.id === accountMetadata.id ||
+              account.address === accountMetadata.address
+          )
+        ) {
+          throw new AccountExistsError('Account already exists in wallet');
+        }
+        wallet.accounts.push(accountMetadata);
+        return wallet;
+      },
+      readEpoch,
+      creationGen
+    );
   }
 
   /**
@@ -1942,28 +2056,31 @@ export class MultiAccountWalletService {
    * recreate account records whose secure keys were already wiped). The epoch is
    * re-checked INSIDE the serialized task (after any earlier-enqueued wipe), and
    * the write chain still guarantees a wipe enqueued afterward wins even if the
-   * check narrowly passes. CREATION writes (createWallet / createWalletWithAccount
-   * / persistRestoredWallet) pass no epoch and always persist.
+   * check narrowly passes. New account additions use a callback to read and
+   * mutate the latest wallet inside the queue. Explicit wallet replacement
+   * (createWallet / persistRestoredWallet) passes no epoch.
    */
   private static async storeWallet(
-    wallet: Wallet,
+    wallet: Wallet | ((current: Wallet | null) => Wallet),
     readEpoch?: number,
     // TASK-220: pass for a CREATION/ADD write that follows a fresh key/account
-    // creation (createWallet, createWalletWithAccount, ledger/restore creation,
+    // creation (createWallet, ledger/restore creation,
     // and the STANDARD existing-wallet add). Captured before the secret write;
     // if the SECURE reset generation advanced since, a full reset raced this
     // creation, so the write is ABORTED with ResetRacedError (not silently
     // skipped) — the caller then rolls back the just-written secret and the
     // reset wins (DR-2). This is the guard that fires in the clearAll()→
     // clearAllWallets() window, where walletResetEpoch has not yet bumped.
-    creationGen?: number
+    creationGen?: number,
+    sourceRaw?: string
   ): Promise<void> {
     // Sanitize + serialize a SNAPSHOT now (synchronously), before enqueuing, so a
     // later in-place mutation of `wallet` by the caller can't alter what is
     // persisted once this task reaches the front of the chain.
-    const serialized = JSON.stringify(
-      this.sanitizeWalletForPersistence(wallet)
-    );
+    const snapshot =
+      typeof wallet === 'function'
+        ? null
+        : JSON.stringify(this.sanitizeWalletForPersistence(wallet));
     const wrote = await this.enqueueWalletWrite(async () => {
       // TASK-220 creation/add guard: abort if a reset advanced the SECURE
       // generation since this creation captured it. Throwing (not skipping) lets
@@ -1994,7 +2111,12 @@ export class MultiAccountWalletService {
         // mutations — such a write is not a resurrection and proceeds below,
         // clearing the stale marker. (Creation writes pass no epoch.)
         const wiped = await storage.getItem(this.WIPE_TOMBSTONE_KEY);
-        if (wiped != null) {
+        // A fresh add after a completed wipe may create a wallet. Its secure
+        // generation and epoch still reject a reset racing this operation.
+        if (
+          wiped != null &&
+          !(typeof wallet === 'function' && creationGen !== undefined)
+        ) {
           const current = await storage.getItem(this.WALLET_KEY);
           if (current == null) {
             if (creationGen !== undefined) throw new ResetRacedError();
@@ -2002,14 +2124,59 @@ export class MultiAccountWalletService {
           }
         }
       }
-      // TASK-212: only the PRIMARY (AsyncStorage) write is serialized on the
-      // chain, so a hanging legacy secure-store op can never block a subsequent
-      // write or wipe.
+      // Read repair must never overwrite a mutation committed since its read.
+      if (
+        sourceRaw !== undefined &&
+        (await storage.getItem(this.WALLET_KEY)) !== sourceRaw
+      ) {
+        return false;
+      }
+      // Mutations read strictly INSIDE the queue. A read error or corrupt blob
+      // must never become an empty wallet, and another mutation cannot commit
+      // between this read and the write. Do not call getCurrentWallet here: its
+      // read/repair work also queues writes and would deadlock this task.
+      let serialized = snapshot!;
+      if (typeof wallet === 'function') {
+        const raw = await this.readWalletForMutation();
+        const current = raw == null ? null : (JSON.parse(raw) as Wallet);
+        if (raw != null && (!current || !Array.isArray(current.accounts))) {
+          throw new Error('Corrupt wallet blob: accounts is not an array');
+        }
+        serialized = JSON.stringify(
+          this.sanitizeWalletForPersistence(wallet(current))
+        );
+        // A reset can advance either generation while the strict read awaits.
+        if (
+          creationGen !== undefined &&
+          AccountSecureStorage.getResetGeneration() !== creationGen
+        ) {
+          throw new ResetRacedError();
+        }
+        if (readEpoch !== undefined && readEpoch !== walletResetEpoch) {
+          if (creationGen !== undefined) throw new ResetRacedError();
+          return false;
+        }
+      }
+      // Legacy cleanup remains outside the chain. A mutation's strict legacy
+      // read, when needed, must finish before it can safely create a wallet.
       await storage.setItem(this.WALLET_KEY, serialized);
       // A primary blob now exists — the wiped state (if any) is over. Clear the
-      // durable tombstone atomically with the write so migrateLegacyValue is
-      // re-enabled and no stale "wiped" marker lingers past a create/restore.
-      await storage.removeItem(this.WIPE_TOMBSTONE_KEY);
+      // durable tombstone with the write so migrateLegacyValue is re-enabled
+      // and no stale "wiped" marker lingers past a create/restore.
+      // Best-effort (audit 10-29, Luna P2): the blob has landed, so this write
+      // has committed and must not report failure. A caller that rolls back
+      // on failure (account create/import) would otherwise delete the secret
+      // of an account whose metadata is persisted. A tombstone left beside a
+      // present primary is harmless: the primary read wins and mutations
+      // proceed (see the guard above).
+      try {
+        await storage.removeItem(this.WIPE_TOMBSTONE_KEY);
+      } catch (error) {
+        console.warn(
+          'Wipe tombstone not cleared after a committed wallet write:',
+          redactError(error)
+        );
+      }
       return true;
     });
     // Best-effort legacy secure-store cleanup, OUTSIDE the chain and
@@ -2078,7 +2245,10 @@ export class MultiAccountWalletService {
 
       return await this.migrateLegacyValue(key);
     } catch (error) {
-      console.error(`Failed to get stored value for key ${key}:`, error);
+      console.error(
+        `Failed to get stored value for key ${key}:`,
+        redactError(error)
+      );
       return null;
     }
   }
@@ -2152,17 +2322,43 @@ export class MultiAccountWalletService {
     if (!walletData) {
       return false;
     }
+    let rekeyedIds: string[] = [];
     try {
       const parsed = JSON.parse(walletData) as Wallet;
       if (!Array.isArray(parsed.accounts)) {
         return false;
       }
-      return parsed.accounts.some((acc) => acc?.type === AccountType.STANDARD);
+      // STANDARD, or REKEYED with `originalOwner: true` (TASK-419): the durable,
+      // keystore-independent signal that rekeyManager converted a STANDARD
+      // account and kept its key. It must not depend on a secure read: a
+      // pre-sentinel Android keystore failure reads the secret as null exactly
+      // like the PIN.
+      if (
+        parsed.accounts.some((acc) => classifyKeyHolding(acc) === 'present')
+      ) {
+        return true;
+      }
+      rekeyedIds = parsed.accounts
+        .filter(
+          (acc) =>
+            classifyKeyHolding(acc) === 'unresolved' &&
+            typeof acc.id === 'string' &&
+            acc.id !== ''
+        )
+        .map((acc) => acc.id);
     } catch {
       // A corrupt blob is handled (thrown) by hasWalletWithAccountsStrict; here we
       // must not emit a false POSITIVE, so treat an unparseable blob as "unknown".
       return false;
     }
+    // Any other REKEYED account is key-bearing only if a secret is present
+    // (discovered/imported REKEYED accounts hold none). A probe failure
+    // PROPAGATES (fail closed, like the sibling strict reads). Concurrent, so
+    // the AuthContext read stays one probe deep under its outer timeout.
+    const present = await Promise.all(
+      rekeyedIds.map((id) => AccountSecureStorage.probeSecretPresenceStrict(id))
+    );
+    return present.some(Boolean);
   }
 
   /**
@@ -2178,13 +2374,8 @@ export class MultiAccountWalletService {
    */
   static async getStandardAccountIdsStrict(): Promise<string[]> {
     // A present-but-EMPTY primary blob ('') is CORRUPTION, not absence (a
-    // genuinely absent wallet is null). getStoredValueStrict collapses '' to null
-    // (its `if (value)` skip), which here would return [] and make EVERY present
-    // secret look like an orphan → mass-deleted by the reconcile. Detect the raw
-    // empty string up front and fail CLOSED (Codex). This is the sole destructive
-    // amplification of the pre-existing ''-as-absent ambiguity, so it is guarded
-    // here rather than in the shared getStoredValueStrict (whose lock-verdict
-    // callers keep their existing absence semantics).
+    // genuinely absent wallet is null). Detect the raw empty string up front
+    // and fail CLOSED rather than making every present secret look orphaned.
     const rawPrimary = await storage.getItem(this.WALLET_KEY);
     if (rawPrimary === '') {
       throw new Error('Corrupt wallet blob: present but empty');
@@ -2230,12 +2421,65 @@ export class MultiAccountWalletService {
   }
 
   /**
+   * STRICT read of the blob's account ids for the boot reconcile (TASK-419):
+   * `standardIds` (phantom candidates, as before) and `allIds`, every account of
+   * ANY type. A secret is owned by any blob account with its id, not only a
+   * STANDARD one: rekeying converts STANDARD → REKEYED in the blob only and the
+   * original key is deliberately retained (rekeyManager converts back when it
+   * still finds it). Same fail-closed validation as getStandardAccountIdsStrict.
+   */
+  static async getBlobAccountIdsStrict(): Promise<{
+    standardIds: string[];
+    allIds: string[];
+  }> {
+    const rawPrimary = await storage.getItem(this.WALLET_KEY);
+    if (rawPrimary === '') {
+      throw new Error('Corrupt wallet blob: present but empty');
+    }
+    const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
+    if (walletData == null) {
+      return { standardIds: [], allIds: [] };
+    }
+    const parsed = JSON.parse(walletData) as Wallet;
+    if (!Array.isArray(parsed.accounts)) {
+      throw new Error(
+        'Corrupt wallet blob: `accounts` is present but not an array'
+      );
+    }
+    const validTypes = new Set<string>(Object.values(AccountType));
+    for (const acc of parsed.accounts) {
+      if (
+        acc == null ||
+        typeof acc.id !== 'string' ||
+        acc.id === '' ||
+        !validTypes.has(acc.type)
+      ) {
+        throw new Error('Corrupt wallet blob: malformed account entry');
+      }
+    }
+    // A duplicated id is CORRUPTION: pruneStandardAccounts filters by id, so a
+    // STANDARD phantom sharing an id with another entry would remove both.
+    if (
+      new Set(parsed.accounts.map((acc) => acc.id)).size !==
+      parsed.accounts.length
+    ) {
+      throw new Error('Corrupt wallet blob: duplicate account id');
+    }
+    return {
+      standardIds: parsed.accounts
+        .filter((acc) => acc.type === AccountType.STANDARD)
+        .map((acc) => acc.id),
+      allIds: parsed.accounts.map((acc) => acc.id),
+    };
+  }
+
+  /**
    * Remove the given STANDARD account ids from the wallet blob only (TASK-222
    * reconcile: phantom-metadata repair — a blob STANDARD account whose secret is
    * strictly absent). Touches ONLY the wallet metadata blob; the secure store is
    * the caller's separate concern (a phantom has no secret to delete). If the
-   * prune empties the wallet, routes through clearAllWallets so the canonical
-   * wipe path (tombstone + memo bust + epoch bump) runs instead of persisting an
+   * prune empties the wallet, performs the metadata wipe (tombstone + memo bust
+   * + epoch bump) inside the same queue task instead of persisting an
    * empty accounts array. Epoch-guarded like every other blob mutation so a reset
    * racing boot is not undone. A no-op when nothing matches.
    */
@@ -2247,28 +2491,75 @@ export class MultiAccountWalletService {
     // batch-write a subscription for an account this call just removed.
     invalidateAccountSubscribePasses();
     const readEpoch = walletResetEpoch;
-    const wallet = await this.getCurrentWallet();
-    if (!wallet) {
-      // No wallet to prune (absent or a reset already wiped it) — nothing to do.
-      return;
+    const wrote = await this.enqueueWalletWrite(async () => {
+      const raw = await this.readWalletForMutation();
+      if (raw == null || readEpoch !== walletResetEpoch) return false;
+      const wallet = JSON.parse(raw) as Wallet;
+      const toPrune = new Set(ids);
+      const remaining = wallet.accounts.filter((acc) => !toPrune.has(acc.id));
+      if (remaining.length === wallet.accounts.length) return false;
+      if (remaining.length === 0) {
+        // Make the empty-wallet decision and removal in the same queue task;
+        // calling clearAllWallets after releasing the queue could erase an add.
+        invalidateRekeyStatus();
+        walletResetEpoch++;
+        const bumpedEpoch = walletResetEpoch;
+        cachedWalletRawString = null;
+        cachedWallet = null;
+        try {
+          await storage.setItem(this.WIPE_TOMBSTONE_KEY, '1');
+          await storage.removeItem(this.WALLET_KEY);
+        } catch (error) {
+          if (walletResetEpoch === bumpedEpoch) walletResetEpoch = readEpoch;
+          throw error;
+        }
+      } else {
+        wallet.accounts = remaining;
+        if (toPrune.has(wallet.activeAccountId)) {
+          wallet.activeAccountId = remaining[0].id;
+        }
+        await storage.setItem(
+          this.WALLET_KEY,
+          JSON.stringify(this.sanitizeWalletForPersistence(wallet))
+        );
+        await storage.removeItem(this.WIPE_TOMBSTONE_KEY);
+      }
+      return true;
+    });
+    if (wrote) void this.clearLegacyValue(this.WALLET_KEY);
+  }
+
+  /**
+   * The wallet blob for a mutation running INSIDE the write chain (audit
+   * #5/#6). A primary read error propagates and absence is null, as in
+   * getStoredValueStrict, with two differences on the legacy fallback:
+   * - The legacy secure-store read is bounded (LEGACY_READ_ON_CHAIN_MS) and a
+   *   timeout fails the mutation closed. TASK-212: a hanging keychain op must
+   *   never block every later write or wipe.
+   * - A legacy copy is never mutated here. It can still carry unmigrated
+   *   secrets that sanitizeWalletForPersistence would strip, so the mutation
+   *   aborts and getCurrentWallet migrates the copy off the chain first.
+   */
+  private static async readWalletForMutation(): Promise<string | null> {
+    const value = await storage.getItem(this.WALLET_KEY);
+    if (value != null) {
+      return value;
     }
-    const toPrune = new Set(ids);
-    const remaining = wallet.accounts.filter((acc) => !toPrune.has(acc.id));
-    if (remaining.length === wallet.accounts.length) {
-      // None of the ids were present — no write.
-      return;
+    const wiped = await storage.getItem(this.WIPE_TOMBSTONE_KEY);
+    if (wiped != null) {
+      return null;
     }
-    if (remaining.length === 0) {
-      // Pruning empties the wallet — use the canonical metadata wipe.
-      await this.clearAllWallets();
-      return;
+    const legacy = await withTimeout(
+      secureStorage.getItem(this.WALLET_KEY),
+      LEGACY_READ_ON_CHAIN_MS,
+      () => new Error('Wallet storage did not respond; try again')
+    );
+    if (legacy != null) {
+      throw new Error(
+        'Wallet data has not been migrated yet; reopen the wallet and try again'
+      );
     }
-    wallet.accounts = remaining;
-    // Keep activeAccountId pointing at a surviving account.
-    if (toPrune.has(wallet.activeAccountId)) {
-      wallet.activeAccountId = remaining[0].id;
-    }
-    await this.storeWallet(wallet, readEpoch);
+    return null;
   }
 
   /**
@@ -2282,7 +2573,7 @@ export class MultiAccountWalletService {
   ): Promise<string | null> {
     // A throw here is a genuine read failure and propagates; `null` = absent.
     const value = await storage.getItem(key);
-    if (value) {
+    if (value != null) {
       return value;
     }
     // TASK-212: for the wallet blob, honor the durable wipe tombstone BEFORE the
@@ -2295,7 +2586,15 @@ export class MultiAccountWalletService {
         return null;
       }
     }
-    const legacy = await secureStorage.getItem(key);
+    // TASK-450: bounded. Every strict boot probe reaches this read when the
+    // primary blob is absent, and clearOrphanPin runs the reconcile (which reads
+    // through here) with no outer timeout. A timeout THROWS like any other read
+    // error, so each caller fails closed; it never reads as "no wallet".
+    const legacy = await withTimeout(
+      secureStorage.getItem(key),
+      LEGACY_READ_OFF_CHAIN_MS,
+      () => new Error('Legacy wallet storage did not respond')
+    );
     return legacy ?? null;
   }
 
@@ -2335,8 +2634,19 @@ export class MultiAccountWalletService {
       // WALLET_KEY, alongside heal-on-read and legacy-strip).
       const migrationEpoch = walletResetEpoch;
 
-      // Try to get from secure storage (legacy location)
-      const legacyValue = await secureStorage.getItem(key);
+      // Try to get from secure storage (legacy location). TASK-443: bounded,
+      // because getCurrentWallet reaches this read whenever the primary blob is
+      // absent, and its callers (default labels, the watch/remote-signer/rekeyed
+      // duplicate checks) must not hang on a stuck keychain. A timeout fails
+      // closed: no migration write, and getCurrentWallet reads as null exactly
+      // as on any other read error. The writes that follow those checks
+      // re-read inside the write chain (readWalletForMutation), which is
+      // bounded and refuses an unmigrated legacy copy.
+      const legacyValue = await withTimeout(
+        secureStorage.getItem(key),
+        LEGACY_READ_OFF_CHAIN_MS,
+        () => new Error('Legacy wallet storage did not respond')
+      );
       if (!legacyValue) {
         return null;
       }
@@ -2355,7 +2665,7 @@ export class MultiAccountWalletService {
         } catch (error) {
           console.warn(
             'Failed to sanitize legacy wallet payload; not migrating',
-            error
+            redactError(error)
           );
           return null;
         }
@@ -2398,7 +2708,10 @@ export class MultiAccountWalletService {
       await secureStorage.deleteItem(key).catch(() => {});
       return legacyValue;
     } catch (error) {
-      console.error(`Failed to migrate legacy value for key ${key}:`, error);
+      console.error(
+        `Failed to migrate legacy value for key ${key}:`,
+        redactError(error)
+      );
       return null;
     }
   }

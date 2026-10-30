@@ -1,6 +1,7 @@
 import algosdk from 'algosdk';
 import { NetworkId } from '@/types/network';
 import { shouldSkipForOffline } from '@/services/network/offline';
+import { fetchBuffered, BufferedResponse } from '@/utils/fetchBuffered';
 import {
   EnvoiNameInfo,
   EnvoiTokenInfo,
@@ -10,6 +11,7 @@ import {
   EnvoiCache,
   EnvoiCacheEntry,
 } from './types';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 export class EnvoiService {
   private static instance: EnvoiService;
@@ -334,7 +336,11 @@ export class EnvoiService {
         return null;
       }
 
-      console.error('Failed to resolve Envoi name:', address, error);
+      console.error(
+        'Failed to resolve Envoi name:',
+        redactAddress(address),
+        redactError(error)
+      );
       return null;
     } finally {
       this.pendingNameRequests.delete(address);
@@ -591,7 +597,7 @@ export class EnvoiService {
     return /^[a-z0-9-_]+(\.[a-z]+)?$/.test(trimmed) && trimmed.length >= 3;
   }
 
-  private async fetchWithRetry(url: string): Promise<Response> {
+  private async fetchWithRetry(url: string): Promise<BufferedResponse> {
     // TASK-191: offline → skip the ladder instead of burning every attempt and
     // its backoff. A plain Error matches what the exhausted ladder throws, so
     // the callers that turn a failure into `null` (name unresolved) behave
@@ -606,22 +612,17 @@ export class EnvoiService {
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
+        // TASK-440 #9: the deadline covers the body read too.
+        return await fetchBuffered(
+          url,
+          {
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+          },
           this.config.timeout
         );
-
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        });
-
-        clearTimeout(timeoutId);
-        return response;
       } catch (error) {
         lastError =
           error instanceof Error ? error : new Error('Unknown fetch error');

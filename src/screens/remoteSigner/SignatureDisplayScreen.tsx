@@ -31,9 +31,12 @@ import {
   RemoteSignerRequest,
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
-import { AccountType, AccountMetadata } from '@/types/wallet';
+import { filterOwnKeyAccounts } from '@/services/wallet/ownKeyCustody';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { AnimatedQRCode } from '@/components/remoteSigner';
 import algosdk from 'algosdk';
+import { redactError } from '@/utils/logRedaction';
+import { assertSignableKeyreg } from '@/utils/keyregSafety';
 
 type RouteParams = {
   SignatureDisplay: {
@@ -90,6 +93,15 @@ export default function SignatureDisplayScreen() {
       try {
         // Sign all transactions
         const signedTxns: Uint8Array[] = [];
+        // TASK-425 U2: the accounts whose own key we hold, a REKEYED account
+        // that kept its key included.
+        const ownKeyAccounts = await filterOwnKeyAccounts(accounts);
+
+        // TASK-439: refuse the whole request, before any key is loaded, if
+        // any transaction is a permanent non-participation keyreg.
+        for (const txnData of request.txns) {
+          assertSignableKeyreg(Buffer.from(txnData.b, 'base64'));
+        }
 
         for (let i = 0; i < request.txns.length; i++) {
           setSigningProgress({ current: i + 1, total: request.txns.length });
@@ -102,9 +114,8 @@ export default function SignatureDisplayScreen() {
           const signerAddress = txnData.a || txnData.s;
 
           // Find the account with this address
-          const account = accounts.find(
-            (acc: AccountMetadata) =>
-              acc.address === signerAddress && acc.type === AccountType.STANDARD
+          const account = ownKeyAccounts.find(
+            (acc) => acc.address === signerAddress
           );
 
           if (!account) {
@@ -123,6 +134,13 @@ export default function SignatureDisplayScreen() {
           if (!privateKey) {
             throw new Error(
               `Could not retrieve private key for account: ${account.label || account.address}`
+            );
+          }
+          // TASK-425 U2: sign only with the account's OWN key.
+          if (!keyBelongsToAddress(privateKey, account.address)) {
+            privateKey.fill(0);
+            throw new Error(
+              `The stored key does not belong to account: ${account.label || account.address}`
             );
           }
 
@@ -152,7 +170,7 @@ export default function SignatureDisplayScreen() {
         setResponse(successResponse);
         setScreenState('display');
       } catch (error) {
-        console.error('Signing failed:', error);
+        console.error('Signing failed:', redactError(error));
         setErrorMessage(
           error instanceof Error ? error.message : 'Signing failed'
         );

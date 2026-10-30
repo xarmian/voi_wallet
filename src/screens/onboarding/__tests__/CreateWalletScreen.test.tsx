@@ -6,8 +6,9 @@
  * 1. DR-11 carrier #1 — the quiz result reaches `SecuritySetup` as a
  *    `backupVerified` BOOLEAN route param. Verified => true, skip => false.
  *    Nothing else about the navigation payload changes (DR-9: the mnemonic
- *    handoff is an accepted risk being remediated in TASK-224 — this task must
- *    not widen it, so the param set is asserted exactly).
+ *    handoff was remediated in TASK-224 — the phrase travels as an opaque
+ *    `mnemonicSecretId` into the in-memory holder, and the param set is
+ *    asserted exactly).
  *
  * 2. U-10 — a `beforeRemove` listener guards EVERY pop path (header back, iOS
  *    swipe-back, Android hardware back), not just the header button. Losing
@@ -94,6 +95,33 @@ import {
   pressWrongQuizOption,
 } from '@/__tests__/fixtures/mnemonicQuiz';
 import { MAX_MISTAKES } from '@/components/wallet/mnemonicQuiz';
+import { getAccountSecret, clearAccountSecret } from '@/utils/accountQRParser';
+
+/**
+ * TASK-224: the phrase must never be a route param. Assert the exact param set
+ * (an opaque `mnemonicSecretId`, no `mnemonic` key) and that the id resolves,
+ * via the in-memory holder, to the phrase that was shown. Clears the entry
+ * afterwards, standing in for SecuritySetup's consume/unmount clear.
+ */
+function expectSecuritySetupHandoff(
+  navigate: jest.Mock,
+  backupVerified: boolean
+): string {
+  const calls = navigate.mock.calls;
+  const [routeName, params] = calls[calls.length - 1];
+  expect(routeName).toBe('SecuritySetup');
+  expect(params).toEqual({
+    mnemonicSecretId: expect.any(String),
+    source: 'create',
+    backupVerified,
+  });
+  expect(params).not.toHaveProperty('mnemonic');
+  expect(getAccountSecret(params.mnemonicSecretId)?.mnemonic).toBe(
+    MOCK_MNEMONIC
+  );
+  clearAccountSecret(params.mnemonicSecretId);
+  return params.mnemonicSecretId;
+}
 
 type Listener = (event: {
   preventDefault: () => void;
@@ -137,7 +165,7 @@ function makeNavigation() {
 const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
 /** Press the button with the given text in the most recent Alert.alert call. */
-function pressAlertButton(label: string) {
+async function pressAlertButton(label: string) {
   const spy = Alert.alert as unknown as jest.Mock;
   const calls = spy.mock.calls;
   const buttons = calls[calls.length - 1][2] as {
@@ -146,7 +174,7 @@ function pressAlertButton(label: string) {
   }[];
   const button = buttons.find((b) => b.text === label);
   expect(button).toBeDefined();
-  act(() => {
+  await act(() => {
     button!.onPress?.();
   });
 }
@@ -160,9 +188,9 @@ afterEach(() => {
 });
 
 describe('CreateWalletScreen — verification carrier (DR-11)', () => {
-  it('navigates with backupVerified: true after passing the quiz', () => {
+  it('navigates with backupVerified: true after passing the quiz', async () => {
     const navigation = makeNavigation();
-    const screen = render(
+    const screen = await render(
       <CreateWalletScreen navigation={navigation as never} />
     );
 
@@ -173,68 +201,68 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
     expect(navigation.navigate).not.toHaveBeenCalled();
 
     // Step 2: enter the quiz. The old self-attestation dialog is gone.
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
     expect(navigation.navigate).not.toHaveBeenCalled();
 
     // Answer the directed challenge the way a user with a written copy would
     // (TASK-226: there is no "fill any slot from any chip" board any more).
-    completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
+    await completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
 
     expect(navigation.navigate).toHaveBeenCalledTimes(1);
-    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
-      mnemonic: MOCK_MNEMONIC,
-      source: 'create',
-      backupVerified: true,
-    });
+    expectSecuritySetupHandoff(navigation.navigate, true);
   });
 
-  it('navigates with backupVerified: false when the user skips', () => {
+  it('navigates with backupVerified: false when the user skips', async () => {
     const navigation = makeNavigation();
-    const screen = render(
+    const screen = await render(
       <CreateWalletScreen navigation={navigation as never} />
     );
 
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
-    fireEvent.press(screen.getByTestId('create-wallet-verification-skip'));
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await fireEvent.press(
+      screen.getByTestId('create-wallet-verification-skip')
+    );
 
     // Skipping is confirmed, not silent.
     expect(Alert.alert).toHaveBeenCalled();
     expect(navigation.navigate).not.toHaveBeenCalled();
 
-    pressAlertButton('Skip for now');
+    await pressAlertButton('Skip for now');
 
-    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
-      mnemonic: MOCK_MNEMONIC,
-      source: 'create',
-      backupVerified: false,
-    });
+    expectSecuritySetupHandoff(navigation.navigate, false);
   });
 
-  it('does not navigate if the skip confirmation is cancelled', () => {
+  it('does not navigate if the skip confirmation is cancelled', async () => {
     const navigation = makeNavigation();
-    const screen = render(
+    const screen = await render(
       <CreateWalletScreen navigation={navigation as never} />
     );
 
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
-    fireEvent.press(screen.getByTestId('create-wallet-verification-skip'));
-    pressAlertButton('Cancel');
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await fireEvent.press(
+      screen.getByTestId('create-wallet-verification-skip')
+    );
+    await pressAlertButton('Cancel');
 
     expect(navigation.navigate).not.toHaveBeenCalled();
   });
 
-  it('never navigates on wrong answers, and sends the user back to the phrase', () => {
+  it('never navigates on wrong answers, and sends the user back to the phrase', async () => {
     // TASK-226: a wrong pick is a real failure. Exhausting the mistake budget
     // returns the user to the phrase rather than letting them grind guesses,
     // and nothing is ever marked verified along the way.
     const navigation = makeNavigation();
-    const screen = render(
+    const screen = await render(
       <CreateWalletScreen navigation={navigation as never} />
     );
 
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
     for (let mistake = 0; mistake <= MAX_MISTAKES; mistake++) {
-      pressWrongQuizOption(screen, 'create-wallet-verification', MOCK_WORDS);
+      await pressWrongQuizOption(
+        screen,
+        'create-wallet-verification',
+        MOCK_WORDS
+      );
     }
 
     expect(navigation.navigate).not.toHaveBeenCalled();
@@ -245,27 +273,23 @@ describe('CreateWalletScreen — verification carrier (DR-11)', () => {
     );
 
     // ...and the legitimate user can still get through afterwards.
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
-    completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
-    expect(navigation.navigate).toHaveBeenCalledWith('SecuritySetup', {
-      mnemonic: MOCK_MNEMONIC,
-      source: 'create',
-      backupVerified: true,
-    });
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await completeQuiz(screen, 'create-wallet-verification', MOCK_WORDS);
+    expectSecuritySetupHandoff(navigation.navigate, true);
   });
 });
 
 describe('CreateWalletScreen — back-path guard (U-10)', () => {
-  it('registers a beforeRemove listener so every pop path is covered', () => {
+  it('registers a beforeRemove listener so every pop path is covered', async () => {
     const navigation = makeNavigation();
-    render(<CreateWalletScreen navigation={navigation as never} />);
+    await render(<CreateWalletScreen navigation={navigation as never} />);
 
     expect(navigation.hasBeforeRemoveListener()).toBe(true);
   });
 
-  it('blocks a swipe-back / hardware-back and asks for confirmation', () => {
+  it('blocks a swipe-back / hardware-back and asks for confirmation', async () => {
     const navigation = makeNavigation();
-    render(<CreateWalletScreen navigation={navigation as never} />);
+    await render(<CreateWalletScreen navigation={navigation as never} />);
 
     const { prevented } = navigation.emitBeforeRemove();
 
@@ -274,58 +298,73 @@ describe('CreateWalletScreen — back-path guard (U-10)', () => {
     expect(navigation.dispatch).not.toHaveBeenCalled();
   });
 
-  it('lets the pop through only after the user confirms', () => {
+  it('lets the pop through only after the user confirms', async () => {
     const navigation = makeNavigation();
-    render(<CreateWalletScreen navigation={navigation as never} />);
+    await render(<CreateWalletScreen navigation={navigation as never} />);
 
     const { action } = navigation.emitBeforeRemove();
-    pressAlertButton('Go Back');
+    await pressAlertButton('Go Back');
 
     expect(navigation.dispatch).toHaveBeenCalledWith(action);
   });
 
-  it('re-arms after returning from SecuritySetup', () => {
+  it('re-arms after returning from SecuritySetup', async () => {
     // Skipping sets the "we are leaving on purpose" escape and pushes
     // SecuritySetup, leaving this screen mounted underneath. If the user comes
     // back, a stale escape flag would let the next hardware-back silently
     // discard the phrase.
     const navigation = makeNavigation();
-    const screen = render(
+    const screen = await render(
       <CreateWalletScreen navigation={navigation as never} />
     );
 
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
-    fireEvent.press(screen.getByTestId('create-wallet-verification-skip'));
-    pressAlertButton('Skip for now');
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await fireEvent.press(
+      screen.getByTestId('create-wallet-verification-skip')
+    );
+    await pressAlertButton('Skip for now');
     expect(navigation.navigate).toHaveBeenCalled();
 
-    act(() => navigation.emitFocus());
+    const firstId = expectSecuritySetupHandoff(navigation.navigate, false);
+
+    await act(() => navigation.emitFocus());
 
     const { prevented } = navigation.emitBeforeRemove();
     expect(prevented).toBe(true);
     expect(navigation.dispatch).not.toHaveBeenCalled();
+
+    // TASK-224: SecuritySetup cleared the first id on unmount (simulated by the
+    // clear in the helper). Continuing again (still on the quiz step) must
+    // store a FRESH, resolvable id.
+    await fireEvent.press(
+      screen.getByTestId('create-wallet-verification-skip')
+    );
+    await pressAlertButton('Skip for now');
+    expect(navigation.navigate).toHaveBeenCalledTimes(2);
+    const secondId = expectSecuritySetupHandoff(navigation.navigate, false);
+    expect(secondId).not.toBe(firstId);
   });
 
-  it('keeps the user on screen when the confirmation is cancelled', () => {
+  it('keeps the user on screen when the confirmation is cancelled', async () => {
     const navigation = makeNavigation();
-    render(<CreateWalletScreen navigation={navigation as never} />);
+    await render(<CreateWalletScreen navigation={navigation as never} />);
 
     navigation.emitBeforeRemove();
-    pressAlertButton('Cancel');
+    await pressAlertButton('Cancel');
 
     expect(navigation.dispatch).not.toHaveBeenCalled();
   });
 
-  it('header back returns to the phrase from the quiz instead of leaving', () => {
+  it('header back returns to the phrase from the quiz instead of leaving', async () => {
     const navigation = makeNavigation();
-    const screen = render(
+    const screen = await render(
       <CreateWalletScreen navigation={navigation as never} />
     );
 
-    fireEvent.press(screen.getByTestId('saved-phrase-button'));
+    await fireEvent.press(screen.getByTestId('saved-phrase-button'));
     expect(screen.getByTestId('create-wallet-verification-root')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('header-back'));
+    await fireEvent.press(screen.getByTestId('header-back'));
 
     expect(screen.queryByTestId('create-wallet-verification-root')).toBeNull();
     expect(screen.getByTestId('mnemonic-display')).toBeTruthy();

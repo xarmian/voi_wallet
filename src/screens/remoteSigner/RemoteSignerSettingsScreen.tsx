@@ -7,7 +7,7 @@
  * - Access export/import features
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Alert,
   View,
@@ -36,10 +36,16 @@ import {
 } from '@/store/remoteSignerStore';
 import { useAccounts, useWalletStore } from '@/store/walletStore';
 import { AppMode } from '@/types/remoteSigner';
-import { AccountType, StandardAccountMetadata } from '@/types/wallet';
+import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
+import {
+  filterTransferableAccounts,
+  OwnKeyAccount,
+} from '@/services/wallet/ownKeyCustody';
 import * as Updates from 'expo-updates';
 import AccountListModal from '@/components/account/AccountListModal';
 import { TransferToAirgapFlow } from '@/components/remoteSigner/TransferToAirgapFlow';
+
+const NO_ACCOUNTS: OwnKeyAccount[] = [];
 
 // Cross-platform alert helper
 const showAlert = (
@@ -83,9 +89,13 @@ export default function RemoteSignerSettingsScreen() {
   const accounts = useAccounts();
   const refresh = useWalletStore((state) => state.refresh);
 
-  // Filter to only STANDARD accounts (which can be transferred to airgap)
-  const standardAccounts = accounts.filter(
-    (acc): acc is StandardAccountMetadata => acc.type === AccountType.STANDARD
+  // The accounts whose own key we hold and which that key controls, so they
+  // can be transferred to airgap (TASK-425 U2: an undone rekey included).
+  const transferableAccounts =
+    useOwnKeyAccounts(accounts, filterTransferableAccounts) ?? NO_ACCOUNTS;
+  const transferableIds = useMemo(
+    () => new Set(transferableAccounts.map((acc) => acc.id)),
+    [transferableAccounts]
   );
 
   const initialize = useRemoteSignerStore((state) => state.initialize);
@@ -109,7 +119,7 @@ export default function RemoteSignerSettingsScreen() {
   // Transfer to Airgap state
   const [showAccountSelector, setShowAccountSelector] = useState(false);
   const [selectedAccountForTransfer, setSelectedAccountForTransfer] =
-    useState<StandardAccountMetadata | null>(null);
+    useState<OwnKeyAccount | null>(null);
   const [showTransferFlow, setShowTransferFlow] = useState(false);
 
   useEffect(() => {
@@ -497,26 +507,26 @@ export default function RemoteSignerSettingsScreen() {
               <TouchableOpacity
                 style={[
                   styles.actionItem,
-                  standardAccounts.length === 0 && { opacity: 0.5 },
+                  transferableAccounts.length === 0 && { opacity: 0.5 },
                 ]}
                 onPress={() => {
-                  if (standardAccounts.length === 0) {
+                  if (transferableAccounts.length === 0) {
                     showAlert(
                       'No Accounts Available',
-                      'You need at least one standard account to transfer to an airgap device.'
+                      'You need at least one account whose key is on this device to transfer to an airgap device.'
                     );
                     return;
                   }
-                  if (standardAccounts.length === 1) {
+                  if (transferableAccounts.length === 1) {
                     // Only one account, select it directly
-                    setSelectedAccountForTransfer(standardAccounts[0]);
+                    setSelectedAccountForTransfer(transferableAccounts[0]);
                     setShowTransferFlow(true);
                   } else {
                     // Multiple accounts, show selector
                     setShowAccountSelector(true);
                   }
                 }}
-                disabled={standardAccounts.length === 0}
+                disabled={transferableAccounts.length === 0}
               >
                 <View style={styles.actionIcon}>
                   <Ionicons
@@ -643,14 +653,16 @@ export default function RemoteSignerSettingsScreen() {
         onClose={() => setShowAccountSelector(false)}
         onAddAccount={() => {}}
         onAccountSelect={(accountId: string) => {
-          const account = standardAccounts.find((acc) => acc.id === accountId);
+          const account = transferableAccounts.find(
+            (acc) => acc.id === accountId
+          );
           if (account) {
             setSelectedAccountForTransfer(account);
             setShowAccountSelector(false);
             setShowTransferFlow(true);
           }
         }}
-        filterSignable
+        onlyAccountIds={transferableIds}
       />
 
       {/* Transfer to Airgap Flow */}

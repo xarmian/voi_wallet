@@ -22,7 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as algosdk from 'algosdk';
 import { useWalletStore } from '@/store/walletStore';
 import { AccountType } from '@/types/wallet';
-import { AccountSecureStorage } from '@/services/secure';
+import { onboardingNeedsSecuritySetup } from '@/services/secure/orphanPin';
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -134,10 +134,9 @@ export default function AddWatchAccountScreen() {
       const isOnboarding = route.params?.isOnboarding;
 
       if (isOnboarding) {
-        // For onboarding, check if PIN is set up
-        const hasPin = await AccountSecureStorage.hasPin();
-
-        if (!hasPin) {
+        // For onboarding, route through SecuritySetup when there is no PIN or
+        // only an orphan one (TASK-417); a strict read failure is caught below.
+        if (await onboardingNeedsSecuritySetup()) {
           // No PIN setup - route through SecuritySetupScreen with a placeholder account
           const watchAccount = {
             id: `watch-${Date.now()}`,
@@ -148,8 +147,6 @@ export default function AddWatchAccountScreen() {
             type: 'watch' as const,
             isValid: true,
             isDuplicate: false,
-            mnemonic: undefined,
-            privateKey: undefined,
           };
 
           navigation.navigate('SecuritySetup', {

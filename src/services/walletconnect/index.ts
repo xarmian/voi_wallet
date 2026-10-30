@@ -18,21 +18,17 @@ import {
   WalletConnectRequestEvent,
 } from './types';
 import {
-  getSignableAccounts,
   formatAccountAddress,
   validateAlgorandTransaction,
   sanitizeMetadata,
   isSessionExpired,
-  detectRequestedChains,
+  getProposalChains,
+  resolveProposalEligibility,
   areAllRequiredChainsSupported,
   normalizeV1Metadata,
   parseAccountAddress,
 } from './utils';
-import {
-  DEFAULT_NAMESPACES,
-  VOI_CHAIN_DATA,
-  ALGORAND_MAINNET_CHAIN_DATA,
-} from './config';
+import { DEFAULT_NAMESPACES } from './config';
 import { useExperimentalStore } from '@/store/experimentalStore';
 import {
   isRestorableV1Session,
@@ -513,40 +509,14 @@ export class WalletConnectService extends EventEmitter {
         key: sessionKey,
       });
 
-      // Set up call_request listener on DeepLinkService
-      // This ensures navigation works the same way as during initial URI connection
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- breaks a REAL require cycle: @/services/deeplink imports this module, so a static import here would form a load-time circular dependency. (Contrast :463, whose "avoid circular dependencies" note is stale — WalletConnectV1Client is already statically imported at line 36.)
+      // Signing requests for the restored session go through the ONE v1
+      // `call_request` listener DeepLinkService owns (TASK-257). This used to
+      // add its own listener that both emitted `session_request` (which the
+      // app navigates on) AND navigated directly, so each request navigated
+      // twice, and a later re-pair stacked a second listener on the client.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- breaks a REAL require cycle: @/services/deeplink imports this module, so a static import here would form a load-time circular dependency.
       const DeepLinkService = require('@/services/deeplink').DeepLinkService;
-      const deepLinkService = DeepLinkService.getInstance();
-
-      v1Client.on('call_request', (callRequest) => {
-        // Transform v1 call_request format to match v2 format
-        const sessionData = v1Client.getSessionData();
-        const transformedRequest = {
-          id: callRequest.id,
-          topic: sessionData?.handshakeTopic || topic,
-          params: {
-            request: {
-              method: callRequest.method,
-              params: [callRequest.params],
-            },
-            chainId: sessionData?.chainId || 416001,
-          },
-        };
-
-        // Emit through both WalletConnectService (for potential listeners)
-        // AND directly navigate using DeepLinkService
-        this.emit('session_request', transformedRequest);
-
-        // Navigate to transaction request screen directly
-        deepLinkService['navigateToRoute']({
-          screen: 'WalletConnectTransactionRequest',
-          params: {
-            requestEvent: transformedRequest,
-            version: 1,
-          },
-        });
-      });
+      DeepLinkService.getInstance().attachV1CallRequests(v1Client, topic);
     } catch (error) {
       console.error('Failed to load v1 sessions:', redactError(error));
       // Don't throw - v1 session restoration failure shouldn't block app startup
@@ -611,7 +581,7 @@ export class WalletConnectService extends EventEmitter {
       const accounts =
         selectedAccounts && selectedAccounts.length > 0
           ? selectedAccounts
-          : await this.getSignableAccounts();
+          : await MultiAccountWalletService.getAllAccounts();
 
       if (accounts.length === 0) {
         throw new Error('No signable accounts available');
@@ -623,35 +593,7 @@ export class WalletConnectService extends EventEmitter {
       const allowUnsupportedNetworks =
         useExperimentalStore.getState().allowUnsupportedNetworks;
 
-      // Decide which chains to include in the approved namespaces.
-      const defaultChains = [
-        VOI_CHAIN_DATA.chainId,
-        ALGORAND_MAINNET_CHAIN_DATA.chainId,
-      ];
-      let chainsToInclude: string[];
-
-      if (allowUnsupportedNetworks) {
-        // Developer / permissive mode: union ALL requested chains (required +
-        // optional), including ones we don't recognize (e.g. a local devnet).
-        const allRequestedChains = new Set<string>();
-
-        if (proposal.requiredNamespaces?.algorand?.chains) {
-          proposal.requiredNamespaces.algorand.chains.forEach((chain: string) =>
-            allRequestedChains.add(chain)
-          );
-        }
-
-        if (proposal.optionalNamespaces?.algorand?.chains) {
-          proposal.optionalNamespaces.algorand.chains.forEach((chain: string) =>
-            allRequestedChains.add(chain)
-          );
-        }
-
-        chainsToInclude =
-          allRequestedChains.size > 0
-            ? Array.from(allRequestedChains)
-            : defaultChains;
-      } else {
+      if (!allowUnsupportedNetworks) {
         // Default / strict mode: a proposal that REQUIRES any chain this wallet
         // does not support is rejected outright — approving it would publish the
         // wallet's addresses as signable on an unrecognized chain. Note this is
@@ -677,25 +619,44 @@ export class WalletConnectService extends EventEmitter {
               'enable "Allow unsupported networks" in Experimental Features.'
           );
         }
-
-        // Required chains are all supported: approve only the SUPPORTED chains,
-        // dropping any unsupported OPTIONAL chains rather than approving them.
-        const supportedRequestedChains = detectRequestedChains(proposal);
-        chainsToInclude =
-          supportedRequestedChains.length > 0
-            ? supportedRequestedChains
-            : defaultChains;
       }
-
-      // Format accounts for the chains we are approving.
-      const formattedAccounts: string[] = [];
-      for (const chainId of chainsToInclude) {
-        for (const account of accounts) {
-          formattedAccounts.push(
-            formatAccountAddress(chainId, account.address)
+      let chainsToInclude = getProposalChains(
+        proposal,
+        allowUnsupportedNetworks
+      );
+      const eligibility = await resolveProposalEligibility(
+        accounts,
+        chainsToInclude
+      );
+      const formattedAccounts = eligibility.flatMap(
+        ({ account, eligibleChains }) =>
+          eligibleChains.map((chain) =>
+            formatAccountAddress(chain, account.address)
+          )
+      );
+      const errors = eligibility.filter((result) => result.errorChains.length);
+      if (errors.length)
+        console.error(
+          'Signing authority probe failed',
+          errors.map(({ account, errorChains }) => ({
+            accountId: account.id,
+            chains: errorChains,
+          }))
+        );
+      for (const chain of proposal.requiredNamespaces?.algorand?.chains ?? []) {
+        if (
+          !eligibility.some((result) => result.eligibleChains.includes(chain))
+        ) {
+          throw new Error(
+            `No signable accounts available for required chain ${chain}`
           );
         }
       }
+      chainsToInclude = chainsToInclude.filter((chain) =>
+        eligibility.some((result) => result.eligibleChains.includes(chain))
+      );
+      if (!formattedAccounts.length)
+        throw new Error('No signable accounts available');
 
       // Build supported namespaces from the chains selected above (all requested
       // chains when the flag is ON, supported-only when OFF).
@@ -947,11 +908,6 @@ export class WalletConnectService extends EventEmitter {
       );
       return [];
     }
-  }
-
-  async getSignableAccounts(): Promise<AccountMetadata[]> {
-    const allAccounts = await MultiAccountWalletService.getAllAccounts();
-    return getSignableAccounts(allAccounts);
   }
 
   async signTransactions(

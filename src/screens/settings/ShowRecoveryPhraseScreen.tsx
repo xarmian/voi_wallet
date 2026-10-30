@@ -14,7 +14,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import { useActiveAccount } from '@/store/walletStore';
+import { AccountType } from '@/types/wallet';
+import { useAccounts, useActiveAccount } from '@/store/walletStore';
+import { useFreshRekeyCheck } from '@/store/useFreshRekeyCheck';
+import { useRekeyDisplayDelegatedAnywhere } from '@/store/rekeyDisplayStatus';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -41,7 +44,29 @@ export default function ShowRecoveryPhraseScreen() {
   useSecureScreen();
 
   const activeAccount = useActiveAccount();
-  const targetAddress = accountAddress ?? activeAccount?.address;
+  // TASK-458: pinned for the screen's lifetime, so the phrase shown and the
+  // warning decision always describe the same account (a later route or
+  // active-account change can't pair one account's phrase with another's
+  // warning).
+  const [targetAddress] = useState(accountAddress ?? activeAccount?.address);
+  const accounts = useAccounts();
+  const targetAccount = accounts.find(
+    (account) => account.address === targetAddress
+  );
+  // TASK-458: rekey state is per network and comes from chain. A record can
+  // still read STANDARD after a pending rekey lands, so the persisted type
+  // alone would hide this warning for a phrase that no longer controls the
+  // account on some network. Fail toward the warning (director ruling, see
+  // the TASK-458 trail): only fresh reads, issued after this screen opened,
+  // that show the account signing for itself on every configured network
+  // hide it. The last refresh's display status is a one-way hint: it can
+  // show the warning early, never hide it.
+  const { allSelf } = useFreshRekeyCheck(targetAccount?.address);
+  const hintDelegated = useRekeyDisplayDelegatedAnywhere(
+    targetAccount?.address ?? ''
+  );
+  const rekeyedSomewhere =
+    targetAccount?.type === AccountType.REKEYED || hintDelegated || !allSelf;
 
   const [mnemonic, setMnemonic] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -235,6 +260,16 @@ export default function ShowRecoveryPhraseScreen() {
             it with anyone.
           </Text>
         </View>
+
+        {rekeyedSomewhere && (
+          <View style={styles.warningContainer}>
+            <Text style={styles.warningText}>
+              {
+                "This phrase restores this account's original key. It does not recover the current signing authority on networks where the account is rekeyed."
+              }
+            </Text>
+          </View>
+        )}
 
         {isLoading ? (
           <View style={styles.loadingContainer}>

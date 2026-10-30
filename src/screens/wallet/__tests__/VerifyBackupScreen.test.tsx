@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 async function renderLoaded() {
-  const screen = render(<VerifyBackupScreen />);
+  const screen = await render(<VerifyBackupScreen />);
   await waitFor(() => screen.getByTestId('verify-backup-root'));
   return screen;
 }
@@ -115,50 +115,57 @@ describe('VerifyBackupScreen', () => {
   it('marks the account whose phrase was actually shown', async () => {
     const screen = await renderLoaded();
 
-    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+    await completeQuiz(screen, 'verify-backup', MOCK_WORDS);
     // Success kicks off an async store write which then clears the phrase from
     // screen state, and the challenge rebuilds itself in response. Flush that
     // continuation inside act() so the rebuild is not an unwrapped update.
     await act(async () => {});
 
     await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
-    expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a');
+    expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a', 'ADDRESS_A');
   });
 
-  it('does not follow an active-account change made while the quiz is open', async () => {
-    // Entered with no address param, so the active account is the entry default.
-    mockRouteParams = undefined;
-    const screen = await renderLoaded();
-    expect(mockGetMnemonic).toHaveBeenCalledWith('ADDRESS_A');
+  it.each(['standard', 'rekeyed'])(
+    'pins the %s account while the quiz is open',
+    async (type) => {
+      mockAccounts![0].type = type;
+      // Entered with no address param, so the active account is the entry default.
+      mockRouteParams = undefined;
+      const screen = await renderLoaded();
+      expect(mockGetMnemonic).toHaveBeenCalledWith('ADDRESS_A');
 
-    // The user switches accounts elsewhere. The store hooks are mocked, so the
-    // re-render has to be forced explicitly — otherwise this test would pass
-    // even if the screen re-resolved its target on every store update.
-    mockActiveAccountId = 'acc-b';
-    await act(async () => {
-      screen.rerender(<VerifyBackupScreen />);
-    });
+      // The user switches accounts elsewhere. The store hooks are mocked, so the
+      // re-render has to be forced explicitly — otherwise this test would pass
+      // even if the screen re-resolved its target on every store update.
+      mockActiveAccountId = 'acc-b';
+      await act(async () => {
+        await screen.rerender(<VerifyBackupScreen />);
+      });
 
-    // The phrase on screen is still account A's — no reload was triggered.
-    expect(mockGetMnemonic).toHaveBeenCalledTimes(1);
-    expect(mockGetMnemonic).not.toHaveBeenCalledWith('ADDRESS_B');
+      // The phrase on screen is still account A's — no reload was triggered.
+      expect(mockGetMnemonic).toHaveBeenCalledTimes(1);
+      expect(mockGetMnemonic).not.toHaveBeenCalledWith('ADDRESS_B');
 
-    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
-    // Success kicks off an async store write which then clears the phrase from
-    // screen state, and the challenge rebuilds itself in response. Flush that
-    // continuation inside act() so the rebuild is not an unwrapped update.
-    await act(async () => {});
+      await completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+      // Success kicks off an async store write which then clears the phrase from
+      // screen state, and the challenge rebuilds itself in response. Flush that
+      // continuation inside act() so the rebuild is not an unwrapped update.
+      await act(async () => {});
 
-    await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
-    // Still account A — the one whose phrase is on screen.
-    expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a');
-    expect(mockMarkBackupVerified).not.toHaveBeenCalledWith('acc-b');
-  });
+      await waitFor(() => expect(mockMarkBackupVerified).toHaveBeenCalled());
+      // Still account A — the one whose phrase is on screen.
+      expect(mockMarkBackupVerified).toHaveBeenCalledWith('acc-a', 'ADDRESS_A');
+      expect(mockMarkBackupVerified).not.toHaveBeenCalledWith(
+        'acc-b',
+        'ADDRESS_B'
+      );
+    }
+  );
 
   it('waits for the store to hydrate instead of declaring the account unverifiable', async () => {
     // Cold mount: the wallet is not in the store yet.
     mockAccounts = undefined;
-    const screen = render(<VerifyBackupScreen />);
+    const screen = await render(<VerifyBackupScreen />);
 
     expect(screen.getByTestId('verify-backup-loading')).toBeTruthy();
     expect(screen.queryByTestId('verify-backup-error')).toBeNull();
@@ -167,7 +174,7 @@ describe('VerifyBackupScreen', () => {
     // Hydration lands.
     mockAccounts = [{ id: 'acc-a', address: 'ADDRESS_A', type: 'standard' }];
     await act(async () => {
-      screen.rerender(<VerifyBackupScreen />);
+      await screen.rerender(<VerifyBackupScreen />);
     });
 
     await waitFor(() => screen.getByTestId('verify-backup-root'));
@@ -175,37 +182,44 @@ describe('VerifyBackupScreen', () => {
     expect(screen.queryByTestId('verify-backup-error')).toBeNull();
   });
 
-  it('refuses a non-standard target instead of loading anything', async () => {
-    mockAccounts = [{ id: 'acc-w', address: 'ADDRESS_W', type: 'watch' }];
-    mockRouteParams = { accountAddress: 'ADDRESS_W' };
+  it.each(['watch', 'ledger', 'remote_signer'])(
+    'refuses a %s target',
+    async (type) => {
+      mockAccounts = [{ id: 'acc-w', address: 'ADDRESS_W', type }];
+      mockRouteParams = { accountAddress: 'ADDRESS_W' };
 
-    const screen = render(<VerifyBackupScreen />);
-    await waitFor(() => screen.getByTestId('verify-backup-error'));
+      const screen = await render(<VerifyBackupScreen />);
+      await waitFor(() => screen.getByTestId('verify-backup-error'));
 
-    expect(mockGetMnemonic).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('verify-backup-root')).toBeNull();
-  });
+      expect(mockGetMnemonic).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('verify-backup-root')).toBeNull();
+    }
+  );
 
-  it('shows a generic error and never marks verified when the phrase cannot load', async () => {
-    mockGetMnemonic.mockRejectedValueOnce(
-      new Error('keychain item SecureStore/voi_sk_acc-a is corrupt')
-    );
+  it.each(['standard', 'rekeyed'])(
+    'fails closed when the %s phrase cannot load',
+    async (type) => {
+      mockAccounts![0].type = type;
+      mockGetMnemonic.mockRejectedValueOnce(
+        new Error('keychain item SecureStore/voi_sk_acc-a is corrupt')
+      );
 
-    const screen = render(<VerifyBackupScreen />);
-    await waitFor(() => screen.getByTestId('verify-backup-error'));
+      const screen = await render(<VerifyBackupScreen />);
+      await waitFor(() => screen.getByTestId('verify-backup-error'));
 
-    // The underlying key-store detail must not reach the UI.
-    expect(screen.getByTestId('verify-backup-error')).not.toHaveTextContent(
-      'SecureStore'
-    );
-    expect(mockMarkBackupVerified).not.toHaveBeenCalled();
-  });
+      // The underlying key-store detail must not reach the UI.
+      expect(screen.getByTestId('verify-backup-error')).not.toHaveTextContent(
+        'SecureStore'
+      );
+      expect(mockMarkBackupVerified).not.toHaveBeenCalled();
+    }
+  );
 
   it('surfaces a failed write instead of pretending it succeeded', async () => {
     mockMarkBackupVerified.mockRejectedValueOnce(new Error('write failed'));
     const screen = await renderLoaded();
 
-    completeQuiz(screen, 'verify-backup', MOCK_WORDS);
+    await completeQuiz(screen, 'verify-backup', MOCK_WORDS);
     // Success kicks off an async store write which then clears the phrase from
     // screen state, and the challenge rebuilds itself in response. Flush that
     // continuation inside act() so the rebuild is not an unwrapped update.
@@ -227,7 +241,7 @@ describe('VerifyBackupScreen', () => {
     // auto-routing board, so the account could be marked backed-up without the
     // user ever knowing the phrase.
     for (let mistake = 0; mistake <= MAX_MISTAKES; mistake++) {
-      pressWrongQuizOption(screen, 'verify-backup', MOCK_WORDS);
+      await pressWrongQuizOption(screen, 'verify-backup', MOCK_WORDS);
     }
 
     expect(mockMarkBackupVerified).not.toHaveBeenCalled();
@@ -243,7 +257,7 @@ describe('VerifyBackupScreen', () => {
 
     const calls = (Alert.alert as unknown as jest.Mock).mock.calls;
     const buttons = calls[calls.length - 1][2] as { onPress?: () => void }[];
-    act(() => buttons[0].onPress?.());
+    await act(() => buttons[0].onPress?.());
     expect(mockNavigation.goBack).toHaveBeenCalled();
   });
 });

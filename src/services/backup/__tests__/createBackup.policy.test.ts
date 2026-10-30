@@ -99,3 +99,17 @@ describe('BackupService.createBackup passphrase policy (TASK-30 P2-1)', () => {
     expect(result.accountCount).toBe(0);
   });
 });
+
+it('counts only REKEYED records with an included mnemonic for the restore warning', async () => {
+  jest
+    .mocked(collectors.collectAccounts)
+    .mockResolvedValueOnce([
+      { type: 'rekeyed', mnemonic: 'included' },
+      { type: 'rekeyed' },
+      { type: 'standard', mnemonic: 'included' },
+    ] as Awaited<ReturnType<typeof collectors.collectAccounts>>);
+  const result = await BackupService.createBackup(
+    'correct horse battery staple'
+  );
+  expect(result.rekeyedKeyCount).toBe(1);
+});

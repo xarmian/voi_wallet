@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -28,17 +28,16 @@ import UniversalHeader from '@/components/common/UniversalHeader';
 import AccountListModal from '@/components/account/AccountListModal';
 import AddAccountModal from '@/components/account/AddAccountModal';
 import RenameAccountModal from '@/components/account/RenameAccountModal';
-import ThemeSwitcher from '@/components/common/ThemeSwitcher';
-import LocaleSwitcher from '@/components/common/LocaleSwitcher';
-import NFTThemeSelector from '@/components/common/NFTThemeSelector';
+import DeleteAccountModal from '@/components/account/DeleteAccountModal';
+import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
+import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { formatAddress } from '@/utils/address';
-import { AccountMetadata, AccountType } from '@/types/wallet';
+import { AccountMetadata, AccountType, isBackupVerified } from '@/types/wallet';
 import { useIsCurrentNetworkHealthy } from '@/store/networkStore';
-import NetworkSwitcher from '@/components/network/NetworkSwitcher';
 import NetworkIndicator from '@/components/network/NetworkIndicator';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
-import { Theme, ThemeMode } from '@/constants/themes';
+import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
 import { NFTBackground } from '@/components/common/NFTBackground';
 import { springConfigs } from '@/utils/animations';
@@ -230,23 +229,53 @@ function SectionHeader({
   );
 }
 
+const deletionErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : 'Failed to delete the account.';
+
 export default function SettingsScreen() {
   const navigation = useNavigation<SettingsScreenNavigationProp>();
   const activeAccount = useActiveAccount();
+  const [phraseAccess, setPhraseAccess] = useState<{
+    account: AccountMetadata;
+    available: boolean;
+  } | null>(null);
+  // Revealing the phrase needs the key present now: originalOwner can outlive
+  // it, and a probe error is not custody (TASK-425 U4).
+  useEffect(() => {
+    if (activeAccount?.type !== AccountType.REKEYED) return;
+    let cancelled = false;
+    void probeOwnKey(activeAccount).then((holding) => {
+      if (!cancelled)
+        setPhraseAccess({
+          account: activeAccount,
+          available: holding === 'present',
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAccount]);
+  const canShowPhrase =
+    activeAccount?.type === AccountType.STANDARD ||
+    (activeAccount?.type === AccountType.REKEYED &&
+      phraseAccess?.account === activeAccount &&
+      phraseAccess.available);
+  const deletionBusy = useRef(false);
+  // Latches one confirmation: rapid taps on the modal's button run it once.
+  const deletionConfirming = useRef(false);
+  const [deletionTarget, setDeletionTarget] = useState<AccountMetadata | null>(
+    null
+  );
   const accounts = useAccounts();
   const deleteAccount = useWalletStore((state) => state.deleteAccount);
   const updateAccountLabel = useWalletStore(
     (state) => state.updateAccountLabel
-  );
-  const updateWalletSettings = useWalletStore(
-    (state) => state.updateWalletSettings
   );
   const walletSettings = useWalletSettings();
   const isNetworkHealthy = useIsCurrentNetworkHealthy();
   const {
     theme,
     themeMode,
-    setThemeMode,
     nftThemeData,
     nftThemeEnabled,
     nftBackgroundEnabled,
@@ -260,11 +289,6 @@ export default function SettingsScreen() {
   const [accountToRename, setAccountToRename] =
     useState<AccountMetadata | null>(null);
   const [isRenamingAccount, setIsRenamingAccount] = useState(false);
-  const [isNetworkSwitcherVisible, setIsNetworkSwitcherVisible] =
-    useState(false);
-  const [isLocaleModalVisible, setIsLocaleModalVisible] = useState(false);
-  const [isThemeModalVisible, setIsThemeModalVisible] = useState(false);
-  const [isNFTThemeModalVisible, setIsNFTThemeModalVisible] = useState(false);
   const currentLocaleValue = walletSettings?.numberLocale ?? null;
   const localeDisplayText = (() => {
     const options = [
@@ -313,15 +337,9 @@ export default function SettingsScreen() {
       return;
     }
 
-    // Only allow rekeying of standard accounts and rekeyed accounts that we control
-    if (activeAccount.type === AccountType.WATCH) {
-      Alert.alert(
-        'Cannot Rekey Watch Account',
-        'Watch-only accounts cannot be rekeyed. You can only rekey accounts where you control the private key.'
-      );
-      return;
-    }
-
+    // No type gate: a WATCH record can be rekeyed to a key we hold, and
+    // authority is per network, so the rekey screen's validation decides it
+    // for the network chosen there (TASK-425 U3).
     navigation.navigate('RekeyAccount', { accountId: activeAccount.id });
   };
 
@@ -369,8 +387,8 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleShowRecoveryPhrase = () => {
-    if (!activeAccount) {
+  const handleShowRecoveryPhrase = (account = activeAccount) => {
+    if (!account) {
       Alert.alert(
         'Error',
         'No active account found. Please select an account first.'
@@ -388,7 +406,7 @@ export default function SettingsScreen() {
           text: 'Continue',
           onPress: () => {
             navigation.navigate('ShowRecoveryPhrase', {
-              accountAddress: activeAccount.address,
+              accountAddress: account.address,
             });
           },
         },
@@ -417,49 +435,126 @@ export default function SettingsScreen() {
   };
 
   const handleNetworkPress = () => {
-    setIsNetworkSwitcherVisible(true);
+    navigation.navigate('NetworkSettings');
   };
 
-  const handleNetworkSwitcherClose = () => {
-    setIsNetworkSwitcherVisible(false);
+  const cancelDeletion = () => {
+    deletionBusy.current = false;
+    deletionConfirming.current = false;
+    setDeletionTarget(null);
   };
 
-  const handleDeleteActiveAccount = () => {
+  const confirmDeletion = async (
+    target: AccountMetadata,
+    keyHolding: boolean
+  ) => {
+    if (deletionConfirming.current) return;
+    deletionConfirming.current = true;
+    const current = () =>
+      useWalletStore
+        .getState()
+        .wallet?.accounts.find((a) => a.id === target.id);
+    const checked = current();
+    // A formerly keyless account may have acquired a key while the alert was open.
+    const gainedKey =
+      !keyHolding && checked && (await isListDeletionProtected(checked));
+    if (
+      !checked ||
+      checked.address !== target.address ||
+      checked.type !== target.type ||
+      current() !== checked ||
+      gainedKey
+    ) {
+      cancelDeletion();
+      Alert.alert(
+        'Account not deleted',
+        'This account was removed or changed while you were confirming. Please start again.'
+      );
+      return;
+    }
+    setDeletionTarget(null);
+    // Computed outside the try: the React Compiler can't lower these
+    // expressions inside a try block.
+    const accountName = target.label?.trim() || formatAddress(target.address);
+    try {
+      await deleteAccount(target.id, {
+        address: target.address,
+        type: target.type,
+        keyless: !keyHolding,
+      });
+      Alert.alert('Account Deleted', `${accountName} has been removed.`);
+    } catch (error) {
+      Alert.alert('Delete Failed', deletionErrorMessage(error));
+    }
+    cancelDeletion();
+  };
+
+  // Every deletion entry point (the Settings row, the keyless confirm, the
+  // typed-confirm modal) ends here on an unexpected throw: reset the busy ref
+  // and latch so Delete never goes dead, and tell the user. A promise catch,
+  // not try/finally, which the React Compiler can't lower.
+  const failDeletion = () => {
+    cancelDeletion();
+    Alert.alert('Delete Failed', 'Something went wrong. Please try again.');
+  };
+
+  const runDeletion = (target: AccountMetadata, keyHolding: boolean) => {
+    void confirmDeletion(target, keyHolding).catch(failDeletion);
+  };
+
+  const handleDeleteActiveAccount = async () => {
+    if (deletionBusy.current) return;
     if (!activeAccount) {
       Alert.alert('No Active Account', 'Please select an account to delete.');
       return;
     }
-
-    const accountId = activeAccount.id;
-    const accountName =
-      activeAccount.label?.trim() || formatAddress(activeAccount.address);
-
-    Alert.alert(
-      'Delete Account',
-      `Are you sure you want to delete ${accountName}? This action cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteAccount(accountId);
-              Alert.alert(
-                'Account Deleted',
-                `${accountName} has been removed.`
-              );
-            } catch (error) {
-              const message =
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to delete the account.';
-              Alert.alert('Delete Failed', message);
-            }
+    deletionBusy.current = true;
+    const target = { ...activeAccount };
+    const accountName = target.label?.trim() || formatAddress(target.address);
+    const phraseAvailable = canShowPhrase;
+    const keyHolding = await isListDeletionProtected(target);
+    if (keyHolding) {
+      Alert.alert(
+        'Back up your recovery phrase first',
+        `Deleting ${accountName} removes its private key from this device. Without its 25-word recovery phrase, you'll permanently lose access to this account.` +
+          (isBackupVerified(target)
+            ? ''
+            : " You haven't confirmed a backup of this phrase yet."),
+        [
+          { text: 'Cancel', style: 'cancel', onPress: cancelDeletion },
+          ...(phraseAvailable
+            ? [
+                {
+                  text: 'Show recovery phrase',
+                  onPress: () => {
+                    cancelDeletion();
+                    handleShowRecoveryPhrase(target);
+                  },
+                },
+              ]
+            : []),
+          {
+            text: 'I have my phrase',
+            onPress: () => setDeletionTarget(target),
           },
-        },
-      ]
-    );
+        ],
+        { cancelable: true, onDismiss: cancelDeletion }
+      );
+    } else {
+      Alert.alert(
+        'Delete Account',
+        `Are you sure you want to delete ${accountName}? This action cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: cancelDeletion },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => runDeletion(target, false),
+          },
+        ],
+        { cancelable: true, onDismiss: cancelDeletion }
+      );
+    }
   };
 
   const handleAbout = () => {
@@ -481,7 +576,7 @@ export default function SettingsScreen() {
   };
 
   const handleThemePress = () => {
-    setIsThemeModalVisible(true);
+    navigation.navigate('ThemeSettings');
   };
 
   const getThemeDisplayText = () => {
@@ -509,42 +604,7 @@ export default function SettingsScreen() {
   };
 
   const handleLocalePress = () => {
-    setIsLocaleModalVisible(true);
-  };
-
-  const handleLocaleSelect = async (value: string | null) => {
-    setIsLocaleModalVisible(false);
-
-    try {
-      await updateWalletSettings({ numberLocale: value ?? null });
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Failed to update number format setting.';
-      Alert.alert('Error', message);
-    }
-  };
-
-  const handleThemeSelect = (value: ThemeMode) => {
-    setThemeMode(value);
-  };
-
-  const handleOpenNFTSelector = () => {
-    // Close the theme switcher modal first, then open NFT selector
-    setIsThemeModalVisible(false);
-    // Use setTimeout to ensure the first modal closes before opening the second
-    setTimeout(() => {
-      setIsNFTThemeModalVisible(true);
-    }, 300);
-  };
-
-  const handleNFTThemeModalClose = () => {
-    setIsNFTThemeModalVisible(false);
-    // Reopen the theme modal after NFT selector closes
-    setTimeout(() => {
-      setIsThemeModalVisible(true);
-    }, 300);
+    navigation.navigate('NumberFormatSettings');
   };
 
   return (
@@ -584,10 +644,10 @@ export default function SettingsScreen() {
             <SettingsRow
               icon="document-text-outline"
               label="Show Recovery Phrase"
-              onPress={handleShowRecoveryPhrase}
-              disabled={activeAccount?.type !== AccountType.STANDARD}
+              onPress={() => handleShowRecoveryPhrase()}
+              disabled={!canShowPhrase}
               subtitle={
-                activeAccount?.type !== AccountType.STANDARD
+                !canShowPhrase
                   ? 'Not available for this account type'
                   : undefined
               }
@@ -727,35 +787,14 @@ export default function SettingsScreen() {
                   ? `Delete "${activeAccount.label?.trim() || formatAddress(activeAccount.address)}"`
                   : 'Delete Account'
               }
-              onPress={handleDeleteActiveAccount}
+              onPress={() =>
+                void handleDeleteActiveAccount().catch(failDeletion)
+              }
               danger
               showChevron={false}
             />
           </GlassCard>
         </ScrollView>
-
-        <LocaleSwitcher
-          visible={isLocaleModalVisible}
-          onClose={() => setIsLocaleModalVisible(false)}
-          currentLocale={currentLocaleValue}
-          onLocaleSelect={handleLocaleSelect}
-          theme={theme}
-        />
-
-        <ThemeSwitcher
-          visible={isThemeModalVisible}
-          onClose={() => setIsThemeModalVisible(false)}
-          currentTheme={themeMode}
-          onThemeSelect={handleThemeSelect}
-          onNFTThemeSelect={handleOpenNFTSelector}
-          theme={theme}
-        />
-
-        <NFTThemeSelector
-          visible={isNFTThemeModalVisible}
-          onClose={handleNFTThemeModalClose}
-          theme={theme}
-        />
 
         <AccountListModal
           isVisible={isAccountModalVisible}
@@ -793,6 +832,16 @@ export default function SettingsScreen() {
           }}
         />
 
+        {deletionTarget && (
+          <DeleteAccountModal
+            accountName={
+              deletionTarget.label?.trim() ||
+              formatAddress(deletionTarget.address)
+            }
+            onCancel={cancelDeletion}
+            onConfirm={() => runDeletion(deletionTarget, true)}
+          />
+        )}
         <RenameAccountModal
           visible={!!accountToRename}
           initialName={accountToRename?.label ?? ''}
@@ -803,36 +852,9 @@ export default function SettingsScreen() {
           onConfirm={handleConfirmAccountRename}
           isSubmitting={isRenamingAccount}
         />
-
-        {isNetworkSwitcherVisible && (
-          <SafeNetworkSwitcher
-            visible={isNetworkSwitcherVisible}
-            onClose={handleNetworkSwitcherClose}
-            theme={theme}
-          />
-        )}
       </SafeAreaView>
     </NFTBackground>
   );
-}
-
-// Safe wrapper for NetworkSwitcher that handles theme context errors
-function SafeNetworkSwitcher({
-  visible,
-  onClose,
-  theme,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  theme: Theme;
-}) {
-  // NetworkSwitcher receives `theme` as a prop and useTheme() no longer throws
-  // (ThemeContext falls back to lightTheme), so this render can't throw. The
-  // previous try/catch could not have caught a child render error anyway — a
-  // try/catch only wraps React element creation, not the later reconciliation
-  // where children actually render — so the catch was dead code (flagged by
-  // react-hooks/error-boundaries). Render directly.
-  return <NetworkSwitcher visible={visible} onClose={onClose} theme={theme} />;
 }
 
 const createStyles = (theme: Theme) =>

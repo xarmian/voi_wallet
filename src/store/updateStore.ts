@@ -16,11 +16,13 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Updates from 'expo-updates';
 import Toast from 'react-native-toast-message';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 
 const DISMISSED_UPDATE_KEY = '@update/dismissedUpdateId';
 const VALID_UPDATES_URL = 'https://getvoi.app/valid_app_updates.json';
 const VALIDATION_CACHE_KEY = '@update/validationCache';
 const VALIDATION_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const VALID_UPDATES_TIMEOUT_MS = 15000;
 
 interface ValidUpdateEntry {
   ids: string[]; // Array of Update UUIDs (iOS ID, Android ID, and/or updateGroup ID)
@@ -56,11 +58,17 @@ async function fetchValidUpdates(): Promise<ValidUpdatesResponse | null> {
     }
 
     // Fetch from server
-    const response = await fetch(VALID_UPDATES_URL, {
-      headers: {
-        'Cache-Control': 'no-cache',
+    // Bounded (TASK-448): a stalled server reads as "couldn't validate" (null),
+    // the same as any other fetch failure, instead of hanging the check.
+    const response = await fetchBuffered(
+      VALID_UPDATES_URL,
+      {
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
       },
-    });
+      VALID_UPDATES_TIMEOUT_MS
+    );
 
     if (!response.ok) {
       console.warn(`Failed to fetch valid updates: ${response.status}`);
@@ -540,9 +548,6 @@ export function useIsValidating(): boolean {
  * Hook to get validation status (reactive)
  */
 export function useValidationStatus():
-  | 'pending'
-  | 'valid'
-  | 'invalid'
-  | 'unknown' {
+  'pending' | 'valid' | 'invalid' | 'unknown' {
   return useUpdateStore((state) => state.validationStatus);
 }

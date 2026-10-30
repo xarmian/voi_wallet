@@ -215,7 +215,7 @@ export default function SignerAuthModal({
           biometricPromptMessage ?? 'Authenticate to sign transactions',
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
-        requireConfirmation: false,
+        requireConfirmation: true,
       });
 
       if (result.success) {

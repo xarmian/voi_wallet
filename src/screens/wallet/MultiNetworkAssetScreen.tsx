@@ -23,8 +23,12 @@ import {
 } from '@/store/walletStore';
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
-import { toErrorAlert } from '@/utils/errorMapping';
+import {
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import { getNetworkConfig } from '@/services/network/config';
+import { getNativeIconNetwork } from '@/utils/mappedAssetPrimary';
 import { NetworkId } from '@/types/network';
 import { SwapService } from '@/services/swap';
 import { submitAsaOptIn, validateAsaOptIn } from '@/services/transactions/asa';
@@ -361,6 +365,14 @@ export default function MultiNetworkAssetScreen() {
           `Successfully opted into ${optInPending.symbol} on ${getNetworkConfig(optInPending.networkId).name}`
         );
       } catch (error: any) {
+        // Submitted but not confirmed is not a failure (TASK-447).
+        const unsettled = toUnsettledTransactionAlert(error);
+        if (unsettled) {
+          Alert.alert(unsettled.title, unsettled.message);
+          setShowAuthModal(false);
+          setOptInPending(null);
+          return;
+        }
         // TASK-41: opt-in failures are almost always a minimum-balance
         // shortfall; the raw algod string never said so.
         const { message } = toErrorAlert(error, {
@@ -392,10 +404,13 @@ export default function MultiNetworkAssetScreen() {
 
     // For native tokens or if image failed, use primary network's token image
     if (mappedAsset.assetId === 0 || imageError) {
-      const primaryNetworkConfig = getNetworkConfig(mappedAsset.primaryNetwork);
+      // The group's native-token network, not processing order (GH #13).
+      const nativeNetworkConfig = getNetworkConfig(
+        getNativeIconNetwork(mappedAsset)
+      );
       return {
         type: 'source' as const,
-        source: primaryNetworkConfig.nativeTokenImage,
+        source: nativeNetworkConfig.nativeTokenImage,
       };
     }
 

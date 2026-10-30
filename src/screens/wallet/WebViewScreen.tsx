@@ -6,6 +6,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useTheme } from '@/contexts/ThemeContext';
 import ThemedWebView from '@/components/common/ThemedWebView';
+import { redactSensitiveForLog } from '@/utils/logRedaction';
 
 interface WebViewRouteParams {
   url: string;
@@ -56,7 +57,10 @@ export default function WebViewScreen() {
         loadingText="Loading..."
         showLoadingOnlyOnce={true}
         onLoadError={(errorDescription) => {
-          console.error('WebView loading error:', errorDescription);
+          console.error(
+            'WebView loading error:',
+            redactSensitiveForLog(errorDescription)
+          );
         }}
         showDefaultErrorAlert={false}
         onError={() => {

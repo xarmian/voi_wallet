@@ -77,6 +77,8 @@ export type MappedErrorType =
   | 'not_opted_in'
   | 'transaction_expired'
   | 'duplicate_transaction'
+  | 'maybe_submitted'
+  | 'transaction_pending'
   | 'fee_too_low'
   | 'app_rejected'
   | 'transaction_rejected'
@@ -429,6 +431,26 @@ const DUPLICATE_TRANSACTION: Rule = {
   userAction: 'Check your transaction history before sending it again.',
 };
 
+// The node may have taken it but there is no txid to check it by
+// (TransactionMaybeSubmittedError, TASK-440 #8). Never retryable, and the copy
+// must never invite a re-sign (director 10-29).
+const MAYBE_SUBMITTED: Rule = {
+  type: 'maybe_submitted',
+  message: 'This transaction may already have been submitted.',
+  retryable: false,
+  userAction: 'Check your transaction history to see whether it went through.',
+};
+
+// Submitted but not confirmed within the wait: it may still be committed
+// (TransactionPendingError, TASK-440 audit #12). Never retryable, and the copy
+// points at its status, never at sending again (director 10-30).
+const TRANSACTION_PENDING: Rule = {
+  type: 'transaction_pending',
+  message: 'This transaction is not confirmed yet and may still be committed.',
+  retryable: false,
+  userAction: 'Check its status in your transaction history.',
+};
+
 const FEE_TOO_LOW: Rule = {
   type: 'fee_too_low',
   message: 'The network fee was too low for current conditions.',
@@ -627,6 +649,14 @@ const MESSAGE_RULES: { pattern: RegExp; rule: Rule }[] = [
     pattern:
       /already in ledger|transactionpool\.remember: txn already|duplicate transaction/,
     rule: DUPLICATE_TRANSACTION,
+  },
+  {
+    pattern: /may already have been submitted/,
+    rule: MAYBE_SUBMITTED,
+  },
+  {
+    pattern: /not confirmed yet and may still be committed/,
+    rule: TRANSACTION_PENDING,
   },
   {
     pattern: /fee \d* ?below threshold|fee too (small|low)/,
@@ -852,6 +882,8 @@ const TITLE_BY_TYPE: Partial<Record<MappedErrorType, string>> = {
   not_opted_in: 'Opt-In Required',
   transaction_expired: 'Transaction Expired',
   duplicate_transaction: 'Already Submitted',
+  maybe_submitted: 'May Have Been Sent',
+  transaction_pending: 'Not Confirmed Yet',
   fee_too_low: 'Fee Too Low',
   app_rejected: 'Rejected by Contract',
   transaction_rejected: 'Transaction Rejected',
@@ -897,6 +929,34 @@ export function toErrorAlert(
     message: parts.join('\n\n'),
   };
 }
+
+/**
+ * The alert for a transaction that was, or may have been, submitted and is not
+ * confirmed (transaction_pending or maybe_submitted). Undefined for anything
+ * else, so the caller keeps its own failure rendering. Callers show this
+ * instead of their failure title: it may still be committed, so it is never a
+ * failure and never an invitation to retry (TASK-447).
+ */
+export function toUnsettledTransactionAlert(
+  error: unknown
+): ErrorAlertContent | undefined {
+  const { type } = mapError(error);
+  if (type !== 'transaction_pending' && type !== 'maybe_submitted') {
+    return undefined;
+  }
+  return toErrorAlert(error);
+}
+
+/**
+ * The same alert for a success result that says `confirmed: false`: submitted,
+ * still pending after the wait (TASK-447).
+ */
+export const PENDING_TRANSACTION_ALERT: ErrorAlertContent = {
+  title: TITLE_BY_TYPE.transaction_pending ?? 'Not Confirmed Yet',
+  message: [TRANSACTION_PENDING.message, TRANSACTION_PENDING.userAction].join(
+    '\n\n'
+  ),
+};
 
 // ---------------------------------------------------------------------------
 // Predicates — replacements for ad-hoc `error.message.includes(...)` branching

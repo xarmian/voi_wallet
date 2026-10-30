@@ -37,8 +37,13 @@ jest.mock('@/services/ledger/transport', () => ({
 }));
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
 jest.mock('@/services/network', () => ({ NetworkService: {} }));
+const mockProbeSecretPresence = jest.fn(
+  async (_id: string): Promise<boolean> => false
+);
 jest.mock('../../secure/AccountSecureStorage', () => ({
-  AccountSecureStorage: {},
+  AccountSecureStorage: {
+    probeSecretPresenceStrict: (id: string) => mockProbeSecretPresence(id),
+  },
 }));
 
 import { storage, secureStorage } from '@/platform';
@@ -162,6 +167,83 @@ describe('hasKeyBearingAccountStrict — STANDARD-account signal (TASK-213)', ()
     ).resolves.toBe(true);
   });
 
+  // TASK-419: rekeying converts STANDARD → REKEYED in the blob only and keeps
+  // the original key; discovered/imported REKEYED accounts hold none. Only a
+  // REKEYED account whose secret is present is key-bearing.
+  describe('REKEYED accounts (TASK-419)', () => {
+    const rekeyedWallet = () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [
+          { id: 'k', type: 'rekeyed' },
+          { id: 'w', type: 'watch' },
+        ],
+      });
+    };
+    afterEach(() => mockProbeSecretPresence.mockReset());
+
+    it('resolves TRUE when a REKEYED account retains its key', async () => {
+      rekeyedWallet();
+      mockProbeSecretPresence.mockResolvedValue(true);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('k');
+    });
+
+    it('resolves FALSE for a keyless (discovered/imported) REKEYED account', async () => {
+      rekeyedWallet();
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(false);
+    });
+
+    it('PROPAGATES a probe failure (fail closed)', async () => {
+      rekeyedWallet();
+      mockProbeSecretPresence.mockRejectedValue(new Error('keychain'));
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).rejects.toThrow('keychain');
+    });
+
+    // The pre-sentinel Android keystore break reads the secret as null like the
+    // PIN, so a converted account must count WITHOUT a secure read.
+    it('resolves TRUE for originalOwner REKEYED without probing (keystore-independent)', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [{ id: 'k', type: 'rekeyed', originalOwner: true }],
+      });
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).not.toHaveBeenCalled();
+    });
+
+    it('probes a REKEYED account with originalOwner false', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [{ id: 'k', type: 'rekeyed', originalOwner: false }],
+      });
+      mockProbeSecretPresence.mockResolvedValue(false);
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(false);
+      expect(mockProbeSecretPresence).toHaveBeenCalledWith('k');
+    });
+
+    it('does not probe when a STANDARD account already answers', async () => {
+      mockStore[WALLET_KEY] = JSON.stringify({
+        accounts: [
+          { id: 's', type: 'standard' },
+          { id: 'k', type: 'rekeyed' },
+        ],
+      });
+      await expect(
+        MultiAccountWalletService.hasKeyBearingAccountStrict()
+      ).resolves.toBe(true);
+      expect(mockProbeSecretPresence).not.toHaveBeenCalled();
+    });
+  });
+
   it('resolves FALSE for a watch-only / ledger / remote-signer wallet (no local key ⇒ PIN-less is legit)', async () => {
     mockStore[WALLET_KEY] = JSON.stringify({
       accounts: [
@@ -197,5 +279,101 @@ describe('hasKeyBearingAccountStrict — STANDARD-account signal (TASK-213)', ()
     });
     await MultiAccountWalletService.hasKeyBearingAccountStrict();
     expect(mockStorageSet).not.toHaveBeenCalled();
+  });
+});
+
+// TASK-450: the legacy secure-store read behind every strict probe is bounded.
+// A hung keychain read must REJECT (callers fail closed), never resolve as
+// "no wallet" and never hang. The bound is LEGACY_READ_OFF_CHAIN_MS (5000ms).
+describe('strict probes — bounded legacy read (TASK-450)', () => {
+  const LEGACY_BOUND_MS = 5000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const probes: [string, () => Promise<unknown>][] = [
+    [
+      'hasWalletWithAccountsStrict',
+      () => MultiAccountWalletService.hasWalletWithAccountsStrict(),
+    ],
+    [
+      'hasKeyBearingAccountStrict',
+      () => MultiAccountWalletService.hasKeyBearingAccountStrict(),
+    ],
+    [
+      'getStandardAccountIdsStrict',
+      () => MultiAccountWalletService.getStandardAccountIdsStrict(),
+    ],
+    [
+      'getBlobAccountIdsStrict',
+      () => MultiAccountWalletService.getBlobAccountIdsStrict(),
+    ],
+  ];
+
+  it.each(probes)(
+    '%s REJECTS when the legacy read never settles (primary absent)',
+    async (_name, probe) => {
+      mockSecureGet.mockImplementation(() => new Promise(() => {}));
+      const settled = jest.fn();
+      const result = probe().then(
+        (value) => {
+          settled('resolved');
+          return value;
+        },
+        (error) => {
+          settled('rejected');
+          throw error;
+        }
+      );
+      const assertion = expect(result).rejects.toThrow(
+        'Legacy wallet storage did not respond'
+      );
+      await jest.advanceTimersByTimeAsync(LEGACY_BOUND_MS - 1);
+      expect(settled).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1);
+      await assertion;
+      expect(settled).toHaveBeenCalledWith('rejected');
+    }
+  );
+
+  // Exact answers for the legacy blob below: a truthy check would also pass on
+  // the ID probes' absence results ([] and { standardIds: [], allIds: [] }).
+  const slowAnswers: [string, () => Promise<unknown>, unknown][] = [
+    [probes[0][0], probes[0][1], true],
+    [probes[1][0], probes[1][1], true],
+    [probes[2][0], probes[2][1], ['a']],
+    [probes[3][0], probes[3][1], { standardIds: ['a'], allIds: ['a'] }],
+  ];
+
+  it.each(slowAnswers)(
+    '%s still answers from a slow legacy read that lands inside the bound',
+    async (_name, probe, expected) => {
+      const legacyBlob = JSON.stringify({
+        accounts: [{ id: 'a', type: 'standard' }],
+      });
+      mockSecureGet.mockImplementation(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve(legacyBlob), LEGACY_BOUND_MS - 1)
+          )
+      );
+      const result = probe();
+      await jest.advanceTimersByTimeAsync(LEGACY_BOUND_MS - 1);
+      await expect(result).resolves.toEqual(expected);
+    }
+  );
+
+  it('the wipe tombstone still short-circuits before the legacy read', async () => {
+    mockStore['voi_wallet_wiped'] = '1';
+    mockSecureGet.mockImplementation(() => new Promise(() => {}));
+    await expect(
+      MultiAccountWalletService.hasWalletWithAccountsStrict()
+    ).resolves.toBe(false);
+    expect(mockSecureGet).not.toHaveBeenCalled();
   });
 });

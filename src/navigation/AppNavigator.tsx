@@ -40,6 +40,10 @@ import SecuritySettingsScreen from '@/screens/settings/SecuritySettingsScreen';
 import AboutScreen from '@/screens/settings/AboutScreen';
 import NotificationSettingsScreen from '@/screens/settings/NotificationSettingsScreen';
 import ExperimentalFeaturesScreen from '@/screens/settings/ExperimentalFeaturesScreen';
+import NumberFormatSettingsScreen from '@/screens/settings/NumberFormatSettingsScreen';
+import NetworkSettingsScreen from '@/screens/settings/NetworkSettingsScreen';
+import ThemeSettingsScreen from '@/screens/settings/ThemeSettingsScreen';
+import NFTThemeSettingsScreen from '@/screens/settings/NFTThemeSettingsScreen';
 import BackupWalletScreen from '@/screens/settings/BackupWalletScreen';
 import RestoreWalletScreen from '@/screens/settings/RestoreWalletScreen';
 import AddWatchAccountScreen from '@/screens/account/AddWatchAccountScreen';
@@ -198,7 +202,14 @@ export type RootStackParamList = {
   Onboarding: undefined;
   CreateWallet: undefined;
   SecuritySetup: {
-    mnemonic?: string;
+    /**
+     * TASK-224 — opaque id of the recovery phrase held in the in-memory secret
+     * store (`storeMnemonicSecret` in `@/utils/accountQRParser`). The raw
+     * mnemonic is deliberately NOT a route param: params are serializable nav
+     * state. SecuritySetupScreen consumes the id at import time and clears it
+     * on consume (success or failure) and on unmount.
+     */
+    mnemonicSecretId?: string;
     accounts?: ScannedAccount[];
     // 'restore' = post-restore PIN setup (no import branch runs; setupPin only).
     // RestoreWalletScreen already navigates with it via CommonActions.reset, and
@@ -248,16 +259,21 @@ export type RootStackParamList = {
      * Its absence means "in-app batch", i.e. a group this wallet built itself.
      */
     walletConnect?: {
+      requestKey: string;
+      dapp?: { name?: string; url?: string; icon?: string };
       transactions: WalletTransaction[];
       binding: WalletConnectSessionBinding;
     };
   };
   QRScanner: undefined;
-  QRAccountImport: undefined;
-  AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
+  QRAccountImport: { isOnboarding?: boolean } | undefined;
+  AccountImportPreview: {
+    accounts: ScannedAccount[];
+    source: 'qr';
+    isOnboarding?: boolean;
+  };
   LedgerAccountImport:
-    | { deviceId?: string; isOnboarding?: boolean }
-    | undefined;
+    { deviceId?: string; isOnboarding?: boolean } | undefined;
   // Remote Signer signing flow screens
   SignRequestScanner: undefined;
   RemoteSignerTransactionReview: {
@@ -405,6 +421,8 @@ export type WalletStackParamList = {
     fee?: number;
     isSuccess: boolean;
     confirmed?: boolean;
+    pendingTitle?: string;
+    pendingMessage?: string;
     errorMessage?: string;
     networkId?: NetworkId;
   };
@@ -418,8 +436,7 @@ export type WalletStackParamList = {
   AccountInfo: { address?: string } | undefined;
   AccountSearch: undefined;
   ClaimableTokens:
-    | { pendingRefresh?: boolean; claimedItemIds?: string[] }
-    | undefined;
+    { pendingRefresh?: boolean; claimedItemIds?: string[] } | undefined;
   ClaimToken: {
     claimableItem: SerializableClaimableItem;
   };
@@ -510,6 +527,11 @@ export type SettingsStackParamList = {
   AboutScreen: undefined;
   NotificationSettings: undefined;
   ExperimentalFeatures: undefined;
+  // Picker rows, pushed like every other Settings row (TASK-435)
+  NumberFormatSettings: undefined;
+  NetworkSettings: undefined;
+  ThemeSettings: undefined;
+  NFTThemeSettings: undefined;
   BackupWallet: undefined;
   RestoreWallet: { isOnboarding?: boolean } | undefined;
   WebView: {
@@ -552,8 +574,7 @@ export type AirgapStackParamList = {
   QRAccountImport: undefined;
   AccountImportPreview: { accounts: ScannedAccount[]; source: 'qr' };
   LedgerAccountImport:
-    | { deviceId?: string; isOnboarding?: boolean }
-    | undefined;
+    { deviceId?: string; isOnboarding?: boolean } | undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -712,6 +733,22 @@ function SettingsStackNavigator() {
         <SettingsStack.Screen
           name="ExperimentalFeatures"
           component={ExperimentalFeaturesScreen}
+        />
+        <SettingsStack.Screen
+          name="NumberFormatSettings"
+          component={NumberFormatSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="NetworkSettings"
+          component={NetworkSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="ThemeSettings"
+          component={ThemeSettingsScreen}
+        />
+        <SettingsStack.Screen
+          name="NFTThemeSettings"
+          component={NFTThemeSettingsScreen}
         />
         <SettingsStack.Screen
           name="BackupWallet"

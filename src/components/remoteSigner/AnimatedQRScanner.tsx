@@ -251,7 +251,7 @@ export function AnimatedQRScanner({
   return (
     <View style={styles.container}>
       <CameraView
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         facing="back"
         barcodeScannerSettings={{
           barcodeTypes: ['qr'],
@@ -389,7 +389,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   overlaySection: {
     flex: 1,

@@ -313,6 +313,7 @@ export type EncryptedBackupFile = EncryptedBackupFileV1 | EncryptedBackupFileV2;
  * Result of creating a backup
  */
 export interface BackupResult {
+  rekeyedKeyCount?: number;
   /** Generated filename */
   filename: string;
   /** File URI in cache directory */
@@ -343,6 +344,8 @@ export interface RestoreResult {
   rekeyedAccountCount: number;
   /** Number of remote signer accounts */
   remoteSignerAccountCount: number;
+  /** Records dropped because another record had the same address (TASK-423) */
+  duplicateAccountsDropped: number;
   /** Whether settings were restored */
   settingsRestored: boolean;
   /** Number of friends restored */

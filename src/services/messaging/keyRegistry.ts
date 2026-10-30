@@ -21,6 +21,7 @@ import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { KEY_REGISTRATION_PREFIX, MessagingKeyRegistration } from './types';
+import { redactAddress, redactError } from '@/utils/logRedaction';
 
 /**
  * MIMIR message_keys table row structure
@@ -134,14 +135,17 @@ export async function lookupMessagingKey(
       }
       // If MIMIR query failed, fall back to indexer
       console.warn(
-        `MIMIR lookup failed for ${address}, falling back to indexer`
+        `MIMIR lookup failed for ${redactAddress(address)}, falling back to indexer`
       );
     }
 
     // Fallback to indexer
     return lookupMessagingKeyViaIndexer(address);
   } catch (error) {
-    console.error(`Failed to lookup messaging key for ${address}:`, error);
+    console.error(
+      `Failed to lookup messaging key for ${redactAddress(address)}:`,
+      redactError(error)
+    );
     return null;
   }
 }
@@ -168,7 +172,10 @@ async function lookupMessagingKeyViaMimir(
       .maybeSingle();
 
     if (error) {
-      console.error(`MIMIR query error for ${address}:`, error);
+      console.error(
+        `MIMIR query error for ${redactAddress(address)}:`,
+        redactError(error)
+      );
       return undefined; // Trigger fallback
     }
 
@@ -194,7 +201,10 @@ async function lookupMessagingKeyViaMimir(
 
     return registration;
   } catch (error) {
-    console.error(`MIMIR lookup error for ${address}:`, error);
+    console.error(
+      `MIMIR lookup error for ${redactAddress(address)}:`,
+      redactError(error)
+    );
     return undefined; // Trigger fallback
   }
 }
@@ -275,7 +285,10 @@ async function lookupMessagingKeyViaIndexer(
 
     return latestRegistration;
   } catch (error) {
-    console.error(`Indexer lookup failed for ${address}:`, error);
+    console.error(
+      `Indexer lookup failed for ${redactAddress(address)}:`,
+      redactError(error)
+    );
     return null;
   }
 }

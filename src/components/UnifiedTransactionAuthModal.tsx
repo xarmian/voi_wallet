@@ -27,6 +27,11 @@ import {
   RemoteSignerResponse,
 } from '@/types/remoteSigner';
 import { hapticNotify } from '@/utils/haptics';
+import { redactError } from '@/utils/logRedaction';
+import {
+  PENDING_TRANSACTION_ALERT,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -36,6 +41,9 @@ interface UnifiedTransactionAuthModalProps {
   onCancel: () => void;
   title?: string;
   message?: string;
+  /** Set only by the review screen's explicit Sign with biometrics tap. */
+  biometricOnOpen?: boolean;
+  formatErrorMessage?: (error: Error) => string | undefined;
 }
 
 export default function UnifiedTransactionAuthModal({
@@ -46,6 +54,8 @@ export default function UnifiedTransactionAuthModal({
   onCancel,
   title = 'Transaction Authentication',
   message = 'Authenticate to complete this transaction',
+  formatErrorMessage,
+  biometricOnOpen = false,
 }: UnifiedTransactionAuthModalProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -56,24 +66,22 @@ export default function UnifiedTransactionAuthModal({
   const [isVerifying, setIsVerifying] = useState(false);
 
   // --- Auth-flow latches (TASK-241) --------------------------------------
-  // initialized / biometricAttempted / userCancelled are REFS, not state, so
+  // initialized / userCancelled are REFS, not state, so
   // the reset logic can never erase them on a stray re-render or when the
   // controller bounces back to `idle` via resetAfterDismiss(). Invariants they
   // protect on the shared transaction-signing auth modal:
   //   • initializeSigningFlow runs EXACTLY ONCE per open (visible false→true) —
   //     never again while `visible` stays true, even after a cancel/error drives
   //     the controller back to `idle`.
-  //   • The biometric auto-prompt fires EXACTLY ONCE per open.
   //   • An explicit-cancel latch (userCancelled) SURVIVES the intervening
   //     resetAfterDismiss()-driven `idle` until the modal genuinely closes/reopens
   //     — the bug the old useState + idle-keyed reset effect had (HT-254 Option A).
   // The visibility-transition effect below is the SOLE owner of these latches:
-  //   initialized/biometricAttempted reset on a genuine close (visible→false)
+  //   initialized resets on a genuine close (visible→false)
   //   AND a genuine open (false→true); userCancelled clears ONLY on a genuine
   //   open (false→true). Because these are refs (no re-render on write), NOTHING
   //   that renders may branch on their VALUES — they are control-flow only.
   const initializedRef = useRef(false);
-  const biometricAttemptedRef = useRef(false);
   const userCancelledRef = useRef(false);
   // Tracks previous visibility so the transition effect can distinguish a
   // genuine open/close from an in-place re-render.
@@ -99,7 +107,6 @@ export default function UnifiedTransactionAuthModal({
       // here (and never on close) is exactly what lets an explicit-cancel latch
       // survive a resetAfterDismiss()-driven `idle` while `visible` stays true.
       initializedRef.current = false;
-      biometricAttemptedRef.current = false;
       userCancelledRef.current = false;
       hasCalledOnComplete.current = false;
     } else if (wasVisible && !visible) {
@@ -108,7 +115,6 @@ export default function UnifiedTransactionAuthModal({
       // it is cleared on the next genuine open, above.
       controller.resetAfterDismiss();
       initializedRef.current = false;
-      biometricAttemptedRef.current = false;
       hasCalledOnComplete.current = false;
     }
     wasVisibleRef.current = visible;
@@ -133,7 +139,20 @@ export default function UnifiedTransactionAuthModal({
       // re-render inside the determineAuthRequirements window can't double-invoke.
       console.log('UnifiedTransactionAuthModal: initializeSigningFlow');
       initializedRef.current = true;
-      controller.initializeSigningFlow(request);
+      void (async () => {
+        await controller.initializeSigningFlow(request);
+        if (userCancelledRef.current || !wasVisibleRef.current) return;
+        if (request.reviewGrantKey) {
+          await controller.authenticateWithReviewGrant(request.reviewGrantKey);
+        } else if (
+          controller.getState().state === 'authenticating' &&
+          !controller.getState().isRemoteSignerFlow &&
+          biometricOnOpen &&
+          controller.getState().biometricAvailable
+        ) {
+          await controller.authenticateWithBiometrics(message);
+        }
+      })();
     }
   }, [
     visible,
@@ -142,6 +161,8 @@ export default function UnifiedTransactionAuthModal({
     authState.state,
     authState.error,
     authState.ledgerError,
+    biometricOnOpen,
+    message,
   ]);
 
   // Handle completion state - wait for result to be populated before calling onComplete
@@ -156,28 +177,6 @@ export default function UnifiedTransactionAuthModal({
       onComplete(true, authState.result);
     }
   }, [authState.state, authState.result, onComplete]);
-
-  // Auto-prompt for biometric auth when available (only once per open)
-  useEffect(() => {
-    if (
-      visible &&
-      authState.state === 'authenticating' &&
-      authState.biometricAvailable &&
-      !authState.isLocked &&
-      !biometricAttemptedRef.current &&
-      !authState.isLedgerFlow
-    ) {
-      biometricAttemptedRef.current = true;
-      handleBiometricAuth();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt, once per open (latched via biometricAttemptedRef); fires on the visible/authState gates, handleBiometricAuth is read at that commit and must not re-fire on its own identity.
-  }, [
-    visible,
-    authState.state,
-    authState.biometricAvailable,
-    authState.isLocked,
-    authState.isLedgerFlow,
-  ]);
 
   const handleNumberPress = (number: string) => {
     if (
@@ -209,7 +208,7 @@ export default function UnifiedTransactionAuthModal({
         hapticNotify('error');
       }
     } catch (error) {
-      console.error('PIN authentication error:', error);
+      console.error('PIN authentication error:', redactError(error));
       setPin('');
     } finally {
       setIsVerifying(false);
@@ -218,9 +217,9 @@ export default function UnifiedTransactionAuthModal({
 
   const handleBiometricAuth = async () => {
     try {
-      await controller.authenticateWithBiometrics();
+      await controller.authenticateWithBiometrics(message);
     } catch (error) {
-      console.error('Biometric authentication error:', error);
+      console.error('Biometric authentication error:', redactError(error));
     }
   };
 
@@ -229,7 +228,6 @@ export default function UnifiedTransactionAuthModal({
     controller.resetAfterDismiss();
     setPin('');
     initializedRef.current = false;
-    biometricAttemptedRef.current = false;
     // Latch the explicit cancel. resetAfterDismiss() above drives the controller
     // back to `idle`, but this ref survives it (the reset effect no longer keys
     // on `idle`), so the init effect will NOT restart the flow while `visible`
@@ -262,7 +260,10 @@ export default function UnifiedTransactionAuthModal({
           payload as RemoteSignerResponse
         );
       } catch (error) {
-        console.error('Failed to process remote signer response:', error);
+        console.error(
+          'Failed to process remote signer response:',
+          redactError(error)
+        );
       }
     },
     [controller]
@@ -330,9 +331,18 @@ export default function UnifiedTransactionAuthModal({
   const isRequestMismatchError =
     authState.state === 'error' && errorMessageLower.includes('does not match');
 
+  // Submitted but not confirmed is not a failure (TASK-447).
+  const unsettledAlert =
+    authState.state === 'error'
+      ? toUnsettledTransactionAlert(authState.error)
+      : undefined;
+  const pendingResult =
+    authState.state === 'completed' && authState.result?.confirmed === false;
+
   const getErrorTitle = () => {
     if (isUserRejectedError) return 'Transaction Cancelled';
     if (isRequestMismatchError) return 'Wrong QR Code';
+    if (unsettledAlert) return unsettledAlert.title;
     return 'Transaction Failed';
   };
 
@@ -343,7 +353,9 @@ export default function UnifiedTransactionAuthModal({
     if (isRequestMismatchError) {
       return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
+    if (unsettledAlert) return unsettledAlert.message;
     return (
+      (authState.error && formatErrorMessage?.(authState.error)) ||
       authState.error?.message ||
       authState.ledgerError ||
       'An unknown error occurred.'
@@ -815,13 +827,21 @@ export default function UnifiedTransactionAuthModal({
         return (
           <View style={styles.successContainer}>
             <Ionicons
-              name="checkmark-circle"
+              name={pendingResult ? 'time' : 'checkmark-circle'}
               size={48}
-              color={theme.colors.success}
+              color={
+                pendingResult ? theme.colors.warning : theme.colors.success
+              }
             />
-            <Text style={styles.successTitle}>Transaction Complete</Text>
+            <Text style={styles.successTitle}>
+              {pendingResult
+                ? PENDING_TRANSACTION_ALERT.title
+                : 'Transaction Complete'}
+            </Text>
             <Text style={styles.successMessage}>
-              Your transaction has been successfully processed.
+              {pendingResult
+                ? PENDING_TRANSACTION_ALERT.message
+                : 'Your transaction has been successfully processed.'}
             </Text>
           </View>
         );
@@ -830,9 +850,15 @@ export default function UnifiedTransactionAuthModal({
         return (
           <View style={styles.errorContainer}>
             <Ionicons
-              name={isUserRejectedError ? 'close-circle' : 'alert-circle'}
+              name={
+                isUserRejectedError
+                  ? 'close-circle'
+                  : unsettledAlert
+                    ? 'time'
+                    : 'alert-circle'
+              }
               size={48}
-              color={theme.colors.error}
+              color={unsettledAlert ? theme.colors.warning : theme.colors.error}
             />
             <Text style={styles.errorTitle}>{getErrorTitle()}</Text>
             <Text style={styles.errorMessage}>{getErrorMessage()}</Text>

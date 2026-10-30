@@ -32,6 +32,8 @@ import {
   BackupError,
   RestoreResult,
 } from './types';
+import { redactAddress, redactError } from '@/utils/logRedaction';
+import { removePersistedBalanceCaches } from '@/store/walletStore';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -125,16 +127,25 @@ export async function clearAllData(): Promise<void> {
       REMOTE_SIGNER_STORAGE_KEYS.PROCESSED_REQUESTS,
     ]);
 
-    // Clear balance caches
+    // Clear balance caches. Balance-cache keys go through the store's
+    // balance-cache chain so an in-flight deferred single-network persist can't
+    // re-add its entry after the removal (TASK-398). The multi-network cache
+    // has no chain, so this doesn't stop its writers; claimable/messages keys
+    // aren't chain-owned either.
     const allKeys = await AsyncStorage.getAllKeys();
-    const cacheKeys = allKeys.filter(
-      (key) =>
-        key.includes('balance_cache') ||
-        key.includes('claimable') ||
-        key.includes('messages')
+    const balanceCacheKeys = allKeys.filter((key) =>
+      key.includes('balance_cache')
     );
-    if (cacheKeys.length > 0) {
-      await AsyncStorage.multiRemove(cacheKeys);
+    const otherCacheKeys = allKeys.filter(
+      (key) =>
+        !key.includes('balance_cache') &&
+        (key.includes('claimable') || key.includes('messages'))
+    );
+    // Always, even when nothing was enumerated: a deferred first persist may
+    // not have created its key yet.
+    await removePersistedBalanceCaches(balanceCacheKeys);
+    if (otherCacheKeys.length > 0) {
+      await AsyncStorage.multiRemove(otherCacheKeys);
     }
   } catch (error) {
     throw new BackupError(
@@ -144,19 +155,135 @@ export async function clearAllData(): Promise<void> {
   }
 }
 
+/** Validate required standard phrases and retained keys before destructive work. */
+export function validateRetainedKeys(accounts: BackupAccountData[]): void {
+  // A later record reusing an id would overwrite (or, metadata-only, delete)
+  // the key an earlier record stored, so ids must be unique.
+  const ids = new Set<string>();
+  for (const account of accounts) {
+    if (ids.has(account.id)) {
+      throw new BackupError(
+        'Backup contains duplicate account ids',
+        'INVALID_FILE_FORMAT'
+      );
+    }
+    ids.add(account.id);
+  }
+  for (const account of accounts) {
+    const standard = account.type === AccountType.STANDARD;
+    if (
+      !standard &&
+      (account.type !== AccountType.REKEYED || account.mnemonic === undefined)
+    )
+      continue;
+    let derived: algosdk.Account;
+    try {
+      if (typeof account.mnemonic !== 'string') throw new Error('not a string');
+      derived = algosdk.mnemonicToSecretKey(account.mnemonic);
+    } catch {
+      throw new BackupError(
+        standard
+          ? 'Standard account in the backup is missing a valid recovery phrase'
+          : 'Retained key in the backup is not a valid recovery phrase',
+        'INVALID_FILE_FORMAT'
+      );
+    }
+    try {
+      if (
+        !standard &&
+        (derived.addr.toString() !== account.address ||
+          (account.publicKey &&
+            Buffer.from(derived.sk.subarray(32)).toString('hex') !==
+              account.publicKey))
+      ) {
+        throw new BackupError(
+          'Retained key does not match the rekeyed account',
+          'INVALID_FILE_FORMAT'
+        );
+      }
+    } finally {
+      derived.sk.fill(0);
+    }
+  }
+}
+
 /**
- * Restore accounts from backup data
- * Creates new wallet structure and stores all accounts
+ * TASK-423: the address a record will be restored under. A STANDARD record is
+ * restored under the address its mnemonic derives, not the payload's; null
+ * for a record restore skips (no mnemonic) or that will fail on its own.
  */
-export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
+function restoredAddress(account: BackupAccountData): string | null {
+  if (account.type !== AccountType.STANDARD) return account.address;
+  if (!account.mnemonic) return null;
+  try {
+    const derived = algosdk.mnemonicToSecretKey(account.mnemonic);
+    derived.sk.fill(0);
+    return derived.addr.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** TASK-423: lower wins when two records share an address. */
+function dedupeRank(account: BackupAccountData): number {
+  const keyBearing =
+    (account.type === AccountType.STANDARD && !!account.mnemonic) ||
+    (account.type === AccountType.REKEYED && account.mnemonic !== undefined);
+  if (keyBearing) return 0;
+  if (
+    account.type === AccountType.LEDGER ||
+    account.type === AccountType.REMOTE_SIGNER
+  )
+    return 1;
+  return 2;
+}
+
+/**
+ * TASK-423: keep one record per restored address, before anything is written.
+ * Records sharing an address never carry different keys (a STANDARD address is
+ * derived from its mnemonic; a retained REKEYED key is validated against its
+ * address), so dropping duplicates loses only their labels. The kept record is
+ * the key-bearing one, then Ledger/remote signer over watch, then backup order.
+ */
+export function dedupeAccountsByAddress(accounts: BackupAccountData[]): {
+  accounts: BackupAccountData[];
+  dropped: number;
+} {
+  const addresses = accounts.map(restoredAddress);
+  const winners = new Map<string, BackupAccountData>();
+  accounts.forEach((account, i) => {
+    const address = addresses[i];
+    if (address === null) return;
+    const current = winners.get(address);
+    if (!current || dedupeRank(account) < dedupeRank(current)) {
+      winners.set(address, account);
+    }
+  });
+  const kept = accounts.filter((account, i) => {
+    const address = addresses[i];
+    return address === null || winners.get(address) === account;
+  });
+  return { accounts: kept, dropped: accounts.length - kept.length };
+}
+
+/** Restore account metadata and journal every restored local key. */
+export async function restoreAccounts(
+  backupAccounts: BackupAccountData[]
+): Promise<{
   total: number;
   standard: number;
   watch: number;
   rekeyed: number;
   ledger: number;
   remoteSigner: number;
+  duplicatesDropped: number;
 }> {
+  // Defensive: the full-restore entry points validate before clearing, but a
+  // direct call must not bypass the duplicate-id and key-identity checks.
+  validateRetainedKeys(backupAccounts);
+  const { accounts, dropped } = dedupeAccountsByAddress(backupAccounts);
   const counts = {
+    duplicatesDropped: dropped,
     total: 0,
     standard: 0,
     watch: 0,
@@ -178,6 +305,11 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
   // resurrected wallet (DR-2).
   const creationGen = AccountSecureStorage.getResetGeneration();
   const pendingCreates: { id: string; token: string }[] = [];
+  // Once the wallet blob MAY reference the restored accounts, their secrets
+  // must never be rolled back: deleting them would leave persisted accounts
+  // keyless. storeWallet writes the blob and THEN clears the wipe tombstone, so
+  // a rejection from the persist call can arrive after the blob is written.
+  let persistAttempted = false;
 
   try {
     const restoredAccounts: (
@@ -191,16 +323,9 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
     for (const backupAccount of accounts) {
       switch (backupAccount.type) {
         case AccountType.STANDARD: {
-          if (!backupAccount.mnemonic) {
-            console.warn(
-              `Skipping standard account ${backupAccount.address} - no mnemonic`
-            );
-            continue;
-          }
-
           // Derive account from mnemonic
           const algoAccount = algosdk.mnemonicToSecretKey(
-            backupAccount.mnemonic
+            backupAccount.mnemonic!
           );
 
           const standardAccount: StandardAccountMetadata = {
@@ -296,15 +421,34 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
             avatarUrl: backupAccount.avatarUrl,
             authAddress: backupAccount.authAddress || '',
             rekeyedAt: backupAccount.rekeyedAt,
-            originalOwner: backupAccount.originalOwner,
+            // Restore wipes first, so without a mnemonic no key exists here:
+            // a backed-up originalOwner would claim one (TASK-425 U4).
+            originalOwner: !!backupAccount.mnemonic,
+            hasBackup: backupAccount.hasBackup ?? false,
+            backupVerified: false,
             canSign: backupAccount.canSign || false,
             rekeyedFrom: backupAccount.rekeyedFrom,
           };
 
-          await AccountSecureStorage.storeAccountMetadataForCreation(
-            rekeyedAccount,
-            creationGen
-          );
+          if (backupAccount.mnemonic !== undefined) {
+            validateRetainedKeys([backupAccount]);
+            const derived = algosdk.mnemonicToSecretKey(backupAccount.mnemonic);
+            try {
+              const token = await AccountSecureStorage.storeAccountForCreation(
+                rekeyedAccount,
+                derived.sk,
+                creationGen
+              );
+              pendingCreates.push({ id: rekeyedAccount.id, token });
+            } finally {
+              derived.sk.fill(0);
+            }
+          } else {
+            await AccountSecureStorage.storeAccountMetadataForCreation(
+              rekeyedAccount,
+              creationGen
+            );
+          }
           restoredAccounts.push(rekeyedAccount);
           counts.rekeyed++;
           counts.total++;
@@ -345,14 +489,14 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
           // Validate required fields for remote signer accounts
           if (!backupAccount.signerDeviceId) {
             console.warn(
-              `Skipping remote signer account ${backupAccount.address} - missing signerDeviceId`
+              `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing signerDeviceId`
             );
             continue;
           }
 
           if (!backupAccount.pairedAt) {
             console.warn(
-              `Skipping remote signer account ${backupAccount.address} - missing pairedAt`
+              `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing pairedAt`
             );
             continue;
           }
@@ -422,6 +566,7 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
       // persistence and legacy secure-store copies are cleared.
       // TASK-220: generation-guarded so a reset racing the restore aborts this
       // commit (ResetRacedError) instead of resurrecting the wallet.
+      persistAttempted = true;
       await MultiAccountWalletService.persistRestoredWallet(
         wallet,
         creationGen
@@ -436,15 +581,21 @@ export async function restoreAccounts(accounts: BackupAccountData[]): Promise<{
 
     return counts;
   } catch (error) {
-    // TASK-220 DR-2: a reset raced the restore → roll back precisely the STANDARD
-    // secrets this attempt wrote (ownership-checked; a no-op for ones the reset
-    // already deleted), then surface the race so restore reports cleanly.
-    if (error instanceof ResetRacedError) {
-      for (const p of pendingCreates) {
+    // Roll back this attempt's journaled secrets only when no blob can have
+    // been written: before the persist call, or a reset race, which storeWallet
+    // throws before its write (TASK-220 DR-2). Any other persist-time or later
+    // failure keeps them; an orphan journaled secret is reconciled at boot,
+    // a keyless persisted account is not (TASK-421 U3).
+    const rollback = !persistAttempted || error instanceof ResetRacedError;
+    for (const p of rollback ? pendingCreates : []) {
+      try {
         await AccountSecureStorage.deleteAccountIfAttemptMatches(p.id, p.token);
+      } catch (rollbackError) {
+        // TASK-415: retry this indexed, journaled id during reconciliation.
+        console.warn('Restore rollback failed:', redactError(rollbackError));
       }
-      throw error;
     }
+    if (error instanceof ResetRacedError) throw error;
     throw new BackupError(
       `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'RESTORE_FAILED'
@@ -704,7 +855,12 @@ export async function performFullRestore(
   friends: Friend[],
   experimental: BackupExperimentalFlags
 ): Promise<RestoreResult> {
-  // Clear all existing data first
+  // Stage a private copy so callers cannot change validated phrases while
+  // the destructive storage operations below are awaiting completion.
+  const stagedAccounts = accounts.map((account) => ({ ...account }));
+  validateRetainedKeys(stagedAccounts);
+
+  // Clear all existing data only after every required phrase has decoded.
   await clearAllData();
 
   // TASK-213 (restore-before-PIN false-lockout fix): set the durable plaintext
@@ -719,7 +875,7 @@ export async function performFullRestore(
   await markPinSetupPending();
 
   // Restore accounts
-  const accountCounts = await restoreAccounts(accounts);
+  const accountCounts = await restoreAccounts(stagedAccounts);
 
   // Restore settings
   await restoreSettings(settings);
@@ -742,6 +898,7 @@ export async function performFullRestore(
     watchAccountCount: accountCounts.watch,
     rekeyedAccountCount: accountCounts.rekeyed,
     remoteSignerAccountCount: accountCounts.remoteSigner,
+    duplicateAccountsDropped: accountCounts.duplicatesDropped,
     settingsRestored: true,
     friendsCount,
     remoteSignerSettingsRestored,

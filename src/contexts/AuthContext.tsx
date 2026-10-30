@@ -20,6 +20,7 @@ import { enterLockedState } from '@/services/secure/sessionTeardown';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
+import { redactError } from '@/utils/logRedaction';
 
 // Helper to check if biometrics are available (web-safe)
 const checkBiometricAvailability = async (): Promise<{
@@ -88,8 +89,8 @@ export interface AuthState {
 
 export interface AuthContextType {
   authState: AuthState;
-  unlock: (secret: string) => Promise<boolean>;
-  unlockWithBiometrics: () => Promise<boolean>;
+  unlock: (secret: string, isCurrent?: () => boolean) => Promise<boolean>;
+  unlockWithBiometrics: (isCurrent?: () => boolean) => Promise<boolean>;
   lock: () => void;
   updateActivity: () => void;
   setupPin: (secret: string, source?: SecretSource) => Promise<void>;
@@ -313,7 +314,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // decision, so keep the safe display defaults and continue.
         console.warn(
           'Non-critical auth-init reads failed; using display defaults',
-          error
+          redactError(error)
         );
       }
 
@@ -374,7 +375,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Retry re-runs this check and recovers if storage becomes readable.
         console.error(
           'Secure storage unavailable at auth init after retries:',
-          lastError
+          redactError(lastError)
         );
         setAuthState((prev) => ({
           ...prev,
@@ -419,7 +420,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           'cross-store boot reconcile'
         ).catch((error) => {
           // ids/status only upstream; here we log the failure class, not contents.
-          console.warn('Cross-store boot reconcile skipped:', error);
+          console.warn(
+            'Cross-store boot reconcile skipped:',
+            redactError(error)
+          );
           return null;
         });
 
@@ -454,7 +458,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } catch (error) {
             console.warn(
               'Post-reconcile lock refresh failed; keeping prior verdict:',
-              error
+              redactError(error)
             );
           }
         }
@@ -597,7 +601,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // unlocked). Retry re-runs this check.
       console.error(
         'Unexpected failure during auth init; failing closed:',
-        error
+        redactError(error)
       );
       setAuthState((prev) => ({
         ...prev,
@@ -718,7 +722,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, timeoutMs);
   };
 
-  const unlock = async (secret: string): Promise<boolean> => {
+  const unlock = async (
+    secret: string,
+    isCurrent = () => true
+  ): Promise<boolean> => {
     try {
       // PR7: accept a PIN or a passphrase — verifyPin validates the format
       // against the STORED credential kind, so no 6-digit gate here (that would
@@ -735,6 +742,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // is tagged 'passphrase'. The vault is load-bearing for v2 reads.
         const source =
           (await AccountSecureStorage.getCredentialSource()) ?? 'pin';
+        // A WalletConnect request may have taken focus during PIN verification.
+        if (!isCurrent()) return false;
         SessionKeyVault.set(secret, source);
         // Flip the lock signal to UNLOCKED synchronously (mirrors lock()) so the
         // messaging poll/cache-write guard resumes immediately, not only after
@@ -760,14 +769,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return false;
     } catch (error) {
-      console.error('Failed to unlock with PIN:', error);
+      console.error('Failed to unlock with PIN:', redactError(error));
       return false;
     }
   };
 
-  const unlockWithBiometrics = async (): Promise<boolean> => {
+  const unlockWithBiometrics = async (
+    isCurrent = () => true
+  ): Promise<boolean> => {
     try {
-      if (!authState.biometricEnabled) {
+      if (!authState.biometricEnabled || !isCurrent()) {
         return false;
       }
 
@@ -781,6 +792,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const outcome = await unlockVaultWithBiometrics('Unlock your wallet');
 
       if (outcome.status === 'unlocked') {
+        // Discard a LockScreen prompt that finished underneath a WC request.
+        if (!isCurrent()) {
+          lock();
+          return false;
+        }
         // Flip the lock signal to UNLOCKED synchronously (mirrors the PIN path
         // and lock()) so the messaging poll/cache-write guard resumes at once.
         AppLockSignal.setUnlocked(true);
@@ -815,7 +831,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // unlocked. Biometrics stays enabled on a cancel so the user can retry.
       return false;
     } catch (error) {
-      console.error('Failed to unlock with biometrics:', error);
+      console.error('Failed to unlock with biometrics:', redactError(error));
       return false;
     }
   };
@@ -957,7 +973,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         timeoutMinutes,
       }));
     } catch (error) {
-      console.error('Failed to update timeout setting:', error);
+      console.error('Failed to update timeout setting:', redactError(error));
     }
   };
 

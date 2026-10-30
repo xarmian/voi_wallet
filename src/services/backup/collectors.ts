@@ -16,6 +16,7 @@ import {
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
   withDefaultAuthLevel,
+  classifyKeyHolding,
 } from '@/types/wallet';
 import { Friend } from '@/types/social';
 import { NetworkId } from '@/types/network';
@@ -74,7 +75,10 @@ export async function collectAccounts(
   pin?: string
 ): Promise<BackupAccountData[]> {
   try {
-    const wallet = await MultiAccountWalletService.getCurrentWallet();
+    // Confirmed read (TASK-443): a swallowed read error or a timed-out legacy
+    // read must fail the backup, never save an empty one that a later restore
+    // would use to clear the wallet.
+    const wallet = await MultiAccountWalletService.getCurrentWalletConfirmed();
     if (!wallet || wallet.accounts.length === 0) {
       return [];
     }
@@ -135,8 +139,28 @@ export async function collectAccounts(
 
         case AccountType.REKEYED: {
           const rekeyedAccount = account as RekeyedAccountMetadata;
+          let mnemonic: string | undefined;
+          try {
+            const holdsKey =
+              classifyKeyHolding(rekeyedAccount) === 'present' ||
+              (await AccountSecureStorage.probeSecretPresenceStrict(
+                account.id
+              ));
+            if (holdsKey) {
+              mnemonic = await SecureKeyManager.getMnemonic(account.address);
+              if (!mnemonic)
+                throw new Error('Expected account key is unavailable');
+            }
+          } catch (error) {
+            throw new BackupError(
+              `Failed to retrieve retained key for account ${account.label || account.address}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              'COLLECTION_FAILED'
+            );
+          }
           backupAccounts.push({
             ...baseData,
+            mnemonic,
+            hasBackup: rekeyedAccount.hasBackup,
             authAddress: rekeyedAccount.authAddress,
             rekeyedAt: rekeyedAccount.rekeyedAt,
             originalOwner: rekeyedAccount.originalOwner,

@@ -9,6 +9,7 @@ import {
 
 // Buffer polyfill for extension compatibility
 import { Buffer } from 'buffer';
+import { keyBelongsToAddress } from '@/utils/keyIdentity';
 
 // Use crypto-js (pure JS, works in RN/Expo and browser) with explicit side-effect imports
 import CryptoJS from 'crypto-js';
@@ -31,6 +32,7 @@ import {
   AccountStorageError,
   AccountRetrievalError,
   AccountNotFoundError,
+  AccountDeletionPreconditionError,
   AuthenticationRequiredError,
   ResetRacedError,
   DuplicatePendingCreateError,
@@ -50,6 +52,7 @@ import { clearPinSetupPending } from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
+import { redactError } from '@/utils/logRedaction';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
@@ -292,6 +295,10 @@ export class AccountSecureStorage {
     { key: Uint8Array; timestamp: number }
   > = new Map();
   private static readonly CACHE_TTL_MS = 60000; // 60 seconds as suggested
+  /** Bound on the keychain reads an account store makes (TASK-449): the PIN
+   *  presence read, the legacy account-list fallback and the device-id read.
+   *  Matches the 5 s wallet-blob legacy bound (TASK-443). */
+  private static readonly KEYCHAIN_READ_TIMEOUT_MS = 5000;
 
   // In-flight request deduplication to prevent cache stampede
   private static inFlightRequests: Map<string, Promise<Uint8Array>> = new Map();
@@ -340,7 +347,7 @@ export class AccountSecureStorage {
       try {
         return JSON.parse(stored) as PersistedAccountMetadata;
       } catch (error) {
-        console.warn('Failed to parse account metadata', error);
+        console.warn('Failed to parse account metadata', redactError(error));
         return null;
       }
     }
@@ -391,7 +398,10 @@ export class AccountSecureStorage {
         ? (JSON.parse(migratedSecret) as AccountSecretPayload)
         : null;
     } catch (error) {
-      console.warn('Failed to parse account secret payload', error);
+      console.warn(
+        'Failed to parse account secret payload',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -401,7 +411,7 @@ export class AccountSecureStorage {
     secret: AccountSecretPayload | null
   ): Promise<void> {
     if (!secret) {
-      await secureStorage.deleteItem(this.secretKey(accountId)).catch(() => {});
+      await secureStorage.deleteItem(this.secretKey(accountId));
       return;
     }
     await secureStorage.setItem(
@@ -948,7 +958,7 @@ export class AccountSecureStorage {
           // wrong-secret trial-decrypt MAC-fails), so a surviving copy is harmless.
         }
       }
-      console.warn('v2 migration deferred', accountId, error);
+      console.warn('v2 migration deferred', accountId, redactError(error));
       return 'NOT_MIGRATED';
     } finally {
       unwrapped.plaintext.fill(0);
@@ -1058,15 +1068,29 @@ export class AccountSecureStorage {
           JSON.stringify(secretPayload)
         );
       } else {
-        await secureStorage
-          .deleteItem(this.secretKey(accountId))
-          .catch(() => {});
+        try {
+          await secureStorage.deleteItem(this.secretKey(accountId));
+        } catch (error) {
+          // Both entry points serve reads. Preserve the successful legacy read
+          // and its discoverable blob when cleanup fails; retry on migration.
+          console.warn('Legacy primary cleanup failed', redactError(error));
+          return persistable;
+        }
       }
 
-      await secureStorage.deleteItem(legacyKey).catch(() => {});
+      try {
+        await secureStorage.deleteItem(legacyKey);
+      } catch (error) {
+        // The migrated primary is readable. Keep the legacy copy discoverable
+        // rather than turning a successful read into a retrieval failure.
+        console.warn('Legacy account cleanup failed', redactError(error));
+      }
       return persistable;
     } catch (error) {
-      console.error('Failed to migrate legacy account data', error);
+      console.error(
+        'Failed to migrate legacy account data',
+        redactError(error)
+      );
       return null;
     }
   }
@@ -1131,7 +1155,7 @@ export class AccountSecureStorage {
   }
 
   /**
-   * Atomic guarded secret write for a NEW STANDARD account (TASK-220). In ONE
+   * Atomic guarded secret write for a NEW key-bearing account (TASK-220). In ONE
    * key-mutation-mutex task: (1) abort if a reset advanced the generation since
    * the creation began (reset wins); (2) reject a duplicate pending id (another
    * attempt owns it — prevents an earlier attempt's rollback deleting a later
@@ -1161,9 +1185,51 @@ export class AccountSecureStorage {
       const token = this.nextPendingCreateToken();
       journal[account.id] = token;
       await this.writePendingCreateJournal(journal);
-      await this.storeAccountLocked(account, privateKey);
+      const progress = { secretWritten: false };
+      try {
+        await this.storeAccountLocked(account, privateKey, progress);
+      } catch (error) {
+        // TASK-449: the caller never receives the token on a throw, so it cannot
+        // roll back; do it here, in the same mutex task.
+        await this.rollBackFailedCreateLocked(
+          account.id,
+          token,
+          progress.secretWritten
+        );
+        throw error;
+      }
       return token;
     });
+  }
+
+  /**
+   * Undo a storeAccountForCreation that threw after journaling its token
+   * (TASK-449). Deletes the secret only if THIS attempt wrote it (a failure
+   * before the write must not touch a same-id record it does not own), then
+   * drops the journal entry iff it is still ours. Never throws: if any step
+   * fails, the journal entry stays and the boot reconcile (TASK-222) finishes
+   * the cleanup, as for a crash.
+   */
+  private static async rollBackFailedCreateLocked(
+    accountId: string,
+    token: string,
+    secretWritten: boolean
+  ): Promise<void> {
+    try {
+      if (secretWritten) {
+        await this.deleteAccountLocked(accountId);
+      }
+      const journal = await this.readPendingCreateJournal();
+      if (journal[accountId] === token) {
+        delete journal[accountId];
+        await this.writePendingCreateJournal(journal);
+      }
+    } catch (rollbackError) {
+      console.warn(
+        'Failed-create rollback incomplete; the boot reconcile will finish it',
+        redactError(rollbackError)
+      );
+    }
   }
 
   /**
@@ -1379,8 +1445,9 @@ export class AccountSecureStorage {
   /**
    * Reject `promise` if it has not settled within `ms`. On timeout the abandoned
    * read's eventual settlement is ignored and a labelled Error is thrown so the
-   * boot reconcile fails CLOSED (treats it as a read failure, not "absent").
-   * Mirrors the AuthContext withTimeout used for the strict lock reads.
+   * caller fails CLOSED (treats it as a read failure, not "absent"): the boot
+   * reconcile probes, and the account-store reads (TASK-449). Mirrors the
+   * AuthContext withTimeout used for the strict lock reads.
    */
   private static withTimeout<T>(
     promise: Promise<T>,
@@ -1405,13 +1472,20 @@ export class AccountSecureStorage {
   }
 
   /** The body of storeAccount, assuming the key-mutation mutex is HELD. Shared by
-   *  storeAccount (public wrapper) and storeAccountForCreation. */
+   *  storeAccount (public wrapper) and storeAccountForCreation. `progress`, when
+   *  given, records whether this call wrote the secret, so a creation that fails
+   *  later knows what it owns (TASK-449). */
   private static async storeAccountLocked(
     account: AccountMetadata,
-    privateKey?: Uint8Array
+    privateKey?: Uint8Array,
+    progress?: { secretWritten: boolean }
   ): Promise<void> {
     try {
-      const hasPin = await this.hasPin();
+      // TASK-449: bounded and strict. A timeout or read error fails the store,
+      // so a stuck or failing keychain is never stored as "no PIN".
+      const hasPin = Boolean(
+        await this.readStoredPinData(this.KEYCHAIN_READ_TIMEOUT_MS)
+      );
       const lastAccessed = new Date().toISOString();
 
       const metadata: PersistedAccountMetadata = {
@@ -1431,7 +1505,18 @@ export class AccountSecureStorage {
         lastAccessed,
       };
 
-      // Encrypt and store private key for Standard accounts.
+      // TASK-421 (b) U2: a REKEYED account's key must be ITS OWN original key.
+      // Reject a key whose seed and public half don't both derive this address,
+      // so a signer's (or any other) key can never be stored under its id.
+      if (account.type === AccountType.REKEYED && privateKey) {
+        if (!keyBelongsToAddress(privateKey, account.address)) {
+          throw new AccountStorageError(
+            'Private key does not belong to this account'
+          );
+        }
+      }
+
+      // Encrypt and store explicitly supplied keys for STANDARD or REKEYED accounts.
       //
       // ALWAYS write the legacy device-key (Format A) envelope — NEVER v2 here
       // (Codex P1-2). A device-key blob is PIN-independent and can be read back
@@ -1445,13 +1530,20 @@ export class AccountSecureStorage {
       // ordered either fully before the enumeration (→ re-wrapped) or fully
       // after the commit (→ stays device-readable, upgraded on the next
       // enumerate). Either way the key is readable — never lost (P1-B).
-      if (account.type === AccountType.STANDARD && privateKey) {
+      if (
+        (account.type === AccountType.STANDARD ||
+          account.type === AccountType.REKEYED) &&
+        privateKey
+      ) {
         const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
         await this.saveSecret(account.id, {
           accountId: account.id,
           encryptedPrivateKey,
           authMethod: metadata.authMethod,
         });
+        if (progress) {
+          progress.secretWritten = true;
+        }
       } else {
         await this.saveSecret(account.id, null);
       }
@@ -1961,12 +2053,27 @@ export class AccountSecureStorage {
     });
   }
 
-  static async deleteAccount(accountId: string): Promise<void> {
+  static async deleteAccount(
+    accountId: string,
+    options: { requireNoSecret?: boolean } = {}
+  ): Promise<void> {
     // Secret writer → acquire the GLOBAL key-mutation mutex (P1-1a) so a delete
     // can never interleave with a rewrap enumeration+commit.
-    return this.runKeyMutationExclusive(() =>
-      this.deleteAccountLocked(accountId)
-    );
+    return this.runKeyMutationExclusive(async () => {
+      // TASK-424: a deletion confirmed as keyless re-checks custody under the
+      // same mutex every secret writer takes, so a key written after the
+      // caller's check can't be deleted with it. A probe failure can't prove
+      // the account keyless, so it refuses too (the probe propagates it).
+      if (
+        options.requireNoSecret &&
+        (await this.probeSecretPresenceStrict(accountId))
+      ) {
+        throw new AccountDeletionPreconditionError(
+          'This account now holds its own key, so it wasn’t deleted.'
+        );
+      }
+      return this.deleteAccountLocked(accountId);
+    });
   }
 
   /** RAW deleteAccount (no mutex acquire) — for callers already holding it
@@ -1976,11 +2083,15 @@ export class AccountSecureStorage {
       // Remove from secure storage
       await this.saveSecret(accountId, null);
 
-      // Remove metadata
+      await secureStorage.deleteItem(
+        `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`
+      );
+      if (await this.probeSecretPresenceStrict(accountId)) {
+        throw new AccountStorageError('Account secret remains after deletion');
+      }
+
+      // Only discard metadata and indexing after verified secret removal.
       await storage.removeItem(this.metadataKey(accountId));
-      await secureStorage
-        .deleteItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`)
-        .catch(() => {});
 
       // Update account list
       await this.removeFromAccountList(accountId);
@@ -1998,7 +2109,14 @@ export class AccountSecureStorage {
         return JSON.parse(stored) as string[];
       }
 
-      const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
+      // TASK-449: bounded. Every store reaches this read while the primary list
+      // is absent (the first account on a fresh install). A timeout throws like
+      // any other read error, and the late value is never migrated.
+      const legacy = await this.withTimeout(
+        secureStorage.getItem(this.METADATA_LIST_KEY),
+        this.KEYCHAIN_READ_TIMEOUT_MS,
+        'Legacy account list read'
+      );
       if (legacy) {
         await storage.setItem(this.METADATA_LIST_KEY, legacy);
         await secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {});
@@ -2294,7 +2412,14 @@ export class AccountSecureStorage {
 
   // Ensure a stable installation-scoped id using platform adapter
   private static async getStableDeviceId(): Promise<string> {
-    return await platformDeviceId.getDeviceId();
+    // TASK-449: bounded. The adapter's first call per process reads the keychain;
+    // a timeout throws, so key derivation fails rather than hanging. The adapter
+    // runs one load at a time, so an abandoned load cannot race a later one.
+    return await this.withTimeout(
+      platformDeviceId.getDeviceId(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Device id read'
+    );
   }
 
   private static async storeAccountMetadata(
@@ -2454,13 +2579,25 @@ export class AccountSecureStorage {
    * no credential is set. Public so the UI (LockScreen / auth modals / settings)
    * can render the numeric keypad vs a masked passphrase field. Never returns the
    * secret itself — only its kind.
+   *
+   * THROWS on a read failure or timeout (TASK-455): null means "no
+   * credential", and ChangePinScreen acts on null by skipping the current-PIN
+   * step, so it must mean exactly that. The deadline covers BOTH reads (primary
+   * and legacy), and it is a pure read: no legacy migration, so an abandoned
+   * read can never write late. verifyPin still migrates a legacy credential.
    */
   static async getCredentialSource(): Promise<SecretSource | null> {
-    const stored = await this.getStoredPinData();
-    if (!stored) {
-      return null;
-    }
-    return stored.secretSource ?? 'pin';
+    return this.withTimeout(
+      (async () => {
+        const raw =
+          (await secureStorage.getItem(this.PIN_KEY)) ||
+          (await storage.getItem(this.PIN_KEY));
+        const stored = raw ? this.parseStoredPin(raw) : null;
+        return stored ? (stored.secretSource ?? 'pin') : null;
+      })(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Credential kind read'
+    );
   }
 
   /**
@@ -2847,7 +2984,10 @@ export class AccountSecureStorage {
               secretSource,
             });
           } catch (error) {
-            console.warn('Failed to upgrade stored PIN metadata', error);
+            console.warn(
+              'Failed to upgrade stored PIN metadata',
+              redactError(error)
+            );
           }
         }
         return true;
@@ -2876,7 +3016,7 @@ export class AccountSecureStorage {
         } catch (error) {
           console.warn(
             'Failed to upgrade PIN hash to latest iteration count',
-            error
+            redactError(error)
           );
         }
         return true;
@@ -2890,31 +3030,34 @@ export class AccountSecureStorage {
     return false;
   }
 
+  /**
+   * Whether a PIN/passphrase credential is stored. THROWS on a read failure and
+   * on a read that outlives KEYCHAIN_READ_TIMEOUT_MS (TASK-455): every caller
+   * decides whether to demand auth on this answer (getPrivateKey's ambient
+   * read, transaction auth, import routing, biometric enable), so a failed read
+   * must never read as "no PIN". It used to swallow failures to `false`.
+   */
   static async hasPin(): Promise<boolean> {
-    try {
-      const storedData = await this.getStoredPinData();
-      return Boolean(storedData);
-    } catch {
-      return false;
-    }
+    return this.withTimeout(
+      this.hasPinStrict(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'PIN presence read'
+    );
   }
 
   /**
-   * STRICT, boot-only PIN-presence probe (TASK-213). Unlike hasPin() — which
-   * swallows secure-storage read/decrypt errors and resolves `false`, making a
-   * genuine read FAILURE indistinguishable from genuine absence (the auth-init
-   * fail-OPEN) — this variant THROWS on a genuine secure-storage read/decrypt
-   * failure and resolves `false` ONLY for genuine ABSENCE (no credential stored
-   * in either the primary secure-store or the legacy AsyncStorage location).
+   * STRICT PIN-presence probe (TASK-213), unbounded. It THROWS on a genuine
+   * secure-storage read/decrypt failure and resolves `false` ONLY for genuine
+   * ABSENCE (no credential stored in either the primary secure-store or the
+   * legacy AsyncStorage location).
    *
    * It is a pure read: no JSON parse, no legacy-migration WRITE, no cache
    * mutation, and no secret material is ever returned or logged. Presence is
    * decided purely on whether a raw credential value exists.
    *
-   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
-   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
-   * read failure. Do NOT route other callers here: hasPin()'s error-swallowing
-   * contract (resolve falsy on failure) is relied on by its other call sites.
+   * AuthContext.checkInitialAuthState calls it directly (under its own deadline)
+   * so lock computation fails CLOSED (the "secure storage unavailable" recovery
+   * state) on a read failure. Other callers use hasPin(), the bounded wrapper.
    */
   static async hasPinStrict(): Promise<boolean> {
     // A throw from either getItem (keychain/keystore unavailable, decrypt error)
@@ -3536,28 +3679,44 @@ export class AccountSecureStorage {
 
   private static async getStoredPinData(): Promise<StoredPinData | null> {
     try {
-      const stored = await secureStorage.getItem(this.PIN_KEY);
-      if (stored) {
-        const parsed = this.parseStoredPin(stored);
-        if (parsed) {
-          return parsed;
-        }
-      }
-
-      const legacy = await storage.getItem(this.PIN_KEY);
-      if (legacy) {
-        await secureStorage.setItem(this.PIN_KEY, legacy);
-        await storage.removeItem(this.PIN_KEY).catch(() => {});
-        const parsed = this.parseStoredPin(legacy);
-        if (parsed) {
-          return parsed;
-        }
-      }
-      return null;
+      return await this.readStoredPinData();
     } catch (error) {
-      console.warn('Failed to retrieve stored PIN hash', error);
+      console.warn('Failed to retrieve stored PIN hash', redactError(error));
       return null;
     }
+  }
+
+  /**
+   * The stored PIN credential, or null if none is stored or it does not parse.
+   * THROWS on a read failure, and on a keychain read that outlives `timeoutMs`
+   * when one is given (TASK-449), so a caller that must not read a failure as
+   * "no PIN" can tell the two apart. getStoredPinData is the swallowing wrapper.
+   */
+  private static async readStoredPinData(
+    timeoutMs?: number
+  ): Promise<StoredPinData | null> {
+    const read = secureStorage.getItem(this.PIN_KEY);
+    const stored =
+      timeoutMs === undefined
+        ? await read
+        : await this.withTimeout(read, timeoutMs, 'PIN presence read');
+    if (stored) {
+      const parsed = this.parseStoredPin(stored);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    const legacy = await storage.getItem(this.PIN_KEY);
+    if (legacy) {
+      await secureStorage.setItem(this.PIN_KEY, legacy);
+      await storage.removeItem(this.PIN_KEY).catch(() => {});
+      const parsed = this.parseStoredPin(legacy);
+      if (parsed) {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   private static async getOrCreateSalt(
@@ -3635,7 +3794,7 @@ export class AccountSecureStorage {
           };
         }
       } catch (error) {
-        console.warn('Failed to parse stored PIN metadata', error);
+        console.warn('Failed to parse stored PIN metadata', redactError(error));
       }
     }
 
@@ -3743,8 +3902,18 @@ export class AccountSecureStorage {
         ]);
 
         // Delete all accounts (listed + in-flight-journaled)
+        let failedCount = 0;
         for (const accountId of idsToDelete) {
-          await this.deleteAccountLocked(accountId);
+          try {
+            await this.deleteAccountLocked(accountId);
+          } catch {
+            failedCount += 1;
+          }
+        }
+        if (failedCount > 0) {
+          throw new AccountStorageError(
+            `Failed to delete ${failedCount} account(s) from secure storage`
+          );
         }
         await this.writePendingCreateJournal({});
 
@@ -3779,7 +3948,8 @@ export class AccountSecureStorage {
           await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
           this.throttleMirror = null;
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof AccountStorageError) throw error;
         throw new AccountStorageError('Failed to clear all secure storage');
       }
     });

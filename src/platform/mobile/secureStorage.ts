@@ -128,6 +128,7 @@ export class MobileSecureStorageAdapter implements SecureStorageAdapter {
       ...SECURE_STORE_OPTIONS,
       requireAuthentication: true,
       authenticationPrompt: options.prompt,
+      requireConfirmation: true,
     });
   }
 
@@ -149,6 +150,7 @@ export class MobileSecureStorageAdapter implements SecureStorageAdapter {
       ...SECURE_STORE_OPTIONS,
       requireAuthentication: true,
       authenticationPrompt: options.prompt,
+      requireConfirmation: true,
     });
   }
 }

@@ -77,7 +77,7 @@ import { completeQuiz } from '@/__tests__/fixtures/mnemonicQuiz';
 
 const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
-function pressAlertButton(label: string) {
+async function pressAlertButton(label: string) {
   const spy = Alert.alert as unknown as jest.Mock;
   const calls = spy.mock.calls;
   const buttons = calls[calls.length - 1][2] as {
@@ -86,7 +86,7 @@ function pressAlertButton(label: string) {
   }[];
   const button = buttons.find((b) => b.text === label);
   expect(button).toBeDefined();
-  act(() => {
+  await act(() => {
     button!.onPress?.();
   });
 }
@@ -100,17 +100,17 @@ afterEach(() => {
 });
 
 /** Generate the account and advance to the backup step. */
-function renderAtBackupStep() {
-  const screen = render(<CreateAccountScreen />);
-  fireEvent.press(screen.getByText('Generate New Account'));
+async function renderAtBackupStep() {
+  const screen = await render(<CreateAccountScreen />);
+  await fireEvent.press(screen.getByText('Generate New Account'));
   return screen;
 }
 
 describe('CreateAccountScreen — quiz enabled (DR-2)', () => {
-  it('routes the "saved it" button into the quiz instead of importing', () => {
-    const screen = renderAtBackupStep();
+  it('routes the "saved it" button into the quiz instead of importing', async () => {
+    const screen = await renderAtBackupStep();
 
-    fireEvent.press(screen.getByTestId('backup-continue'));
+    await fireEvent.press(screen.getByTestId('backup-continue'));
 
     // The quiz is on screen and nothing has been imported yet.
     expect(screen.getByTestId('backup-verification-root')).toBeTruthy();
@@ -120,13 +120,13 @@ describe('CreateAccountScreen — quiz enabled (DR-2)', () => {
 
 describe('CreateAccountScreen — backupVerified carrier (DR-11)', () => {
   it('imports with backupVerified: true after the quiz passes', async () => {
-    const screen = renderAtBackupStep();
-    fireEvent.press(screen.getByTestId('backup-continue'));
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
 
-    completeQuiz(screen, 'backup-verification', MOCK_WORDS);
+    await completeQuiz(screen, 'backup-verification', MOCK_WORDS);
 
     // Success is confirmed through an alert before the import runs.
-    pressAlertButton('Continue');
+    await pressAlertButton('Continue');
 
     await waitFor(() => expect(mockImportAccount).toHaveBeenCalledTimes(1));
     expect(mockImportAccount).toHaveBeenCalledWith(
@@ -138,13 +138,13 @@ describe('CreateAccountScreen — backupVerified carrier (DR-11)', () => {
   });
 
   it('imports with backupVerified: false when the user skips', async () => {
-    const screen = renderAtBackupStep();
-    fireEvent.press(screen.getByTestId('backup-continue'));
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
 
-    fireEvent.press(screen.getByTestId('backup-verification-skip'));
+    await fireEvent.press(screen.getByTestId('backup-verification-skip'));
     expect(mockImportAccount).not.toHaveBeenCalled();
 
-    pressAlertButton('Skip for now');
+    await pressAlertButton('Skip for now');
 
     await waitFor(() => expect(mockImportAccount).toHaveBeenCalledTimes(1));
     expect(mockImportAccount).toHaveBeenCalledWith(
@@ -155,11 +155,11 @@ describe('CreateAccountScreen — backupVerified carrier (DR-11)', () => {
     );
   });
 
-  it('does not import if the skip confirmation is cancelled', () => {
-    const screen = renderAtBackupStep();
-    fireEvent.press(screen.getByTestId('backup-continue'));
-    fireEvent.press(screen.getByTestId('backup-verification-skip'));
-    pressAlertButton('Cancel');
+  it('does not import if the skip confirmation is cancelled', async () => {
+    const screen = await renderAtBackupStep();
+    await fireEvent.press(screen.getByTestId('backup-continue'));
+    await fireEvent.press(screen.getByTestId('backup-verification-skip'));
+    await pressAlertButton('Cancel');
 
     expect(mockImportAccount).not.toHaveBeenCalled();
   });

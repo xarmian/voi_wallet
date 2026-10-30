@@ -34,6 +34,7 @@ const mockDeepLinkService = {
   setNavigationRef: jest.fn(),
   initialize: jest.fn(async () => {}),
   testDeepLink: jest.fn(async () => {}),
+  cleanup: jest.fn(),
 };
 const mockExtensionDeepLinkHandler = {
   initialize: jest.fn(),
@@ -51,8 +52,7 @@ const mockTxnQueue = {
   enqueue: jest.fn(async () => {}),
   setProcessing: jest.fn(async () => {}),
   isEmpty: jest.fn(async () => true),
-  peek: jest.fn(async () => null),
-  dequeue: jest.fn(async () => {}),
+  setDroppedRequestHandler: jest.fn(),
 };
 // Mutable app mode driven per test ('user' vs 'signer').
 let mockAppMode = 'user';
@@ -117,6 +117,10 @@ jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
   get TransactionRequestQueue() {
     return mockTxnQueue;
   },
+  QueueFullError: class QueueFullError extends Error {},
+}));
+jest.mock('@/services/walletconnect/droppedRequestResponder', () => ({
+  answerDroppedRequests: jest.fn(),
 }));
 
 jest.mock('@/platform/detection', () => ({
@@ -166,6 +170,7 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     expect(mockWcService.off).not.toHaveBeenCalled();
     expect(mockExtensionDeepLinkHandler.cleanup).not.toHaveBeenCalled();
     expect(mockNotificationService.cleanup).not.toHaveBeenCalled();
+    expect(mockDeepLinkService.cleanup).not.toHaveBeenCalled();
 
     // Simulate the effect's synchronous unmount cleanup.
     cleanupRef.current!();
@@ -182,6 +187,8 @@ describe('serviceBootstrap.initializeServices — TASK-243 teardown wiring', () 
     // ...and the deep-link + notification services are cleaned up.
     expect(mockExtensionDeepLinkHandler.cleanup).toHaveBeenCalledTimes(1);
     expect(mockNotificationService.cleanup).toHaveBeenCalledTimes(1);
+    // TASK-381: the deep-link Linking subscription + route queue too.
+    expect(mockDeepLinkService.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it('tears services down IMMEDIATELY when the effect already unmounted before boot completed (isDisposed)', async () => {
@@ -277,6 +284,24 @@ describe('serviceBootstrap.initializeServices — deferred subscribe abort token
     mockAppMode = 'user';
     mockGetCurrentWallet.mockResolvedValue({ accounts: [{ id: 'acct-1' }] });
     mockNotificationService.registerPushToken.mockResolvedValue('expo-token');
+  });
+
+  it('registers without prompting and skips account subscriptions when no token is available (TASK-433)', async () => {
+    mockNotificationService.registerPushToken.mockResolvedValue(null);
+    const cleanupRef = makeCleanupRef();
+
+    await initializeServices({
+      navigationRef: { current: null },
+      initializeNetwork: jest.fn(async () => {}),
+      cleanupRef,
+    });
+    await flush();
+
+    expect(mockNotificationService.registerPushToken).toHaveBeenCalledWith({
+      prompt: false,
+    });
+    expect(mockNotificationService.subscribeAllAccounts).not.toHaveBeenCalled();
+    cleanupRef.current!();
   });
 
   it('hands the deferred subscribe a live token, which the teardown then invalidates', async () => {

@@ -68,7 +68,10 @@ export async function buildAsaOptOutTransaction(
       .getAlgodClient()
       .getAssetByID(assetId)
       .do();
-    if (!assetInfo) {
+    // algosdk >=3.8 types Asset.params as optional. Without params there is
+    // no creator to close out to, and algosdk would reject the undefined
+    // receiver anyway, so fail here with the not-found error.
+    if (!assetInfo?.params) {
       throw new Error(`Asset ${assetId} not found`);
     }
     assetCreator = assetInfo.params.creator;
@@ -266,8 +269,14 @@ export async function submitAsaOptIn(
     networkId,
   });
 
-  // Sign transaction
-  const signedTxn = await SecureKeyManager.signTransaction(txn, address, pin);
+  // Sign transaction. TASK-425: resolve the signing route on the network the
+  // txn was built for and is submitted to, not the app's active network.
+  const signedTxn = await SecureKeyManager.signTransaction(
+    txn,
+    address,
+    pin,
+    networkId
+  );
 
   // Submit transaction
   const { txId } = await networkService.submitTransaction(signedTxn);
@@ -299,8 +308,14 @@ export async function submitAsaOptOut(
     networkId,
   });
 
-  // Sign transaction
-  const signedTxn = await SecureKeyManager.signTransaction(txn, address, pin);
+  // Sign transaction. TASK-425: resolve the signing route on the network the
+  // txn was built for and is submitted to, not the app's active network.
+  const signedTxn = await SecureKeyManager.signTransaction(
+    txn,
+    address,
+    pin,
+    networkId
+  );
 
   // Submit transaction
   const { txId } = await networkService.submitTransaction(signedTxn);

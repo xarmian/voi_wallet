@@ -18,7 +18,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Swipeable } from 'react-native-gesture-handler';
+// RNGH 3 removed the legacy `Swipeable`; ReanimatedSwipeable is its drop-in
+// replacement (same friction/threshold/overshoot defaults).
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import {
@@ -28,8 +30,9 @@ import {
   useShowHiddenThreads,
 } from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
-import { useActiveAccount, useAccounts } from '@/store/walletStore';
-import { AccountType, RekeyedAccountMetadata } from '@/types/wallet';
+import { useActiveAccount } from '@/store/walletStore';
+import { useMessagingSigner } from './useMessagingSigner';
+import { MessagingSignerNotice } from './MessagingSignerNotice';
 import { MessageThread, MESSAGE_FEE_DISPLAY } from '@/services/messaging/types';
 import type { FriendsStackParamList } from '@/navigation/AppNavigator';
 import { NFTBackground } from '@/components/common/NFTBackground';
@@ -64,7 +67,8 @@ export default function MessagesInboxScreen() {
   }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
-  const allAccounts = useAccounts();
+  const signer = useMessagingSigner(activeAccount);
+  const { ready: signerReady, isLedgerBacked, canUseMessaging } = signer;
   const sortedThreads = useSortedThreads();
   const hiddenThreadsCount = useHiddenThreadsCount();
   const showHiddenThreads = useShowHiddenThreads();
@@ -101,36 +105,13 @@ export default function MessagesInboxScreen() {
     }
   }, [friendsIsInitialized, friendsInitialize]);
 
-  // Helper to check if account is Ledger-backed
-  const checkIsLedgerBacked = useCallback(() => {
-    if (!activeAccount) return false;
-
-    // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER) {
-      return true;
-    }
-
-    // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED) {
-      const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(
-        (acc) => acc.address === rekeyedAccount.authAddress
-      );
-      if (authAccount?.type === AccountType.LEDGER) {
-        return true;
-      }
-    }
-
-    return false;
-  }, [activeAccount, allAccounts]);
-
   // Check registration and fetch messages when account is available
   useFocusEffect(
     useCallback(() => {
       const initializeMessaging = async () => {
         if (activeAccount?.address && isInitialized) {
           // Skip everything for Ledger-backed accounts - messaging not supported
-          if (checkIsLedgerBacked()) {
+          if (!canUseMessaging) {
             setIsCheckingRegistration(false);
             return;
           }
@@ -159,7 +140,7 @@ export default function MessagesInboxScreen() {
     }, [
       activeAccount?.address,
       isInitialized,
-      checkIsLedgerBacked,
+      canUseMessaging,
       checkKeyRegistration,
       fetchAllThreads,
       startPolling,
@@ -208,18 +189,20 @@ export default function MessagesInboxScreen() {
   // Handle thread press
   const handleThreadPress = useCallback(
     (thread: MessageThread) => {
+      if (!canUseMessaging) return;
       navigation.navigate('Chat', {
         friendAddress: thread.friendAddress,
         friendEnvoiName: thread.friendEnvoiName,
       });
     },
-    [navigation]
+    [navigation, canUseMessaging]
   );
 
   // Handle new message
   const handleNewMessage = useCallback(() => {
+    if (!canUseMessaging) return;
     navigation.navigate('NewMessage');
-  }, [navigation]);
+  }, [navigation, canUseMessaging]);
 
   // Handle refresh
   const handleRefresh = useCallback(async () => {
@@ -231,7 +214,7 @@ export default function MessagesInboxScreen() {
 
   // Handle key registration
   const handleRegisterKey = useCallback(async () => {
-    if (!activeAccount?.address || isRegistering) return;
+    if (!activeAccount?.address || isRegistering || !canUseMessaging) return;
 
     setIsRegistering(true);
     try {
@@ -247,6 +230,7 @@ export default function MessagesInboxScreen() {
     activeAccount?.address,
     isRegistering,
     registerMessagingKey,
+    canUseMessaging,
     fetchAllThreads,
   ]);
 
@@ -397,7 +381,7 @@ export default function MessagesInboxScreen() {
     const isHidden = hiddenThreads.has(thread.friendAddress);
 
     return (
-      <Swipeable
+      <ReanimatedSwipeable
         renderRightActions={() => renderRightActions(thread.friendAddress)}
         overshootRight={false}
       >
@@ -497,32 +481,9 @@ export default function MessagesInboxScreen() {
             </View>
           </TouchableOpacity>
         </BlurredContainer>
-      </Swipeable>
+      </ReanimatedSwipeable>
     );
   };
-
-  // Check if current account is backed by a Ledger (either directly or via rekey)
-  const isLedgerBacked = (() => {
-    if (!activeAccount) return false;
-
-    // Direct Ledger account
-    if (activeAccount.type === AccountType.LEDGER) {
-      return true;
-    }
-
-    // Rekeyed account - check if auth address belongs to a Ledger account
-    if (activeAccount.type === AccountType.REKEYED) {
-      const rekeyedAccount = activeAccount as RekeyedAccountMetadata;
-      const authAccount = allAccounts.find(
-        (acc) => acc.address === rekeyedAccount.authAddress
-      );
-      if (authAccount?.type === AccountType.LEDGER) {
-        return true;
-      }
-    }
-
-    return false;
-  })();
 
   // Render unsupported message for Ledger accounts
   const renderLedgerUnsupported = useCallback(() => {
@@ -562,7 +523,7 @@ export default function MessagesInboxScreen() {
           label={isRegistering ? 'Registering...' : 'Enable Messaging'}
           icon={isRegistering ? undefined : 'shield-checkmark-outline'}
           onPress={handleRegisterKey}
-          disabled={isRegistering}
+          disabled={isRegistering || !canUseMessaging}
           style={{ marginTop: theme.spacing.lg }}
         />
         {isRegistering && (
@@ -574,7 +535,7 @@ export default function MessagesInboxScreen() {
         )}
       </View>
     );
-  }, [styles, theme, isRegistering, handleRegisterKey]);
+  }, [styles, theme, isRegistering, handleRegisterKey, canUseMessaging]);
 
   // Render empty state. Memoized: an unstable component identity makes
   // VirtualizedList remount the empty subtree (and its GlassButton animations)
@@ -585,8 +546,12 @@ export default function MessagesInboxScreen() {
       return renderLedgerUnsupported();
     }
 
+    if (signer.status === 'error' || (signerReady && !canUseMessaging)) {
+      return <MessagingSignerNotice signer={signer} />;
+    }
+
     // Show loading while checking registration status
-    if (isCheckingRegistration) {
+    if (!signerReady || isCheckingRegistration) {
       return (
         <View style={styles.emptyState}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -631,6 +596,9 @@ export default function MessagesInboxScreen() {
     );
   }, [
     isLedgerBacked,
+    signer,
+    canUseMessaging,
+    signerReady,
     isCheckingRegistration,
     isKeyRegistered,
     searchQuery,
@@ -644,7 +612,7 @@ export default function MessagesInboxScreen() {
   // Threads are only listable once messaging is usable for this account;
   // otherwise the list stays empty and ListEmptyComponent explains why.
   const canShowThreads =
-    !isLedgerBacked && !isCheckingRegistration && isKeyRegistered;
+    canUseMessaging && !isCheckingRegistration && isKeyRegistered;
   const threadListData = canShowThreads ? filteredThreads : [];
 
   const keyExtractor = useCallback(
@@ -660,7 +628,7 @@ export default function MessagesInboxScreen() {
           showAccountSelector
           onAccountSelectorPress={handleAccountSelectorPress}
           rightAction={
-            !isLedgerBacked && isKeyRegistered ? (
+            canUseMessaging && isKeyRegistered ? (
               <View style={styles.headerActions}>
                 {/* Hidden conversations toggle - only show if there are hidden threads */}
                 {hiddenThreadsCount > 0 && (
@@ -721,7 +689,7 @@ export default function MessagesInboxScreen() {
         />
 
         {/* Search Bar - only show when registered and not Ledger */}
-        {!isLedgerBacked && isKeyRegistered && (
+        {canUseMessaging && isKeyRegistered && (
           <BlurredContainer style={styles.searchContainer} borderRadius={0}>
             <View style={styles.searchInputContainer}>
               <Ionicons

@@ -13,6 +13,7 @@ import {
   ARAMID_TOKEN_MAPPINGS,
   VOI_ARC200_TOKEN_MAPPINGS,
 } from '@/constants/token-mappings';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 
 const CACHE_KEY = '@voi_wallet_token_mappings';
 const CACHE_TIMESTAMP_KEY = '@voi_wallet_token_mappings_timestamp';
@@ -369,21 +370,17 @@ export class TokenMappingService {
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
+        // TASK-440 #9: the deadline covers the body read too.
+        const response = await fetchBuffered(
+          this.config.apiUrl,
+          {
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+          },
           this.config.timeout
         );
-
-        const response = await fetch(this.config.apiUrl, {
-          signal: controller.signal,
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-        });
-
-        clearTimeout(timeoutId);
 
         if (!response.ok) {
           throw new TokenMappingAPIError(

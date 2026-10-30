@@ -6,6 +6,11 @@
  */
 
 import * as Notifications from 'expo-notifications';
+// Named import: expo-notifications 58 compiles its enums to
+// `export var X = /*#__PURE__*/ function…({})`, which eslint-plugin-import's
+// import/namespace cannot see, so `Notifications.AndroidImportance` is a lint
+// false positive. tsc verifies this import.
+import { AndroidImportance } from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform, AppState, AppStateStatus } from 'react-native';
 import Constants from 'expo-constants';
@@ -27,7 +32,9 @@ import {
 } from './subscribePass';
 import Toast from 'react-native-toast-message';
 import { AccountMetadata, AccountType } from '@/types/wallet';
+import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
 import { deviceId } from '../../platform';
+import { redactAddress } from '@/utils/logRedaction';
 
 const LAST_HANDLED_NOTIFICATION_KEY = '@voi_wallet/last_handled_notification';
 
@@ -63,15 +70,23 @@ class NotificationService {
   private static instance: NotificationService;
   private deviceId: string | null = null;
   private pushToken: string | null = null;
+  private pushTokenWarningsLogged = new Set<string>();
   private notificationListener: Notifications.Subscription | null = null;
   private responseListener: Notifications.Subscription | null = null;
   private appStateSubscription: ReturnType<
     typeof AppState.addEventListener
   > | null = null;
+  // The second argument is the notification request identifier. The deep
+  // link service keys its cold-start route queue on it, so the cold-start
+  // response and a response-listener event for the same tap route once.
   private onNotificationTap:
-    | ((data: NotificationData) => void | Promise<void>)
+    | ((
+        data: NotificationData,
+        notificationId?: string
+      ) => void | Promise<void>)
     | null = null;
   private pendingNotificationTap: NotificationData | null = null;
+  private pendingNotificationTapId: string | undefined = undefined;
 
   private constructor() {
     // Private constructor for singleton
@@ -135,9 +150,10 @@ class NotificationService {
           );
 
           if (this.onNotificationTap) {
-            this.onNotificationTap(data);
+            this.onNotificationTap(data, notificationId);
           } else {
             this.pendingNotificationTap = data;
+            this.pendingNotificationTapId = notificationId;
           }
         }
       }
@@ -174,7 +190,10 @@ class NotificationService {
    * Set callback for notification taps
    */
   setNotificationTapHandler(
-    handler: (data: NotificationData) => void | Promise<void>
+    handler: (
+      data: NotificationData,
+      notificationId?: string
+    ) => void | Promise<void>
   ): void {
     this.onNotificationTap = handler;
 
@@ -185,8 +204,10 @@ class NotificationService {
         this.pendingNotificationTap
       );
       const pendingData = this.pendingNotificationTap;
+      const pendingId = this.pendingNotificationTapId;
       this.pendingNotificationTap = null;
-      handler(pendingData);
+      this.pendingNotificationTapId = undefined;
+      handler(pendingData, pendingId);
     }
   }
 
@@ -202,13 +223,15 @@ class NotificationService {
    */
   clearPendingNotificationTap(): void {
     this.pendingNotificationTap = null;
+    this.pendingNotificationTapId = undefined;
   }
 
   /**
    * Request notification permissions
+   * @param options.prompt Whether to prompt if permission is not already granted
    * @returns true if permissions granted
    */
-  async requestPermissions(): Promise<boolean> {
+  async requestPermissions({ prompt = true } = {}): Promise<boolean> {
     if (!Device.isDevice) {
       console.warn('Push notifications only work on physical devices');
       return false;
@@ -218,7 +241,7 @@ class NotificationService {
       await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
-    if (existingStatus !== 'granted') {
+    if (existingStatus !== 'granted' && prompt) {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
@@ -238,14 +261,15 @@ class NotificationService {
 
   /**
    * Register push token with the server
+   * @param options.prompt Whether to prompt for permission (false during startup)
    * @returns The Expo push token or null if failed
    */
-  async registerPushToken(): Promise<string | null> {
-    const hasPermission = await this.requestPermissions();
-    if (!hasPermission) return null;
-
+  async registerPushToken({ prompt = true } = {}): Promise<string | null> {
     const supabase = getSupabaseClient();
     if (!supabase || !this.deviceId) return null;
+
+    const hasPermission = await this.requestPermissions({ prompt });
+    if (!hasPermission) return null;
 
     try {
       // Get Expo push token
@@ -258,9 +282,38 @@ class NotificationService {
         return null;
       }
 
-      const tokenData = await Notifications.getExpoPushTokenAsync({
-        projectId,
-      });
+      let tokenData: Notifications.ExpoPushToken;
+      try {
+        tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+      } catch (error) {
+        const { code, message } = (error ?? {}) as {
+          code?: unknown;
+          message?: unknown;
+        };
+        if (
+          code === 'E_REGISTRATION_FAILED' ||
+          (typeof message === 'string' && message.includes('FIS_'))
+        ) {
+          // Native registration can fail with invalid Firebase credentials.
+          // Warn once per distinct failure, without the native error's verbose
+          // payload. The message is kept (truncated) because it carries the
+          // reason, e.g. FIS_AUTH_ERROR vs SERVICE_NOT_AVAILABLE (TASK-405).
+          const label = typeof code === 'string' ? code : 'FIS_ERROR';
+          const reason =
+            typeof message === 'string' ? message.slice(0, 160) : '';
+          const key = `${label}|${reason}`;
+          if (!this.pushTokenWarningsLogged.has(key)) {
+            this.pushTokenWarningsLogged.add(key);
+            console.warn(
+              '[Notifications] Push token unavailable:',
+              label,
+              reason
+            );
+          }
+          return null;
+        }
+        throw error;
+      }
       this.pushToken = tokenData.data;
 
       // Register with server (using voiwallet schema)
@@ -351,7 +404,8 @@ class NotificationService {
    *    entirely. A blanket upsert of defaults would silently reset every user's
    *    notification settings on the next app start.
    * 2. Defaults are per account, not per batch: watch accounts cannot decrypt,
-   *    so they get `messages: false` while every other type gets `true`.
+   *    so they get `messages: false`, as does a REKEYED account that has not
+   *    kept its own key; every other type gets `true`.
    * 3. FAIL CLOSED on the read. A single batch `.select()` succeeds or fails
    *    wholesale — it cannot say which account failed — so per-account error
    *    tolerance is incoherent here. If the read fails we abort the whole pass
@@ -393,14 +447,31 @@ class NotificationService {
     // entries sharing an address are one subscription. If any of them can
     // decrypt, the device can decrypt, so `messages` ORs across duplicates.
     const pending = new Map<string, { messages: boolean }>();
+    // TASK-425 U2: a REKEYED record may or may not have kept its own key, so
+    // probe it rather than trusting the type. An unresolved probe skips that
+    // account this pass: defaults are insert-if-absent, so writing `false` on
+    // a transient error would stick.
+    const rekeyedKey = new Map(
+      await Promise.all(
+        accounts
+          .filter((account) => account.type === AccountType.REKEYED)
+          .map(
+            async (account) => [account.id, await probeOwnKey(account)] as const
+          )
+      )
+    );
     for (const account of accounts) {
+      if (rekeyedKey.get(account.id) === 'unresolved') continue;
       const address = this.validateAddress(
         account.address,
         'subscribeAllAccounts'
       );
       if (!address) continue;
 
-      const canDecryptMessages = account.type !== AccountType.WATCH;
+      const canDecryptMessages =
+        account.type === AccountType.REKEYED
+          ? rekeyedKey.get(account.id) === 'present'
+          : account.type !== AccountType.WATCH;
       const existing = pending.get(address);
       if (existing) {
         existing.messages = existing.messages || canDecryptMessages;
@@ -643,7 +714,7 @@ class NotificationService {
     return {
       messages: data.notify_messages,
       voiPayments: data.notify_voi_payments,
-      blockRewards: data.notify_proposer_payouts ?? true,
+      blockRewards: data.notify_proposer_payouts ?? false,
       arc200Transfers: data.notify_arc200_transfers,
       arc72Transfers: data.notify_arc72_transfers,
       outgoingConfirmations: data.notify_outgoing_confirmations,
@@ -747,7 +818,7 @@ class NotificationService {
       ) {
         console.warn(
           `[NotificationService] ${context}: Recovered address from object:`,
-          obj.address
+          redactAddress(obj.address)
         );
         return obj.address;
       }
@@ -755,7 +826,7 @@ class NotificationService {
 
     console.error(
       `[NotificationService] ${context}: Invalid address parameter:`,
-      address
+      typeof address === 'string' ? redactAddress(address) : typeof address
     );
     return null;
   }
@@ -798,14 +869,16 @@ class NotificationService {
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content
           .data as unknown as NotificationData;
+        const notificationId = response.notification.request.identifier;
         console.log('Notification tapped:', data);
 
         if (this.onNotificationTap) {
-          this.onNotificationTap(data);
+          this.onNotificationTap(data, notificationId);
         } else {
           // Handler not set yet (app still initializing), store for later
           console.log('No notification tap handler set yet, storing for later');
           this.pendingNotificationTap = data;
+          this.pendingNotificationTapId = notificationId;
         }
       });
   }
@@ -835,7 +908,7 @@ class NotificationService {
     await Notifications.setNotificationChannelAsync('messages', {
       name: 'Messages',
       description: 'Encrypted message notifications',
-      importance: Notifications.AndroidImportance.HIGH,
+      importance: AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#8B5CF6',
     });
@@ -844,7 +917,7 @@ class NotificationService {
     await Notifications.setNotificationChannelAsync('transactions', {
       name: 'Transactions',
       description: 'Payment and token transfer notifications',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250],
       lightColor: '#10B981',
     });
@@ -853,7 +926,7 @@ class NotificationService {
     await Notifications.setNotificationChannelAsync('default', {
       name: 'General',
       description: 'General notifications',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: AndroidImportance.DEFAULT,
     });
   }
 }

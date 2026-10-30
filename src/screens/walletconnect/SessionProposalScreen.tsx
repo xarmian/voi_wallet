@@ -1,4 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
   View,
   Text,
@@ -7,6 +12,7 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,15 +28,31 @@ import {
   VOI_CHAIN_DATA,
   ALGORAND_MAINNET_CHAIN_DATA,
 } from '@/services/walletconnect';
+import { resolveV1Chain } from '@/services/walletconnect/v1/config';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountMetadata } from '@/types/wallet';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import { getSignableAccounts } from '@/services/walletconnect/utils';
+import {
+  getProposalChains,
+  resolveProposalEligibility,
+} from '@/services/walletconnect/utils';
+import { useExperimentalStore } from '@/store/experimentalStore';
 import AccountSelectionItem from '@/components/walletconnect/AccountSelectionItem';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  reviewGrant,
+  walletConnectProposalKey,
+  walletConnectRequestKey,
+} from '@/services/auth/reviewGrant';
+import LockedRequestGate from '@/components/walletconnect/LockedRequestGate';
+import {
+  useAppSwitcherProtection,
+  useSecureScreen,
+} from '@/hooks/useSecureScreen';
 
 type SessionProposalScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -58,11 +80,68 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   // Determine which version we're handling
   const isV1 = version === 1 || v1SessionRequest;
 
+  // TASK-438: while the wallet is locked the connect screen shows only the
+  // gate (dApp name and icon, URL host, requested networks; Unlock to review /
+  // Reject). Accounts are not loaded, probed or mounted until the review
+  // sitting covers this proposal. The sitting is TASK-437's: one unlock covers
+  // everything in it, and it ends on background, idle, re-lock or queue end.
+  useSecureScreen();
+  useAppSwitcherProtection();
+  const { authState } = useAuth();
+  const requestKey = proposal
+    ? walletConnectProposalKey(proposal.pairingTopic, proposal.id)
+    : walletConnectRequestKey(
+        'v1',
+        `proposal-${v1SessionRequest?.peerId ?? ''}`
+      );
+  const requiresReviewUnlock = authState.isLocked || !authState.isAuthenticated;
+  const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isValid(requestKey)
+  );
+  const [foreground, setForeground] = useState(
+    AppState.currentState !== 'background' &&
+      AppState.currentState !== 'inactive'
+  );
+  const canReview = !requiresReviewUnlock || (grantValid && foreground);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setForeground(state === 'active');
+      if (state === 'background') reviewGrant.revoke();
+    });
+    return () => subscription.remove();
+  }, []);
+
+  // A proposal shown while a review sitting is live joins it: one unlock covers
+  // everything in the sitting (Connect still needs its own tap). The router
+  // usually joins first (serviceBootstrap); this covers any other way in.
+  useEffect(() => {
+    reviewGrant.join(requestKey);
+  }, [requestKey]);
+
+  // However the screen is left, this proposal leaves the sitting.
+  useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
+  useEffect(
+    () =>
+      navigation.addListener('beforeRemove', () =>
+        reviewGrant.leave(requestKey)
+      ),
+    [navigation, requestKey]
+  );
+
+  const [probing, setProbing] = useState(true);
+  const [eligibility, setEligibility] = useState<
+    Awaited<ReturnType<typeof resolveProposalEligibility>>
+  >([]);
+  const [approvedChains, setApprovedChains] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [accounts, setAccounts] = useState<AccountMetadata[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(
     new Set()
   );
+
+  const generation = useRef(0);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     // Only load accounts when there's actually a proposal to act on. The
@@ -70,14 +149,34 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     // unconditional), so without this guard loadAccounts() — and its error
     // Alerts — would fire on the "No proposal data" screen too.
     if (!proposal && !v1SessionRequest) return;
+    // TASK-438: no account read or keystore probe before review is allowed.
+    if (!canReview) return;
     loadAccounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; proposal/v1SessionRequest are stable route params
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the proposal changes or review becomes allowed
+  }, [proposal, v1SessionRequest, canReview]);
 
   const loadAccounts = async () => {
+    const current = ++generation.current;
+    inFlight.current = true;
+    setProbing(true);
     try {
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
-      const signableAccounts = getSignableAccounts(allAccounts);
+      const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
+      const chains = isV1
+        ? v1Chain
+          ? [v1Chain.chainId]
+          : []
+        : getProposalChains(
+            proposal!,
+            useExperimentalStore.getState().allowUnsupportedNetworks
+          );
+      const result = await resolveProposalEligibility(allAccounts, chains);
+      if (current !== generation.current) return;
+      setApprovedChains(chains);
+      setEligibility(result);
+      const signableAccounts = result
+        .filter((entry) => entry.eligibleChains.length)
+        .map((entry) => entry.account);
       setAccounts(signableAccounts);
       // Pre-select all signable accounts by default
       const initialSelection = new Set(
@@ -85,12 +184,20 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       );
       setSelectedAccountIds(initialSelection);
     } catch (error) {
+      if (current !== generation.current) return;
       console.error('Failed to load accounts:', error);
       Alert.alert('Error', 'Failed to load accounts');
+    } finally {
+      if (current === generation.current) {
+        inFlight.current = false;
+        setProbing(false);
+      }
     }
   };
 
   const handleApprove = async () => {
+    // TASK-438: connecting shares account addresses, so it needs review access.
+    if (requiresReviewUnlock && !reviewGrant.isValid(requestKey)) return;
     if (accounts.length === 0) {
       Alert.alert('Error', 'No signable accounts available');
       return;
@@ -356,13 +463,48 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         </View>
       )}
 
+      {probing && (
+        <ActivityIndicator accessibilityLabel="Checking signing authority" />
+      )}
+      {eligibility.some((entry) => entry.errorChains.length > 0) && (
+        <View>
+          <Text style={styles.permissionText}>
+            {"Couldn't check signing authority for "}
+            {
+              eligibility.filter((entry) => entry.errorChains.length > 0).length
+            }{' '}
+            account(s)
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              if (!inFlight.current) void loadAccounts();
+            }}
+            disabled={probing || isLoading}
+          >
+            <Text style={styles.selectAllText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {accounts.map((account) => (
-        <AccountSelectionItem
-          key={account.id}
-          account={account}
-          isSelected={selectedAccountIds.has(account.id)}
-          onToggleSelection={handleToggleAccountSelection}
-        />
+        <View key={account.id}>
+          <AccountSelectionItem
+            account={account}
+            isSelected={selectedAccountIds.has(account.id)}
+            onToggleSelection={handleToggleAccountSelection}
+          />
+          {(() => {
+            const chains =
+              eligibility.find((entry) => entry.account.id === account.id)
+                ?.eligibleChains ?? [];
+            return (
+              chains.length < approvedChains.length && (
+                <Text style={styles.permissionText}>
+                  Only on {chains.map(getNetworkNameByChainId).join(', ')}
+                </Text>
+              )
+            );
+          })()}
+        </View>
       ))}
     </View>
   );
@@ -392,54 +534,102 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     );
   }
 
+  // Gate display: proposal metadata only (no account or network lookups).
+  const gateMetadata = isV1
+    ? v1SessionRequest?.peerMeta
+    : proposal?.proposer.metadata;
+  const gateNetworks = (() => {
+    if (isV1) {
+      const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
+      return v1Chain ? getNetworkNameByChainId(v1Chain.chainId) : 'Unknown';
+    }
+    return (
+      getProposalChains(
+        proposal!,
+        useExperimentalStore.getState().allowUnsupportedNetworks
+      )
+        .map(getNetworkNameByChainId)
+        .join(', ') || 'Unknown'
+    );
+  })();
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView
+      onTouchStart={() => reviewGrant.touch()}
+      style={styles.container}
+      edges={['top', 'bottom']}
+    >
       <UniversalHeader
         title="Connect to dApp"
         showBackButton
         onBackPress={() => navigation.goBack()}
       />
 
-      <ScrollView
-        style={styles.scrollView}
-        showsVerticalScrollIndicator={false}
-      >
-        {renderDAppInfo()}
-        {renderPermissions()}
-        {renderAccounts()}
-
-        <View style={styles.warningContainer}>
-          <Ionicons name="warning" size={24} color={theme.colors.warning} />
-          <Text style={styles.warningText}>
-            Only connect to dApps you trust. Connected dApps will be able to
-            view your account addresses and request transaction signatures.
-          </Text>
-        </View>
-      </ScrollView>
-
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.rejectButton]}
-          onPress={handleReject}
-          disabled={isLoading}
-        >
-          <Text style={styles.rejectButtonText}>Reject</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.approveButton]}
-          onPress={handleApprove}
-          disabled={
-            isLoading || accounts.length === 0 || selectedAccountIds.size === 0
+      {!canReview ? (
+        <LockedRequestGate
+          requestKey={requestKey}
+          dapp={
+            gateMetadata
+              ? {
+                  name: gateMetadata.name,
+                  url: gateMetadata.url,
+                  icon: gateMetadata.icons?.[0],
+                }
+              : undefined
           }
-        >
-          {isLoading ? (
-            <ActivityIndicator color={theme.colors.buttonText} />
-          ) : (
-            <Text style={styles.approveButtonText}>Connect</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+          network={gateNetworks}
+          biometricEnabled={authState.biometricEnabled}
+          onReject={handleReject}
+        />
+      ) : (
+        <>
+          <ScrollView
+            style={styles.scrollView}
+            showsVerticalScrollIndicator={false}
+          >
+            {renderDAppInfo()}
+            {renderPermissions()}
+            {renderAccounts()}
+
+            <View style={styles.warningContainer}>
+              <Ionicons name="warning" size={24} color={theme.colors.warning} />
+              <Text style={styles.warningText}>
+                Only connect to dApps you trust. Connected dApps will be able to
+                view your account addresses and request transaction signatures.
+              </Text>
+            </View>
+          </ScrollView>
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.rejectButton]}
+              onPress={handleReject}
+              disabled={isLoading}
+            >
+              <Text style={styles.rejectButtonText}>Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Connect"
+              style={[styles.button, styles.approveButton]}
+              onPress={handleApprove}
+              disabled={
+                probing ||
+                isLoading ||
+                accounts.length === 0 ||
+                selectedAccountIds.size === 0
+              }
+            >
+              {isLoading || probing ? (
+                <ActivityIndicator color={theme.colors.buttonText} />
+              ) : (
+                <Text style={styles.approveButtonText}>Connect</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
     </SafeAreaView>
   );
 }

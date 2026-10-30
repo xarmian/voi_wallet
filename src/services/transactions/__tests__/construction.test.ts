@@ -23,8 +23,10 @@
  */
 
 import algosdk from 'algosdk';
+import { AccountType } from '@/types/wallet';
 
 import {
+  makeAccount,
   makeAddress,
   SUGGESTED_PARAMS,
   FIXTURE_ASSET_ID,
@@ -46,6 +48,7 @@ jest.mock('@/services/network', () => {
     getSuggestedParams: (...args: unknown[]) => mockGetSuggestedParams(...args),
     getAlgodClient: (...args: unknown[]) => mockGetAlgodClient(...args),
     getAccountBalance: (...args: unknown[]) => mockGetAccountBalance(...args),
+    estimateTransactionFee: async () => 1000,
   };
   return {
     __esModule: true,
@@ -91,11 +94,46 @@ jest.mock('@/services/ledger/algorand', () => ({
 }));
 jest.mock('@/services/secure/keyManager', () => ({
   __esModule: true,
-  SecureKeyManager: {},
+  SecureKeyManager: {
+    getSigningInfo: jest.fn(async (sender: string) => ({
+      signingAddress: sender,
+    })),
+    getLedgerSigningInfo: jest.fn(),
+  },
 }));
 jest.mock('@/services/security/transactionTracker', () => ({
   __esModule: true,
-  TransactionTracker: {},
+  TransactionTracker: { validateNewTransaction: async () => [] },
+}));
+
+const mockSender = () => SENDER;
+// The rekey builders check the receiving key is held (TASK-425 U3).
+const mockCurrentWallet = jest.fn(async () => ({
+  accounts: [
+    { id: 'sender', address: mockSender(), type: 'standard' },
+    { id: 'recipient', address: mockRecipient(), type: 'standard' },
+  ] as { id: string; address: string; type: string }[],
+}));
+const mockRecipient = () => RECIPIENT;
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    getAllAccounts: async () => [{ address: mockSender() }],
+    getCurrentWallet: () => mockCurrentWallet(),
+  },
+}));
+// TASK-425 U3: which REKEYED records still hold their own secret.
+const mockProbe = jest.fn(async (_id: string) => false);
+const mockGetPrivateKey = jest.fn(async (_id: string): Promise<Uint8Array> => {
+  throw new Error('no key');
+});
+jest.mock('@/services/secure/AccountSecureStorage', () => ({
+  AccountSecureStorage: {
+    probeSecretPresenceStrict: (id: string) => mockProbe(id),
+    getPrivateKey: (id: string) => mockGetPrivateKey(id),
+  },
+}));
+jest.mock('@/services/remoteSigner/signingRouter', () => ({
+  checkRemoteSigningRequired: () => ({ needsRemoteSigning: false }),
 }));
 
 // Imported AFTER the mocks above are registered (jest hoists jest.mock, but keep
@@ -149,7 +187,7 @@ beforeEach(() => {
   // Simulate client returns no unnamed resources / boxes by default.
   mockGetAlgodClient.mockReturnValue({
     simulateTransactions: () => ({
-      do: async () => ({ txnGroups: [{}] }),
+      do: async () => ({ txnGroups: [{ txnResults: [{ txnResult: {} }] }] }),
     }),
   });
   // ARC-72 balance path (network) and ARC-200 balance path (mimir) default to
@@ -399,8 +437,13 @@ describe('ARC-200 transfer construction', () => {
   });
 
   it('prepends an MBR payment to the app escrow when the recipient is not opted in', async () => {
-    // Recipient has no ARC-200 balance -> needsMbrPayment.
-    mockGetAllAccountAssets.mockResolvedValueOnce([]);
+    mockGetAlgodClient.mockReturnValueOnce({
+      simulateTransactions: () => ({
+        do: async () => ({
+          txnGroups: [{ failureMessage: 'box minimum balance' }],
+        }),
+      }),
+    });
 
     const result = (await TransactionService.buildTransaction({
       from: SENDER,
@@ -447,6 +490,7 @@ describe('ARC-200 transfer construction', () => {
         do: async () => ({
           txnGroups: [
             {
+              txnResults: [{ txnResult: {} }],
               unnamedResourcesAccessed: {
                 boxes: [{ app: FIXTURE_APP_ID, name: boxName }],
               },
@@ -600,4 +644,429 @@ describe('ARC-72 transfer construction', () => {
     expect(Number(boxes[0].appIndex)).toBe(0);
     expect(Buffer.from(boxes[0].name).toString()).toBe('arc72-owner-box');
   });
+});
+
+test('signing preflight uses the request network and fails closed on strict lookup failure', async () => {
+  const { SecureKeyManager } = require('@/services/secure/keyManager');
+  const { NetworkId } = require('@/types/network');
+  const account = {
+    address: SENDER,
+    type: 'rekeyed',
+    authAddress: 'STALE',
+    canSign: true,
+  };
+  SecureKeyManager.getSigningInfo.mockResolvedValue({ canSign: false });
+  SecureKeyManager.getLedgerSigningInfo.mockRejectedValue(
+    new Error('not ledger')
+  );
+  const errors: string[] = [];
+  await (TransactionService as any).appendSigningValidation(
+    errors,
+    account,
+    NetworkId.ALGORAND_MAINNET
+  );
+  expect(errors).toHaveLength(1);
+  expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledWith(
+    SENDER,
+    NetworkId.ALGORAND_MAINNET
+  );
+  SecureKeyManager.getSigningInfo.mockRejectedValue(new Error('offline'));
+  errors.length = 0;
+  await (TransactionService as any).appendSigningValidation(
+    errors,
+    account,
+    NetworkId.ALGORAND_MAINNET
+  );
+  expect(errors).toEqual([
+    'Unable to verify signing authority. Please try again.',
+  ]);
+});
+
+it('bounds each ARC-200 simulation to 10 seconds and funds on timeout', async () => {
+  jest.useFakeTimers();
+  const simulate = jest.fn(() => new Promise(() => {}));
+  mockGetAlgodClient.mockReturnValue({
+    simulateTransactions: () => ({ do: simulate }),
+  });
+  try {
+    const pending = TransactionService.buildTransaction({
+      from: SENDER,
+      to: RECIPIENT,
+      amount: 1,
+      contractId: FIXTURE_APP_ID,
+      assetType: 'arc200',
+    });
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(simulate).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(10000);
+    const result = (await pending) as { txnBytes: Uint8Array[] };
+    expect(decodeBytes(result.txnBytes[0]).payment?.amount).toBe(28500n);
+    expect(jest.getTimerCount()).toBe(0);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('passes validation cost estimation the request network', async () => {
+  const {
+    Arc200TransactionService: Arc,
+  } = require('@/services/transactions/arc200');
+  const { SecureKeyManager } = require('@/services/secure/keyManager');
+  const { NetworkId } = require('@/types/network');
+  const estimate = jest.spyOn(Arc, 'estimateArc200TransferCost');
+  mockGetAccountBalance.mockResolvedValue({
+    amount: 1000000,
+    assets: [{ assetType: 'arc200', contractId: FIXTURE_APP_ID, amount: 10 }],
+  });
+  try {
+    await TransactionService.validateTransaction(
+      {
+        from: SENDER,
+        to: RECIPIENT,
+        amount: 1,
+        assetType: 'arc200',
+        contractId: FIXTURE_APP_ID,
+        networkId: NetworkId.ALGORAND_MAINNET,
+      },
+      { address: SENDER, type: AccountType.STANDARD }
+    );
+    expect(estimate).toHaveBeenCalledWith(
+      expect.objectContaining({ networkId: NetworkId.ALGORAND_MAINNET })
+    );
+    expect(SecureKeyManager.getSigningInfo).toHaveBeenCalledWith(
+      SENDER,
+      NetworkId.ALGORAND_MAINNET
+    );
+  } finally {
+    estimate.mockRestore();
+  }
+});
+
+// The request network, rather than persisted account kind/authority, owns this verdict.
+it.each([false, true])(
+  'rekey duplicate check uses chain state (%s)',
+  async (isRekeyed) => {
+    mockGetAccountBalance.mockResolvedValue({
+      amount: 1000000n,
+      minBalance: 100000n,
+      rekeyInfo: { isRekeyed, authAddress: isRekeyed ? RECIPIENT : undefined },
+    });
+    const errors = await TransactionService.validateRekeyTransaction(
+      SENDER,
+      RECIPIENT,
+      {
+        accounts: [
+          {
+            address: SENDER,
+            type: isRekeyed ? AccountType.STANDARD : AccountType.REKEYED,
+            authAddress: RECIPIENT,
+            canSign: false,
+          },
+          { address: RECIPIENT, type: AccountType.STANDARD },
+        ],
+      }
+    );
+    expect(errors.includes('Account is already rekeyed to this address')).toBe(
+      isRekeyed
+    );
+    expect(errors).not.toContain('Failed to validate transaction requirements');
+  }
+);
+
+// TASK-425 U3: target, controller and source authority follow own-key custody
+// and chain state, not the persisted kind.
+describe('validateRekeyTransaction own-key custody (TASK-425 U3)', () => {
+  const CONTROLLER = makeAddress('tx-construction:controller');
+  const TARGET_ERROR =
+    'Target address must be an account whose key you hold, a Ledger, or an airgap signer account in your wallet';
+  const SOURCE_ERROR =
+    'This account is not rekeyed on this network and its key is not in your wallet, so it cannot sign a rekey.';
+  const funded = (rekeyInfo: { isRekeyed: boolean; authAddress?: string }) =>
+    mockGetAccountBalance.mockResolvedValue({
+      amount: 1000000n,
+      minBalance: 100000n,
+      rekeyInfo,
+    });
+  const validate = (accounts: unknown[]) =>
+    TransactionService.validateRekeyTransaction(SENDER, RECIPIENT, {
+      accounts,
+    });
+
+  const REVERSE_ERROR =
+    "Removing the rekey returns control to this account's own key, which is not in your wallet.";
+  const UNKNOWN_ERROR =
+    "Couldn't check this account's rekey status on this network. Try again.";
+
+  beforeEach(() => {
+    mockProbe.mockReset();
+    mockProbe.mockResolvedValue(false);
+    mockGetPrivateKey.mockReset();
+    mockGetPrivateKey.mockRejectedValue(new Error('no key'));
+  });
+
+  // originalOwner can outlive the key, so it never replaces the read (TASK-425 U4).
+  it('rejects an originalOwner REKEYED target whose key does not read', async () => {
+    funded({ isRekeyed: false });
+    mockProbe.mockImplementation(async (id) => id === 'tgt');
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      {
+        id: 'tgt',
+        address: RECIPIENT,
+        type: AccountType.REKEYED,
+        originalOwner: true,
+      },
+    ]);
+    expect(errors).toContain(TARGET_ERROR);
+  });
+
+  it('accepts a REKEYED target whose key reads and is its own', async () => {
+    const TGT = makeAccount('tx-construction:usable-target');
+    funded({ isRekeyed: false });
+    mockProbe.mockResolvedValue(true);
+    mockGetPrivateKey.mockImplementation(async () => TGT.sk.slice());
+    const errors = await TransactionService.validateRekeyTransaction(
+      SENDER,
+      TGT.addr,
+      {
+        accounts: [
+          { id: 'src', address: SENDER, type: AccountType.STANDARD },
+          { id: 'tgt', address: TGT.addr, type: AccountType.REKEYED },
+        ],
+      }
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects a REKEYED target that probes present but has no readable key', async () => {
+    funded({ isRekeyed: false });
+    mockProbe.mockResolvedValue(true);
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.REKEYED },
+    ]);
+    expect(errors).toContain(TARGET_ERROR);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['unavailable', { isRekeyed: false, unavailable: true }],
+    ['rekeyed without an auth address', { isRekeyed: true }],
+  ])('fails closed when rekey state is %s', async (_label, rekeyInfo) => {
+    mockGetAccountBalance.mockResolvedValue({
+      amount: 1000000n,
+      minBalance: 100000n,
+      rekeyInfo,
+    });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([UNKNOWN_ERROR]);
+  });
+
+  it.each([
+    ['WATCH', AccountType.WATCH, {}, false],
+    ['keyless REKEYED', AccountType.REKEYED, {}, false],
+    ['STANDARD', AccountType.STANDARD, {}, true],
+    [
+      'originalOwner REKEYED whose key does not read',
+      AccountType.REKEYED,
+      { originalOwner: true },
+      false,
+    ],
+    ['LEDGER', AccountType.LEDGER, {}, true],
+    ['REMOTE_SIGNER', AccountType.REMOTE_SIGNER, {}, true],
+  ])(
+    'removing a rekey from a %s source needs its own key afterwards',
+    async (_label, type, extra, allowed) => {
+      funded({ isRekeyed: true, authAddress: CONTROLLER });
+      mockProbe.mockImplementation(async (id) => id === 'src');
+      const errors = await TransactionService.validateRekeyTransaction(
+        SENDER,
+        SENDER,
+        {
+          accounts: [
+            { id: 'src', address: SENDER, type, ...extra },
+            { id: 'ctl', address: CONTROLLER, type: AccountType.STANDARD },
+          ],
+        }
+      );
+      expect(errors.includes(REVERSE_ERROR)).toBe(!allowed);
+      if (allowed) expect(errors).toEqual([]);
+    }
+  );
+
+  it.each([AccountType.LEDGER, AccountType.REMOTE_SIGNER])(
+    'an unrekeyed %s source signs as itself without a software key',
+    async (type) => {
+      funded({ isRekeyed: false });
+      const errors = await validate([
+        { id: 'src', address: SENDER, type },
+        { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+      ]);
+      expect(errors).not.toContain(SOURCE_ERROR);
+    }
+  );
+
+  it.each([
+    ['REKEYED without its key', AccountType.REKEYED],
+    ['WATCH', AccountType.WATCH],
+  ])('rejects a %s target', async (_label, type) => {
+    funded({ isRekeyed: false });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type },
+    ]);
+    expect(errors).toContain(TARGET_ERROR);
+  });
+
+  it('accepts a controller that is a REKEYED record holding its own key', async () => {
+    funded({ isRekeyed: true, authAddress: CONTROLLER });
+    mockProbe.mockImplementation(async (id) => id === 'ctl');
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.WATCH },
+      { id: 'ctl', address: CONTROLLER, type: AccountType.REKEYED },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects a controller that is a REKEYED record without its key', async () => {
+    funded({ isRekeyed: true, authAddress: CONTROLLER });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.WATCH },
+      { id: 'ctl', address: CONTROLLER, type: AccountType.REKEYED },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([
+      expect.stringContaining('You need this controlling account'),
+    ]);
+  });
+
+  it.each([
+    ['WATCH', AccountType.WATCH, false],
+    ['REKEYED without its key', AccountType.REKEYED, false],
+    ['REKEYED holding its key', AccountType.REKEYED, true],
+    ['STANDARD', AccountType.STANDARD, false],
+  ])(
+    'unrekeyed %s source signs as itself only with its own key',
+    async (_label, type, held) => {
+      funded({ isRekeyed: false });
+      mockProbe.mockImplementation(async (id) => held && id === 'src');
+      const errors = await validate([
+        { id: 'src', address: SENDER, type },
+        { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+      ]);
+      const ownsKey = type === AccountType.STANDARD || held;
+      expect(errors.includes(SOURCE_ERROR)).toBe(!ownsKey);
+    }
+  );
+
+  it('a rekeyed WATCH source is judged by its controller, not by its own key', async () => {
+    funded({ isRekeyed: true, authAddress: CONTROLLER });
+    const errors = await validate([
+      { id: 'src', address: SENDER, type: AccountType.WATCH },
+      { id: 'ctl', address: CONTROLLER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type: AccountType.STANDARD },
+    ]);
+    expect(errors).toEqual([]);
+  });
+});
+
+// TASK-425 U3 Codex confirm 2: the builders are the last step before every
+// signing path, so they re-check that the key receiving authority is held.
+describe('rekey builders re-check the receiving key (TASK-425 U3)', () => {
+  const REFUSED =
+    'The account receiving signing authority has no key in this wallet. Rekey cancelled.';
+  const only = (accounts: { id: string; address: string; type: string }[]) =>
+    mockCurrentWallet.mockResolvedValueOnce({ accounts });
+
+  beforeEach(() => {
+    mockGetSuggestedParams.mockResolvedValue(SUGGESTED_PARAMS);
+  });
+
+  it.each([
+    ['WATCH', AccountType.WATCH],
+    ['keyless REKEYED', AccountType.REKEYED],
+  ])('buildRekeyTransaction refuses a %s target', async (_label, type) => {
+    only([
+      { id: 'sender', address: SENDER, type: AccountType.STANDARD },
+      { id: 'tgt', address: RECIPIENT, type },
+    ]);
+    await expect(
+      TransactionService.buildRekeyTransaction({
+        fromAddress: SENDER,
+        rekeyToAddress: RECIPIENT,
+        note: 'u3-refuse',
+      })
+    ).rejects.toThrow(REFUSED);
+  });
+
+  it('buildRekeyReverseTransaction refuses when the source key is gone', async () => {
+    only([{ id: 'sender', address: SENDER, type: AccountType.WATCH }]);
+    await expect(
+      TransactionService.buildRekeyReverseTransaction({
+        fromAddress: SENDER,
+        note: 'u3-refuse-reverse',
+      })
+    ).rejects.toThrow(REFUSED);
+  });
+
+  it('re-checks even when the transaction is already cached', async () => {
+    const params = { fromAddress: SENDER, note: 'u3-cached' };
+    await TransactionService.buildRekeyReverseTransaction(params);
+    only([{ id: 'sender', address: SENDER, type: AccountType.WATCH }]);
+    await expect(
+      TransactionService.buildRekeyReverseTransaction(params)
+    ).rejects.toThrow(REFUSED);
+  });
+
+  it.each([
+    ['sendRekeyTransaction', RECIPIENT],
+    ['sendRekeyReverseTransaction', SENDER],
+  ])(
+    '%s does not submit when the receiving key is lost while signing',
+    async (method, receiver) => {
+      const sign = jest
+        .spyOn(TransactionService as any, 'signTransactionWithRecovery')
+        .mockImplementation(async () => {
+          // A Ledger approval or PIN wait: meanwhile the receiver loses its key.
+          mockCurrentWallet.mockResolvedValue({
+            accounts: [
+              { id: 'sender', address: SENDER, type: AccountType.WATCH },
+              { id: 'recipient', address: receiver, type: AccountType.WATCH },
+            ],
+          });
+          return new Uint8Array([1]);
+        });
+      const submit = jest
+        .spyOn(TransactionService as any, 'submitWithRetries')
+        .mockResolvedValue({ txId: 'TX', confirmed: true });
+      try {
+        await expect(
+          (TransactionService as any)[method](
+            {
+              fromAddress: SENDER,
+              rekeyToAddress: RECIPIENT,
+              note: `u3-${method}`,
+            },
+            { address: SENDER }
+          )
+        ).rejects.toThrow(REFUSED);
+        expect(sign).toHaveBeenCalled();
+        expect(submit).not.toHaveBeenCalled();
+      } finally {
+        sign.mockRestore();
+        submit.mockRestore();
+        mockCurrentWallet.mockReset();
+        mockCurrentWallet.mockImplementation(async () => ({
+          accounts: [
+            { id: 'sender', address: SENDER, type: 'standard' },
+            { id: 'recipient', address: RECIPIENT, type: 'standard' },
+          ],
+        }));
+      }
+    }
+  );
 });

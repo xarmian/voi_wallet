@@ -121,7 +121,7 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
     const onComplete = jest.fn();
     const onCancel = jest.fn();
 
-    const { rerender } = render(
+    const { rerender } = await render(
       <UnifiedTransactionAuthModal
         visible
         controller={asController(controller)}
@@ -138,7 +138,7 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
 
     // Parent re-renders during the async init window (state still idle): a
     // benign prop change must not re-invoke init.
-    rerender(
+    await rerender(
       <UnifiedTransactionAuthModal
         visible
         controller={asController(controller)}
@@ -171,7 +171,7 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
     // shows a confirm dialog / awaits a WalletConnect reject / animates dismiss.
     const onCancel = jest.fn();
 
-    const { getByText, rerender } = render(
+    const { getByText, rerender } = await render(
       <UnifiedTransactionAuthModal
         visible
         controller={asController(controller)}
@@ -188,13 +188,13 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
 
     // Explicit cancel. handleCancel calls resetAfterDismiss(), which emits idle.
     await act(async () => {
-      fireEvent.press(getByText('Cancel'));
+      await fireEvent.press(getByText('Cancel'));
     });
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(controller.cancel).toHaveBeenCalledTimes(1);
 
     // visible stays true; force another parent re-render for good measure.
-    rerender(
+    await rerender(
       <UnifiedTransactionAuthModal
         visible
         controller={asController(controller)}
@@ -235,7 +235,7 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
       message: 'msg',
     });
 
-    const { getByText, rerender } = render(
+    const { getByText, rerender } = await render(
       <UnifiedTransactionAuthModal {...props(true)} />
     );
 
@@ -244,20 +244,62 @@ describe('UnifiedTransactionAuthModal init/cancel latch (TASK-241)', () => {
     );
 
     await act(async () => {
-      fireEvent.press(getByText('Cancel'));
+      await fireEvent.press(getByText('Cancel'));
     });
 
     // Genuine close (visible true→false): clears init/biometric latches.
-    rerender(<UnifiedTransactionAuthModal {...props(false)} />);
+    await rerender(<UnifiedTransactionAuthModal {...props(false)} />);
 
     // Genuine reopen (visible false→true): clears the userCancelled latch first,
     // then the init effect re-initializes for the new open.
     await act(async () => {
-      rerender(<UnifiedTransactionAuthModal {...props(true)} />);
+      await rerender(<UnifiedTransactionAuthModal {...props(true)} />);
     });
 
     await waitFor(() =>
       expect(controller.initializeSigningFlow).toHaveBeenCalledTimes(2)
     );
   });
+});
+
+it('does not start biometrics merely because the modal opened (TASK-437)', async () => {
+  const controller = makeController(
+    idleState({ state: 'authenticating', biometricAvailable: true })
+  );
+  await render(
+    <UnifiedTransactionAuthModal
+      visible
+      controller={asController(controller)}
+      request={{} as never}
+      onComplete={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  expect(controller.authenticateWithBiometrics).not.toHaveBeenCalled();
+});
+
+it('starts biometrics once when opened by the explicit Sign with Face ID tap (TASK-437)', async () => {
+  const controller = makeController();
+  controller.initializeSigningFlow.mockImplementation(async () => {
+    controller._emit(
+      idleState({ state: 'authenticating', biometricAvailable: true })
+    );
+  });
+  await render(
+    <UnifiedTransactionAuthModal
+      visible
+      biometricOnOpen
+      controller={asController(controller)}
+      request={{} as never}
+      message="Send 12.5 VOI to ABCD…WXYZ"
+      onComplete={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  await waitFor(() =>
+    expect(controller.authenticateWithBiometrics).toHaveBeenCalledWith(
+      'Send 12.5 VOI to ABCD…WXYZ'
+    )
+  );
+  expect(controller.authenticateWithBiometrics).toHaveBeenCalledTimes(1);
 });

@@ -5,6 +5,8 @@
  * between the wallet (online) and signer (offline/air-gapped) devices.
  */
 
+import type { DangerItem } from '@/utils/transactionDangers';
+
 /**
  * Transaction item in a signing request
  */
@@ -189,9 +191,7 @@ export interface RemoteSignerPairing {
  * Union type for all QR payload types
  */
 export type RemoteSignerPayload =
-  | RemoteSignerRequest
-  | RemoteSignerResponse
-  | RemoteSignerPairing;
+  RemoteSignerRequest | RemoteSignerResponse | RemoteSignerPairing;
 
 /**
  * Type guard to check if payload is a signing request
@@ -306,10 +306,10 @@ export interface DecodedTransactionInfo {
   amount?: bigint;
   /** Transaction fee */
   fee: bigint;
-  /** Asset ID (for asset transfers) */
-  assetId?: number;
-  /** Application ID (for app calls) */
-  appId?: number;
+  /** Asset ID (asset transfer / config / freeze) */
+  assetId?: bigint;
+  /** Application ID (for app calls; 0n on app creation) */
+  appId?: bigint;
   /** Note field (decoded as UTF-8 if possible) */
   note?: string;
   /** First valid round */
@@ -322,8 +322,21 @@ export interface DecodedTransactionInfo {
   genesisHash: string;
   /** Rekey to address */
   rekeyTo?: string;
-  /** Close remainder to address */
+  /** Close remainder to address (native payment: sweeps the whole account) */
   closeRemainderTo?: string;
+  /** Asset close-to address (asset transfer: sweeps the whole ASA holding) */
+  assetCloseTo?: string;
+  /**
+   * Clawback source (asset transfer `asnd`): the account the asset is taken
+   * from; the sender is only the clawback authority.
+   */
+  assetSender?: string;
+  /**
+   * Every dangerous operation in this transaction (shared detector,
+   * TASK-440 / TASK-445). Asset-authority items are not yet narrowed against
+   * the asset's current holders; the review screen does that.
+   */
+  dangers: DangerItem[];
   /** Raw transaction for full details */
   raw: any;
 }

@@ -68,6 +68,12 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+const mockRemovePersistedBalanceCaches = jest.fn(async (_keys: string[]) => {});
+jest.mock('@/store/walletStore', () => ({
+  removePersistedBalanceCaches: (keys: string[]) =>
+    mockRemovePersistedBalanceCaches(keys),
+}));
+
 jest.mock('algosdk', () => ({
   __esModule: true,
   default: {
@@ -126,3 +132,112 @@ describe('performFullRestore — pin_setup_pending breadcrumb ordering (TASK-213
     expect(order.indexOf('mark')).toBeLessThan(order.indexOf('storeAccount'));
   });
 });
+
+it('a failed secure wipe aborts restore before wallet metadata or settings are cleared', async () => {
+  const {
+    AccountSecureStorage,
+  } = require('@/services/secure/AccountSecureStorage');
+  const { MultiAccountWalletService } = require('@/services/wallet');
+  AccountSecureStorage.clearAll.mockRejectedValueOnce(
+    new Error('disk I/O failure')
+  );
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  await expect(
+    performFullRestore(
+      [],
+      {} as BackupSettings,
+      [],
+      {} as Parameters<typeof performFullRestore>[3]
+    )
+  ).rejects.toThrow();
+  expect(MultiAccountWalletService.clearAllWallets).not.toHaveBeenCalled();
+  expect(mockMark).not.toHaveBeenCalled();
+  expect(order).not.toContain('storeAccount');
+  errorSpy.mockRestore();
+});
+
+it('removes balance-cache keys through the store chain and other caches directly (TASK-398)', async () => {
+  const AsyncStorage = jest.requireMock(
+    '@react-native-async-storage/async-storage'
+  ).default;
+  AsyncStorage.getAllKeys.mockResolvedValueOnce([
+    '@voi_wallet_balance_cache_v2',
+    '@voi_wallet_multi_network_balance_cache',
+    'claimable_cache_x',
+    'messages_cache_y',
+    'unrelated',
+  ]);
+  try {
+    await performFullRestore(
+      [],
+      {} as BackupSettings,
+      [],
+      {} as Parameters<typeof performFullRestore>[3]
+    );
+  } catch {
+    // later restorers may reject on the minimal fixtures; the clear ran first
+  }
+  expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([
+    '@voi_wallet_balance_cache_v2',
+    '@voi_wallet_multi_network_balance_cache',
+  ]);
+  expect(AsyncStorage.multiRemove).toHaveBeenCalledWith([
+    'claimable_cache_x',
+    'messages_cache_y',
+  ]);
+  for (const [keys] of AsyncStorage.multiRemove.mock.calls)
+    expect(keys.some((k: string) => k.includes('balance_cache'))).toBe(false);
+});
+
+it('runs the balance-cache barrier even when no balance key exists yet (TASK-398)', async () => {
+  try {
+    await performFullRestore(
+      [],
+      {} as BackupSettings,
+      [],
+      {} as Parameters<typeof performFullRestore>[3]
+    );
+  } catch {
+    // later restorers may reject on the minimal fixtures; the clear ran first
+  }
+  expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([]);
+});
+
+it.each([undefined, '', 'invalid phrase'])(
+  'rejects a missing or invalid standard phrase before any destructive work (#4): %s',
+  async (mnemonic) => {
+    const algosdk = jest.requireMock('algosdk').default;
+    const { AccountSecureStorage } = jest.requireMock(
+      '@/services/secure/AccountSecureStorage'
+    );
+    const { MultiAccountWalletService } = jest.requireMock('@/services/wallet');
+    algosdk.mnemonicToSecretKey.mockImplementation((phrase: string) => {
+      if (phrase !== 'valid test phrase') throw new Error('Invalid mnemonic');
+      return {
+        addr: { toString: () => 'RESTORED_ADDR' },
+        sk: new Uint8Array(64),
+      };
+    });
+    const records = ['valid test phrase', mnemonic].map(
+      (phrase, index) =>
+        ({
+          id: `standard-${index}`,
+          type: AccountType.STANDARD,
+          address: 'RESTORED_ADDR',
+          mnemonic: phrase,
+        }) as BackupAccountData
+    );
+    await expect(
+      performFullRestore(
+        records,
+        {} as BackupSettings,
+        [],
+        {} as Parameters<typeof performFullRestore>[3]
+      )
+    ).rejects.toThrow();
+    expect(AccountSecureStorage.clearAll).not.toHaveBeenCalled();
+    expect(MultiAccountWalletService.clearAllWallets).not.toHaveBeenCalled();
+    expect(AccountSecureStorage.storeAccountForCreation).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+  }
+);

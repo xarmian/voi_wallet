@@ -8,9 +8,7 @@ import { getNetworkConfig } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 
 export type TokenImageSource =
-  | { type: 'uri'; uri: string }
-  | { type: 'local'; source: any }
-  | null;
+  { type: 'uri'; uri: string } | { type: 'local'; source: any } | null;
 
 /**
  * Get the image source for a SwapToken with priority:

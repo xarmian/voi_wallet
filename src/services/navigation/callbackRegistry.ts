@@ -21,6 +21,12 @@
 export interface NavigationCallbacks {
   onSuccess?: (result: any) => Promise<void>;
   onReject?: () => Promise<void>;
+  /**
+   * Called when the target screen is removed from the navigation stack,
+   * however it was left (including the OS back button or a swipe-back). The
+   * caller decides whether anything was left unanswered (TASK-257).
+   */
+  onDismiss?: () => void;
 }
 
 const callbackRegistry = new Map<string, NavigationCallbacks>();

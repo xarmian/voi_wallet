@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { ErrorStateView } from '@/components/common/ErrorStateView';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +11,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Arc200TransactionService } from '@/services/transactions/arc200';
+import {
+  ARC200_RECONFIRM_MESSAGE,
+  isArc200MbrRace,
+  isArc200ExpiredGroup,
+} from '@/services/transactions/arc200MbrRace';
+import { useArc200Confirmation } from '@/hooks/useArc200Confirmation';
 import { formatAddress } from '@/utils/address';
 import EnvoiService, { EnvoiNameInfo } from '@/services/envoi';
 import UnifiedTransactionAuthModal from '@/components/UnifiedTransactionAuthModal';
@@ -24,7 +32,10 @@ import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { parseAmountToBaseUnits } from '@/utils/bigint';
-import { toErrorAlert } from '@/utils/errorMapping';
+import {
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 // Removed TransactionConfirmationCard in favor of unified TransactionVerification
 import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -92,6 +103,34 @@ export default function TransactionConfirmationScreen() {
   const [fallbackImageUrl, setFallbackImageUrl] = useState<string | undefined>(
     undefined
   );
+
+  const buildTransfer = useCallback(
+    (forceMbrPayment = false) =>
+      params.assetType === 'arc200'
+        ? Arc200TransactionService.buildArc200TransferGroup({
+            from: params.fromAccount.address,
+            to: params.recipient.trim(),
+            amount: parseAmountToBaseUnits(
+              params.amount,
+              params.assetDecimals ?? 0
+            ),
+            contractId: params.contractId!,
+            note: params.note,
+            networkId: selectedNetworkId,
+            forceMbrPayment,
+          })
+        : undefined,
+    [params, selectedNetworkId]
+  );
+  const {
+    group,
+    fee: builtFee,
+    recover,
+    buildError,
+    retry,
+  } = useArc200Confirmation(buildTransfer);
+  const confirmationFee =
+    params.assetType === 'arc200' ? builtFee : params.estimatedFee;
 
   // Use the unified auth controller
   const authController = useTransactionAuthController();
@@ -241,6 +280,7 @@ export default function TransactionConfirmationScreen() {
   };
 
   const handleConfirm = () => {
+    if (params.assetType === 'arc200' && !group) return;
     // Create unified transaction request
     const decimals =
       params.assetDecimals || (params.assetId === 0 || !params.assetId ? 6 : 0);
@@ -271,6 +311,7 @@ export default function TransactionConfirmationScreen() {
               : 'voi_transfer',
       account: params.fromAccount,
       transferParams: {
+        preparedArc200Group: group,
         from: params.fromAccount.address,
         to: params.recipient.trim(),
         amount: amountInBaseUnits,
@@ -291,9 +332,25 @@ export default function TransactionConfirmationScreen() {
     navigation.goBack();
   };
 
-  const handleAuthComplete = (success: boolean, result?: any) => {
+  const handleAuthComplete = async (success: boolean, result?: any) => {
     setShowAuthModal(false);
     setCurrentRequest(null);
+
+    const recoveryResult =
+      !success &&
+      (await recover(
+        result?.error ?? result,
+        currentRequest?.transferParams?.preparedArc200Group
+      ));
+    if (recoveryResult) {
+      if (recoveryResult === 'rebuilt')
+        Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+      return;
+    }
+
+    const unsettled = success
+      ? undefined
+      : toUnsettledTransactionAlert(result?.error);
 
     if (success && result?.transactionId) {
       // Replace this screen with result to keep stack cleaner.
@@ -311,7 +368,7 @@ export default function TransactionConfirmationScreen() {
         assetType: params.assetType,
         contractId: params.contractId,
         tokenId: params.tokenId,
-        fee: params.estimatedFee,
+        fee: confirmationFee,
         isSuccess: true,
         // Pending vs confirmed: comes from the auth result when available
         // (e.g. remote-signer flow). Undefined on the standard flow, which the
@@ -321,10 +378,36 @@ export default function TransactionConfirmationScreen() {
         networkId: params.networkId as NetworkId | undefined,
       };
       navigation.replace('TransactionResult', successParams);
+    } else if (unsettled) {
+      // It may already have been sent: the result screen's pending state, not
+      // its failure state, so nothing invites a resend (TASK-447).
+      const txId = (result?.error as { txId?: unknown } | undefined)?.txId;
+      const pendingParams = {
+        transactionId: typeof txId === 'string' && txId ? txId : undefined,
+        recipient: params.recipient,
+        recipientName: getDisplayName(),
+        amount: params.amount,
+        assetSymbol: params.assetSymbol,
+        assetId: params.assetId,
+        assetType: params.assetType,
+        contractId: params.contractId,
+        tokenId: params.tokenId,
+        fee: confirmationFee,
+        isSuccess: true,
+        confirmed: false,
+        pendingTitle: unsettled.title,
+        pendingMessage: unsettled.message,
+        homeRoute: params.assetType === 'arc72' ? 'NFTMain' : 'HomeMain',
+        networkId: params.networkId as NetworkId | undefined,
+      };
+      navigation.replace('TransactionResult', pendingParams);
     } else {
       // Replace this screen with error result
-      const errorMessage =
-        result instanceof Error ? result.message : 'Transaction failed';
+      // The modal reports failure as { error } (TASK-453): map that error, so a
+      // real failure isn't shown as the generic fallback.
+      const errorMessage = toErrorAlert(result?.error, {
+        fallbackMessage: 'Transaction failed.',
+      }).message;
 
       const errorParams = {
         recipient: params.recipient,
@@ -335,7 +418,7 @@ export default function TransactionConfirmationScreen() {
         assetType: params.assetType,
         contractId: params.contractId,
         tokenId: params.tokenId,
-        fee: params.estimatedFee,
+        fee: confirmationFee,
         isSuccess: false,
         errorMessage,
         homeRoute: params.assetType === 'arc72' ? 'NFTMain' : 'HomeMain',
@@ -368,10 +451,7 @@ export default function TransactionConfirmationScreen() {
 
     if (params.assetId === 0 || !params.assetId) {
       // For VOI, add fee to amount
-      return (
-        parseFloat(params.amount) +
-        params.estimatedFee / 1000000
-      ).toFixed(6);
+      return (parseFloat(params.amount) + confirmationFee / 1000000).toFixed(6);
     }
     // For other assets, fee is separate
     return params.amount;
@@ -387,6 +467,14 @@ export default function TransactionConfirmationScreen() {
       />
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {!!buildError && (
+          <ErrorStateView
+            error={buildError}
+            onRetry={retry}
+            variant="inline"
+            fallbackMessage="Unable to prepare transaction. Please retry."
+          />
+        )}
         {/* Recipient Profile */}
         <EnvoiProfileCard
           address={params.recipient}
@@ -404,7 +492,7 @@ export default function TransactionConfirmationScreen() {
           amount={params.amount}
           assetSymbol={params.assetSymbol}
           assetId={params.assetId}
-          fee={params.estimatedFee}
+          fee={confirmationFee}
           total={getTotalAmount()}
           note={params.note}
           networkToken={networkConfig.nativeToken}
@@ -434,6 +522,7 @@ export default function TransactionConfirmationScreen() {
         <TouchableOpacity
           style={[styles.button, styles.confirmButton]}
           onPress={handleConfirm}
+          disabled={params.assetType === 'arc200' && !group}
         >
           <Text style={styles.confirmButtonText}>Confirm & Send</Text>
         </TouchableOpacity>
@@ -444,6 +533,12 @@ export default function TransactionConfirmationScreen() {
         controller={authController}
         request={currentRequest}
         onComplete={handleAuthComplete}
+        formatErrorMessage={(error) =>
+          group &&
+          (isArc200MbrRace(error, group) || isArc200ExpiredGroup(error, group))
+            ? ARC200_RECONFIRM_MESSAGE
+            : undefined
+        }
         onCancel={handleAuthCancel}
         title="Authorize Transaction"
         message={`Authenticate to send ${params.amount} ${params.assetSymbol} to ${getDisplayName()}`}

@@ -16,11 +16,21 @@
  * mismatch, load failure, or runtime error we fall back to @noble — always correct,
  * just slow. The shim therefore can NEVER emit a blob under an unverified backend.
  *
- * FALLBACK CONTEXTS: jest (no native runtime) and any non-dev-client build resolve
- * to the @noble path automatically (the native require/parity-check fails safely).
+ * FALLBACK CONTEXTS: jest (no native runtime; the module is mocked empty) and any
+ * build without the native module resolve to @noble, as does a native backend
+ * that throws or mismatches during the parity check. A native call that fails
+ * after parity passed degrades to @noble for that call only. Every one of these
+ * paths warns (see LOUD FALLBACK below), so they are expected noise under jest.
  *
- * SECURITY: never logs the secret or derived bytes (only the backend name / parity
- * result).
+ * SECURITY: never logs the secret or derived bytes (only the backend name, the
+ * parity result and, on a native error, a fixed error-class label).
+ *
+ * LOUD FALLBACK (DR-7 / HT-377): every fallback path warns via `console.warn`,
+ * which release bundles keep (babel.config.js strips only console.log), so a
+ * release build that fell back to @noble is distinguishable from a native one.
+ * The warnings carry ONLY the backend name and the error class name.
+ * `backend=` is the backend SELECTED for the session; the per-call warning
+ * (`backend=native: ... @noble for this call`) means that one call fell back.
  */
 import { scryptAsync } from '@noble/hashes/scrypt';
 import { utf8ToBytes, bytesToHex } from '@noble/hashes/utils';
@@ -110,6 +120,36 @@ function callNative(
   });
 }
 
+/** Standard ECMAScript error classes a fallback warning may name. */
+const KNOWN_ERROR_CLASSES = [
+  'Error',
+  'TypeError',
+  'RangeError',
+  'ReferenceError',
+  'SyntaxError',
+  'EvalError',
+  'URIError',
+  'AggregateError',
+] as const;
+
+/**
+ * The error's class, for the loud-fallback warnings. Deliberately NOT the
+ * message, stack or the error object itself: a native error's text could echo
+ * its inputs. `name` is runtime data too, so it is never passed through: the
+ * result is always one of the constants below, chosen by equality.
+ */
+function errorClass(e: unknown): string {
+  // Total: a hostile error (throwing `name` getter, Proxy traps) must never
+  // stop the fallback from running.
+  try {
+    if (!(e instanceof Error)) return 'non-Error';
+    const name: unknown = e.name;
+    return KNOWN_ERROR_CLASSES.find((k) => k === name) ?? 'Error(custom)';
+  } catch {
+    return 'Error(unreadable)';
+  }
+}
+
 async function nobleScrypt(
   pw: Uint8Array,
   salt: Uint8Array,
@@ -132,6 +172,9 @@ async function resolveBackend(): Promise<Backend> {
   backendResolution = (async (): Promise<Backend> => {
     const native = loadNativeScrypt();
     if (!native) {
+      console.warn(
+        '[scryptKdf] backend=js: native scrypt module unavailable; using @noble fallback'
+      );
       resolvedBackend = 'js';
       return 'js';
     }
@@ -150,15 +193,13 @@ async function resolveBackend(): Promise<Backend> {
       }
       // Present but WRONG — must never write blobs with it.
       console.warn(
-        '[scryptKdf] native scrypt failed byte-parity; using @noble fallback'
+        '[scryptKdf] backend=js: native scrypt failed byte-parity; using @noble fallback'
       );
     } catch (e) {
-      if (__DEV__) {
-        console.log(
-          '[scryptKdf] native scrypt unavailable; @noble fallback',
-          e
-        );
-      }
+      console.warn(
+        '[scryptKdf] backend=js: native scrypt threw during parity check; using @noble fallback',
+        errorClass(e)
+      );
     }
     resolvedBackend = 'js';
     return 'js';
@@ -185,9 +226,10 @@ export async function scryptRaw(
     } catch (e) {
       // Passed parity but failed at runtime — degrade to @noble for THIS call
       // (correctness over speed). Never surface an unwrapped native error.
-      if (__DEV__) {
-        console.log('[scryptKdf] native call failed; @noble for this call', e);
-      }
+      console.warn(
+        '[scryptKdf] backend=native: native call failed; @noble for this call',
+        errorClass(e)
+      );
     }
   }
   return nobleScrypt(pw, saltBytes, params);

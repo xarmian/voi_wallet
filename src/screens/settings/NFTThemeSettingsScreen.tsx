@@ -1,3 +1,11 @@
+/**
+ * NFT Theme Screen
+ *
+ * Pushed from the Theme screen to pick the NFT that themes the app (TASK-435:
+ * was a slide-up modal chained off the Theme modal with timers). Selecting an
+ * NFT applies it live and stays here.
+ */
+
 import React, {
   useState,
   useEffect,
@@ -10,37 +18,29 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Modal,
   Alert,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { Theme } from '@/constants/themes';
-import { EdgeInsets, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useActiveAccount } from '@/store/walletStore';
 import { NFTService } from '@/services/nft';
 import { NFTToken, ARC72Collection } from '@/types/nft';
 import { useTheme } from '@/contexts/ThemeContext';
 import CollectionBrowser from '@/components/nft/CollectionBrowser';
 import NFTGridView from '@/components/nft/NFTGridView';
-
-interface NFTThemeSelectorProps {
-  visible: boolean;
-  onClose: () => void;
-  theme: Theme;
-}
+import { NFTBackground } from '@/components/common/NFTBackground';
+import UniversalHeader from '@/components/common/UniversalHeader';
 
 type TabType = 'my-nfts' | 'browse-collections';
 type ViewMode = 'my-nfts' | 'browse-collections' | 'collection-tokens';
 
-export default function NFTThemeSelector({
-  visible,
-  onClose,
-  theme,
-}: NFTThemeSelectorProps) {
-  const insets = useSafeAreaInsets();
-  const styles = useMemo(() => createStyles(theme, insets), [theme, insets]);
-  const { setNFTTheme } = useTheme();
+export default function NFTThemeSettingsScreen() {
+  const navigation = useNavigation();
+  const { theme, setNFTTheme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const activeAccount = useActiveAccount();
 
   // Track the active account address so an in-flight collection/ownership load
@@ -71,13 +71,13 @@ export default function NFTThemeSelector({
   const [nextToken, setNextToken] = useState<string | undefined>();
   const [hasMore, setHasMore] = useState(false);
 
-  // Load my NFTs when visible and active account changes
+  // Load my NFTs on open and when the active account changes
   useEffect(() => {
-    if (visible && viewMode === 'my-nfts' && activeAccount) {
+    if (viewMode === 'my-nfts' && activeAccount) {
       loadMyNFTs();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load on open, keyed on visible/account-address/viewMode; activeAccount is tracked via its stable .address slice and loadMyNFTs is read at that commit, so neither should re-trigger on object/function identity.
-  }, [visible, activeAccount?.address, viewMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load on mount, keyed on account-address/viewMode; activeAccount is tracked via its stable .address slice and loadMyNFTs is read at that commit, so neither should re-trigger on object/function identity.
+  }, [activeAccount?.address, viewMode]);
 
   // Reset the view the moment the active tab changes by adjusting state during
   // render off the tracked previous tab — the React-canonical replacement for
@@ -440,68 +440,32 @@ export default function NFTThemeSelector({
   };
 
   return (
-    <>
-      <Modal
-        visible={visible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={onClose}
-      >
-        <View style={styles.container}>
-          {/* Header */}
-          <View style={styles.header}>
-            <Text style={styles.title}>NFT Theme</Text>
-            <View style={styles.headerActions}>
-              <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-                <Ionicons name="close" size={24} color={theme.colors.text} />
-              </TouchableOpacity>
-            </View>
-          </View>
+    <NFTBackground>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <UniversalHeader
+          title="NFT Theme"
+          showBackButton
+          onBackPress={() => navigation.goBack()}
+          showAccountSelector={false}
+        />
 
-          {/* Tabs */}
-          {renderTabs()}
+        {/* Tabs */}
+        {renderTabs()}
 
-          {/* Collection Header (Collection tokens view only) */}
-          {renderCollectionHeader()}
+        {/* Collection Header (Collection tokens view only) */}
+        {renderCollectionHeader()}
 
-          {/* Content */}
-          {renderContent()}
-        </View>
-      </Modal>
-    </>
+        {/* Content */}
+        {renderContent()}
+      </SafeAreaView>
+    </NFTBackground>
   );
 }
 
-const createStyles = (theme: Theme, insets: EdgeInsets) =>
+const createStyles = (theme: Theme) =>
   StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: theme.colors.background,
-      paddingTop: insets.top,
-    },
-    header: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingTop: 20,
-      paddingBottom: 16,
-      backgroundColor: theme.colors.surface,
-      borderBottomWidth: 1,
-      borderBottomColor: theme.colors.border,
-    },
-    title: {
-      fontSize: 24,
-      fontWeight: '600',
-      color: theme.colors.text,
-    },
-    headerActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 16,
-    },
-    closeButton: {
-      padding: 4,
     },
     tabContainer: {
       flexDirection: 'row',

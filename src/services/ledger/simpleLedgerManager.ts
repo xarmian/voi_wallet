@@ -6,6 +6,7 @@ import Transport from '@ledgerhq/hw-transport';
 import type { DeviceModelId } from '@ledgerhq/devices';
 
 import { LedgerDeviceNotConnectedError } from '@/types/wallet';
+import { redactError } from '@/utils/logRedaction';
 
 export interface SimpleLedgerDevice {
   id: string;
@@ -17,12 +18,7 @@ export interface SimpleLedgerDevice {
 }
 
 export type LedgerConnectionState =
-  | 'disconnected'
-  | 'discovering'
-  | 'connecting'
-  | 'ready'
-  | 'signing'
-  | 'error';
+  'disconnected' | 'discovering' | 'connecting' | 'ready' | 'signing' | 'error';
 
 export type LedgerError =
   | 'device_not_found'
@@ -140,7 +136,7 @@ export class SimpleLedgerManager {
       try {
         await this.currentTransport.close();
       } catch (error) {
-        console.warn('Error closing transport:', error);
+        console.warn('Error closing transport:', redactError(error));
       }
     }
 
@@ -352,14 +348,14 @@ export class SimpleLedgerManager {
           }
         },
         error: (error: any) => {
-          console.warn('BLE discovery error:', error);
+          console.warn('BLE discovery error:', redactError(error));
         },
         complete: () => {
           this.bleSubscription = null;
         },
       });
     } catch (error) {
-      console.warn('Failed to start BLE discovery:', error);
+      console.warn('Failed to start BLE discovery:', redactError(error));
     }
   }
 
@@ -388,14 +384,14 @@ export class SimpleLedgerManager {
           }
         },
         error: (error: any) => {
-          console.warn('USB discovery error:', error);
+          console.warn('USB discovery error:', redactError(error));
         },
         complete: () => {
           this.usbSubscription = null;
         },
       });
     } catch (error) {
-      console.warn('Failed to start USB discovery:', error);
+      console.warn('Failed to start USB discovery:', redactError(error));
     }
   }
 
@@ -513,7 +509,7 @@ export class SimpleLedgerManager {
           results[permission] === PermissionsAndroid.RESULTS.GRANTED
       );
     } catch (error) {
-      console.error('Permission check failed:', error);
+      console.error('Permission check failed:', redactError(error));
       return false;
     }
   }
@@ -549,7 +545,7 @@ export class SimpleLedgerManager {
       try {
         listener(stateChange);
       } catch (error) {
-        console.error('State listener error:', error);
+        console.error('State listener error:', redactError(error));
       }
     });
   }

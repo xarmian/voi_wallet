@@ -77,12 +77,12 @@ function autoConfirmAlerts() {
 describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () => {
   it('exposes a Retry action wired to onRetry', async () => {
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText } = render(
+    const { getByLabelText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
 
     await act(async () => {
-      fireEvent.press(getByLabelText('Retry secure storage check'));
+      await fireEvent.press(getByLabelText('Retry secure storage check'));
     });
 
     expect(onRetry).toHaveBeenCalledTimes(1);
@@ -94,15 +94,15 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
   it('the guarded Reset wipes local data (clearAll + clearAllWallets) then re-runs the check', async () => {
     const alertSpy = autoConfirmAlerts();
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText, getByPlaceholderText } = render(
+    const { getByLabelText, getByPlaceholderText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
 
     // Type-RESET friction (TASK-213): the wipe is gated until RESET is typed.
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
 
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
@@ -118,30 +118,35 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     alertSpy.mockRestore();
   });
 
-  it('still re-runs the check when clearAll throws (broken keystore) — best-effort wipe', async () => {
+  it('failed clearAll shows actionable error, preserves metadata, and permits a successful retry', async () => {
     const alertSpy = autoConfirmAlerts();
-    mockClearAll.mockRejectedValueOnce(new Error('keystore delete failed'));
+    mockClearAll.mockRejectedValueOnce(new Error('disk I/O failure'));
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText, getByPlaceholderText } = render(
+    const { getByLabelText, getByPlaceholderText, getByText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
-
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
-
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
-      await Promise.resolve();
     });
-
-    // A clearAll failure must NOT abort the reset: the wallet-metadata wipe (the
-    // step that actually lets the next boot resolve "no wallet") still runs, and
-    // the check is still re-run.
+    expect(mockClearAllWallets).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(
+      getByText(
+        "Couldn't erase all wallet data from secure storage. Restart your device and try again. If your device is low on storage, free some up first."
+      )
+    ).toBeTruthy();
+    await act(async () => {
+      await fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+    });
+    expect(mockClearAll).toHaveBeenCalledTimes(2);
     expect(mockClearAllWallets).toHaveBeenCalledTimes(1);
     expect(onRetry).toHaveBeenCalledTimes(1);
-
     errorSpy.mockRestore();
     alertSpy.mockRestore();
   });
@@ -149,13 +154,13 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
   it('the wipe stays DISABLED until the exact word RESET is typed (TASK-213)', async () => {
     const alertSpy = autoConfirmAlerts();
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText, getByPlaceholderText } = render(
+    const { getByLabelText, getByPlaceholderText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
 
     // Pressing with NOTHING typed does nothing — no confirm dialog, no wipe.
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
@@ -164,9 +169,9 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     expect(mockClearAll).not.toHaveBeenCalled();
 
     // A near-miss (wrong case) still does NOT enable it.
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'reset');
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'reset');
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
@@ -175,9 +180,9 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     expect(mockClearAll).not.toHaveBeenCalled();
 
     // Exact RESET enables it — now the confirm chain runs and the wipe fires.
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
@@ -191,13 +196,13 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
   it('the reset confirmation copy is accurate — no single-recovery-phrase over-promise (TASK-213)', async () => {
     const alertSpy = autoConfirmAlerts();
     const onRetry = jest.fn(async () => {});
-    const { getByLabelText, getByPlaceholderText } = render(
+    const { getByLabelText, getByPlaceholderText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
 
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
@@ -224,16 +229,16 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     // the guidance renders.
     const alertSpy = autoConfirmAlerts();
     const onRetry = jest.fn(async () => {}); // does not resolve the failure
-    const { getByLabelText, getByPlaceholderText, queryByText } = render(
+    const { getByLabelText, getByPlaceholderText, queryByText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
 
     // No message before a reset attempt.
     expect(queryByText(/resolve the problem/i)).toBeNull();
 
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
@@ -250,23 +255,22 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
     const alertSpy = autoConfirmAlerts();
     // clearAll never settles (wedged native keystore deletion). Bounded reset
     // steps must time out so the flow proceeds instead of hanging forever.
-    mockClearAll.mockReturnValue(new Promise(() => {}));
+    mockClearAll.mockReturnValueOnce(new Promise(() => {}));
     const onRetry = jest.fn(async () => {});
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const { getByLabelText, getByPlaceholderText, queryByText } = render(
+    const { getByLabelText, getByPlaceholderText, queryByText } = await render(
       <SecureStorageUnavailableScreen onRetry={onRetry} />
     );
 
-    fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
+    await fireEvent.changeText(getByPlaceholderText('RESET'), 'RESET');
     await act(async () => {
-      fireEvent.press(
+      await fireEvent.press(
         getByLabelText('Reset app and restore from recovery phrase')
       );
       await Promise.resolve();
     });
 
-    // Advance past the per-step timeout so the hung clearAll is abandoned and the
-    // flow continues to clearAllWallets + the recheck.
+    // A timeout must release the buttons while preserving wallet metadata.
     await act(async () => {
       jest.advanceTimersByTime(8000);
       for (let i = 0; i < 10; i += 1) {
@@ -274,11 +278,16 @@ describe('SecureStorageUnavailableScreen — reset escape hatch (TASK-213)', () 
       }
     });
 
-    // The recheck ran (flow did NOT hang on clearAll) and, since onRetry didn't
-    // resolve the failure, the "didn't resolve" guidance is shown (not a stuck
-    // spinner).
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(mockClearAllWallets).not.toHaveBeenCalled();
+    expect(queryByText(/Restart your device and try again/)).not.toBeNull();
+    await act(async () => {
+      await fireEvent.press(
+        getByLabelText('Reset app and restore from recovery phrase')
+      );
+    });
+    expect(mockClearAllWallets).toHaveBeenCalledTimes(1);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(queryByText(/resolve the problem/i)).not.toBeNull();
 
     errorSpy.mockRestore();
     alertSpy.mockRestore();

@@ -164,7 +164,8 @@ export default function NFTGridView({
       }
       onEndReached={onEndReached}
       onEndReachedThreshold={0.5}
-      ListEmptyComponent={ListEmptyComponent}
+      // RN 0.88's VirtualizedList types reject null; undefined renders the same.
+      ListEmptyComponent={ListEmptyComponent ?? undefined}
       ListFooterComponent={ListFooterComponent}
       showsVerticalScrollIndicator={false}
     />

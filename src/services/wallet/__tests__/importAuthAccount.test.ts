@@ -63,6 +63,10 @@ describe('MultiAccountWalletService.importAuthAccount — notes persistence (TAS
     jest
       .spyOn(MultiAccountWalletService, 'findAccountByAddress')
       .mockResolvedValue(null);
+    // The auth lookup reads through the confirmed wallet read (TASK-443).
+    jest
+      .spyOn(MultiAccountWalletService, 'getCurrentWalletConfirmed')
+      .mockResolvedValue(null);
     // Stub the persistence write; capture what would be stored.
     addSpy = jest
       .spyOn(MultiAccountWalletService as any, 'addAccountToWallet')

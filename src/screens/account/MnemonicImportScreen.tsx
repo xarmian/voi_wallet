@@ -9,6 +9,7 @@ import {
   FlatList,
   Keyboard,
   Platform,
+  type TextInputInstance,
 } from 'react-native';
 import {
   SafeAreaView,
@@ -25,6 +26,7 @@ import { RootStackParamList } from '@/navigation/AppNavigator';
 import { AccountType } from '@/types/wallet';
 import { useWalletStore } from '@/store/walletStore';
 import { BIP39Utils, WordSuggestion } from '@/utils/bip39';
+import { storeMnemonicSecret } from '@/utils/accountQRParser';
 import KeyboardAwareScrollView from '@/components/common/KeyboardAwareScrollView';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemeColors } from '@/hooks/useThemedStyles';
@@ -63,7 +65,7 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
 
   const importAccount = useWalletStore((state) => state.importAccount);
 
-  const inputRefs = useRef<(TextInput | null)[]>(Array(25).fill(null));
+  const inputRefs = useRef<(TextInputInstance | null)[]>(Array(25).fill(null));
   const scrollViewRef = useRef<any>(null);
 
   useFocusEffect(
@@ -267,9 +269,12 @@ export default function MnemonicImportScreen({ navigation, route }: Props) {
       const normalizedLabel = accountLabel.trim();
 
       if (isOnboarding) {
-        // For onboarding, navigate to SecuritySetup with mnemonic
+        // For onboarding, hand SecuritySetup an opaque id for the phrase held
+        // in the in-memory secret store (TASK-224) — never the phrase itself.
+        // A fresh id per navigate: SecuritySetup clears it on unmount.
+        const mnemonicSecretId = storeMnemonicSecret(mnemonic);
         navigation.navigate('SecuritySetup', {
-          mnemonic,
+          mnemonicSecretId,
           source: 'mnemonic',
           accountLabel: normalizedLabel || undefined,
         });

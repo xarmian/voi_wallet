@@ -1,3 +1,8 @@
+import {
+  NetworkRekeyStatusService,
+  REKEY_STATUS_TTL,
+} from '@/services/wallet/networkRekeyStatus';
+import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import algosdk from 'algosdk';
 import { NetworkService } from '../index';
 import { NetworkId } from '@/types/network';
@@ -81,6 +86,38 @@ describe('NetworkService.getAccountBalance (batch + dedupe, TASK-46)', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  // TASK-421 (c): a failed rekey lookup must be distinguishable from "not
+  // rekeyed", so nothing persists a metadata conversion from the fallback.
+  it('flags a failed bulk rekey lookup unavailable, never plain not-rekeyed', async () => {
+    jest
+      .spyOn(service, 'getAccountRekeyInfo')
+      .mockRejectedValue(new Error('algod 503'));
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await service.getMultipleAccountRekeyInfo([ADDRESS]);
+    expect(result[ADDRESS]).toEqual({ isRekeyed: false, unavailable: true });
+  });
+
+  it('flags the rekey fallback unavailable when the rekey lookup fails', async () => {
+    let callCount = 0;
+    (service as any).algodClient = {
+      accountInformation: () => ({
+        do: async () => {
+          callCount += 1;
+          if (callCount === 1) {
+            return { amount: 1n, minBalance: 100_000n, assets: [] };
+          }
+          throw new Error('algod 503');
+        },
+      }),
+    };
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await service.getAccountBalance(ADDRESS);
+
+    expect(result.rekeyInfo).toEqual({ isRekeyed: false, unavailable: true });
   });
 
   it('reads rekey authority from an INDEPENDENT fetch, not the shared balance snapshot (DR-1); dedupes only pricing', async () => {
@@ -337,12 +374,162 @@ describe('NetworkService.getAccountRekeyInfo (independent fetch, DR-1)', () => {
     expect(indexerCalls).toBe(0);
   });
 
+  it('invalidates cached authority and rejects caching a response from before invalidation', async () => {
+    let finish!: (info: object) => void;
+    const fetch = jest.fn(
+      () =>
+        new Promise<object>((resolve) => {
+          finish = resolve;
+        })
+    );
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: fetch }),
+    };
+    const pending = service.getAccountRekeyInfo(ADDRESS, true);
+    invalidateRekeyStatus();
+    finish({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    await pending;
+    expect(
+      (service as any).rekeyInfoCache.has(
+        `${service.getCurrentNetworkId()}:${ADDRESS}`
+      )
+    ).toBe(false);
+    fetch.mockResolvedValue({});
+    await service.getAccountRekeyInfo(ADDRESS, true);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    invalidateRekeyStatus();
+    await service.getAccountRekeyInfo(ADDRESS, true);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+  // TASK-458 (Codex pass C #3): provenance is stamped at issue, a cache hit
+  // keeps its stamp, and an older request landing late can't replace a newer
+  // cached answer.
+  it('stamps each read at issue; a cache hit returns the same stamp', async () => {
+    const { getRekeyObservation } = await import('../rekeyObservation');
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: async () => ({}) }),
+    };
+    const first = await service.getAccountRekeyInfo(ADDRESS, true);
+    const cached = await service.getAccountRekeyInfo(ADDRESS, true);
+    const fresh = await service.getAccountRekeyInfo(ADDRESS, true, true);
+    expect(getRekeyObservation(first)).toBeDefined();
+    expect(getRekeyObservation(cached)).toBe(getRekeyObservation(first));
+    expect(getRekeyObservation(fresh)!.seq).toBeGreaterThan(
+      getRekeyObservation(first)!.seq
+    );
+  });
+  it('an older read landing late never replaces a newer cached answer', async () => {
+    const finishers: ((info: object) => void)[] = [];
+    (service as any).algodClient = {
+      accountInformation: () => ({
+        do: () => new Promise<object>((resolve) => finishers.push(resolve)),
+      }),
+    };
+    const older = service.getAccountRekeyInfo(ADDRESS, true, true);
+    const newer = service.getAccountRekeyInfo(ADDRESS, true, true);
+    finishers[1]({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    await newer;
+    finishers[0]({});
+    await older;
+    const cached = await service.getAccountRekeyInfo(ADDRESS, true);
+    expect(cached).toMatchObject({ isRekeyed: true, authAddress: AUTH_ADDR });
+  });
+  it('a balance refresh always reads authority fresh, bypassing the cache', async () => {
+    const spy = jest
+      .spyOn(service, 'getAccountRekeyInfo')
+      .mockResolvedValue({ isRekeyed: false });
+    (service as any).algodClient = makeAlgodProbe({
+      amount: 0n,
+      minBalance: 0n,
+      assets: [],
+    }).algodClient;
+    await service.getAccountBalance(ADDRESS).catch(() => {});
+    expect(spy).toHaveBeenCalledWith(ADDRESS, false, true);
+  });
+  it('isolates cached authority across switches and rejects a late old-network response', async () => {
+    jest
+      .spyOn(service as any, 'initializeClients')
+      .mockImplementation(() => {});
+    jest
+      .spyOn(service as any, 'initializeMimirService')
+      .mockImplementation(() => {});
+    jest
+      .spyOn(service as any, 'configureEnvoiService')
+      .mockImplementation(() => {});
+    jest
+      .spyOn(service, 'checkNetworkHealth')
+      .mockResolvedValue(undefined as any);
+    await service.switchNetwork(NetworkId.VOI_MAINNET);
+    const fetch = jest
+      .fn()
+      .mockResolvedValue({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: fetch }),
+    };
+    expect((await service.getAccountRekeyInfo(ADDRESS, true)).isRekeyed).toBe(
+      true
+    );
+    let finish!: (info: object) => void;
+    fetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const pending = service.getAccountRekeyInfo(ADDRESS, true, true);
+    const rejected = expect(pending).rejects.toThrow('Network changed');
+    await service.switchNetwork(NetworkId.ALGORAND_MAINNET);
+    fetch.mockResolvedValue({});
+    expect(await service.getAccountRekeyInfo(ADDRESS, true)).toEqual({
+      isRekeyed: false,
+    });
+    finish({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    await rejected;
+    expect(await service.getAccountRekeyInfo(ADDRESS, true)).toEqual({
+      isRekeyed: false,
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounds aggregate staleness to one TTL with an almost-expired network entry', async () => {
+    jest.useFakeTimers();
+    const status = new NetworkRekeyStatusService();
+    status.setNetworks([NetworkId.ALGORAND_MAINNET]);
+    jest.spyOn(NetworkService, 'getInstance').mockReturnValue(service);
+    const fetch = jest
+      .fn()
+      .mockResolvedValue({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: fetch }),
+    };
+    try {
+      await service.getAccountRekeyInfo(ADDRESS, true);
+      jest.advanceTimersByTime(REKEY_STATUS_TTL - 1);
+      fetch.mockResolvedValue({});
+      await status.ensure(ADDRESS);
+      expect(
+        status.get(ADDRESS).perNetwork[NetworkId.ALGORAND_MAINNET]
+      ).toEqual({ status: 'self' });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(REKEY_STATUS_TTL);
+      expect(
+        status.get(ADDRESS).perNetwork[NetworkId.ALGORAND_MAINNET]
+      ).toEqual({ status: 'unknown' });
+    } finally {
+      status.invalidate();
+      jest.useRealTimers();
+    }
+  });
+
   it('returns a fresh cache entry without a network fetch (cache semantics preserved)', async () => {
     const cachedInfo = { isRekeyed: false };
-    (service as any).rekeyInfoCache.set(ADDRESS, {
-      info: cachedInfo,
-      timestamp: Date.now(),
-    });
+    (service as any).rekeyInfoCache.set(
+      `${service.getCurrentNetworkId()}:${ADDRESS}`,
+      {
+        info: cachedInfo,
+        timestamp: Date.now(),
+      }
+    );
     let accountInfoCalls = 0;
     (service as any).algodClient = {
       accountInformation: () => ({
@@ -357,5 +544,94 @@ describe('NetworkService.getAccountRekeyInfo (independent fetch, DR-1)', () => {
 
     expect(result).toBe(cachedInfo);
     expect(accountInfoCalls).toBe(0);
+  });
+});
+
+// TASK-440 #7: a stalled rekey lookup used to block balance publication, and
+// every deduplicated refresh joined the stalled promise.
+describe('NetworkService rekey lookups are bounded (TASK-440 #7)', () => {
+  let service: NetworkService;
+  const never = () => new Promise<never>(() => {});
+  const TIMEOUT_MS = 15000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    service = NetworkService.getInstance(NetworkId.ALGORAND_MAINNET);
+    (service as any).assetParamsCache.clear();
+    (service as any).rekeyInfoCache.clear();
+    jest.spyOn(service as any, 'getMimirAssets').mockResolvedValue([]);
+    jest.spyOn(service, 'isFeatureAvailable').mockReturnValue(true);
+    jest
+      .spyOn(AlgorandPriceService, 'getAssetPrices')
+      .mockResolvedValue(new Map<number, number>([[0, 1.5]]));
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('a stalled rekey accountInformation rejects at the deadline and caches nothing', async () => {
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: never }),
+    };
+
+    const pending = service.getAccountRekeyInfo(ADDRESS, true);
+    const rejected = expect(pending).rejects.toThrow(
+      'rekey account info timed out'
+    );
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    await rejected;
+    expect(
+      (service as any).rekeyInfoCache.has(
+        `${service.getCurrentNetworkId()}:${ADDRESS}`
+      )
+    ).toBe(false);
+  });
+
+  it('a stalled rekey timestamp lookup degrades to rekeyedAt undefined', async () => {
+    (service as any).algodClient = {
+      accountInformation: () => ({
+        do: async () => ({ authAddr: { publicKey: AUTH_PUBLIC_KEY } }),
+      }),
+    };
+    (service as any).indexerClient = {
+      lookupAccountTransactions: () => ({
+        txType: () => ({ limit: () => ({ do: never }) }),
+      }),
+    };
+
+    const pending = service.getAccountRekeyInfo(ADDRESS);
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+
+    await expect(pending).resolves.toEqual({
+      isRekeyed: true,
+      authAddress: AUTH_ADDR,
+      rekeyedAt: undefined,
+    });
+  });
+
+  it('getAccountBalance publishes with rekey unavailable when only the rekey fetch stalls', async () => {
+    let calls = 0;
+    (service as any).algodClient = {
+      accountInformation: () => ({
+        // Call 1 = the balance snapshot; call 2 = rekey's own fetch (DR-1).
+        do: () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.resolve({ amount: 5n, minBalance: 1n, assets: [] })
+            : never();
+        },
+      }),
+    };
+
+    const pending = service.getAccountBalance(ADDRESS);
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    const result = await pending;
+
+    expect(calls).toBe(2);
+    expect(result.rekeyInfo).toEqual({ isRekeyed: false, unavailable: true });
   });
 });

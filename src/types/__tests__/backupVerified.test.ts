@@ -89,11 +89,37 @@ describe('needsBackupVerification', () => {
     expect(needsBackupVerification({ type: AccountType.REMOTE_SIGNER })).toBe(
       false
     );
-    expect(needsBackupVerification({ type: AccountType.REKEYED })).toBe(false);
+    expect(needsBackupVerification({ type: AccountType.REKEYED })).toBe(true);
   });
 
   it('is false when there is no active account', () => {
     expect(needsBackupVerification(null)).toBe(false);
     expect(needsBackupVerification(undefined)).toBe(false);
   });
+});
+
+// Both metadata-bearing types use literal verification; unresolved custody reminds.
+describe('shared reminder policy', () => {
+  it.each(Object.values(AccountType))(
+    'keeps %s results for every flag combination',
+    (type) => {
+      for (const hasBackup of [undefined, false, true]) {
+        for (const backupVerified of [undefined, false, true, 'yes', 1, null]) {
+          const account = {
+            type,
+            hasBackup,
+            backupVerified,
+          } as unknown as Parameters<typeof isBackupVerified>[0];
+          const verified =
+            (type === AccountType.STANDARD || type === AccountType.REKEYED) &&
+            backupVerified === true;
+          expect(isBackupVerified(account)).toBe(verified);
+          expect(needsBackupVerification(account)).toBe(
+            (type === AccountType.STANDARD || type === AccountType.REKEYED) &&
+              !verified
+          );
+        }
+      }
+    }
+  );
 });

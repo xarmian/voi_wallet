@@ -30,7 +30,7 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import { AssetBalance, needsBackupVerification } from '@/types/wallet';
+import { AssetBalance } from '@/types/wallet';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   useActiveAccount,
@@ -75,7 +75,9 @@ import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
 import SignerModeBanner from '@/components/remoteSigner/SignerModeBanner';
+import { useHomeBackupReminder } from '@/store/useHomeBackupReminder';
 import BackupWarningBanner from '@/components/wallet/BackupWarningBanner';
+import ControlledByNotice from '@/components/wallet/ControlledByNotice';
 import { useAppMode, useRemoteSignerStore } from '@/store/remoteSignerStore';
 import { ErrorStateView } from '@/components/common/ErrorStateView';
 import { toErrorAlert } from '@/utils/errorMapping';
@@ -396,7 +398,6 @@ export default function HomeScreen() {
     // Exposed by the store since forever but destructured by no consumer, so
     // balance failures rendered as "no balance" (TASK-40 / U-03).
     error: balanceError,
-    reload: reloadBalance,
   } = useActiveAccountBalance();
   const {
     nameInfo: envoiNameInfo,
@@ -1146,8 +1147,10 @@ export default function HomeScreen() {
         setNetworkStatusError(networkHealth.reason);
       }
 
-      // Load balance and transactions through the store
-      await reloadBalance();
+      // Load balance and transactions through the store. Forced and keyed on
+      // the account resolved above: pull-to-refresh must never be a fresh-cache
+      // no-op, nor reload a previously active account (GH #12 / TASK-390).
+      await loadAccountBalance(accountId, true);
       // Multi-network aggregate is what the assets card renders in
       // multi-network view; refreshing it here keeps pull-to-refresh honest
       // in both view modes. (if-statement instead of a ternary in the array:
@@ -1217,12 +1220,7 @@ export default function HomeScreen() {
     fetchApprovals(activeAccount.address);
   }, [activeAccount?.address, fetchApprovals]);
 
-  // Navigate to claimable tokens screen
-  // TASK-45 / DR-10: the warning is driven by the persisted `backupVerified`
-  // flag via needsBackupVerification(), which fails closed — non-standard
-  // accounts are excluded, and anything other than an explicit `true` (legacy
-  // record, restored account, skipped quiz) keeps the warning up.
-  const showBackupWarning = needsBackupVerification(activeAccount);
+  const showBackupWarning = useHomeBackupReminder();
 
   const handleBackupBannerPress = useCallback(() => {
     if (!activeAccount) return;
@@ -1713,6 +1711,8 @@ export default function HomeScreen() {
               {showBackupWarning && (
                 <BackupWarningBanner onPress={handleBackupBannerPress} />
               )}
+
+              <ControlledByNotice />
 
               {/* Claimable Tokens Banner */}
               {visibleClaimableCount > 0 && (

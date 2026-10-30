@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useSyncExternalStore,
+} from 'react';
 import {
   View,
   Text,
@@ -6,12 +12,22 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  AppState,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { useAuth } from '@/contexts/AuthContext';
+import { reviewGrant } from '@/services/auth/reviewGrant';
+import { AppLockSignal } from '@/services/secure/appLockState';
+import LockedRequestGate, {
+  dappHost,
+} from '@/components/walletconnect/LockedRequestGate';
+import { signingSummary } from '@/utils/signingSummary';
 
 import { RootStackParamList } from '@/navigation/AppNavigator';
 import { AccountMetadata, AssetParams } from '@/types/wallet';
@@ -35,14 +51,18 @@ import {
 import { formatBaseUnitsToAmount } from '@/utils/bigint';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
+import {
+  useAppSwitcherProtection,
+  useSecureScreen,
+} from '@/hooks/useSecureScreen';
 import { Theme } from '@/constants/themes';
 import TransactionDangerBanner from '@/components/transaction/TransactionDangerBanner';
 import {
-  detectTransactionDangers,
-  aggregateDangers,
-  hasAnyDanger,
-  TransactionDangers,
+  describeTransactionDangers,
+  DangerItem,
 } from '@/utils/transactionDangers';
+import { useTransactionDangers } from '@/hooks/useTransactionDangers';
+import { toErrorAlert } from '@/utils/errorMapping';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -77,7 +97,12 @@ interface ParsedTransaction {
   /** ASA index from the type-specific field; `undefined` means native currency. */
   assetId?: bigint;
   type: string;
-  dangers?: TransactionDangers;
+  /** Every dangerous operation in this entry; undefined if undecodable. */
+  dangers?: DangerItem[];
+  /** False for a pre-signed or undecodable entry: this review doesn't sign it. */
+  signs?: boolean;
+  /** An application call: it may change any asset via inner transactions. */
+  mayTouchAssets?: boolean;
 }
 
 /** How a single account will produce its signature, resolved on chain. */
@@ -143,6 +168,17 @@ function decodeNoteForDisplay(note: Uint8Array): string | undefined {
 }
 
 /**
+ * TASK-437 (Luna P2): a WalletConnect review stays out of screenshots and the
+ * app-switcher snapshot for as long as it is mounted. Rendered only for dApp
+ * requests, so in-app signing screens keep their current capture behaviour.
+ */
+function WalletConnectPrivacyGuard(): null {
+  useSecureScreen();
+  useAppSwitcherProtection();
+  return null;
+}
+
+/**
  * Decode the batch for review.
  *
  * DR-9 — `decoded` is same-length and index-preserving: an entry that cannot be
@@ -163,6 +199,7 @@ function parseBatch(transactionBytes: string[]): {
       to: 'Protocol Transaction',
       fee: 0n,
       type: 'pre-signed / unreadable',
+      signs: false,
     });
     decoded.push(undefined);
   };
@@ -242,8 +279,11 @@ function parseBatch(transactionBytes: string[]): {
         note: decodeNoteForDisplay(txn.note),
         assetId,
         type: isAlreadySigned ? `${txnType} (pre-signed)` : txnType,
-        // Only surface danger fields for transactions we are about to sign.
-        dangers: isAlreadySigned ? undefined : detectTransactionDangers(txn),
+        // Pre-signed entries are not listed, but whether they may touch an
+        // asset decides whether its authority changes can be narrowed.
+        dangers: describeTransactionDangers(txn),
+        signs: !isAlreadySigned,
+        mayTouchAssets: !!txn.applicationCall,
       });
     } catch (error) {
       console.error('Failed to parse transaction:', error);
@@ -293,6 +333,35 @@ export default function UniversalTransactionSigningScreen({
   const onSuccess = registryCallbacks?.onSuccess || directOnSuccess;
   const onReject = registryCallbacks?.onReject || directOnReject;
 
+  const { authState } = useAuth();
+  const requestKey = walletConnect?.requestKey ?? '';
+  const requiresReviewUnlock =
+    !!walletConnect && (authState.isLocked || !authState.isAuthenticated);
+  const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isValid(requestKey)
+  );
+  const [foreground, setForeground] = useState(
+    AppState.currentState !== 'background' &&
+      AppState.currentState !== 'inactive'
+  );
+  const canReview = !requiresReviewUnlock || (grantValid && foreground);
+  const [biometricLabel, setBiometricLabel] = useState('biometrics');
+  useEffect(() => {
+    LocalAuthentication.supportedAuthenticationTypesAsync()
+      .then((types) => {
+        setBiometricLabel(
+          Platform.OS === 'ios'
+            ? types.includes(
+                LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION
+              )
+              ? 'Face ID'
+              : 'Touch ID'
+            : 'biometrics'
+        );
+      })
+      .catch(() => {});
+  }, []);
+
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
@@ -313,13 +382,51 @@ export default function UniversalTransactionSigningScreen({
   const authController = useTransactionAuthController();
 
   useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      setForeground(state === 'active');
+      if (state === 'background') reviewGrant.revoke();
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(
+    () =>
+      reviewGrant.subscribe(() => {
+        if (
+          walletConnect &&
+          !AppLockSignal.isUnlocked() &&
+          !reviewGrant.isValid(requestKey)
+        ) {
+          authController.cancel();
+          setShowAuthModal(false);
+          setCurrentRequest(null);
+          setDangerAcknowledged(false);
+        }
+      }),
+    [walletConnect, requestKey, authController]
+  );
+
+  useEffect(() => {
     return () => {
+      reviewGrant.leave(requestKey);
       authController.cleanup();
       // Clean up callback registry when unmounting
       clearNavigationCallbacks(callbackId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once teardown: it captures authController (a stable useState(() => new TransactionAuthController()) handle) and callbackId (stable route param), so the one-per-mount teardown targets the right instance.
   }, []);
+
+  // Tell the caller when this screen leaves the stack, however it was left
+  // (TASK-257). A navigation event, not an effect cleanup, so an effect
+  // replay never reports a departure that did not happen.
+  useEffect(
+    () =>
+      navigation.addListener('beforeRemove', () => {
+        reviewGrant.leave(requestKey);
+        getNavigationCallbacks(callbackId)?.onDismiss?.();
+      }),
+    [navigation, callbackId, requestKey]
+  );
 
   /**
    * The network EVERY on-chain lookup on this screen resolves against, and the
@@ -363,9 +470,13 @@ export default function UniversalTransactionSigningScreen({
     };
   }, [boundNetworkId, chainId]);
 
+  // TASK-437 (Luna P2): nothing about the request is decoded before review is
+  // allowed. Everything below (asset metadata fetches, which log the asset id;
+  // signer-route resolution) derives from this list, so an empty list until
+  // canReview means no request detail is parsed, fetched or logged pre-auth.
   const { parsed: parsedTransactions, decoded: decodedTransactions } = useMemo(
-    () => parseBatch(transactionBytes),
-    [transactionBytes]
+    () => parseBatch(canReview ? transactionBytes : []),
+    [canReview, transactionBytes]
   );
 
   // -------------------------------------------------------------------------
@@ -693,15 +804,30 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
-  // S-01: aggregate authority-transfer / balance-sweep dangers across all
-  // transactions. Declared before handleApprove so the guard and the render
-  // gating share the same scope.
-  const aggregatedDangers = aggregateDangers(
-    parsedTransactions.map((t) => t.dangers ?? {})
+  // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
+  // each with its transaction index (not the first target of each kind).
+  // Asset-authority items are narrowed against the asset's current holders on
+  // the bound network (Luna r1 #3). Declared before handleApprove so the guard
+  // and the render gating share the same scope.
+  const dangerEntries = useMemo(
+    () =>
+      parsedTransactions.map((t) => ({
+        dangers: t.dangers,
+        signs: t.signs,
+        opaque: t.mayTouchAssets,
+        networkId: boundNetworkId,
+      })),
+    [parsedTransactions, boundNetworkId]
   );
-  const hasDanger = hasAnyDanger(aggregatedDangers);
+  const dangerList = useTransactionDangers(dangerEntries);
+  const hasDanger = dangerList.length > 0;
 
   const handleApprove = () => {
+    if (
+      !canReview ||
+      (requiresReviewUnlock && !reviewGrant.isValid(requestKey))
+    )
+      return;
     if (hasDanger && !dangerAcknowledged) {
       Alert.alert(
         'Confirmation required',
@@ -728,6 +854,7 @@ export default function UniversalTransactionSigningScreen({
     // this one" — before the signer ever saw them.
     const request: UnifiedTransactionRequest = {
       type: 'batch_transaction',
+      reviewGrantKey: requiresReviewUnlock ? requestKey : undefined,
       account: signingAccount,
       networkId: boundNetworkId,
       walletConnectParams: {
@@ -755,15 +882,18 @@ export default function UniversalTransactionSigningScreen({
     if (success && onSuccess) {
       await onSuccess(result);
     } else if (!success) {
-      const errorMessage =
-        result instanceof Error
-          ? result.message
-          : 'Failed to sign transactions';
-      Alert.alert('Error', errorMessage);
+      // The modal reports failure as { error } (TASK-453): map that error, so
+      // a real failure isn't shown as the generic fallback.
+      const { title, message } = toErrorAlert(result?.error, {
+        fallbackMessage: 'Failed to sign transactions.',
+        fallbackTitle: 'Error',
+      });
+      Alert.alert(title, message);
     }
   };
 
   const handleReject = async () => {
+    if (requiresReviewUnlock && !grantValid) reviewGrant.leave(requestKey);
     if (onReject) {
       await onReject();
     } else {
@@ -971,102 +1101,149 @@ export default function UniversalTransactionSigningScreen({
     reviewedSigners.length > 0 &&
     (!hasDanger || dangerAcknowledged);
 
+  const usesLedger = signingAccounts.some(
+    ([, resolution]) => resolution.method === 'ledger'
+  );
+  const signingMethod = usesLedger
+    ? 'Ledger'
+    : authState.biometricEnabled
+      ? biometricLabel
+      : 'PIN';
+
+  const summary = signingSummary(
+    parsedTransactions,
+    networkInfo.currency,
+    assetParams,
+    dappHost(walletConnect?.dapp)
+  );
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView
+      onTouchStart={() => reviewGrant.touch()}
+      style={styles.container}
+      edges={['top', 'bottom']}
+    >
       <UniversalHeader
         title={title}
         onAccountSelectorPress={() => {}}
         showAccountSelector={false}
       />
+      {walletConnect && <WalletConnectPrivacyGuard />}
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {networkInfo.known ? (
-          <View style={styles.networkContainer}>
-            <View style={styles.networkHeader}>
-              <Ionicons name="globe" size={20} color={theme.colors.primary} />
-              <Text style={styles.networkTitle}>Network</Text>
-            </View>
-            <Text style={styles.networkName}>{networkInfo.name}</Text>
-            <Text style={styles.networkCurrency}>
-              Currency: {networkInfo.currency}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.networkWarningContainer}>
-            <View style={styles.networkHeader}>
-              <Ionicons
-                name="alert-circle"
-                size={20}
-                color={theme.colors.warning}
+      {!canReview ? (
+        <LockedRequestGate
+          requestKey={requestKey}
+          dapp={walletConnect?.dapp}
+          network={networkInfo.name}
+          biometricEnabled={authState.biometricEnabled}
+          onReject={handleReject}
+        />
+      ) : (
+        <>
+          <ScrollView
+            style={styles.scrollView}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {networkInfo.known ? (
+              <View style={styles.networkContainer}>
+                <View style={styles.networkHeader}>
+                  <Ionicons
+                    name="globe"
+                    size={20}
+                    color={theme.colors.primary}
+                  />
+                  <Text style={styles.networkTitle}>Network</Text>
+                </View>
+                <Text style={styles.networkName}>{networkInfo.name}</Text>
+                <Text style={styles.networkCurrency}>
+                  Currency: {networkInfo.currency}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.networkWarningContainer}>
+                <View style={styles.networkHeader}>
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={theme.colors.warning}
+                  />
+                  <Text style={styles.networkWarningTitle}>
+                    Unrecognized network
+                  </Text>
+                </View>
+                <Text style={styles.networkWarningText}>
+                  This wallet cannot identify the network these transactions
+                  target ({String(networkInfo.name)}). Amounts and fees are
+                  shown without a currency. Do not approve unless you know
+                  exactly what you are signing.
+                </Text>
+              </View>
+            )}
+
+            {renderTransactionSummary()}
+
+            {hasDanger && (
+              <TransactionDangerBanner
+                dangers={dangerList}
+                acknowledged={dangerAcknowledged}
+                onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
               />
-              <Text style={styles.networkWarningTitle}>
-                Unrecognized network
+            )}
+
+            {renderSigners()}
+
+            <View style={styles.warningContainer}>
+              <Ionicons name="warning" size={24} color={theme.colors.warning} />
+              <Text style={styles.warningText}>
+                Carefully review all transaction details before signing. This
+                action cannot be undone.
               </Text>
             </View>
-            <Text style={styles.networkWarningText}>
-              This wallet cannot identify the network these transactions target
-              ({String(networkInfo.name)}). Amounts and fees are shown without a
-              currency. Do not approve unless you know exactly what you are
-              signing.
-            </Text>
+          </ScrollView>
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.rejectButton]}
+              onPress={handleReject}
+              disabled={false}
+            >
+              <Text style={styles.rejectButtonText}>Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, styles.approveButton]}
+              onPress={handleApprove}
+              disabled={!canSign}
+            >
+              <Text style={styles.approveButtonText}>
+                {requiresReviewUnlock
+                  ? 'Sign'
+                  : authState.hasPin === false && !usesLedger
+                    ? 'Sign'
+                    : `Sign with ${signingMethod}`}
+              </Text>
+            </TouchableOpacity>
           </View>
-        )}
 
-        {renderTransactionSummary()}
-
-        {hasDanger && (
-          <TransactionDangerBanner
-            dangers={aggregatedDangers}
-            acknowledged={dangerAcknowledged}
-            onToggleAcknowledged={() => setDangerAcknowledged((v) => !v)}
+          <UnifiedTransactionAuthModal
+            visible={showAuthModal}
+            controller={authController}
+            request={currentRequest}
+            onComplete={handleAuthComplete}
+            onCancel={() => {
+              reviewGrant.leave(requestKey);
+              setShowAuthModal(false);
+              setCurrentRequest(null);
+            }}
+            title="Sign Transaction"
+            message={summary}
+            biometricOnOpen={
+              !requiresReviewUnlock && !usesLedger && authState.biometricEnabled
+            }
           />
-        )}
-
-        {renderSigners()}
-
-        <View style={styles.warningContainer}>
-          <Ionicons name="warning" size={24} color={theme.colors.warning} />
-          <Text style={styles.warningText}>
-            Carefully review all transaction details before signing. This action
-            cannot be undone.
-          </Text>
-        </View>
-      </ScrollView>
-
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.rejectButton]}
-          onPress={handleReject}
-          disabled={false}
-        >
-          <Text style={styles.rejectButtonText}>Reject</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.approveButton]}
-          onPress={handleApprove}
-          disabled={!canSign}
-        >
-          <Text style={styles.approveButtonText}>Sign</Text>
-        </TouchableOpacity>
-      </View>
-
-      <UnifiedTransactionAuthModal
-        visible={showAuthModal}
-        controller={authController}
-        request={currentRequest}
-        onComplete={handleAuthComplete}
-        onCancel={() => {
-          setShowAuthModal(false);
-          setCurrentRequest(null);
-        }}
-        title="Sign Transaction"
-        message="Authenticate to sign the transaction"
-      />
+        </>
+      )}
     </SafeAreaView>
   );
 }

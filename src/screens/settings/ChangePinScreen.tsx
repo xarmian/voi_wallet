@@ -64,12 +64,20 @@ export default function ChangePinScreen() {
           setCurrentSource(source);
           setNewSource(source); // default: keep the same kind
         }
+      } catch {
+        // TASK-455: an unreadable credential is never "no credential" (that
+        // would skip the current-PIN step). Leave rather than guess.
+        Alert.alert(
+          'Unable to Read Security Settings',
+          'Your PIN settings could not be read. Please try again.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
       } finally {
         setIsLoading(false);
       }
     };
     load();
-  }, []);
+  }, [navigation]);
 
   // Which kind the ACTIVE step's input is for.
   const stepSource: SecretSource =
