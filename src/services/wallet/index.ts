@@ -114,6 +114,8 @@ const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
  */
 /** Bound on the legacy keychain read a mutation makes on the write chain. */
 const LEGACY_READ_ON_CHAIN_MS = 5000;
+/** Same bound on getCurrentWallet's legacy migration read (TASK-443). */
+const LEGACY_READ_OFF_CHAIN_MS = 5000;
 let walletResetEpoch = 0;
 let walletWriteChain: Promise<unknown> = Promise.resolve();
 
@@ -2593,8 +2595,19 @@ export class MultiAccountWalletService {
       // WALLET_KEY, alongside heal-on-read and legacy-strip).
       const migrationEpoch = walletResetEpoch;
 
-      // Try to get from secure storage (legacy location)
-      const legacyValue = await secureStorage.getItem(key);
+      // Try to get from secure storage (legacy location). TASK-443: bounded,
+      // because getCurrentWallet reaches this read whenever the primary blob is
+      // absent, and its callers (default labels, the watch/remote-signer/rekeyed
+      // duplicate checks) must not hang on a stuck keychain. A timeout fails
+      // closed: no migration write, and getCurrentWallet reads as null exactly
+      // as on any other read error. The writes that follow those checks
+      // re-read inside the write chain (readWalletForMutation), which is
+      // bounded and refuses an unmigrated legacy copy.
+      const legacyValue = await withTimeout(
+        secureStorage.getItem(key),
+        LEGACY_READ_OFF_CHAIN_MS,
+        () => new Error('Legacy wallet storage did not respond')
+      );
       if (!legacyValue) {
         return null;
       }

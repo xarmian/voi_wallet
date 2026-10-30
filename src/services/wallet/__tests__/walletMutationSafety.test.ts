@@ -402,3 +402,91 @@ it('keeps the secret of an account whose metadata landed when the tombstone clea
     removeItem.mockImplementation(original!);
   }
 });
+
+// TASK-443: getCurrentWallet's legacy migration read is bounded too, so every
+// caller that reaches it (default labels, the watch/remote-signer/rekeyed
+// duplicate checks) settles instead of hanging on a stuck keychain, and the
+// write that follows still fails closed in the chain.
+describe('getCurrentWallet legacy read is bounded (TASK-443)', () => {
+  const algosdk = require('algosdk');
+  const address = () => algosdk.generateAccount().addr.toString();
+  // Each path crosses its bounded reads in sequence: createStandardAccount two
+  // (getAccountCount, then the write chain), the other imports three (the
+  // duplicate/auth lookup, the default-label count, then the write chain).
+  const TWO_DEADLINES_MS = 10_000;
+  const THREE_DEADLINES_MS = 15_000;
+
+  const settle = (pending: Promise<unknown>) =>
+    pending.then(
+      () => 'resolved',
+      (error: Error) => `rejected: ${error.message}`
+    );
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest
+      .mocked(secureStorage.getItem)
+      .mockImplementation(() => new Promise(() => {}));
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('getCurrentWallet reads as null at the deadline and migrates nothing', async () => {
+    const outcome = Service.getCurrentWallet();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(await outcome).toBeNull();
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('createStandardAccount (default label via getAccountCount) settles and fails closed', async () => {
+    const outcome = settle(
+      Service.createStandardAccount({ type: AccountType.STANDARD })
+    );
+    await jest.advanceTimersByTimeAsync(TWO_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('addWatchAccount (duplicate check) settles and fails closed', async () => {
+    const outcome = settle(
+      Service.addWatchAccount({ type: AccountType.WATCH, address: address() })
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('addRemoteSignerAccount (duplicate check) settles and fails closed', async () => {
+    const account = algosdk.generateAccount();
+    const outcome = settle(
+      Service.addRemoteSignerAccount({
+        type: AccountType.REMOTE_SIGNER,
+        address: account.addr.toString(),
+        publicKey: Buffer.from(account.sk.slice(32)).toString('hex'),
+        signerDeviceId: 'device-1',
+      } as never)
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('detectRekeyedAccount (auth-address lookup) settles and fails closed', async () => {
+    jest
+      .spyOn(Service as any, 'verifyRekeyRelationship')
+      .mockResolvedValue(true);
+    const outcome = settle(
+      Service.detectRekeyedAccount({
+        type: AccountType.REKEYED,
+        originalAddress: address(),
+        authAddress: address(),
+      })
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+});
