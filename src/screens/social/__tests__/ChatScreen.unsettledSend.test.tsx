@@ -17,6 +17,8 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
+let mockThread: unknown;
+
 const mockStore = {
   isInitialized: true,
   fetchThreadMessages: jest.fn(),
@@ -27,6 +29,7 @@ const mockStore = {
   removePendingMessage: jest.fn(),
   addMessage: jest.fn(),
   settlePendingMessage: jest.fn(),
+  expireUnsettledPlaceholders: jest.fn(),
   registerMessagingKey: jest.fn(),
   checkKeyRegistration: jest.fn(async () => true),
 };
@@ -36,7 +39,7 @@ jest.mock('@/store/messagesStore', () => ({
   useMessagesStore: Object.assign(() => mockStore, {
     getState: () => mockStore,
   }),
-  useThread: () => undefined,
+  useThread: () => mockThread,
 }));
 jest.mock('@/store/friendsStore', () => ({
   useFriendsStore: (select: (state: unknown) => unknown) =>
@@ -93,6 +96,7 @@ const sendMessage = jest.mocked(MessagingService.sendMessage);
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockThread = undefined;
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
@@ -118,7 +122,11 @@ it.each([
   const { tempId } = await sendWith(make());
 
   expect(tempId.startsWith('pending-')).toBe(true);
-  expect(mockStore.settlePendingMessage).toHaveBeenCalledWith(tempId, txId);
+  expect(mockStore.settlePendingMessage).toHaveBeenCalledWith(
+    tempId,
+    txId,
+    expect.any(Number)
+  );
   expect(mockStore.updateMessageStatus).not.toHaveBeenCalledWith(
     tempId,
     'failed'
@@ -132,4 +140,58 @@ it('still marks a genuine failure failed, with a retry', async () => {
 
   expect(mockStore.updateMessageStatus).toHaveBeenCalledWith(tempId, 'failed');
   expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
+});
+
+// Codex pass A #1: nothing else polls an open chat, so the screen keeps
+// resolving an unsettled placeholder while it is open, and stops when it isn't.
+it('re-checks an unsettled placeholder while the chat is open', async () => {
+  jest.useFakeTimers();
+  try {
+    mockThread = {
+      messages: [
+        {
+          id: 'pending-1',
+          threadId: 'FRIEND',
+          direction: 'sent',
+          content: 'hi',
+          timestamp: 1,
+          status: 'pending',
+          fee: 1000,
+          unsettled: true,
+        },
+      ],
+    };
+    const view = await render(<ChatScreen />);
+    mockStore.fetchThreadMessages.mockClear();
+
+    await act(async () => {
+      jest.advanceTimersByTime(30000);
+    });
+    expect(mockStore.expireUnsettledPlaceholders).toHaveBeenCalledWith(
+      'FRIEND'
+    );
+    expect(mockStore.fetchThreadMessages).toHaveBeenCalledWith('ME', 'FRIEND');
+
+    await view.unmount();
+    mockStore.expireUnsettledPlaceholders.mockClear();
+    await act(async () => {
+      jest.advanceTimersByTime(60000);
+    });
+    expect(mockStore.expireUnsettledPlaceholders).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('does not poll when no placeholder is unsettled', async () => {
+  jest.useFakeTimers();
+  try {
+    await render(<ChatScreen />);
+    await act(async () => {
+      jest.advanceTimersByTime(60000);
+    });
+    expect(mockStore.expireUnsettledPlaceholders).not.toHaveBeenCalled();
+  } finally {
+    jest.useRealTimers();
+  }
 });

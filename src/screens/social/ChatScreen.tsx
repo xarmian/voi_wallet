@@ -47,6 +47,9 @@ import MessagingInfoModal from '@/components/social/MessagingInfoModal';
 import { useIsMessagingEnabled } from '@/store/experimentalStore';
 import { toUnsettledTransactionAlert } from '@/utils/errorMapping';
 
+// How often an open chat re-checks an unsettled placeholder (TASK-454).
+const UNSETTLED_REFRESH_MS = 30000;
+
 export default function ChatScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
@@ -149,6 +152,32 @@ export default function ChatScreen() {
     ])
   );
 
+  // While this chat is open with an unsettled placeholder, keep resolving it:
+  // nothing else polls an open chat, so without this it could spin forever.
+  // Local expiry runs first, so a failing fetch can't keep it (TASK-454).
+  const hasUnsettled = !!thread?.messages.some(
+    (m) => m.unsettled && m.status === 'pending'
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasUnsettled) return undefined;
+      const timer = setInterval(() => {
+        const store = useMessagesStore.getState();
+        store.expireUnsettledPlaceholders(friendAddress);
+        if (activeAccount?.address && canUseMessaging && isInitialized) {
+          store.fetchThreadMessages(activeAccount.address, friendAddress);
+        }
+      }, UNSETTLED_REFRESH_MS);
+      return () => clearInterval(timer);
+    }, [
+      hasUnsettled,
+      friendAddress,
+      activeAccount?.address,
+      canUseMessaging,
+      isInitialized,
+    ])
+  );
+
   // Mark as read when messages change
   useEffect(() => {
     if (thread?.unreadCount && thread.unreadCount > 0) {
@@ -177,6 +206,7 @@ export default function ChatScreen() {
       if (!canUseMessaging) return;
 
       const isRetry = !!existingMessageId;
+      const attemptedAt = Date.now();
       const tempId =
         existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
 
@@ -222,7 +252,8 @@ export default function ChatScreen() {
             .getState()
             .settlePendingMessage(
               tempId,
-              typeof txId === 'string' && txId ? txId : undefined
+              typeof txId === 'string' && txId ? txId : undefined,
+              attemptedAt
             );
           return;
         }

@@ -28,6 +28,7 @@ import {
   PENDING_PLACEHOLDER_TTL_MS,
   useMessagesStore,
 } from '@/store/messagesStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Message } from '@/services/messaging/types';
 
 const USER = 'USERADDRESS';
@@ -118,14 +119,19 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
     useMessagesStore.getState().settlePendingMessage(a);
     useMessagesStore.getState().settlePendingMessage(b);
 
-    mockFetchMessages.mockResolvedValue([chainSent('TX1', 'ok', T0 + 5000)]);
+    mockFetchMessages.mockResolvedValue([chainSent('TX-ONE', 'ok', T0 + 5000)]);
     await load();
     // The older placeholder is resolved; the newer one stays pending.
     expect(
       thread()
         .map((m) => m.id)
         .sort()
-    ).toEqual(['TX1', b].sort());
+    ).toEqual(['TX-ONE', b].sort());
+    expect(thread().find((m) => m.id === b)?.status).toBe('pending');
+
+    // A second load sees the same chain message again; it is already spent
+    // (Codex pass A #4).
+    await load();
     expect(thread().find((m) => m.id === b)?.status).toBe('pending');
   });
 
@@ -202,5 +208,92 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
     now.mockReturnValue(T0 + PENDING_PLACEHOLDER_TTL_MS + 1);
     await useMessagesStore.getState().fetchAllThreads(USER);
     expect(useMessagesStore.getState().threads[FRIEND]).toBeUndefined();
+  });
+
+  // Codex pass A #3: a retry is a new attempt, aged from when it started.
+  it('ages a retried placeholder from its new attempt, not the old bubble', async () => {
+    const old = T0 - 3 * 60 * 60 * 1000;
+    const tempId = `${PENDING_PLACEHOLDER_PREFIX}${old}`;
+    useMessagesStore.getState().addPendingMessage({
+      ...placeholder(tempId, 'retry me', old),
+      status: 'failed',
+    });
+    useMessagesStore.getState().settlePendingMessage(tempId, undefined, T0);
+
+    await load();
+    expect(thread().find((m) => m.id === tempId)?.status).toBe('pending');
+
+    // A same-content send that confirmed between the attempts doesn't match.
+    mockFetchMessages.mockResolvedValue([
+      chainSent('TX-BETWEEN', 'retry me', old + 60 * 60 * 1000),
+    ]);
+    await load();
+    expect(thread().find((m) => m.id === tempId)?.status).toBe('pending');
+  });
+
+  // Codex pass A #2: placeholders are memory-only, so storage never holds a
+  // spinner that a restart could reload and nothing could resolve.
+  it('never stores a pending placeholder, and strips one stored by an older build', async () => {
+    const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
+    mockFetchMessages.mockResolvedValue([
+      chainSent('TX-KEEP', 'kept', T0 - 5000),
+    ]);
+    useMessagesStore.getState().addPendingMessage(placeholder(tempId, 'hi'));
+    await load(); // persists while the send is in flight
+    useMessagesStore.getState().settlePendingMessage(tempId);
+    await load();
+
+    const stored = JSON.parse(
+      (await AsyncStorage.getItem(`@messages/${USER}`)) ?? '{}'
+    );
+    expect(stored[FRIEND].messages.map((m: Message) => m.id)).toEqual([
+      'TX-KEEP',
+    ]);
+
+    await AsyncStorage.setItem(
+      `@messages/${USER}`,
+      JSON.stringify({
+        [FRIEND]: {
+          ...stored[FRIEND],
+          messages: [
+            ...stored[FRIEND].messages,
+            placeholder('pending-legacy', 'x'),
+          ],
+        },
+      })
+    );
+    useMessagesStore.setState({
+      threads: {},
+      currentUserAddress: null as never,
+    });
+    await useMessagesStore.getState().loadCachedThreads(USER);
+    expect(thread().map((m) => m.id)).toEqual(['TX-KEEP']);
+  });
+
+  it('keeps a failed placeholder in storage, so its retry survives a restart', async () => {
+    const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
+    useMessagesStore
+      .getState()
+      .addPendingMessage({ ...placeholder(tempId, 'oops'), status: 'failed' });
+    await load();
+    const stored = JSON.parse(
+      (await AsyncStorage.getItem(`@messages/${USER}`)) ?? '{}'
+    );
+    expect(stored[FRIEND].messages.map((m: Message) => m.id)).toEqual([tempId]);
+  });
+
+  // Codex pass A #1: an open chat expires locally, without a fetch.
+  it('expires an unsettled placeholder locally, with no network call', () => {
+    const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
+    useMessagesStore.getState().addPendingMessage(placeholder(tempId, 'hi'));
+    useMessagesStore.getState().settlePendingMessage(tempId, undefined, T0);
+
+    useMessagesStore.getState().expireUnsettledPlaceholders(FRIEND);
+    expect(thread().find((m) => m.id === tempId)?.status).toBe('pending');
+
+    now.mockReturnValue(T0 + PENDING_PLACEHOLDER_TTL_MS + 1);
+    useMessagesStore.getState().expireUnsettledPlaceholders(FRIEND);
+    expect(useMessagesStore.getState().threads[FRIEND]).toBeUndefined();
+    expect(mockFetchMessages).not.toHaveBeenCalled();
   });
 });

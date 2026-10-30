@@ -44,10 +44,12 @@ const CONVERSATION_FETCH_LIMIT = 100;
 export const PENDING_PLACEHOLDER_PREFIX = 'pending-';
 
 /**
- * How long a placeholder for a send that may have landed, with no txid, stays
- * pending (TASK-454). Messages use algod's default validity window (1000
- * rounds, about 47 min on Voi), so after this the send can no longer land: if
- * no chain message matched it by then, it never landed.
+ * How long a placeholder for a send that may have landed, with no txid, keeps
+ * its spinner (TASK-454). This is a UI retention cutoff, not a claim that the
+ * send can no longer land: messages use algod's default 1000-round validity
+ * (about 47 min on Voi at normal pace), but a stalled network or a delayed
+ * indexer can stretch that. Dropping the bubble offers no resend; if the send
+ * lands later, its chain record appears in the thread.
  */
 export const PENDING_PLACEHOLDER_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -96,7 +98,12 @@ interface MessagesState {
   addMessage: (message: Message) => void;
   addPendingMessage: (message: Message) => void;
   removePendingMessage: (tempId: string) => void;
-  settlePendingMessage: (tempId: string, txId?: string) => void;
+  settlePendingMessage: (
+    tempId: string,
+    txId?: string,
+    attemptedAt?: number
+  ) => void;
+  expireUnsettledPlaceholders: (friendAddress: string) => void;
   updateMessageStatus: (txId: string, status: MessageStatus) => void;
   markThreadAsRead: (friendAddress: string) => Promise<void>;
 
@@ -308,7 +315,11 @@ export const useMessagesStore = create<MessagesState>()(
      * confirms it by id. Without one, it resolves by content match on a later
      * merge, or ages out (PENDING_PLACEHOLDER_TTL_MS).
      */
-    settlePendingMessage: (tempId: string, txId?: string) => {
+    settlePendingMessage: (
+      tempId: string,
+      txId?: string,
+      attemptedAt?: number
+    ) => {
       const { threads } = get();
       for (const [addr, thread] of Object.entries(threads)) {
         const msgIndex = thread.messages.findIndex((m) => m.id === tempId);
@@ -316,7 +327,14 @@ export const useMessagesStore = create<MessagesState>()(
 
         let messages = thread.messages.map((m, i) =>
           i === msgIndex
-            ? { ...m, status: 'pending' as const, unsettled: !txId }
+            ? {
+                ...m,
+                status: 'pending' as const,
+                unsettled: !txId,
+                // A retry is a new attempt: its age and match window start now,
+                // not at the original bubble's timestamp.
+                attemptedAt: attemptedAt ?? m.timestamp,
+              }
             : m
         );
         if (txId) {
@@ -341,6 +359,25 @@ export const useMessagesStore = create<MessagesState>()(
           },
         });
         return;
+      }
+    },
+
+    /**
+     * Age out a thread's unsettled placeholders without a network round trip,
+     * so a chat left open can't spin forever even when fetches fail
+     * (TASK-454).
+     */
+    expireUnsettledPlaceholders: (friendAddress: string) => {
+      const { threads } = get();
+      const thread = threads[friendAddress];
+      if (!thread) return;
+      const reconciled = withReconciledPlaceholders(thread, Date.now());
+      if (reconciled === thread) return;
+      if (reconciled.messages.length > 0) {
+        set({ threads: { ...threads, [friendAddress]: reconciled } });
+      } else {
+        const { [friendAddress]: _emptied, ...rest } = threads;
+        set({ threads: rest });
       }
     },
 
@@ -1002,33 +1039,71 @@ function isTxidlessPlaceholder(message: Message): boolean {
  * can no longer land and is dropped, so it never spins forever. Neither path
  * offers a resend.
  */
+// Chain message ids that have already stood in for a placeholder. Kept across
+// merges so one chain message resolves at most one placeholder, however many
+// loads see it. Memory-only, like the placeholders themselves.
+const consumedPlaceholderMatches = new Set<string>();
+
+const attemptStart = (m: Message) => m.attemptedAt ?? m.timestamp;
+
 function reconcilePlaceholders(messages: Message[], now: number): Message[] {
   const placeholders = messages
     .filter(isTxidlessPlaceholder)
-    .sort((a, b) => a.timestamp - b.timestamp);
+    .sort((a, b) => attemptStart(a) - attemptStart(b));
   if (placeholders.length === 0) return messages;
 
   // Only chain records (parsed as confirmed) count, never another local send.
   const candidates = messages.filter(
-    (m) => m.direction === 'sent' && m.status === 'confirmed'
+    (m) =>
+      m.direction === 'sent' &&
+      m.status === 'confirmed' &&
+      !consumedPlaceholderMatches.has(m.id)
   );
-  const used = new Set<string>();
   const drop = new Set<string>();
   for (const placeholder of placeholders) {
     const match = candidates.find(
       (c) =>
-        !used.has(c.id) &&
+        !consumedPlaceholderMatches.has(c.id) &&
         c.content === placeholder.content &&
-        c.timestamp >= placeholder.timestamp - PLACEHOLDER_CLOCK_SKEW_MS
+        c.timestamp >= attemptStart(placeholder) - PLACEHOLDER_CLOCK_SKEW_MS
     );
     if (match) {
-      used.add(match.id);
+      consumedPlaceholderMatches.add(match.id);
       drop.add(placeholder.id);
-    } else if (now - placeholder.timestamp > PENDING_PLACEHOLDER_TTL_MS) {
+    } else if (now - attemptStart(placeholder) > PENDING_PLACEHOLDER_TTL_MS) {
       drop.add(placeholder.id);
     }
   }
   return drop.size > 0 ? messages.filter((m) => !drop.has(m.id)) : messages;
+}
+
+// In-flight and unsettled placeholders are memory-only (TASK-454): a stored
+// one would reload as a spinner that nothing can resolve. A failed placeholder
+// is kept, so its retry survives a restart.
+function isMemoryOnlyPlaceholder(m: Message): boolean {
+  return m.status === 'pending' && m.id.startsWith(PENDING_PLACEHOLDER_PREFIX);
+}
+
+function withoutMemoryOnlyPlaceholders(
+  threads: Record<string, MessageThread>
+): Record<string, MessageThread> {
+  const out: Record<string, MessageThread> = {};
+  for (const [addr, thread] of Object.entries(threads)) {
+    if (!thread.messages.some(isMemoryOnlyPlaceholder)) {
+      out[addr] = thread;
+      continue;
+    }
+    const messages = thread.messages.filter((m) => !isMemoryOnlyPlaceholder(m));
+    if (messages.length === 0) continue;
+    const lastMsg = messages[messages.length - 1];
+    out[addr] = {
+      ...thread,
+      messages,
+      lastMessage: lastMsg,
+      lastMessageTimestamp: lastMsg?.timestamp || 0,
+    };
+  }
+  return out;
 }
 
 /**
@@ -1053,7 +1128,10 @@ function deduplicateThreads(threads: Record<string, MessageThread>): {
 } {
   const deduped: Record<string, MessageThread> = {};
 
-  for (const [friendAddress, thread] of Object.entries(threads)) {
+  // A placeholder stored by an older build can't be resolved (TASK-454).
+  for (const [friendAddress, thread] of Object.entries(
+    withoutMemoryOnlyPlaceholders(threads)
+  )) {
     // Deduplicate messages by ID
     const seen = new Set<string>();
     const uniqueMessages: Message[] = [];
@@ -1091,9 +1169,12 @@ async function persistThreads(
 ): Promise<boolean> {
   try {
     const storageKey = getStorageKey(userAddress);
-    // Only persist threads that have actual messages
+    // Only persist threads that have actual messages, and never a
+    // memory-only placeholder (TASK-454)
     const threadsToSave = Object.fromEntries(
-      Object.entries(threads).filter(([, thread]) => thread.messages.length > 0)
+      Object.entries(withoutMemoryOnlyPlaceholders(threads)).filter(
+        ([, thread]) => thread.messages.length > 0
+      )
     );
     await AsyncStorage.setItem(storageKey, JSON.stringify(threadsToSave));
     return true;

@@ -55,8 +55,11 @@ export interface Message {
   /**
    * Set on a local placeholder whose send may have landed but returned no
    * txid (TASK-454). It is reconciled against chain by content, or aged out.
+   * Placeholders live in memory only, never in storage.
    */
   unsettled?: boolean;
+  /** When the send attempt behind an unsettled placeholder started (ms). */
+  attemptedAt?: number;
 }
 
 /**
