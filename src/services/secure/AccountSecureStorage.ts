@@ -1185,9 +1185,51 @@ export class AccountSecureStorage {
       const token = this.nextPendingCreateToken();
       journal[account.id] = token;
       await this.writePendingCreateJournal(journal);
-      await this.storeAccountLocked(account, privateKey);
+      const progress = { secretWritten: false };
+      try {
+        await this.storeAccountLocked(account, privateKey, progress);
+      } catch (error) {
+        // TASK-449: the caller never receives the token on a throw, so it cannot
+        // roll back; do it here, in the same mutex task.
+        await this.rollBackFailedCreateLocked(
+          account.id,
+          token,
+          progress.secretWritten
+        );
+        throw error;
+      }
       return token;
     });
+  }
+
+  /**
+   * Undo a storeAccountForCreation that threw after journaling its token
+   * (TASK-449). Deletes the secret only if THIS attempt wrote it (a failure
+   * before the write must not touch a same-id record it does not own), then
+   * drops the journal entry iff it is still ours. Never throws: if any step
+   * fails, the journal entry stays and the boot reconcile (TASK-222) finishes
+   * the cleanup, as for a crash.
+   */
+  private static async rollBackFailedCreateLocked(
+    accountId: string,
+    token: string,
+    secretWritten: boolean
+  ): Promise<void> {
+    try {
+      if (secretWritten) {
+        await this.deleteAccountLocked(accountId);
+      }
+      const journal = await this.readPendingCreateJournal();
+      if (journal[accountId] === token) {
+        delete journal[accountId];
+        await this.writePendingCreateJournal(journal);
+      }
+    } catch (rollbackError) {
+      console.warn(
+        'Failed-create rollback incomplete; the boot reconcile will finish it',
+        redactError(rollbackError)
+      );
+    }
   }
 
   /**
@@ -1430,10 +1472,13 @@ export class AccountSecureStorage {
   }
 
   /** The body of storeAccount, assuming the key-mutation mutex is HELD. Shared by
-   *  storeAccount (public wrapper) and storeAccountForCreation. */
+   *  storeAccount (public wrapper) and storeAccountForCreation. `progress`, when
+   *  given, records whether this call wrote the secret, so a creation that fails
+   *  later knows what it owns (TASK-449). */
   private static async storeAccountLocked(
     account: AccountMetadata,
-    privateKey?: Uint8Array
+    privateKey?: Uint8Array,
+    progress?: { secretWritten: boolean }
   ): Promise<void> {
     try {
       // TASK-449: bounded and strict. hasPin() swallows a read failure to false,
@@ -1497,6 +1542,9 @@ export class AccountSecureStorage {
           encryptedPrivateKey,
           authMethod: metadata.authMethod,
         });
+        if (progress) {
+          progress.secretWritten = true;
+        }
       } else {
         await this.saveSecret(account.id, null);
       }
@@ -2366,7 +2414,8 @@ export class AccountSecureStorage {
   // Ensure a stable installation-scoped id using platform adapter
   private static async getStableDeviceId(): Promise<string> {
     // TASK-449: bounded. The adapter's first call per process reads the keychain;
-    // a timeout throws, so key derivation fails rather than hanging.
+    // a timeout throws, so key derivation fails rather than hanging. The adapter
+    // runs one load at a time, so an abandoned load cannot race a later one.
     return await this.withTimeout(
       platformDeviceId.getDeviceId(),
       this.KEYCHAIN_READ_TIMEOUT_MS,

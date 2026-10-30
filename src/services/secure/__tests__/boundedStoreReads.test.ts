@@ -87,6 +87,7 @@ const PIN_KEY = 'voi_wallet_pin';
 const LIST_KEY = 'voi_account_list';
 const SECRET_PREFIX = 'voi_account_secret_';
 const METADATA_PREFIX = 'voi_account_metadata_';
+const JOURNAL_KEY = 'voi_pending_account_creates';
 const TIMEOUT_MS = 5000;
 
 const nodeCrypto = require('crypto');
@@ -128,15 +129,24 @@ const storedAuthMethod = (id: string): string | undefined => {
     : undefined;
 };
 
-/** Run `op` and advance fake time past the deadline; resolve to its outcome. */
+const journal = (): Record<string, string> => {
+  const raw = mockKv.get(JOURNAL_KEY);
+  return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+};
+
+/** Run `op` and advance fake time past `deadlines` deadlines (a rollback can
+ *  hit the same wedged read again); resolve to its outcome. */
 async function settleAfterDeadline<T>(
-  op: Promise<T>
+  op: Promise<T>,
+  deadlines = 1
 ): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> {
   const outcome = op.then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error })
   );
-  await jest.advanceTimersByTimeAsync(TIMEOUT_MS + 1);
+  for (let i = 0; i < deadlines; i++) {
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS + 1);
+  }
   return outcome;
 }
 
@@ -279,5 +289,90 @@ describe('TASK-449 R3: the device-id read behind key encryption', () => {
       /Device id read timed out/
     );
     expect(mockSecure.has(`${SECRET_PREFIX}a2`)).toBe(false);
+  });
+});
+
+describe('TASK-449: a creation that throws after journaling rolls itself back', () => {
+  it('a failure before the secret write drops the journal entry and deletes nothing', async () => {
+    // A same-id secret this attempt does not own must survive the rollback.
+    mockSecure.set(`${SECRET_PREFIX}a3`, 'pre-existing');
+    mockWedged.set(PIN_KEY, () => {});
+
+    const outcome = await settleAfterDeadline(
+      AccountSecureStorage.storeAccountForCreation(
+        standardAccount('a3'),
+        freshSk(),
+        AccountSecureStorage.getResetGeneration()
+      )
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(journal()).toEqual({});
+    expect(mockSecure.get(`${SECRET_PREFIX}a3`)).toBe('pre-existing');
+  });
+
+  it('a device-id timeout drops the journal entry', async () => {
+    mockDeviceIdWedged = true;
+
+    const outcome = await settleAfterDeadline(
+      AccountSecureStorage.storeAccountForCreation(
+        standardAccount('a4'),
+        freshSk(),
+        AccountSecureStorage.getResetGeneration()
+      )
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(journal()).toEqual({});
+  });
+
+  it('a failure after the secret write deletes the secret and metadata it wrote', async () => {
+    mockWedged.set(LIST_KEY, () => {});
+
+    // The store times out on the list read; the rollback's list update hits
+    // the same wedged read, so two deadlines pass.
+    const outcome = await settleAfterDeadline(
+      AccountSecureStorage.storeAccountForCreation(
+        standardAccount('a5'),
+        freshSk(),
+        AccountSecureStorage.getResetGeneration()
+      ),
+      2
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(mockSecure.has(`${SECRET_PREFIX}a5`)).toBe(false);
+    expect(mockKv.has(`${METADATA_PREFIX}a5`)).toBe(false);
+    // The list step of the rollback failed too, so the entry stays for the
+    // boot reconcile (TASK-222), exactly as after a crash.
+    expect(Object.keys(journal())).toEqual(['a5']);
+  });
+
+  it('a failure after the secret write on a healthy list read clears the journal too', async () => {
+    // Fail the metadata list WRITE instead: the rollback's own reads succeed.
+    const { storage } = jest.requireMock('@/platform') as {
+      storage: { setItem: jest.Mock };
+    };
+    const original = storage.setItem.getMockImplementation();
+    storage.setItem.mockImplementation(async (k: string, v: string) => {
+      if (k === LIST_KEY && v.includes('a6')) {
+        throw new Error('list write failed');
+      }
+      mockKv.set(k, v);
+    });
+
+    const outcome = await settleAfterDeadline(
+      AccountSecureStorage.storeAccountForCreation(
+        standardAccount('a6'),
+        freshSk(),
+        AccountSecureStorage.getResetGeneration()
+      )
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(mockSecure.has(`${SECRET_PREFIX}a6`)).toBe(false);
+    expect(mockKv.has(`${METADATA_PREFIX}a6`)).toBe(false);
+    expect(journal()).toEqual({});
+    storage.setItem.mockImplementation(original);
   });
 });
