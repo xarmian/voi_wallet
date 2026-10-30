@@ -1377,7 +1377,9 @@ export const useWalletStore = create<WalletState>()(
       const keyNetworkId = networkService.getCurrentNetworkId();
       // The epoch is part of the key too: after A→B→A a caller must not join a
       // load issued before the switches, whose result the commit guard drops.
-      const inFlightKey = `${accountId}:${keyNetworkId}:${balanceEpoch}`;
+      // TASK-458 (Codex pass E #2): the reset epoch is part of the key too, so a
+      // caller after a wipe/reset never joins a load fenced off from publishing.
+      const inFlightKey = `${accountId}:${keyNetworkId}:${balanceEpoch}:${rekeyEpoch}`;
 
       // In-flight dedup: concurrent callers (HomeScreen mount, pull-to-refresh,
       // SendScreen, the transactionSuccess force-refresh) for the same
@@ -1400,6 +1402,9 @@ export const useWalletStore = create<WalletState>()(
           .catch(() => {})
           .then(() => {
             forcedBalanceFollowUps.delete(inFlightKey);
+            // Codex pass E #1: requested before a wipe/reset that has since
+            // happened, so it doesn't run with the new epoch.
+            if (getRekeyStatusEpoch() !== rekeyEpoch) return;
             return get().loadAccountBalance(accountId, true);
           });
         forcedBalanceFollowUps.set(inFlightKey, followUp);

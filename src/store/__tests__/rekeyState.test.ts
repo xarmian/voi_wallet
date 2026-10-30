@@ -629,4 +629,90 @@ describe('balance refreshes feed the display-only rekey status (TASK-458)', () =
       });
     }
   );
+
+  // Codex pass E: lifecycle fences around queued and joined loads.
+  const setupHeldReads = async () => {
+    const { useRekeyDisplayStatus, clearRekeyDisplayStatus } =
+      await import('../rekeyDisplayStatus');
+    const { issueRekeyObservation, stampRekeyInfo } =
+      await import('@/services/network/rekeyObservation');
+    const { invalidateRekeyStatus } =
+      await import('@/services/wallet/rekeyStatusInvalidation');
+    clearRekeyDisplayStatus();
+    useWalletStore.setState({ wallet, accountStates: {} });
+    const releases: (() => void)[] = [];
+    let reads = 0;
+    mockGetAccountBalance.mockImplementation(async () => {
+      reads++;
+      const observation = issueRekeyObservation();
+      if (reads === 1)
+        await new Promise<void>((resolve) => releases.push(resolve));
+      return {
+        ...balance,
+        rekeyInfo: stampRekeyInfo(
+          { isRekeyed: true, authAddress: 'OUTSIDE' },
+          observation
+        ),
+      };
+    });
+    const display = async () =>
+      (await renderHook(() => useRekeyDisplayStatus('SOURCE', network))).result
+        .current;
+    return {
+      releases,
+      reads: () => reads,
+      invalidateRekeyStatus,
+      display,
+    };
+  };
+
+  it('a follow-up queued before a reset does not run after it', async () => {
+    mockGetAccount.mockImplementation(async (id: string) => ({
+      id,
+      address: 'SOURCE',
+      type: 'standard',
+    }));
+    const t = await setupHeldReads();
+    const earlier = useWalletStore.getState().loadAccountBalance('source');
+    while (t.reads() < 1) await new Promise((r) => setTimeout(r, 0));
+    const queued = useWalletStore.getState().loadAccountBalance('source', true);
+    t.invalidateRekeyStatus();
+    t.releases[0]();
+    await Promise.all([earlier, queued]);
+    expect(t.reads()).toBe(1);
+    expect(await t.display()).toBeUndefined();
+  });
+
+  it('a refresh after a reset never joins a load fenced before it', async () => {
+    let releaseAccount!: () => void;
+    const accountHeld = new Promise<void>((r) => (releaseAccount = r));
+    mockGetAccount.mockImplementation(async (id: string) => {
+      await accountHeld;
+      return { id, address: 'SOURCE', type: 'standard' };
+    });
+    const t = await setupHeldReads();
+    // The first read is not held in this case.
+    mockGetAccountBalance.mockImplementation(async () => {
+      const { issueRekeyObservation, stampRekeyInfo } =
+        await import('@/services/network/rekeyObservation');
+      const observation = issueRekeyObservation();
+      return {
+        ...balance,
+        rekeyInfo: stampRekeyInfo(
+          { isRekeyed: true, authAddress: 'OUTSIDE' },
+          observation
+        ),
+      };
+    });
+    const before = useWalletStore.getState().loadAccountBalance('source', true);
+    await new Promise((r) => setTimeout(r, 0));
+    t.invalidateRekeyStatus();
+    const after = useWalletStore.getState().loadAccountBalance('source', true);
+    releaseAccount();
+    await Promise.all([before, after]);
+    expect(await t.display()).toMatchObject({
+      status: 'delegated',
+      authAddress: 'OUTSIDE',
+    });
+  });
 });

@@ -182,6 +182,8 @@ it('an older refresh landing late never overwrites a newer rekey', async () => {
   const older = MultiNetworkBalanceService.getAggregatedBalance(
     standard.address
   );
+  // Codex pass E #3: the older reads must be ISSUED (and held) first.
+  while (mockIssued < 2) await act(async () => {});
   mockHold = undefined;
   mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
   await refresh();
