@@ -132,6 +132,10 @@ import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { getRekeyStateStrict } from '@/store/walletStore';
 import { NetworkId } from '@/types/network';
 import { AccountType } from '@/types/wallet';
+import {
+  PENDING_TRANSACTION_ALERT,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import { TransactionAuthController } from '../transactionAuthController';
 
 const mockLA = LocalAuthentication as jest.Mocked<typeof LocalAuthentication>;
@@ -536,6 +540,9 @@ describe('remote batch submission ownership (TASK-418)', () => {
       claimableItem: { id: 'claim' },
       items: [{ id: 'claim' }],
       Alert: { alert: jest.fn() },
+      // The claim callbacks' pending rendering (TASK-447 / TASK-451).
+      toUnsettledTransactionAlert,
+      PENDING_TRANSACTION_ALERT,
       Toast: { show: noop },
       redactError: (e: unknown) => e,
       setIsSwapping: noop,

@@ -49,7 +49,12 @@ import { Arc200TransactionService } from '@/services/transactions/arc200';
 import { NetworkService } from '@/services/network';
 import EnvoiService, { EnvoiSearchResult } from '@/services/envoi';
 import { normalizeAssetImageUrl } from '@/utils/assetImages';
-import { toErrorAlert } from '@/utils/errorMapping';
+import {
+  ErrorAlertContent,
+  PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import {
   resolveAddressOrName,
   isLikelyEnvoiName,
@@ -337,10 +342,12 @@ export default function ClaimAllConfirmationScreen() {
             return;
           }
 
-          // Submit the signed transactions to Voi network
+          // Submit the signed transactions to Voi network. Set when it was,
+          // or may have been, submitted and is not confirmed: pending, never
+          // failed, and the latch stays held so the group can't submit again.
+          let unsettled: ErrorAlertContent | undefined;
           try {
             const networkService = NetworkService.getInstance(CLAIM_NETWORK_ID);
-            const algodClient = networkService.getAlgodClient();
             // DR-1: a `null` slot means the signer DECLINED that entry
             // (ARC-0001). `Buffer.from(null, 'base64')` would throw a bare
             // TypeError here; submitting a hole would corrupt the group. Fail
@@ -355,50 +362,60 @@ export default function ClaimAllConfirmationScreen() {
               (txn) => new Uint8Array(Buffer.from(txn as string, 'base64'))
             );
             hasSubmittedRef.current = true;
-            await algodClient.sendRawTransaction(signedTxns).do();
-
-            // Navigate back to claimable tokens list with pending refresh
-            navigation.dispatch(
-              CommonActions.reset({
-                index: 1,
-                routes: [
-                  { name: 'HomeMain' },
-                  {
-                    name: 'ClaimableTokens',
-                    params: {
-                      pendingRefresh: true,
-                      claimedItemIds: items.map((item) => item.id),
-                    },
-                  },
-                ],
-              })
-            );
+            // Through submitTransaction, so an ambiguous send is resent with
+            // the same bytes and reconciled by txid, never reported as a
+            // failure (TASK-440 #8, TASK-451).
+            const { confirmed } =
+              await networkService.submitTransaction(signedTxns);
+            if (!confirmed) unsettled = PENDING_TRANSACTION_ALERT;
           } catch (submitError) {
-            // Hold the latch THROUGH recovery (a second success callback for
-            // the old group must not submit while recover() awaits), then
-            // release it on every path, so the reconfirmed group can submit
-            // through this same callback (TASK-418 + TASK-416).
-            let recoveryResult: Awaited<ReturnType<typeof recover>> = false;
-            try {
-              recoveryResult = await recover(submitError, txnGroup);
-            } catch {
-              // A failed recovery is no recovery: show the original error.
-              recoveryResult = false;
-            } finally {
-              hasSubmittedRef.current = false;
-            }
-            if (recoveryResult) {
-              navigation.goBack();
-              if (recoveryResult === 'rebuilt')
-                Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+            unsettled = toUnsettledTransactionAlert(submitError);
+            if (!unsettled) {
+              // Hold the latch THROUGH recovery (a second success callback for
+              // the old group must not submit while recover() awaits), then
+              // release it on every path, so the reconfirmed group can submit
+              // through this same callback (TASK-418 + TASK-416).
+              let recoveryResult: Awaited<ReturnType<typeof recover>> = false;
+              try {
+                recoveryResult = await recover(submitError, txnGroup);
+              } catch {
+                // A failed recovery is no recovery: show the original error.
+                recoveryResult = false;
+              } finally {
+                hasSubmittedRef.current = false;
+              }
+              if (recoveryResult) {
+                navigation.goBack();
+                if (recoveryResult === 'rebuilt')
+                  Alert.alert('Confirm Again', ARC200_RECONFIRM_MESSAGE);
+                return;
+              }
+              const message =
+                submitError instanceof Error
+                  ? submitError.message
+                  : 'Failed to submit transaction';
+              Alert.alert('Submission Failed', message);
               return;
             }
-            const message =
-              submitError instanceof Error
-                ? submitError.message
-                : 'Failed to submit transaction';
-            Alert.alert('Submission Failed', message);
           }
+
+          // Navigate back to claimable tokens list with pending refresh
+          navigation.dispatch(
+            CommonActions.reset({
+              index: 1,
+              routes: [
+                { name: 'HomeMain' },
+                {
+                  name: 'ClaimableTokens',
+                  params: {
+                    pendingRefresh: true,
+                    claimedItemIds: items.map((item) => item.id),
+                  },
+                },
+              ],
+            })
+          );
+          if (unsettled) Alert.alert(unsettled.title, unsettled.message);
         },
         onReject: async () => {
           // User cancelled - just go back
