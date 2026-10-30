@@ -3,10 +3,13 @@ import { View, Text, StyleSheet, TouchableOpacity, Switch } from 'react-native';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { useRekeyDisplayStatus } from '@/store/rekeyDisplayStatus';
+
 import { truncateAddress } from '@/services/walletconnect/utils';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
+
+const REKEYED_CHECKING = `${AccountType.REKEYED} (checking)`;
 
 interface AccountSelectionItemProps {
   account: AccountMetadata;
@@ -28,13 +31,19 @@ export default function AccountSelectionItem({
     account.address,
     useCurrentNetwork()
   );
-  // A known self hides a stale REKEYED type, as the account list does.
+  // A known self hides a stale REKEYED type, as the account list does. This
+  // row never confirms custody, so a rekeyed label stays neutral (Codex pass
+  // C #1).
   const typeLabel =
     displayRekey?.status === 'delegated'
-      ? AccountType.REKEYED
-      : displayRekey?.status === 'self' && account.type === AccountType.REKEYED
-        ? ''
-        : account.type;
+      ? REKEYED_CHECKING
+      : displayRekey?.status === 'self'
+        ? account.type === AccountType.REKEYED
+          ? ''
+          : account.type
+        : account.type === AccountType.REKEYED
+          ? REKEYED_CHECKING
+          : account.type;
 
   const handlePress = () => {
     onToggleSelection(account.id);

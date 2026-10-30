@@ -19,7 +19,6 @@ jest.mock('../networkStore', () => ({
 }));
 const mockRecord = jest.fn();
 jest.mock('../rekeyDisplayStatus', () => ({
-  beginRekeyObservation: () => 'TOKEN',
   recordRekeyObservation: (...args: unknown[]) => mockRecord(...args),
 }));
 
@@ -43,7 +42,7 @@ it('is true only once every network freshly reads self, and bypasses the cache',
   for (const call of mockLookup.mock.calls) {
     expect(call[3]).toBe(true);
   }
-  expect(mockRecord).toHaveBeenCalledWith('TOKEN', 'ADDR', 'voi-mainnet', SELF);
+  expect(mockRecord).toHaveBeenCalledWith('ADDR', 'voi-mainnet', SELF);
 });
 
 it.each([

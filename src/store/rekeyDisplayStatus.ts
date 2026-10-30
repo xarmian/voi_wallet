@@ -3,7 +3,11 @@ import { useStore } from 'zustand';
 import type { RekeyInfo } from '@/services/network';
 import type { NetworkId } from '@/types/network';
 import { classifyNetworkRekey } from '@/services/wallet/rekeyClassify';
-import { subscribeRekeyInvalidation } from '@/services/wallet/rekeyStatusInvalidation';
+import {
+  getRekeyStatusEpoch,
+  subscribeRekeyInvalidation,
+} from '@/services/wallet/rekeyStatusInvalidation';
+import { getRekeyObservation } from '@/services/network/rekeyObservation';
 
 /**
  * DISPLAY-ONLY per-network rekey status (TASK-458). It is fed by the balance
@@ -24,36 +28,36 @@ type StoredEntry = RekeyDisplayEntry & { seq: number };
 
 const keyFor = (address: string, network: NetworkId) => `${address}:${network}`;
 const store = createStore<Record<string, StoredEntry>>(() => ({}));
-let epoch = 0;
-let nextSeq = 0;
 
 subscribeRekeyInvalidation(() => clearRekeyDisplayStatus());
 
 /**
- * Taken when a read is ISSUED, before the network call. A result recorded
- * with it is dropped if a wipe/reset invalidated the store since, or if a
- * later-issued read already landed (Codex pass B #3).
+ * Record what a refresh observed. Ordering and fencing use the read's own
+ * provenance (getRekeyObservation), stamped when the algod request was
+ * issued (Codex pass C #3/#4): a cached replay keeps its old stamp and can't
+ * overwrite a newer answer, and a read issued before a wipe/reset is dropped.
+ * `null`, or a result with no stamp (the lookup failed), records unknown only
+ * where nothing is known: unknown never overwrites a known status.
  */
-export type RekeyObservationToken = { epoch: number; seq: number };
-export function beginRekeyObservation(): RekeyObservationToken {
-  return { epoch, seq: ++nextSeq };
-}
-
-/** Record what a refresh observed. `null` means the lookup failed. */
 export function recordRekeyObservation(
-  token: RekeyObservationToken,
   address: string,
   network: NetworkId,
   info: RekeyInfo | null | undefined
 ): void {
-  if (!address || token.epoch !== epoch) return;
-  const value = info
-    ? classifyNetworkRekey(address, info)
-    : ({ status: 'unknown' } as const);
+  if (!address) return;
   const key = keyFor(address, network);
   const previous = store.getState()[key];
-  if (previous && previous.seq > token.seq) return;
-  // A failed read keeps the last known answer: unknown never overwrites it.
+  const observation = getRekeyObservation(info);
+  if (!info || !observation) {
+    if (!previous)
+      store.setState({
+        [key]: { status: 'unknown', checkedAt: Date.now(), seq: -1 },
+      });
+    return;
+  }
+  if (observation.epoch !== getRekeyStatusEpoch()) return;
+  if (previous && previous.seq >= observation.seq) return;
+  const value = classifyNetworkRekey(address, info);
   if (value.status === 'unknown' && previous && previous.status !== 'unknown')
     return;
   store.setState({
@@ -61,13 +65,12 @@ export function recordRekeyObservation(
       status: value.status,
       authAddress: value.status === 'delegated' ? value.authAddress : undefined,
       checkedAt: Date.now(),
-      seq: token.seq,
+      seq: observation.seq,
     },
   });
 }
 
 export function clearRekeyDisplayStatus(): void {
-  epoch++;
   store.setState({}, true);
 }
 

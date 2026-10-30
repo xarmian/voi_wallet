@@ -10,22 +10,26 @@ import { MultiNetworkBalanceService } from '@/services/network/multi-network';
 import { clearRekeyDisplayStatus } from '@/store/rekeyDisplayStatus';
 
 const mockChain: Record<string, object> = {};
-const mockFreshSeen: boolean[] = [];
+let mockHold: Promise<void> | undefined;
+let mockIssued = 0;
+const mockStamp = (info: object) => {
+  const { issueRekeyObservation, stampRekeyInfo } = jest.requireActual(
+    '@/services/network/rekeyObservation'
+  );
+  return stampRekeyInfo(info, issueRekeyObservation());
+};
 let mockRekeyState: object = { status: 'loading' };
 jest.mock('@/services/network', () => ({
   NetworkService: {
     getInstance: (network: string) => ({
-      getAccountBalance: async (
-        address: string,
-        options?: { freshRekey?: boolean }
-      ) => ({
-        _fresh: mockFreshSeen.push(Boolean(options?.freshRekey)),
-        address,
-        amount: 1n,
-        minBalance: 0n,
-        assets: [],
-        rekeyInfo: mockChain[network],
-      }),
+      getAccountBalance: async (address: string) => {
+        // Captured and stamped at issue, as NetworkService.getAccountRekeyInfo
+        // does; a held response lands later with its original stamp.
+        const rekeyInfo = mockStamp({ ...mockChain[network] });
+        mockIssued++;
+        if (mockHold) await mockHold;
+        return { address, amount: 1n, minBalance: 0n, assets: [], rekeyInfo };
+      },
     }),
   },
 }));
@@ -83,13 +87,9 @@ const standard = {
 const row = () => (
   <AccountListItem account={standard} isActive={false} onSelect={jest.fn()} />
 );
-const refresh = (freshRekey = false) =>
+const refresh = () =>
   act(async () => {
-    await MultiNetworkBalanceService.getAggregatedBalance(
-      standard.address,
-      undefined,
-      { freshRekey }
-    );
+    await MultiNetworkBalanceService.getAggregatedBalance(standard.address);
   });
 // Custody is unconfirmed until chain state loads, so the label never implies
 // a key (Codex pass B #2).
@@ -101,8 +101,9 @@ beforeEach(() => {
   mockChain['voi-mainnet'] = { isRekeyed: false };
   mockChain['algorand-mainnet'] = { isRekeyed: false };
   mockAsyncSet.mockReset();
-  mockFreshSeen.length = 0;
   mockRekeyState = { status: 'loading' };
+  mockHold = undefined;
+  mockIssued = 0;
   mockPlatformSet.mockReset();
   mockUpdateMetadata.mockReset();
 });
@@ -140,6 +141,7 @@ it('a rekey on another network does not label this network', async () => {
   const view = await render(row());
   await refresh();
   expect(view.queryByText('Rekeyed')).toBeNull();
+  expect(view.queryByText(CHECKING)).toBeNull();
 });
 
 // Codex pass B #1: a loaded self snapshot must not mask a newer refresh.
@@ -166,11 +168,54 @@ it('an agreeing loaded snapshot keeps its confirmed custody label', async () => 
   expect(view.getByText('Rekeyed (No Key)')).toBeTruthy();
 });
 
-// Codex pass B #4: an explicit refresh asks for a cache-bypassing rekey read.
-it('passes freshRekey through to every network read', async () => {
-  await refresh(true);
-  expect(mockFreshSeen).toEqual([true, true]);
-  mockFreshSeen.length = 0;
-  await refresh(false);
-  expect(mockFreshSeen).toEqual([false, false]);
+// Codex pass C #3/#4 (ported from its harness, with reads stamped at issue).
+it('an older refresh landing late never overwrites a newer rekey', async () => {
+  let release!: () => void;
+  mockHold = new Promise<void>((resolve) => (release = resolve));
+  const older = MultiNetworkBalanceService.getAggregatedBalance(
+    standard.address
+  );
+  mockHold = undefined;
+  mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
+  await refresh();
+  const view = await render(row());
+  expect(view.getByText(CHECKING)).toBeTruthy();
+  await act(async () => {
+    release();
+    await older;
+  });
+  expect(view.getByText(CHECKING)).toBeTruthy();
+});
+
+it('a refresh issued before a wipe/reset never repopulates the cleared status', async () => {
+  const { invalidateRekeyStatus } =
+    await import('@/services/wallet/rekeyStatusInvalidation');
+  mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
+  let release!: () => void;
+  mockHold = new Promise<void>((resolve) => (release = resolve));
+  const inFlight = MultiNetworkBalanceService.getAggregatedBalance(
+    standard.address
+  );
+  // The reads must be ISSUED (stamped) before the reset for this case.
+  while (mockIssued < 2) await act(async () => {});
+  await act(async () => invalidateRekeyStatus());
+  await act(async () => {
+    release();
+    await inFlight;
+  });
+  const view = await render(row());
+  expect(view.queryByText(CHECKING)).toBeNull();
+});
+
+// A read issued AFTER the reset is a genuine post-reset chain observation, so
+// it is recorded (Codex pass C #4 reduces to this once reads are stamped at
+// issue).
+it('a read issued after a reset is a fresh observation and is recorded', async () => {
+  const { invalidateRekeyStatus } =
+    await import('@/services/wallet/rekeyStatusInvalidation');
+  await act(async () => invalidateRekeyStatus());
+  mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
+  await refresh();
+  const view = await render(row());
+  expect(view.getByText(CHECKING)).toBeTruthy();
 });

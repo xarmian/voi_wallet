@@ -401,6 +401,51 @@ describe('NetworkService.getAccountRekeyInfo (independent fetch, DR-1)', () => {
     await service.getAccountRekeyInfo(ADDRESS, true);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+  // TASK-458 (Codex pass C #3): provenance is stamped at issue, a cache hit
+  // keeps its stamp, and an older request landing late can't replace a newer
+  // cached answer.
+  it('stamps each read at issue; a cache hit returns the same stamp', async () => {
+    const { getRekeyObservation } = await import('../rekeyObservation');
+    (service as any).algodClient = {
+      accountInformation: () => ({ do: async () => ({}) }),
+    };
+    const first = await service.getAccountRekeyInfo(ADDRESS, true);
+    const cached = await service.getAccountRekeyInfo(ADDRESS, true);
+    const fresh = await service.getAccountRekeyInfo(ADDRESS, true, true);
+    expect(getRekeyObservation(first)).toBeDefined();
+    expect(getRekeyObservation(cached)).toBe(getRekeyObservation(first));
+    expect(getRekeyObservation(fresh)!.seq).toBeGreaterThan(
+      getRekeyObservation(first)!.seq
+    );
+  });
+  it('an older read landing late never replaces a newer cached answer', async () => {
+    const finishers: ((info: object) => void)[] = [];
+    (service as any).algodClient = {
+      accountInformation: () => ({
+        do: () => new Promise<object>((resolve) => finishers.push(resolve)),
+      }),
+    };
+    const older = service.getAccountRekeyInfo(ADDRESS, true, true);
+    const newer = service.getAccountRekeyInfo(ADDRESS, true, true);
+    finishers[1]({ authAddr: { publicKey: AUTH_PUBLIC_KEY } });
+    await newer;
+    finishers[0]({});
+    await older;
+    const cached = await service.getAccountRekeyInfo(ADDRESS, true);
+    expect(cached).toMatchObject({ isRekeyed: true, authAddress: AUTH_ADDR });
+  });
+  it('a balance refresh always reads authority fresh, bypassing the cache', async () => {
+    const spy = jest
+      .spyOn(service, 'getAccountRekeyInfo')
+      .mockResolvedValue({ isRekeyed: false });
+    (service as any).algodClient = makeAlgodProbe({
+      amount: 0n,
+      minBalance: 0n,
+      assets: [],
+    }).algodClient;
+    await service.getAccountBalance(ADDRESS).catch(() => {});
+    expect(spy).toHaveBeenCalledWith(ADDRESS, false, true);
+  });
   it('isolates cached authority across switches and rejects a late old-network response', async () => {
     jest
       .spyOn(service as any, 'initializeClients')

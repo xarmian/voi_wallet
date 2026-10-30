@@ -60,20 +60,21 @@ it.each([
 ] as const)(
   'loading with display status %s: neutral badge = %s',
   async (status, shown) => {
-    const {
-      beginRekeyObservation,
-      recordRekeyObservation,
-      clearRekeyDisplayStatus,
-    } = await import('@/store/rekeyDisplayStatus');
+    const { recordRekeyObservation, clearRekeyDisplayStatus } =
+      await import('@/store/rekeyDisplayStatus');
+    const { issueRekeyObservation, stampRekeyInfo } =
+      await import('@/services/network/rekeyObservation');
     clearRekeyDisplayStatus();
     if (status)
       recordRekeyObservation(
-        beginRekeyObservation(),
         'SOURCE',
         NetworkId.ALGORAND_MAINNET,
-        status === 'self'
-          ? { isRekeyed: false }
-          : { isRekeyed: true, authAddress: 'AUTH' }
+        stampRekeyInfo(
+          status === 'self'
+            ? { isRekeyed: false }
+            : { isRekeyed: true, authAddress: 'AUTH' },
+          issueRekeyObservation()
+        )
       );
     jest
       .mocked(useRekeyState)

@@ -54,10 +54,7 @@ import {
   subscribeRekeySigner,
 } from '@/services/wallet/rekeyState';
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
-import {
-  beginRekeyObservation,
-  recordRekeyObservation,
-} from './rekeyDisplayStatus';
+import { recordRekeyObservation } from './rekeyDisplayStatus';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -701,6 +698,10 @@ let walletInitializationPromise: Promise<void> | null = null;
 // accountStates reset. Entries are always removed in a `finally`, so a failed
 // load can never wedge future loads.
 const balanceLoadsInFlight = new Map<string, Promise<void>>();
+// TASK-458 (Codex pass C #2): in-flight loads started by an explicit
+// (forced) refresh. A forced caller only joins one of these: a load issued
+// before the press may carry authority read before an external rekey landed.
+const freshBalanceLoads = new Set<string>();
 
 export const useWalletStore = create<WalletState>()(
   subscribeWithSelector((set, get) => ({
@@ -1382,7 +1383,13 @@ export const useWalletStore = create<WalletState>()(
       // "ignore fresh cache" semantics).
       const existingLoad = balanceLoadsInFlight.get(inFlightKey);
       if (existingLoad) {
-        return existingLoad;
+        if (!forceRefresh || freshBalanceLoads.has(inFlightKey)) {
+          return existingLoad;
+        }
+        // Let the earlier load finish (its commit is still valid), then run
+        // the one the caller asked for, issued after the press.
+        await existingLoad.catch(() => {});
+        return get().loadAccountBalance(accountId, true);
       }
 
       // TASK-59: issued on the key network; commits below only while current.
@@ -1452,10 +1459,8 @@ export const useWalletStore = create<WalletState>()(
             balanceError: null,
           });
 
-          const observation = beginRekeyObservation();
           const balance = await networkService.getAccountBalance(
-            account.address,
-            { freshRekey: forceRefresh }
+            account.address
           );
 
           // A fetch that straddled a network switch (or was superseded by a
@@ -1477,7 +1482,6 @@ export const useWalletStore = create<WalletState>()(
           });
           // TASK-458: display-only, so an external rekey shows after a refresh.
           recordRekeyObservation(
-            observation,
             account.address,
             currentNetworkId,
             balance.rekeyInfo
@@ -1526,10 +1530,12 @@ export const useWalletStore = create<WalletState>()(
       // so overlapping callers observe and join it, and always clear it in
       // `finally` — even on throw — so a failed load can never wedge future loads.
       balanceLoadsInFlight.set(inFlightKey, loadPromise);
+      if (forceRefresh) freshBalanceLoads.add(inFlightKey);
       try {
         await loadPromise;
       } finally {
         balanceLoadsInFlight.delete(inFlightKey);
+        freshBalanceLoads.delete(inFlightKey);
       }
     },
 
@@ -2123,17 +2129,14 @@ export const useWalletStore = create<WalletState>()(
           const freshAccount = await MultiAccountWalletService.getAccount(
             account.id
           );
-          const observation = beginRekeyObservation();
           const balance = await networkService.getAccountBalance(
-            freshAccount.address,
-            { freshRekey: true }
+            freshAccount.address
           );
 
           return {
             accountId: account.id,
             account: freshAccount,
             balance,
-            observation,
             error: null,
           };
         } catch (error) {
@@ -2156,8 +2159,6 @@ export const useWalletStore = create<WalletState>()(
       for (const result of results) {
         if (result.status !== 'fulfilled') continue;
         const { accountId, account, balance, error } = result.value;
-        const observation =
-          'observation' in result.value ? result.value.observation : undefined;
         const token = tokens.get(accountId);
         if (!token || !isCurrentBalanceRequest(accountId, token)) continue;
 
@@ -2170,13 +2171,11 @@ export const useWalletStore = create<WalletState>()(
           });
         } else if (balance) {
           // TASK-458: display-only, so an external rekey shows after a refresh.
-          if (observation)
-            recordRekeyObservation(
-              observation,
-              account.address,
-              currentNetworkId,
-              balance.rekeyInfo
-            );
+          recordRekeyObservation(
+            account.address,
+            currentNetworkId,
+            balance.rekeyInfo
+          );
           patches.set(accountId, {
             balance,
             balanceNetworkId: currentNetworkId,
@@ -2793,9 +2792,7 @@ export const useWalletStore = create<WalletState>()(
         // Fetch multi-network balance
         const multiNetworkBalance =
           await MultiNetworkBalanceService.getAggregatedBalance(
-            account.address,
-            undefined,
-            { freshRekey: forceRefresh }
+            account.address
           );
 
         if (!isLatestMultiNetworkRequest(accountId, requestToken)) return;

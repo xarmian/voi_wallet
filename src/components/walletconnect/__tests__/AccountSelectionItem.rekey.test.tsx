@@ -7,10 +7,13 @@ import AccountSelectionItem from '../AccountSelectionItem';
 import { AccountMetadata, AccountType } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import {
-  beginRekeyObservation,
   clearRekeyDisplayStatus,
   recordRekeyObservation,
 } from '@/store/rekeyDisplayStatus';
+import {
+  issueRekeyObservation,
+  stampRekeyInfo,
+} from '@/services/network/rekeyObservation';
 
 jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
@@ -32,10 +35,9 @@ const item = (type: AccountType) => (
 const observe = (info: object) =>
   act(async () =>
     recordRekeyObservation(
-      beginRekeyObservation(),
       'ADDR',
       NetworkId.VOI_MAINNET,
-      info as never
+      stampRekeyInfo({ ...info } as never, issueRekeyObservation())
     )
   );
 
@@ -44,12 +46,17 @@ beforeEach(() => clearRekeyDisplayStatus());
 it.each([
   ['unknown keeps the stored type', AccountType.STANDARD, null, 'standard'],
   [
-    'an external rekey reads rekeyed',
+    'an external rekey reads rekeyed, custody neutral',
     AccountType.STANDARD,
     { isRekeyed: true, authAddress: 'X' },
-    'rekeyed',
+    'rekeyed (checking)',
   ],
-  ['unknown keeps a stored REKEYED', AccountType.REKEYED, null, 'rekeyed'],
+  [
+    'unknown keeps a stored REKEYED, custody neutral',
+    AccountType.REKEYED,
+    null,
+    'rekeyed (checking)',
+  ],
   [
     'a known self hides a stale REKEYED',
     AccountType.REKEYED,
@@ -60,5 +67,7 @@ it.each([
   const view = await render(item(type));
   if (info) await observe(info);
   if (label) expect(view.getByText(label)).toBeTruthy();
-  else expect(view.queryByText('rekeyed')).toBeNull();
+  else expect(view.queryByText(/rekeyed/)).toBeNull();
+  // Never the bare, custody-capable wording (Codex pass C #1).
+  expect(view.queryByText('rekeyed')).toBeNull();
 });

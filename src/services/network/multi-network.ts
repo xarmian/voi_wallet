@@ -13,10 +13,7 @@ import {
 } from '@/utils/assetImages';
 import { selectPrimarySource } from '@/utils/mappedAssetPrimary';
 import { redactError } from '@/utils/logRedaction';
-import {
-  beginRekeyObservation,
-  recordRekeyObservation,
-} from '@/store/rekeyDisplayStatus';
+import { recordRekeyObservation } from '@/store/rekeyDisplayStatus';
 
 /**
  * Service for aggregating balances across multiple networks
@@ -27,8 +24,7 @@ export class MultiNetworkBalanceService {
    */
   static async getAggregatedBalance(
     address: string,
-    networks: NetworkId[] = [NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET],
-    { freshRekey = false }: { freshRekey?: boolean } = {}
+    networks: NetworkId[] = [NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]
   ): Promise<MultiNetworkBalance> {
     try {
       // Fetch token mappings
@@ -36,22 +32,14 @@ export class MultiNetworkBalanceService {
 
       // Fetch balances from all networks concurrently
       const balancePromises = networks.map(async (networkId) => {
-        const observation = beginRekeyObservation();
         try {
           const networkService = NetworkService.getInstance(networkId);
-          const balance = await networkService.getAccountBalance(address, {
-            freshRekey,
-          });
+          const balance = await networkService.getAccountBalance(address);
           // TASK-458: display-only, so an external rekey shows after a refresh.
-          recordRekeyObservation(
-            observation,
-            address,
-            networkId,
-            balance.rekeyInfo
-          );
+          recordRekeyObservation(address, networkId, balance.rekeyInfo);
           return { networkId, balance, success: true };
         } catch (error) {
-          recordRekeyObservation(observation, address, networkId, null);
+          recordRekeyObservation(address, networkId, null);
           console.warn(
             `[MultiNetworkBalanceService] Failed to fetch balance from ${networkId}:`,
             redactError(error)

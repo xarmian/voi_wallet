@@ -542,7 +542,16 @@ describe('balance refreshes feed the display-only rekey status (TASK-458)', () =
       }));
       mockGetCurrentWallet.mockResolvedValue(wallet);
       useWalletStore.setState({ wallet, accountStates: {} });
-      mockGetAccountBalance.mockResolvedValue(external);
+      const { issueRekeyObservation, stampRekeyInfo } =
+        await import('@/services/network/rekeyObservation');
+      // Stamped at issue, as NetworkService.getAccountRekeyInfo does.
+      mockGetAccountBalance.mockImplementation(async () => ({
+        ...external,
+        rekeyInfo: stampRekeyInfo(
+          { ...external.rekeyInfo },
+          issueRekeyObservation()
+        ),
+      }));
       const address = 'SOURCE';
       if (path === 'loadAccountBalance')
         await useWalletStore.getState().loadAccountBalance('source', true);
@@ -562,4 +571,52 @@ describe('balance refreshes feed the display-only rekey status (TASK-458)', () =
       }
     }
   );
+
+  // Codex pass C #2: a forced refresh must not just join a load issued before
+  // the press; it runs its own read after the earlier load finishes.
+  it('a forced load after a non-forced one in flight issues its own read', async () => {
+    const { useRekeyDisplayStatus, clearRekeyDisplayStatus } =
+      await import('../rekeyDisplayStatus');
+    const { issueRekeyObservation, stampRekeyInfo } =
+      await import('@/services/network/rekeyObservation');
+    clearRekeyDisplayStatus();
+    mockGetAccount.mockImplementation(async (id: string) => ({
+      id,
+      address: id === 'source' ? 'SOURCE' : 'AUTH',
+      type: 'standard',
+    }));
+    useWalletStore.setState({ wallet, accountStates: {} });
+    let releaseOld!: () => void;
+    const reads: string[] = [];
+    mockGetAccountBalance.mockImplementation(async () => {
+      const first = reads.length === 0;
+      reads.push(first ? 'old' : 'new');
+      // The old read was issued before the external rekey landed.
+      const observation = issueRekeyObservation();
+      if (first) await new Promise<void>((resolve) => (releaseOld = resolve));
+      return {
+        ...balance,
+        rekeyInfo: stampRekeyInfo(
+          first
+            ? { isRekeyed: false }
+            : { isRekeyed: true, authAddress: 'OUTSIDE' },
+          observation
+        ),
+      };
+    });
+    const background = useWalletStore.getState().loadAccountBalance('source');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const forced = useWalletStore.getState().loadAccountBalance('source', true);
+    releaseOld();
+    await background;
+    await forced;
+    expect(reads).toEqual(['old', 'new']);
+    const { result } = await renderHook(() =>
+      useRekeyDisplayStatus('SOURCE', network)
+    );
+    expect(result.current).toMatchObject({
+      status: 'delegated',
+      authAddress: 'OUTSIDE',
+    });
+  });
 });

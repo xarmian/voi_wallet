@@ -5,7 +5,17 @@ import { join, relative } from 'path';
 import { NetworkId } from '@/types/network';
 import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import {
-  beginRekeyObservation,
+  issueRekeyObservation,
+  RekeyObservation,
+  stampRekeyInfo,
+} from '@/services/network/rekeyObservation';
+
+// A read as NetworkService produces it: stamped when issued.
+const observed = <T extends object>(
+  info: T,
+  observation: RekeyObservation = issueRekeyObservation()
+) => stampRekeyInfo({ ...info }, observation);
+import {
   clearRekeyDisplayStatus,
   displayOverridesLoaded,
   recordRekeyObservation,
@@ -22,10 +32,14 @@ it('records self and delegated from a refresh, with the auth address', async () 
   const { result } = await renderHook(() => useRekeyDisplayStatus('ADDR', VOI));
   expect(result.current).toBeUndefined();
   await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, {
-      isRekeyed: true,
-      authAddress: 'AUTH',
-    })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({
+        isRekeyed: true,
+        authAddress: 'AUTH',
+      })
+    )
   );
   expect(result.current).toMatchObject({
     status: 'delegated',
@@ -33,9 +47,13 @@ it('records self and delegated from a refresh, with the auth address', async () 
   });
   expect(typeof result.current?.checkedAt).toBe('number');
   await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, {
-      isRekeyed: false,
-    })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({
+        isRekeyed: false,
+      })
+    )
   );
   expect(result.current).toMatchObject({ status: 'self' });
   expect(result.current?.authAddress).toBeUndefined();
@@ -44,28 +62,32 @@ it('records self and delegated from a refresh, with the auth address', async () 
 it('a failed read never overwrites a known status', async () => {
   const { result } = await renderHook(() => useRekeyDisplayStatus('ADDR', VOI));
   await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, {
-      isRekeyed: true,
-      authAddress: 'AUTH',
-    })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({
+        isRekeyed: true,
+        authAddress: 'AUTH',
+      })
+    )
   );
+  await act(async () => recordRekeyObservation('ADDR', VOI, null));
   await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, null)
-  );
-  await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, {
-      isRekeyed: false,
-      unavailable: true,
-    })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({
+        isRekeyed: false,
+        unavailable: true,
+      })
+    )
   );
   expect(result.current?.status).toBe('delegated');
 });
 
 it('a failed first read records unknown', async () => {
   const { result } = await renderHook(() => useRekeyDisplayStatus('ADDR', VOI));
-  await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, null)
-  );
+  await act(async () => recordRekeyObservation('ADDR', VOI, null));
   expect(result.current?.status).toBe('unknown');
 });
 
@@ -76,10 +98,14 @@ it('is per network, and delegated-anywhere reads every network', async () => {
     other: useRekeyDisplayDelegatedAnywhere('ADDR2'),
   }));
   await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', ALGO, {
-      isRekeyed: true,
-      authAddress: 'AUTH',
-    })
+    recordRekeyObservation(
+      'ADDR',
+      ALGO,
+      observed({
+        isRekeyed: true,
+        authAddress: 'AUTH',
+      })
+    )
   );
   expect(result.current.voi).toBeUndefined();
   expect(result.current.anywhere).toBe(true);
@@ -89,9 +115,13 @@ it('is per network, and delegated-anywhere reads every network', async () => {
 it('a wallet-wide rekey invalidation clears it', async () => {
   const { result } = await renderHook(() => useRekeyDisplayStatus('ADDR', VOI));
   await act(async () =>
-    recordRekeyObservation(beginRekeyObservation(), 'ADDR', VOI, {
-      isRekeyed: false,
-    })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({
+        isRekeyed: false,
+      })
+    )
   );
   await act(async () => invalidateRekeyStatus());
   expect(result.current).toBeUndefined();
@@ -100,26 +130,31 @@ it('a wallet-wide rekey invalidation clears it', async () => {
 // Codex pass B #3: results are ordered by ISSUE, and fenced by invalidation.
 it('an older-issued read landing late never overwrites a newer one', async () => {
   const { result } = await renderHook(() => useRekeyDisplayStatus('ADDR', VOI));
-  const older = beginRekeyObservation();
-  const newer = beginRekeyObservation();
+  const older = issueRekeyObservation();
+  const newer = issueRekeyObservation();
   await act(async () =>
-    recordRekeyObservation(newer, 'ADDR', VOI, {
-      isRekeyed: true,
-      authAddress: 'AUTH',
-    })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({ isRekeyed: true, authAddress: 'AUTH' }, newer)
+    )
   );
   await act(async () =>
-    recordRekeyObservation(older, 'ADDR', VOI, { isRekeyed: false })
+    recordRekeyObservation('ADDR', VOI, observed({ isRekeyed: false }, older))
   );
   expect(result.current?.status).toBe('delegated');
 });
 
 it('a read issued before an invalidation is dropped when it lands', async () => {
   const { result } = await renderHook(() => useRekeyDisplayStatus('ADDR', VOI));
-  const inFlight = beginRekeyObservation();
+  const inFlight = issueRekeyObservation();
   await act(async () => invalidateRekeyStatus());
   await act(async () =>
-    recordRekeyObservation(inFlight, 'ADDR', VOI, { isRekeyed: false })
+    recordRekeyObservation(
+      'ADDR',
+      VOI,
+      observed({ isRekeyed: false }, inFlight)
+    )
   );
   expect(result.current).toBeUndefined();
 });
