@@ -2582,14 +2582,22 @@ export class AccountSecureStorage {
    *
    * THROWS on a read failure or timeout (TASK-455): null means "no
    * credential", and ChangePinScreen acts on null by skipping the current-PIN
-   * step, so it must mean exactly that.
+   * step, so it must mean exactly that. The deadline covers BOTH reads (primary
+   * and legacy), and it is a pure read: no legacy migration, so an abandoned
+   * read can never write late. verifyPin still migrates a legacy credential.
    */
   static async getCredentialSource(): Promise<SecretSource | null> {
-    const stored = await this.readStoredPinData(this.KEYCHAIN_READ_TIMEOUT_MS);
-    if (!stored) {
-      return null;
-    }
-    return stored.secretSource ?? 'pin';
+    return this.withTimeout(
+      (async () => {
+        const raw =
+          (await secureStorage.getItem(this.PIN_KEY)) ||
+          (await storage.getItem(this.PIN_KEY));
+        const stored = raw ? this.parseStoredPin(raw) : null;
+        return stored ? (stored.secretSource ?? 'pin') : null;
+      })(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Credential kind read'
+    );
   }
 
   /**

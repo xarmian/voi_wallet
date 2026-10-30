@@ -383,3 +383,38 @@ describe('TASK-449: a creation that throws after journaling rolls itself back', 
     storage.setItem.mockImplementation(original);
   });
 });
+
+describe('TASK-455: getCredentialSource is bounded end to end', () => {
+  it('a wedged LEGACY read (primary absent) rejects at the deadline', async () => {
+    const { storage } = jest.requireMock('@/platform') as {
+      storage: { getItem: jest.Mock };
+    };
+    storage.getItem.mockImplementationOnce(() => new Promise(() => {}));
+
+    const outcome = await settleAfterDeadline(
+      AccountSecureStorage.getCredentialSource()
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect((outcome as { error: Error }).error.message).toMatch(
+      /Credential kind read timed out/
+    );
+  });
+
+  it('reports a legacy-only credential without migrating it', async () => {
+    mockKv.set(
+      PIN_KEY,
+      JSON.stringify({
+        hash: 'ab'.repeat(32),
+        iterations: 8000,
+        secretSource: 'passphrase',
+      })
+    );
+
+    await expect(AccountSecureStorage.getCredentialSource()).resolves.toBe(
+      'passphrase'
+    );
+    expect(mockSecure.has(PIN_KEY)).toBe(false);
+    expect(mockKv.has(PIN_KEY)).toBe(true);
+  });
+});
