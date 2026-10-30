@@ -14,6 +14,11 @@ import { TransactionService } from '@/services/transactions';
 import { getNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import { networkService } from '@/services/network';
 import {
+  TransactionExpiredError,
+  TransactionMaybeSubmittedError,
+  TransactionPendingError,
+} from '@/types/network';
+import {
   isArc200MbrRace,
   isArc200ExpiredGroup,
   ARC200_RECONFIRM_MESSAGE,
@@ -32,7 +37,6 @@ jest.mock('@/contexts/ThemeContext', () => ({
 jest.mock('@/services/network', () => ({
   networkService: {
     submitTransaction: jest.fn(),
-    getAlgodClient: () => ({ sendRawTransaction: () => ({ do: mockSubmit }) }),
   },
   NetworkService: {
     getInstance: () => require('@/services/network').networkService,
@@ -52,7 +56,7 @@ let mockParams: any;
 const mockNavigate = jest.fn();
 const mockReplace = jest.fn();
 const mockGoBack = jest.fn();
-const mockSubmit = jest.fn();
+const mockDispatch = jest.fn();
 let mockAuthProps: any;
 let mockRequest: any;
 const mockAccount = { id: 'a', address: makeAddress(1) };
@@ -62,7 +66,9 @@ jest.mock('@react-navigation/native', () => ({
     navigate: mockNavigate,
     replace: mockReplace,
     goBack: mockGoBack,
+    dispatch: mockDispatch,
   }),
+  CommonActions: { reset: (state: unknown) => ({ type: 'RESET', state }) },
 }));
 jest.mock('@/store/walletStore', () => ({
   useActiveAccount: () => mockAccount,
@@ -340,10 +346,8 @@ it.each(['send', 'claim', 'all'] as const)(
     const delay = jest
       .spyOn(TransactionService as any, 'delay')
       .mockResolvedValue(undefined);
-    const submit =
-      flow === 'send'
-        ? (networkService.submitTransaction as jest.Mock)
-        : mockSubmit;
+    // Claims submit through NetworkService.submitTransaction too (TASK-451).
+    const submit = networkService.submitTransaction as jest.Mock;
     const pressLabel =
       flow === 'send'
         ? 'Confirm & Send'
@@ -562,3 +566,163 @@ const expiredMessage = (group = makeGroup(false)) => {
   const txn = group.transactions[0];
   return `TransactionPool.Remember: txn dead: round ${txn.lastValid + 1n} outside of ${txn.firstValid}--${txn.lastValid}`;
 };
+
+// TASK-451: a claim that was, or may have been, submitted and is not confirmed
+// is pending: it leaves the screen like a confirmed claim, never says
+// 'Submission Failed', and keeps the latch held so the same group can't submit
+// again. A genuine rejection keeps its failure rendering.
+describe.each(['claim', 'all'] as const)('%s submit outcome', (flow) => {
+  const item = {
+    contractId: 123,
+    owner: makeAddress(2),
+    amount: '1',
+    ownerBalance: '1',
+    tokenDecimals: 0,
+    tokenSymbol: 'T',
+    tokenName: 'Token',
+  };
+  const builder = () =>
+    (flow === 'claim'
+      ? Arc.buildArc200TransferFromGroup
+      : Arc.buildBatchClaimTransactionGroup) as jest.Mock;
+  const submit = networkService.submitTransaction as jest.Mock;
+  let alert: jest.SpyInstance;
+
+  beforeEach(() => {
+    mockParams = { claimableItem: item, items: [item] };
+    builder().mockReset().mockResolvedValue(makeGroup(false));
+    alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    submit.mockReset();
+    mockDispatch.mockClear();
+    mockNavigate.mockClear();
+  });
+  afterEach(() => alert.mockRestore());
+
+  const signAndSubmit = async () => {
+    const view = await render(flow === 'claim' ? <Claim /> : <All />);
+    await view.findByText(
+      `${(Arc.groupCost(makeGroup(false)) / 1e6).toFixed(6)} VOI`
+    );
+    await act(async () => {
+      await fireEvent.press(
+        view.getByText(flow === 'claim' ? 'Claim Tokens' : 'Claim 1 Token')
+      );
+    });
+    const callbackId = mockNavigate.mock.calls.at(-1)![1].callbackId;
+    const onSuccess = getNavigationCallbacks(callbackId)!.onSuccess!;
+    await act(async () => {
+      await onSuccess({ signedTransactions: ['AQ=='] });
+    });
+    return { view, onSuccess };
+  };
+
+  it('leaves for the claim list on a confirmed claim, with no alert', async () => {
+    submit.mockResolvedValue({ txId: 'TX', confirmed: true });
+    const { view } = await signAndSubmit();
+
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(alert).not.toHaveBeenCalled();
+    await view.unmount();
+  });
+
+  it.each([
+    [
+      'a confirmed=false result',
+      () => submit.mockResolvedValue({ txId: 'TX', confirmed: false }),
+      'Not Confirmed Yet',
+    ],
+    [
+      'a pending error',
+      () => submit.mockRejectedValue(new TransactionPendingError('TX')),
+      'Not Confirmed Yet',
+    ],
+    [
+      'a maybe-submitted error',
+      () => submit.mockRejectedValue(new TransactionMaybeSubmittedError()),
+      'May Have Been Sent',
+    ],
+  ])(
+    'shows %s as pending, leaves the screen and holds the latch',
+    async (_, arrange, title) => {
+      arrange();
+      const { view, onSuccess } = await signAndSubmit();
+
+      expect(alert).toHaveBeenLastCalledWith(title, expect.any(String));
+      expect(alert).not.toHaveBeenCalledWith(
+        'Submission Failed',
+        expect.anything()
+      );
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(builder()).toHaveBeenCalledTimes(1);
+      // A second success callback for the same group must not submit again.
+      await act(async () => {
+        await onSuccess({ signedTransactions: ['AQ=='] });
+      });
+      expect(submit).toHaveBeenCalledTimes(1);
+      await view.unmount();
+    }
+  );
+
+  it('rebuilds when the reconcile finds the group expired (TransactionExpiredError)', async () => {
+    const group = makeGroup(false);
+    submit.mockRejectedValue(
+      new TransactionExpiredError('TX', group.transactions[0].lastValid)
+    );
+    const { view } = await signAndSubmit();
+
+    expect(alert).toHaveBeenLastCalledWith(
+      'Confirm Again',
+      ARC200_RECONFIRM_MESSAGE
+    );
+    expect(builder()).toHaveBeenCalledTimes(2);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    await view.unmount();
+  });
+
+  it('keeps Submission Failed for a genuine rejection', async () => {
+    submit.mockRejectedValue(
+      new Error('logic eval error: invalid Box reference')
+    );
+    const { view } = await signAndSubmit();
+
+    expect(alert).toHaveBeenLastCalledWith(
+      'Submission Failed',
+      'logic eval error: invalid Box reference'
+    );
+    expect(mockDispatch).not.toHaveBeenCalled();
+    await view.unmount();
+  });
+});
+
+// TASK-451: NetworkService's reconciled expiry is an expired group too, but
+// only for a last valid round this group carries.
+describe('isArc200ExpiredGroup on a reconciled expiry', () => {
+  const group = makeGroup(false);
+  const lastValid = group.transactions[0].lastValid;
+
+  it('matches TransactionExpiredError for this group, typed or wrapped', () => {
+    const expired = new TransactionExpiredError('TX', lastValid);
+    expect(isArc200ExpiredGroup(expired, group)).toBe(true);
+    expect(
+      isArc200ExpiredGroup(
+        new Error(`Transaction failed: ${expired.message}`),
+        group
+      )
+    ).toBe(true);
+  });
+
+  it("does not match another group's last valid round", () => {
+    expect(
+      isArc200ExpiredGroup(
+        new TransactionExpiredError('TX', lastValid + 7n),
+        group
+      )
+    ).toBe(false);
+  });
+
+  it('is not an MBR race', () => {
+    expect(
+      isArc200MbrRace(new TransactionExpiredError('TX', lastValid), group)
+    ).toBe(false);
+  });
+});

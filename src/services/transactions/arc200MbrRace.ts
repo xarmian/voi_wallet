@@ -35,6 +35,19 @@ export function isArc200ExpiredGroup(
   group: Arc200TransactionGroup
 ) {
   if (!(error instanceof Error)) return false;
+  // NetworkService's own expiry verdict (TransactionExpiredError, by message
+  // so it survives wrapping): an ambiguous send whose reconcile found the
+  // node past this group's last valid round. It can no longer land, so the
+  // rebuild is as safe as for algod's txn-dead rejection (TASK-451).
+  const reconciled =
+    /last valid round \((\d+)\) has passed, so it can no longer be committed/.exec(
+      error.message
+    );
+  if (reconciled) {
+    return group.transactions.some(
+      (txn) => txn.lastValid === BigInt(reconciled[1])
+    );
+  }
   const match =
     /(?:txn|transaction) dead: round (\d+) outside of (\d+)--(\d+)/.exec(
       error.message
