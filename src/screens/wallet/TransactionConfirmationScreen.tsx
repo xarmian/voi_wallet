@@ -403,8 +403,11 @@ export default function TransactionConfirmationScreen() {
       navigation.replace('TransactionResult', pendingParams);
     } else {
       // Replace this screen with error result
-      const errorMessage =
-        result instanceof Error ? result.message : 'Transaction failed';
+      // The modal reports failure as { error } (TASK-453): map that error, so a
+      // real failure isn't shown as the generic fallback.
+      const errorMessage = toErrorAlert(result?.error, {
+        fallbackMessage: 'Transaction failed.',
+      }).message;
 
       const errorParams = {
         recipient: params.recipient,

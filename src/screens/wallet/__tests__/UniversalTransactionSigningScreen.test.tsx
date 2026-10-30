@@ -20,13 +20,17 @@
  */
 
 import React from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
 import { render, waitFor, fireEvent, act } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 
 import { makeAccount } from '@/__tests__/fixtures/algorand';
-import { NetworkId } from '@/types/network';
+import {
+  NetworkId,
+  TransactionMaybeSubmittedError,
+  TransactionPendingError,
+} from '@/types/network';
 import { truncateAddress } from '@/services/walletconnect/utils';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 
@@ -917,4 +921,65 @@ describe('asset reconfiguration review', () => {
       ).toBeTruthy();
     }
   });
+});
+
+// TASK-453: the modal reports failure as { error }. The alert must carry that
+// error's mapped reason, not the generic "Failed to sign transactions".
+it('shows the mapped reason when signing fails', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const a = makeAccount('signer-fail').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+
+  await act(async () => {
+    await mockModalProps.onComplete(false, {
+      error: new Error('TransactionPool.Remember: overspend'),
+    });
+  });
+
+  expect(alert).toHaveBeenLastCalledWith(
+    'Not Enough Balance',
+    expect.stringContaining("doesn't have enough balance")
+  );
+  alert.mockRestore();
+});
+
+// TASK-453 (Codex pass A #2): this screen only signs, but if the modal ever
+// reports a pending or maybe-submitted error, the alert must not call it a
+// failure. The send-side cases live in Arc200Confirmation.test.
+it.each([
+  ['pending', () => new TransactionPendingError('TXID'), 'Not Confirmed Yet'],
+  [
+    'maybe submitted',
+    () => new TransactionMaybeSubmittedError(),
+    'May Have Been Sent',
+  ],
+])('shows a %s send as unsettled, not failed', async (_label, make, title) => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const a = makeAccount('signer-unsettled').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+
+  await act(async () => {
+    await mockModalProps.onComplete(false, { error: make() });
+  });
+
+  const [shownTitle, shownMessage] = alert.mock.calls.at(-1)!;
+  expect(shownTitle).toBe(title);
+  expect(String(shownMessage)).not.toMatch(/fail/i);
+  alert.mockRestore();
 });

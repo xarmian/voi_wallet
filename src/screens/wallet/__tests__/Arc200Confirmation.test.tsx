@@ -23,6 +23,7 @@ import {
   isArc200ExpiredGroup,
   ARC200_RECONFIRM_MESSAGE,
 } from '@/services/transactions/arc200MbrRace';
+import { toErrorAlert } from '@/utils/errorMapping';
 import Send from '../TransactionConfirmationScreen';
 import Claim from '../ClaimTokenScreen';
 import All from '../ClaimAllConfirmationScreen';
@@ -443,6 +444,7 @@ it.each(['send', 'claim', 'all'] as const)(
             );
           });
         };
+        let lastFailure: unknown;
         const fail = async () => {
           await act(async () => {
             if (flow === 'send') {
@@ -456,6 +458,7 @@ it.each(['send', 'claim', 'all'] as const)(
                 failure = caught;
               }
               expect(failure).toBeInstanceOf(Error);
+              lastFailure = failure;
               await mockAuthProps.onComplete(false, { error: failure });
             } else {
               const callbackId = mockNavigate.mock.calls.at(-1)![1].callbackId;
@@ -542,12 +545,20 @@ it.each(['send', 'claim', 'all'] as const)(
           expect(builder).toHaveBeenCalledTimes(2);
           expect(submit.mock.calls.length).toBe(submits * 2);
         } else expect(builder).toHaveBeenCalledTimes(1);
-        if (flow === 'send')
-          expect(mockReplace).toHaveBeenLastCalledWith(
-            'TransactionResult',
-            expect.objectContaining({ isSuccess: false })
+        if (flow === 'send') {
+          // The failure copy is the injected error's own mapped reason
+          // (TASK-453), which differs from what a discarded error yields.
+          const expected = toErrorAlert(lastFailure).message;
+          expect(expected).not.toBe(
+            toErrorAlert(undefined, { fallbackMessage: 'Transaction failed.' })
+              .message
           );
-        else
+          const shown = mockReplace.mock.calls.at(-1)![1];
+          expect(shown.isSuccess).toBe(false);
+          expect(shown.errorMessage.split('\n\n')[0]).toBe(
+            expected.split('\n\n')[0]
+          );
+        } else
           expect(alert).toHaveBeenLastCalledWith(
             'Submission Failed',
             error.message
@@ -724,5 +735,83 @@ describe('isArc200ExpiredGroup on a reconciled expiry', () => {
     expect(
       isArc200MbrRace(new TransactionExpiredError('TX', lastValid), group)
     ).toBe(false);
+  });
+});
+
+// TASK-453 (Codex pass B #1): a send that may have landed arrives through the
+// modal's failure callback, and must still read as pending, never failed.
+describe('send failure callback outcome', () => {
+  const item = {
+    contractId: 123,
+    owner: makeAddress(2),
+    amount: '1',
+    ownerBalance: '1',
+    tokenDecimals: 0,
+    tokenSymbol: 'T',
+    tokenName: 'Token',
+  };
+
+  beforeEach(() => {
+    mockParams = {
+      claimableItem: item,
+      items: [item],
+      fromAccount: mockAccount,
+      recipient: makeAddress(2),
+      amount: '1',
+      assetType: 'arc200',
+      assetDecimals: 0,
+      contractId: 123,
+      estimatedFee: 999999,
+      assetSymbol: 'T',
+    };
+    (Arc.buildArc200TransferGroup as jest.Mock)
+      .mockReset()
+      .mockResolvedValue(makeGroup(false));
+    mockReplace.mockClear();
+  });
+
+  const confirmThenFail = async (error: unknown) => {
+    const view = await render(<Send />);
+    await view.findByText(
+      `${(Arc.groupCost(makeGroup(false)) / 1e6).toFixed(6)} VOI`
+    );
+    await act(async () => {
+      await fireEvent.press(view.getByText('Confirm & Send'));
+    });
+    await act(async () => {
+      await mockAuthProps.onComplete(false, { error });
+    });
+    await view.unmount();
+    return mockReplace.mock.calls.at(-1)!;
+  };
+
+  it.each([
+    ['pending', () => new TransactionPendingError('TX'), 'TX'],
+    ['maybe submitted', () => new TransactionMaybeSubmittedError(), undefined],
+  ])('shows a %s send as pending, not failed', async (_l, make, txId) => {
+    const error = make();
+    const [route, params] = await confirmThenFail(error);
+    const expected = toErrorAlert(error);
+    expect(route).toBe('TransactionResult');
+    expect(params).toEqual(
+      expect.objectContaining({
+        isSuccess: true,
+        confirmed: false,
+        pendingTitle: expected.title,
+        pendingMessage: expected.message,
+      })
+    );
+    // The txid is the status and explorer handle (Codex pass C #1).
+    expect(params.transactionId).toBe(txId);
+    expect(['Not Confirmed Yet', 'May Have Been Sent']).toContain(
+      expected.title
+    );
+  });
+
+  it('shows a genuine failure with its mapped reason', async () => {
+    const error = new Error('TransactionPool.Remember: overspend');
+    const [, params] = await confirmThenFail(error);
+    expect(params.isSuccess).toBe(false);
+    expect(params.errorMessage).toContain("doesn't have enough balance");
   });
 });

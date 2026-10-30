@@ -39,6 +39,7 @@ import { NetworkService } from '@/services/network';
 import { redactError } from '@/utils/logRedaction';
 import {
   PENDING_TRANSACTION_ALERT,
+  toErrorAlert,
   toUnsettledTransactionAlert,
 } from '@/utils/errorMapping';
 import { useOwnKeyAccounts } from '@/hooks/useOwnKeyAccounts';
@@ -748,18 +749,23 @@ export default function RekeyAccountScreen() {
           return;
         }
 
-        // Handle error
-        let errorMessage =
-          result instanceof Error ? result.message : 'Unknown error occurred';
+        // The modal reports failure as { error } (TASK-453): map that error, so
+        // a real failure isn't shown as the generic fallback. The mapped text
+        // already covers insufficient funds.
+        let errorMessage = toErrorAlert(result?.error, {
+          fallbackMessage: 'The rekey could not be completed.',
+        }).message;
 
-        if (rekeyFlow === 'reverse') {
-          if (errorMessage.includes('auth')) {
-            errorMessage +=
-              '\n\nTip: Make sure you have signing authority for this account.';
-          } else if (errorMessage.includes('insufficient funds')) {
-            errorMessage +=
-              '\n\nTip: You need a small amount of VOI to pay for the transaction fee.';
-          }
+        // Only an on-chain authority rejection earns the tip, not a failed
+        // biometric/PIN "authentication" (TASK-453, Codex pass A #3).
+        const rawMessage =
+          result?.error instanceof Error ? result.error.message : '';
+        if (
+          rekeyFlow === 'reverse' &&
+          /should have been authorized by/.test(rawMessage)
+        ) {
+          errorMessage +=
+            '\n\nTip: Make sure you have signing authority for this account.';
         }
 
         Alert.alert(
