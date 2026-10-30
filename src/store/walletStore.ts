@@ -54,7 +54,10 @@ import {
   subscribeRekeySigner,
 } from '@/services/wallet/rekeyState';
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
-import { recordRekeyObservation } from './rekeyDisplayStatus';
+import {
+  beginRekeyObservation,
+  recordRekeyObservation,
+} from './rekeyDisplayStatus';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -1449,8 +1452,10 @@ export const useWalletStore = create<WalletState>()(
             balanceError: null,
           });
 
+          const observation = beginRekeyObservation();
           const balance = await networkService.getAccountBalance(
-            account.address
+            account.address,
+            { freshRekey: forceRefresh }
           );
 
           // A fetch that straddled a network switch (or was superseded by a
@@ -1472,6 +1477,7 @@ export const useWalletStore = create<WalletState>()(
           });
           // TASK-458: display-only, so an external rekey shows after a refresh.
           recordRekeyObservation(
+            observation,
             account.address,
             currentNetworkId,
             balance.rekeyInfo
@@ -2117,14 +2123,17 @@ export const useWalletStore = create<WalletState>()(
           const freshAccount = await MultiAccountWalletService.getAccount(
             account.id
           );
+          const observation = beginRekeyObservation();
           const balance = await networkService.getAccountBalance(
-            freshAccount.address
+            freshAccount.address,
+            { freshRekey: true }
           );
 
           return {
             accountId: account.id,
             account: freshAccount,
             balance,
+            observation,
             error: null,
           };
         } catch (error) {
@@ -2147,6 +2156,8 @@ export const useWalletStore = create<WalletState>()(
       for (const result of results) {
         if (result.status !== 'fulfilled') continue;
         const { accountId, account, balance, error } = result.value;
+        const observation =
+          'observation' in result.value ? result.value.observation : undefined;
         const token = tokens.get(accountId);
         if (!token || !isCurrentBalanceRequest(accountId, token)) continue;
 
@@ -2159,11 +2170,13 @@ export const useWalletStore = create<WalletState>()(
           });
         } else if (balance) {
           // TASK-458: display-only, so an external rekey shows after a refresh.
-          recordRekeyObservation(
-            account.address,
-            currentNetworkId,
-            balance.rekeyInfo
-          );
+          if (observation)
+            recordRekeyObservation(
+              observation,
+              account.address,
+              currentNetworkId,
+              balance.rekeyInfo
+            );
           patches.set(accountId, {
             balance,
             balanceNetworkId: currentNetworkId,
@@ -2780,7 +2793,9 @@ export const useWalletStore = create<WalletState>()(
         // Fetch multi-network balance
         const multiNetworkBalance =
           await MultiNetworkBalanceService.getAggregatedBalance(
-            account.address
+            account.address,
+            undefined,
+            { freshRekey: forceRefresh }
           );
 
         if (!isLatestMultiNetworkRequest(accountId, requestToken)) return;

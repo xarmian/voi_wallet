@@ -10,10 +10,16 @@ import { MultiNetworkBalanceService } from '@/services/network/multi-network';
 import { clearRekeyDisplayStatus } from '@/store/rekeyDisplayStatus';
 
 const mockChain: Record<string, object> = {};
+const mockFreshSeen: boolean[] = [];
+let mockRekeyState: object = { status: 'loading' };
 jest.mock('@/services/network', () => ({
   NetworkService: {
     getInstance: (network: string) => ({
-      getAccountBalance: async (address: string) => ({
+      getAccountBalance: async (
+        address: string,
+        options?: { freshRekey?: boolean }
+      ) => ({
+        _fresh: mockFreshSeen.push(Boolean(options?.freshRekey)),
         address,
         amount: 1n,
         minBalance: 0n,
@@ -61,7 +67,7 @@ jest.mock('@/store/walletStore', () => ({
   ),
   // Chain state for this network has not loaded: the badge must come from
   // the refresh's display status, not the STANDARD record.
-  useRekeyState: () => ({ status: 'loading' }),
+  useRekeyState: () => mockRekeyState,
   useAccountBalance: () => ({ balance: undefined, isLoading: false }),
 }));
 jest.mock('@/store/networkStore', () => ({
@@ -77,10 +83,17 @@ const standard = {
 const row = () => (
   <AccountListItem account={standard} isActive={false} onSelect={jest.fn()} />
 );
-const refresh = () =>
+const refresh = (freshRekey = false) =>
   act(async () => {
-    await MultiNetworkBalanceService.getAggregatedBalance(standard.address);
+    await MultiNetworkBalanceService.getAggregatedBalance(
+      standard.address,
+      undefined,
+      { freshRekey }
+    );
   });
+// Custody is unconfirmed until chain state loads, so the label never implies
+// a key (Codex pass B #2).
+const CHECKING = 'Rekeyed (Checking)';
 
 beforeEach(() => {
   clearRekeyDisplayStatus();
@@ -88,6 +101,8 @@ beforeEach(() => {
   mockChain['voi-mainnet'] = { isRekeyed: false };
   mockChain['algorand-mainnet'] = { isRekeyed: false };
   mockAsyncSet.mockReset();
+  mockFreshSeen.length = 0;
+  mockRekeyState = { status: 'loading' };
   mockPlatformSet.mockReset();
   mockUpdateMetadata.mockReset();
 });
@@ -101,7 +116,8 @@ it('external rekey, then refresh, then the badge reads Rekeyed, with no persiste
   mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
   expect(view.queryByText('Rekeyed')).toBeNull();
   await refresh();
-  expect(view.getByText('Rekeyed')).toBeTruthy();
+  expect(view.getByText(CHECKING)).toBeTruthy();
+  expect(view.queryByText('Rekeyed')).toBeNull();
 
   expect(standard.type).toBe(AccountType.STANDARD);
   expect(mockUpdateMetadata).not.toHaveBeenCalled();
@@ -113,10 +129,10 @@ it('a failed refresh keeps the last known badge', async () => {
   mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
   const view = await render(row());
   await refresh();
-  expect(view.getByText('Rekeyed')).toBeTruthy();
+  expect(view.getByText(CHECKING)).toBeTruthy();
   mockChain['voi-mainnet'] = { isRekeyed: false, unavailable: true };
   await refresh();
-  expect(view.getByText('Rekeyed')).toBeTruthy();
+  expect(view.getByText(CHECKING)).toBeTruthy();
 });
 
 it('a rekey on another network does not label this network', async () => {
@@ -124,4 +140,37 @@ it('a rekey on another network does not label this network', async () => {
   const view = await render(row());
   await refresh();
   expect(view.queryByText('Rekeyed')).toBeNull();
+});
+
+// Codex pass B #1: a loaded self snapshot must not mask a newer refresh.
+it('a newer refresh overrides a loaded self snapshot, custody neutral', async () => {
+  mockRekeyState = { status: 'loaded', isRekeyed: false, canSign: true };
+  const view = await render(row());
+  await refresh();
+  expect(view.queryByText(CHECKING)).toBeNull();
+  mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
+  await refresh();
+  expect(view.getByText(CHECKING)).toBeTruthy();
+});
+
+it('an agreeing loaded snapshot keeps its confirmed custody label', async () => {
+  mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
+  mockRekeyState = {
+    status: 'loaded',
+    isRekeyed: true,
+    authAddress: 'OUTSIDE',
+    canSign: false,
+  };
+  const view = await render(row());
+  await refresh();
+  expect(view.getByText('Rekeyed (No Key)')).toBeTruthy();
+});
+
+// Codex pass B #4: an explicit refresh asks for a cache-bypassing rekey read.
+it('passes freshRekey through to every network read', async () => {
+  await refresh(true);
+  expect(mockFreshSeen).toEqual([true, true]);
+  mockFreshSeen.length = 0;
+  await refresh(false);
+  expect(mockFreshSeen).toEqual([false, false]);
 });

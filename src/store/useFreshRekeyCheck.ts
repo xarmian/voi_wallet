@@ -6,7 +6,10 @@ import {
   NetworkRekeyStatus,
 } from '@/services/wallet/rekeyClassify';
 import { useNetworkStore } from './networkStore';
-import { recordRekeyObservation } from './rekeyDisplayStatus';
+import {
+  beginRekeyObservation,
+  recordRekeyObservation,
+} from './rekeyDisplayStatus';
 
 /**
  * Screen-scoped, cache-bypassing rekey read on every configured network
@@ -29,11 +32,12 @@ export function useFreshRekeyCheck(address: string | undefined): {
     if (!address) return;
     let live = true;
     for (const network of networks) {
+      const observation = beginRekeyObservation();
       void NetworkService.getInstance(network)
         .getAccountRekeyInfo(address, true, true)
         .then(
           (info) => {
-            recordRekeyObservation(address, network, info);
+            recordRekeyObservation(observation, address, network, info);
             return classifyNetworkRekey(address, info).status;
           },
           () => 'unknown' as const

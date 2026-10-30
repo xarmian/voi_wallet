@@ -9,7 +9,10 @@ import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { useRekeyState, useWalletStore } from '@/store/walletStore';
-import { useRekeyDisplayStatus } from '@/store/rekeyDisplayStatus';
+import {
+  displayOverridesLoaded,
+  useRekeyDisplayStatus,
+} from '@/store/rekeyDisplayStatus';
 
 // Shared cache for avatar URLs across all AccountAvatar instances
 const avatarUrlCache = new Map<string, string | null>();
@@ -289,7 +292,10 @@ export default function AccountAvatar({
   // Determine rekey indicator
   const getRekeyIndicator = () => {
     if (!showRekeyIndicator || !account) return null;
-    if (rekeyState.status !== 'loaded') {
+    if (
+      rekeyState.status !== 'loaded' ||
+      displayOverridesLoaded(displayRekey, rekeyState)
+    ) {
       // The last refresh saw it signing for itself: no badge. Otherwise stay
       // neutral; a key icon would claim custody chain state hasn't confirmed.
       if (displayRekey?.status === 'self') return null;

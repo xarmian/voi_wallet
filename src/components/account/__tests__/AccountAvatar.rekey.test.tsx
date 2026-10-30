@@ -60,11 +60,15 @@ it.each([
 ] as const)(
   'loading with display status %s: neutral badge = %s',
   async (status, shown) => {
-    const { recordRekeyObservation, clearRekeyDisplayStatus } =
-      await import('@/store/rekeyDisplayStatus');
+    const {
+      beginRekeyObservation,
+      recordRekeyObservation,
+      clearRekeyDisplayStatus,
+    } = await import('@/store/rekeyDisplayStatus');
     clearRekeyDisplayStatus();
     if (status)
       recordRekeyObservation(
+        beginRekeyObservation(),
         'SOURCE',
         NetworkId.ALGORAND_MAINNET,
         status === 'self'

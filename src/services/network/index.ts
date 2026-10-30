@@ -394,7 +394,14 @@ export class NetworkService {
     }
   }
 
-  async getAccountBalance(address: string): Promise<AccountBalance> {
+  /**
+   * `freshRekey` (TASK-458): an explicit refresh bypasses the 10s rekey cache,
+   * so it observes a rekey made outside the wallet since the last read.
+   */
+  async getAccountBalance(
+    address: string,
+    { freshRekey = false }: { freshRekey?: boolean } = {}
+  ): Promise<AccountBalance> {
     try {
       if (!algosdk.isValidAddress(address)) {
         throw new Error('Invalid Algorand address');
@@ -419,7 +426,7 @@ export class NetworkService {
           accountInfoPromise,
           this.getMimirAssets(address),
           this.getPricingData(address, accountInfoPromise),
-          this.getAccountRekeyInfo(address),
+          this.getAccountRekeyInfo(address, false, freshRekey),
         ]);
 
       if (accountInfo.status === 'rejected') {

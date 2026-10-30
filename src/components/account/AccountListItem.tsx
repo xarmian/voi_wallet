@@ -21,7 +21,13 @@ import {
   useCurrentNetwork,
 } from '@/store/networkStore';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
-import { useRekeyDisplayStatus } from '@/store/rekeyDisplayStatus';
+import {
+  displayOverridesLoaded,
+  useRekeyDisplayStatus,
+} from '@/store/rekeyDisplayStatus';
+
+// TASK-458: rekeyed, custody not yet confirmed by chain state.
+const REKEYED_CHECKING = 'Rekeyed (Checking)';
 
 interface AccountListItemProps {
   account: AccountMetadata;
@@ -112,7 +118,10 @@ export default function AccountListItem({
   };
 
   const getAccountTypeLabel = (account: AccountMetadata) => {
-    if (rekeyState.status === 'loaded') {
+    if (
+      rekeyState.status === 'loaded' &&
+      !displayOverridesLoaded(displayRekey, rekeyState)
+    ) {
       if (rekeyState.isRekeyed) {
         return (
           signerLabel(rekeyState.authAddress) ??
@@ -120,10 +129,12 @@ export default function AccountListItem({
         );
       }
     } else if (displayRekey?.status === 'delegated') {
-      // Custody is unknown until chain state loads, so no "(No Key)" here.
-      return signerLabel(displayRekey.authAddress) ?? 'Rekeyed';
+      // Custody is unconfirmed until chain state (re)loads: never imply a key.
+      return signerLabel(displayRekey.authAddress) ?? REKEYED_CHECKING;
     } else if (displayRekey?.status !== 'self') {
-      if (account.type === AccountType.REKEYED) return 'Rekeyed';
+      if (account.type === AccountType.REKEYED) return REKEYED_CHECKING;
+    } else if (account.type === AccountType.REKEYED) {
+      return '';
     }
     switch (account.type) {
       case AccountType.STANDARD:

@@ -28,8 +28,13 @@ export default function AccountSelectionItem({
     account.address,
     useCurrentNetwork()
   );
+  // A known self hides a stale REKEYED type, as the account list does.
   const typeLabel =
-    displayRekey?.status === 'delegated' ? AccountType.REKEYED : account.type;
+    displayRekey?.status === 'delegated'
+      ? AccountType.REKEYED
+      : displayRekey?.status === 'self' && account.type === AccountType.REKEYED
+        ? ''
+        : account.type;
 
   const handlePress = () => {
     onToggleSelection(account.id);
