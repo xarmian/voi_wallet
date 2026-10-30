@@ -94,6 +94,50 @@ describe('fetchBuffered', () => {
     await expect(res.json()).rejects.toBeInstanceOf(SyntaxError);
   });
 
+  it('keeps the status of an error response whose body stalls past the deadline', async () => {
+    fetchMock.mockResolvedValue(
+      respond({
+        ok: false,
+        status: 429,
+        statusText: 'Too Many Requests',
+        text: () => new Promise<string>(() => {}),
+      })
+    );
+
+    const result = fetchBuffered('https://x.test', {}, 1000);
+    await jest.advanceTimersByTimeAsync(1000);
+    const res = await result;
+
+    expect(res).toMatchObject({ ok: false, status: 429 });
+    await expect(res.json()).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('keeps the status of an error response whose body read fails', async () => {
+    fetchMock.mockResolvedValue(
+      respond({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: () => Promise.reject(new TypeError('stream error')),
+      })
+    );
+
+    const res = await fetchBuffered('https://x.test', {}, 1000);
+
+    expect(res).toMatchObject({ ok: false, status: 404 });
+    await expect(res.json()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it('still rejects when an OK response body read fails', async () => {
+    fetchMock.mockResolvedValue(
+      respond({ text: () => Promise.reject(new TypeError('stream error')) })
+    );
+
+    await expect(fetchBuffered('https://x.test', {}, 1000)).rejects.toThrow(
+      'stream error'
+    );
+  });
+
   it('passes the caller init through and adds its own abort signal', async () => {
     fetchMock.mockResolvedValue(respond({}));
 

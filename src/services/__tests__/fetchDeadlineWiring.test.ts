@@ -73,4 +73,24 @@ describe('HTTP deadlines cover the response body (TASK-440 #9)', () => {
     await jest.advanceTimersByTimeAsync(LADDER_MS);
     await assertion;
   });
+
+  // Codex bug-hunter: a known HTTP failure whose body stalls must surface its
+  // status at once, not become a transport timeout that runs the retry ladder.
+  it('MimirApiService keeps a 429 status when the error body stalls (no retries)', async () => {
+    fetchMock.mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 429,
+        statusText: 'Too Many Requests',
+        text: () => new Promise<string>(() => {}),
+        json: () => new Promise<unknown>(() => {}),
+      })
+    );
+
+    const result = MimirApiService.getInstance().getAccountAssets(ADDRESS);
+    const assertion = expect(result).rejects.toMatchObject({ status: 429 });
+    await jest.advanceTimersByTimeAsync(LADDER_MS);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

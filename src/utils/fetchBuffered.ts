@@ -21,6 +21,21 @@ function deadlineError(): Error {
   return error;
 }
 
+// An error response whose body could not be read in time still carries its
+// status: callers branch on status (429, 404, 5xx) before they ever parse, and
+// turning a known HTTP failure into a transport timeout would send it into
+// their retry ladders (TASK-440 #9, Codex bug-hunter).
+function unreadableError(response: Response, cause: unknown): BufferedResponse {
+  return {
+    ok: false,
+    status: response.status,
+    statusText: response.statusText,
+    json: async () => {
+      throw cause;
+    },
+  };
+}
+
 export async function fetchBuffered(
   url: string,
   init: RequestInit,
@@ -28,10 +43,18 @@ export async function fetchBuffered(
 ): Promise<BufferedResponse> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let headers: Response | undefined;
 
   const read = async (): Promise<BufferedResponse> => {
     const response = await fetch(url, { ...init, signal: controller.signal });
-    const text = await response.text();
+    headers = response;
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      if (!response.ok) return unreadableError(response, error);
+      throw error;
+    }
     return {
       ok: response.ok,
       status: response.status,
@@ -45,10 +68,14 @@ export async function fetchBuffered(
     // propagates an abort into an in-flight body read.
     return await Promise.race([
       read(),
-      new Promise<never>((_, reject) => {
+      new Promise<BufferedResponse>((resolve, reject) => {
         timer = setTimeout(() => {
           controller.abort();
-          reject(deadlineError());
+          if (headers && !headers.ok) {
+            resolve(unreadableError(headers, deadlineError()));
+          } else {
+            reject(deadlineError());
+          }
         }, ms);
       }),
     ]);
