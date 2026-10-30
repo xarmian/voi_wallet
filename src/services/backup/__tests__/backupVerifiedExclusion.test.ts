@@ -48,10 +48,17 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 const mockPersistRestoredWallet = jest.fn(async () => {});
 const mockGetCurrentWallet = jest.fn();
+// Defaults to the same fake; a test overrides it to prove the binding.
+const mockGetCurrentWalletConfirmed = jest.fn((...args: unknown[]) =>
+  mockGetCurrentWallet(...args)
+);
 
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getCurrentWallet: (...args: unknown[]) => mockGetCurrentWallet(...args),
+    // collectAccounts reads through the confirmed wrapper (TASK-443).
+    getCurrentWalletConfirmed: (...args: unknown[]) =>
+      mockGetCurrentWalletConfirmed(...args),
     persistRestoredWallet: (...args: unknown[]) =>
       mockPersistRestoredWallet(...(args as [])),
   },
@@ -107,6 +114,16 @@ function freshAccount() {
 beforeEach(() => {
   mockStore = {};
   jest.clearAllMocks();
+});
+
+// TASK-443 (Codex bug-hunter): an unreadable wallet must fail the backup,
+// never save an empty one that a later restore would use to clear the wallet.
+it('collectAccounts fails when the confirmed wallet read throws', async () => {
+  mockGetCurrentWallet.mockResolvedValue(null);
+  mockGetCurrentWalletConfirmed.mockRejectedValueOnce(
+    new Error('Wallet storage did not respond; try again')
+  );
+  await expect(collectAccounts()).rejects.toThrow();
 });
 
 describe('collectAccounts — backupVerified is not collected', () => {

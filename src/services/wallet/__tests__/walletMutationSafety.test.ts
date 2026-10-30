@@ -441,6 +441,9 @@ describe('getCurrentWallet legacy read is bounded (TASK-443)', () => {
     expect(storage.setItem).not.toHaveBeenCalled();
   });
 
+  // AccountSecureStorage is mocked in this file, so this covers the wallet
+  // service's reads only; the secret store's own keychain reads (e.g. its PIN
+  // check) are a separate, still-unbounded seam flagged on TASK-443.
   it('createStandardAccount (default label via getAccountCount) settles and fails closed', async () => {
     const outcome = settle(
       Service.createStandardAccount({ type: AccountType.STANDARD })
@@ -488,5 +491,67 @@ describe('getCurrentWallet legacy read is bounded (TASK-443)', () => {
     await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
     expect(await outcome).toContain('Wallet storage did not respond');
     expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  // Codex bug-hunter on 738e81d: getCurrentWallet's null is ambiguous, so a
+  // decision that must not fail open confirms it with the strict read.
+  it('getCurrentWalletConfirmed throws when the legacy read times out', async () => {
+    const outcome = settle(Service.getCurrentWalletConfirmed());
+    await jest.advanceTimersByTimeAsync(TWO_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+  });
+
+  it('getCurrentWalletConfirmed reads a genuinely absent wallet as null', async () => {
+    jest.mocked(secureStorage.getItem).mockResolvedValue(null);
+    expect(await Service.getCurrentWalletConfirmed()).toBeNull();
+  });
+
+  it('detectRekeyedAccount never persists canSign: false from a lookup that timed out', async () => {
+    // The auth lookup's legacy read stalls; every later read finds a legacy
+    // wallet holding the STANDARD auth account. Before the confirmed read, the
+    // default-label read migrated it and the import persisted canSign: false.
+    const authAddress = address();
+    const legacy = JSON.stringify({
+      id: 'w',
+      version: '1.0',
+      createdAt: new Date(0).toISOString(),
+      activeAccountId: 'auth',
+      accounts: [
+        {
+          id: 'auth',
+          address: authAddress,
+          publicKey: '00',
+          type: AccountType.STANDARD,
+          label: 'Auth',
+          mnemonic: '',
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    });
+    jest
+      .mocked(secureStorage.getItem)
+      .mockReset()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(legacy);
+    jest
+      .spyOn(Service as any, 'verifyRekeyRelationship')
+      .mockResolvedValue(true);
+
+    const outcome = settle(
+      Service.detectRekeyedAccount({
+        type: AccountType.REKEYED,
+        originalAddress: address(),
+        authAddress,
+      })
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+
+    expect(await outcome).toMatch(/^rejected: /);
+    const persisted = mockStore[WALLET_KEY]
+      ? (JSON.parse(mockStore[WALLET_KEY]) as Wallet).accounts
+      : [];
+    expect(persisted.some((acc) => acc.type === AccountType.REKEYED)).toBe(
+      false
+    );
   });
 });

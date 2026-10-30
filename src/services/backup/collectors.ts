@@ -75,7 +75,10 @@ export async function collectAccounts(
   pin?: string
 ): Promise<BackupAccountData[]> {
   try {
-    const wallet = await MultiAccountWalletService.getCurrentWallet();
+    // Confirmed read (TASK-443): a swallowed read error or a timed-out legacy
+    // read must fail the backup, never save an empty one that a later restore
+    // would use to clear the wallet.
+    const wallet = await MultiAccountWalletService.getCurrentWalletConfirmed();
     if (!wallet || wallet.accounts.length === 0) {
       return [];
     }

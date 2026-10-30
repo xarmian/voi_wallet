@@ -707,8 +707,14 @@ export class MultiAccountWalletService {
         throw new RekeyVerificationError('Cannot verify rekey relationship');
       }
 
-      // Check if we control the auth address
-      const authAccount = await this.findAccountByAddress(request.authAddress);
+      // Check if we control the auth address. Confirmed read (TASK-443): an
+      // unreadable wallet must fail the import, not persist a canSign: false
+      // derived from a read that timed out.
+      const confirmedWallet = await this.getCurrentWalletConfirmed();
+      const authAccount =
+        confirmedWallet?.accounts.find(
+          (acc) => acc.address === request.authAddress
+        ) ?? null;
       const canSign =
         request.canSign ??
         (!!authAccount && authAccount.type === AccountType.STANDARD);
@@ -1684,10 +1690,14 @@ export class MultiAccountWalletService {
         );
       }
 
-      // Check if we control the auth address (Ledger account)
-      const authAccountInWallet = await this.findAccountByAddress(
-        authAccount.authAddress
-      );
+      // Check if we control the auth address (Ledger account). Confirmed read
+      // (TASK-443): an unreadable wallet must fail the import, not persist a
+      // canSign: false derived from a read that timed out.
+      const confirmedWallet = await this.getCurrentWalletConfirmed();
+      const authAccountInWallet =
+        confirmedWallet?.accounts.find(
+          (acc) => acc.address === authAccount.authAddress
+        ) ?? null;
       const canSign = Boolean(authAccountInWallet);
 
       if (!canSign) {
@@ -1818,6 +1828,24 @@ export class MultiAccountWalletService {
 
   private static parsePrivateKey(privateKeyHex: string): Uint8Array {
     return this.validateAndParseSecretKey(privateKeyHex);
+  }
+
+  /**
+   * getCurrentWallet for a decision that must not fail open (TASK-443, Codex
+   * bug-hunter): getCurrentWallet still runs first so a legacy copy migrates,
+   * but its null is ambiguous (absent, a swallowed read error, or the bounded
+   * legacy read timing out). A null is confirmed with the strict read, which
+   * throws on any of those, so only a genuinely absent wallet reads as null.
+   */
+  static async getCurrentWalletConfirmed(): Promise<Wallet | null> {
+    const wallet = await this.getCurrentWallet();
+    if (wallet) {
+      return wallet;
+    }
+    if (await this.readWalletStrict()) {
+      throw new Error('Wallet could not be read; try again');
+    }
+    return null;
   }
 
   // Public so auth-account-discovery can reuse the same lookup/dedup logic.

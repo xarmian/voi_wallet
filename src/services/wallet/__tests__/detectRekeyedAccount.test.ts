@@ -49,11 +49,14 @@ it.each([
   'writes originalOwner false with %s',
   async (_label, authType, expectedCanSign) => {
     jest.spyOn(service, 'verifyRekeyRelationship').mockResolvedValue(true);
-    jest
-      .spyOn(service, 'findAccountByAddress')
-      .mockResolvedValue(
-        authType ? ({ address: AUTH, type: authType } as AccountMetadata) : null
-      );
+    // The auth lookup reads through the confirmed wallet read (TASK-443).
+    jest.spyOn(service, 'getCurrentWalletConfirmed').mockResolvedValue(
+      authType
+        ? {
+            accounts: [{ address: AUTH, type: authType } as AccountMetadata],
+          }
+        : null
+    );
     jest.spyOn(service, 'getRekeyedAccountCount').mockResolvedValue(0);
     const add = jest
       .spyOn(service, 'addAccountToWallet')
