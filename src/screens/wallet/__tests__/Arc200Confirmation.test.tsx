@@ -786,21 +786,25 @@ describe('send failure callback outcome', () => {
   };
 
   it.each([
-    ['pending', () => new TransactionPendingError('TX'), 'Not Confirmed Yet'],
-    [
-      'maybe submitted',
-      () => new TransactionMaybeSubmittedError(),
-      'May Have Been Sent',
-    ],
-  ])('shows a %s send as pending, not failed', async (_l, make, title) => {
-    const [route, params] = await confirmThenFail(make());
+    ['pending', () => new TransactionPendingError('TX'), 'TX'],
+    ['maybe submitted', () => new TransactionMaybeSubmittedError(), undefined],
+  ])('shows a %s send as pending, not failed', async (_l, make, txId) => {
+    const error = make();
+    const [route, params] = await confirmThenFail(error);
+    const expected = toErrorAlert(error);
     expect(route).toBe('TransactionResult');
     expect(params).toEqual(
       expect.objectContaining({
         isSuccess: true,
         confirmed: false,
-        pendingTitle: title,
+        pendingTitle: expected.title,
+        pendingMessage: expected.message,
       })
+    );
+    // The txid is the status and explorer handle (Codex pass C #1).
+    expect(params.transactionId).toBe(txId);
+    expect(['Not Confirmed Yet', 'May Have Been Sent']).toContain(
+      expected.title
     );
   });
 
