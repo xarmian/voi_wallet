@@ -14,6 +14,7 @@ import { TransactionService } from '@/services/transactions';
 import { getNavigationCallbacks } from '@/services/navigation/callbackRegistry';
 import { networkService } from '@/services/network';
 import {
+  TransactionExpiredError,
   TransactionMaybeSubmittedError,
   TransactionPendingError,
 } from '@/types/network';
@@ -662,6 +663,22 @@ describe.each(['claim', 'all'] as const)('%s submit outcome', (flow) => {
     }
   );
 
+  it('rebuilds when the reconcile finds the group expired (TransactionExpiredError)', async () => {
+    const group = makeGroup(false);
+    submit.mockRejectedValue(
+      new TransactionExpiredError('TX', group.transactions[0].lastValid)
+    );
+    const { view } = await signAndSubmit();
+
+    expect(alert).toHaveBeenLastCalledWith(
+      'Confirm Again',
+      ARC200_RECONFIRM_MESSAGE
+    );
+    expect(builder()).toHaveBeenCalledTimes(2);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    await view.unmount();
+  });
+
   it('keeps Submission Failed for a genuine rejection', async () => {
     submit.mockRejectedValue(
       new Error('logic eval error: invalid Box reference')
@@ -674,5 +691,38 @@ describe.each(['claim', 'all'] as const)('%s submit outcome', (flow) => {
     );
     expect(mockDispatch).not.toHaveBeenCalled();
     await view.unmount();
+  });
+});
+
+// TASK-451: NetworkService's reconciled expiry is an expired group too, but
+// only for a last valid round this group carries.
+describe('isArc200ExpiredGroup on a reconciled expiry', () => {
+  const group = makeGroup(false);
+  const lastValid = group.transactions[0].lastValid;
+
+  it('matches TransactionExpiredError for this group, typed or wrapped', () => {
+    const expired = new TransactionExpiredError('TX', lastValid);
+    expect(isArc200ExpiredGroup(expired, group)).toBe(true);
+    expect(
+      isArc200ExpiredGroup(
+        new Error(`Transaction failed: ${expired.message}`),
+        group
+      )
+    ).toBe(true);
+  });
+
+  it("does not match another group's last valid round", () => {
+    expect(
+      isArc200ExpiredGroup(
+        new TransactionExpiredError('TX', lastValid + 7n),
+        group
+      )
+    ).toBe(false);
+  });
+
+  it('is not an MBR race', () => {
+    expect(
+      isArc200MbrRace(new TransactionExpiredError('TX', lastValid), group)
+    ).toBe(false);
   });
 });
