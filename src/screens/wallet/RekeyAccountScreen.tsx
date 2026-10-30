@@ -644,8 +644,19 @@ export default function RekeyAccountScreen() {
       setCurrentRequest(null);
 
       if (success && result?.transactionId) {
+        // TASK-452: custody metadata is written only for a CONFIRMED rekey. A
+        // submitted-but-unconfirmed one may never land, and signing authority
+        // comes from chain state anyway (getSigningInfo reads the auth address),
+        // so a rekey that lands later still signs through its new controller.
+        const rekeyConfirmed = result.confirmed !== false;
+
         // Apply Ledger metadata update if needed
-        if (rekeyFlow === 'ledger' && selectedLedgerAccount && sourceAccount) {
+        if (
+          rekeyConfirmed &&
+          rekeyFlow === 'ledger' &&
+          selectedLedgerAccount &&
+          sourceAccount
+        ) {
           try {
             await applyLedgerMetadataUpdate(
               sourceAccount,
@@ -660,7 +671,12 @@ export default function RekeyAccountScreen() {
         }
 
         // Apply Airgap metadata update if needed
-        if (rekeyFlow === 'airgap' && selectedAirgapAccount && sourceAccount) {
+        if (
+          rekeyConfirmed &&
+          rekeyFlow === 'airgap' &&
+          selectedAirgapAccount &&
+          sourceAccount
+        ) {
           try {
             await applyAirgapMetadataUpdate(
               sourceAccount,
