@@ -117,11 +117,35 @@ describe('filterOwnKeyAccounts / filterAirgapSignableAccounts', () => {
 });
 
 describe('canTransferOwnKey', () => {
-  it('a STANDARD account transfers without a chain read', async () => {
+  it('a STANDARD account transfers once no network is rekeyed', async () => {
     await expect(
       canTransferOwnKey(acc('s', AccountType.STANDARD))
     ).resolves.toBe(true);
-    expect(mockRekeyInfo).not.toHaveBeenCalled();
+    expect(mockRekeyInfo.mock.calls.map(([n]) => n).sort()).toEqual([
+      'algorand-mainnet',
+      'voi-mainnet',
+    ]);
+  });
+
+  // TASK-452: the persisted type can lag the chain (a rekey made elsewhere, or
+  // one still pending when the rekey screen finished that landed later).
+  it.each(['voi-mainnet', 'algorand-mainnet'])(
+    'a STANDARD record rekeyed on %s does not transfer',
+    async (rekeyedOn) => {
+      mockRekeyInfo.mockImplementation(async (networkId) => ({
+        isRekeyed: networkId === rekeyedOn,
+      }));
+      await expect(
+        canTransferOwnKey(acc('s', AccountType.STANDARD), { fresh: true })
+      ).resolves.toBe(false);
+    }
+  );
+
+  it('a STANDARD record fails closed on a chain-read error', async () => {
+    mockRekeyInfo.mockRejectedValue(new Error('network down'));
+    await expect(
+      canTransferOwnKey(acc('s', AccountType.STANDARD))
+    ).resolves.toBe(false);
   });
 
   it('a REKEYED account with its key transfers once no network is rekeyed', async () => {

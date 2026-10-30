@@ -131,19 +131,20 @@ export async function findUsableOwnKey(
 
 /**
  * Airgap transfer hands the account's own key to the signer and converts the
- * record to REMOTE_SIGNER, so that key must be the account's authority. A
- * REKEYED record qualifies only once chain state shows no rekey on any network
- * (an undone rekey); a still-rekeyed one keeps its record. A lookup error fails
- * closed. (TASK-425 U2 hunter review.) `fresh` bypasses the rekey-info cache;
- * the destructive convert passes it, so a cached "not rekeyed" can't authorize
- * deleting the key (U2 Codex confirm).
+ * record to REMOTE_SIGNER, so that key must be the account's authority. Any
+ * record qualifies only while chain state shows no rekey on any network: a
+ * REKEYED one once its rekey is undone, and a STANDARD one too, because the
+ * persisted type can lag the chain (a rekey made elsewhere, or one that was
+ * still pending when the app finished and landed later, TASK-452). A lookup
+ * error fails closed. (TASK-425 U2 hunter review.) `fresh` bypasses the
+ * rekey-info cache; the destructive convert passes it, so a cached "not
+ * rekeyed" can't authorize deleting the key (U2 Codex confirm).
  */
 export async function canTransferOwnKey(
   account: AccountMetadata,
   { fresh = false }: { fresh?: boolean } = {}
 ): Promise<boolean> {
   if (!(await holdsOwnKey(account))) return false;
-  if (account.type === AccountType.STANDARD) return true;
   try {
     for (const networkId of Object.values(NetworkId)) {
       const info = await NetworkService.getInstance(

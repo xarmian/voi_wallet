@@ -108,9 +108,14 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
   },
 }));
 
+const mockRekeyToAirgap = jest.fn();
+const mockRekeyToLedger = jest.fn();
 jest.mock('@/services/wallet/rekeyManager', () => ({
   __esModule: true,
-  default: {},
+  default: {
+    rekeyToAirgap: (...args: unknown[]) => mockRekeyToAirgap(...args),
+    rekeyToLedger: (...args: unknown[]) => mockRekeyToLedger(...args),
+  },
 }));
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
@@ -163,10 +168,24 @@ jest.mock('@/components/ledger/RekeyToLedger', () => ({
   __esModule: true,
   default: () => null,
 }));
-jest.mock('@/components/rekey/AirgapVerificationFlow', () => ({
-  __esModule: true,
-  default: () => null,
-}));
+jest.mock('@/components/rekey/AirgapVerificationFlow', () => {
+  const { Pressable, Text } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({
+      onVerificationSuccess,
+    }: {
+      onVerificationSuccess: () => void;
+    }) => (
+      <Pressable
+        testID="airgap-verify-ok"
+        onPress={() => onVerificationSuccess()}
+      >
+        <Text>verified</Text>
+      </Pressable>
+    ),
+  };
+});
 
 // The real auth modal drives native signing; here it just exposes its
 // visibility plus one press target per exit path so a test can complete or
@@ -199,6 +218,25 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
           >
             <Text>err</Text>
           </Pressable>
+          <Pressable
+            testID="auth-complete-confirmed"
+            onPress={() =>
+              onComplete(true, { transactionId: 'abcdef1234', confirmed: true })
+            }
+          >
+            <Text>confirmed</Text>
+          </Pressable>
+          <Pressable
+            testID="auth-complete-pending"
+            onPress={() =>
+              onComplete(true, {
+                transactionId: 'abcdef1234',
+                confirmed: false,
+              })
+            }
+          >
+            <Text>pending</Text>
+          </Pressable>
           <Pressable testID="auth-cancel" onPress={() => onCancel()}>
             <Text>cancel</Text>
           </Pressable>
@@ -209,6 +247,7 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
 
 import { Alert } from 'react-native';
 import RekeyAccountScreen from '../RekeyAccountScreen';
+import { PENDING_TRANSACTION_ALERT } from '@/utils/errorMapping';
 import { MultiAccountWalletService } from '@/services/wallet';
 
 // ---------------------------------------------------------------------------
@@ -594,5 +633,161 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
     await settle();
 
     expect(screen.getByText('Retained Key')).toBeTruthy();
+  });
+});
+
+// TASK-452: custody metadata follows a CONFIRMED rekey only. An unconfirmed
+// one may never land; signing authority is read from chain state either way.
+describe('RekeyAccountScreen — rekey metadata waits for confirmation (TASK-452)', () => {
+  const signer = {
+    id: 'signer',
+    address: 'SIGNER_ADDR',
+    label: 'Airgap Phone',
+    type: AccountType.REMOTE_SIGNER,
+  };
+
+  beforeEach(() => {
+    mockWalletState.wallet = { accounts: [mockSourceAccount, signer] };
+    mockRekeyToAirgap.mockReset();
+    mockRekeyToAirgap.mockImplementation(async (source: { id: string }) => ({
+      ...source,
+      type: AccountType.REKEYED,
+      authAddress: signer.address,
+    }));
+    jest.mocked(MultiAccountWalletService.updateAccountMetadata).mockClear();
+  });
+
+  async function airgapRekeyToAuthModal(
+    screen: Awaited<ReturnType<typeof render>>
+  ) {
+    await fireEvent.press(screen.getAllByText('Rekey to Airgap Signer')[0]);
+    await settle();
+    // The single signer auto-selects; proceeding first runs verification.
+    await waitFor(() =>
+      expect(screen.getByText('Verify Airgap Signer')).toBeEnabled()
+    );
+    await fireEvent.press(screen.getByText('Verify Airgap Signer'));
+    await fireEvent.press(screen.getByTestId('airgap-verify-ok'));
+    await settle();
+    const proceed = () => screen.getAllByText('Rekey to Airgap Signer').at(-1)!;
+    await waitFor(() => expect(proceed()).toBeEnabled());
+    await fireEvent.press(proceed());
+    await pressAlertButton('Continue');
+    expect(screen.getByTestId('auth-modal-open')).toBeTruthy();
+  }
+
+  async function complete(
+    screen: Awaited<ReturnType<typeof render>>,
+    testID: string
+  ) {
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(testID));
+      });
+      jest.clearAllTimers();
+    } finally {
+      jest.useRealTimers();
+    }
+  }
+
+  it('a confirmed airgap rekey writes the custody metadata', async () => {
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await airgapRekeyToAuthModal(screen);
+
+    await complete(screen, 'auth-complete-confirmed');
+
+    expect(mockRekeyToAirgap).toHaveBeenCalledTimes(1);
+    expect(
+      jest.mocked(MultiAccountWalletService.updateAccountMetadata)
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'src',
+        type: AccountType.REKEYED,
+        authAddress: signer.address,
+      })
+    );
+  });
+
+  it('a submitted but unconfirmed airgap rekey writes nothing and shows the pending alert', async () => {
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await airgapRekeyToAuthModal(screen);
+
+    await complete(screen, 'auth-complete-pending');
+
+    expect(mockRekeyToAirgap).not.toHaveBeenCalled();
+    expect(
+      jest.mocked(MultiAccountWalletService.updateAccountMetadata)
+    ).not.toHaveBeenCalled();
+    const titles = jest.mocked(Alert.alert).mock.calls.map((c) => c[0]);
+    expect(titles).toContain(PENDING_TRANSACTION_ALERT.title);
+    expect(titles).not.toContain('Airgap Rekey Successful');
+  });
+});
+
+describe('RekeyAccountScreen — Ledger rekey metadata waits for confirmation (TASK-452)', () => {
+  const ledger = {
+    id: 'ledger',
+    address: 'LEDGER_ADDR',
+    label: 'Nano X',
+    type: AccountType.LEDGER,
+    deviceId: 'dev-1',
+  };
+
+  beforeEach(() => {
+    mockWalletState.wallet = { accounts: [mockSourceAccount, ledger] };
+    mockRekeyToLedger.mockReset();
+    mockRekeyToLedger.mockImplementation(async (source: { id: string }) => ({
+      ...source,
+      type: AccountType.REKEYED,
+      authAddress: ledger.address,
+    }));
+    jest.mocked(MultiAccountWalletService.updateAccountMetadata).mockClear();
+  });
+
+  async function ledgerRekeyThrough(
+    screen: Awaited<ReturnType<typeof render>>,
+    testID: string
+  ) {
+    await fireEvent.press(screen.getByText('Rekey to Ledger Device'));
+    await settle();
+    const proceed = () => screen.getAllByText('Rekey to Ledger').at(-1)!;
+    await waitFor(() => expect(proceed()).toBeEnabled());
+    await fireEvent.press(proceed());
+    await pressAlertButton('Continue');
+    expect(screen.getByTestId('auth-modal-open')).toBeTruthy();
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(testID));
+      });
+      jest.clearAllTimers();
+    } finally {
+      jest.useRealTimers();
+    }
+  }
+
+  it('a confirmed Ledger rekey writes the custody metadata', async () => {
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await ledgerRekeyThrough(screen, 'auth-complete-confirmed');
+
+    expect(mockRekeyToLedger).toHaveBeenCalledTimes(1);
+    expect(
+      jest.mocked(MultiAccountWalletService.updateAccountMetadata)
+    ).toHaveBeenCalledWith(expect.objectContaining({ id: 'src' }));
+  });
+
+  it('a submitted but unconfirmed Ledger rekey writes nothing', async () => {
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await ledgerRekeyThrough(screen, 'auth-complete-pending');
+
+    expect(mockRekeyToLedger).not.toHaveBeenCalled();
+    expect(
+      jest.mocked(MultiAccountWalletService.updateAccountMetadata)
+    ).not.toHaveBeenCalled();
   });
 });
