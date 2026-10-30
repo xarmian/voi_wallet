@@ -308,8 +308,8 @@ export const useMessagesStore = create<MessagesState>()(
      * Keep a placeholder pending for a send that may have landed (TASK-454):
      * never 'failed', so it offers no retry that could send it twice. With a
      * txid it is re-keyed to that id, and the thread's next chain load
-     * confirms it by id. Without one, it resolves by content match on a later
-     * merge, or ages out (PENDING_PLACEHOLDER_TTL_MS).
+     * confirms it by id. Without one it keeps its spinner for
+     * PENDING_PLACEHOLDER_TTL_MS from the attempt start, then ages out.
      */
     settlePendingMessage: (
       tempId: string,
@@ -327,8 +327,8 @@ export const useMessagesStore = create<MessagesState>()(
                 ...m,
                 status: 'pending' as const,
                 unsettled: !txId,
-                // A retry is a new attempt: its age and match window start
-                // when it began, not at the original bubble's timestamp.
+                // A retry is a new attempt: its spinner window starts when it
+                // began, not at the original bubble's timestamp.
                 attemptedAt: attemptedAt ?? m.timestamp,
               }
             : m
@@ -864,7 +864,7 @@ export const useMessagesStore = create<MessagesState>()(
         }
 
         // Preserve threads not in this fetch (they still exist), ageing out
-        // any placeholder that can no longer land (TASK-454).
+        // any placeholder whose spinner window has ended (TASK-454).
         const now = Date.now();
         for (const [addr, thread] of Object.entries(existingThreads)) {
           if (!newThreads[addr]) {
@@ -1039,14 +1039,6 @@ function isTxidlessPlaceholder(message: Message): boolean {
   );
 }
 
-/**
- * Resolve placeholders for sends that may have landed but carry no txid
- * (TASK-454). A sent chain message with the same content, no earlier than the
- * placeholder (less clock skew), stands in for it: matched one-to-one, oldest
- * placeholder first. An unmatched placeholder past PENDING_PLACEHOLDER_TTL_MS
- * can no longer land and is dropped, so it never spins forever. Neither path
- * offers a resend.
- */
 const attemptStart = (m: Message) => m.attemptedAt ?? m.timestamp;
 
 /**

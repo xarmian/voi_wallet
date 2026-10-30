@@ -253,3 +253,32 @@ it('starts one send for two quick retries of the same failed row', async () => {
   });
   expect(sendMessage).toHaveBeenCalledTimes(1);
 });
+
+// Codex pass D #2: ordinary success results still replace the optimistic row
+// with the real one, confirmed or still pending by txid (confirmed:false).
+it.each([
+  ['confirmed', 'confirmed'],
+  ['pending by txid', 'pending'],
+] as const)('replaces the placeholder with a %s send', async (_l, status) => {
+  const message = {
+    id: 'REAL-TX',
+    threadId: 'FRIEND',
+    direction: 'sent',
+    content: 'hello',
+    timestamp: 2,
+    status,
+    fee: 1000,
+  };
+  sendMessage.mockResolvedValue({ txId: 'REAL-TX', message } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  const tempId = mockStore.addPendingMessage.mock.calls[0][0].id;
+  expect(mockStore.removePendingMessage).toHaveBeenCalledWith(tempId);
+  expect(mockStore.addMessage).toHaveBeenCalledWith(message);
+  expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
+  expect(mockStore.failPendingMessage).not.toHaveBeenCalled();
+  expect(Alert.alert).not.toHaveBeenCalled();
+});
