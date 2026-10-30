@@ -234,9 +234,16 @@ describe('TASK-449 R1: the PIN presence read on store', () => {
     expect(storedAuthMethod('w4')).toBe('pin');
   });
 
-  it('hasPin() keeps its swallowing contract for its other callers', async () => {
+  it('hasPin() rejects on a failed or wedged PIN read (TASK-455)', async () => {
     mockFailing.add(PIN_KEY);
-    await expect(AccountSecureStorage.hasPin()).resolves.toBe(false);
+    await expect(AccountSecureStorage.hasPin()).rejects.toThrow(
+      'keychain unavailable'
+    );
+
+    mockFailing.clear();
+    mockWedged.set(PIN_KEY, () => {});
+    const outcome = await settleAfterDeadline(AccountSecureStorage.hasPin());
+    expect(outcome.ok).toBe(false);
   });
 });
 
