@@ -1871,6 +1871,9 @@ describe('signTransaction — keyreg routing', () => {
     expect(result.error?.message).toMatch(
       /TXID_KEYREG_PENDING is not confirmed yet and may still be committed/
     );
+    expect(result.error).toBeInstanceOf(
+      require('@/types/network').TransactionPendingError
+    );
     expect(fns.onError).toHaveBeenCalledWith(result.error);
   });
 

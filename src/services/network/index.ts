@@ -15,6 +15,7 @@ import {
   TransactionRejectedError,
   TransactionExpiredError,
   TransactionMaybeSubmittedError,
+  TransactionPendingError,
 } from '@/types/network';
 import { getNetworkConfig, DEFAULT_NETWORK_ID } from './config';
 import { isAlreadySubmittedError } from './alreadySubmitted';
@@ -2076,8 +2077,8 @@ export class NetworkService {
   /**
    * Wait for transaction confirmation. Resolves with the confirmed
    * transaction's info. Throws TransactionExpiredError once it can no longer
-   * land (needs `lastValid`), and otherwise an Error saying it is not
-   * confirmed yet and may still land: never "rejected".
+   * land (needs `lastValid`), and otherwise TransactionPendingError: not
+   * confirmed yet, may still land, never "rejected".
    */
   public async waitForConfirmation(
     txId: string,
@@ -2090,9 +2091,7 @@ export class NetworkService {
       lastValid
     );
     if (!info) {
-      throw new Error(
-        `Transaction ${txId} is not confirmed yet and may still be committed; check its status before sending again`
-      );
+      throw new TransactionPendingError(txId);
     }
     return info;
   }

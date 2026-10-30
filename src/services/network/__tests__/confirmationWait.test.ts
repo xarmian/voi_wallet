@@ -3,6 +3,7 @@ import {
   NetworkId,
   TransactionExpiredError,
   TransactionMaybeSubmittedError,
+  TransactionPendingError,
   TransactionRejectedError,
 } from '@/types/network';
 import { mapError } from '@/utils/errorMapping';
@@ -115,7 +116,7 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
       run: () => service.waitForConfirmation(TX_ID, 4, LAST_VALID),
       confirmed: CONFIRMED,
       expectPending: (outcome) => {
-        expect(outcome).toBeInstanceOf(Error);
+        expect(outcome).toBeInstanceOf(TransactionPendingError);
         expect(outcome).not.toBeInstanceOf(TransactionRejectedError);
         expect(outcome).not.toBeInstanceOf(TransactionExpiredError);
         expect((outcome as Error).message).toMatch(/may still be committed/);
@@ -511,6 +512,8 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
     expect((outcome as Error).message).toMatch(/may still be committed/);
   });
 
+  const NO_RESEND = /try again|send(ing)? (it )?again|resend|re-sign/i;
+
   it('the outcomes map to their causes, and pending never maps to a rejection', () => {
     const rejected = new TransactionRejectedError(
       TX_ID,
@@ -523,10 +526,20 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
     expect(mapError(new TransactionExpiredError(TX_ID, LAST_VALID)).type).toBe(
       'transaction_expired'
     );
-    const pending = new Error(
-      `Transaction ${TX_ID} is not confirmed yet and may still be committed; check its status before sending again`
-    );
-    expect(mapError(pending).type).not.toBe('transaction_rejected');
+    // Not confirmed in time: never retryable, and neither the mapped copy nor
+    // the raw message (shown as-is by some callers) invites a resend (audit
+    // #12, director 10-30). Bare or wrapped by submitTransaction's catch.
+    const pending = new TransactionPendingError(TX_ID);
+    expect(pending.message).not.toMatch(NO_RESEND);
+    for (const error of [
+      pending,
+      new Error(`Transaction failed: ${pending.message}`),
+    ]) {
+      const mapped = mapError(error);
+      expect(mapped.type).toBe('transaction_pending');
+      expect(mapped.retryable).toBe(false);
+      expect(`${mapped.message} ${mapped.userAction}`).not.toMatch(NO_RESEND);
+    }
     // No txid to check by: never retryable, never an invitation to re-sign
     // (director 10-29), bare or wrapped by submitTransaction's catch.
     const maybe = new TransactionMaybeSubmittedError();
@@ -537,9 +550,7 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
       const mapped = mapError(error);
       expect(mapped.type).toBe('maybe_submitted');
       expect(mapped.retryable).toBe(false);
-      expect(`${mapped.message} ${mapped.userAction}`).not.toMatch(
-        /try again|send (it )?again|resend|re-sign/i
-      );
+      expect(`${mapped.message} ${mapped.userAction}`).not.toMatch(NO_RESEND);
     }
   });
 });

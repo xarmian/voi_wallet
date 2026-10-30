@@ -12,7 +12,7 @@ import {
   LedgerUserRejectedError,
   RemoteSignerRequiredError,
 } from '@/types/wallet';
-import { NetworkId } from '@/types/network';
+import { NetworkId, TransactionPendingError } from '@/types/network';
 import type { NetworkService } from '@/services/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { SecureKeyManager } from '@/services/secure/keyManager';
@@ -71,7 +71,7 @@ function networkFromGenesisHash(
  * Submit through NetworkService.submitTransaction, so an already-submitted or
  * ambiguous send is reconciled by txid rather than reported as a failure
  * (TASK-440 #8). Still pending afterwards throws the same "may still be
- * committed" error waitForConfirmation does.
+ * committed" TransactionPendingError waitForConfirmation does.
  */
 async function submitAndConfirm(
   networkService: NetworkService,
@@ -80,9 +80,7 @@ async function submitAndConfirm(
   const { txId, confirmed } =
     await networkService.submitTransaction(signedTxnBlob);
   if (!confirmed) {
-    throw new Error(
-      `Transaction ${txId} is not confirmed yet and may still be committed; check its status before sending again`
-    );
+    throw new TransactionPendingError(txId);
   }
   return txId;
 }
