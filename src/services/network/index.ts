@@ -12,8 +12,12 @@ import {
   NetworkConfiguration,
   NetworkStatus,
   NetworkError,
+  TransactionRejectedError,
+  TransactionExpiredError,
+  TransactionMaybeSubmittedError,
 } from '@/types/network';
 import { getNetworkConfig, DEFAULT_NETWORK_ID } from './config';
+import { isAlreadySubmittedError } from './alreadySubmitted';
 import { MimirApiService, MimirAsset } from '@/services/mimir';
 import VoiPriceService from '@/services/price';
 import AlgorandPriceService from '@/services/algorand-price';
@@ -1131,70 +1135,306 @@ export class NetworkService {
     }
   }
 
+  /**
+   * Submit a signed transaction (or group) and wait for it to confirm.
+   * Resolves `confirmed: false` when it is submitted, or may have been, but is
+   * not confirmed yet: it may still land, so the caller must not resend.
+   *
+   * Every send outcome is classified here, so every caller gets the same
+   * treatment (TASK-440 #8, director 10-29):
+   * - a 4xx that isn't "already in the ledger/pool" is the only hard
+   *   rejection, and only while no earlier attempt in this call was ambiguous;
+   * - "already in the ledger/pool" means a prior send landed: reconcile by
+   *   txid, never resend;
+   * - anything else (a timeout, a dropped connection, a 5xx) is ambiguous: the
+   *   node may have taken it. The same bytes are resent, which is safe (algod
+   *   answers "already in the ledger/pool"), and if every attempt fails the
+   *   end state is the reconcile by txid, never a failure.
+   * Throws TransactionExpiredError once it can no longer land.
+   */
   async submitTransaction(
-    signedTxn: Uint8Array | Uint8Array[]
+    signedTxn: Uint8Array | Uint8Array[],
+    maxAttempts: number = 3
   ): Promise<{ txId: string; confirmed: boolean }> {
     try {
-      // NOTE: sendRawTransaction is now wrapped with a client-side timeout.
-      // A timeout after the node accepted the tx is safe because
-      // TransactionService.submitWithRetries detects "already in ledger" /
-      // "already in the pool" responses on retry and treats them as success
-      // instead of resubmitting, so a lost-response commit can no longer cause
-      // either a false failure or a double-send.
-      const res = await this.withTimeout(
-        this.algodClient.sendRawTransaction(signedTxn).do(),
-        'submit transaction',
-        30000
-      );
-      const txId =
-        (res as unknown as { txId?: string; txid?: string }).txId ??
-        (res as any).txid;
-      // Wait for confirmation. A false result means the tx is still pending
-      // (not confirmed within the round window), NOT a failure.
-      const confirmed = await this.waitForConfirmationInternal(txId);
-      return { txId, confirmed };
+      const facts = NetworkService.signedTxnFacts(signedTxn);
+      let ambiguous = false;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let res: unknown;
+        try {
+          res = await this.withTimeout(
+            this.algodClient.sendRawTransaction(signedTxn).do(),
+            'submit transaction',
+            30000
+          );
+        } catch (sendError) {
+          lastError = sendError;
+          if (isAlreadySubmittedError(sendError)) {
+            return await this.reconcileSubmitted(facts, sendError);
+          }
+          const status = (sendError as { response?: { status?: number } })
+            ?.response?.status;
+          if (status !== undefined && status >= 400 && status < 500) {
+            // After an ambiguous attempt, a 4xx on the same bytes can't prove
+            // the first one didn't land (e.g. "txn dead" once it committed).
+            if (ambiguous) {
+              return await this.reconcileSubmitted(facts, sendError);
+            }
+            throw new TransactionRejectedError(
+              facts.txId ?? '',
+              sendError instanceof Error ? sendError.message : String(sendError)
+            );
+          }
+          ambiguous = true;
+          if (attempt < maxAttempts) {
+            await NetworkService.retryDelay(500 * 2 ** (attempt - 1));
+          }
+          continue;
+        }
+        const txId =
+          (res as { txId?: string; txid?: string }).txId ??
+          (res as { txid?: string }).txid ??
+          // A 2xx without an id still sent these bytes: wait on their txid.
+          facts.txId ??
+          '';
+        // Wait for confirmation. A false result means the tx is still pending
+        // (not confirmed within the round window), NOT a failure.
+        const confirmed = await this.waitForConfirmationInternal(
+          txId,
+          facts.lastValid
+        );
+        return { txId, confirmed };
+      }
+      return await this.reconcileSubmitted(facts, lastError);
     } catch (error) {
       console.error('Failed to submit transaction:', redactError(error));
+      if (
+        error instanceof TransactionRejectedError ||
+        error instanceof TransactionExpiredError ||
+        error instanceof TransactionMaybeSubmittedError
+      ) {
+        throw error;
+      }
       throw new Error(
         `Transaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
 
-  private async waitForConfirmationInternal(txId: string): Promise<boolean> {
+  /**
+   * The end state of a send the node may have taken: a short wait by txid.
+   * Confirmed, still pending ("may still land"), or TransactionExpiredError;
+   * never a failure, so the caller can't be led to resend it.
+   */
+  private async reconcileSubmitted(
+    facts: { txId?: string; lastValid?: bigint },
+    sendError: unknown
+  ): Promise<{ txId: string; confirmed: boolean }> {
+    console.warn(
+      'Submit may have reached the node; reconciling by txid:',
+      redactError(sendError)
+    );
+    if (!facts.txId) {
+      throw new TransactionMaybeSubmittedError();
+    }
     try {
-      // Wait up to 10 rounds for confirmation
-      await algosdk.waitForConfirmation(this.algodClient, txId, 10);
-      return true;
-    } catch (err) {
-      // Not confirmed within the round window. This is a PENDING state, not a
-      // failure: the tx may still confirm later. Surface a soft warning and let
-      // the caller report a pending (not failed) status to the user.
-      console.warn(
-        'Transaction submitted but not yet confirmed:',
-        redactError(err)
-      );
-      return false;
+      return {
+        txId: facts.txId,
+        confirmed: await this.isTransactionConfirmed(
+          facts.txId,
+          facts.lastValid
+        ),
+      };
+    } catch (reconcileError) {
+      if (reconcileError instanceof TransactionExpiredError) {
+        throw reconcileError;
+      }
+      return { txId: facts.txId, confirmed: false };
+    }
+  }
+
+  private static retryDelay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * The first transaction's id and the group's last valid round (the
+   * smallest: a group can't commit once any member is dead), decoded from
+   * the signed bytes. Either is undefined when the bytes don't decode (e.g.
+   * one concatenated group blob).
+   */
+  static signedTxnFacts(signedTxn: Uint8Array | Uint8Array[]): {
+    txId?: string;
+    lastValid?: bigint;
+  } {
+    const blobs = Array.isArray(signedTxn) ? signedTxn : [signedTxn];
+    try {
+      const txns = blobs.map((b) => algosdk.decodeSignedTransaction(b).txn);
+      return {
+        txId: txns[0]?.txID(),
+        lastValid: txns.reduce<bigint | undefined>(
+          (min, t) =>
+            min === undefined || t.lastValid < min ? t.lastValid : min,
+          undefined
+        ),
+      };
+    } catch {
+      return {};
     }
   }
 
   /**
-   * Short, best-effort confirmation check used to reconcile a submit whose
-   * HTTP response was lost (algod returned "already in ledger"/"already in the
-   * pool" on retry). Returns true only if the tx is confirmed within a few
-   * rounds; false on any error or timeout.
+   * Wall-clock budget for a confirmation wait of `rounds` rounds: a wait
+   * bounded only in rounds never returns if a status or pending-info call
+   * hangs (TASK-440 audit #8).
    */
-  async isTransactionConfirmed(txId: string): Promise<boolean> {
+  private static confirmationDeadlineMs(rounds: number): number {
+    return 15000 + rounds * 5000;
+  }
+
+  /**
+   * Wait up to `rounds` rounds, and at most a wall-clock deadline, for a
+   * submitted transaction to confirm. Resolves with its info when it
+   * confirmed, or null when it is still pending: it may still land.
+   *
+   * A pool error is NOT a rejection here. After a successful submit it is one
+   * node's view, and another node can still commit the transaction before its
+   * last valid round (director 10-29, matching the voirewards double-pay fix).
+   * So the wait records it and keeps polling, and it never reads as
+   * "rejected, try again". The only failure is expiry: given `lastValid`,
+   * when the node's own round is past it and a readable look still shows the
+   * transaction unconfirmed, this throws TransactionExpiredError. A 404 or an
+   * unreadable node stays pending, because a long-confirmed transaction also
+   * reads 404 there.
+   */
+  private async confirmOrClassify(
+    txId: string,
+    rounds: number,
+    lastValid?: bigint
+  ): Promise<algosdk.modelsv2.PendingTransactionResponse | null> {
+    // The deadline only stops us awaiting the loop; an await in flight keeps
+    // running. Record what the loop sees, so a confirmation it reaches while
+    // the look below is in flight is not lost (Codex pass A).
+    const seen: {
+      info?: algosdk.modelsv2.PendingTransactionResponse;
+      poolError?: string;
+    } = {};
+    let stopped = false;
+    const loop = async () => {
+      const status = await this.algodClient.status().do();
+      let round = status.lastRound + 1n;
+      const stopRound = round + BigInt(rounds);
+      while (round < stopRound && !stopped) {
+        try {
+          const info = await this.algodClient
+            .pendingTransactionInformation(txId)
+            .do();
+          if (info.confirmedRound && info.confirmedRound > 0n) {
+            seen.info = info;
+            return info;
+          }
+          if (info.poolError) {
+            seen.poolError = info.poolError;
+          }
+        } catch {
+          // A 404 (a load-balanced algod that doesn't hold it) or an
+          // unreadable node: keep waiting.
+        }
+        if (stopped) break;
+        await this.algodClient.statusAfterBlock(round).do();
+        round += 1n;
+      }
+      return null;
+    };
+
+    let waitError: unknown;
     try {
-      await this.withTimeout(
-        algosdk.waitForConfirmation(this.algodClient, txId, 4),
-        'confirm transaction',
-        30000
+      const info = await this.withTimeout(
+        loop(),
+        `confirm transaction ${txId}`,
+        NetworkService.confirmationDeadlineMs(rounds)
       );
-      return true;
-    } catch {
-      return false;
+      if (info) return info;
+    } catch (error) {
+      waitError = error;
+    } finally {
+      stopped = true;
     }
+
+    // Not confirmed in time, out of rounds, or the node was unreachable:
+    // one bounded look before calling it pending.
+    let look: algosdk.modelsv2.PendingTransactionResponse | undefined;
+    try {
+      look = await this.withTimeout(
+        this.algodClient.pendingTransactionInformation(txId).do(),
+        `pending transaction ${txId}`
+      );
+    } catch (lookError) {
+      console.warn(
+        'Could not inspect pending transaction after confirmation wait:',
+        redactError(lookError)
+      );
+    }
+    // A confirmed round is a ledger fact and outranks any pool error.
+    if (look?.confirmedRound && look.confirmedRound > 0n) {
+      return look;
+    }
+    if (seen.info) {
+      return seen.info;
+    }
+    if (look && lastValid !== undefined) {
+      // The node still holds it, unconfirmed: is it past its last valid
+      // round, by the node's own count?
+      let lastRound: bigint | undefined;
+      try {
+        lastRound = (
+          await this.withTimeout(
+            this.algodClient.status().do(),
+            `status after confirming ${txId}`
+          )
+        ).lastRound;
+      } catch (statusError) {
+        console.warn(
+          'Could not read node round after confirmation wait:',
+          redactError(statusError)
+        );
+      }
+      if (lastRound !== undefined && lastRound > lastValid) {
+        throw new TransactionExpiredError(txId, lastValid);
+      }
+    }
+    console.warn(
+      'Transaction submitted but not yet confirmed (it may still land):',
+      redactError(waitError ?? look?.poolError ?? seen.poolError ?? 'pending')
+    );
+    return null;
+  }
+
+  /**
+   * True when confirmed within 10 rounds, false when still pending (a pending
+   * state, not a failure: the caller reports it as such). Throws
+   * TransactionExpiredError once it can no longer land.
+   */
+  private async waitForConfirmationInternal(
+    txId: string,
+    lastValid?: bigint
+  ): Promise<boolean> {
+    return (await this.confirmOrClassify(txId, 10, lastValid)) !== null;
+  }
+
+  /**
+   * Short confirmation check used to reconcile a submit whose HTTP response
+   * was lost (algod returned "already in ledger"/"already in the pool" on
+   * retry). True only if the tx confirmed within a few rounds; false when it
+   * is still pending or the node can't be read. Throws
+   * TransactionExpiredError once it can no longer land.
+   */
+  async isTransactionConfirmed(
+    txId: string,
+    lastValid?: bigint
+  ): Promise<boolean> {
+    return (await this.confirmOrClassify(txId, 4, lastValid)) !== null;
   }
 
   getNetworkStatus(): NetworkStatus {
@@ -1834,47 +2074,27 @@ export class NetworkService {
   }
 
   /**
-   * Wait for transaction confirmation
+   * Wait for transaction confirmation. Resolves with the confirmed
+   * transaction's info. Throws TransactionExpiredError once it can no longer
+   * land (needs `lastValid`), and otherwise an Error saying it is not
+   * confirmed yet and may still land: never "rejected".
    */
-  public async waitForConfirmation(txId: string, rounds = 4): Promise<any> {
-    const roundsToWait = Math.max(rounds, 1);
-
-    try {
-      return await algosdk.waitForConfirmation(
-        this.algodClient,
-        txId,
-        roundsToWait
+  public async waitForConfirmation(
+    txId: string,
+    rounds = 4,
+    lastValid?: bigint
+  ): Promise<any> {
+    const info = await this.confirmOrClassify(
+      txId,
+      Math.max(rounds, 1),
+      lastValid
+    );
+    if (!info) {
+      throw new Error(
+        `Transaction ${txId} is not confirmed yet and may still be committed; check its status before sending again`
       );
-    } catch (error) {
-      // Before surfacing the error, check whether the transaction actually confirmed
-      try {
-        const pendingInfo = await this.algodClient
-          .pendingTransactionInformation(txId)
-          .do();
-
-        const confirmedRound = pendingInfo.confirmedRound;
-        if (confirmedRound && Number(confirmedRound) > 0) {
-          return pendingInfo;
-        }
-
-        const poolError = pendingInfo.poolError;
-        if (typeof poolError === 'string' && poolError.length > 0) {
-          throw new Error(`Transaction rejected: ${poolError}`);
-        }
-      } catch (pendingError) {
-        console.warn(
-          'Failed to inspect pending transaction after waitForConfirmation error:',
-          redactError(pendingError)
-        );
-      }
-
-      if (error instanceof NetworkError) {
-        throw error;
-      }
-
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to confirm transaction ${txId}: ${message}`);
     }
+    return info;
   }
 }
 

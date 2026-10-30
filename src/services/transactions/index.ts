@@ -1855,86 +1855,20 @@ export class TransactionService {
   }
 
   /**
-   * Detects algod responses that indicate the exact same signed transaction has
-   * already been accepted (committed to a block or sitting in the pool). When we
-   * see one of these on a retry it means a PRIOR attempt already landed the tx —
-   * possibly a first submit that committed but whose HTTP response was lost — so
-   * we must treat it as success and MUST NOT resubmit (double-send / fund-loss
-   * risk).
+   * Submit and wait on the network the transaction was built for. The retry,
+   * the already-submitted reconcile and the ambiguous-send end state all live
+   * in NetworkService.submitTransaction, so every submit path shares them
+   * (TASK-440 #8): a retry here would resend after an outcome it had already
+   * classified.
    */
-  private static isAlreadySubmittedError(error: unknown): boolean {
-    const message =
-      error instanceof Error ? error.message : String(error ?? '');
-    const lower = message.toLowerCase();
-    return (
-      lower.includes('already in ledger') ||
-      lower.includes('already in the pool') ||
-      lower.includes('already present') ||
-      lower.includes('transaction already') ||
-      lower.includes('txn already')
-    );
-  }
-
   private static async submitWithRetries(
     signedTxnBlob: Uint8Array | Uint8Array[],
-    networkId?: NetworkId,
-    maxAttempts: number = 3
+    networkId?: NetworkId
   ): Promise<{ txId: string; confirmed: boolean }> {
-    let attempt = 0;
-    let lastError: unknown;
-    const baseDelayMs = 500;
     const networkService = networkId
       ? NetworkService.getInstance(networkId)
       : defaultNetworkService;
-
-    // Compute the expected txId from the signed blob up front so that a commit
-    // whose response was lost can still be reported as success (rather than a
-    // false failure that tempts the user to resend). For groups/edge cases the
-    // decode may fail; we then fall back to the response txId.
-    let expectedTxId: string | undefined;
-    try {
-      const firstBlob = Array.isArray(signedTxnBlob)
-        ? signedTxnBlob[0]
-        : signedTxnBlob;
-      expectedTxId = algosdk.decodeSignedTransaction(firstBlob).txn.txID();
-    } catch {
-      /* group/edge — fall back to the response txId */
-    }
-
-    while (attempt < maxAttempts) {
-      try {
-        return await networkService.submitTransaction(signedTxnBlob);
-      } catch (error) {
-        // If a prior attempt (or a lost-response commit) already landed this
-        // exact tx, do NOT resubmit — reconcile confirmation and report success.
-        if (TransactionService.isAlreadySubmittedError(error)) {
-          // The node already accepted this exact tx (a prior attempt, possibly a
-          // commit whose HTTP response was lost). MUST NOT resubmit — double-send.
-          if (expectedTxId) {
-            const confirmed = await networkService
-              .isTransactionConfirmed(expectedTxId)
-              .catch(() => false);
-            return { txId: expectedTxId, confirmed };
-          }
-          // Already accepted but the txId couldn't be derived (rare decode edge):
-          // still do NOT resubmit — surface a clear, non-retryable message.
-          throw new Error(
-            'This transaction appears to have already been submitted. ' +
-              'Please check your transaction history before retrying.'
-          );
-        }
-        lastError = error;
-        attempt += 1;
-        if (attempt >= maxAttempts) break;
-        const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
-        await TransactionService.delay(delayMs);
-      }
-    }
-    throw new Error(
-      `Network submission failed after ${maxAttempts} attempts: ${
-        (lastError as Error)?.message ?? 'Unknown error'
-      }`
-    );
+    return networkService.submitTransaction(signedTxnBlob);
   }
 
   private static delay(ms: number): Promise<void> {

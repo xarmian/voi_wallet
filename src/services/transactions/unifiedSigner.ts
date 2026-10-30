@@ -13,6 +13,7 @@ import {
   RemoteSignerRequiredError,
 } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
+import type { NetworkService } from '@/services/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { assertSignableKeyreg } from '@/utils/keyregSafety';
@@ -64,6 +65,26 @@ function networkFromGenesisHash(
   }
   const hex = Buffer.from(genesisHash).toString('hex').toLowerCase();
   return GENESIS_HASH_HEX_TO_NETWORK.get(hex) ?? null;
+}
+
+/**
+ * Submit through NetworkService.submitTransaction, so an already-submitted or
+ * ambiguous send is reconciled by txid rather than reported as a failure
+ * (TASK-440 #8). Still pending afterwards throws the same "may still be
+ * committed" error waitForConfirmation does.
+ */
+async function submitAndConfirm(
+  networkService: NetworkService,
+  signedTxnBlob: Uint8Array
+): Promise<string> {
+  const { txId, confirmed } =
+    await networkService.submitTransaction(signedTxnBlob);
+  if (!confirmed) {
+    throw new Error(
+      `Transaction ${txId} is not confirmed yet and may still be committed; check its status before sending again`
+    );
+  }
+  return txId;
 }
 
 /**
@@ -1238,11 +1259,7 @@ export class UnifiedTransactionSigner {
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
       callbacks?.onNetworkSubmit?.();
 
-      // Submit to network
-      const txId = await networkService.sendRawTransaction(signedTxnBlob);
-
-      // Wait for confirmation
-      await networkService.waitForConfirmation(txId);
+      const txId = await submitAndConfirm(networkService, signedTxnBlob);
 
       callbacks?.onNetworkConfirmed?.(txId);
 
@@ -1308,11 +1325,7 @@ export class UnifiedTransactionSigner {
       callbacks?.onLedgerSigned?.({ index: 1, total: 1 });
       callbacks?.onNetworkSubmit?.();
 
-      // Submit to network
-      const txId = await networkService.sendRawTransaction(signedTxnBlob);
-
-      // Wait for confirmation
-      await networkService.waitForConfirmation(txId);
+      const txId = await submitAndConfirm(networkService, signedTxnBlob);
 
       callbacks?.onNetworkConfirmed?.(txId);
 

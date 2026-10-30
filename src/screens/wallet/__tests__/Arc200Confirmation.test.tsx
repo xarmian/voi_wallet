@@ -513,8 +513,11 @@ it.each(['send', 'claim', 'all'] as const)(
           expect(sign.mock.calls.length).toBe(
             signedBefore + (flow === 'send' ? 1 : 0)
           );
+          // One submit per send: resends live inside
+          // NetworkService.submitTransaction (mocked here), not in
+          // TransactionService (TASK-440 #8).
           const submits = submit.mock.calls.length;
-          expect(submits).toBe(flow === 'send' ? 3 : 1);
+          expect(submits).toBe(1);
           await confirm();
           expect(mockReplace).not.toHaveBeenCalled();
           if (flow === 'send')
