@@ -1673,9 +1673,13 @@ export class NetworkService {
       // behavior. Reusing a shared snapshot would change which round-consistent
       // view the rekey state is read from (e.g. across a rekey confirmation),
       // so the rekey fetch is intentionally NOT deduped against the balance load.
-      const accountInfo = await this.algodClient
-        .accountInformation(address)
-        .do();
+      // TASK-440 #7: bounded like every other algod read. getAccountBalance
+      // awaits this lookup, and a timeout rejects into its `unavailable` rekey
+      // state (never "not rekeyed"); nothing is cached on that path.
+      const accountInfo = await this.withTimeout(
+        this.algodClient.accountInformation(address).do(),
+        'rekey account info'
+      );
 
       assertCurrentNetwork();
 
@@ -1708,11 +1712,16 @@ export class NetworkService {
       let rekeyedAt: number | undefined;
       if (!skipTimestamp) {
         try {
-          const txnResponse = await this.indexerClient
-            .lookupAccountTransactions(address)
-            .txType('pay') // Rekey transactions are payment type with rekey-to field
-            .limit(50)
-            .do();
+          // TASK-440 #7: bounded; the timestamp is optional enrichment, so a
+          // timeout lands in the catch below and leaves rekeyedAt undefined.
+          const txnResponse = await this.withTimeout(
+            this.indexerClient
+              .lookupAccountTransactions(address)
+              .txType('pay') // Rekey transactions are payment type with rekey-to field
+              .limit(50)
+              .do(),
+            'rekey timestamp lookup'
+          );
 
           // Look for the most recent transaction with a rekey-to field.
           // algosdk v3 exposes it as `rekeyTo` (string or Address), not the

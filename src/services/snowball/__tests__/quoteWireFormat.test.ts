@@ -25,6 +25,8 @@ const okResponse = (body: unknown) => ({
   status: 200,
   statusText: '',
   json: async () => body,
+  // TASK-440 #9: fetchBuffered reads the body as text inside its deadline.
+  text: async () => JSON.stringify(body),
 });
 
 const errorResponse = (status: number, body: unknown, statusText = '') => ({
@@ -32,6 +34,7 @@ const errorResponse = (status: number, body: unknown, statusText = '') => ({
   status,
   statusText,
   json: async () => body,
+  text: async () => JSON.stringify(body),
 });
 
 /** The request body the service actually put on the wire, parsed. */
