@@ -110,7 +110,7 @@ export default function KeyregConfirmScreen() {
         voteFirst: params.votefst,
         voteLast: params.votelst,
         voteKeyDilution: params.votekd,
-        nonParticipation: !params.isOnline,
+        goOffline: !params.isOnline,
         fee: params.fee,
         note: params.note,
         networkId,
