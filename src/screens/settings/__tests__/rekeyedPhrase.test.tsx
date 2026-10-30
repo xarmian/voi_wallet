@@ -166,6 +166,7 @@ it.each([AccountType.REKEYED, AccountType.STANDARD])(
 
 // TASK-458: a pending rekey that lands later leaves the record STANDARD, so
 // the warning follows chain state per network, not only the persisted type.
+// Only 'self' on every network hides it.
 it.each([
   [
     'delegated on one network',
@@ -182,7 +183,13 @@ it.each([
     { 'voi-mainnet': 'self', 'algorand-mainnet': 'self' },
     false,
   ],
-  ['unknown (lookup failed)', { 'voi-mainnet': 'unknown' }, false],
+  // Fail toward the warning: a failed or pending read never hides it.
+  ['unknown (lookup failed)', { 'voi-mainnet': 'unknown' }, true],
+  [
+    'self on one network, unknown on another',
+    { 'voi-mainnet': 'self', 'algorand-mainnet': 'unknown' },
+    true,
+  ],
 ] as const)(
   'a STANDARD record %s: warning shown = %s',
   async (_name, statuses, shown) => {

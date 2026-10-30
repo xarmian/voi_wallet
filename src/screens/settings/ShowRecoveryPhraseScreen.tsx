@@ -51,11 +51,13 @@ export default function ShowRecoveryPhraseScreen() {
   // TASK-458: rekey state is per network and comes from chain. A record can
   // still read STANDARD after a pending rekey lands, so the persisted type
   // alone would hide this warning for a phrase that no longer controls the
-  // account on some network.
+  // account on some network. Fail toward the warning (director ruling, see
+  // the TASK-458 trail): only chain reads confirming the account signs for
+  // itself on every network hide it, so a failed or pending read shows it.
   const { perNetwork } = useNetworkRekeyStatus(targetAccount?.address ?? '');
   const rekeyedSomewhere =
     targetAccount?.type === AccountType.REKEYED ||
-    Object.values(perNetwork).some((status) => status.status === 'delegated');
+    !Object.values(perNetwork).every((status) => status.status === 'self');
 
   const [mnemonic, setMnemonic] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
