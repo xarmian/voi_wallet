@@ -341,9 +341,18 @@ describe('strict probes — bounded legacy read (TASK-450)', () => {
     }
   );
 
-  it.each(probes)(
+  // Exact answers for the legacy blob below: a truthy check would also pass on
+  // the ID probes' absence results ([] and { standardIds: [], allIds: [] }).
+  const slowAnswers: [string, () => Promise<unknown>, unknown][] = [
+    [probes[0][0], probes[0][1], true],
+    [probes[1][0], probes[1][1], true],
+    [probes[2][0], probes[2][1], ['a']],
+    [probes[3][0], probes[3][1], { standardIds: ['a'], allIds: ['a'] }],
+  ];
+
+  it.each(slowAnswers)(
     '%s still answers from a slow legacy read that lands inside the bound',
-    async (_name, probe) => {
+    async (_name, probe, expected) => {
       const legacyBlob = JSON.stringify({
         accounts: [{ id: 'a', type: 'standard' }],
       });
@@ -355,7 +364,7 @@ describe('strict probes — bounded legacy read (TASK-450)', () => {
       );
       const result = probe();
       await jest.advanceTimersByTimeAsync(LEGACY_BOUND_MS - 1);
-      await expect(result).resolves.toBeTruthy();
+      await expect(result).resolves.toEqual(expected);
     }
   );
 
