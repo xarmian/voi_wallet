@@ -1,4 +1,5 @@
 import { withTimeout } from '@/utils/withTimeout';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
 import {
   getRekeyObservation,
@@ -875,10 +876,10 @@ export class NetworkService {
         throw new Error('Invalid Algorand address');
       }
 
-      const algodResponse = await this.indexerClient
-        .lookupAccountTransactions(address)
-        .limit(limit)
-        .do();
+      const algodResponse = await this.withTimeout(
+        this.indexerClient.lookupAccountTransactions(address).limit(limit).do(),
+        'transaction history'
+      );
 
       const transactions: TransactionInfo[] = [];
 
@@ -1020,7 +1021,10 @@ export class NetworkService {
           indexerQuery = indexerQuery.nextToken(nextToken);
         }
 
-        const algodResponse = await indexerQuery.do();
+        const algodResponse = await this.withTimeout(
+          indexerQuery.do(),
+          'payment transaction history'
+        );
         const transactions: TransactionInfo[] = [];
 
         if (algodResponse.transactions) {
@@ -1064,7 +1068,10 @@ export class NetworkService {
           indexerQuery = indexerQuery.nextToken(nextToken);
         }
 
-        const algodResponse = await indexerQuery.do();
+        const algodResponse = await this.withTimeout(
+          indexerQuery.do(),
+          'asset transaction history'
+        );
         const transactions: TransactionInfo[] = [];
 
         if (algodResponse.transactions) {
@@ -1508,7 +1515,7 @@ export class NetworkService {
 
       // Fetch indexer transactions and ARC-200 transfers in parallel
       const promises: [Promise<any>, Promise<any>] = [
-        indexerQuery.do(),
+        this.withTimeout(indexerQuery.do(), 'all transaction history'),
         // Only fetch ARC-200 transfers if Mimir service is available
         this.mimirService
           ? this.mimirService.getArc200Transfers(
@@ -1919,11 +1926,15 @@ export class NetworkService {
       const url = `${this.config.indexerUrl}/v2/assets?${params.toString()}`;
 
       // Make direct HTTP request
-      const response = await fetch(url, {
-        headers: {
-          'X-API-Key': this.config.token || '',
+      const response = await fetchBuffered(
+        url,
+        {
+          headers: {
+            'X-API-Key': this.config.token || '',
+          },
         },
-      });
+        NetworkService.REQUEST_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -1941,11 +1952,15 @@ export class NetworkService {
 
         const unitUrl = `${this.config.indexerUrl}/v2/assets?${unitParams.toString()}`;
 
-        const unitResponse = await fetch(unitUrl, {
-          headers: {
-            'X-API-Key': this.config.token || '',
+        const unitResponse = await fetchBuffered(
+          unitUrl,
+          {
+            headers: {
+              'X-API-Key': this.config.token || '',
+            },
           },
-        });
+          NetworkService.REQUEST_TIMEOUT_MS
+        );
 
         if (unitResponse.ok) {
           const unitData = await unitResponse.json();
@@ -1982,11 +1997,14 @@ export class NetworkService {
       }
 
       // Query with minRound=1 and limit=1 to get the earliest transaction
-      const algodResponse = await this.indexerClient
-        .lookupAccountTransactions(address)
-        .minRound(1)
-        .limit(1)
-        .do();
+      const algodResponse = await this.withTimeout(
+        this.indexerClient
+          .lookupAccountTransactions(address)
+          .minRound(1)
+          .limit(1)
+          .do(),
+        'first transaction'
+      );
 
       if (algodResponse.transactions && algodResponse.transactions.length > 0) {
         const txn = algodResponse.transactions[0];
@@ -2016,9 +2034,10 @@ export class NetworkService {
         throw new Error('Invalid Algorand address');
       }
 
-      const accountInfo = await this.algodClient
-        .accountInformation(address)
-        .do();
+      const accountInfo = await this.withTimeout(
+        this.algodClient.accountInformation(address).do(),
+        'account info'
+      );
       return accountInfo;
     } catch (error) {
       console.error(
@@ -2041,7 +2060,10 @@ export class NetworkService {
    */
   async getTransactionParams(): Promise<algosdk.SuggestedParams> {
     try {
-      const params = await this.algodClient.getTransactionParams().do();
+      const params = await this.withTimeout(
+        this.algodClient.getTransactionParams().do(),
+        'transaction params'
+      );
       return params;
     } catch (error) {
       console.error('Failed to fetch transaction params:', error);
@@ -2052,39 +2074,6 @@ export class NetworkService {
 
       throw new Error(
         `Failed to fetch transaction params: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
-  }
-
-  /**
-   * Send a raw transaction
-   */
-  async sendRawTransaction(signedTxn: Uint8Array): Promise<string> {
-    try {
-      const response = await this.algodClient
-        .sendRawTransaction(signedTxn)
-        .do();
-      const txId =
-        (response as { txId?: string }).txId ??
-        (response as { txid?: string }).txid ??
-        (response as unknown as Record<string, unknown>).txID;
-
-      if (!txId || typeof txId !== 'string') {
-        throw new Error(
-          'Transaction submission succeeded but no transaction ID was returned'
-        );
-      }
-
-      return txId;
-    } catch (error) {
-      console.error('Failed to send transaction:', redactError(error));
-
-      if (error instanceof NetworkError) {
-        throw error;
-      }
-
-      throw new Error(
-        `Failed to send transaction: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
