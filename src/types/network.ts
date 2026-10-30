@@ -147,6 +147,21 @@ export class TransactionExpiredError extends Error {
 }
 
 /**
+ * Submitted (or possibly submitted) but not confirmed within the wait: it may
+ * still be committed, so it is not a failure and sending it again is unsafe.
+ * The copy points at its status and never invites a resend (TASK-440 audit
+ * #12, director 10-30).
+ */
+export class TransactionPendingError extends Error {
+  constructor(public txId: string) {
+    super(
+      `Transaction ${txId} is not confirmed yet and may still be committed. Check its status in your transaction history.`
+    );
+    this.name = 'TransactionPendingError';
+  }
+}
+
+/**
  * A send that the node may have accepted (it answered "already in the
  * ledger/pool", or every attempt failed ambiguously) whose transaction id
  * can't be derived from the signed bytes, so it can't be reconciled. Not a

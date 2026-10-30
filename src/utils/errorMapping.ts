@@ -78,6 +78,7 @@ export type MappedErrorType =
   | 'transaction_expired'
   | 'duplicate_transaction'
   | 'maybe_submitted'
+  | 'transaction_pending'
   | 'fee_too_low'
   | 'app_rejected'
   | 'transaction_rejected'
@@ -440,6 +441,16 @@ const MAYBE_SUBMITTED: Rule = {
   userAction: 'Check your transaction history to see whether it went through.',
 };
 
+// Submitted but not confirmed within the wait: it may still be committed
+// (TransactionPendingError, TASK-440 audit #12). Never retryable, and the copy
+// points at its status, never at sending again (director 10-30).
+const TRANSACTION_PENDING: Rule = {
+  type: 'transaction_pending',
+  message: 'This transaction is not confirmed yet and may still be committed.',
+  retryable: false,
+  userAction: 'Check its status in your transaction history.',
+};
+
 const FEE_TOO_LOW: Rule = {
   type: 'fee_too_low',
   message: 'The network fee was too low for current conditions.',
@@ -642,6 +653,10 @@ const MESSAGE_RULES: { pattern: RegExp; rule: Rule }[] = [
   {
     pattern: /may already have been submitted/,
     rule: MAYBE_SUBMITTED,
+  },
+  {
+    pattern: /not confirmed yet and may still be committed/,
+    rule: TRANSACTION_PENDING,
   },
   {
     pattern: /fee \d* ?below threshold|fee too (small|low)/,
@@ -868,6 +883,7 @@ const TITLE_BY_TYPE: Partial<Record<MappedErrorType, string>> = {
   transaction_expired: 'Transaction Expired',
   duplicate_transaction: 'Already Submitted',
   maybe_submitted: 'May Have Been Sent',
+  transaction_pending: 'Not Confirmed Yet',
   fee_too_low: 'Fee Too Low',
   app_rejected: 'Rejected by Contract',
   transaction_rejected: 'Transaction Rejected',
