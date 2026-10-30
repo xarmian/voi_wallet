@@ -961,6 +961,40 @@ describe('AuthContext — PIN unlock', () => {
     expect(result.current.authState.isLocked).toBe(true);
     expect(mockVerifyPin).not.toHaveBeenCalled();
   });
+
+  it('a failed credential-kind read after a valid PIN stays locked (TASK-455)', async () => {
+    // getCredentialSource() now throws on a read failure instead of resolving
+    // null (which the unlock defaulted to 'pin').
+    (
+      AccountSecureStorage.getCredentialSource as jest.Mock
+    ).mockRejectedValueOnce(new Error('keychain unavailable'));
+    const { result } = await mountAuth();
+
+    let ok!: boolean;
+    await act(async () => {
+      ok = await result.current.unlock(TEST_PIN);
+    });
+
+    expect(ok).toBe(false);
+    expect(result.current.authState.isLocked).toBe(true);
+    expect(mockVaultSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthContext — enabling biometrics (TASK-455)', () => {
+  it('a failed PIN presence read refuses: nothing is stored or enabled', async () => {
+    const { result } = await mountAuth();
+    mockHasPin.mockRejectedValueOnce(new Error('keychain unavailable'));
+
+    await act(async () => {
+      await expect(result.current.enableBiometrics(true)).rejects.toThrow(
+        'keychain unavailable'
+      );
+    });
+
+    expect(AccountSecureStorage.setBiometricSecret).not.toHaveBeenCalled();
+    expect(AccountSecureStorage.setBiometricEnabled).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthContext — biometric unlock', () => {

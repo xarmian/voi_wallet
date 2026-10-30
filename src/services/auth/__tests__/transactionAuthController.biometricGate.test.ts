@@ -324,6 +324,18 @@ describe('software signing failure is never Ledger-shaped (PR6.1, onError + onCo
 });
 
 describe('request-network signing authority', () => {
+  it('fails closed when the PIN presence read fails: error, never signs (TASK-455)', async () => {
+    // hasPin() now throws on a read failure (it used to resolve false, which
+    // set requiresPin false and auto-proceeded to signing with no prompt).
+    // This pins the controller's half: a throw ends in 'error', not signing.
+    mockASS.hasPin.mockRejectedValueOnce(new Error('keychain unavailable'));
+    const controller = new TransactionAuthController();
+    await initFlow(controller);
+
+    expect(controller.getState().state).toBe('error');
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
+
   it('fails closed when auth preflight cannot resolve authority', async () => {
     (SecureKeyManager.getSigningInfo as jest.Mock).mockRejectedValueOnce(
       new Error('offline')

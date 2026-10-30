@@ -1481,9 +1481,8 @@ export class AccountSecureStorage {
     progress?: { secretWritten: boolean }
   ): Promise<void> {
     try {
-      // TASK-449: bounded and strict. hasPin() swallows a read failure to false,
-      // so a stuck or failing keychain would be stored as "no PIN"; here a
-      // timeout or read error fails the store instead.
+      // TASK-449: bounded and strict. A timeout or read error fails the store,
+      // so a stuck or failing keychain is never stored as "no PIN".
       const hasPin = Boolean(
         await this.readStoredPinData(this.KEYCHAIN_READ_TIMEOUT_MS)
       );
@@ -2580,13 +2579,25 @@ export class AccountSecureStorage {
    * no credential is set. Public so the UI (LockScreen / auth modals / settings)
    * can render the numeric keypad vs a masked passphrase field. Never returns the
    * secret itself — only its kind.
+   *
+   * THROWS on a read failure or timeout (TASK-455): null means "no
+   * credential", and ChangePinScreen acts on null by skipping the current-PIN
+   * step, so it must mean exactly that. The deadline covers BOTH reads (primary
+   * and legacy), and it is a pure read: no legacy migration, so an abandoned
+   * read can never write late. verifyPin still migrates a legacy credential.
    */
   static async getCredentialSource(): Promise<SecretSource | null> {
-    const stored = await this.getStoredPinData();
-    if (!stored) {
-      return null;
-    }
-    return stored.secretSource ?? 'pin';
+    return this.withTimeout(
+      (async () => {
+        const raw =
+          (await secureStorage.getItem(this.PIN_KEY)) ||
+          (await storage.getItem(this.PIN_KEY));
+        const stored = raw ? this.parseStoredPin(raw) : null;
+        return stored ? (stored.secretSource ?? 'pin') : null;
+      })(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Credential kind read'
+    );
   }
 
   /**
@@ -3019,31 +3030,34 @@ export class AccountSecureStorage {
     return false;
   }
 
+  /**
+   * Whether a PIN/passphrase credential is stored. THROWS on a read failure and
+   * on a read that outlives KEYCHAIN_READ_TIMEOUT_MS (TASK-455): every caller
+   * decides whether to demand auth on this answer (getPrivateKey's ambient
+   * read, transaction auth, import routing, biometric enable), so a failed read
+   * must never read as "no PIN". It used to swallow failures to `false`.
+   */
   static async hasPin(): Promise<boolean> {
-    try {
-      const storedData = await this.getStoredPinData();
-      return Boolean(storedData);
-    } catch {
-      return false;
-    }
+    return this.withTimeout(
+      this.hasPinStrict(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'PIN presence read'
+    );
   }
 
   /**
-   * STRICT, boot-only PIN-presence probe (TASK-213). Unlike hasPin() — which
-   * swallows secure-storage read/decrypt errors and resolves `false`, making a
-   * genuine read FAILURE indistinguishable from genuine absence (the auth-init
-   * fail-OPEN) — this variant THROWS on a genuine secure-storage read/decrypt
-   * failure and resolves `false` ONLY for genuine ABSENCE (no credential stored
-   * in either the primary secure-store or the legacy AsyncStorage location).
+   * STRICT PIN-presence probe (TASK-213), unbounded. It THROWS on a genuine
+   * secure-storage read/decrypt failure and resolves `false` ONLY for genuine
+   * ABSENCE (no credential stored in either the primary secure-store or the
+   * legacy AsyncStorage location).
    *
    * It is a pure read: no JSON parse, no legacy-migration WRITE, no cache
    * mutation, and no secret material is ever returned or logged. Presence is
    * decided purely on whether a raw credential value exists.
    *
-   * Used EXCLUSIVELY by AuthContext.checkInitialAuthState so lock computation can
-   * fail CLOSED (the "secure storage unavailable" recovery state) on a storage
-   * read failure. Do NOT route other callers here: hasPin()'s error-swallowing
-   * contract (resolve falsy on failure) is relied on by its other call sites.
+   * AuthContext.checkInitialAuthState calls it directly (under its own deadline)
+   * so lock computation fails CLOSED (the "secure storage unavailable" recovery
+   * state) on a read failure. Other callers use hasPin(), the bounded wrapper.
    */
   static async hasPinStrict(): Promise<boolean> {
     // A throw from either getItem (keychain/keystore unavailable, decrypt error)

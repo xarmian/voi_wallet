@@ -234,9 +234,16 @@ describe('TASK-449 R1: the PIN presence read on store', () => {
     expect(storedAuthMethod('w4')).toBe('pin');
   });
 
-  it('hasPin() keeps its swallowing contract for its other callers', async () => {
+  it('hasPin() rejects on a failed or wedged PIN read (TASK-455)', async () => {
     mockFailing.add(PIN_KEY);
-    await expect(AccountSecureStorage.hasPin()).resolves.toBe(false);
+    await expect(AccountSecureStorage.hasPin()).rejects.toThrow(
+      'keychain unavailable'
+    );
+
+    mockFailing.clear();
+    mockWedged.set(PIN_KEY, () => {});
+    const outcome = await settleAfterDeadline(AccountSecureStorage.hasPin());
+    expect(outcome.ok).toBe(false);
   });
 });
 
@@ -374,5 +381,40 @@ describe('TASK-449: a creation that throws after journaling rolls itself back', 
     expect(mockKv.has(`${METADATA_PREFIX}a6`)).toBe(false);
     expect(journal()).toEqual({});
     storage.setItem.mockImplementation(original);
+  });
+});
+
+describe('TASK-455: getCredentialSource is bounded end to end', () => {
+  it('a wedged LEGACY read (primary absent) rejects at the deadline', async () => {
+    const { storage } = jest.requireMock('@/platform') as {
+      storage: { getItem: jest.Mock };
+    };
+    storage.getItem.mockImplementationOnce(() => new Promise(() => {}));
+
+    const outcome = await settleAfterDeadline(
+      AccountSecureStorage.getCredentialSource()
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect((outcome as { error: Error }).error.message).toMatch(
+      /Credential kind read timed out/
+    );
+  });
+
+  it('reports a legacy-only credential without migrating it', async () => {
+    mockKv.set(
+      PIN_KEY,
+      JSON.stringify({
+        hash: 'ab'.repeat(32),
+        iterations: 8000,
+        secretSource: 'passphrase',
+      })
+    );
+
+    await expect(AccountSecureStorage.getCredentialSource()).resolves.toBe(
+      'passphrase'
+    );
+    expect(mockSecure.has(PIN_KEY)).toBe(false);
+    expect(mockKv.has(PIN_KEY)).toBe(true);
   });
 });

@@ -312,6 +312,21 @@ describe('QR preview onboarding decision', () => {
     );
   });
 
+  it('outside onboarding, a failed PIN read alerts and never routes to SecuritySetup (TASK-455)', async () => {
+    jest
+      .mocked(AccountSecureStorage.hasPin)
+      .mockRejectedValueOnce(new Error('keychain unavailable'));
+    await renderQRPreview(false);
+    await pressAlert('Import Accounts', 'Import');
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Import Error',
+      'An unexpected error occurred during import. Please try again.',
+      [{ text: 'OK' }]
+    );
+    expectNoDirectImport();
+    expect(mockNavigation.navigate).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     'outside onboarding uses hasPin() = %s',
     async (hasPin) => {
