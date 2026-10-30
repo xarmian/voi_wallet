@@ -219,6 +219,14 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
             <Text>err</Text>
           </Pressable>
           <Pressable
+            testID="auth-complete-confirmed"
+            onPress={() =>
+              onComplete(true, { transactionId: 'abcdef1234', confirmed: true })
+            }
+          >
+            <Text>confirmed</Text>
+          </Pressable>
+          <Pressable
             testID="auth-complete-pending"
             onPress={() =>
               onComplete(true, {
@@ -688,7 +696,7 @@ describe('RekeyAccountScreen — rekey metadata waits for confirmation (TASK-452
     await settle();
     await airgapRekeyToAuthModal(screen);
 
-    await complete(screen, 'auth-complete-success');
+    await complete(screen, 'auth-complete-confirmed');
 
     expect(mockRekeyToAirgap).toHaveBeenCalledTimes(1);
     expect(
@@ -764,7 +772,7 @@ describe('RekeyAccountScreen — Ledger rekey metadata waits for confirmation (T
   it('a confirmed Ledger rekey writes the custody metadata', async () => {
     const screen = await render(<RekeyAccountScreen />);
     await settle();
-    await ledgerRekeyThrough(screen, 'auth-complete-success');
+    await ledgerRekeyThrough(screen, 'auth-complete-confirmed');
 
     expect(mockRekeyToLedger).toHaveBeenCalledTimes(1);
     expect(
