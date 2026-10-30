@@ -23,7 +23,11 @@ import type { RouteProp } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useMessagesStore, useThread } from '@/store/messagesStore';
+import {
+  PENDING_PLACEHOLDER_PREFIX,
+  useMessagesStore,
+  useThread,
+} from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
 import { useActiveAccount } from '@/store/walletStore';
 import { useMessagingSigner } from './useMessagingSigner';
@@ -43,6 +47,9 @@ import MessagingInfoModal from '@/components/social/MessagingInfoModal';
 import { useIsMessagingEnabled } from '@/store/experimentalStore';
 import { toUnsettledTransactionAlert } from '@/utils/errorMapping';
 
+// How often an open chat re-checks an unsettled placeholder (TASK-454).
+const UNSETTLED_REFRESH_MS = 30000;
+
 export default function ChatScreen() {
   const styles = useThemedStyles(createStyles);
   const { theme } = useTheme();
@@ -61,6 +68,8 @@ export default function ChatScreen() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const flatListRef = useRef<FlatList>(null);
+  // Placeholder ids with a send in flight (TASK-454).
+  const inFlightRef = useRef(new Set<string>());
 
   // Experimental feature guard - redirect if messaging is not enabled
   const isMessagingEnabled = useIsMessagingEnabled();
@@ -145,6 +154,23 @@ export default function ChatScreen() {
     ])
   );
 
+  // While this chat is open with an unsettled placeholder, age it out locally:
+  // nothing else polls an open chat, so without this it could spin forever.
+  // No network call: if the send landed, its chain record arrives on the next
+  // load as usual (TASK-454).
+  const hasUnsettled = !!thread?.messages.some(
+    (m) => m.unsettled && m.status === 'pending'
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasUnsettled) return undefined;
+      const timer = setInterval(() => {
+        useMessagesStore.getState().expireUnsettledPlaceholders(friendAddress);
+      }, UNSETTLED_REFRESH_MS);
+      return () => clearInterval(timer);
+    }, [hasUnsettled, friendAddress])
+  );
+
   // Mark as read when messages change
   useEffect(() => {
     if (thread?.unreadCount && thread.unreadCount > 0) {
@@ -173,7 +199,21 @@ export default function ChatScreen() {
       if (!canUseMessaging) return;
 
       const isRetry = !!existingMessageId;
-      const tempId = existingMessageId || `pending-${Date.now()}`;
+      const attemptedAt = Date.now();
+      const tempId =
+        existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
+
+      // One attempt per row at a time, and only a row that is still failed can
+      // be retried: a second tap must never race the first (TASK-454).
+      const currentThread =
+        useMessagesStore.getState().threads[friendAddress]?.messages ?? [];
+      if (isRetry) {
+        const row = currentThread.find((m) => m.id === tempId);
+        if (inFlightRef.current.has(tempId) || row?.status !== 'failed') {
+          return;
+        }
+      }
+      inFlightRef.current.add(tempId);
 
       // If not a retry, create and add optimistic message
       if (!isRetry) {
@@ -209,15 +249,20 @@ export default function ChatScreen() {
       } catch (error) {
         console.error('Failed to send message:', error);
         // It may already be on chain: a 'failed' bubble's retry button would
-        // send it twice. Drop the placeholder; the thread's next load from
-        // chain shows it if it landed (TASK-447).
-        const unsettled = toUnsettledTransactionAlert(error);
-        if (unsettled) {
-          useMessagesStore.getState().removePendingMessage(tempId);
-          Alert.alert(unsettled.title, unsettled.message);
+        // send it twice. Keep the placeholder pending, with no retry: with a
+        // txid the chain load confirms it, without one it ages out (TASK-454).
+        if (toUnsettledTransactionAlert(error)) {
+          const txId = (error as { txId?: unknown }).txId;
+          useMessagesStore
+            .getState()
+            .settlePendingMessage(
+              tempId,
+              typeof txId === 'string' && txId ? txId : undefined,
+              attemptedAt
+            );
           return;
         }
-        updateMessageStatus(tempId, 'failed');
+        useMessagesStore.getState().failPendingMessage(tempId);
         if (!isRetry) {
           // Only show alert for first-time sends, not retries
           Alert.alert(
@@ -228,6 +273,7 @@ export default function ChatScreen() {
           );
         }
       } finally {
+        inFlightRef.current.delete(tempId);
         if (!isRetry) {
           setIsSending(false);
         }
