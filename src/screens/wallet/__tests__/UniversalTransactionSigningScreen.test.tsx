@@ -951,8 +951,9 @@ it('shows the mapped reason when signing fails', async () => {
   alert.mockRestore();
 });
 
-// TASK-453 (Codex pass A #2): a send that may have landed is never shown as a
-// failure, even though it arrives through the modal's failure callback.
+// TASK-453 (Codex pass A #2): this screen only signs, but if the modal ever
+// reports a pending or maybe-submitted error, the alert must not call it a
+// failure. The send-side cases live in Arc200Confirmation.test.
 it.each([
   ['pending', () => new TransactionPendingError('TXID'), 'Not Confirmed Yet'],
   [

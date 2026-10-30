@@ -737,3 +737,77 @@ describe('isArc200ExpiredGroup on a reconciled expiry', () => {
     ).toBe(false);
   });
 });
+
+// TASK-453 (Codex pass B #1): a send that may have landed arrives through the
+// modal's failure callback, and must still read as pending, never failed.
+describe('send failure callback outcome', () => {
+  const item = {
+    contractId: 123,
+    owner: makeAddress(2),
+    amount: '1',
+    ownerBalance: '1',
+    tokenDecimals: 0,
+    tokenSymbol: 'T',
+    tokenName: 'Token',
+  };
+
+  beforeEach(() => {
+    mockParams = {
+      claimableItem: item,
+      items: [item],
+      fromAccount: mockAccount,
+      recipient: makeAddress(2),
+      amount: '1',
+      assetType: 'arc200',
+      assetDecimals: 0,
+      contractId: 123,
+      estimatedFee: 999999,
+      assetSymbol: 'T',
+    };
+    (Arc.buildArc200TransferGroup as jest.Mock)
+      .mockReset()
+      .mockResolvedValue(makeGroup(false));
+    mockReplace.mockClear();
+  });
+
+  const confirmThenFail = async (error: unknown) => {
+    const view = await render(<Send />);
+    await view.findByText(
+      `${(Arc.groupCost(makeGroup(false)) / 1e6).toFixed(6)} VOI`
+    );
+    await act(async () => {
+      await fireEvent.press(view.getByText('Confirm & Send'));
+    });
+    await act(async () => {
+      await mockAuthProps.onComplete(false, { error });
+    });
+    await view.unmount();
+    return mockReplace.mock.calls.at(-1)!;
+  };
+
+  it.each([
+    ['pending', () => new TransactionPendingError('TX'), 'Not Confirmed Yet'],
+    [
+      'maybe submitted',
+      () => new TransactionMaybeSubmittedError(),
+      'May Have Been Sent',
+    ],
+  ])('shows a %s send as pending, not failed', async (_l, make, title) => {
+    const [route, params] = await confirmThenFail(make());
+    expect(route).toBe('TransactionResult');
+    expect(params).toEqual(
+      expect.objectContaining({
+        isSuccess: true,
+        confirmed: false,
+        pendingTitle: title,
+      })
+    );
+  });
+
+  it('shows a genuine failure with its mapped reason', async () => {
+    const error = new Error('TransactionPool.Remember: overspend');
+    const [, params] = await confirmThenFail(error);
+    expect(params.isSuccess).toBe(false);
+    expect(params.errorMessage).toContain("doesn't have enough balance");
+  });
+});
