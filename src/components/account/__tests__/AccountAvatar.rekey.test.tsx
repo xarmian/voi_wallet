@@ -50,3 +50,45 @@ it.each(['loading', 'error', 'loaded'])(
     );
   }
 );
+
+// TASK-458: while chain state loads, a refresh that saw `self` clears the
+// neutral badge; a delegated or unknown refresh keeps it neutral (never a key).
+it.each([
+  ['self', false],
+  ['delegated', true],
+  [undefined, true],
+] as const)(
+  'loading with display status %s: neutral badge = %s',
+  async (status, shown) => {
+    const { recordRekeyObservation, clearRekeyDisplayStatus } =
+      await import('@/store/rekeyDisplayStatus');
+    const { issueRekeyObservation, stampRekeyInfo } =
+      await import('@/services/network/rekeyObservation');
+    clearRekeyDisplayStatus();
+    if (status)
+      recordRekeyObservation(
+        'SOURCE',
+        NetworkId.ALGORAND_MAINNET,
+        stampRekeyInfo(
+          status === 'self'
+            ? { isRekeyed: false }
+            : { isRekeyed: true, authAddress: 'AUTH' },
+          issueRekeyObservation()
+        )
+      );
+    jest
+      .mocked(useRekeyState)
+      .mockReturnValue({ status: 'loading' } as ReturnType<
+        typeof useRekeyState
+      >);
+    const view = await render(
+      <AccountAvatar
+        address="SOURCE"
+        account={{ type: AccountType.STANDARD } as AccountMetadata}
+        useEnvoiAvatar={false}
+      />
+    );
+    expect(Boolean(view.queryByText('lock-closed'))).toBe(shown);
+    expect(view.queryByText('key')).toBeNull();
+  }
+);

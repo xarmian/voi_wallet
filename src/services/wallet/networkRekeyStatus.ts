@@ -1,15 +1,17 @@
 import { createStore } from 'zustand/vanilla';
-import { NetworkService, RekeyInfo } from '@/services/network';
+import { NetworkService } from '@/services/network';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 import { NetworkId } from '@/types/network';
 import { subscribeRekeyInvalidation } from './rekeyStatusInvalidation';
+import {
+  classifyNetworkRekey,
+  NetworkRekeyStatus,
+  UNKNOWN,
+} from './rekeyClassify';
 
-export type NetworkRekeyStatus =
-  | { status: 'unknown' }
-  | { status: 'self' }
-  | { status: 'delegated'; authAddress: string };
-const UNKNOWN: NetworkRekeyStatus = Object.freeze({ status: 'unknown' });
-const SELF: NetworkRekeyStatus = Object.freeze({ status: 'self' });
+export { classifyNetworkRekey };
+export type { NetworkRekeyStatus };
+
 // External rekeys (including dApp-submitted WalletConnect rekeys) rely on expiry.
 // Refreshes bypass the network cache so the two TTLs cannot stack.
 export const REKEY_STATUS_TTL = 10_000;
@@ -17,15 +19,6 @@ type Entry = { value: NetworkRekeyStatus; expires: number };
 type Snapshot = { networks: NetworkId[]; entries: Record<string, Entry> };
 const keyFor = (address: string, network: NetworkId) => `${address}:${network}`;
 
-export function classifyNetworkRekey(
-  address: string,
-  info: RekeyInfo
-): NetworkRekeyStatus {
-  if (info.unavailable || (info.isRekeyed && !info.authAddress)) return UNKNOWN;
-  return info.isRekeyed && info.authAddress !== address
-    ? { status: 'delegated', authAddress: info.authAddress! }
-    : SELF;
-}
 export function aggregateNetworkRekey(values: NetworkRekeyStatus[]): boolean {
   return (
     values.length > 0 && values.every((value) => value.status === 'delegated')

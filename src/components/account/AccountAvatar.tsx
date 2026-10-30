@@ -9,6 +9,10 @@ import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { useRekeyState, useWalletStore } from '@/store/walletStore';
+import {
+  displayOverridesLoaded,
+  useRekeyDisplayStatus,
+} from '@/store/rekeyDisplayStatus';
 
 // Shared cache for avatar URLs across all AccountAvatar instances
 const avatarUrlCache = new Map<string, string | null>();
@@ -144,7 +148,11 @@ export default function AccountAvatar({
 }: AccountAvatarProps) {
   const styles = useThemedStyles(createStyles);
   const themeColors = useThemeColors();
-  const rekeyState = useRekeyState(address, useCurrentNetwork());
+  const currentNetwork = useCurrentNetwork();
+  const rekeyState = useRekeyState(address, currentNetwork);
+  // TASK-458: display-only status from the last refresh, used while chain
+  // state loads.
+  const displayRekey = useRekeyDisplayStatus(address, currentNetwork);
   const [envoiAvatarUrl, setEnvoiAvatarUrl] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<boolean>(false);
 
@@ -284,7 +292,13 @@ export default function AccountAvatar({
   // Determine rekey indicator
   const getRekeyIndicator = () => {
     if (!showRekeyIndicator || !account) return null;
-    if (rekeyState.status !== 'loaded') {
+    if (
+      rekeyState.status !== 'loaded' ||
+      displayOverridesLoaded(displayRekey, rekeyState)
+    ) {
+      // The last refresh saw it signing for itself: no badge. Otherwise stay
+      // neutral; a key icon would claim custody chain state hasn't confirmed.
+      if (displayRekey?.status === 'self') return null;
       return { iconName: 'lock-closed', color: themeColors.textMuted };
     }
     if (!rekeyState.isRekeyed) return null;

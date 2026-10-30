@@ -54,6 +54,8 @@ import {
   subscribeRekeySigner,
 } from '@/services/wallet/rekeyState';
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
+import { recordRekeyObservation } from './rekeyDisplayStatus';
+import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -692,11 +694,18 @@ let walletInitializationPromise: Promise<void> | null = null;
 // caller on the new network join (and receive/persist) the previous network's
 // result. Concurrent callers for the same account+network (HomeScreen mount,
 // pull-to-refresh, SendScreen, the transactionSuccess force-refresh) share one
-// promise, so the expensive fetch chain and the rekeyInfo→canSign persist run
-// exactly once. Module-level (not a store field) so it survives initialize()'s
+// promise, so the expensive fetch chain runs exactly once (balance loads no
+// longer persist rekey metadata, TASK-425 U5). Module-level (not a store field) so it survives initialize()'s
 // accountStates reset. Entries are always removed in a `finally`, so a failed
 // load can never wedge future loads.
 const balanceLoadsInFlight = new Map<string, Promise<void>>();
+// TASK-458 (Codex passes C #2, D #1): an explicit (forced) refresh joins an
+// in-flight load only while that load's authority read is not yet issued (it
+// will then be issued after the press, so TASK-49's mount + pull-to-refresh
+// dedup holds). Once the read is out it may predate an external rekey, so the
+// caller joins a queued follow-up whose read is not yet issued, or queues one.
+const balanceReadsIssued = new Set<string>();
+const forcedBalanceFollowUps = new Map<string, Promise<void>>();
 
 export const useWalletStore = create<WalletState>()(
   subscribeWithSelector((set, get) => ({
@@ -1335,6 +1344,8 @@ export const useWalletStore = create<WalletState>()(
 
     // Balance and transaction management
     loadAccountBalance: async (accountId: string, forceRefresh = false) => {
+      // TASK-458: a load begun before a wipe/reset never writes display status.
+      const rekeyEpoch = getRekeyStatusEpoch();
       const { accountStates } = get();
       const accountState =
         accountStates[accountId] || createInitialAccountState();
@@ -1366,19 +1377,38 @@ export const useWalletStore = create<WalletState>()(
       const keyNetworkId = networkService.getCurrentNetworkId();
       // The epoch is part of the key too: after A→B→A a caller must not join a
       // load issued before the switches, whose result the commit guard drops.
-      const inFlightKey = `${accountId}:${keyNetworkId}:${balanceEpoch}`;
+      // TASK-458 (Codex pass E #2): the reset epoch is part of the key too, so a
+      // caller after a wipe/reset never joins a load fenced off from publishing.
+      const inFlightKey = `${accountId}:${keyNetworkId}:${balanceEpoch}:${rekeyEpoch}`;
 
       // In-flight dedup: concurrent callers (HomeScreen mount, pull-to-refresh,
       // SendScreen, the transactionSuccess force-refresh) for the same
-      // account+network share this one promise, so the expensive fetch chain and
-      // the rekeyInfo→canSign persist below run exactly once and every caller sees
-      // the same result. forceRefresh joins an active load rather than launching a
-      // duplicate; when nothing is in flight it still starts a fresh load (the
+      // account+network share this one promise, so the expensive fetch chain
+      // runs exactly once and every caller sees the same result. forceRefresh
+      // joins an active load rather than launching a duplicate; when nothing is
+      // in flight it still starts a fresh load (the
       // cache-freshness early-return above already honored forceRefresh's
       // "ignore fresh cache" semantics).
       const existingLoad = balanceLoadsInFlight.get(inFlightKey);
       if (existingLoad) {
-        return existingLoad;
+        if (!forceRefresh || !balanceReadsIssued.has(inFlightKey))
+          return existingLoad;
+        const queued = forcedBalanceFollowUps.get(inFlightKey);
+        if (queued) return queued;
+        // Let the earlier load finish (its commit is still valid), then run
+        // one whose read is issued after this press. Dequeued as it starts,
+        // so a later press queues its own.
+        const followUp = existingLoad
+          .catch(() => {})
+          .then(() => {
+            forcedBalanceFollowUps.delete(inFlightKey);
+            // Codex pass E #1: requested before a wipe/reset that has since
+            // happened, so it doesn't run with the new epoch.
+            if (getRekeyStatusEpoch() !== rekeyEpoch) return;
+            return get().loadAccountBalance(accountId, true);
+          });
+        forcedBalanceFollowUps.set(inFlightKey, followUp);
+        return followUp;
       }
 
       // TASK-59: issued on the key network; commits below only while current.
@@ -1448,6 +1478,7 @@ export const useWalletStore = create<WalletState>()(
             balanceError: null,
           });
 
+          balanceReadsIssued.add(inFlightKey);
           const balance = await networkService.getAccountBalance(
             account.address
           );
@@ -1469,6 +1500,13 @@ export const useWalletStore = create<WalletState>()(
             isBackgroundRefreshing: false,
             balanceLastUpdated: now,
           });
+          // TASK-458: display-only, so an external rekey shows after a refresh.
+          if (getRekeyStatusEpoch() === rekeyEpoch)
+            recordRekeyObservation(
+              account.address,
+              currentNetworkId,
+              balance.rekeyInfo
+            );
 
           // Persist the updated balance cache with network ID
           setTimeout(() => {
@@ -1517,6 +1555,7 @@ export const useWalletStore = create<WalletState>()(
         await loadPromise;
       } finally {
         balanceLoadsInFlight.delete(inFlightKey);
+        balanceReadsIssued.delete(inFlightKey);
       }
     },
 
@@ -2085,6 +2124,8 @@ export const useWalletStore = create<WalletState>()(
     },
 
     refreshAllBalances: async () => {
+      // TASK-458: a refresh begun before a wipe/reset never writes display status.
+      const rekeyEpoch = getRekeyStatusEpoch();
       const { wallet } = get();
       if (!wallet) return;
 
@@ -2139,7 +2180,7 @@ export const useWalletStore = create<WalletState>()(
 
       for (const result of results) {
         if (result.status !== 'fulfilled') continue;
-        const { accountId, balance, error } = result.value;
+        const { accountId, account, balance, error } = result.value;
         const token = tokens.get(accountId);
         if (!token || !isCurrentBalanceRequest(accountId, token)) continue;
 
@@ -2151,6 +2192,13 @@ export const useWalletStore = create<WalletState>()(
             isBackgroundRefreshing: false,
           });
         } else if (balance) {
+          // TASK-458: display-only, so an external rekey shows after a refresh.
+          if (getRekeyStatusEpoch() === rekeyEpoch)
+            recordRekeyObservation(
+              account.address,
+              currentNetworkId,
+              balance.rekeyInfo
+            );
           patches.set(accountId, {
             balance,
             balanceNetworkId: currentNetworkId,

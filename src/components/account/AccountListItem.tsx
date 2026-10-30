@@ -21,6 +21,13 @@ import {
   useCurrentNetwork,
 } from '@/store/networkStore';
 import { isListDeletionProtected } from '@/services/wallet/listDeletionProtection';
+import {
+  displayOverridesLoaded,
+  useRekeyDisplayStatus,
+} from '@/store/rekeyDisplayStatus';
+
+// TASK-458: rekeyed, custody not yet confirmed by chain state.
+const REKEYED_CHECKING = 'Rekeyed (Checking)';
 
 interface AccountListItemProps {
   account: AccountMetadata;
@@ -48,7 +55,12 @@ export default function AccountListItem({
   const setActiveAccount = useWalletStore((state) => state.setActiveAccount);
   const walletAccounts = useWalletStore((state) => state.wallet?.accounts);
   const accountBalanceData = useAccountBalance(account.id);
-  const rekeyState = useRekeyState(account.address, useCurrentNetwork());
+  const currentNetwork = useCurrentNetwork();
+  const rekeyState = useRekeyState(account.address, currentNetwork);
+  // TASK-458: the last refresh's display-only status labels the account while
+  // this network's chain state loads, so an external rekey shows after the
+  // next refresh. The stored type is the fallback only when that is unknown.
+  const displayRekey = useRekeyDisplayStatus(account.address, currentNetwork);
   const currentNetworkConfig = useCurrentNetworkConfig();
   const [deletionProtection, setDeletionProtection] = useState<{
     account: AccountMetadata;
@@ -96,15 +108,33 @@ export default function AccountListItem({
     return formatNativeBalance(amount, currentNetworkConfig.nativeToken);
   };
 
+  const signerLabel = (authAddress: string | undefined) => {
+    const signer = walletAccounts?.find(
+      (candidate) => candidate.address === authAddress
+    );
+    if (signer?.type === AccountType.LEDGER) return 'Ledger';
+    if (signer?.type === AccountType.REMOTE_SIGNER) return 'Airgap';
+    return null;
+  };
+
   const getAccountTypeLabel = (account: AccountMetadata) => {
-    if (rekeyState.status !== 'loaded') return '';
-    if (rekeyState.isRekeyed) {
-      const signer = walletAccounts?.find(
-        (candidate) => candidate.address === rekeyState.authAddress
-      );
-      if (signer?.type === AccountType.LEDGER) return 'Ledger';
-      if (signer?.type === AccountType.REMOTE_SIGNER) return 'Airgap';
-      return rekeyState.canSign ? 'Rekeyed' : 'Rekeyed (No Key)';
+    if (
+      rekeyState.status === 'loaded' &&
+      !displayOverridesLoaded(displayRekey, rekeyState)
+    ) {
+      if (rekeyState.isRekeyed) {
+        return (
+          signerLabel(rekeyState.authAddress) ??
+          (rekeyState.canSign ? 'Rekeyed' : 'Rekeyed (No Key)')
+        );
+      }
+    } else if (displayRekey?.status === 'delegated') {
+      // Custody is unconfirmed until chain state (re)loads: never imply a key.
+      return signerLabel(displayRekey.authAddress) ?? REKEYED_CHECKING;
+    } else if (displayRekey?.status !== 'self') {
+      if (account.type === AccountType.REKEYED) return REKEYED_CHECKING;
+    } else if (account.type === AccountType.REKEYED) {
+      return '';
     }
     switch (account.type) {
       case AccountType.STANDARD:

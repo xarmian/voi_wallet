@@ -1,5 +1,10 @@
 import { withTimeout } from '@/utils/withTimeout';
 import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
+import {
+  getRekeyObservation,
+  issueRekeyObservation,
+  stampRekeyInfo,
+} from './rekeyObservation';
 import algosdk from 'algosdk';
 import {
   AccountBalance,
@@ -419,7 +424,10 @@ export class NetworkService {
           accountInfoPromise,
           this.getMimirAssets(address),
           this.getPricingData(address, accountInfoPromise),
-          this.getAccountRekeyInfo(address),
+          // TASK-458: always a fresh authority read, so a rekey made outside
+          // the wallet shows on the next refresh even inside the 10s cache
+          // TTL (Codex pass C #3). The cache still serves signing lookups.
+          this.getAccountRekeyInfo(address, false, true),
         ]);
 
       if (accountInfo.status === 'rejected') {
@@ -1676,6 +1684,15 @@ export class NetworkService {
       // TASK-440 #7: bounded like every other algod read. getAccountBalance
       // awaits this lookup, and a timeout rejects into its `unavailable` rekey
       // state (never "not rekeyed"); nothing is cached on that path.
+      const observation = issueRekeyObservation();
+      // TASK-458: an older request landing late must not replace a newer
+      // cached answer, or the next cached read would replay it.
+      const cacheIfNewest = (info: RekeyInfo) => {
+        const current = this.rekeyInfoCache.get(cacheKey);
+        const currentSeq = getRekeyObservation(current?.info)?.seq ?? -1;
+        if (epoch === getRekeyStatusEpoch() && observation.seq > currentSeq)
+          this.rekeyInfoCache.set(cacheKey, { info, timestamp: Date.now() });
+      };
       const accountInfo = await this.withTimeout(
         this.algodClient.accountInformation(address).do(),
         'rekey account info'
@@ -1697,13 +1714,8 @@ export class NetworkService {
       const isRekeyed = Boolean(authAddress);
 
       if (!isRekeyed) {
-        const result = { isRekeyed: false };
-        // Cache the result
-        if (epoch === getRekeyStatusEpoch())
-          this.rekeyInfoCache.set(cacheKey, {
-            info: result,
-            timestamp: Date.now(),
-          });
+        const result = stampRekeyInfo({ isRekeyed: false }, observation);
+        cacheIfNewest(result);
         return result;
       }
 
@@ -1746,19 +1758,13 @@ export class NetworkService {
         }
       }
 
-      const result = {
-        isRekeyed: true,
-        authAddress,
-        rekeyedAt,
-      };
+      const result = stampRekeyInfo(
+        { isRekeyed: true, authAddress, rekeyedAt },
+        observation
+      );
 
       assertCurrentNetwork();
-      // Cache the result
-      if (epoch === getRekeyStatusEpoch())
-        this.rekeyInfoCache.set(cacheKey, {
-          info: result,
-          timestamp: Date.now(),
-        });
+      cacheIfNewest(result);
 
       return result;
     } catch (error) {
