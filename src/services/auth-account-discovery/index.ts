@@ -14,6 +14,7 @@ import {
 } from '@/services/network/config';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { redactAddress, redactError } from '@/utils/logRedaction';
+import { fetchBuffered } from '@/utils/fetchBuffered';
 
 export class AuthAccountDiscoveryService {
   private static instance: AuthAccountDiscoveryService;
@@ -224,18 +225,16 @@ export class AuthAccountDiscoveryService {
 
         const url = `${config.indexerUrl}/v2/accounts?${params.toString()}`;
 
-        // Create timeout controller for React Native compatibility
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-        const response = await fetch(url, {
-          headers: {
-            'X-API-Key': config.token || '',
+        // TASK-440 #9: the 30 s deadline covers the body read too.
+        const response = await fetchBuffered(
+          url,
+          {
+            headers: {
+              'X-API-Key': config.token || '',
+            },
           },
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
+          30000
+        );
 
         if (!response.ok) {
           if (response.status === 429) {

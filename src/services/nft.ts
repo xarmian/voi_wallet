@@ -8,6 +8,7 @@ import {
   NFTCollectionsResponse,
 } from '@/types/nft';
 import { NFT_CONSTANTS, NFT_ERROR_MESSAGES } from '@/constants/nft';
+import { fetchBuffered, BufferedResponse } from '@/utils/fetchBuffered';
 
 export class NFTService {
   /**
@@ -30,26 +31,22 @@ export class NFTService {
   /**
    * Create a fetch request with timeout protection
    */
-  private static async fetchWithTimeout(url: string): Promise<Response> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      NFT_CONSTANTS.REQUEST_TIMEOUT
-    );
-
+  private static async fetchWithTimeout(
+    url: string
+  ): Promise<BufferedResponse> {
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
+      // TASK-440 #9: the deadline covers the body read too.
+      return await fetchBuffered(
+        url,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-      return response;
+        NFT_CONSTANTS.REQUEST_TIMEOUT
+      );
     } catch (error) {
-      clearTimeout(timeoutId);
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(NFT_ERROR_MESSAGES.NETWORK_TIMEOUT);
       }

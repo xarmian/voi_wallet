@@ -1,4 +1,5 @@
 import { shouldSkipForOffline } from '@/services/network/offline';
+import { fetchBuffered, BufferedResponse } from '@/utils/fetchBuffered';
 import { redactAddress, redactError } from '@/utils/logRedaction';
 
 export interface MimirAsset {
@@ -388,7 +389,7 @@ export class MimirApiService {
   private async fetchWithRetry(
     url: string,
     init?: RequestInit
-  ): Promise<Response> {
+  ): Promise<BufferedResponse> {
     // TASK-191: while the device is definitely offline, skip the ladder
     // outright rather than burning `retryAttempts` fetches plus their backoff
     // on a request that cannot reach the network. Deliberately the SAME error
@@ -406,28 +407,23 @@ export class MimirApiService {
 
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
+        // TASK-440 #9: the deadline covers the body read too.
+        return await fetchBuffered(
+          url,
+          {
+            // Caller-supplied method/body (e.g. a POST batch) override the
+            // GET default; headers below are merged over any the caller passes so
+            // Accept/Content-Type stay set. Existing GET callers pass no init and
+            // are unaffected.
+            ...init,
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              ...init?.headers,
+            },
+          },
           this.config.timeout
         );
-
-        const response = await fetch(url, {
-          signal: controller.signal,
-          // Caller-supplied method/body (e.g. a POST batch) override the
-          // GET default; headers below are merged over any the caller passes so
-          // Accept/Content-Type stay set. Existing GET callers pass no init and
-          // are unaffected.
-          ...init,
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            ...init?.headers,
-          },
-        });
-
-        clearTimeout(timeoutId);
-        return response;
       } catch (error) {
         lastError =
           error instanceof Error ? error : new Error('Unknown fetch error');
