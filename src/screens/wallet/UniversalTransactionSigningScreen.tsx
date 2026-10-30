@@ -62,6 +62,7 @@ import {
   DangerItem,
 } from '@/utils/transactionDangers';
 import { useTransactionDangers } from '@/hooks/useTransactionDangers';
+import { toErrorAlert } from '@/utils/errorMapping';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -881,11 +882,13 @@ export default function UniversalTransactionSigningScreen({
     if (success && onSuccess) {
       await onSuccess(result);
     } else if (!success) {
-      const errorMessage =
-        result instanceof Error
-          ? result.message
-          : 'Failed to sign transactions';
-      Alert.alert('Error', errorMessage);
+      // The modal reports failure as { error } (TASK-453): map that error, so
+      // a real failure isn't shown as the generic fallback.
+      const { title, message } = toErrorAlert(result?.error, {
+        fallbackMessage: 'Failed to sign transactions.',
+        fallbackTitle: 'Error',
+      });
+      Alert.alert(title, message);
     }
   };
 

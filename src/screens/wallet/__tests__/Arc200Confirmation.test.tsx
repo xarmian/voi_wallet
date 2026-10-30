@@ -543,9 +543,16 @@ it.each(['send', 'claim', 'all'] as const)(
           expect(submit.mock.calls.length).toBe(submits * 2);
         } else expect(builder).toHaveBeenCalledTimes(1);
         if (flow === 'send')
+          // The failure copy comes from the modal's { error } (TASK-453), not
+          // the generic fallback.
           expect(mockReplace).toHaveBeenLastCalledWith(
             'TransactionResult',
-            expect.objectContaining({ isSuccess: false })
+            expect.objectContaining({
+              isSuccess: false,
+              errorMessage: expect.not.stringMatching(
+                /^Transaction failed\.?$/
+              ),
+            })
           );
         else
           expect(alert).toHaveBeenLastCalledWith(

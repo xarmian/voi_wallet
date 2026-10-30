@@ -214,7 +214,12 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
           </Pressable>
           <Pressable
             testID="auth-complete-error"
-            onPress={() => onComplete(false, new Error('signing failed'))}
+            // The real modal reports failure as { error } (TASK-453).
+            onPress={() =>
+              onComplete(false, {
+                error: new Error('TransactionPool.Remember: overspend'),
+              })
+            }
           >
             <Text>err</Text>
           </Pressable>
@@ -360,6 +365,23 @@ describe('RekeyAccountScreen — isProcessing guard (TASK-252)', () => {
 
     expect(screen.getByText(VOI_NETWORK)).toBeEnabled();
     expect(screen.getByText(ALGO_NETWORK)).toBeEnabled();
+  });
+
+  // TASK-453: the failure alert reads the modal's { error }, not a generic
+  // "Unknown error occurred".
+  it('shows the mapped reason for a failed rekey', async () => {
+    const screen = await render(<RekeyAccountScreen />);
+    await settle();
+    await startRekeyToInFlight(screen);
+
+    await act(async () => {
+      await fireEvent.press(screen.getByTestId('auth-complete-error'));
+    });
+
+    expect(Alert.alert).toHaveBeenLastCalledWith(
+      'Rekey Failed',
+      expect.stringContaining("doesn't have enough balance")
+    );
   });
 
   it('re-enables the network selector after the auth modal is cancelled', async () => {

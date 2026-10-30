@@ -20,7 +20,7 @@
  */
 
 import React from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
 import { render, waitFor, fireEvent, act } from '@testing-library/react-native';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
@@ -917,4 +917,32 @@ describe('asset reconfiguration review', () => {
       ).toBeTruthy();
     }
   });
+});
+
+// TASK-453: the modal reports failure as { error }. The alert must carry that
+// error's mapped reason, not the generic "Failed to sign transactions".
+it('shows the mapped reason when signing fails', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const a = makeAccount('signer-fail').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+
+  await act(async () => {
+    await mockModalProps.onComplete(false, {
+      error: new Error('TransactionPool.Remember: overspend'),
+    });
+  });
+
+  expect(alert).toHaveBeenLastCalledWith(
+    'Not Enough Balance',
+    expect.stringContaining("doesn't have enough balance")
+  );
+  alert.mockRestore();
 });
