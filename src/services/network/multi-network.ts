@@ -14,6 +14,7 @@ import {
 import { selectPrimarySource } from '@/utils/mappedAssetPrimary';
 import { redactError } from '@/utils/logRedaction';
 import { recordRekeyObservation } from '@/store/rekeyDisplayStatus';
+import { getRekeyStatusEpoch } from '@/services/wallet/rekeyStatusInvalidation';
 
 /**
  * Service for aggregating balances across multiple networks
@@ -26,6 +27,14 @@ export class MultiNetworkBalanceService {
     address: string,
     networks: NetworkId[] = [NetworkId.VOI_MAINNET, NetworkId.ALGORAND_MAINNET]
   ): Promise<MultiNetworkBalance> {
+    // TASK-458 (Codex pass D #2): fence this whole operation, not just its
+    // reads. A refresh begun before a wipe/reset must not write display
+    // status even if its reads are only issued after the reset.
+    const operationEpoch = getRekeyStatusEpoch();
+    const record: typeof recordRekeyObservation = (...args) => {
+      if (getRekeyStatusEpoch() === operationEpoch)
+        recordRekeyObservation(...args);
+    };
     try {
       // Fetch token mappings
       const tokenMappings = await tokenMappingService.getTokenMappings();
@@ -36,10 +45,10 @@ export class MultiNetworkBalanceService {
           const networkService = NetworkService.getInstance(networkId);
           const balance = await networkService.getAccountBalance(address);
           // TASK-458: display-only, so an external rekey shows after a refresh.
-          recordRekeyObservation(address, networkId, balance.rekeyInfo);
+          record(address, networkId, balance.rekeyInfo);
           return { networkId, balance, success: true };
         } catch (error) {
-          recordRekeyObservation(address, networkId, null);
+          record(address, networkId, null);
           console.warn(
             `[MultiNetworkBalanceService] Failed to fetch balance from ${networkId}:`,
             redactError(error)

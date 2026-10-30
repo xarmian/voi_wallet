@@ -33,9 +33,15 @@ jest.mock('@/services/network', () => ({
     }),
   },
 }));
+let mockMappingHold: Promise<void> | undefined;
 jest.mock('@/services/token-mapping', () => ({
   __esModule: true,
-  default: { getTokenMappings: async () => [] },
+  default: {
+    getTokenMappings: async () => {
+      if (mockMappingHold) await mockMappingHold;
+      return [];
+    },
+  },
 }));
 // Persistence instruments: none of these may be written by a refresh.
 const mockAsyncSet = jest.fn();
@@ -104,6 +110,7 @@ beforeEach(() => {
   mockRekeyState = { status: 'loading' };
   mockHold = undefined;
   mockIssued = 0;
+  mockMappingHold = undefined;
   mockPlatformSet.mockReset();
   mockUpdateMetadata.mockReset();
 });
@@ -218,4 +225,27 @@ it('a read issued after a reset is a fresh observation and is recorded', async (
   await refresh();
   const view = await render(row());
   expect(view.getByText(CHECKING)).toBeTruthy();
+});
+
+// Codex pass D #2: a refresh begun before a wipe/reset, still waiting on token
+// mappings, issues its reads after the reset; the operation fence still drops
+// them.
+it('a refresh begun before a reset never writes, even if it reads after it', async () => {
+  const { invalidateRekeyStatus } =
+    await import('@/services/wallet/rekeyStatusInvalidation');
+  mockChain['voi-mainnet'] = { isRekeyed: true, authAddress: 'OUTSIDE' };
+  let release!: () => void;
+  mockMappingHold = new Promise<void>((resolve) => (release = resolve));
+  const stale = MultiNetworkBalanceService.getAggregatedBalance(
+    standard.address
+  );
+  await act(async () => invalidateRekeyStatus());
+  expect(mockIssued).toBe(0);
+  await act(async () => {
+    release();
+    await stale;
+  });
+  expect(mockIssued).toBe(2);
+  const view = await render(row());
+  expect(view.queryByText(CHECKING)).toBeNull();
 });
