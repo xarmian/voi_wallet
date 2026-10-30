@@ -101,8 +101,9 @@ interface MessagesState {
   settlePendingMessage: (
     tempId: string,
     txId?: string,
-    attemptedAt?: number
+    attempt?: { attemptedAt: number; excludeIds: string[] }
   ) => void;
+  failPendingMessage: (tempId: string) => void;
   expireUnsettledPlaceholders: (friendAddress: string) => void;
   updateMessageStatus: (txId: string, status: MessageStatus) => void;
   markThreadAsRead: (friendAddress: string) => Promise<void>;
@@ -318,7 +319,7 @@ export const useMessagesStore = create<MessagesState>()(
     settlePendingMessage: (
       tempId: string,
       txId?: string,
-      attemptedAt?: number
+      attempt?: { attemptedAt: number; excludeIds: string[] }
     ) => {
       const { threads } = get();
       for (const [addr, thread] of Object.entries(threads)) {
@@ -331,9 +332,10 @@ export const useMessagesStore = create<MessagesState>()(
                 ...m,
                 status: 'pending' as const,
                 unsettled: !txId,
-                // A retry is a new attempt: its age and match window start now,
-                // not at the original bubble's timestamp.
-                attemptedAt: attemptedAt ?? m.timestamp,
+                // A retry is a new attempt: its age and match window start
+                // when it began, not at the original bubble's timestamp.
+                attemptedAt: attempt?.attemptedAt ?? m.timestamp,
+                excludeIds: attempt?.excludeIds ?? [],
               }
             : m
         );
@@ -358,6 +360,22 @@ export const useMessagesStore = create<MessagesState>()(
             },
           },
         });
+        return;
+      }
+    },
+
+    /**
+     * Mark a placeholder failed after a genuine send failure, unless another
+     * attempt has left it unsettled: that send may have landed, so it must
+     * never regain a retry (TASK-454).
+     */
+    failPendingMessage: (tempId: string) => {
+      const { threads } = get();
+      for (const thread of Object.values(threads)) {
+        const msg = thread.messages.find((m) => m.id === tempId);
+        if (!msg) continue;
+        if (msg.unsettled) return;
+        get().updateMessageStatus(tempId, 'failed');
         return;
       }
     },
@@ -1039,11 +1057,6 @@ function isTxidlessPlaceholder(message: Message): boolean {
  * can no longer land and is dropped, so it never spins forever. Neither path
  * offers a resend.
  */
-// Chain message ids that have already stood in for a placeholder. Kept across
-// merges so one chain message resolves at most one placeholder, however many
-// loads see it. Memory-only, like the placeholders themselves.
-const consumedPlaceholderMatches = new Set<string>();
-
 const attemptStart = (m: Message) => m.attemptedAt ?? m.timestamp;
 
 function reconcilePlaceholders(messages: Message[], now: number): Message[] {
@@ -1054,27 +1067,44 @@ function reconcilePlaceholders(messages: Message[], now: number): Message[] {
 
   // Only chain records (parsed as confirmed) count, never another local send.
   const candidates = messages.filter(
-    (m) =>
-      m.direction === 'sent' &&
-      m.status === 'confirmed' &&
-      !consumedPlaceholderMatches.has(m.id)
+    (m) => m.direction === 'sent' && m.status === 'confirmed'
   );
   const drop = new Set<string>();
+  // Per placeholder: ids it may never resolve against. A chain record that
+  // resolves one placeholder is added for the rest, so it is spent once; the
+  // state lives on the rows themselves (memory-only), not in a global.
+  const exclude = new Map(
+    placeholders.map((p) => [p.id, new Set(p.excludeIds ?? [])])
+  );
   for (const placeholder of placeholders) {
+    const excluded = exclude.get(placeholder.id)!;
     const match = candidates.find(
       (c) =>
-        !consumedPlaceholderMatches.has(c.id) &&
+        !excluded.has(c.id) &&
         c.content === placeholder.content &&
         c.timestamp >= attemptStart(placeholder) - PLACEHOLDER_CLOCK_SKEW_MS
     );
     if (match) {
-      consumedPlaceholderMatches.add(match.id);
       drop.add(placeholder.id);
+      for (const other of placeholders) exclude.get(other.id)!.add(match.id);
     } else if (now - attemptStart(placeholder) > PENDING_PLACEHOLDER_TTL_MS) {
       drop.add(placeholder.id);
     }
   }
-  return drop.size > 0 ? messages.filter((m) => !drop.has(m.id)) : messages;
+
+  let changed = drop.size > 0;
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (drop.has(m.id)) continue;
+    const ids = exclude.get(m.id);
+    if (ids && ids.size !== (m.excludeIds?.length ?? 0)) {
+      out.push({ ...m, excludeIds: [...ids] });
+      changed = true;
+    } else {
+      out.push(m);
+    }
+  }
+  return changed ? out : messages;
 }
 
 // In-flight and unsettled placeholders are memory-only (TASK-454): a stored

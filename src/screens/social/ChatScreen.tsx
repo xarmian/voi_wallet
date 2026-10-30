@@ -68,6 +68,8 @@ export default function ChatScreen() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const flatListRef = useRef<FlatList>(null);
+  // Placeholder ids with a send in flight (TASK-454).
+  const inFlightRef = useRef(new Set<string>());
 
   // Experimental feature guard - redirect if messaging is not enabled
   const isMessagingEnabled = useIsMessagingEnabled();
@@ -152,9 +154,9 @@ export default function ChatScreen() {
     ])
   );
 
-  // While this chat is open with an unsettled placeholder, keep resolving it:
+  // While this chat is open with an unsettled placeholder, age it out locally:
   // nothing else polls an open chat, so without this it could spin forever.
-  // Local expiry runs first, so a failing fetch can't keep it (TASK-454).
+  // No network call: the chain record resolves it on the next load (TASK-454).
   const hasUnsettled = !!thread?.messages.some(
     (m) => m.unsettled && m.status === 'pending'
   );
@@ -162,20 +164,10 @@ export default function ChatScreen() {
     useCallback(() => {
       if (!hasUnsettled) return undefined;
       const timer = setInterval(() => {
-        const store = useMessagesStore.getState();
-        store.expireUnsettledPlaceholders(friendAddress);
-        if (activeAccount?.address && canUseMessaging && isInitialized) {
-          store.fetchThreadMessages(activeAccount.address, friendAddress);
-        }
+        useMessagesStore.getState().expireUnsettledPlaceholders(friendAddress);
       }, UNSETTLED_REFRESH_MS);
       return () => clearInterval(timer);
-    }, [
-      hasUnsettled,
-      friendAddress,
-      activeAccount?.address,
-      canUseMessaging,
-      isInitialized,
-    ])
+    }, [hasUnsettled, friendAddress])
   );
 
   // Mark as read when messages change
@@ -209,6 +201,25 @@ export default function ChatScreen() {
       const attemptedAt = Date.now();
       const tempId =
         existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
+
+      // One attempt per row at a time, and only a row that is still failed can
+      // be retried: a second tap must never race the first (TASK-454).
+      const currentThread =
+        useMessagesStore.getState().threads[friendAddress]?.messages ?? [];
+      if (isRetry) {
+        const row = currentThread.find((m) => m.id === tempId);
+        if (inFlightRef.current.has(tempId) || row?.status !== 'failed') {
+          return;
+        }
+      }
+      inFlightRef.current.add(tempId);
+      // Sends this attempt must never be mistaken for (TASK-454).
+      const excludeIds = currentThread
+        .filter(
+          (m) =>
+            m.direction === 'sent' && m.content === content && m.id !== tempId
+        )
+        .map((m) => m.id);
 
       // If not a retry, create and add optimistic message
       if (!isRetry) {
@@ -253,11 +264,11 @@ export default function ChatScreen() {
             .settlePendingMessage(
               tempId,
               typeof txId === 'string' && txId ? txId : undefined,
-              attemptedAt
+              { attemptedAt, excludeIds }
             );
           return;
         }
-        updateMessageStatus(tempId, 'failed');
+        useMessagesStore.getState().failPendingMessage(tempId);
         if (!isRetry) {
           // Only show alert for first-time sends, not retries
           Alert.alert(
@@ -268,6 +279,7 @@ export default function ChatScreen() {
           );
         }
       } finally {
+        inFlightRef.current.delete(tempId);
         if (!isRetry) {
           setIsSending(false);
         }

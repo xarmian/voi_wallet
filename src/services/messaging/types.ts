@@ -60,6 +60,12 @@ export interface Message {
   unsettled?: boolean;
   /** When the send attempt behind an unsettled placeholder started (ms). */
   attemptedAt?: number;
+  /**
+   * Sent message ids an unsettled placeholder must never resolve against:
+   * same-content sends already in the thread when its attempt started, and
+   * chain records that already resolved another placeholder.
+   */
+  excludeIds?: string[];
 }
 
 /**

@@ -218,7 +218,10 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
       ...placeholder(tempId, 'retry me', old),
       status: 'failed',
     });
-    useMessagesStore.getState().settlePendingMessage(tempId, undefined, T0);
+    useMessagesStore.getState().settlePendingMessage(tempId, undefined, {
+      attemptedAt: T0,
+      excludeIds: [],
+    });
 
     await load();
     expect(thread().find((m) => m.id === tempId)?.status).toBe('pending');
@@ -286,7 +289,10 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
   it('expires an unsettled placeholder locally, with no network call', () => {
     const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
     useMessagesStore.getState().addPendingMessage(placeholder(tempId, 'hi'));
-    useMessagesStore.getState().settlePendingMessage(tempId, undefined, T0);
+    useMessagesStore.getState().settlePendingMessage(tempId, undefined, {
+      attemptedAt: T0,
+      excludeIds: [],
+    });
 
     useMessagesStore.getState().expireUnsettledPlaceholders(FRIEND);
     expect(thread().find((m) => m.id === tempId)?.status).toBe('pending');
@@ -295,5 +301,66 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
     useMessagesStore.getState().expireUnsettledPlaceholders(FRIEND);
     expect(useMessagesStore.getState().threads[FRIEND]).toBeUndefined();
     expect(mockFetchMessages).not.toHaveBeenCalled();
+  });
+
+  // Codex pass B #3: a send already known when this attempt started (an
+  // earlier same-text send, or a txid-known one confirming later) never
+  // resolves it.
+  it('never resolves against a send known when the attempt started', async () => {
+    const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
+    useMessagesStore.getState().addPendingMessage(placeholder(tempId, 'ok'));
+    useMessagesStore.getState().settlePendingMessage(tempId, undefined, {
+      attemptedAt: T0,
+      excludeIds: ['KNOWN-TX'],
+    });
+
+    mockFetchMessages.mockResolvedValue([
+      chainSent('KNOWN-TX', 'ok', T0 + 5000),
+    ]);
+    await load();
+    expect(thread().find((m) => m.id === tempId)?.status).toBe('pending');
+
+    mockFetchMessages.mockResolvedValue([
+      chainSent('KNOWN-TX', 'ok', T0 + 5000),
+      chainSent('NEW-TX', 'ok', T0 + 6000),
+    ]);
+    await load();
+    expect(thread().find((m) => m.id === tempId)).toBeUndefined();
+  });
+
+  // Codex pass B #5: spent-once state lives on the rows, so the same chain
+  // fixture behaves identically in a fresh run.
+  it('resolves the same fixture again from a clean store', async () => {
+    for (let run = 0; run < 2; run++) {
+      useMessagesStore.setState({ threads: {}, currentUserAddress: USER });
+      const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
+      useMessagesStore
+        .getState()
+        .addPendingMessage(placeholder(tempId, 'same'));
+      useMessagesStore.getState().settlePendingMessage(tempId);
+      mockFetchMessages.mockResolvedValue([
+        chainSent('SAME-FIXTURE', 'same', T0 + 5000),
+      ]);
+      await load();
+      expect(thread().map((m) => m.id)).toEqual(['SAME-FIXTURE']);
+    }
+  });
+
+  // Codex pass B #2: a genuine failure from another attempt must not turn an
+  // unsettled row back into a retryable 'failed' one.
+  it('never fails a row another attempt left unsettled', () => {
+    const tempId = `${PENDING_PLACEHOLDER_PREFIX}${T0}`;
+    useMessagesStore.getState().addPendingMessage(placeholder(tempId, 'hi'));
+    useMessagesStore.getState().settlePendingMessage(tempId);
+
+    useMessagesStore.getState().failPendingMessage(tempId);
+    expect(thread()[0]).toEqual(
+      expect.objectContaining({ status: 'pending', unsettled: true })
+    );
+
+    const other = `${PENDING_PLACEHOLDER_PREFIX}${T0 + 1}`;
+    useMessagesStore.getState().addPendingMessage(placeholder(other, 'x'));
+    useMessagesStore.getState().failPendingMessage(other);
+    expect(thread().find((m) => m.id === other)?.status).toBe('failed');
   });
 });

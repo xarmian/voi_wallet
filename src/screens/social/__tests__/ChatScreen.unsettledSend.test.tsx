@@ -29,6 +29,8 @@ const mockStore = {
   removePendingMessage: jest.fn(),
   addMessage: jest.fn(),
   settlePendingMessage: jest.fn(),
+  failPendingMessage: jest.fn(),
+  threads: {} as Record<string, unknown>,
   expireUnsettledPlaceholders: jest.fn(),
   registerMessagingKey: jest.fn(),
   checkKeyRegistration: jest.fn(async () => true),
@@ -91,12 +93,25 @@ jest.mock('@/components/social/MessageInput', () => ({
   ),
 }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+jest.mock('@/components/social/MessageBubble', () => ({
+  __esModule: true,
+  default: ({
+    message,
+    onRetry,
+  }: {
+    message: { id: string };
+    onRetry: (m: unknown) => void;
+  }) => (
+    <MockText onPress={() => onRetry(message)}>retry-{message.id}</MockText>
+  ),
+}));
 
 const sendMessage = jest.mocked(MessagingService.sendMessage);
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockThread = undefined;
+  mockStore.threads = {};
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
@@ -122,11 +137,10 @@ it.each([
   const { tempId } = await sendWith(make());
 
   expect(tempId.startsWith('pending-')).toBe(true);
-  expect(mockStore.settlePendingMessage).toHaveBeenCalledWith(
-    tempId,
-    txId,
-    expect.any(Number)
-  );
+  expect(mockStore.settlePendingMessage).toHaveBeenCalledWith(tempId, txId, {
+    attemptedAt: expect.any(Number),
+    excludeIds: [],
+  });
   expect(mockStore.updateMessageStatus).not.toHaveBeenCalledWith(
     tempId,
     'failed'
@@ -138,7 +152,7 @@ it.each([
 it('still marks a genuine failure failed, with a retry', async () => {
   const { tempId } = await sendWith(new Error('Recipient not registered'));
 
-  expect(mockStore.updateMessageStatus).toHaveBeenCalledWith(tempId, 'failed');
+  expect(mockStore.failPendingMessage).toHaveBeenCalledWith(tempId);
   expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
 });
 
@@ -170,7 +184,8 @@ it('re-checks an unsettled placeholder while the chat is open', async () => {
     expect(mockStore.expireUnsettledPlaceholders).toHaveBeenCalledWith(
       'FRIEND'
     );
-    expect(mockStore.fetchThreadMessages).toHaveBeenCalledWith('ME', 'FRIEND');
+    // Local only: no network load on the timer (Codex pass B #1, #4).
+    expect(mockStore.fetchThreadMessages).not.toHaveBeenCalled();
 
     await view.unmount();
     mockStore.expireUnsettledPlaceholders.mockClear();
@@ -194,4 +209,46 @@ it('does not poll when no placeholder is unsettled', async () => {
   } finally {
     jest.useRealTimers();
   }
+});
+
+// Codex pass B #2: two taps on one failed row start one send, and a row that
+// is no longer 'failed' can't be retried at all.
+it('starts one send for two quick retries of the same failed row', async () => {
+  const failed = {
+    id: 'pending-9',
+    threadId: 'FRIEND',
+    direction: 'sent',
+    content: 'again',
+    timestamp: 1,
+    status: 'failed',
+    fee: 1000,
+  };
+  mockThread = { messages: [failed] };
+  mockStore.threads = { FRIEND: { messages: [failed] } };
+  let release!: (v: unknown) => void;
+  sendMessage.mockReturnValue(
+    new Promise((resolve) => {
+      release = resolve;
+    }) as never
+  );
+  const view = await render(<ChatScreen />);
+
+  await act(async () => {
+    fireEvent.press(view.getByText('retry-pending-9'));
+    fireEvent.press(view.getByText('retry-pending-9'));
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    release({ message: { ...failed, id: 'TXR', status: 'confirmed' } });
+  });
+
+  // Now pending (not failed): a further retry is refused.
+  mockStore.threads = {
+    FRIEND: { messages: [{ ...failed, status: 'pending', unsettled: true }] },
+  };
+  await act(async () => {
+    fireEvent.press(view.getByText('retry-pending-9'));
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(1);
 });
