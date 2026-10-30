@@ -295,6 +295,10 @@ export class AccountSecureStorage {
     { key: Uint8Array; timestamp: number }
   > = new Map();
   private static readonly CACHE_TTL_MS = 60000; // 60 seconds as suggested
+  /** Bound on the keychain reads an account store makes (TASK-449): the PIN
+   *  presence read, the legacy account-list fallback and the device-id read.
+   *  Matches the 5 s wallet-blob legacy bound (TASK-443). */
+  private static readonly KEYCHAIN_READ_TIMEOUT_MS = 5000;
 
   // In-flight request deduplication to prevent cache stampede
   private static inFlightRequests: Map<string, Promise<Uint8Array>> = new Map();
@@ -1399,8 +1403,9 @@ export class AccountSecureStorage {
   /**
    * Reject `promise` if it has not settled within `ms`. On timeout the abandoned
    * read's eventual settlement is ignored and a labelled Error is thrown so the
-   * boot reconcile fails CLOSED (treats it as a read failure, not "absent").
-   * Mirrors the AuthContext withTimeout used for the strict lock reads.
+   * caller fails CLOSED (treats it as a read failure, not "absent"): the boot
+   * reconcile probes, and the account-store reads (TASK-449). Mirrors the
+   * AuthContext withTimeout used for the strict lock reads.
    */
   private static withTimeout<T>(
     promise: Promise<T>,
@@ -1431,7 +1436,12 @@ export class AccountSecureStorage {
     privateKey?: Uint8Array
   ): Promise<void> {
     try {
-      const hasPin = await this.hasPin();
+      // TASK-449: bounded and strict. hasPin() swallows a read failure to false,
+      // so a stuck or failing keychain would be stored as "no PIN"; here a
+      // timeout or read error fails the store instead.
+      const hasPin = Boolean(
+        await this.readStoredPinData(this.KEYCHAIN_READ_TIMEOUT_MS)
+      );
       const lastAccessed = new Date().toISOString();
 
       const metadata: PersistedAccountMetadata = {
@@ -2052,7 +2062,14 @@ export class AccountSecureStorage {
         return JSON.parse(stored) as string[];
       }
 
-      const legacy = await secureStorage.getItem(this.METADATA_LIST_KEY);
+      // TASK-449: bounded. Every store reaches this read while the primary list
+      // is absent (the first account on a fresh install). A timeout throws like
+      // any other read error, and the late value is never migrated.
+      const legacy = await this.withTimeout(
+        secureStorage.getItem(this.METADATA_LIST_KEY),
+        this.KEYCHAIN_READ_TIMEOUT_MS,
+        'Legacy account list read'
+      );
       if (legacy) {
         await storage.setItem(this.METADATA_LIST_KEY, legacy);
         await secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {});
@@ -2348,7 +2365,13 @@ export class AccountSecureStorage {
 
   // Ensure a stable installation-scoped id using platform adapter
   private static async getStableDeviceId(): Promise<string> {
-    return await platformDeviceId.getDeviceId();
+    // TASK-449: bounded. The adapter's first call per process reads the keychain;
+    // a timeout throws, so key derivation fails rather than hanging.
+    return await this.withTimeout(
+      platformDeviceId.getDeviceId(),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Device id read'
+    );
   }
 
   private static async storeAccountMetadata(
@@ -3593,28 +3616,44 @@ export class AccountSecureStorage {
 
   private static async getStoredPinData(): Promise<StoredPinData | null> {
     try {
-      const stored = await secureStorage.getItem(this.PIN_KEY);
-      if (stored) {
-        const parsed = this.parseStoredPin(stored);
-        if (parsed) {
-          return parsed;
-        }
-      }
-
-      const legacy = await storage.getItem(this.PIN_KEY);
-      if (legacy) {
-        await secureStorage.setItem(this.PIN_KEY, legacy);
-        await storage.removeItem(this.PIN_KEY).catch(() => {});
-        const parsed = this.parseStoredPin(legacy);
-        if (parsed) {
-          return parsed;
-        }
-      }
-      return null;
+      return await this.readStoredPinData();
     } catch (error) {
       console.warn('Failed to retrieve stored PIN hash', redactError(error));
       return null;
     }
+  }
+
+  /**
+   * The stored PIN credential, or null if none is stored or it does not parse.
+   * THROWS on a read failure, and on a keychain read that outlives `timeoutMs`
+   * when one is given (TASK-449), so a caller that must not read a failure as
+   * "no PIN" can tell the two apart. getStoredPinData is the swallowing wrapper.
+   */
+  private static async readStoredPinData(
+    timeoutMs?: number
+  ): Promise<StoredPinData | null> {
+    const read = secureStorage.getItem(this.PIN_KEY);
+    const stored =
+      timeoutMs === undefined
+        ? await read
+        : await this.withTimeout(read, timeoutMs, 'PIN presence read');
+    if (stored) {
+      const parsed = this.parseStoredPin(stored);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    const legacy = await storage.getItem(this.PIN_KEY);
+    if (legacy) {
+      await secureStorage.setItem(this.PIN_KEY, legacy);
+      await storage.removeItem(this.PIN_KEY).catch(() => {});
+      const parsed = this.parseStoredPin(legacy);
+      if (parsed) {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   private static async getOrCreateSalt(
