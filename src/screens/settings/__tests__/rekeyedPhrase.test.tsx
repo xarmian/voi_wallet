@@ -23,13 +23,17 @@ jest.mock('@/store/walletStore', () => ({
   useWalletSettings: () => ({}),
   useWalletStore: (selector: (state: object) => unknown) => selector({}),
 }));
-let mockPerNetwork: Record<string, { status: string; authAddress?: string }>;
-const mockRekeyStatus = jest.fn();
-jest.mock('@/store/useNetworkRekeyStatus', () => ({
-  useNetworkRekeyStatus: (address: string) => {
-    mockRekeyStatus(address);
-    return { perNetwork: mockPerNetwork, delegatedEverywhere: false };
+let mockAllSelf: boolean;
+let mockHintDelegated: boolean;
+const mockFreshCheck = jest.fn();
+jest.mock('@/store/useFreshRekeyCheck', () => ({
+  useFreshRekeyCheck: (address: string | undefined) => {
+    mockFreshCheck(address);
+    return { allSelf: mockAllSelf };
   },
+}));
+jest.mock('@/store/rekeyDisplayStatus', () => ({
+  useRekeyDisplayDelegatedAnywhere: () => mockHintDelegated,
 }));
 jest.mock('@/store/networkStore', () => ({
   useIsCurrentNetworkHealthy: () => true,
@@ -82,8 +86,9 @@ beforeEach(() => {
   mockActive = account();
   mockAccounts = [mockActive];
   mockParams = {};
-  mockPerNetwork = {};
-  mockRekeyStatus.mockReset();
+  mockAllSelf = true;
+  mockHintDelegated = false;
+  mockFreshCheck.mockReset();
   probe.mockReset();
   probe.mockResolvedValue(false);
   jest.mocked(SecureKeyManager.getMnemonic).mockResolvedValue('');
@@ -165,54 +170,43 @@ it.each([AccountType.REKEYED, AccountType.STANDARD])(
 );
 
 // TASK-458: a pending rekey that lands later leaves the record STANDARD, so
-// the warning follows chain state per network, not only the persisted type.
-// Only 'self' on every network hides it.
+// the warning follows fresh chain reads per network, not only the persisted
+// type. Only a fresh 'self' on every network hides it (useFreshRekeyCheck
+// owns that rule; its own test covers pending, failed and empty lists).
 it.each([
+  ['fresh reads all self, no hint', AccountType.STANDARD, true, false, false],
+  ['fresh reads not all self', AccountType.STANDARD, false, false, true],
+  // The display hint can only add the warning, never hide it.
   [
-    'delegated on one network',
-    { 'voi-mainnet': 'delegated', 'algorand-mainnet': 'self' },
+    'all self but the hint says delegated',
+    AccountType.STANDARD,
+    true,
+    true,
     true,
   ],
+  ['not all self, hint absent', AccountType.STANDARD, false, false, true],
+  // The persisted REKEYED branch still shows it on its own.
   [
-    'delegated everywhere',
-    { 'voi-mainnet': 'delegated', 'algorand-mainnet': 'delegated' },
+    'a REKEYED record whose fresh reads are all self',
+    AccountType.REKEYED,
     true,
-  ],
-  [
-    'self everywhere',
-    { 'voi-mainnet': 'self', 'algorand-mainnet': 'self' },
     false,
-  ],
-  // Fail toward the warning: a failed or pending read never hides it.
-  ['unknown (lookup failed)', { 'voi-mainnet': 'unknown' }, true],
-  [
-    'self on one network, unknown on another',
-    { 'voi-mainnet': 'self', 'algorand-mainnet': 'unknown' },
     true,
   ],
 ] as const)(
-  'a STANDARD record %s: warning shown = %s',
-  async (_name, statuses, shown) => {
-    mockActive = account({
-      type: AccountType.STANDARD,
-      authAddress: undefined,
-    });
+  '%s: warning shown = %s',
+  async (_name, type, allSelf, hint, shown) => {
+    mockActive = account({ type, authAddress: undefined });
     mockAccounts = [mockActive];
-    mockPerNetwork = Object.fromEntries(
-      Object.entries(statuses).map(([network, status]) => [
-        network,
-        status === 'delegated'
-          ? { status, authAddress: 'SIGNER_ADDRESS' }
-          : { status },
-      ])
-    );
+    mockAllSelf = allSelf;
+    mockHintDelegated = hint;
     const view = await render(<ShowRecoveryPhraseScreen />);
     expect(Boolean(view.queryByText(note))).toBe(shown);
-    expect(mockRekeyStatus).toHaveBeenCalledWith('ORIGINAL_ADDRESS');
+    expect(mockFreshCheck).toHaveBeenCalledWith('ORIGINAL_ADDRESS');
   }
 );
 
-it('reads chain status for the routed target, not the active account', async () => {
+it('checks the routed target, not the active account', async () => {
   mockActive = account({ type: AccountType.STANDARD });
   mockAccounts = [
     mockActive,
@@ -220,6 +214,24 @@ it('reads chain status for the routed target, not the active account', async () 
   ];
   mockParams = { accountAddress: 'TARGET_ADDRESS' };
   await render(<ShowRecoveryPhraseScreen />);
-  expect(mockRekeyStatus).toHaveBeenCalledWith('TARGET_ADDRESS');
-  expect(mockRekeyStatus).not.toHaveBeenCalledWith('ORIGINAL_ADDRESS');
+  expect(mockFreshCheck).toHaveBeenCalledWith('TARGET_ADDRESS');
+  expect(mockFreshCheck).not.toHaveBeenCalledWith('ORIGINAL_ADDRESS');
+});
+
+// Codex pass A M2: a later route change must not pair one account's phrase
+// with another account's warning decision. The target is pinned at mount.
+it('pins the target for the screen lifetime', async () => {
+  mockActive = account({ type: AccountType.STANDARD });
+  mockAccounts = [
+    mockActive,
+    account({ address: 'A_ADDRESS', type: AccountType.STANDARD }),
+    account({ address: 'B_ADDRESS', type: AccountType.STANDARD }),
+  ];
+  mockParams = { accountAddress: 'A_ADDRESS' };
+  const view = await render(<ShowRecoveryPhraseScreen />);
+  mockParams = { accountAddress: 'B_ADDRESS' };
+  await view.rerender(<ShowRecoveryPhraseScreen />);
+  expect(mockFreshCheck).not.toHaveBeenCalledWith('B_ADDRESS');
+  expect(SecureKeyManager.getMnemonic).not.toHaveBeenCalledWith('B_ADDRESS');
+  expect(SecureKeyManager.getMnemonic).toHaveBeenCalledWith('A_ADDRESS');
 });

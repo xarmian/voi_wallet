@@ -13,6 +13,7 @@ import {
 } from '@/utils/assetImages';
 import { selectPrimarySource } from '@/utils/mappedAssetPrimary';
 import { redactError } from '@/utils/logRedaction';
+import { recordRekeyObservation } from '@/store/rekeyDisplayStatus';
 
 /**
  * Service for aggregating balances across multiple networks
@@ -34,8 +35,11 @@ export class MultiNetworkBalanceService {
         try {
           const networkService = NetworkService.getInstance(networkId);
           const balance = await networkService.getAccountBalance(address);
+          // TASK-458: display-only, so an external rekey shows after a refresh.
+          recordRekeyObservation(address, networkId, balance.rekeyInfo);
           return { networkId, balance, success: true };
         } catch (error) {
+          recordRekeyObservation(address, networkId, null);
           console.warn(
             `[MultiNetworkBalanceService] Failed to fetch balance from ${networkId}:`,
             redactError(error)

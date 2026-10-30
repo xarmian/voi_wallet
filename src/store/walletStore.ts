@@ -54,6 +54,7 @@ import {
   subscribeRekeySigner,
 } from '@/services/wallet/rekeyState';
 import { probeOwnKey } from '@/services/wallet/ownKeyCustody';
+import { recordRekeyObservation } from './rekeyDisplayStatus';
 
 /**
  * A transaction-load failure, tagged with the resource it belongs to:
@@ -692,8 +693,8 @@ let walletInitializationPromise: Promise<void> | null = null;
 // caller on the new network join (and receive/persist) the previous network's
 // result. Concurrent callers for the same account+network (HomeScreen mount,
 // pull-to-refresh, SendScreen, the transactionSuccess force-refresh) share one
-// promise, so the expensive fetch chain and the rekeyInfo→canSign persist run
-// exactly once. Module-level (not a store field) so it survives initialize()'s
+// promise, so the expensive fetch chain runs exactly once (balance loads no
+// longer persist rekey metadata, TASK-425 U5). Module-level (not a store field) so it survives initialize()'s
 // accountStates reset. Entries are always removed in a `finally`, so a failed
 // load can never wedge future loads.
 const balanceLoadsInFlight = new Map<string, Promise<void>>();
@@ -1370,10 +1371,10 @@ export const useWalletStore = create<WalletState>()(
 
       // In-flight dedup: concurrent callers (HomeScreen mount, pull-to-refresh,
       // SendScreen, the transactionSuccess force-refresh) for the same
-      // account+network share this one promise, so the expensive fetch chain and
-      // the rekeyInfo→canSign persist below run exactly once and every caller sees
-      // the same result. forceRefresh joins an active load rather than launching a
-      // duplicate; when nothing is in flight it still starts a fresh load (the
+      // account+network share this one promise, so the expensive fetch chain
+      // runs exactly once and every caller sees the same result. forceRefresh
+      // joins an active load rather than launching a duplicate; when nothing is
+      // in flight it still starts a fresh load (the
       // cache-freshness early-return above already honored forceRefresh's
       // "ignore fresh cache" semantics).
       const existingLoad = balanceLoadsInFlight.get(inFlightKey);
@@ -1469,6 +1470,12 @@ export const useWalletStore = create<WalletState>()(
             isBackgroundRefreshing: false,
             balanceLastUpdated: now,
           });
+          // TASK-458: display-only, so an external rekey shows after a refresh.
+          recordRekeyObservation(
+            account.address,
+            currentNetworkId,
+            balance.rekeyInfo
+          );
 
           // Persist the updated balance cache with network ID
           setTimeout(() => {
@@ -2139,7 +2146,7 @@ export const useWalletStore = create<WalletState>()(
 
       for (const result of results) {
         if (result.status !== 'fulfilled') continue;
-        const { accountId, balance, error } = result.value;
+        const { accountId, account, balance, error } = result.value;
         const token = tokens.get(accountId);
         if (!token || !isCurrentBalanceRequest(accountId, token)) continue;
 
@@ -2151,6 +2158,12 @@ export const useWalletStore = create<WalletState>()(
             isBackgroundRefreshing: false,
           });
         } else if (balance) {
+          // TASK-458: display-only, so an external rekey shows after a refresh.
+          recordRekeyObservation(
+            account.address,
+            currentNetworkId,
+            balance.rekeyInfo
+          );
           patches.set(accountId, {
             balance,
             balanceNetworkId: currentNetworkId,

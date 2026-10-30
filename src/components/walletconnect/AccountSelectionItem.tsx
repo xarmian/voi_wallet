@@ -1,6 +1,8 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Switch } from 'react-native';
-import { AccountMetadata } from '@/types/wallet';
+import { AccountMetadata, AccountType } from '@/types/wallet';
+import { useCurrentNetwork } from '@/store/networkStore';
+import { useRekeyDisplayStatus } from '@/store/rekeyDisplayStatus';
 import { truncateAddress } from '@/services/walletconnect/utils';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -19,6 +21,15 @@ export default function AccountSelectionItem({
 }: AccountSelectionItemProps) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+  // TASK-458: label from the last refresh's display-only rekey status; the
+  // stored type is the fallback only when that is unknown. Display only:
+  // proposal eligibility reads chain (resolveProposalEligibility).
+  const displayRekey = useRekeyDisplayStatus(
+    account.address,
+    useCurrentNetwork()
+  );
+  const typeLabel =
+    displayRekey?.status === 'delegated' ? AccountType.REKEYED : account.type;
 
   const handlePress = () => {
     onToggleSelection(account.id);
@@ -40,7 +51,7 @@ export default function AccountSelectionItem({
             {truncateAddress(account.address)}
           </Text>
         </View>
-        <Text style={styles.accountType}>{account.type}</Text>
+        <Text style={styles.accountType}>{typeLabel}</Text>
       </View>
 
       <Switch

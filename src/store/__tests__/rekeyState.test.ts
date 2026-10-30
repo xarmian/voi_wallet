@@ -513,3 +513,53 @@ describe('balance loads never persist rekey metadata', () => {
     }
   );
 });
+
+// TASK-458: both current-network balance commits feed the display-only rekey
+// status, so an external rekey shows after the next refresh. Neither writes
+// wallet metadata or the persisted account type.
+describe('balance refreshes feed the display-only rekey status (TASK-458)', () => {
+  const external = {
+    ...balance,
+    rekeyInfo: { isRekeyed: true, authAddress: 'OUTSIDE' },
+  };
+  const display = async (address: string) => {
+    const { useRekeyDisplayStatus, clearRekeyDisplayStatus } =
+      await import('../rekeyDisplayStatus');
+    return { useRekeyDisplayStatus, clearRekeyDisplayStatus, address };
+  };
+
+  it.each(['loadAccountBalance', 'refreshAllBalances'] as const)(
+    '%s records an external rekey without a persisted write',
+    async (path) => {
+      const { useRekeyDisplayStatus, clearRekeyDisplayStatus } =
+        await display('');
+      clearRekeyDisplayStatus();
+      // Pinned here: earlier tests in this file replace these implementations.
+      mockGetAccount.mockImplementation(async (id: string) => ({
+        id,
+        address: id === 'source' ? 'SOURCE' : 'AUTH',
+        type: 'standard',
+      }));
+      mockGetCurrentWallet.mockResolvedValue(wallet);
+      useWalletStore.setState({ wallet, accountStates: {} });
+      mockGetAccountBalance.mockResolvedValue(external);
+      const address = 'SOURCE';
+      if (path === 'loadAccountBalance')
+        await useWalletStore.getState().loadAccountBalance('source', true);
+      else await useWalletStore.getState().refreshAllBalances();
+      const { result } = await renderHook(() =>
+        useRekeyDisplayStatus(address, network)
+      );
+      expect(result.current).toMatchObject({
+        status: 'delegated',
+        authAddress: 'OUTSIDE',
+      });
+      expect(mockUpdateAccountMetadata).not.toHaveBeenCalled();
+      expect(mockPersistRestoredWallet).not.toHaveBeenCalled();
+      // Storage writes, if any, are the network-scoped balance cache only.
+      for (const [key] of mockSetItem.mock.calls) {
+        expect(key).toMatch(/balance_cache/);
+      }
+    }
+  );
+});

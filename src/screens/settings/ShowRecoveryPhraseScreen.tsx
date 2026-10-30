@@ -16,7 +16,8 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { AccountType } from '@/types/wallet';
 import { useAccounts, useActiveAccount } from '@/store/walletStore';
-import { useNetworkRekeyStatus } from '@/store/useNetworkRekeyStatus';
+import { useFreshRekeyCheck } from '@/store/useFreshRekeyCheck';
+import { useRekeyDisplayDelegatedAnywhere } from '@/store/rekeyDisplayStatus';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -43,7 +44,11 @@ export default function ShowRecoveryPhraseScreen() {
   useSecureScreen();
 
   const activeAccount = useActiveAccount();
-  const targetAddress = accountAddress ?? activeAccount?.address;
+  // TASK-458: pinned for the screen's lifetime, so the phrase shown and the
+  // warning decision always describe the same account (a later route or
+  // active-account change can't pair one account's phrase with another's
+  // warning).
+  const [targetAddress] = useState(accountAddress ?? activeAccount?.address);
   const accounts = useAccounts();
   const targetAccount = accounts.find(
     (account) => account.address === targetAddress
@@ -52,12 +57,16 @@ export default function ShowRecoveryPhraseScreen() {
   // still read STANDARD after a pending rekey lands, so the persisted type
   // alone would hide this warning for a phrase that no longer controls the
   // account on some network. Fail toward the warning (director ruling, see
-  // the TASK-458 trail): only chain reads confirming the account signs for
-  // itself on every network hide it, so a failed or pending read shows it.
-  const { perNetwork } = useNetworkRekeyStatus(targetAccount?.address ?? '');
+  // the TASK-458 trail): only fresh reads, issued after this screen opened,
+  // that show the account signing for itself on every configured network
+  // hide it. The last refresh's display status is a one-way hint: it can
+  // show the warning early, never hide it.
+  const { allSelf } = useFreshRekeyCheck(targetAccount?.address);
+  const hintDelegated = useRekeyDisplayDelegatedAnywhere(
+    targetAccount?.address ?? ''
+  );
   const rekeyedSomewhere =
-    targetAccount?.type === AccountType.REKEYED ||
-    !Object.values(perNetwork).every((status) => status.status === 'self');
+    targetAccount?.type === AccountType.REKEYED || hintDelegated || !allSelf;
 
   const [mnemonic, setMnemonic] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
