@@ -527,5 +527,19 @@ describe('NetworkService confirmation waits (TASK-440 #8)', () => {
       `Transaction ${TX_ID} is not confirmed yet and may still be committed; check its status before sending again`
     );
     expect(mapError(pending).type).not.toBe('transaction_rejected');
+    // No txid to check by: never retryable, never an invitation to re-sign
+    // (director 10-29), bare or wrapped by submitTransaction's catch.
+    const maybe = new TransactionMaybeSubmittedError();
+    for (const error of [
+      maybe,
+      new Error(`Transaction failed: ${maybe.message}`),
+    ]) {
+      const mapped = mapError(error);
+      expect(mapped.type).toBe('maybe_submitted');
+      expect(mapped.retryable).toBe(false);
+      expect(`${mapped.message} ${mapped.userAction}`).not.toMatch(
+        /try again|send (it )?again|resend|re-sign/i
+      );
+    }
   });
 });

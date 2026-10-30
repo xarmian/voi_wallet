@@ -155,7 +155,7 @@ export class TransactionExpiredError extends Error {
 export class TransactionMaybeSubmittedError extends Error {
   constructor() {
     super(
-      'This transaction may already have been submitted. Check your transaction history before sending it again.'
+      'This transaction may already have been submitted. Check your transaction history to see whether it went through.'
     );
     this.name = 'TransactionMaybeSubmittedError';
   }
