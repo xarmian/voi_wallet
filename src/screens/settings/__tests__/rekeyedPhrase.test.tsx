@@ -23,6 +23,14 @@ jest.mock('@/store/walletStore', () => ({
   useWalletSettings: () => ({}),
   useWalletStore: (selector: (state: object) => unknown) => selector({}),
 }));
+let mockPerNetwork: Record<string, { status: string; authAddress?: string }>;
+const mockRekeyStatus = jest.fn();
+jest.mock('@/store/useNetworkRekeyStatus', () => ({
+  useNetworkRekeyStatus: (address: string) => {
+    mockRekeyStatus(address);
+    return { perNetwork: mockPerNetwork, delegatedEverywhere: false };
+  },
+}));
 jest.mock('@/store/networkStore', () => ({
   useIsCurrentNetworkHealthy: () => true,
 }));
@@ -74,6 +82,8 @@ beforeEach(() => {
   mockActive = account();
   mockAccounts = [mockActive];
   mockParams = {};
+  mockPerNetwork = {};
+  mockRekeyStatus.mockReset();
   probe.mockReset();
   probe.mockResolvedValue(false);
   jest.mocked(SecureKeyManager.getMnemonic).mockResolvedValue('');
@@ -153,3 +163,56 @@ it.each([AccountType.REKEYED, AccountType.STANDARD])(
     expect(mockSecureScreen).toHaveBeenCalled();
   }
 );
+
+// TASK-458: a pending rekey that lands later leaves the record STANDARD, so
+// the warning follows chain state per network, not only the persisted type.
+it.each([
+  [
+    'delegated on one network',
+    { 'voi-mainnet': 'delegated', 'algorand-mainnet': 'self' },
+    true,
+  ],
+  [
+    'delegated everywhere',
+    { 'voi-mainnet': 'delegated', 'algorand-mainnet': 'delegated' },
+    true,
+  ],
+  [
+    'self everywhere',
+    { 'voi-mainnet': 'self', 'algorand-mainnet': 'self' },
+    false,
+  ],
+  ['unknown (lookup failed)', { 'voi-mainnet': 'unknown' }, false],
+] as const)(
+  'a STANDARD record %s: warning shown = %s',
+  async (_name, statuses, shown) => {
+    mockActive = account({
+      type: AccountType.STANDARD,
+      authAddress: undefined,
+    });
+    mockAccounts = [mockActive];
+    mockPerNetwork = Object.fromEntries(
+      Object.entries(statuses).map(([network, status]) => [
+        network,
+        status === 'delegated'
+          ? { status, authAddress: 'SIGNER_ADDRESS' }
+          : { status },
+      ])
+    );
+    const view = await render(<ShowRecoveryPhraseScreen />);
+    expect(Boolean(view.queryByText(note))).toBe(shown);
+    expect(mockRekeyStatus).toHaveBeenCalledWith('ORIGINAL_ADDRESS');
+  }
+);
+
+it('reads chain status for the routed target, not the active account', async () => {
+  mockActive = account({ type: AccountType.STANDARD });
+  mockAccounts = [
+    mockActive,
+    account({ address: 'TARGET_ADDRESS', type: AccountType.STANDARD }),
+  ];
+  mockParams = { accountAddress: 'TARGET_ADDRESS' };
+  await render(<ShowRecoveryPhraseScreen />);
+  expect(mockRekeyStatus).toHaveBeenCalledWith('TARGET_ADDRESS');
+  expect(mockRekeyStatus).not.toHaveBeenCalledWith('ORIGINAL_ADDRESS');
+});

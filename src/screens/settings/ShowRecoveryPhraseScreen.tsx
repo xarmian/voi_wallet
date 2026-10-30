@@ -16,6 +16,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { AccountType } from '@/types/wallet';
 import { useAccounts, useActiveAccount } from '@/store/walletStore';
+import { useNetworkRekeyStatus } from '@/store/useNetworkRekeyStatus';
 import MnemonicDisplay from '@/components/wallet/MnemonicDisplay';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -47,6 +48,14 @@ export default function ShowRecoveryPhraseScreen() {
   const targetAccount = accounts.find(
     (account) => account.address === targetAddress
   );
+  // TASK-458: rekey state is per network and comes from chain. A record can
+  // still read STANDARD after a pending rekey lands, so the persisted type
+  // alone would hide this warning for a phrase that no longer controls the
+  // account on some network.
+  const { perNetwork } = useNetworkRekeyStatus(targetAccount?.address ?? '');
+  const rekeyedSomewhere =
+    targetAccount?.type === AccountType.REKEYED ||
+    Object.values(perNetwork).some((status) => status.status === 'delegated');
 
   const [mnemonic, setMnemonic] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -241,7 +250,7 @@ export default function ShowRecoveryPhraseScreen() {
           </Text>
         </View>
 
-        {targetAccount?.type === AccountType.REKEYED && (
+        {rekeyedSomewhere && (
           <View style={styles.warningContainer}>
             <Text style={styles.warningText}>
               {
