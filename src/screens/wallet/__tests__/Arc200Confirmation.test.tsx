@@ -23,6 +23,7 @@ import {
   isArc200ExpiredGroup,
   ARC200_RECONFIRM_MESSAGE,
 } from '@/services/transactions/arc200MbrRace';
+import { toErrorAlert } from '@/utils/errorMapping';
 import Send from '../TransactionConfirmationScreen';
 import Claim from '../ClaimTokenScreen';
 import All from '../ClaimAllConfirmationScreen';
@@ -443,6 +444,7 @@ it.each(['send', 'claim', 'all'] as const)(
             );
           });
         };
+        let lastFailure: unknown;
         const fail = async () => {
           await act(async () => {
             if (flow === 'send') {
@@ -456,6 +458,7 @@ it.each(['send', 'claim', 'all'] as const)(
                 failure = caught;
               }
               expect(failure).toBeInstanceOf(Error);
+              lastFailure = failure;
               await mockAuthProps.onComplete(false, { error: failure });
             } else {
               const callbackId = mockNavigate.mock.calls.at(-1)![1].callbackId;
@@ -542,19 +545,20 @@ it.each(['send', 'claim', 'all'] as const)(
           expect(builder).toHaveBeenCalledTimes(2);
           expect(submit.mock.calls.length).toBe(submits * 2);
         } else expect(builder).toHaveBeenCalledTimes(1);
-        if (flow === 'send')
-          // The failure copy comes from the modal's { error } (TASK-453), not
-          // the generic fallback.
-          expect(mockReplace).toHaveBeenLastCalledWith(
-            'TransactionResult',
-            expect.objectContaining({
-              isSuccess: false,
-              errorMessage: expect.not.stringMatching(
-                /^Transaction failed\.?$/
-              ),
-            })
+        if (flow === 'send') {
+          // The failure copy is the injected error's own mapped reason
+          // (TASK-453), which differs from what a discarded error yields.
+          const expected = toErrorAlert(lastFailure).message;
+          expect(expected).not.toBe(
+            toErrorAlert(undefined, { fallbackMessage: 'Transaction failed.' })
+              .message
           );
-        else
+          const shown = mockReplace.mock.calls.at(-1)![1];
+          expect(shown.isSuccess).toBe(false);
+          expect(shown.errorMessage.split('\n\n')[0]).toBe(
+            expected.split('\n\n')[0]
+          );
+        } else
           expect(alert).toHaveBeenLastCalledWith(
             'Submission Failed',
             error.message

@@ -756,9 +756,14 @@ export default function RekeyAccountScreen() {
           fallbackMessage: 'The rekey could not be completed.',
         }).message;
 
+        // Only an on-chain authority rejection earns the tip, not a failed
+        // biometric/PIN "authentication" (TASK-453, Codex pass A #3).
         const rawMessage =
           result?.error instanceof Error ? result.error.message : '';
-        if (rekeyFlow === 'reverse' && rawMessage.includes('auth')) {
+        if (
+          rekeyFlow === 'reverse' &&
+          /should have been authorized by/.test(rawMessage)
+        ) {
           errorMessage +=
             '\n\nTip: Make sure you have signing authority for this account.';
         }

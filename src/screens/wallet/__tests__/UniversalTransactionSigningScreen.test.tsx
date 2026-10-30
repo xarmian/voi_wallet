@@ -26,7 +26,11 @@ import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 
 import { makeAccount } from '@/__tests__/fixtures/algorand';
-import { NetworkId } from '@/types/network';
+import {
+  NetworkId,
+  TransactionMaybeSubmittedError,
+  TransactionPendingError,
+} from '@/types/network';
 import { truncateAddress } from '@/services/walletconnect/utils';
 import { NETWORK_CONFIGURATIONS } from '@/services/network/config';
 
@@ -944,5 +948,37 @@ it('shows the mapped reason when signing fails', async () => {
     'Not Enough Balance',
     expect.stringContaining("doesn't have enough balance")
   );
+  alert.mockRestore();
+});
+
+// TASK-453 (Codex pass A #2): a send that may have landed is never shown as a
+// failure, even though it arrives through the modal's failure callback.
+it.each([
+  ['pending', () => new TransactionPendingError('TXID'), 'Not Confirmed Yet'],
+  [
+    'maybe submitted',
+    () => new TransactionMaybeSubmittedError(),
+    'May Have Been Sent',
+  ],
+])('shows a %s send as unsettled, not failed', async (_label, make, title) => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const a = makeAccount('signer-unsettled').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+
+  await act(async () => {
+    await mockModalProps.onComplete(false, { error: make() });
+  });
+
+  const [shownTitle, shownMessage] = alert.mock.calls.at(-1)!;
+  expect(shownTitle).toBe(title);
+  expect(String(shownMessage)).not.toMatch(/fail/i);
   alert.mockRestore();
 });

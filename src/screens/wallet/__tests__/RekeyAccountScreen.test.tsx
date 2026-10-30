@@ -190,6 +190,9 @@ jest.mock('@/components/rekey/AirgapVerificationFlow', () => {
 // The real auth modal drives native signing; here it just exposes its
 // visibility plus one press target per exit path so a test can complete or
 // cancel exactly as the screen's callbacks expect.
+// The error the mocked modal reports on failure (TASK-453).
+let mockAuthError: Error = new Error('TransactionPool.Remember: overspend');
+
 jest.mock('@/components/UnifiedTransactionAuthModal', () => {
   const { View, Text, Pressable } = require('react-native');
   return {
@@ -217,7 +220,7 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
             // The real modal reports failure as { error } (TASK-453).
             onPress={() =>
               onComplete(false, {
-                error: new Error('TransactionPool.Remember: overspend'),
+                error: mockAuthError,
               })
             }
           >
@@ -308,6 +311,7 @@ beforeEach(() => {
   mockGetPrivateKey.mockRejectedValue(new Error('no key'));
   mockFocused = true;
   mockAuthState = { isAuthenticated: true, isLocked: false };
+  mockAuthError = new Error('TransactionPool.Remember: overspend');
 });
 
 afterEach(() => {
@@ -639,6 +643,53 @@ describe('RekeyAccountScreen — own-key targets and controllers (TASK-425 U3)',
       jest.mocked(MultiAccountWalletService.updateAccountMetadata)
     ).not.toHaveBeenCalled();
   });
+
+  // TASK-453 (Codex pass A #3): the authority tip is for an on-chain authority
+  // rejection only, never for a failed biometric/PIN authentication.
+  it.each([
+    [
+      'should have been authorized by XYZ but was actually authorized by ABC',
+      true,
+    ],
+    ['Biometric authentication failed', false],
+  ])(
+    'reverse-rekey failure "%s" shows the authority tip: %s',
+    async (raw, tip) => {
+      mockAuthError = new Error(raw);
+      const SRC = algosdk.generateAccount();
+      const keptSource = {
+        ...retained,
+        id: 'src',
+        address: SRC.addr.toString(),
+        label: 'Source Account',
+      };
+      const controller = { ...retained, id: 'ctl', label: 'Controller' };
+      mockGetPrivateKey.mockImplementation(async (id: string) => {
+        if (id === 'src') return SRC.sk.slice();
+        if (id === 'ctl') return KEPT.sk.slice();
+        throw new Error('no key');
+      });
+      mockWalletState.wallet = { accounts: [keptSource, controller] };
+      mockRekeyInfo = { isRekeyed: true, authAddress: KEPT_ADDR };
+      mockProbe.mockResolvedValue(true);
+      const screen = await render(<RekeyAccountScreen />);
+      await settle();
+      await fireEvent.press(screen.getByText('Remove Rekey (Return to Self)'));
+      await settle();
+      const proceed = () => screen.getAllByText('Remove Rekey').at(-1)!;
+      await waitFor(() => expect(proceed()).toBeEnabled());
+      await fireEvent.press(proceed());
+      await pressAlertButton('Remove Rekey');
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId('auth-complete-error'));
+      });
+
+      const last = jest.mocked(Alert.alert).mock.calls.at(-1)!;
+      expect(last[0]).toBe('Remove Rekey Failed');
+      expect(String(last[1]).includes('signing authority')).toBe(tip);
+    }
+  );
 
   it('re-probes custody when the app unlocks', async () => {
     mockWalletState.wallet = { accounts: [mockSourceAccount, retained] };
