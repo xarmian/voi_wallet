@@ -130,6 +130,62 @@ describe('NetworkService off-balance-path calls are bounded (TASK-448)', () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
+  // Headers arrive, the body never does: a header-only deadline would hang here
+  // (Codex pass A #1).
+  const stalledBody = () => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: never,
+    json: never,
+  });
+
+  it('searchAssets bounds a stalled body on the name search', async () => {
+    (global.fetch as jest.Mock).mockImplementation(async () => stalledBody());
+
+    const pending = service.searchAssets('voi');
+    const rejected = expect(pending).rejects.toThrow(
+      'request deadline exceeded'
+    );
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    await rejected;
+  });
+
+  it('searchAssets bounds a stalled body on the unit-name fallback', async () => {
+    (global.fetch as jest.Mock)
+      .mockImplementationOnce(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => JSON.stringify({ assets: [] }),
+        json: async () => ({ assets: [] }),
+      }))
+      .mockImplementationOnce(async () => stalledBody());
+
+    const pending = service.searchAssets('voi');
+    const rejected = expect(pending).rejects.toThrow(
+      'request deadline exceeded'
+    );
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    await rejected;
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('the standalone pricing fallback is bounded', async () => {
+    (service as any).currentNetworkId = NetworkId.ALGORAND_MAINNET;
+    jest.spyOn(service, 'isFeatureAvailable').mockReturnValue(true);
+
+    let settled = false;
+    const pending = (service as any).getPricingData(ADDRESS).finally(() => {
+      settled = true;
+    });
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(settled).toBe(true);
+  });
+
   // Every send goes through submitTransaction, whose timeout is classified as
   // "may have been sent" (TASK-440 #8). The unbounded, unclassified
   // sendRawTransaction wrapper had no callers and is gone.

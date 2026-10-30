@@ -44,4 +44,36 @@ describe('updateStore allowlist fetch is bounded (TASK-448)', () => {
     expect(state.validationStatus).toBe('unknown');
     expect(state.isUpdateAvailable).toBe(false);
   });
+
+  // Headers arrive and the body stalls past the deadline, then lands late
+  // (Codex pass A #1): still blocked, and the late body is never cached.
+  it('a stalled body blocks the update and a late body is not cached', async () => {
+    const AsyncStorage = jest.requireMock(
+      '@react-native-async-storage/async-storage'
+    ).default;
+    AsyncStorage.setItem.mockClear();
+    let deliver: (text: string) => void = () => {};
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: () =>
+        new Promise<string>((resolve) => {
+          deliver = resolve;
+        }),
+    })) as any;
+
+    const pending = useUpdateStore.getState().setUpdateAvailable('update-2');
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    await pending;
+    expect(useUpdateStore.getState().validationStatus).toBe('unknown');
+
+    deliver(JSON.stringify({ updates: [{ ids: ['update-2'] }] }));
+    await jest.advanceTimersByTimeAsync(0);
+    expect(AsyncStorage.setItem).not.toHaveBeenCalledWith(
+      '@update/validationCache',
+      expect.anything()
+    );
+    expect(useUpdateStore.getState().validationStatus).toBe('unknown');
+  });
 });

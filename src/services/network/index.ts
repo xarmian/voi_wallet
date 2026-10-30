@@ -766,9 +766,12 @@ export class NetworkService {
         // For Algorand, get prices for ALGO and all user's assets. Reuse the
         // caller's in-flight account request when provided so this path doesn't
         // issue a duplicate accountInformation call for the same address; fall
-        // back to fetching when called standalone.
+        // back to a bounded fetch when called standalone (TASK-448).
         const accountInfo = await (prefetchedAccountInfo ??
-          this.algodClient.accountInformation(address).do());
+          this.withTimeout(
+            this.algodClient.accountInformation(address).do(),
+            'pricing account info'
+          ));
         const assetIds: number[] = [0]; // Always include ALGO (asset ID 0)
 
         // Collect all asset IDs from user's assets
