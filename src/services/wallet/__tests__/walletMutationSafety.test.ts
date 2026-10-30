@@ -402,3 +402,156 @@ it('keeps the secret of an account whose metadata landed when the tombstone clea
     removeItem.mockImplementation(original!);
   }
 });
+
+// TASK-443: getCurrentWallet's legacy migration read is bounded too, so every
+// caller that reaches it (default labels, the watch/remote-signer/rekeyed
+// duplicate checks) settles instead of hanging on a stuck keychain, and the
+// write that follows still fails closed in the chain.
+describe('getCurrentWallet legacy read is bounded (TASK-443)', () => {
+  const algosdk = require('algosdk');
+  const address = () => algosdk.generateAccount().addr.toString();
+  // Each path crosses its bounded reads in sequence: createStandardAccount two
+  // (getAccountCount, then the write chain), the other imports three (the
+  // duplicate/auth lookup, the default-label count, then the write chain).
+  const TWO_DEADLINES_MS = 10_000;
+  const THREE_DEADLINES_MS = 15_000;
+
+  const settle = (pending: Promise<unknown>) =>
+    pending.then(
+      () => 'resolved',
+      (error: Error) => `rejected: ${error.message}`
+    );
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest
+      .mocked(secureStorage.getItem)
+      .mockImplementation(() => new Promise(() => {}));
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('getCurrentWallet reads as null at the deadline and migrates nothing', async () => {
+    const outcome = Service.getCurrentWallet();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(await outcome).toBeNull();
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  // AccountSecureStorage is mocked in this file, so this covers the wallet
+  // service's reads only; the secret store's own keychain reads (e.g. its PIN
+  // check) are a separate, still-unbounded seam flagged on TASK-443.
+  it('createStandardAccount (default label via getAccountCount) settles and fails closed', async () => {
+    const outcome = settle(
+      Service.createStandardAccount({ type: AccountType.STANDARD })
+    );
+    await jest.advanceTimersByTimeAsync(TWO_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('addWatchAccount (duplicate check) settles and fails closed', async () => {
+    const outcome = settle(
+      Service.addWatchAccount({ type: AccountType.WATCH, address: address() })
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('addRemoteSignerAccount (duplicate check) settles and fails closed', async () => {
+    const account = algosdk.generateAccount();
+    const outcome = settle(
+      Service.addRemoteSignerAccount({
+        type: AccountType.REMOTE_SIGNER,
+        address: account.addr.toString(),
+        publicKey: Buffer.from(account.sk.slice(32)).toString('hex'),
+        signerDeviceId: 'device-1',
+      } as never)
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  it('detectRekeyedAccount (auth-address lookup) settles and fails closed', async () => {
+    jest
+      .spyOn(Service as any, 'verifyRekeyRelationship')
+      .mockResolvedValue(true);
+    const outcome = settle(
+      Service.detectRekeyedAccount({
+        type: AccountType.REKEYED,
+        originalAddress: address(),
+        authAddress: address(),
+      })
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+    expect(mockStore[WALLET_KEY]).toBeUndefined();
+  });
+
+  // Codex bug-hunter on 738e81d: getCurrentWallet's null is ambiguous, so a
+  // decision that must not fail open confirms it with the strict read.
+  it('getCurrentWalletConfirmed throws when the legacy read times out', async () => {
+    const outcome = settle(Service.getCurrentWalletConfirmed());
+    await jest.advanceTimersByTimeAsync(TWO_DEADLINES_MS);
+    expect(await outcome).toContain('Wallet storage did not respond');
+  });
+
+  it('getCurrentWalletConfirmed reads a genuinely absent wallet as null', async () => {
+    jest.mocked(secureStorage.getItem).mockResolvedValue(null);
+    expect(await Service.getCurrentWalletConfirmed()).toBeNull();
+  });
+
+  it('detectRekeyedAccount never persists canSign: false from a lookup that timed out', async () => {
+    // The auth lookup's legacy read stalls; every later read finds a legacy
+    // wallet holding the STANDARD auth account. Before the confirmed read, the
+    // default-label read migrated it and the import persisted canSign: false.
+    const authAddress = address();
+    const legacy = JSON.stringify({
+      id: 'w',
+      version: '1.0',
+      createdAt: new Date(0).toISOString(),
+      activeAccountId: 'auth',
+      accounts: [
+        {
+          id: 'auth',
+          address: authAddress,
+          publicKey: '00',
+          type: AccountType.STANDARD,
+          label: 'Auth',
+          mnemonic: '',
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    });
+    jest
+      .mocked(secureStorage.getItem)
+      .mockReset()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(legacy);
+    jest
+      .spyOn(Service as any, 'verifyRekeyRelationship')
+      .mockResolvedValue(true);
+
+    const outcome = settle(
+      Service.detectRekeyedAccount({
+        type: AccountType.REKEYED,
+        originalAddress: address(),
+        authAddress,
+      })
+    );
+    await jest.advanceTimersByTimeAsync(THREE_DEADLINES_MS);
+
+    expect(await outcome).toMatch(/^rejected: /);
+    const persisted = mockStore[WALLET_KEY]
+      ? (JSON.parse(mockStore[WALLET_KEY]) as Wallet).accounts
+      : [];
+    expect(persisted.some((acc) => acc.type === AccountType.REKEYED)).toBe(
+      false
+    );
+  });
+});

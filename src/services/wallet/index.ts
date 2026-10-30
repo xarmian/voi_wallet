@@ -114,6 +114,8 @@ const SECRET_ACCOUNT_FIELDS = ['mnemonic', 'privateKey'] as const;
  */
 /** Bound on the legacy keychain read a mutation makes on the write chain. */
 const LEGACY_READ_ON_CHAIN_MS = 5000;
+/** Same bound on getCurrentWallet's legacy migration read (TASK-443). */
+const LEGACY_READ_OFF_CHAIN_MS = 5000;
 let walletResetEpoch = 0;
 let walletWriteChain: Promise<unknown> = Promise.resolve();
 
@@ -705,8 +707,14 @@ export class MultiAccountWalletService {
         throw new RekeyVerificationError('Cannot verify rekey relationship');
       }
 
-      // Check if we control the auth address
-      const authAccount = await this.findAccountByAddress(request.authAddress);
+      // Check if we control the auth address. Confirmed read (TASK-443): an
+      // unreadable wallet must fail the import, not persist a canSign: false
+      // derived from a read that timed out.
+      const confirmedWallet = await this.getCurrentWalletConfirmed();
+      const authAccount =
+        confirmedWallet?.accounts.find(
+          (acc) => acc.address === request.authAddress
+        ) ?? null;
       const canSign =
         request.canSign ??
         (!!authAccount && authAccount.type === AccountType.STANDARD);
@@ -1682,10 +1690,14 @@ export class MultiAccountWalletService {
         );
       }
 
-      // Check if we control the auth address (Ledger account)
-      const authAccountInWallet = await this.findAccountByAddress(
-        authAccount.authAddress
-      );
+      // Check if we control the auth address (Ledger account). Confirmed read
+      // (TASK-443): an unreadable wallet must fail the import, not persist a
+      // canSign: false derived from a read that timed out.
+      const confirmedWallet = await this.getCurrentWalletConfirmed();
+      const authAccountInWallet =
+        confirmedWallet?.accounts.find(
+          (acc) => acc.address === authAccount.authAddress
+        ) ?? null;
       const canSign = Boolean(authAccountInWallet);
 
       if (!canSign) {
@@ -1816,6 +1828,24 @@ export class MultiAccountWalletService {
 
   private static parsePrivateKey(privateKeyHex: string): Uint8Array {
     return this.validateAndParseSecretKey(privateKeyHex);
+  }
+
+  /**
+   * getCurrentWallet for a decision that must not fail open (TASK-443, Codex
+   * bug-hunter): getCurrentWallet still runs first so a legacy copy migrates,
+   * but its null is ambiguous (absent, a swallowed read error, or the bounded
+   * legacy read timing out). A null is confirmed with the strict read, which
+   * throws on any of those, so only a genuinely absent wallet reads as null.
+   */
+  static async getCurrentWalletConfirmed(): Promise<Wallet | null> {
+    const wallet = await this.getCurrentWallet();
+    if (wallet) {
+      return wallet;
+    }
+    if (await this.readWalletStrict()) {
+      throw new Error('Wallet could not be read; try again');
+    }
+    return null;
   }
 
   // Public so auth-account-discovery can reuse the same lookup/dedup logic.
@@ -2593,8 +2623,19 @@ export class MultiAccountWalletService {
       // WALLET_KEY, alongside heal-on-read and legacy-strip).
       const migrationEpoch = walletResetEpoch;
 
-      // Try to get from secure storage (legacy location)
-      const legacyValue = await secureStorage.getItem(key);
+      // Try to get from secure storage (legacy location). TASK-443: bounded,
+      // because getCurrentWallet reaches this read whenever the primary blob is
+      // absent, and its callers (default labels, the watch/remote-signer/rekeyed
+      // duplicate checks) must not hang on a stuck keychain. A timeout fails
+      // closed: no migration write, and getCurrentWallet reads as null exactly
+      // as on any other read error. The writes that follow those checks
+      // re-read inside the write chain (readWalletForMutation), which is
+      // bounded and refuses an unmigrated legacy copy.
+      const legacyValue = await withTimeout(
+        secureStorage.getItem(key),
+        LEGACY_READ_OFF_CHAIN_MS,
+        () => new Error('Legacy wallet storage did not respond')
+      );
       if (!legacyValue) {
         return null;
       }
