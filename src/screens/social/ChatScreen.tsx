@@ -23,7 +23,11 @@ import type { RouteProp } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
-import { useMessagesStore, useThread } from '@/store/messagesStore';
+import {
+  PENDING_PLACEHOLDER_PREFIX,
+  useMessagesStore,
+  useThread,
+} from '@/store/messagesStore';
 import { useFriendsStore } from '@/store/friendsStore';
 import { useActiveAccount } from '@/store/walletStore';
 import { useMessagingSigner } from './useMessagingSigner';
@@ -173,7 +177,8 @@ export default function ChatScreen() {
       if (!canUseMessaging) return;
 
       const isRetry = !!existingMessageId;
-      const tempId = existingMessageId || `pending-${Date.now()}`;
+      const tempId =
+        existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
 
       // If not a retry, create and add optimistic message
       if (!isRetry) {
@@ -209,12 +214,16 @@ export default function ChatScreen() {
       } catch (error) {
         console.error('Failed to send message:', error);
         // It may already be on chain: a 'failed' bubble's retry button would
-        // send it twice. Drop the placeholder; the thread's next load from
-        // chain shows it if it landed (TASK-447).
-        const unsettled = toUnsettledTransactionAlert(error);
-        if (unsettled) {
-          useMessagesStore.getState().removePendingMessage(tempId);
-          Alert.alert(unsettled.title, unsettled.message);
+        // send it twice. Keep the placeholder pending, with no retry, until the
+        // thread's chain load resolves it or it ages out (TASK-454).
+        if (toUnsettledTransactionAlert(error)) {
+          const txId = (error as { txId?: unknown }).txId;
+          useMessagesStore
+            .getState()
+            .settlePendingMessage(
+              tempId,
+              typeof txId === 'string' && txId ? txId : undefined
+            );
           return;
         }
         updateMessageStatus(tempId, 'failed');

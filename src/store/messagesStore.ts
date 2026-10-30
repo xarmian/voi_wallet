@@ -37,6 +37,24 @@ const POLLING_INTERVAL_MS = 30000; // 30 seconds (used when chat is open)
 // this many messages; incremental polls drain every page in the new range.
 const CONVERSATION_FETCH_LIMIT = 100;
 
+/**
+ * Optimistic sent messages carry a local id with this prefix until the send
+ * returns a txid (TASK-454).
+ */
+export const PENDING_PLACEHOLDER_PREFIX = 'pending-';
+
+/**
+ * How long a placeholder for a send that may have landed, with no txid, stays
+ * pending (TASK-454). Messages use algod's default validity window (1000
+ * rounds, about 47 min on Voi), so after this the send can no longer land: if
+ * no chain message matched it by then, it never landed.
+ */
+export const PENDING_PLACEHOLDER_TTL_MS = 2 * 60 * 60 * 1000;
+
+// Device clock vs chain round time: a matching chain message may carry a
+// timestamp slightly before the placeholder's local one.
+const PLACEHOLDER_CLOCK_SKEW_MS = 2 * 60 * 1000;
+
 // Addresses with a fetchAllThreads currently in flight. Concurrent fetches for
 // the SAME account (e.g. a focus fetch overlapping a poll or pull-to-refresh)
 // are coalesced so two bootstraps can't each commit a different newest window
@@ -78,6 +96,7 @@ interface MessagesState {
   addMessage: (message: Message) => void;
   addPendingMessage: (message: Message) => void;
   removePendingMessage: (tempId: string) => void;
+  settlePendingMessage: (tempId: string, txId?: string) => void;
   updateMessageStatus: (txId: string, status: MessageStatus) => void;
   markThreadAsRead: (friendAddress: string) => Promise<void>;
 
@@ -279,6 +298,49 @@ export const useMessagesStore = create<MessagesState>()(
       if (updated) {
         set({ threads: newThreads });
         // Don't persist - pending messages aren't persisted anyway
+      }
+    },
+
+    /**
+     * Keep a placeholder pending for a send that may have landed (TASK-454):
+     * never 'failed', so it offers no retry that could send it twice. With a
+     * txid it is re-keyed to that id, and the thread's next chain load
+     * confirms it by id. Without one, it resolves by content match on a later
+     * merge, or ages out (PENDING_PLACEHOLDER_TTL_MS).
+     */
+    settlePendingMessage: (tempId: string, txId?: string) => {
+      const { threads } = get();
+      for (const [addr, thread] of Object.entries(threads)) {
+        const msgIndex = thread.messages.findIndex((m) => m.id === tempId);
+        if (msgIndex < 0) continue;
+
+        let messages = thread.messages.map((m, i) =>
+          i === msgIndex
+            ? { ...m, status: 'pending' as const, unsettled: !txId }
+            : m
+        );
+        if (txId) {
+          messages = messages.some((m) => m.id === txId)
+            ? messages.filter((m) => m.id !== tempId)
+            : messages.map((m) => (m.id === tempId ? { ...m, id: txId } : m));
+        } else {
+          // The chain message may already have merged while the send was
+          // still waiting.
+          messages = reconcilePlaceholders(messages, Date.now());
+        }
+        const lastMsg = messages[messages.length - 1];
+        set({
+          threads: {
+            ...threads,
+            [addr]: {
+              ...thread,
+              messages,
+              lastMessage: lastMsg,
+              lastMessageTimestamp: lastMsg?.timestamp || 0,
+            },
+          },
+        });
+        return;
       }
     },
 
@@ -509,6 +571,15 @@ export const useMessagesStore = create<MessagesState>()(
             isLoading: false,
           });
 
+          await persistThreads(userAddress, get().threads);
+        } else if (existingThread) {
+          // Its only message was a placeholder that aged out (TASK-454).
+          const { [friendAddress]: _emptied, ...rest } = threads;
+          set({
+            threads: rest,
+            currentUserAddress: userAddress,
+            isLoading: false,
+          });
           await persistThreads(userAddress, get().threads);
         } else {
           set({
@@ -747,10 +818,13 @@ export const useMessagesStore = create<MessagesState>()(
           };
         }
 
-        // Preserve threads not in this fetch (they still exist)
+        // Preserve threads not in this fetch (they still exist), ageing out
+        // any placeholder that can no longer land (TASK-454).
+        const now = Date.now();
         for (const [addr, thread] of Object.entries(existingThreads)) {
           if (!newThreads[addr]) {
-            newThreads[addr] = thread;
+            const reconciled = withReconciledPlaceholders(thread, now);
+            if (reconciled.messages.length > 0) newThreads[addr] = reconciled;
           }
         }
 
@@ -872,7 +946,8 @@ export const useMessagesStore = create<MessagesState>()(
  */
 function mergeMessagesById(
   existing: Message[],
-  incoming: Message[]
+  incoming: Message[],
+  now: number = Date.now()
 ): Message[] {
   const merged = [...existing];
   for (const msg of incoming) {
@@ -892,7 +967,68 @@ function mergeMessagesById(
       };
     }
   }
-  return merged;
+  return reconcilePlaceholders(merged, now);
+}
+
+function withReconciledPlaceholders(
+  thread: MessageThread,
+  now: number
+): MessageThread {
+  const messages = reconcilePlaceholders(thread.messages, now);
+  if (messages === thread.messages) return thread;
+  const lastMsg = messages[messages.length - 1];
+  return {
+    ...thread,
+    messages,
+    lastMessage: lastMsg,
+    lastMessageTimestamp: lastMsg?.timestamp || 0,
+  };
+}
+
+// Only a settled placeholder: one still in flight resolves through its send.
+function isTxidlessPlaceholder(message: Message): boolean {
+  return (
+    message.unsettled === true &&
+    message.direction === 'sent' &&
+    message.status === 'pending'
+  );
+}
+
+/**
+ * Resolve placeholders for sends that may have landed but carry no txid
+ * (TASK-454). A sent chain message with the same content, no earlier than the
+ * placeholder (less clock skew), stands in for it: matched one-to-one, oldest
+ * placeholder first. An unmatched placeholder past PENDING_PLACEHOLDER_TTL_MS
+ * can no longer land and is dropped, so it never spins forever. Neither path
+ * offers a resend.
+ */
+function reconcilePlaceholders(messages: Message[], now: number): Message[] {
+  const placeholders = messages
+    .filter(isTxidlessPlaceholder)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (placeholders.length === 0) return messages;
+
+  // Only chain records (parsed as confirmed) count, never another local send.
+  const candidates = messages.filter(
+    (m) => m.direction === 'sent' && m.status === 'confirmed'
+  );
+  const used = new Set<string>();
+  const drop = new Set<string>();
+  for (const placeholder of placeholders) {
+    const match = candidates.find(
+      (c) =>
+        !used.has(c.id) &&
+        c.content === placeholder.content &&
+        c.timestamp >= placeholder.timestamp - PLACEHOLDER_CLOCK_SKEW_MS
+    );
+    if (match) {
+      used.add(match.id);
+      drop.add(placeholder.id);
+    } else if (now - placeholder.timestamp > PENDING_PLACEHOLDER_TTL_MS) {
+      drop.add(placeholder.id);
+    }
+  }
+  return drop.size > 0 ? messages.filter((m) => !drop.has(m.id)) : messages;
 }
 
 /**

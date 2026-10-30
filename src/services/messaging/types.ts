@@ -52,6 +52,11 @@ export interface Message {
   sourceId?: number;
   /** Transaction fee paid in microVOI */
   fee: number;
+  /**
+   * Set on a local placeholder whose send may have landed but returned no
+   * txid (TASK-454). It is reconciled against chain by content, or aged out.
+   */
+  unsettled?: boolean;
 }
 
 /**
