@@ -421,6 +421,8 @@ export type WalletStackParamList = {
     fee?: number;
     isSuccess: boolean;
     confirmed?: boolean;
+    pendingTitle?: string;
+    pendingMessage?: string;
     errorMessage?: string;
     networkId?: NetworkId;
   };

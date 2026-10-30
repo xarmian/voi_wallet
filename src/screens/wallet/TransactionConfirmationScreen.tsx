@@ -32,7 +32,10 @@ import { NetworkId } from '@/types/network';
 import { getNetworkConfig } from '@/services/network/config';
 import { useCurrentNetwork } from '@/store/networkStore';
 import { parseAmountToBaseUnits } from '@/utils/bigint';
-import { toErrorAlert } from '@/utils/errorMapping';
+import {
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 // Removed TransactionConfirmationCard in favor of unified TransactionVerification
 import EnvoiProfileCard from '@/components/envoi/EnvoiProfileCard';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
@@ -345,6 +348,10 @@ export default function TransactionConfirmationScreen() {
       return;
     }
 
+    const unsettled = success
+      ? undefined
+      : toUnsettledTransactionAlert(result?.error);
+
     if (success && result?.transactionId) {
       // Replace this screen with result to keep stack cleaner.
       // Built as an intermediate object so the extra display fields carried for
@@ -371,6 +378,29 @@ export default function TransactionConfirmationScreen() {
         networkId: params.networkId as NetworkId | undefined,
       };
       navigation.replace('TransactionResult', successParams);
+    } else if (unsettled) {
+      // It may already have been sent: the result screen's pending state, not
+      // its failure state, so nothing invites a resend (TASK-447).
+      const txId = (result?.error as { txId?: unknown } | undefined)?.txId;
+      const pendingParams = {
+        transactionId: typeof txId === 'string' && txId ? txId : undefined,
+        recipient: params.recipient,
+        recipientName: getDisplayName(),
+        amount: params.amount,
+        assetSymbol: params.assetSymbol,
+        assetId: params.assetId,
+        assetType: params.assetType,
+        contractId: params.contractId,
+        tokenId: params.tokenId,
+        fee: confirmationFee,
+        isSuccess: true,
+        confirmed: false,
+        pendingTitle: unsettled.title,
+        pendingMessage: unsettled.message,
+        homeRoute: params.assetType === 'arc72' ? 'NFTMain' : 'HomeMain',
+        networkId: params.networkId as NetworkId | undefined,
+      };
+      navigation.replace('TransactionResult', pendingParams);
     } else {
       // Replace this screen with error result
       const errorMessage =

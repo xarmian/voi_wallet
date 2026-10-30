@@ -28,6 +28,10 @@ import {
 } from '@/types/remoteSigner';
 import { hapticNotify } from '@/utils/haptics';
 import { redactError } from '@/utils/logRedaction';
+import {
+  PENDING_TRANSACTION_ALERT,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 
 interface UnifiedTransactionAuthModalProps {
   visible: boolean;
@@ -327,9 +331,18 @@ export default function UnifiedTransactionAuthModal({
   const isRequestMismatchError =
     authState.state === 'error' && errorMessageLower.includes('does not match');
 
+  // Submitted but not confirmed is not a failure (TASK-447).
+  const unsettledAlert =
+    authState.state === 'error'
+      ? toUnsettledTransactionAlert(authState.error)
+      : undefined;
+  const pendingResult =
+    authState.state === 'completed' && authState.result?.confirmed === false;
+
   const getErrorTitle = () => {
     if (isUserRejectedError) return 'Transaction Cancelled';
     if (isRequestMismatchError) return 'Wrong QR Code';
+    if (unsettledAlert) return unsettledAlert.title;
     return 'Transaction Failed';
   };
 
@@ -340,6 +353,7 @@ export default function UnifiedTransactionAuthModal({
     if (isRequestMismatchError) {
       return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
+    if (unsettledAlert) return unsettledAlert.message;
     return (
       (authState.error && formatErrorMessage?.(authState.error)) ||
       authState.error?.message ||
@@ -813,13 +827,21 @@ export default function UnifiedTransactionAuthModal({
         return (
           <View style={styles.successContainer}>
             <Ionicons
-              name="checkmark-circle"
+              name={pendingResult ? 'time' : 'checkmark-circle'}
               size={48}
-              color={theme.colors.success}
+              color={
+                pendingResult ? theme.colors.warning : theme.colors.success
+              }
             />
-            <Text style={styles.successTitle}>Transaction Complete</Text>
+            <Text style={styles.successTitle}>
+              {pendingResult
+                ? PENDING_TRANSACTION_ALERT.title
+                : 'Transaction Complete'}
+            </Text>
             <Text style={styles.successMessage}>
-              Your transaction has been successfully processed.
+              {pendingResult
+                ? PENDING_TRANSACTION_ALERT.message
+                : 'Your transaction has been successfully processed.'}
             </Text>
           </View>
         );
@@ -828,9 +850,15 @@ export default function UnifiedTransactionAuthModal({
         return (
           <View style={styles.errorContainer}>
             <Ionicons
-              name={isUserRejectedError ? 'close-circle' : 'alert-circle'}
+              name={
+                isUserRejectedError
+                  ? 'close-circle'
+                  : unsettledAlert
+                    ? 'time'
+                    : 'alert-circle'
+              }
               size={48}
-              color={theme.colors.error}
+              color={unsettledAlert ? theme.colors.warning : theme.colors.error}
             />
             <Text style={styles.errorTitle}>{getErrorTitle()}</Text>
             <Text style={styles.errorMessage}>{getErrorMessage()}</Text>

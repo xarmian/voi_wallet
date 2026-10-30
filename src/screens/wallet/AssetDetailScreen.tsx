@@ -30,7 +30,10 @@ import {
 import { formatNativeBalance, formatAssetBalance } from '@/utils/bigint';
 import { formatCurrency } from '@/utils/formatting';
 import { dedupeTransactions } from '@/utils/transactions';
-import { toErrorAlert } from '@/utils/errorMapping';
+import {
+  toErrorAlert,
+  toUnsettledTransactionAlert,
+} from '@/utils/errorMapping';
 import TransactionAddressDisplay from '@/components/transaction/TransactionAddressDisplay';
 import { useCurrentNetworkConfig } from '@/store/networkStore';
 import { getNetworkConfig } from '@/services/network/config';
@@ -849,6 +852,12 @@ export default function AssetDetailScreen() {
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
     } catch (error: any) {
+      // Submitted but not confirmed is not a failure (TASK-447).
+      const unsettled = toUnsettledTransactionAlert(error);
+      if (unsettled) {
+        Alert.alert(unsettled.title, unsettled.message);
+        return;
+      }
       // TASK-41: this was the literal `Failed to opt out: ${error.message}`
       // called out by the audit — an opt-out that trips the minimum balance
       // showed raw algod text.
