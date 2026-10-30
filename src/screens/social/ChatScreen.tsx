@@ -156,7 +156,8 @@ export default function ChatScreen() {
 
   // While this chat is open with an unsettled placeholder, age it out locally:
   // nothing else polls an open chat, so without this it could spin forever.
-  // No network call: the chain record resolves it on the next load (TASK-454).
+  // No network call: if the send landed, its chain record arrives on the next
+  // load as usual (TASK-454).
   const hasUnsettled = !!thread?.messages.some(
     (m) => m.unsettled && m.status === 'pending'
   );
@@ -213,13 +214,6 @@ export default function ChatScreen() {
         }
       }
       inFlightRef.current.add(tempId);
-      // Sends this attempt must never be mistaken for (TASK-454).
-      const excludeIds = currentThread
-        .filter(
-          (m) =>
-            m.direction === 'sent' && m.content === content && m.id !== tempId
-        )
-        .map((m) => m.id);
 
       // If not a retry, create and add optimistic message
       if (!isRetry) {
@@ -255,8 +249,8 @@ export default function ChatScreen() {
       } catch (error) {
         console.error('Failed to send message:', error);
         // It may already be on chain: a 'failed' bubble's retry button would
-        // send it twice. Keep the placeholder pending, with no retry, until the
-        // thread's chain load resolves it or it ages out (TASK-454).
+        // send it twice. Keep the placeholder pending, with no retry: with a
+        // txid the chain load confirms it, without one it ages out (TASK-454).
         if (toUnsettledTransactionAlert(error)) {
           const txId = (error as { txId?: unknown }).txId;
           useMessagesStore
@@ -264,7 +258,7 @@ export default function ChatScreen() {
             .settlePendingMessage(
               tempId,
               typeof txId === 'string' && txId ? txId : undefined,
-              { attemptedAt, excludeIds }
+              attemptedAt
             );
           return;
         }

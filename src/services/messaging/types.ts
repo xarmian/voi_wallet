@@ -54,18 +54,12 @@ export interface Message {
   fee: number;
   /**
    * Set on a local placeholder whose send may have landed but returned no
-   * txid (TASK-454). It is reconciled against chain by content, or aged out.
-   * Placeholders live in memory only, never in storage.
+   * txid (TASK-454). With no txid there is no identity to match on chain, so
+   * it keeps its spinner for a fixed window, then ages out. Memory-only.
    */
   unsettled?: boolean;
   /** When the send attempt behind an unsettled placeholder started (ms). */
   attemptedAt?: number;
-  /**
-   * Sent message ids an unsettled placeholder must never resolve against:
-   * same-content sends already in the thread when its attempt started, and
-   * chain records that already resolved another placeholder.
-   */
-  excludeIds?: string[];
 }
 
 /**

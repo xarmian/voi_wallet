@@ -137,10 +137,11 @@ it.each([
   const { tempId } = await sendWith(make());
 
   expect(tempId.startsWith('pending-')).toBe(true);
-  expect(mockStore.settlePendingMessage).toHaveBeenCalledWith(tempId, txId, {
-    attemptedAt: expect.any(Number),
-    excludeIds: [],
-  });
+  expect(mockStore.settlePendingMessage).toHaveBeenCalledWith(
+    tempId,
+    txId,
+    expect.any(Number)
+  );
   expect(mockStore.updateMessageStatus).not.toHaveBeenCalledWith(
     tempId,
     'failed'

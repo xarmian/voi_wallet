@@ -45,17 +45,12 @@ export const PENDING_PLACEHOLDER_PREFIX = 'pending-';
 
 /**
  * How long a placeholder for a send that may have landed, with no txid, keeps
- * its spinner (TASK-454). This is a UI retention cutoff, not a claim that the
- * send can no longer land: messages use algod's default 1000-round validity
- * (about 47 min on Voi at normal pace), but a stalled network or a delayed
- * indexer can stretch that. Dropping the bubble offers no resend; if the send
- * lands later, its chain record appears in the thread.
+ * its spinner (TASK-454). With no txid there is no identity to resolve it by
+ * on chain, so this is a fixed UI window, not a claim about the send: if it
+ * landed, its chain record appears in the thread as usual (alongside the
+ * spinner until the window ends). Ageing out offers no resend.
  */
-export const PENDING_PLACEHOLDER_TTL_MS = 2 * 60 * 60 * 1000;
-
-// Device clock vs chain round time: a matching chain message may carry a
-// timestamp slightly before the placeholder's local one.
-const PLACEHOLDER_CLOCK_SKEW_MS = 2 * 60 * 1000;
+export const PENDING_PLACEHOLDER_TTL_MS = 10 * 60 * 1000;
 
 // Addresses with a fetchAllThreads currently in flight. Concurrent fetches for
 // the SAME account (e.g. a focus fetch overlapping a poll or pull-to-refresh)
@@ -101,7 +96,7 @@ interface MessagesState {
   settlePendingMessage: (
     tempId: string,
     txId?: string,
-    attempt?: { attemptedAt: number; excludeIds: string[] }
+    attemptedAt?: number
   ) => void;
   failPendingMessage: (tempId: string) => void;
   expireUnsettledPlaceholders: (friendAddress: string) => void;
@@ -319,7 +314,7 @@ export const useMessagesStore = create<MessagesState>()(
     settlePendingMessage: (
       tempId: string,
       txId?: string,
-      attempt?: { attemptedAt: number; excludeIds: string[] }
+      attemptedAt?: number
     ) => {
       const { threads } = get();
       for (const [addr, thread] of Object.entries(threads)) {
@@ -334,8 +329,7 @@ export const useMessagesStore = create<MessagesState>()(
                 unsettled: !txId,
                 // A retry is a new attempt: its age and match window start
                 // when it began, not at the original bubble's timestamp.
-                attemptedAt: attempt?.attemptedAt ?? m.timestamp,
-                excludeIds: attempt?.excludeIds ?? [],
+                attemptedAt: attemptedAt ?? m.timestamp,
               }
             : m
         );
@@ -343,10 +337,6 @@ export const useMessagesStore = create<MessagesState>()(
           messages = messages.some((m) => m.id === txId)
             ? messages.filter((m) => m.id !== tempId)
             : messages.map((m) => (m.id === tempId ? { ...m, id: txId } : m));
-        } else {
-          // The chain message may already have merged while the send was
-          // still waiting.
-          messages = reconcilePlaceholders(messages, Date.now());
         }
         const lastMsg = messages[messages.length - 1];
         set({
@@ -1059,52 +1049,21 @@ function isTxidlessPlaceholder(message: Message): boolean {
  */
 const attemptStart = (m: Message) => m.attemptedAt ?? m.timestamp;
 
+/**
+ * Age out txid-less unsettled placeholders past PENDING_PLACEHOLDER_TTL_MS
+ * (TASK-454). They are never matched to chain records by content: without a
+ * txid there is no identity, and content can't tell two same-text attempts
+ * apart.
+ */
 function reconcilePlaceholders(messages: Message[], now: number): Message[] {
-  const placeholders = messages
-    .filter(isTxidlessPlaceholder)
-    .sort((a, b) => attemptStart(a) - attemptStart(b));
-  if (placeholders.length === 0) return messages;
-
-  // Only chain records (parsed as confirmed) count, never another local send.
-  const candidates = messages.filter(
-    (m) => m.direction === 'sent' && m.status === 'confirmed'
+  const expired = messages.filter(
+    (m) =>
+      isTxidlessPlaceholder(m) &&
+      now - attemptStart(m) > PENDING_PLACEHOLDER_TTL_MS
   );
-  const drop = new Set<string>();
-  // Per placeholder: ids it may never resolve against. A chain record that
-  // resolves one placeholder is added for the rest, so it is spent once; the
-  // state lives on the rows themselves (memory-only), not in a global.
-  const exclude = new Map(
-    placeholders.map((p) => [p.id, new Set(p.excludeIds ?? [])])
-  );
-  for (const placeholder of placeholders) {
-    const excluded = exclude.get(placeholder.id)!;
-    const match = candidates.find(
-      (c) =>
-        !excluded.has(c.id) &&
-        c.content === placeholder.content &&
-        c.timestamp >= attemptStart(placeholder) - PLACEHOLDER_CLOCK_SKEW_MS
-    );
-    if (match) {
-      drop.add(placeholder.id);
-      for (const other of placeholders) exclude.get(other.id)!.add(match.id);
-    } else if (now - attemptStart(placeholder) > PENDING_PLACEHOLDER_TTL_MS) {
-      drop.add(placeholder.id);
-    }
-  }
-
-  let changed = drop.size > 0;
-  const out: Message[] = [];
-  for (const m of messages) {
-    if (drop.has(m.id)) continue;
-    const ids = exclude.get(m.id);
-    if (ids && ids.size !== (m.excludeIds?.length ?? 0)) {
-      out.push({ ...m, excludeIds: [...ids] });
-      changed = true;
-    } else {
-      out.push(m);
-    }
-  }
-  return changed ? out : messages;
+  if (expired.length === 0) return messages;
+  const drop = new Set(expired.map((m) => m.id));
+  return messages.filter((m) => !drop.has(m.id));
 }
 
 // In-flight and unsettled placeholders are memory-only (TASK-454): a stored
