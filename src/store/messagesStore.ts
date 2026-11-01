@@ -68,6 +68,11 @@ let accountEpoch = 0;
 // so a slow check for A can't land after B's.
 let keyCheckSeq = 0;
 
+// The newest action to set isLoading owns it (TASK-460). An action that
+// abandons a superseded result clears the flag only while it is still the
+// owner, so it can neither leave the spinner stuck nor end a newer action's.
+let loadingOwner = 0;
+
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) =>
   `${STORAGE_KEY_PREFIX}${userAddress}`;
@@ -512,6 +517,7 @@ export const useMessagesStore = create<MessagesState>()(
     registerMessagingKey: async (userAddress: string, pin?: string) => {
       const seq = ++keyCheckSeq;
       try {
+        ++loadingOwner;
         set({ isLoading: true, lastError: null });
         const txId = await MessagingService.registerKey(userAddress, pin);
         set(
@@ -540,12 +546,16 @@ export const useMessagesStore = create<MessagesState>()(
      * Fetch messages for a specific thread from the blockchain
      */
     fetchThreadMessages: async (userAddress, friendAddress, pin) => {
+      const loading = ++loadingOwner;
+      const abandon = () => {
+        if (loading === loadingOwner) set({ isLoading: false });
+      };
       try {
         set({ isLoading: true, lastError: null });
 
         // Merge only into this account's own threads, never into whichever
         // account the store last held (TASK-460).
-        if (!(await adoptAccount(userAddress, set, get))) return;
+        if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Derive messaging keypair (automatic for software wallets)
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -561,7 +571,7 @@ export const useMessagesStore = create<MessagesState>()(
 
         // The account may have switched while the fetch was in flight. From
         // here to the set() below nothing awaits (TASK-460).
-        if (get().currentUserAddress !== userAddress) return;
+        if (get().currentUserAddress !== userAddress) return abandon();
 
         const { threads } = get();
         const existingThread = threads[friendAddress];
@@ -714,16 +724,20 @@ export const useMessagesStore = create<MessagesState>()(
         return;
       }
       inFlightThreadFetches.add(userAddress);
+      const loading = ++loadingOwner;
+      const abandon = () => {
+        if (loading === loadingOwner) set({ isLoading: false });
+      };
       try {
         set({ isLoading: true, lastError: null });
 
-        if (!(await adoptAccount(userAddress, set, get))) return;
+        if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Check key registration status
         const seq = ++keyCheckSeq;
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
-        if (get().currentUserAddress !== userAddress) return;
+        if (get().currentUserAddress !== userAddress) return abandon();
         if (seq === keyCheckSeq) set({ isKeyRegistered: isRegistered });
 
         // If not registered, can't fetch messages (need to register first)
@@ -762,11 +776,16 @@ export const useMessagesStore = create<MessagesState>()(
 
         // The active account may have changed while this request was in flight
         // (account switch). Abandon the stale result rather than merge it into,
-        // or persist its cursor over, another account's state. Everything from
-        // here to the set() below runs without awaiting, so the account can't
-        // change mid-writeback.
-        if (get().currentUserAddress !== userAddress) {
-          return;
+        // or persist its cursor over, another account's state. The drain is
+        // also only valid against the cursor it started from: if that moved
+        // (a clearCache and reload), its rows are not the whole range above
+        // the cursor it would commit (TASK-460). Everything from here to the
+        // set() below runs without awaiting, so neither can change mid-writeback.
+        if (
+          get().currentUserAddress !== userAddress ||
+          get().committedId !== committed
+        ) {
+          return abandon();
         }
 
         const { threads: existingThreads } = get();
@@ -838,8 +857,15 @@ export const useMessagesStore = create<MessagesState>()(
         // be durably ahead of the rows it represents: a stale (lower) cursor
         // just re-fetches on the next sync (dedup-safe), whereas the reverse
         // would skip the just-fetched rows below the advanced cursor.
+        // A clearCache or switch while the rows were being written leaves the
+        // durable cursor where it was, which is the safe direction (TASK-460).
         const rowsPersisted = await persistThreads(userAddress, newThreads);
-        if (rowsPersisted && nextCommitted !== previousCommitted) {
+        if (
+          rowsPersisted &&
+          nextCommitted !== previousCommitted &&
+          get().currentUserAddress === userAddress &&
+          get().committedId === nextCommitted
+        ) {
           await persistCommittedId(userAddress, nextCommitted);
         }
       } catch (error) {

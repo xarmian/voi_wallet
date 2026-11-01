@@ -9,17 +9,15 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 const mockFetchMessages = jest.fn();
 const mockIsKeyRegistered = jest.fn();
+const mockFetchAllConversations = jest.fn();
 jest.mock('@/services/messaging', () => ({
   __esModule: true,
   default: {
     deriveMessagingKeyPair: jest.fn(async () => ({})),
     isKeyRegistered: (...args: unknown[]) => mockIsKeyRegistered(...args),
     fetchMessages: (...args: unknown[]) => mockFetchMessages(...args),
-    fetchAllConversations: jest.fn(async () => ({
-      conversations: new Map(),
-      complete: true,
-      maxId: null,
-    })),
+    fetchAllConversations: (...args: unknown[]) =>
+      mockFetchAllConversations(...args),
     clearKeyCache: jest.fn(),
   },
 }));
@@ -73,6 +71,37 @@ function holdReadOf(key: string, until: Promise<void>): () => void {
   return () => getItem.mockImplementation(real);
 }
 
+// Holds the first write of `key` until `until` resolves; `reached` resolves
+// once that write has started.
+function holdWriteOf(
+  key: string,
+  until: Promise<void>
+): { reached: Promise<void>; restore: () => void } {
+  const setItem = AsyncStorage.setItem as jest.Mock;
+  const real = setItem.getMockImplementation()!;
+  const reached = deferred<void>();
+  let held = false;
+  setItem.mockImplementation(async (k: string, ...rest: unknown[]) => {
+    if (k === key && !held) {
+      held = true;
+      reached.resolve();
+      await until;
+    }
+    return real(k, ...rest);
+  });
+  return {
+    reached: reached.promise,
+    restore: () => setItem.mockImplementation(real),
+  };
+}
+
+const CURSOR_KEY = `@messages/committedid/${A}`;
+const drain = (maxId: number, messages: Message[]) => ({
+  conversations: new Map([[FA, messages]]),
+  complete: true,
+  maxId,
+});
+
 const store = () => useMessagesStore.getState();
 const stored = async (account: string) =>
   JSON.parse((await AsyncStorage.getItem(`@messages/${account}`)) ?? '{}');
@@ -99,6 +128,11 @@ describe('messagesStore account switches (TASK-460)', () => {
     useMessagesStore.setState({ isLoading: false, isKeyRegistered: false });
     mockFetchMessages.mockReset().mockResolvedValue([]);
     mockIsKeyRegistered.mockReset().mockResolvedValue(true);
+    mockFetchAllConversations.mockReset().mockResolvedValue({
+      conversations: new Map(),
+      complete: true,
+      maxId: null,
+    });
   });
 
   // The task's probe: start A's fetch, switch to B, then resolve A's response.
@@ -230,5 +264,87 @@ describe('messagesStore account switches (TASK-460)', () => {
 
     expect(store().currentUserAddress).toBe(B);
     expect(store().isKeyRegistered).toBe(false);
+  });
+  // Codex pass A #1: the rows were written, then cleared, so the cursor must
+  // not be written after them.
+  it('writes no durable cursor when clearCache lands while the rows persist', async () => {
+    await store().loadCachedThreads(A);
+    mockFetchAllConversations.mockResolvedValueOnce(
+      drain(500, [msg('A-NEW', FA, 2000)])
+    );
+    const rowsWrite = deferred<void>();
+    const hold = holdWriteOf(`@messages/${A}`, rowsWrite.promise);
+    try {
+      const sync = store().fetchAllThreads(A);
+      await hold.reached;
+      await store().clearCache();
+      rowsWrite.resolve();
+      await sync;
+    } finally {
+      hold.restore();
+    }
+
+    expect(await AsyncStorage.getItem(CURSOR_KEY)).toBeNull();
+  });
+
+  // Codex pass A #5: a drain from cursor 100 that lands after a clear and
+  // reload of A is not the whole range above A's new cursor.
+  it('drops a drain whose starting cursor moved under it (clear, then reload A)', async () => {
+    await AsyncStorage.setItem(CURSOR_KEY, JSON.stringify(100));
+    await store().loadCachedThreads(A);
+    expect(store().committedId).toBe(100);
+    const response = deferred<ReturnType<typeof drain>>();
+    mockFetchAllConversations.mockReturnValueOnce(response.promise);
+    const sync = store().fetchAllThreads(A);
+    await flush();
+
+    await store().clearCache();
+    await store().loadCachedThreads(A);
+    response.resolve(drain(500, [msg('A-NEW', FA, 2000)]));
+    await sync;
+
+    expect(store().committedId).toBeNull();
+    expect(await AsyncStorage.getItem(CURSOR_KEY)).toBeNull();
+    expect(memoryIds()).toEqual([]);
+  });
+
+  // Codex pass A #3.
+  it('clears isLoading when its fetch is superseded by a plain cache load', async () => {
+    await store().loadCachedThreads(B);
+    const aRead = deferred<void>();
+    const restore = holdReadOf(`@messages/${A}`, aRead.promise);
+    try {
+      const aFetch = store().fetchThreadMessages(A, FA);
+      expect(store().isLoading).toBe(true);
+      await store().loadCachedThreads(B);
+      aRead.resolve();
+      await aFetch;
+    } finally {
+      restore();
+    }
+
+    expect(store().currentUserAddress).toBe(B);
+    expect(store().isLoading).toBe(false);
+  });
+
+  it('leaves isLoading to a newer fetch that still owns it', async () => {
+    await store().loadCachedThreads(A);
+    const aResponse = deferred<Message[]>();
+    const bResponse = deferred<Message[]>();
+    mockFetchMessages
+      .mockReturnValueOnce(aResponse.promise)
+      .mockReturnValueOnce(bResponse.promise);
+    const aFetch = store().fetchThreadMessages(A, FA);
+    await flush();
+    const bFetch = store().fetchThreadMessages(B, FB);
+    await flush();
+
+    aResponse.resolve([msg('A-NEW', FA)]);
+    await aFetch;
+    expect(store().isLoading).toBe(true);
+
+    bResponse.resolve([]);
+    await bFetch;
+    expect(store().isLoading).toBe(false);
   });
 });
