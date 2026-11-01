@@ -516,20 +516,21 @@ export const useMessagesStore = create<MessagesState>()(
      */
     registerMessagingKey: async (userAddress: string, pin?: string) => {
       const seq = ++keyCheckSeq;
+      const loading = ++loadingOwner;
       try {
-        ++loadingOwner;
         set({ isLoading: true, lastError: null });
         const txId = await MessagingService.registerKey(userAddress, pin);
-        set(
-          seq === keyCheckSeq
-            ? { isKeyRegistered: true, isLoading: false }
-            : { isLoading: false }
-        );
+        if (seq === keyCheckSeq) set({ isKeyRegistered: true });
+        if (loading === loadingOwner) set({ isLoading: false });
         return txId;
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        // The caller gets the error either way; the store's error and
+        // spinner are only this call's while it still owns them (TASK-460).
+        if (loading === loadingOwner) {
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+          set({ lastError: message, isLoading: false });
+        }
         throw error;
       }
     },
@@ -859,6 +860,9 @@ export const useMessagesStore = create<MessagesState>()(
         // would skip the just-fetched rows below the advanced cursor.
         // A clearCache or switch while the rows were being written leaves the
         // durable cursor where it was, which is the safe direction (TASK-460).
+        // This check suffices because AsyncStorage runs operations in issue
+        // order (a serial queue on iOS and Android): a write issued here,
+        // before a clearCache, lands before that clearCache's removals.
         const rowsPersisted = await persistThreads(userAddress, newThreads);
         if (
           rowsPersisted &&

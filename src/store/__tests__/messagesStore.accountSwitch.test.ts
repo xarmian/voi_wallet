@@ -10,6 +10,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const mockFetchMessages = jest.fn();
 const mockIsKeyRegistered = jest.fn();
 const mockFetchAllConversations = jest.fn();
+const mockRegisterKey = jest.fn();
 jest.mock('@/services/messaging', () => ({
   __esModule: true,
   default: {
@@ -18,6 +19,7 @@ jest.mock('@/services/messaging', () => ({
     fetchMessages: (...args: unknown[]) => mockFetchMessages(...args),
     fetchAllConversations: (...args: unknown[]) =>
       mockFetchAllConversations(...args),
+    registerKey: (...args: unknown[]) => mockRegisterKey(...args),
     clearKeyCache: jest.fn(),
   },
 }));
@@ -346,5 +348,39 @@ describe('messagesStore account switches (TASK-460)', () => {
     bResponse.resolve([]);
     await bFetch;
     expect(store().isLoading).toBe(false);
+  });
+  // Codex pass B #2.
+  it("doesn't end a newer fetch's spinner or error when a registration settles", async () => {
+    await store().loadCachedThreads(A);
+    const registration = deferred<string>();
+    mockRegisterKey.mockReturnValueOnce(
+      registration.promise.then(() => Promise.reject(new Error('rejected')))
+    );
+    const register = store().registerMessagingKey(A);
+    const response = deferred<Message[]>();
+    mockFetchMessages.mockReturnValueOnce(response.promise);
+    const fetch = store().fetchThreadMessages(A, FA);
+    await flush();
+
+    registration.resolve('');
+    await expect(register).rejects.toThrow('rejected');
+    expect(store().isLoading).toBe(true);
+    expect(store().lastError).toBeNull();
+
+    response.resolve([]);
+    await fetch;
+    expect(store().isLoading).toBe(false);
+  });
+
+  it("doesn't let A's slow registration mark B registered after B's check", async () => {
+    const registration = deferred<string>();
+    mockRegisterKey.mockReturnValueOnce(registration.promise);
+    const register = store().registerMessagingKey(A);
+    mockIsKeyRegistered.mockResolvedValueOnce(false);
+    await store().checkKeyRegistration(B);
+
+    registration.resolve('TXID');
+    await register;
+    expect(store().isKeyRegistered).toBe(false);
   });
 });
