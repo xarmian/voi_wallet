@@ -383,4 +383,73 @@ describe('messagesStore account switches (TASK-460)', () => {
     await register;
     expect(store().isKeyRegistered).toBe(false);
   });
+  // Codex pass C #1, and the rest of its class: every completion write.
+  it("doesn't let A's failed fetch end B's spinner or set B's error", async () => {
+    await store().loadCachedThreads(A);
+    const aResponse = deferred<Message[]>();
+    const bResponse = deferred<Message[]>();
+    mockFetchMessages
+      .mockReturnValueOnce(aResponse.promise)
+      .mockReturnValueOnce(bResponse.promise);
+    const aFetch = store().fetchThreadMessages(A, FA);
+    await flush();
+    const bFetch = store().fetchThreadMessages(B, FB);
+    await flush();
+
+    aResponse.resolve(Promise.reject(new Error('A failed')) as never);
+    await aFetch;
+    expect(store().isLoading).toBe(true);
+    expect(store().lastError).toBeNull();
+
+    bResponse.resolve([]);
+    await bFetch;
+    expect(store().isLoading).toBe(false);
+  });
+
+  it("clears the spinner but sets no error on B when A's fetch fails after a plain switch", async () => {
+    await store().loadCachedThreads(A);
+    const aResponse = deferred<Message[]>();
+    mockFetchMessages.mockReturnValueOnce(aResponse.promise);
+    const aFetch = store().fetchThreadMessages(A, FA);
+    await flush();
+
+    await store().loadCachedThreads(B);
+    aResponse.resolve(Promise.reject(new Error('A failed')) as never);
+    await aFetch;
+
+    expect(store().currentUserAddress).toBe(B);
+    expect(store().isLoading).toBe(false);
+    expect(store().lastError).toBeNull();
+  });
+
+  it("still reports a fetch's own failure on its own account", async () => {
+    await store().loadCachedThreads(A);
+    mockFetchMessages.mockRejectedValueOnce(new Error('A failed'));
+
+    await store().fetchThreadMessages(A, FA);
+
+    expect(store().isLoading).toBe(false);
+    expect(store().lastError).toBe('A failed');
+  });
+
+  it("doesn't let an older same-account fetch's success end a newer one's spinner", async () => {
+    await store().loadCachedThreads(A);
+    const first = deferred<Message[]>();
+    const second = deferred<Message[]>();
+    mockFetchMessages
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const older = store().fetchThreadMessages(A, FA);
+    await flush();
+    const newer = store().fetchThreadMessages(A, FA);
+    await flush();
+
+    first.resolve([msg('A-NEW', FA, 2000)]);
+    await older;
+    expect(store().isLoading).toBe(true);
+
+    second.resolve([]);
+    await newer;
+    expect(store().isLoading).toBe(false);
+  });
 });

@@ -73,6 +73,28 @@ let keyCheckSeq = 0;
 // owner, so it can neither leave the spinner stuck nor end a newer action's.
 let loadingOwner = 0;
 
+/** isLoading: false, but only while `loading` still owns the flag. */
+const doneLoading = (loading: number): Partial<MessagesState> =>
+  loading === loadingOwner ? { isLoading: false } : {};
+
+/**
+ * A failed action's completion (TASK-460): nothing once a newer action owns
+ * the flag, and no lastError onto another account's state.
+ */
+function failedLoading(
+  loading: number,
+  userAddress: string,
+  error: unknown,
+  current: string | null
+): Partial<MessagesState> {
+  if (loading !== loadingOwner) return {};
+  if (current !== null && current !== userAddress) return { isLoading: false };
+  return {
+    lastError: error instanceof Error ? error.message : 'Unknown error',
+    isLoading: false,
+  };
+}
+
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) =>
   `${STORAGE_KEY_PREFIX}${userAddress}`;
@@ -521,16 +543,14 @@ export const useMessagesStore = create<MessagesState>()(
         set({ isLoading: true, lastError: null });
         const txId = await MessagingService.registerKey(userAddress, pin);
         if (seq === keyCheckSeq) set({ isKeyRegistered: true });
-        if (loading === loadingOwner) set({ isLoading: false });
+        set(doneLoading(loading));
         return txId;
       } catch (error) {
         // The caller gets the error either way; the store's error and
         // spinner are only this call's while it still owns them (TASK-460).
-        if (loading === loadingOwner) {
-          const message =
-            error instanceof Error ? error.message : 'Unknown error';
-          set({ lastError: message, isLoading: false });
-        }
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
         throw error;
       }
     },
@@ -548,9 +568,7 @@ export const useMessagesStore = create<MessagesState>()(
      */
     fetchThreadMessages: async (userAddress, friendAddress, pin) => {
       const loading = ++loadingOwner;
-      const abandon = () => {
-        if (loading === loadingOwner) set({ isLoading: false });
-      };
+      const abandon = () => set(doneLoading(loading));
       try {
         set({ isLoading: true, lastError: null });
 
@@ -606,22 +624,22 @@ export const useMessagesStore = create<MessagesState>()(
                 unreadCount: 0, // Reset when explicitly fetching
               },
             },
-            isLoading: false,
+            ...doneLoading(loading),
           });
 
           await persistThreads(userAddress, get().threads);
         } else if (existingThread) {
           // Its only message was a placeholder that aged out (TASK-454).
           const { [friendAddress]: _emptied, ...rest } = threads;
-          set({ threads: rest, isLoading: false });
+          set({ threads: rest, ...doneLoading(loading) });
           await persistThreads(userAddress, get().threads);
         } else {
-          set({ isLoading: false });
+          set(doneLoading(loading));
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
       }
     },
 
@@ -726,9 +744,7 @@ export const useMessagesStore = create<MessagesState>()(
       }
       inFlightThreadFetches.add(userAddress);
       const loading = ++loadingOwner;
-      const abandon = () => {
-        if (loading === loadingOwner) set({ isLoading: false });
-      };
+      const abandon = () => set(doneLoading(loading));
       try {
         set({ isLoading: true, lastError: null });
 
@@ -742,10 +758,7 @@ export const useMessagesStore = create<MessagesState>()(
         if (seq === keyCheckSeq) set({ isKeyRegistered: isRegistered });
 
         // If not registered, can't fetch messages (need to register first)
-        if (!isRegistered) {
-          set({ isLoading: false });
-          return;
-        }
+        if (!isRegistered) return abandon();
 
         // Derive messaging keypair (automatic for software wallets)
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -850,7 +863,7 @@ export const useMessagesStore = create<MessagesState>()(
           threads: newThreads,
           currentUserAddress: userAddress,
           committedId: nextCommitted,
-          isLoading: false,
+          ...doneLoading(loading),
         });
 
         // Persist the message rows BEFORE the cursor, and only advance the
@@ -873,9 +886,9 @@ export const useMessagesStore = create<MessagesState>()(
           await persistCommittedId(userAddress, nextCommitted);
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
       } finally {
         inFlightThreadFetches.delete(userAddress);
       }
