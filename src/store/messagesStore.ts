@@ -65,8 +65,29 @@ const inFlightThreadFetches = new Set<string>();
 let accountEpoch = 0;
 
 // Only the newest key-registration check writes isKeyRegistered (TASK-460),
-// so a slow check for A can't land after B's.
+// so a slow check for A can't land after B's. A check also can't write once
+// the store has switched to another account since it began. It is not tied
+// to currentUserAddress outright: the inbox checks an unregistered account
+// while the store still holds the previous one (it never syncs), and that
+// result must land.
 let keyCheckSeq = 0;
+let accountSwitches = 0;
+
+interface KeyCheck {
+  seq: number;
+  switches: number;
+  userAddress: string;
+}
+
+const startKeyCheck = (userAddress: string): KeyCheck => ({
+  seq: ++keyCheckSeq,
+  switches: accountSwitches,
+  userAddress,
+});
+
+const keyCheckMayWrite = (check: KeyCheck, current: string | null) =>
+  check.seq === keyCheckSeq &&
+  (check.switches === accountSwitches || current === check.userAddress);
 
 // The newest action to set isLoading owns it (TASK-460). An action that
 // abandons a superseded result clears the flag only while it is still the
@@ -521,11 +542,13 @@ export const useMessagesStore = create<MessagesState>()(
      * Check if the user has registered their messaging key on-chain
      */
     checkKeyRegistration: async (userAddress: string) => {
-      const seq = ++keyCheckSeq;
+      const check = startKeyCheck(userAddress);
       try {
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
-        if (seq === keyCheckSeq) set({ isKeyRegistered: isRegistered });
+        if (keyCheckMayWrite(check, get().currentUserAddress)) {
+          set({ isKeyRegistered: isRegistered });
+        }
         return isRegistered;
       } catch (error) {
         console.error('Failed to check key registration:', error);
@@ -537,12 +560,14 @@ export const useMessagesStore = create<MessagesState>()(
      * Register the user's messaging key on-chain
      */
     registerMessagingKey: async (userAddress: string, pin?: string) => {
-      const seq = ++keyCheckSeq;
+      const check = startKeyCheck(userAddress);
       const loading = ++loadingOwner;
       try {
         set({ isLoading: true, lastError: null });
         const txId = await MessagingService.registerKey(userAddress, pin);
-        if (seq === keyCheckSeq) set({ isKeyRegistered: true });
+        if (keyCheckMayWrite(check, get().currentUserAddress)) {
+          set({ isKeyRegistered: true });
+        }
         set(doneLoading(loading));
         return txId;
       } catch (error) {
@@ -751,11 +776,13 @@ export const useMessagesStore = create<MessagesState>()(
         if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Check key registration status
-        const seq = ++keyCheckSeq;
+        const check = startKeyCheck(userAddress);
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
         if (get().currentUserAddress !== userAddress) return abandon();
-        if (seq === keyCheckSeq) set({ isKeyRegistered: isRegistered });
+        if (keyCheckMayWrite(check, userAddress)) {
+          set({ isKeyRegistered: isRegistered });
+        }
 
         // If not registered, can't fetch messages (need to register first)
         if (!isRegistered) return abandon();
@@ -1114,6 +1141,7 @@ async function adoptAccount(
 
   if (epoch !== accountEpoch) return false;
 
+  accountSwitches++;
   set({
     threads: storedThreads,
     currentUserAddress: userAddress,

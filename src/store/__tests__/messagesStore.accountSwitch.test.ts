@@ -452,4 +452,56 @@ describe('messagesStore account switches (TASK-460)', () => {
     await newer;
     expect(store().isLoading).toBe(false);
   });
+  // Codex pass D #1: no newer check, just a switch.
+  it("doesn't let A's check land on B after a switch with no newer check", async () => {
+    await store().loadCachedThreads(A);
+    const aCheck = deferred<boolean>();
+    mockIsKeyRegistered.mockReturnValueOnce(aCheck.promise);
+    const check = store().checkKeyRegistration(A);
+
+    await store().loadCachedThreads(B);
+    aCheck.resolve(true);
+    await expect(check).resolves.toBe(true);
+
+    expect(store().isKeyRegistered).toBe(false);
+  });
+
+  it("doesn't let A's registration mark B registered after a switch", async () => {
+    await store().loadCachedThreads(A);
+    const registration = deferred<string>();
+    mockRegisterKey.mockReturnValueOnce(registration.promise);
+    const register = store().registerMessagingKey(A);
+
+    await store().loadCachedThreads(B);
+    registration.resolve('TXID');
+    await register;
+
+    expect(store().isKeyRegistered).toBe(false);
+  });
+
+  // The inbox checks an unregistered account while the store still holds the
+  // previous one (it never syncs it); that result must land.
+  it("lands B's check while the store still holds A", async () => {
+    await store().loadCachedThreads(A);
+    useMessagesStore.setState({ isKeyRegistered: true });
+    mockIsKeyRegistered.mockResolvedValueOnce(false);
+
+    await store().checkKeyRegistration(B);
+
+    expect(store().currentUserAddress).toBe(A);
+    expect(store().isKeyRegistered).toBe(false);
+  });
+
+  it('lands a check for the account a switch installed while it was pending', async () => {
+    await store().loadCachedThreads(A);
+    const bCheck = deferred<boolean>();
+    mockIsKeyRegistered.mockReturnValueOnce(bCheck.promise);
+    const check = store().checkKeyRegistration(B);
+
+    await store().loadCachedThreads(B);
+    bCheck.resolve(true);
+    await check;
+
+    expect(store().isKeyRegistered).toBe(true);
+  });
 });
