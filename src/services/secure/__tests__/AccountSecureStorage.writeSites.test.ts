@@ -2,9 +2,10 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import ts from 'typescript';
 
-// The original 51 source write sites: 18 now call bounded wrappers, one
+// The original 51 source write sites: 19 now call bounded wrappers, one
 // delegates to saveSecret, and 32 remain raw. The unknown journal adds one
-// new raw site. Counts prevent a new raw write in an allowed method from passing.
+// three raw journal sites (write, late-write repair, reset). Counts prevent a
+// new raw write in an allowed method from passing.
 const IN_SCOPE = new Set([
   'saveSecret',
   'saveSecretV2Checked',
@@ -13,13 +14,14 @@ const IN_SCOPE = new Set([
   'getAllAccountIds',
   'addToAccountList',
   'removeFromAccountList',
+  'saveMetadata',
   'readStoredPinData',
   'getOrCreateSalt',
 ]);
 const OUT_OF_SCOPE_CLASSIFIED: Record<string, number> = {
   // The unknown-write journal itself uses its own bounded storage operation.
-  mutateUnknownWrites: 1,
-  saveMetadata: 1,
+  writeUnknownSnapshot: 2,
+  resetUnknownWrites: 1,
   deleteAccountLocked: 2,
   saveThrottle: 1,
   resetThrottle: 1,
@@ -76,8 +78,8 @@ test('all 51 original write sites stay classified', () => {
   const pending = sites('pinSetupPending.ts');
   const raw = [...secure.raw, ...pending.raw];
   const bounded = [...secure.bounded, ...pending.bounded];
-  expect(raw.length - 1 + bounded.length + secure.delegated.length).toBe(51);
-  expect(bounded.length).toBe(18);
+  expect(raw.length - 3 + bounded.length + secure.delegated.length).toBe(51);
+  expect(bounded.length).toBe(19);
   expect(secure.delegated).toEqual(['migrateLegacyAccountDataLocked']);
   expect(bounded.every((method) => IN_SCOPE.has(method))).toBe(true);
   const actual = raw.reduce<Record<string, number>>((counts, method) => {

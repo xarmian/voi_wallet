@@ -34,6 +34,7 @@ import { AccountSecureStorage } from '@/services/secure';
 
 import { MultiAccountWalletService } from './index';
 import { redactError } from '@/utils/logRedaction';
+import { UnknownJournalCorruptError } from '@/services/secure/boundedWrites';
 
 export interface ReconcileResult {
   /** false when Phase 1 hit a read/probe failure and the pass was aborted. */
@@ -75,7 +76,16 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
   const journalIds = Object.keys(journal);
-  const unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
+  let unknownWrites: Awaited<
+    ReturnType<typeof AccountSecureStorage.readUnknownWritesStrict>
+  >;
+  try {
+    unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
+  } catch (error) {
+    if (!(error instanceof UnknownJournalCorruptError)) throw error;
+    await AccountSecureStorage.resetUnknownWrites();
+    return RECONCILE_ABORTED;
+  }
   const unresolvedIds = new Set<string>();
   // Resolved entries are dropped only after the whole pass (below), so an
   // unresolved entry found later cannot leave a half-applied journal.

@@ -8,6 +8,7 @@ import {
   WriteUnresolvedError,
   UNKNOWN_WRITE_MESSAGES,
   type UnknownWriteEntry,
+  classifyUnknownWrite,
 } from '../boundedWrites';
 
 const VALUE = 'private-test-value';
@@ -173,12 +174,29 @@ test('failed or hung journal add is unknown and unjournaled', async () => {
     if (failure === 'hang') await tick();
     await assertion;
     await expect(
-      boundedSet(f.adapter, 'another-key', VALUE, {
+      boundedDelete(f.adapter, `failed-${failure}`, {
+        journal: f.journal,
+        verifier: 'presence',
+        timeoutMs: 10,
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      boundedSet(f.adapter, `failed-${failure}`, VALUE, {
         journal: f.journal,
         verifier: 'presence',
         timeoutMs: 10,
       })
     ).rejects.toBeInstanceOf(WriteUnresolvedError);
+    f.setWrite(async (key, value) => {
+      f.values.set(key, value);
+    });
+    await expect(
+      boundedSet(f.adapter, 'another-key', VALUE, {
+        journal: f.journal,
+        verifier: 'presence',
+        timeoutMs: 10,
+      })
+    ).resolves.toBeUndefined();
   }
 });
 
@@ -225,6 +243,7 @@ test('same-session nonce blocks a later write until the old attempt is observed'
     })
   ).rejects.toBeInstanceOf(WriteUnresolvedError);
   land();
+  await Promise.resolve();
   f.setWrite(async (key, value) => {
     f.values.set(key, value);
   });
@@ -259,6 +278,182 @@ test.each([null, VALUE])(
     expect(f.entries.size).toBe(0);
   }
 );
+
+test.each([
+  [JSON.stringify({ writeNonce: 'a' }), 'written'],
+  [JSON.stringify({ writeNonce: 'b' }), 'not-written'],
+  [JSON.stringify({ legacy: true }), 'not-written'],
+  [null, 'not-written'],
+  ['{bad', 'not-written'],
+])('classifies nonce payload %s as %s', (raw, expected) => {
+  const entry: UnknownWriteEntry = {
+    key: 'k',
+    op: 'set',
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 'old',
+    at: 1,
+  };
+  expect(classifyUnknownWrite(entry, raw)).toBe(expected);
+  expect(classifyUnknownWrite({ ...entry, verifier: 'presence' }, raw)).toBe(
+    'not-written'
+  );
+});
+
+test('delete bypasses unresolved and unreadable journals', async () => {
+  const f = fixture();
+  f.values.set('k', VALUE);
+  f.journal.get.mockRejectedValue(new Error('corrupt'));
+  await expect(
+    boundedDelete(f.adapter, 'k', {
+      journal: f.journal,
+      verifier: 'presence',
+      timeoutMs: 10,
+    })
+  ).resolves.toBeUndefined();
+  expect(f.values.has('k')).toBe(false);
+});
+
+test('a timed-out set that lands after delete is deleted again', async () => {
+  const f = fixture();
+  let land!: () => void;
+  f.setWrite(
+    (key, value) =>
+      new Promise<void>((resolve) => {
+        land = () => {
+          f.values.set(key, value);
+          resolve();
+        };
+      })
+  );
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  await boundedDelete(f.adapter, 'k', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  land();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(f.values.has('k')).toBe(false);
+  expect(f.entries.has('k')).toBe(false);
+});
+
+test('a timed-out set that later rejects permits the next set', async () => {
+  const f = fixture();
+  let rejectOld!: (error: Error) => void;
+  f.setWrite(
+    () =>
+      new Promise<void>((_, reject) => {
+        rejectOld = reject;
+      })
+  );
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  rejectOld(new Error('late rejection'));
+  await Promise.resolve();
+  f.setWrite(async (key, value) => {
+    f.values.set(key, value);
+  });
+  await boundedSet(f.adapter, 'k', 'third', {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'b',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  expect(f.values.get('k')).toBe('third');
+  expect(f.entries.size).toBe(0);
+});
+
+test('a tombstone re-delete timeout journals a delete UNKNOWN entry', async () => {
+  const f = fixture();
+  let land!: () => void;
+  f.setWrite(
+    (key, value) =>
+      new Promise<void>((resolve) => {
+        land = () => {
+          f.values.set(key, value);
+          resolve();
+        };
+      })
+  );
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  let deletes = 0;
+  f.setDelete(async (key) => {
+    if (++deletes === 1) f.values.delete(key);
+    else await new Promise<void>(() => {});
+  });
+  await boundedDelete(f.adapter, 'k', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  land();
+  await tick();
+  await jest.advanceTimersByTimeAsync(5001);
+  expect(f.adapter.deleteItem).toHaveBeenCalledTimes(2);
+  expect(f.entries.get('k')?.op).toBe('delete');
+});
+
+test('session ID generation retries after RNG rejects', async () => {
+  jest.resetModules();
+  const platform = require('../../../platform') as {
+    crypto: { getRandomBytes: (n: number) => Promise<Uint8Array> };
+  };
+  const original = platform.crypto.getRandomBytes;
+  const spy = jest
+    .spyOn(platform.crypto, 'getRandomBytes')
+    .mockRejectedValueOnce(new Error('rng failed'))
+    .mockResolvedValueOnce(new Uint8Array(16).fill(7));
+  try {
+    const fresh =
+      require('../boundedWrites') as typeof import('../boundedWrites');
+    await expect(fresh.isCurrentSessionId('x')).rejects.toThrow('rng failed');
+    await expect(
+      fresh.isCurrentSessionId('07070707070707070707070707070707')
+    ).resolves.toBe(true);
+    expect(spy).toHaveBeenCalledTimes(2);
+  } finally {
+    spy.mockRestore();
+    platform.crypto.getRandomBytes = original;
+  }
+});
 
 test('UNKNOWN errors expose the exact create and restore messages', () => {
   expect(new WriteOutcomeUnknownError(true, 'create').userMessage).toEqual(

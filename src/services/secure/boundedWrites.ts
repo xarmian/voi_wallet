@@ -24,6 +24,7 @@ export const UNKNOWN_WRITE_MESSAGES = {
 export type WriteContext = 'create' | 'restore' | 'other';
 export class WriteFailedError extends Error {}
 export class WriteUnresolvedError extends Error {}
+export class UnknownJournalCorruptError extends Error {}
 export class WriteOutcomeUnknownError extends Error {
   constructor(
     public readonly journaled: boolean,
@@ -56,17 +57,48 @@ export interface WriteOptions {
   attempt?: string;
   context?: WriteContext;
 }
-const failedJournals = new WeakSet<UnknownJournal>();
+interface PendingSet {
+  settled: boolean;
+  ok: boolean;
+  tombstone: boolean;
+}
+const pendingSets = new WeakMap<WriteAdapter, Map<string, PendingSet>>();
+function pendingFor(adapter: WriteAdapter) {
+  let map = pendingSets.get(adapter);
+  if (!map) {
+    map = new Map();
+    pendingSets.set(adapter, map);
+  }
+  return map;
+}
+export function classifyUnknownWrite(
+  entry: UnknownWriteEntry,
+  rawValue: string | null
+): 'written' | 'not-written' {
+  if (entry.op !== 'set' || entry.verifier !== 'nonce' || rawValue === null)
+    return 'not-written';
+  try {
+    return JSON.parse(rawValue).writeNonce === entry.attempt
+      ? 'written'
+      : 'not-written';
+  } catch {
+    return 'not-written';
+  }
+}
 let processSessionId: Promise<string> | undefined;
 function currentSessionId(): Promise<string> {
-  processSessionId ??= (async () => {
-    const bytes = platformCrypto?.getRandomBytes
-      ? await platformCrypto.getRandomBytes(16)
-      : globalThis.crypto.getRandomValues(new Uint8Array(16));
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
-      ''
-    );
-  })();
+  if (!processSessionId)
+    processSessionId = (async () => {
+      const bytes = platformCrypto?.getRandomBytes
+        ? await platformCrypto.getRandomBytes(16)
+        : globalThis.crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, '0')
+      ).join('');
+    })().catch((error) => {
+      processSessionId = undefined;
+      throw error;
+    });
   return processSessionId;
 }
 export async function isCurrentSessionId(id: string): Promise<boolean> {
@@ -98,8 +130,20 @@ export async function assertKeyResolved(
   opts: { timeoutMs?: number; sessionId?: string } = {}
 ): Promise<void> {
   const ms = opts.timeoutMs ?? WRITE_TIMEOUT_MS;
-  if (failedJournals.has(journal))
-    throw new WriteUnresolvedError('Write cannot be resolved this session');
+  const pending = pendingFor(adapter).get(key);
+  if (pending && !pending.settled)
+    throw new WriteUnresolvedError('Write may still land');
+  if (pending) {
+    try {
+      await deadline(journal.remove(key), ms);
+    } catch {
+      throw new WriteUnresolvedError(
+        'Unknown-write journal could not be cleared'
+      );
+    }
+    pendingFor(adapter).delete(key);
+    return;
+  }
   let entry: UnknownWriteEntry | undefined;
   try {
     entry = await deadline(journal.get(key), ms);
@@ -115,35 +159,12 @@ export async function assertKeyResolved(
   }
   const sessionId = opts.sessionId ?? (await currentSessionId());
   if (entry.sessionId === sessionId) {
-    let matches = false;
-    if (entry.op === 'set' && entry.verifier === 'nonce' && value != null) {
-      try {
-        matches = JSON.parse(value).writeNonce === entry.attempt;
-      } catch {
-        /* Unproven. */
-      }
-    }
-    if (!matches)
+    if (classifyUnknownWrite(entry, value) !== 'written')
       throw new WriteUnresolvedError('Unknown write may still land');
-  } else if (
-    entry.verifier === 'nonce' &&
-    entry.op === 'set' &&
-    value !== null
-  ) {
-    // An earlier session: nothing is in flight. A present payload must carry
-    // this attempt's marker; any other value leaves the entry unresolved.
-    let ours = false;
-    try {
-      ours = JSON.parse(value).writeNonce === entry.attempt;
-    } catch {
-      /* Unproven. */
-    }
-    if (!ours) throw new WriteUnresolvedError('Unknown write is unresolved');
-  }
+  } else classifyUnknownWrite(entry, value);
   try {
     await deadline(journal.remove(key), ms);
   } catch {
-    failedJournals.add(journal);
     throw new WriteUnresolvedError(
       'Unknown-write journal could not be cleared'
     );
@@ -157,8 +178,11 @@ async function perform(
   opts: WriteOptions
 ): Promise<void> {
   const ms = opts.timeoutMs ?? WRITE_TIMEOUT_MS;
-  await assertKeyResolved(opts.journal, adapter, key, opts);
-  const sessionId = opts.sessionId ?? (await currentSessionId());
+  if (op === 'set') await assertKeyResolved(opts.journal, adapter, key, opts);
+  else {
+    const pending = pendingFor(adapter).get(key);
+    if (pending && !pending.settled) pending.tombstone = true;
+  }
   let operation: Promise<void>;
   try {
     operation =
@@ -168,10 +192,49 @@ async function perform(
           ? adapter.deleteItem(key)
           : adapter.removeItem!(key);
     await deadline(operation, ms);
+    if (op === 'delete' && !pendingFor(adapter).get(key)?.tombstone)
+      await deadline(opts.journal.remove(key), ms).catch(() => undefined);
     return;
   } catch (error) {
     if (!(error instanceof DeadlineError))
       throw new WriteFailedError('Write rejected');
+  }
+  const sessionId = opts.sessionId ?? (await currentSessionId());
+  if (op === 'set') {
+    const pending: PendingSet = { settled: false, ok: false, tombstone: false };
+    pendingFor(adapter).set(key, pending);
+    operation!.then(
+      () => {
+        pending.settled = true;
+        pending.ok = true;
+        if (pending.tombstone)
+          void (async () => {
+            try {
+              await deadline(
+                adapter.deleteItem
+                  ? adapter.deleteItem(key)
+                  : adapter.removeItem!(key),
+                WRITE_TIMEOUT_MS
+              );
+              await opts.journal.remove(key).catch(() => undefined);
+            } catch {
+              await opts.journal
+                .add({
+                  key,
+                  op: 'delete',
+                  verifier: 'presence',
+                  attempt: '',
+                  sessionId,
+                  at: Date.now(),
+                })
+                .catch(() => undefined);
+            }
+          })();
+      },
+      () => {
+        pending.settled = true;
+      }
+    );
   }
   try {
     const found = await boundedRead(adapter, key, ms);
@@ -193,9 +256,7 @@ async function perform(
   try {
     await deadline(opts.journal.add(entry), ms);
     journaled = true;
-  } catch {
-    failedJournals.add(opts.journal);
-  }
+  } catch {}
   throw new WriteOutcomeUnknownError(journaled, opts.context);
 }
 export function boundedSet(

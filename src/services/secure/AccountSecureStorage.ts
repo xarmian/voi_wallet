@@ -56,6 +56,8 @@ import { redactError } from '@/utils/logRedaction';
 import {
   boundedSet,
   boundedDelete,
+  classifyUnknownWrite,
+  UnknownJournalCorruptError,
   UNKNOWN_WRITES_STORAGE_KEY,
   WRITE_TIMEOUT_MS,
   WriteOutcomeUnknownError,
@@ -315,6 +317,9 @@ export class AccountSecureStorage {
   private static readonly KEYCHAIN_READ_TIMEOUT_MS = 5000;
 
   private static unknownJournalChain: Promise<unknown> = Promise.resolve();
+  private static unknownJournalWriteCounter = 0;
+  private static unknownJournalDesired:
+    Record<string, UnknownWriteEntry> | null | undefined;
   private static readonly unknownJournal: UnknownJournal = {
     get: async (key) => (await this.readUnknownWritesStrict())[key],
     add: (entry) =>
@@ -355,12 +360,17 @@ export class AccountSecureStorage {
       'unknown-write journal read'
     );
     if (raw === null) return {};
-    const parsed: unknown = JSON.parse(raw);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
-      throw new Error('Corrupt unknown-write journal');
+      throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
     for (const [key, entry] of Object.entries(parsed)) {
       if (!key || !entry || typeof entry !== 'object' || Array.isArray(entry))
-        throw new Error('Corrupt unknown-write journal');
+        throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
       const e = entry as UnknownWriteEntry;
       if (
         e.key !== key ||
@@ -368,24 +378,70 @@ export class AccountSecureStorage {
         !['nonce', 'presence'].includes(e.verifier) ||
         typeof e.attempt !== 'string' ||
         typeof e.sessionId !== 'string' ||
-        typeof e.at !== 'number'
+        typeof e.at !== 'number' ||
+        !Number.isFinite(e.at)
       )
-        throw new Error('Corrupt unknown-write journal');
+        throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
     }
     return parsed as Record<string, UnknownWriteEntry>;
+  }
+
+  static async resetUnknownWrites(): Promise<void> {
+    this.unknownJournalDesired = null;
+    this.unknownJournalWriteCounter += 1;
+    try {
+      await this.withTimeout(
+        storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY),
+        WRITE_TIMEOUT_MS,
+        'unknown-write journal reset'
+      );
+    } catch {
+      /* Best effort. */
+    }
+  }
+
+  private static writeUnknownSnapshot(
+    entries: Record<string, UnknownWriteEntry> | null
+  ): Promise<void> {
+    const counter = ++this.unknownJournalWriteCounter;
+    const write =
+      entries === null
+        ? storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY)
+        : storage.setItem(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(entries));
+    void write.then(
+      () => {
+        if (counter >= this.unknownJournalWriteCounter) return;
+        const repair = this.unknownJournalChain.then(async () => {
+          if (
+            counter < this.unknownJournalWriteCounter &&
+            this.unknownJournalDesired !== undefined
+          )
+            await this.writeUnknownSnapshot(this.unknownJournalDesired);
+        });
+        this.unknownJournalChain = repair.catch(() => undefined);
+      },
+      () => undefined
+    );
+    return this.withTimeout(
+      write,
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal write'
+    );
   }
 
   private static mutateUnknownWrites(
     change: (entries: Record<string, UnknownWriteEntry>) => void
   ): Promise<void> {
     const task = this.unknownJournalChain.then(async () => {
-      const entries = await this.readUnknownWritesTolerant();
+      const stored = await this.readUnknownWritesTolerant();
+      const entries = {
+        ...(this.unknownJournalDesired === undefined
+          ? stored
+          : (this.unknownJournalDesired ?? {})),
+      };
       change(entries);
-      await this.withTimeout(
-        storage.setItem(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(entries)),
-        WRITE_TIMEOUT_MS,
-        'unknown-write journal write'
-      );
+      this.unknownJournalDesired = entries;
+      await this.writeUnknownSnapshot(entries);
     });
     this.unknownJournalChain = task.catch(() => undefined);
     return task;
@@ -429,16 +485,10 @@ export class AccountSecureStorage {
           )
         );
       }
-      if (entry.verifier !== 'nonce' || entry.op !== 'set') return true;
-      const present = raws.filter((raw): raw is string => raw !== null);
-      if (present.length === 0) return true;
-      return present.every((raw) => {
-        try {
-          return JSON.parse(raw).writeNonce === entry.attempt;
-        } catch {
-          return false;
-        }
+      raws.forEach((raw) => {
+        classifyUnknownWrite(entry, raw);
       });
+      return true;
     } catch {
       return false;
     }
@@ -4227,7 +4277,10 @@ export class AccountSecureStorage {
           this.BIOMETRIC_ENABLED_KEY,
           this.METADATA_LIST_KEY,
           this.PIN_TIMEOUT_KEY,
+          UNKNOWN_WRITES_STORAGE_KEY,
         ]);
+        this.unknownJournalDesired = null;
+        this.unknownJournalWriteCounter += 1;
         // Clear from secure storage
         await Promise.all([
           secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),

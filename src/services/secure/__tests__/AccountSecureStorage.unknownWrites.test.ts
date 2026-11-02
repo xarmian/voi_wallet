@@ -3,6 +3,8 @@ const mockPlainValues = new Map<string, string>();
 let mockNonceCounter = 0;
 let mockHeldWrite: { key: string; value: string; land: () => void } | undefined;
 let mockHoldNext = false;
+let mockHoldJournalNext = false;
+let mockLandJournal: (() => void) | undefined;
 jest.mock('@/platform', () => ({
   crypto: {
     getRandomBytes: async (n: number) =>
@@ -36,10 +38,23 @@ jest.mock('@/platform', () => ({
   storage: {
     getItem: jest.fn(async (key: string) => mockPlainValues.get(key) ?? null),
     setItem: jest.fn(async (key: string, value: string) => {
+      if (key === 'voi_unknown_secure_writes' && mockHoldJournalNext) {
+        mockHoldJournalNext = false;
+        await new Promise<void>((resolve) => {
+          mockLandJournal = () => {
+            mockPlainValues.set(key, value);
+            resolve();
+          };
+        });
+        return;
+      }
       mockPlainValues.set(key, value);
     }),
     removeItem: jest.fn(async (key: string) => {
       mockPlainValues.delete(key);
+    }),
+    multiRemove: jest.fn(async (keys: string[]) => {
+      keys.forEach((key) => mockPlainValues.delete(key));
     }),
   },
   biometrics: {},
@@ -75,6 +90,8 @@ beforeEach(() => {
   mockNonceCounter = 0;
   mockHoldNext = false;
   mockHeldWrite = undefined;
+  mockHoldJournalNext = false;
+  mockLandJournal = undefined;
 });
 
 test('every secret payload write remints a 32-hex nonce, including append and reused object', async () => {
@@ -168,25 +185,25 @@ const seedEntry = (over: Record<string, unknown> = {}) =>
     JSON.stringify(earlierEntry(over))
   );
 
-test('boot: an earlier-session nonce entry over a legacy payload (no nonce) stays UNRESOLVED', async () => {
+test('boot: an earlier-session nonce entry over a legacy payload is resolved', async () => {
   mockSecureValues.set(key, JSON.stringify(payload));
   seedEntry();
   await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
-    false
+    true
   );
   expect(
     Object.keys(await AccountSecureStorage.readUnknownWritesStrict())
   ).toEqual([key]);
 });
 
-test('boot: a payload carrying a DIFFERENT nonce is unresolved; the matching nonce is written', async () => {
+test('boot: a payload carrying a different nonce resolves; the matching nonce also resolves', async () => {
   seedEntry();
   mockSecureValues.set(
     key,
     JSON.stringify({ ...payload, writeNonce: 'b'.repeat(32) })
   );
   await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
-    false
+    true
   );
   mockSecureValues.set(
     key,
@@ -197,14 +214,14 @@ test('boot: a payload carrying a DIFFERENT nonce is unresolved; the matching non
   );
 });
 
-test('boot: an absent key is resolved (not written); a corrupt value is unresolved; resolving never removes the entry', async () => {
+test('boot: an absent key and a corrupt value resolve; resolving never removes the entry', async () => {
   seedEntry();
   await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
     true
   );
   mockSecureValues.set(key, '{corrupt');
   await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
-    false
+    true
   );
   expect(
     Object.keys(await AccountSecureStorage.readUnknownWritesStrict())
@@ -219,14 +236,11 @@ test('boot: a presence-verifier entry resolves on any successful probe', async (
   );
 });
 
-test('guard: a later mutation over an earlier-session nonce entry refuses on a mismatched or legacy payload and proceeds when absent', async () => {
+test('guard: a later mutation over an earlier-session legacy payload proceeds', async () => {
   seedEntry();
   mockSecureValues.set(key, JSON.stringify(payload));
-  await expect(account.saveSecret('one', payload)).rejects.toBeInstanceOf(
-    WriteUnresolvedError
-  );
-  mockSecureValues.delete(key);
   await expect(account.saveSecret('one', payload)).resolves.toBeUndefined();
+  expect(JSON.parse(mockSecureValues.get(key)!).writeNonce).toBeDefined();
 });
 
 test('legacy payload without an UNKNOWN entry remains readable', async () => {
@@ -245,4 +259,64 @@ test('corrupt UNKNOWN journal blocks a new mutation', async () => {
     WriteUnresolvedError
   );
   expect(mockSecureValues.has(key)).toBe(false);
+});
+
+test('corrupt UNKNOWN journal does not refuse saveSecret(null), deleteAccount, or clearAll', async () => {
+  mockSecureValues.set(key, JSON.stringify(payload));
+  mockPlainValues.set(UNKNOWN_WRITES_STORAGE_KEY, '{corrupt');
+  await expect(account.saveSecret('one', null)).resolves.toBeUndefined();
+  mockSecureValues.set(key, JSON.stringify(payload));
+  await expect(
+    AccountSecureStorage.deleteAccount('one')
+  ).resolves.toBeUndefined();
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockPlainValues.has(UNKNOWN_WRITES_STORAGE_KEY)).toBe(false);
+});
+
+test('clearAll tombstones a timed-out secret write that lands after the wipe', async () => {
+  jest.useFakeTimers();
+  try {
+    mockPlainValues.set('voi_account_list', JSON.stringify(['one']));
+    mockHoldNext = true;
+    const first = account.saveSecret('one', payload);
+    const assertion = expect(first).rejects.toBeInstanceOf(
+      WriteOutcomeUnknownError
+    );
+    await jest.advanceTimersByTimeAsync(5001);
+    await assertion;
+    await AccountSecureStorage.clearAll();
+    mockHeldWrite!.land();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(mockSecureValues.has(key)).toBe(false);
+    const journal = JSON.parse(
+      mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY) ?? '{}'
+    );
+    expect(journal).not.toHaveProperty(key);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('a late journal write cannot restore an entry removed by a later mutation', async () => {
+  jest.useFakeTimers();
+  try {
+    const lateKey = 'voi_account_secret_late';
+    await AccountSecureStorage.resetUnknownWrites();
+    mockHoldNext = true;
+    mockHoldJournalNext = true;
+    const first = account.saveSecret('late', { ...payload, accountId: 'late' });
+    const assertion = expect(first).rejects.toBeInstanceOf(
+      WriteOutcomeUnknownError
+    );
+    await jest.advanceTimersByTimeAsync(10002);
+    await assertion;
+    await AccountSecureStorage.dropUnknownWrite(lateKey);
+    mockLandJournal!();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(
+      JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)
+    ).not.toHaveProperty(lateKey);
+  } finally {
+    jest.useRealTimers();
+  }
 });

@@ -5,6 +5,7 @@ jest.mock('@/services/secure', () => ({
     readUnknownWritesStrict: jest.fn(),
     resolveUnknownWrite: jest.fn(),
     dropUnknownWrite: jest.fn(),
+    resetUnknownWrites: jest.fn(async () => {}),
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(),
     dropPendingCreateEntries: jest.fn(),
@@ -19,6 +20,7 @@ jest.mock('../index', () => ({
 import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '../index';
 import { reconcileCrossStoreHalfState } from '../crossStoreReconcile';
+import { UnknownJournalCorruptError } from '@/services/secure/boundedWrites';
 const secure = AccountSecureStorage as unknown as Record<string, jest.Mock>;
 const wallet = MultiAccountWalletService as unknown as Record<
   string,
@@ -53,6 +55,23 @@ function setup({
   wallet.pruneStandardAccounts.mockResolvedValue(undefined);
 }
 beforeEach(() => jest.clearAllMocks());
+test('corrupt unknown journal aborts without destructive calls, resets, then next boot runs', async () => {
+  setup({ blob: ['phantom'], list: ['phantom'] });
+  secure.readUnknownWritesStrict.mockRejectedValueOnce(
+    new UnknownJournalCorruptError('corrupt')
+  );
+  await expect(reconcileCrossStoreHalfState()).resolves.toMatchObject({
+    ran: false,
+  });
+  expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
+  expect(secure.deleteAccount).not.toHaveBeenCalled();
+  expect(secure.dropPendingCreateEntries).not.toHaveBeenCalled();
+  expect(secure.resetUnknownWrites).toHaveBeenCalledTimes(1);
+  await expect(reconcileCrossStoreHalfState()).resolves.toMatchObject({
+    ran: true,
+  });
+  expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+});
 test('orphan secret with no list entry and no journal is not invented as a candidate', async () => {
   setup({ secrets: ['orphan'] });
   await reconcileCrossStoreHalfState();
