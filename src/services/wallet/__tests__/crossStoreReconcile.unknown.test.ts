@@ -187,3 +187,20 @@ test('a delete entry whose secret is still present makes the id an orphan candid
     'voi_account_secret_gone'
   );
 });
+test('a METADATA delete entry never makes the id an orphan candidate (a separate secret is not deleted)', async () => {
+  setup({
+    secrets: ['gone'],
+    unknown: {
+      voi_account_metadata_gone: {
+        key: 'voi_account_metadata_gone',
+        op: 'delete',
+        verifier: 'presence',
+        attempt: '',
+        sessionId: 'old',
+        at: 1,
+      },
+    },
+  });
+  await reconcileCrossStoreHalfState();
+  expect(secure.deleteAccount).not.toHaveBeenCalled();
+});

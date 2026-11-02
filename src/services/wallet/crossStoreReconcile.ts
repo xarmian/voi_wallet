@@ -97,10 +97,16 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
       : key.startsWith('voi_account_metadata_')
         ? key.slice('voi_account_metadata_'.length)
         : null;
-    // A delete that never landed (or whose re-delete failed) leaves the secret
-    // behind with no owner: make the id a candidate so the existing orphan
+    // A SECRET-key delete that never landed (or whose re-delete failed) leaves the
+    // secret behind with no owner (a metadata delete must never widen the orphan
+    // set): make the id a candidate so the existing orphan
     // policy removes it (read-only here; nothing is mutated in Phase 1).
-    if (id && unknownWrites[key]?.op === 'delete') deleteEntryIds.push(id);
+    if (
+      id &&
+      key.startsWith('voi_account_secret_') &&
+      unknownWrites[key]?.op === 'delete'
+    )
+      deleteEntryIds.push(id);
     const resolved = await AccountSecureStorage.resolveUnknownWrite(key);
     if (resolved) resolvedUnknownKeys.push(key);
     if (!resolved && id) unresolvedIds.add(id);

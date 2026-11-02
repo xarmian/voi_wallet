@@ -61,6 +61,24 @@ interface PendingSet {
   settled: boolean;
   ok: boolean;
   tombstone: boolean;
+  // The journal entry THIS operation wrote, so a late settle clears only its own
+  // entry and never a newer operation's entry for the same key.
+  entry?: UnknownWriteEntry;
+}
+async function removeIfOwned(
+  journal: UnknownJournal,
+  key: string,
+  entry: UnknownWriteEntry | undefined
+): Promise<void> {
+  if (!entry) return;
+  const current = await deadline(journal.get(key), WRITE_TIMEOUT_MS);
+  if (
+    current &&
+    current.op === entry.op &&
+    current.at === entry.at &&
+    current.attempt === entry.attempt
+  )
+    await deadline(journal.remove(key), WRITE_TIMEOUT_MS);
 }
 const pendingSets = new WeakMap<WriteAdapter, Map<string, PendingSet>>();
 // A delete that timed out can still land late and erase a newer value, so it is
@@ -194,6 +212,7 @@ async function perform(
     const pending = pendingFor(adapter).get(key);
     if (pending && !pending.settled) pending.tombstone = true;
   }
+  const sessionId = opts.sessionId ?? (await currentSessionId());
   let operation: Promise<void>;
   try {
     operation =
@@ -210,7 +229,6 @@ async function perform(
     if (!(error instanceof DeadlineError))
       throw new WriteFailedError('Write rejected');
   }
-  const sessionId = opts.sessionId ?? (await currentSessionId());
   if (op === 'set') {
     const pending: PendingSet = { settled: false, ok: false, tombstone: false };
     pendingFor(adapter).set(key, pending);
@@ -247,7 +265,7 @@ async function perform(
       // Best effort: clear the entry and the record so nothing lingers; if the
       // journal remove fails the record stays and the next set's guard retries it.
       try {
-        await deadline(opts.journal.remove(key), WRITE_TIMEOUT_MS);
+        await removeIfOwned(opts.journal, key, pending.entry);
         if (pendingFor(adapter).get(key) === pending)
           pendingFor(adapter).delete(key);
       } catch {
@@ -270,7 +288,7 @@ async function perform(
       pendingDelete.ok = landed;
       pendingDelete.settled = true;
       try {
-        await deadline(opts.journal.remove(key), WRITE_TIMEOUT_MS);
+        await removeIfOwned(opts.journal, key, pendingDelete.entry);
         if (pendingDeleteFor(adapter).get(key) === pendingDelete)
           pendingDeleteFor(adapter).delete(key);
       } catch {
@@ -298,6 +316,11 @@ async function perform(
     sessionId,
     at: Date.now(),
   };
+  const own =
+    op === 'set'
+      ? pendingFor(adapter).get(key)
+      : pendingDeleteFor(adapter).get(key);
+  if (own) own.entry = entry;
   let journaled = false;
   try {
     await deadline(opts.journal.add(entry), ms);

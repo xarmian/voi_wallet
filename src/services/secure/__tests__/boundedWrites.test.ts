@@ -345,9 +345,7 @@ test('a timed-out set that lands after delete is deleted again', async () => {
     timeoutMs: 10,
   });
   land();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  await flush();
   expect(f.values.has('k')).toBe(false);
   expect(f.entries.has('k')).toBe(false);
 });
@@ -525,6 +523,46 @@ test('a delete whose read-back is absent journals UNKNOWN, refuses sets until it
       timeoutMs: 10,
     })
   ).resolves.toBeUndefined();
+});
+
+test('a late settle clears only its OWN journal entry, never a newer entry for the same key', async () => {
+  const f = fixture();
+  let rejectSet!: (error: Error) => void;
+  f.setWrite(
+    () =>
+      new Promise<void>((_, reject) => {
+        rejectSet = reject;
+      })
+  );
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const firstAssertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await firstAssertion;
+  expect(f.entries.get('k')?.op).toBe('set');
+  f.setDelete(() => new Promise<void>(() => {})); // a delete that never settles
+  const del = boundedDelete(f.adapter, 'k', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const delAssertion = expect(del).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await delAssertion;
+  expect(f.entries.get('k')?.op).toBe('delete'); // the newer entry replaced it
+  rejectSet(new Error('late rejection')); // the OLD set settles
+  await flush();
+  expect(f.entries.get('k')?.op).toBe('delete'); // still there
 });
 
 test('a timed-out set that later rejects permits the next set', async () => {
