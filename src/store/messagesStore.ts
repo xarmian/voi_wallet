@@ -24,6 +24,16 @@ import { computeSyncCursor } from '@/services/messaging/syncCursor';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { shouldSkipForOffline } from '@/services/network/offline';
 import { useFriendsStore } from './friendsStore';
+import { useWalletStore } from './walletStore';
+
+// TASK-462: account adoption follows the wallet's active account.
+function activeWalletAddress(): string | null {
+  const wallet = useWalletStore.getState().wallet;
+  return (
+    wallet?.accounts.find((account) => account.id === wallet.activeAccountId)
+      ?.address ?? null
+  );
+}
 
 const STORAGE_KEY_PREFIX = '@messages/';
 const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
@@ -58,14 +68,10 @@ export const PENDING_PLACEHOLDER_TTL_MS = 10 * 60 * 1000;
 // and skip the gap between them.
 const inFlightThreadFetches = new Set<string>();
 
-// Account switches, newest request wins (TASK-460). Every adoptAccount call
-// takes a new epoch, and clearCache takes one too; a cache load that finishes
-// after a newer epoch commits nothing, so a slow load for A can't land after
-// the switch to B.
+// Account switches use an epoch (TASK-460). Stale calls for a non-active
+// account are refused before taking one (TASK-462); a cache load that finishes
+// after a newer epoch commits nothing.
 let accountEpoch = 0;
-// The latest account adoption request, so a poll tick can't supersede it
-// (TASK-462). Cleared by clearCache.
-let requestedAccount: string | null = null;
 
 // Only the newest key-registration check writes isKeyRegistered (TASK-460),
 // so a slow check for A can't land after B's. A check also can't write once
@@ -945,17 +951,10 @@ export const useMessagesStore = create<MessagesState>()(
         // The interval keeps running — the next tick after connectivity
         // returns syncs from the same committed cursor, so nothing is lost.
         if (shouldSkipForOffline('messages-poll')) return;
-        // A tick may not contradict the latest account request: a stale A
-        // poll must not cancel a pending switch to B. With no request yet (a
-        // cold start whose first sync was deferred by the app lock), it may
-        // adopt its account. The check and fetchAllThreads' epoch bump run in
-        // one synchronous turn, so nothing interleaves (TASK-462).
-        const { currentUserAddress } = get();
-        const mayRun =
-          requestedAccount === null
-            ? currentUserAddress === null || currentUserAddress === userAddress
-            : requestedAccount === userAddress;
-        if (mayRun) get().fetchAllThreads(userAddress);
+        // TASK-462: only the wallet's active account may sync. This also
+        // permits a locked cold start, where the store has no account yet.
+        if (activeWalletAddress() === userAddress)
+          get().fetchAllThreads(userAddress);
       }, intervalMs);
 
       set({ pollingInterval: interval });
@@ -991,7 +990,6 @@ export const useMessagesStore = create<MessagesState>()(
 
       // A cache load still in flight must not re-install the cleared account.
       accountEpoch++;
-      requestedAccount = null;
       set({
         threads: {},
         currentUserAddress: null,
@@ -1125,15 +1123,16 @@ type GetState = () => MessagesState;
 
 /**
  * Make userAddress the store's account, loading its cache when the store
- * holds another one (TASK-460). Resolves false when a newer adoptAccount or a
- * clearCache superseded this call: the caller must then write nothing.
+ * holds another one (TASK-460). TASK-462 refuses stale calls for a non-active
+ * account before taking an epoch. Resolves false when clearCache or a newer
+ * active-account adoption superseded this call.
  */
 async function adoptAccount(
   userAddress: string,
   set: SetState,
   get: GetState
 ): Promise<boolean> {
-  requestedAccount = userAddress;
+  if (activeWalletAddress() !== userAddress) return false;
   const epoch = ++accountEpoch;
   if (get().currentUserAddress === userAddress) return true;
 
@@ -1159,7 +1158,8 @@ async function adoptAccount(
   const { threads: storedThreads } = deduplicateThreads(rawStoredThreads);
   const committedId = await resolveCommittedCursor(userAddress, storedThreads);
 
-  if (epoch !== accountEpoch) return false;
+  if (epoch !== accountEpoch || activeWalletAddress() !== userAddress)
+    return false;
 
   accountSwitches++;
   set({

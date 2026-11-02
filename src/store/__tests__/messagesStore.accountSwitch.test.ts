@@ -27,6 +27,21 @@ jest.mock('@/services/secure/appLockState', () => ({
   AppLockSignal: { isUnlocked: () => true },
 }));
 
+// The wallet's active account: the store adopts only this one (TASK-462).
+let mockActiveAddress: string | null = null;
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: {
+    getState: () => ({
+      wallet: mockActiveAddress
+        ? {
+            activeAccountId: 'active',
+            accounts: [{ id: 'active', address: mockActiveAddress }],
+          }
+        : null,
+    }),
+  },
+}));
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMessagesStore } from '@/store/messagesStore';
 import type { Message, MessageThread } from '@/services/messaging/types';
@@ -105,6 +120,14 @@ const drain = (maxId: number, messages: Message[]) => ({
 });
 
 const store = () => useMessagesStore.getState();
+const activate = (address: string) => {
+  mockActiveAddress = address;
+};
+// The user switches to an account: it becomes active, then the store loads it.
+const switchTo = (address: string) => {
+  activate(address);
+  return store().loadCachedThreads(address);
+};
 const stored = async (account: string) =>
   JSON.parse((await AsyncStorage.getItem(`@messages/${account}`)) ?? '{}');
 const storedIds = async (account: string) =>
@@ -117,6 +140,7 @@ const flush = () => new Promise((r) => setImmediate(r));
 
 describe('messagesStore account switches (TASK-460)', () => {
   beforeEach(async () => {
+    mockActiveAddress = null;
     await store().clearCache();
     await AsyncStorage.clear();
     await AsyncStorage.setItem(
@@ -139,13 +163,14 @@ describe('messagesStore account switches (TASK-460)', () => {
 
   // The task's probe: start A's fetch, switch to B, then resolve A's response.
   it("drops A's thread fetch that resolves after the switch to B", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aResponse = deferred<Message[]>();
     mockFetchMessages.mockReturnValueOnce(aResponse.promise);
+    activate(A);
     const aFetch = store().fetchThreadMessages(A, FA);
     await flush();
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     aResponse.resolve([msg('A-NEW', FA)]);
     await aFetch;
 
@@ -157,9 +182,10 @@ describe('messagesStore account switches (TASK-460)', () => {
 
   // No race at all: the store holds A and a chat for B opens directly.
   it("loads B's own cache before merging B's thread, never A's map", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     mockFetchMessages.mockResolvedValueOnce([msg('B-NEW', FB, 2000)]);
 
+    activate(B);
     await store().fetchThreadMessages(B, FB);
 
     expect(store().currentUserAddress).toBe(B);
@@ -169,13 +195,13 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it("drops A's older-page fetch that resolves after the switch to B", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aPage = deferred<Message[]>();
     mockFetchMessages.mockReturnValueOnce(aPage.promise);
     const aFetch = store().fetchOlderMessages(A, FA, 100);
     await flush();
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     aPage.resolve([msg('A-PAGE', FA, 10)]);
     await aFetch;
 
@@ -189,8 +215,8 @@ describe('messagesStore account switches (TASK-460)', () => {
     const aRead = deferred<void>();
     const restore = holdReadOf(`@messages/${A}`, aRead.promise);
     try {
-      const aLoad = store().loadCachedThreads(A);
-      await store().loadCachedThreads(B);
+      const aLoad = switchTo(A);
+      await switchTo(B);
       aRead.resolve();
       await aLoad;
     } finally {
@@ -203,11 +229,11 @@ describe('messagesStore account switches (TASK-460)', () => {
 
   it("does not let A's poll tick supersede a pending adoption of B (TASK-462)", async () => {
     jest.useFakeTimers();
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     store().startPolling(A, 1000);
     const bRead = deferred<void>();
     const restore = holdReadOf(`@messages/${B}`, bRead.promise);
-    const bLoad = store().loadCachedThreads(B);
+    const bLoad = switchTo(B);
     await Promise.resolve();
     try {
       jest.advanceTimersByTime(1000);
@@ -224,7 +250,7 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it('marks read only for the adopted account and persists the matching account (TASK-462)', async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const unread = threadOf(FA, [msg('A-OLD', FA)]);
     unread.unreadCount = 4;
     useMessagesStore.setState({ threads: { [FA]: unread } });
@@ -250,7 +276,7 @@ describe('messagesStore account switches (TASK-460)', () => {
     const aRead = deferred<void>();
     const restore = holdReadOf(`@messages/${A}`, aRead.promise);
     try {
-      const aLoad = store().loadCachedThreads(A);
+      const aLoad = switchTo(A);
       await store().clearCache();
       aRead.resolve();
       await aLoad;
@@ -265,14 +291,15 @@ describe('messagesStore account switches (TASK-460)', () => {
   // A→B→A: the stale completion is A's data landing on A's own map, which is
   // correct, so it is kept rather than dropped.
   it("keeps A's fetch that resolves after a switch to B and back to A", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aResponse = deferred<Message[]>();
     mockFetchMessages.mockReturnValueOnce(aResponse.promise);
+    activate(A);
     const aFetch = store().fetchThreadMessages(A, FA);
     await flush();
 
-    await store().loadCachedThreads(B);
-    await store().loadCachedThreads(A);
+    await switchTo(B);
+    await switchTo(A);
     aResponse.resolve([msg('A-NEW', FA, 2000)]);
     await aFetch;
 
@@ -297,13 +324,13 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it("does not let A's thread sync write B's registration flag", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aCheck = deferred<boolean>();
     mockIsKeyRegistered.mockReturnValueOnce(aCheck.promise);
     const aSync = store().fetchAllThreads(A);
     await flush();
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     mockIsKeyRegistered.mockResolvedValueOnce(false);
     await store().checkKeyRegistration(B);
     aCheck.resolve(true);
@@ -315,7 +342,7 @@ describe('messagesStore account switches (TASK-460)', () => {
   // Codex pass A #1: the rows were written, then cleared, so the cursor must
   // not be written after them.
   it('writes no durable cursor when clearCache lands while the rows persist', async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     mockFetchAllConversations.mockResolvedValueOnce(
       drain(500, [msg('A-NEW', FA, 2000)])
     );
@@ -338,7 +365,7 @@ describe('messagesStore account switches (TASK-460)', () => {
   // reload of A is not the whole range above A's new cursor.
   it('drops a drain whose starting cursor moved under it (clear, then reload A)', async () => {
     await AsyncStorage.setItem(CURSOR_KEY, JSON.stringify(100));
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     expect(store().committedId).toBe(100);
     const response = deferred<ReturnType<typeof drain>>();
     mockFetchAllConversations.mockReturnValueOnce(response.promise);
@@ -346,7 +373,7 @@ describe('messagesStore account switches (TASK-460)', () => {
     await flush();
 
     await store().clearCache();
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     response.resolve(drain(500, [msg('A-NEW', FA, 2000)]));
     await sync;
 
@@ -357,13 +384,14 @@ describe('messagesStore account switches (TASK-460)', () => {
 
   // Codex pass A #3.
   it('clears isLoading when its fetch is superseded by a plain cache load', async () => {
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     const aRead = deferred<void>();
     const restore = holdReadOf(`@messages/${A}`, aRead.promise);
     try {
+      activate(A);
       const aFetch = store().fetchThreadMessages(A, FA);
       expect(store().isLoading).toBe(true);
-      await store().loadCachedThreads(B);
+      await switchTo(B);
       aRead.resolve();
       await aFetch;
     } finally {
@@ -375,14 +403,16 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it('leaves isLoading to a newer fetch that still owns it', async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aResponse = deferred<Message[]>();
     const bResponse = deferred<Message[]>();
     mockFetchMessages
       .mockReturnValueOnce(aResponse.promise)
       .mockReturnValueOnce(bResponse.promise);
+    activate(A);
     const aFetch = store().fetchThreadMessages(A, FA);
     await flush();
+    activate(B);
     const bFetch = store().fetchThreadMessages(B, FB);
     await flush();
 
@@ -396,7 +426,7 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
   // Codex pass B #2.
   it("doesn't end a newer fetch's spinner or error when a registration settles", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const registration = deferred<string>();
     mockRegisterKey.mockReturnValueOnce(
       registration.promise.then(() => Promise.reject(new Error('rejected')))
@@ -404,6 +434,7 @@ describe('messagesStore account switches (TASK-460)', () => {
     const register = store().registerMessagingKey(A);
     const response = deferred<Message[]>();
     mockFetchMessages.mockReturnValueOnce(response.promise);
+    activate(A);
     const fetch = store().fetchThreadMessages(A, FA);
     await flush();
 
@@ -430,14 +461,16 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
   // Codex pass C #1, and the rest of its class: every completion write.
   it("doesn't let A's failed fetch end B's spinner or set B's error", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aResponse = deferred<Message[]>();
     const bResponse = deferred<Message[]>();
     mockFetchMessages
       .mockReturnValueOnce(aResponse.promise)
       .mockReturnValueOnce(bResponse.promise);
+    activate(A);
     const aFetch = store().fetchThreadMessages(A, FA);
     await flush();
+    activate(B);
     const bFetch = store().fetchThreadMessages(B, FB);
     await flush();
 
@@ -452,13 +485,14 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it("clears the spinner but sets no error on B when A's fetch fails after a plain switch", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aResponse = deferred<Message[]>();
     mockFetchMessages.mockReturnValueOnce(aResponse.promise);
+    activate(A);
     const aFetch = store().fetchThreadMessages(A, FA);
     await flush();
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     aResponse.resolve(Promise.reject(new Error('A failed')) as never);
     await aFetch;
 
@@ -468,9 +502,10 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it("still reports a fetch's own failure on its own account", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     mockFetchMessages.mockRejectedValueOnce(new Error('A failed'));
 
+    activate(A);
     await store().fetchThreadMessages(A, FA);
 
     expect(store().isLoading).toBe(false);
@@ -478,14 +513,16 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it("doesn't let an older same-account fetch's success end a newer one's spinner", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const first = deferred<Message[]>();
     const second = deferred<Message[]>();
     mockFetchMessages
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
+    activate(A);
     const older = store().fetchThreadMessages(A, FA);
     await flush();
+    activate(A);
     const newer = store().fetchThreadMessages(A, FA);
     await flush();
 
@@ -499,12 +536,12 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
   // Codex pass D #1: no newer check, just a switch.
   it("doesn't let A's check land on B after a switch with no newer check", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const aCheck = deferred<boolean>();
     mockIsKeyRegistered.mockReturnValueOnce(aCheck.promise);
     const check = store().checkKeyRegistration(A);
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     aCheck.resolve(true);
     await expect(check).resolves.toBe(true);
 
@@ -512,12 +549,12 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it("doesn't let A's registration mark B registered after a switch", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const registration = deferred<string>();
     mockRegisterKey.mockReturnValueOnce(registration.promise);
     const register = store().registerMessagingKey(A);
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     registration.resolve('TXID');
     await register;
 
@@ -527,7 +564,7 @@ describe('messagesStore account switches (TASK-460)', () => {
   // The inbox checks an unregistered account while the store still holds the
   // previous one (it never syncs it); that result must land.
   it("lands B's check while the store still holds A", async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     useMessagesStore.setState({ isKeyRegistered: true });
     mockIsKeyRegistered.mockResolvedValueOnce(false);
 
@@ -538,15 +575,54 @@ describe('messagesStore account switches (TASK-460)', () => {
   });
 
   it('lands a check for the account a switch installed while it was pending', async () => {
-    await store().loadCachedThreads(A);
+    await switchTo(A);
     const bCheck = deferred<boolean>();
     mockIsKeyRegistered.mockReturnValueOnce(bCheck.promise);
     const check = store().checkKeyRegistration(B);
 
-    await store().loadCachedThreads(B);
+    await switchTo(B);
     bCheck.resolve(true);
     await check;
 
     expect(store().isKeyRegistered).toBe(true);
+  });
+
+  // TASK-462: the store adopts only the wallet's active account, so stale
+  // screen work for A can neither install A nor cancel the pending switch to B.
+  it('refuses a stale call for a non-active account without cancelling a pending switch', async () => {
+    await switchTo(A);
+    const bRead = deferred<void>();
+    const restore = holdReadOf(`@messages/${B}`, bRead.promise);
+    try {
+      const bLoad = switchTo(B);
+      await store().loadCachedThreads(A);
+      await store().fetchThreadMessages(A, FA);
+      expect(store().currentUserAddress).toBe(A);
+      bRead.resolve();
+      await bLoad;
+    } finally {
+      restore();
+    }
+
+    expect(mockFetchMessages).not.toHaveBeenCalled();
+    expect(store().currentUserAddress).toBe(B);
+    expect(memoryIds()).toEqual(['B-OLD']);
+    expect(store().isLoading).toBe(false);
+  });
+
+  it('refuses a load that lands after its account stopped being active', async () => {
+    const aRead = deferred<void>();
+    const restore = holdReadOf(`@messages/${A}`, aRead.promise);
+    try {
+      const aLoad = switchTo(A);
+      activate(B);
+      aRead.resolve();
+      await aLoad;
+    } finally {
+      restore();
+    }
+
+    expect(store().currentUserAddress).toBeNull();
+    expect(memoryIds()).toEqual([]);
   });
 });

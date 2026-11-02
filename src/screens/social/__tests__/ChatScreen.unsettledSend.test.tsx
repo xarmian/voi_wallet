@@ -36,6 +36,7 @@ const mockStore = {
   expireUnsettledPlaceholders: jest.fn(),
   registerMessagingKey: jest.fn(),
   checkKeyRegistration: jest.fn(async () => true),
+  loadCachedThreads: jest.fn(async () => {}),
 };
 
 jest.mock('@/store/messagesStore', () => ({
@@ -329,4 +330,39 @@ it('still completes a send when the store holds the sender', async () => {
 
   expect(mockStore.removePendingMessage).toHaveBeenCalledWith(tempId);
   expect(mockStore.addMessage).toHaveBeenCalledWith({ id: 'TX9' });
+});
+
+// Pass B #2 (TASK-462): a send before the chat's account is adopted adopts it
+// first, so the placeholder and the completion land on the sender's own map.
+it('adopts the sender before a cold-start send, then completes it', async () => {
+  mockStore.currentUserAddress = null;
+  mockStore.loadCachedThreads.mockImplementationOnce(async () => {
+    mockStore.currentUserAddress = 'ME';
+  });
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  expect(mockStore.loadCachedThreads).toHaveBeenCalledWith('ME');
+  const loadOrder = mockStore.loadCachedThreads.mock.invocationCallOrder[0];
+  const addOrder = mockStore.addPendingMessage.mock.invocationCallOrder[0];
+  expect(loadOrder).toBeLessThan(addOrder);
+  expect(mockStore.addMessage).toHaveBeenCalledWith({ id: 'TX9' });
+});
+
+it('refuses a send whose account the store cannot adopt, before sending', async () => {
+  mockStore.currentUserAddress = null;
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(mockStore.addPendingMessage).not.toHaveBeenCalled();
+  expect(Alert.alert).toHaveBeenCalledWith(
+    'Error',
+    'Messages are still loading for this account. Try again.'
+  );
 });

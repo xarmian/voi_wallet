@@ -217,6 +217,17 @@ export default function ChatScreen() {
       const holdsSender = () =>
         useMessagesStore.getState().currentUserAddress === sender;
 
+      if (!holdsSender()) {
+        await useMessagesStore.getState().loadCachedThreads(sender);
+        if (!holdsSender()) {
+          Alert.alert(
+            'Error',
+            'Messages are still loading for this account. Try again.'
+          );
+          return;
+        }
+      }
+
       const isRetry = !!existingMessageId;
       const attemptedAt = Date.now();
       const tempId =

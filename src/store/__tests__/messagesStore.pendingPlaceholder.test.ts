@@ -23,6 +23,21 @@ jest.mock('@/services/secure/appLockState', () => ({
   AppLockSignal: { isUnlocked: () => true },
 }));
 
+// The wallet's active account: the store adopts only this one (TASK-462).
+let mockActiveAddress: string | null = null;
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: {
+    getState: () => ({
+      wallet: mockActiveAddress
+        ? {
+            activeAccountId: 'active',
+            accounts: [{ id: 'active', address: mockActiveAddress }],
+          }
+        : null,
+    }),
+  },
+}));
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   PENDING_PLACEHOLDER_PREFIX,
@@ -77,6 +92,7 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
   let now: jest.SpyInstance;
 
   beforeEach(async () => {
+    mockActiveAddress = USER;
     await AsyncStorage.clear();
     useMessagesStore.setState({ threads: {}, currentUserAddress: USER });
     mockFetchMessages.mockReset().mockResolvedValue([]);

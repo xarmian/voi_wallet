@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -67,11 +67,6 @@ export default function MessagesInboxScreen() {
   }, [isMessagingEnabled, navigation]);
 
   const activeAccount = useActiveAccount();
-  // The active address now, for continuations that outlive a switch (TASK-462).
-  const activeAddressRef = useRef(activeAccount?.address);
-  useEffect(() => {
-    activeAddressRef.current = activeAccount?.address;
-  }, [activeAccount?.address]);
   const signer = useMessagingSigner(activeAccount);
   const { ready: signerReady, isLedgerBacked, canUseMessaging } = signer;
   const sortedThreads = useSortedThreads();
@@ -229,9 +224,6 @@ export default function MessagesInboxScreen() {
     setIsRegistering(true);
     try {
       await registerMessagingKey(address);
-      // After registration, fetch threads, unless the account was switched
-      // meanwhile: fetching would re-adopt the old account (TASK-462).
-      if (activeAddressRef.current !== address) return;
       await fetchAllThreads(address);
     } catch (error) {
       console.error('Failed to register messaging key:', error);

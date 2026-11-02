@@ -12,6 +12,21 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
+// The wallet's active account: polling syncs only this one (TASK-462).
+let mockActiveAddress: string | null = null;
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: {
+    getState: () => ({
+      wallet: mockActiveAddress
+        ? {
+            activeAccountId: 'active',
+            accounts: [{ id: 'active', address: mockActiveAddress }],
+          }
+        : null,
+    }),
+  },
+}));
+
 const mockSubscribe = jest.fn();
 const mockGetState = jest.fn();
 
@@ -54,6 +69,7 @@ describe('messagesStore.startPolling offline gating (TASK-191)', () => {
 
   beforeEach(() => {
     jest.useFakeTimers();
+    mockActiveAddress = ADDRESS;
 
     mockSubscribe.mockImplementation(
       (listener: (state: ConnectivityState) => void) => {
@@ -128,5 +144,16 @@ describe('messagesStore.startPolling offline gating (TASK-191)', () => {
     jest.advanceTimersByTime(1000);
 
     expect(fetchAllThreads).toHaveBeenCalledWith(ADDRESS);
+  });
+
+  // TASK-462: a stale poll for an account the user switched away from.
+  it('does not sync an account that is no longer active', () => {
+    emit(ONLINE);
+    useMessagesStore.getState().startPolling(ADDRESS, 1000);
+    mockActiveAddress = 'OTHERACCOUNT';
+
+    jest.advanceTimersByTime(3000);
+
+    expect(fetchAllThreads).not.toHaveBeenCalled();
   });
 });

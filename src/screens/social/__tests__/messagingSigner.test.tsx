@@ -338,12 +338,7 @@ it('does not sync or poll when Inbox registration resolves after blur (TASK-462)
   view.unmount();
 });
 
-// Codex pass A #2 (TASK-462): registration that finishes after an account
-// switch must not fetch, which would re-adopt the old account.
-it.each([
-  ['fetches the account it registered', false, ['SOURCE']],
-  ['does not fetch after a switch to another account', true, []],
-])('Inbox registration %s', async (_label, switchAccount, fetched) => {
+it('fetches threads after registration; the store rejects a stale account (TASK-462)', async () => {
   mockMessages.isKeyRegistered = false;
   let finish!: (txId: string) => void;
   mockMessages.registerMessagingKey.mockReturnValueOnce(
@@ -358,15 +353,10 @@ it.each([
   });
   expect(mockMessages.registerMessagingKey).toHaveBeenCalledWith('SOURCE');
 
-  if (switchAccount) {
-    mockAccount = auth();
-    await act(async () => view.rerender(<MessagesInboxScreen />));
-    mockMessages.fetchAllThreads.mockClear();
-  }
   await act(async () => finish('TXID'));
 
   expect(
     mockMessages.fetchAllThreads.mock.calls.map(([address]) => address)
-  ).toEqual(fetched);
+  ).toEqual(['SOURCE']);
   view.unmount();
 });
