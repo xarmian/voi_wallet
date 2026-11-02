@@ -139,7 +139,7 @@ test('unknown set is journaled without the value or its digest', async () => {
   expect(persisted).not.toContain(Buffer.from(VALUE).toString('base64'));
 });
 
-test('delete still present is failed, absent is unknown', async () => {
+test('a timed-out delete is UNKNOWN whether the key reads back present or absent (both journal a delete entry)', async () => {
   const f = fixture();
   f.values.set('k', VALUE);
   f.setDelete(() => new Promise(() => {}));
@@ -148,9 +148,13 @@ test('delete still present is failed, absent is unknown', async () => {
     verifier: 'presence',
     timeoutMs: 10,
   });
-  const assertion = expect(result).rejects.toBeInstanceOf(WriteFailedError);
+  const assertion = expect(result).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
   await tick();
   await assertion;
+  expect(f.entries.get('k')?.op).toBe('delete'); // present: journaled too
+  f.entries.delete('k');
   f.values.delete('k');
   result = boundedDelete(f.adapter, 'k', {
     journal: f.journal,
@@ -468,7 +472,9 @@ test('a delete that timed out (key still present) is tracked: a later set is ref
     sessionId: 's',
     timeoutMs: 10,
   });
-  const assertion = expect(del).rejects.toBeInstanceOf(WriteFailedError);
+  const assertion = expect(del).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
   await tick();
   await assertion;
   f.setWrite(async (key, value) => {
@@ -1198,4 +1204,61 @@ test('unguarded set (delete/wipe bookkeeping rewrite) proceeds over a same-proce
     })
   ).resolves.toBeUndefined();
   expect(f.values.get('voi_account_list')).toBe('[]');
+});
+
+test('an UNGUARDED set never tombstones a hung earlier set: when the earlier set lands, the key is NOT deleted', async () => {
+  const f = fixture();
+  let land!: () => void;
+  f.setWrite(
+    (key, value) =>
+      new Promise<void>((resolve) => {
+        land = () => {
+          f.values.set(key, value);
+          resolve();
+        };
+      })
+  );
+  const hung = boundedSet(f.adapter, 'voi_account_list', '["old"]', {
+    ...setOpts(f),
+    verifier: 'presence',
+  });
+  const assertion = expect(hung).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  f.setWrite(async (key, value) => {
+    f.values.set(key, value);
+  });
+  await boundedSet(f.adapter, 'voi_account_list', '[]', {
+    ...setOpts(f),
+    unguarded: true,
+  });
+  land(); // the hung earlier set lands after the unguarded rewrite
+  await flush();
+  // The unguarded set must not have tombstoned the earlier set (a tombstone would
+  // delete the key here and erase the list just written).
+  expect(f.values.has('voi_account_list')).toBe(true);
+});
+
+test('a timed-out delete that reads back PRESENT survives a simulated JS reload: its delete entry still refuses sets', async () => {
+  const f = fixture();
+  f.values.set('voi_account_secret_x', 'v');
+  f.setDelete(() => new Promise(() => {})); // hung native delete; the key is still there
+  const del = boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
+  const assertion = expect(del).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  expect(f.entries.get('voi_account_secret_x')?.op).toBe('delete');
+  // JS reload: the in-memory pending records are gone, the journal entry remains.
+  let reloaded!: typeof import('../boundedWrites');
+  jest.isolateModules(() => {
+    reloaded = require('../boundedWrites');
+  });
+  await expect(
+    reloaded.boundedSet(f.adapter, 'voi_account_secret_x', 'new', setOpts(f))
+  ).rejects.toBeInstanceOf(reloaded.WriteUnresolvedError);
+  expect(f.values.get('voi_account_secret_x')).toBe('v'); // untouched: the set was refused
 });

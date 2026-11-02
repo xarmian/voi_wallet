@@ -306,9 +306,13 @@ async function perform(
   opts: WriteOptions
 ): Promise<void> {
   const ms = opts.timeoutMs ?? WRITE_TIMEOUT_MS;
-  if (op === 'set' && !opts.unguarded)
-    await assertKeyResolved(opts.journal, adapter, key, opts);
-  else {
+  if (op === 'set') {
+    // An unguarded set (delete/wipe bookkeeping rewrite) skips the guard and must
+    // never tombstone an earlier hung set: a tombstone would delete the key when
+    // that set lands and erase the value just written.
+    if (!opts.unguarded)
+      await assertKeyResolved(opts.journal, adapter, key, opts);
+  } else {
     const pending = pendingFor(adapter).get(key);
     if (pending && !pending.settled) pending.tombstone = true;
   }
@@ -414,10 +418,11 @@ async function perform(
   try {
     const found = await boundedRead(adapter, key, ms);
     if (op === 'set' && found === value) return;
-    if (op === 'delete' && found !== null)
-      throw new WriteFailedError('Delete did not remove the key');
-  } catch (error) {
-    if (error instanceof WriteFailedError) throw error;
+    // A delete that reads back PRESENT is UNKNOWN like one that reads back absent
+    // (the native delete can still land): it takes the same path, a delete entry
+    // owned by pendingDelete, then WriteOutcomeUnknownError (dev lead ruling).
+  } catch {
+    // The read-back itself failed or timed out: UNKNOWN as well.
   }
   const entry: UnknownWriteEntry = {
     key,
