@@ -517,13 +517,22 @@ export class DeepLinkService {
         // Navigate to MessagesInbox first (handles initialization), then to Chat
         if (data.sender) {
           // If receiver is provided, switch to that account first
+          let openChat = true;
           if (data.receiver) {
-            const walletStore = useWalletStore.getState();
+            let walletStore = useWalletStore.getState();
+            // A fast cold-start unlock can beat wallet hydration; initialize()
+            // shares the in-flight pass, so await it (TASK-465).
+            if (!walletStore.isInitialized) {
+              await walletStore.initialize();
+              walletStore = useWalletStore.getState();
+            }
             const receiverAccount = walletStore.wallet?.accounts.find(
               (acc) => acc.address === data.receiver
             );
-            if (
-              receiverAccount &&
+            if (!receiverAccount) {
+              // Never open Chat under whichever account happens to be active.
+              openChat = false;
+            } else if (
               walletStore.wallet?.activeAccountId !== receiverAccount.id
             ) {
               console.log(
@@ -547,6 +556,7 @@ export class DeepLinkService {
           });
 
           // Small delay to let MessagesInbox initialize, then navigate to Chat
+          if (!openChat) break;
           setTimeout(() => {
             this.navigateToRoute({
               screen: 'Main',

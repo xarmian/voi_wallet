@@ -35,6 +35,30 @@ function activeWalletAddress(): string | null {
   );
 }
 
+// TASK-464: reactive form of activeWalletAddress, a string so the selector is
+// referentially stable.
+function useActiveWalletAddress(): string | null {
+  return useWalletStore((state) => {
+    const wallet = state.wallet;
+    return (
+      wallet?.accounts.find((account) => account.id === wallet.activeAccountId)
+        ?.address ?? null
+    );
+  });
+}
+
+// TASK-464: threads held in memory belong to currentUserAddress. Show them only
+// while that is the wallet's active account, so a switch to an account that
+// can't fetch (Ledger/watch, registration pending) never renders the previous
+// account's conversations.
+const NO_THREADS: Record<string, MessageThread> = {};
+function useVisibleThreads(): Record<string, MessageThread> {
+  const threads = useMessagesStore((state) => state.threads);
+  const owner = useMessagesStore((state) => state.currentUserAddress);
+  const active = useActiveWalletAddress();
+  return owner !== null && owner === active ? threads : NO_THREADS;
+}
+
 const STORAGE_KEY_PREFIX = '@messages/';
 const HIDDEN_THREADS_STORAGE_KEY_PREFIX = '@messages/hidden/';
 // Durable committed sync cursor (MIMIR ingestion id), persisted separately from
@@ -1354,7 +1378,7 @@ async function persistHiddenThreads(
  * Uses stable selector that doesn't create new objects
  */
 export function useTotalUnreadCount(): number {
-  const threads = useMessagesStore((state) => state.threads);
+  const threads = useVisibleThreads();
   return Object.values(threads).reduce(
     (sum, thread) => sum + thread.unreadCount,
     0
@@ -1365,7 +1389,8 @@ export function useTotalUnreadCount(): number {
  * Hook to get a specific thread (reactive)
  */
 export function useThread(friendAddress: string): MessageThread | null {
-  return useMessagesStore((state) => state.threads[friendAddress] || null);
+  const threads = useVisibleThreads();
+  return threads[friendAddress] || null;
 }
 
 /**
@@ -1373,7 +1398,7 @@ export function useThread(friendAddress: string): MessageThread | null {
  * Filters out hidden threads unless showHiddenThreads is true
  */
 export function useSortedThreads(): MessageThread[] {
-  const threads = useMessagesStore((state) => state.threads);
+  const threads = useVisibleThreads();
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
   const showHiddenThreads = useMessagesStore(
     (state) => state.showHiddenThreads
@@ -1390,7 +1415,7 @@ export function useSortedThreads(): MessageThread[] {
  * Hook to get count of hidden threads (reactive)
  */
 export function useHiddenThreadsCount(): number {
-  const threads = useMessagesStore((state) => state.threads);
+  const threads = useVisibleThreads();
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
   return Object.keys(threads).filter((addr) => hiddenThreads.has(addr)).length;
 }
