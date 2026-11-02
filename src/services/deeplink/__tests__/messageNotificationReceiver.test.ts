@@ -131,4 +131,18 @@ describe('message notification receiver switch (TASK-465)', () => {
 
     expect(routes()).toEqual(['MessagesInbox']);
   });
+
+  it('does not open Chat if the active account changes before the delayed push', async () => {
+    mockState.isInitialized = true;
+    mockState.wallet = walletWith('recv');
+    mockState.initialize = jest.fn();
+
+    const p = (service as any).handleNotificationNavigation(tap);
+    await jest.advanceTimersByTimeAsync(10);
+    mockState.wallet = walletWith('other');
+    await jest.advanceTimersByTimeAsync(200);
+    await p;
+
+    expect(routes()).toEqual(['MessagesInbox']);
+  });
 });

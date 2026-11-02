@@ -23,6 +23,7 @@ jest.mock('@/store/walletStore', () => {
 import { act, renderHook } from '@testing-library/react-native';
 import {
   useMessagesStore,
+  useIsThreadHidden,
   useSortedThreads,
   useThread,
   useTotalUnreadCount,
@@ -94,5 +95,14 @@ describe('messagesStore read selectors follow the active account (TASK-464)', ()
     expect(
       (await renderHook(() => useThread(FRIEND))).result.current
     ).toBeNull();
+  });
+
+  it('reports a thread hidden only while its owner account is active', async () => {
+    useMessagesStore.setState({ hiddenThreads: new Set([FRIEND]) });
+    const hidden = await renderHook(() => useIsThreadHidden(FRIEND));
+    expect(hidden.result.current).toBe(true);
+
+    await act(async () => setActive(B));
+    expect(hidden.result.current).toBe(false);
   });
 });

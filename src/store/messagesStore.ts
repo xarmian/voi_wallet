@@ -1425,7 +1425,9 @@ export function useHiddenThreadsCount(): number {
  */
 export function useIsThreadHidden(friendAddress: string): boolean {
   const hiddenThreads = useMessagesStore((state) => state.hiddenThreads);
-  return hiddenThreads.has(friendAddress);
+  const owner = useMessagesStore((state) => state.currentUserAddress);
+  const active = useActiveWalletAddress();
+  return owner !== null && owner === active && hiddenThreads.has(friendAddress);
 }
 
 /**

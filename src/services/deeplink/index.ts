@@ -564,6 +564,15 @@ export class DeepLinkService {
           // Small delay to let MessagesInbox initialize, then navigate to Chat
           if (!openChat) break;
           setTimeout(() => {
+            // The account may have changed during the delay; Chat is only
+            // right under the receiver account.
+            if (data.receiver) {
+              const wallet = useWalletStore.getState().wallet;
+              const active = wallet?.accounts.find(
+                (acc) => acc.id === wallet.activeAccountId
+              );
+              if (active?.address !== data.receiver) return;
+            }
             this.navigateToRoute({
               screen: 'Main',
               params: {
