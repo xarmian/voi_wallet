@@ -453,10 +453,10 @@ export class AccountSecureStorage {
    * whole pass, so a later unresolved entry cannot leave a half-applied journal).
    * An entry from THIS session is never resolved here (a late write can still
    * land). Verifier 'presence': resolved by any successful probe. Verifier
-   * 'nonce' (a secret set): absent everywhere = not written (the process
-   * restarted, nothing is in flight); present with writeNonce === entry.attempt
-   * = written; present with any other marker, a legacy payload or an unparsable
-   * value is UNRESOLVED and the entry stays (fail closed).
+   * 'nonce' (a secret set): present with writeNonce === entry.attempt = written;
+   * absent, a different or missing marker, a legacy payload or an unparsable value
+   * = not written (no native call survives process death). Any successful probe
+   * resolves; only a probe that throws or times out leaves the entry unresolved.
    */
   static async resolveUnknownWrite(key: string): Promise<boolean> {
     const entries = await this.readUnknownWritesStrict();

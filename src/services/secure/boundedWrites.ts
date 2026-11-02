@@ -63,6 +63,17 @@ interface PendingSet {
   tombstone: boolean;
 }
 const pendingSets = new WeakMap<WriteAdapter, Map<string, PendingSet>>();
+// A delete that timed out can still land late and erase a newer value, so it is
+// tracked like a set: later SETs of the key are refused until it settles.
+const pendingDeletes = new WeakMap<WriteAdapter, Map<string, PendingSet>>();
+function pendingDeleteFor(adapter: WriteAdapter) {
+  let map = pendingDeletes.get(adapter);
+  if (!map) {
+    map = new Map();
+    pendingDeletes.set(adapter, map);
+  }
+  return map;
+}
 function pendingFor(adapter: WriteAdapter) {
   let map = pendingSets.get(adapter);
   if (!map) {
@@ -130,6 +141,19 @@ export async function assertKeyResolved(
   opts: { timeoutMs?: number; sessionId?: string } = {}
 ): Promise<void> {
   const ms = opts.timeoutMs ?? WRITE_TIMEOUT_MS;
+  const pendingDelete = pendingDeleteFor(adapter).get(key);
+  if (pendingDelete && !pendingDelete.settled)
+    throw new WriteUnresolvedError('Delete may still land');
+  if (pendingDelete) {
+    try {
+      await deadline(journal.remove(key), ms);
+    } catch {
+      throw new WriteUnresolvedError(
+        'Unknown-write journal could not be cleared'
+      );
+    }
+    pendingDeleteFor(adapter).delete(key);
+  }
   const pending = pendingFor(adapter).get(key);
   if (pending && !pending.settled)
     throw new WriteUnresolvedError('Write may still land');
@@ -246,6 +270,29 @@ async function perform(
     operation!.then(
       () => void finish(true),
       () => void finish(false)
+    );
+  }
+  if (op === 'delete') {
+    const pendingDelete: PendingSet = {
+      settled: false,
+      ok: false,
+      tombstone: false,
+    };
+    pendingDeleteFor(adapter).set(key, pendingDelete);
+    const settleDelete = async (landed: boolean) => {
+      pendingDelete.ok = landed;
+      pendingDelete.settled = true;
+      try {
+        await deadline(opts.journal.remove(key), WRITE_TIMEOUT_MS);
+        if (pendingDeleteFor(adapter).get(key) === pendingDelete)
+          pendingDeleteFor(adapter).delete(key);
+      } catch {
+        /* the guard drops the entry on the next set */
+      }
+    };
+    operation!.then(
+      () => void settleDelete(true),
+      () => void settleDelete(false)
     );
   }
   try {

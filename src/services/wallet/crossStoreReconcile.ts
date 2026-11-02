@@ -90,12 +90,17 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // Resolved entries are dropped only after the whole pass (below), so an
   // unresolved entry found later cannot leave a half-applied journal.
   const resolvedUnknownKeys: string[] = [];
+  const deleteEntryIds: string[] = [];
   for (const key of Object.keys(unknownWrites)) {
     const id = key.startsWith('voi_account_secret_')
       ? key.slice('voi_account_secret_'.length)
       : key.startsWith('voi_account_metadata_')
         ? key.slice('voi_account_metadata_'.length)
         : null;
+    // A delete that never landed (or whose re-delete failed) leaves the secret
+    // behind with no owner: make the id a candidate so the existing orphan
+    // policy removes it (read-only here; nothing is mutated in Phase 1).
+    if (id && unknownWrites[key]?.op === 'delete') deleteEntryIds.push(id);
     const resolved = await AccountSecureStorage.resolveUnknownWrite(key);
     if (resolved) resolvedUnknownKeys.push(key);
     if (!resolved && id) unresolvedIds.add(id);
@@ -113,6 +118,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     ...blobStandardIds,
     ...accountListIds,
     ...journalIds,
+    ...deleteEntryIds,
   ]);
 
   // Probe EVERY candidate's secret presence before touching anything. Run the

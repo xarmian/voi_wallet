@@ -434,6 +434,99 @@ test('a settled pending record clears itself without a later set', async () => {
   expect(f.entries.has('k')).toBe(false);
 });
 
+const hangDelete = (f: ReturnType<typeof fixture>) => {
+  let finish!: () => void;
+  f.setDelete(
+    (key) =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          f.values.delete(key);
+          resolve();
+        };
+      })
+  );
+  return () => finish();
+};
+
+test('a delete that timed out (key still present) is tracked: a later set is refused until it settles, so a late delete cannot erase the newer value', async () => {
+  const f = fixture();
+  f.values.set('k', 'old');
+  const land = hangDelete(f);
+  const del = boundedDelete(f.adapter, 'k', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(del).rejects.toBeInstanceOf(WriteFailedError);
+  await tick();
+  await assertion;
+  f.setWrite(async (key, value) => {
+    f.values.set(key, value);
+  });
+  await expect(
+    boundedSet(f.adapter, 'k', 'newer', {
+      journal: f.journal,
+      verifier: 'presence',
+      sessionId: 's',
+      timeoutMs: 10,
+    })
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
+  land(); // the late delete lands while the set was refused
+  await flush();
+  await boundedSet(f.adapter, 'k', 'newer', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  expect(f.values.get('k')).toBe('newer');
+});
+
+test('a delete whose read-back is absent journals UNKNOWN, refuses sets until its promise settles, then clears itself', async () => {
+  const f = fixture();
+  f.values.set('k', 'old');
+  let finish!: () => void;
+  f.setDelete(
+    (key) =>
+      new Promise<void>((resolve) => {
+        f.values.delete(key); // the key is already gone when the read-back runs
+        finish = () => resolve();
+      })
+  );
+  const del = boundedDelete(f.adapter, 'k', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(del).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  expect(f.entries.has('k')).toBe(true);
+  await expect(
+    boundedSet(f.adapter, 'k', 'v', {
+      journal: f.journal,
+      verifier: 'presence',
+      sessionId: 's',
+      timeoutMs: 10,
+    })
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
+  finish();
+  await flush();
+  expect(f.entries.has('k')).toBe(false);
+  await expect(
+    boundedSet(f.adapter, 'k', 'v', {
+      journal: f.journal,
+      verifier: 'presence',
+      sessionId: 's',
+      timeoutMs: 10,
+    })
+  ).resolves.toBeUndefined();
+});
+
 test('a timed-out set that later rejects permits the next set', async () => {
   const f = fixture();
   let rejectOld!: (error: Error) => void;

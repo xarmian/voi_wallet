@@ -167,3 +167,23 @@ test('resolved entries are dropped after the destructive phase, never before', a
   await reconcileCrossStoreHalfState();
   expect(order).toEqual(['prune', 'drop']);
 });
+test('a delete entry whose secret is still present makes the id an orphan candidate (the secret is not silently abandoned)', async () => {
+  setup({
+    secrets: ['gone'],
+    unknown: {
+      voi_account_secret_gone: {
+        key: 'voi_account_secret_gone',
+        op: 'delete',
+        verifier: 'presence',
+        attempt: '',
+        sessionId: 'old',
+        at: 1,
+      },
+    },
+  });
+  await reconcileCrossStoreHalfState();
+  expect(secure.deleteAccount).toHaveBeenCalledWith('gone');
+  expect(secure.dropUnknownWrite).toHaveBeenCalledWith(
+    'voi_account_secret_gone'
+  );
+});
