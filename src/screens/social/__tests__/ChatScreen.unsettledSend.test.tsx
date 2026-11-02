@@ -21,6 +21,8 @@ let mockThread: unknown;
 
 const mockStore = {
   isInitialized: true,
+  // The store holds the chat's account once the fetch has adopted it.
+  currentUserAddress: 'ME' as string | null,
   fetchThreadMessages: jest.fn(),
   fetchOlderMessages: jest.fn(),
   markThreadAsRead: jest.fn(),
@@ -112,6 +114,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockThread = undefined;
   mockStore.threads = {};
+  mockStore.currentUserAddress = 'ME';
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
@@ -281,4 +284,49 @@ it.each([
   expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
   expect(mockStore.failPendingMessage).not.toHaveBeenCalled();
   expect(Alert.alert).not.toHaveBeenCalled();
+});
+
+// Codex pass A #1 (TASK-462): a send that completes after the store switched
+// to another account writes nothing into that account.
+it.each([
+  ['success', () => Promise.resolve({ message: { id: 'TX9' } })],
+  ['pending', () => Promise.reject(new TransactionPendingError('TX9'))],
+  ['failure', () => Promise.reject(new Error('Recipient not registered'))],
+])(
+  'writes nothing to the store on a %s after a switch',
+  async (_l, outcome) => {
+    let settle!: () => void;
+    const gate = new Promise<void>((done) => {
+      settle = done;
+    });
+    sendMessage.mockImplementation((async () => {
+      await gate;
+      return outcome();
+    }) as never);
+    const view = await render(<ChatScreen />);
+    await act(async () => {
+      fireEvent.press(view.getByText('send'));
+    });
+    expect(mockStore.addPendingMessage).toHaveBeenCalled();
+
+    mockStore.currentUserAddress = 'OTHER';
+    await act(async () => settle());
+
+    expect(mockStore.removePendingMessage).not.toHaveBeenCalled();
+    expect(mockStore.addMessage).not.toHaveBeenCalled();
+    expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
+    expect(mockStore.failPendingMessage).not.toHaveBeenCalled();
+  }
+);
+
+it('still completes a send when the store holds the sender', async () => {
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  const tempId = mockStore.addPendingMessage.mock.calls[0][0].id as string;
+
+  expect(mockStore.removePendingMessage).toHaveBeenCalledWith(tempId);
+  expect(mockStore.addMessage).toHaveBeenCalledWith({ id: 'TX9' });
 });

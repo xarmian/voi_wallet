@@ -209,6 +209,14 @@ export default function ChatScreen() {
 
       if (!canUseMessaging) return;
 
+      // The store may switch accounts while a send is in flight. Its
+      // completion then belongs to an account the store no longer holds, so
+      // it writes nothing; the next load of that account shows the message
+      // from chain (TASK-462).
+      const sender = activeAccount.address;
+      const holdsSender = () =>
+        useMessagesStore.getState().currentUserAddress === sender;
+
       const isRetry = !!existingMessageId;
       const attemptedAt = Date.now();
       const tempId =
@@ -220,7 +228,11 @@ export default function ChatScreen() {
         useMessagesStore.getState().threads[friendAddress]?.messages ?? [];
       if (isRetry) {
         const row = currentThread.find((m) => m.id === tempId);
-        if (inFlightRef.current.has(tempId) || row?.status !== 'failed') {
+        if (
+          inFlightRef.current.has(tempId) ||
+          row?.status !== 'failed' ||
+          !holdsSender()
+        ) {
           return;
         }
       }
@@ -255,14 +267,17 @@ export default function ChatScreen() {
         );
 
         // Remove the pending message and add the confirmed one with real transaction ID
-        useMessagesStore.getState().removePendingMessage(tempId);
-        useMessagesStore.getState().addMessage(result.message);
+        if (holdsSender()) {
+          useMessagesStore.getState().removePendingMessage(tempId);
+          useMessagesStore.getState().addMessage(result.message);
+        }
       } catch (error) {
         console.error('Failed to send message:', error);
         // It may already be on chain: a 'failed' bubble's retry button would
         // send it twice. Keep the placeholder pending, with no retry: with a
         // txid the chain load confirms it, without one it ages out (TASK-454).
         if (toUnsettledTransactionAlert(error)) {
+          if (!holdsSender()) return;
           const txId = (error as { txId?: unknown }).txId;
           useMessagesStore
             .getState()
@@ -273,7 +288,9 @@ export default function ChatScreen() {
             );
           return;
         }
-        useMessagesStore.getState().failPendingMessage(tempId);
+        if (holdsSender()) {
+          useMessagesStore.getState().failPendingMessage(tempId);
+        }
         if (!isRetry) {
           // Only show alert for first-time sends, not retries
           Alert.alert(

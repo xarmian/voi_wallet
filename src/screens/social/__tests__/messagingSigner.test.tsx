@@ -45,6 +45,7 @@ const mockMessages = {
   markThreadAsRead: jest.fn(),
   startPolling: jest.fn(),
   stopPolling: jest.fn(),
+  registerMessagingKey: jest.fn(),
 };
 const mockFriends = {
   friends: [{ address: 'FRIEND', envoiName: 'Friend' }],
@@ -334,5 +335,38 @@ it('does not sync or poll when Inbox registration resolves after blur (TASK-462)
   await act(async () => resolve(true));
   expect(mockMessages.fetchAllThreads).not.toHaveBeenCalled();
   expect(mockMessages.startPolling).not.toHaveBeenCalled();
+  view.unmount();
+});
+
+// Codex pass A #2 (TASK-462): registration that finishes after an account
+// switch must not fetch, which would re-adopt the old account.
+it.each([
+  ['fetches the account it registered', false, ['SOURCE']],
+  ['does not fetch after a switch to another account', true, []],
+])('Inbox registration %s', async (_label, switchAccount, fetched) => {
+  mockMessages.isKeyRegistered = false;
+  let finish!: (txId: string) => void;
+  mockMessages.registerMessagingKey.mockReturnValueOnce(
+    new Promise((done) => {
+      finish = done;
+    })
+  );
+  const view = await render(<MessagesInboxScreen />);
+  mockMessages.fetchAllThreads.mockClear();
+  await act(async () => {
+    fireEvent.press(view.getByText('Enable Messaging:false'));
+  });
+  expect(mockMessages.registerMessagingKey).toHaveBeenCalledWith('SOURCE');
+
+  if (switchAccount) {
+    mockAccount = auth();
+    await act(async () => view.rerender(<MessagesInboxScreen />));
+    mockMessages.fetchAllThreads.mockClear();
+  }
+  await act(async () => finish('TXID'));
+
+  expect(
+    mockMessages.fetchAllThreads.mock.calls.map(([address]) => address)
+  ).toEqual(fetched);
   view.unmount();
 });
