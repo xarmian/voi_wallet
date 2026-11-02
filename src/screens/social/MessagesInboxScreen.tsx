@@ -108,6 +108,7 @@ export default function MessagesInboxScreen() {
   // Check registration and fetch messages when account is available
   useFocusEffect(
     useCallback(() => {
+      let cancelled = false;
       const initializeMessaging = async () => {
         if (activeAccount?.address && isInitialized) {
           // Skip everything for Ledger-backed accounts - messaging not supported
@@ -120,6 +121,8 @@ export default function MessagesInboxScreen() {
 
           // First check registration status (this is the slow part)
           const registered = await checkKeyRegistration(activeAccount.address);
+          // A blurred or superseded focus must not start account work (TASK-462).
+          if (cancelled) return;
           setIsCheckingRegistration(false);
 
           // Only fetch threads and start polling if registered
@@ -134,6 +137,7 @@ export default function MessagesInboxScreen() {
       initializeMessaging();
 
       return () => {
+        cancelled = true;
         // Stop polling when screen loses focus
         stopPolling();
       };

@@ -63,6 +63,9 @@ const inFlightThreadFetches = new Set<string>();
 // after a newer epoch commits nothing, so a slow load for A can't land after
 // the switch to B.
 let accountEpoch = 0;
+// The latest account adoption request, so a poll tick can't supersede it
+// (TASK-462). Cleared by clearCache.
+let requestedAccount: string | null = null;
 
 // Only the newest key-registration check writes isKeyRegistered (TASK-460),
 // so a slow check for A can't land after B's. A check also can't write once
@@ -159,7 +162,10 @@ interface MessagesState {
   failPendingMessage: (tempId: string) => void;
   expireUnsettledPlaceholders: (friendAddress: string) => void;
   updateMessageStatus: (txId: string, status: MessageStatus) => void;
-  markThreadAsRead: (friendAddress: string) => Promise<void>;
+  markThreadAsRead: (
+    friendAddress: string,
+    userAddress: string
+  ) => Promise<void>;
 
   // Hidden threads
   hideThread: (friendAddress: string) => Promise<void>;
@@ -479,7 +485,9 @@ export const useMessagesStore = create<MessagesState>()(
     /**
      * Mark all messages in a thread as read
      */
-    markThreadAsRead: async (friendAddress: string) => {
+    markThreadAsRead: async (friendAddress: string, userAddress: string) => {
+      // Chat callbacks can outlive the account whose unread state they saw (TASK-462).
+      if (get().currentUserAddress !== userAddress) return;
       const { threads } = get();
       const thread = threads[friendAddress];
 
@@ -500,8 +508,8 @@ export const useMessagesStore = create<MessagesState>()(
       });
 
       const { currentUserAddress, threads: updatedThreads } = get();
-      if (currentUserAddress) {
-        await persistThreads(currentUserAddress, updatedThreads);
+      if (currentUserAddress === userAddress) {
+        await persistThreads(userAddress, updatedThreads);
       }
     },
 
@@ -937,7 +945,17 @@ export const useMessagesStore = create<MessagesState>()(
         // The interval keeps running — the next tick after connectivity
         // returns syncs from the same committed cursor, so nothing is lost.
         if (shouldSkipForOffline('messages-poll')) return;
-        get().fetchAllThreads(userAddress);
+        // A tick may not contradict the latest account request: a stale A
+        // poll must not cancel a pending switch to B. With no request yet (a
+        // cold start whose first sync was deferred by the app lock), it may
+        // adopt its account. The check and fetchAllThreads' epoch bump run in
+        // one synchronous turn, so nothing interleaves (TASK-462).
+        const { currentUserAddress } = get();
+        const mayRun =
+          requestedAccount === null
+            ? currentUserAddress === null || currentUserAddress === userAddress
+            : requestedAccount === userAddress;
+        if (mayRun) get().fetchAllThreads(userAddress);
       }, intervalMs);
 
       set({ pollingInterval: interval });
@@ -973,6 +991,7 @@ export const useMessagesStore = create<MessagesState>()(
 
       // A cache load still in flight must not re-install the cleared account.
       accountEpoch++;
+      requestedAccount = null;
       set({
         threads: {},
         currentUserAddress: null,
@@ -1114,6 +1133,7 @@ async function adoptAccount(
   set: SetState,
   get: GetState
 ): Promise<boolean> {
+  requestedAccount = userAddress;
   const epoch = ++accountEpoch;
   if (get().currentUserAddress === userAddress) return true;
 

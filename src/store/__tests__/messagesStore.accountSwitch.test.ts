@@ -201,6 +201,51 @@ describe('messagesStore account switches (TASK-460)', () => {
     expect(memoryIds()).toEqual(['B-OLD']);
   });
 
+  it("does not let A's poll tick supersede a pending adoption of B (TASK-462)", async () => {
+    jest.useFakeTimers();
+    await store().loadCachedThreads(A);
+    store().startPolling(A, 1000);
+    const bRead = deferred<void>();
+    const restore = holdReadOf(`@messages/${B}`, bRead.promise);
+    const bLoad = store().loadCachedThreads(B);
+    await Promise.resolve();
+    try {
+      jest.advanceTimersByTime(1000);
+      expect(mockFetchAllConversations).not.toHaveBeenCalled();
+      bRead.resolve();
+      await bLoad;
+    } finally {
+      restore();
+      store().stopPolling();
+      jest.useRealTimers();
+    }
+    expect(store().currentUserAddress).toBe(B);
+    expect(memoryIds()).toEqual(['B-OLD']);
+  });
+
+  it('marks read only for the adopted account and persists the matching account (TASK-462)', async () => {
+    await store().loadCachedThreads(A);
+    const unread = threadOf(FA, [msg('A-OLD', FA)]);
+    unread.unreadCount = 4;
+    useMessagesStore.setState({ threads: { [FA]: unread } });
+    await AsyncStorage.setItem(
+      `@messages/${A}`,
+      JSON.stringify({ [FA]: unread })
+    );
+    const before = await AsyncStorage.getItem(`@messages/${A}`);
+
+    await store().markThreadAsRead(FA, B);
+    expect(store().threads[FA].unreadCount).toBe(4);
+    expect(await AsyncStorage.getItem(`@messages/${A}`)).toBe(before);
+
+    await store().markThreadAsRead(FA, A);
+    expect(store().threads[FA].unreadCount).toBe(0);
+    const persisted = JSON.parse(
+      (await AsyncStorage.getItem(`@messages/${A}`))!
+    );
+    expect(persisted[FA].unreadCount).toBe(0);
+  });
+
   it('does not re-install an account whose load was in flight at clearCache', async () => {
     const aRead = deferred<void>();
     const restore = holdReadOf(`@messages/${A}`, aRead.promise);

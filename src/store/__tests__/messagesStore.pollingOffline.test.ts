@@ -117,4 +117,16 @@ describe('messagesStore.startPolling offline gating (TASK-191)', () => {
 
     expect(fetchAllThreads).toHaveBeenCalledTimes(1);
   });
+
+  // TASK-462: a cold start whose first sync the app lock deferred has adopted
+  // no account yet; the poll must still sync after unlock.
+  it('still syncs when no account has been adopted yet', () => {
+    emit(ONLINE);
+    useMessagesStore.setState({ currentUserAddress: null });
+    useMessagesStore.getState().startPolling(ADDRESS, 1000);
+
+    jest.advanceTimersByTime(1000);
+
+    expect(fetchAllThreads).toHaveBeenCalledWith(ADDRESS);
+  });
 });

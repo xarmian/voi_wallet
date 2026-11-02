@@ -137,7 +137,9 @@ export default function ChatScreen() {
           // Only fetch messages and mark as read if account can use messaging and store is initialized
           if (canUseMessaging && isInitialized) {
             fetchThreadMessages(activeAccount.address, friendAddress);
-            markThreadAsRead(friendAddress);
+            if (activeAccount?.address) {
+              markThreadAsRead(friendAddress, activeAccount.address);
+            }
           }
         }
       };
@@ -173,10 +175,19 @@ export default function ChatScreen() {
 
   // Mark as read when messages change
   useEffect(() => {
-    if (thread?.unreadCount && thread.unreadCount > 0) {
-      markThreadAsRead(friendAddress);
+    if (
+      activeAccount?.address &&
+      thread?.unreadCount &&
+      thread.unreadCount > 0
+    ) {
+      markThreadAsRead(friendAddress, activeAccount.address);
     }
-  }, [thread?.unreadCount, friendAddress, markThreadAsRead]);
+  }, [
+    thread?.unreadCount,
+    friendAddress,
+    activeAccount?.address,
+    markThreadAsRead,
+  ]);
 
   // Scroll to bottom when new message arrives
   useEffect(() => {
