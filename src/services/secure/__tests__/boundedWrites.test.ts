@@ -38,6 +38,17 @@ function fixture() {
     remove: jest.fn(async (key: string) => {
       entries.delete(key);
     }),
+    removeIf: jest.fn(async (key: string, expected: UnknownWriteEntry) => {
+      const current = entries.get(key);
+      if (
+        current &&
+        current.op === expected.op &&
+        current.at === expected.at &&
+        current.attempt === expected.attempt &&
+        current.sessionId === expected.sessionId
+      )
+        entries.delete(key);
+    }),
   };
   return {
     values,
@@ -922,4 +933,52 @@ test('A: an older pending delete settling late never erases a NEWER same-process
   await flush();
   expect(f.entries.has('voi_account_secret_x')).toBe(true);
   expect(older.attempt).not.toBe('');
+});
+
+test('a settled operation clears its entry through the ATOMIC conditional remove, never get-then-remove', async () => {
+  const f = fixture();
+  let land!: () => void;
+  f.setWrite(
+    (key, value) =>
+      new Promise<void>((resolve) => {
+        land = () => {
+          f.values.set(key, value);
+          resolve();
+        };
+      })
+  );
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  f.journal.get.mockClear();
+  f.journal.remove.mockClear();
+  land();
+  await flush();
+  expect(f.journal.removeIf).toHaveBeenCalled();
+  expect(f.journal.remove).not.toHaveBeenCalled();
+  expect(f.entries.has('k')).toBe(false);
+});
+
+test('delete attempt tokens are unique per module instance (a JS reload never repeats a token)', () => {
+  let first = '';
+  let reloaded = '';
+  // Two fresh module instances, each making its FIRST call: a bare counter would
+  // yield the same token twice.
+  jest.isolateModules(() => {
+    first = require('../boundedWrites').newDeleteAttempt();
+  });
+  jest.isolateModules(() => {
+    reloaded = require('../boundedWrites').newDeleteAttempt();
+  });
+  expect(reloaded).not.toBe(first);
+  expect(first).toMatch(/^d[a-z0-9]+-\d+$/);
 });

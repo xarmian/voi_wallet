@@ -48,6 +48,8 @@ export interface UnknownJournal {
   add(entry: UnknownWriteEntry): Promise<void>;
   get(key: string): Promise<UnknownWriteEntry | undefined>;
   remove(key: string): Promise<void>;
+  /** Atomic compare-and-remove: removes the key's entry ONLY if it still is `expected`. */
+  removeIf(key: string, expected: UnknownWriteEntry): Promise<void>;
 }
 export interface WriteOptions {
   timeoutMs?: number;
@@ -67,10 +69,13 @@ interface PendingSet {
 }
 // Delete entries carry no nonce, so give each a unique attempt token: entry
 // ownership (removeIfOwned) must never collide on a same-millisecond pair.
+// The per-module prefix is random so a JS reload (same process id, counter back
+// at zero) never repeats a token from before the reload.
+const deleteAttemptPrefix = Math.random().toString(36).slice(2, 10);
 let deleteAttemptSeq = 0;
 export function newDeleteAttempt(): string {
   deleteAttemptSeq += 1;
-  return `d${deleteAttemptSeq}`;
+  return `d${deleteAttemptPrefix}-${deleteAttemptSeq}`;
 }
 async function removeIfOwned(
   journal: UnknownJournal,
@@ -78,15 +83,9 @@ async function removeIfOwned(
   entry: UnknownWriteEntry | undefined
 ): Promise<void> {
   if (!entry) return;
-  const current = await deadline(journal.get(key), WRITE_TIMEOUT_MS);
-  if (
-    current &&
-    current.op === entry.op &&
-    current.at === entry.at &&
-    current.attempt === entry.attempt &&
-    current.sessionId === entry.sessionId
-  )
-    await deadline(journal.remove(key), WRITE_TIMEOUT_MS);
+  // One conditional journal mutation: a read followed by a separate remove could
+  // erase a newer entry journaled in between.
+  await deadline(journal.removeIf(key, entry), WRITE_TIMEOUT_MS);
 }
 const pendingSets = new WeakMap<WriteAdapter, Map<string, PendingSet>>();
 // A delete that timed out can still land late and erase a newer value, so it is

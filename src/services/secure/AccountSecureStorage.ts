@@ -332,6 +332,18 @@ export class AccountSecureStorage {
       this.mutateUnknownWrites((entries) => {
         delete entries[key];
       }),
+    removeIf: (key, expected) =>
+      this.mutateUnknownWrites((entries) => {
+        const current = entries[key];
+        if (
+          current &&
+          current.op === expected.op &&
+          current.at === expected.at &&
+          current.attempt === expected.attempt &&
+          current.sessionId === expected.sessionId
+        )
+          delete entries[key];
+      }),
   };
 
   private static async readUnknownWritesTolerant(): Promise<
