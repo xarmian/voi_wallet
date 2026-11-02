@@ -619,10 +619,15 @@ export class AccountSecureStorage {
       verifier: 'presence',
     });
   }
-  private static boundedStorageSet(key: string, value: string): Promise<void> {
+  private static boundedStorageSet(
+    key: string,
+    value: string,
+    unguarded = false
+  ): Promise<void> {
     return boundedSet(storage, key, value, {
       journal: this.unknownJournal,
       verifier: 'presence',
+      unguarded,
     });
   }
   private static boundedStorageRemove(key: string): Promise<void> {
@@ -2874,9 +2879,11 @@ export class AccountSecureStorage {
     try {
       const accountIds = await this.getAllAccountIds();
       const updatedIds = accountIds.filter((id) => id !== accountId);
+      // A delete or wipe is never refused: this list rewrite skips the guard.
       await this.boundedStorageSet(
         this.METADATA_LIST_KEY,
-        JSON.stringify(updatedIds)
+        JSON.stringify(updatedIds),
+        true
       );
     } catch (error) {
       if (

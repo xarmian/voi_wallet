@@ -61,7 +61,12 @@ export async function clearOrphanPin(): Promise<void> {
     const before = await readCandidateIdsStrict();
     const result = await reconcileCrossStoreHalfState();
     // A report-only pass (a downgraded write marker) repaired nothing: unverifiable.
-    if (result?.ran !== true || result.reportOnly === true) {
+    // Unresolved ids were skipped, so their secrets were not verified either.
+    if (
+      result?.ran !== true ||
+      result.reportOnly === true ||
+      (result.skippedUnresolved ?? 0) > 0
+    ) {
       throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
     }
     const after = await readCandidateIdsStrict();

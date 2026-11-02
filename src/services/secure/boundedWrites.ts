@@ -58,6 +58,11 @@ export interface WriteOptions {
   sessionId?: string;
   attempt?: string;
   context?: WriteContext;
+  /**
+   * Skip the unresolved-write guard for this SET. Only for bookkeeping rewrites
+   * on a delete/wipe path, which must never be refused (TASK-456 ruling).
+   */
+  unguarded?: boolean;
 }
 interface PendingSet {
   settled: boolean;
@@ -301,7 +306,8 @@ async function perform(
   opts: WriteOptions
 ): Promise<void> {
   const ms = opts.timeoutMs ?? WRITE_TIMEOUT_MS;
-  if (op === 'set') await assertKeyResolved(opts.journal, adapter, key, opts);
+  if (op === 'set' && !opts.unguarded)
+    await assertKeyResolved(opts.journal, adapter, key, opts);
   else {
     const pending = pendingFor(adapter).get(key);
     if (pending && !pending.settled) pending.tombstone = true;

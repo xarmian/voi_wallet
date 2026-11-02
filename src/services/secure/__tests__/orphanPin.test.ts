@@ -490,3 +490,17 @@ describe('onboardingNeedsSecuritySetup (TASK-417)', () => {
     }
   );
 });
+
+it('a reconcile pass that skipped unresolved UNKNOWN-write ids is unverifiable (their secrets were not checked)', async () => {
+  jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
+    ran: true,
+    skippedUnresolved: 1,
+    orphanSecretsDeleted: [],
+    phantomAccountsPruned: [],
+    staleJournalDropped: [],
+  });
+  await expect(clearOrphanPin()).rejects.toThrow(
+    ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+  );
+  expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
+});

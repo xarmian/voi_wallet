@@ -476,3 +476,25 @@ test('dropUnknownWrite(key, expected) never erases an entry journaled after the 
   await AccountSecureStorage.dropUnknownWrite(key, fresh);
   expect(await AccountSecureStorage.readUnknownWritesStrict()).toEqual({});
 });
+
+test('deleteAccount and clearAll are not refused by an unresolved same-process entry on the account-list key', async () => {
+  const listEntry = {
+    key: 'voi_account_list',
+    op: 'delete',
+    verifier: 'presence',
+    attempt: 'dx-1',
+    sessionId: 'test-process-id',
+    at: 1,
+  };
+  mockPlainValues.set('voi_account_list', JSON.stringify(['one', 'two']));
+  mockSecureValues.set(key, JSON.stringify(payload));
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({ voi_account_list: listEntry })
+  );
+  await expect(
+    AccountSecureStorage.deleteAccount('one')
+  ).resolves.toBeUndefined();
+  expect(JSON.parse(mockPlainValues.get('voi_account_list')!)).toEqual(['two']);
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+});

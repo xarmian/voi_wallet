@@ -44,6 +44,8 @@ export interface ReconcileResult {
   ran: boolean;
   /** true when a downgraded write marker made this pass report-only (nothing repaired). */
   reportOnly?: boolean;
+  /** ids skipped because an UNKNOWN write for them is unresolved (nothing was verified for them). */
+  skippedUnresolved?: number;
   orphanSecretsDeleted: string[];
   phantomAccountsPruned: string[];
   staleJournalDropped: string[];
@@ -251,6 +253,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   return {
     ran: true,
     reportOnly: nonDestructive || undefined,
+    skippedUnresolved: unresolvedIds.size || undefined,
     orphanSecretsDeleted: orphansDeleted,
     phantomAccountsPruned: phantomsPruned,
     staleJournalDropped: staleJournalIds.filter((id) =>

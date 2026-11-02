@@ -1080,3 +1080,122 @@ test('a delete that settles WHILE the post-timeout read-back waits leaves no own
   await flush();
   expect(f.entries.has('k')).toBe(false);
 });
+
+// Luna r10 test gaps (tests only).
+test('post-add cleanup: the operation settles while journal.add is still pending; the entry is removed once the add completes', async () => {
+  const f = fixture();
+  let rejectSet!: (error: Error) => void;
+  f.setWrite(
+    () =>
+      new Promise<void>((_, reject) => {
+        rejectSet = reject;
+      })
+  );
+  let releaseAdd!: () => void;
+  const realAdd = f.journal.add.getMockImplementation()!;
+  f.journal.add.mockImplementationOnce(
+    (entry: UnknownWriteEntry) =>
+      new Promise<void>((resolve) => {
+        releaseAdd = () => {
+          void realAdd(entry).then(resolve);
+        };
+      })
+  );
+  const first = boundedSet(f.adapter, 'voi_account_secret_x', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 100,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await jest.advanceTimersByTimeAsync(100); // the write deadline
+  await flush(); // the read-back runs, journal.add is now pending
+  rejectSet(new Error('settles while the add is pending'));
+  await flush();
+  releaseAdd();
+  await jest.advanceTimersByTimeAsync(1);
+  await assertion;
+  await flush();
+  expect(f.entries.has('voi_account_secret_x')).toBe(false);
+});
+
+test('settle after the post-add check: the settle handler (which owns the entry) clears it', async () => {
+  const f = fixture();
+  f.values.set('k', 'v');
+  let settleDelete!: () => void;
+  f.setDelete(
+    () =>
+      new Promise<void>((resolve) => {
+        settleDelete = resolve;
+      })
+  );
+  f.adapter.getItem.mockImplementationOnce(async () => null); // reads absent: UNKNOWN delete
+  const del = boundedDelete(f.adapter, 'k', setOpts(f));
+  const assertion = expect(del).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  expect(f.entries.get('k')?.op).toBe('delete'); // journaled, op still pending
+  settleDelete(); // settles AFTER perform finished
+  await flush();
+  expect(f.entries.has('k')).toBe(false);
+});
+
+test('a set tombstone whose re-delete completes during the post-timeout read-back leaves no ownerless entry and the key absent', async () => {
+  const f = fixture();
+  let land!: () => void;
+  f.setWrite(
+    (key, value) =>
+      new Promise<void>((resolve) => {
+        land = () => {
+          f.values.set(key, value);
+          resolve();
+        };
+      })
+  );
+  f.adapter.getItem.mockImplementationOnce(async () => {
+    // During the read-back: a delete runs (tombstones the set), the set lands and
+    // the tombstone re-delete completes, all before the read-back returns.
+    f.setDelete(async (key) => {
+      f.values.delete(key);
+    });
+    await boundedDelete(f.adapter, 'k', setOpts(f));
+    land();
+    await flush();
+    return null;
+  });
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  await flush();
+  expect(f.values.has('k')).toBe(false);
+  expect(f.entries.has('k')).toBe(false);
+});
+
+test('unguarded set (delete/wipe bookkeeping rewrite) proceeds over a same-process delete entry that refuses a guarded set', async () => {
+  const f = fixture();
+  inherited(f, 'voi_account_list', { op: 'delete' });
+  await expect(
+    boundedSet(f.adapter, 'voi_account_list', '[]', setOpts(f))
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
+  await expect(
+    boundedSet(f.adapter, 'voi_account_list', '[]', {
+      ...setOpts(f),
+      unguarded: true,
+    })
+  ).resolves.toBeUndefined();
+  expect(f.values.get('voi_account_list')).toBe('[]');
+});
