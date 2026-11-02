@@ -63,6 +63,7 @@ import {
   WriteOutcomeUnknownError,
   WriteUnresolvedError,
   isCurrentSessionId,
+  hasPendingRecord,
   type UnknownWriteEntry,
   type UnknownJournal,
   type WriteContext,
@@ -384,6 +385,48 @@ export class AccountSecureStorage {
         throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
     }
     return parsed as Record<string, UnknownWriteEntry>;
+  }
+
+  private static async rewriteUnknownWritesAfterWipe(): Promise<void> {
+    let entries: Record<string, UnknownWriteEntry> = {};
+    try {
+      entries = await this.readUnknownWritesStrict();
+    } catch {
+      // Unreadable/corrupt journal: reset it (the boot reconcile resets too).
+      this.unknownJournalDesired = null;
+      this.unknownJournalWriteCounter += 1;
+      await storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY).catch(() => {});
+      return;
+    }
+    const kept: Record<string, UnknownWriteEntry> = {};
+    for (const [key, entry] of Object.entries(entries)) {
+      const adapter = key.startsWith(this.STORAGE_KEY_PREFIX)
+        ? secureStorage
+        : storage;
+      if (
+        entry.op === 'set' &&
+        (await isCurrentSessionId(entry.sessionId)) &&
+        !hasPendingRecord(adapter, key)
+      )
+        kept[key] = {
+          key,
+          op: 'delete',
+          verifier: 'presence',
+          attempt: '',
+          sessionId: entry.sessionId,
+          at: Date.now(),
+        };
+    }
+    // Keep the in-memory desired state in step so later journal mutations do not
+    // drop the retained delete entries.
+    this.unknownJournalDesired = Object.keys(kept).length === 0 ? null : kept;
+    this.unknownJournalWriteCounter += 1;
+    if (Object.keys(kept).length === 0)
+      await storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY).catch(() => {});
+    else
+      await storage
+        .setItem(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(kept))
+        .catch(() => {});
   }
 
   static async resetUnknownWrites(): Promise<void> {
@@ -4277,10 +4320,11 @@ export class AccountSecureStorage {
           this.BIOMETRIC_ENABLED_KEY,
           this.METADATA_LIST_KEY,
           this.PIN_TIMEOUT_KEY,
-          UNKNOWN_WRITES_STORAGE_KEY,
         ]);
-        this.unknownJournalDesired = null;
-        this.unknownJournalWriteCounter += 1;
+        // Ruling A: a wipe never erases an inherited same-process SET entry (the
+        // native set may still be hung and could resurrect the key); keep it as a
+        // delete UNKNOWN entry, drop everything else from the journal.
+        await this.rewriteUnknownWritesAfterWipe();
         // Clear from secure storage
         await Promise.all([
           secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),

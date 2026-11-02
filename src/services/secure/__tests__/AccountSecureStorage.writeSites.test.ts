@@ -22,6 +22,9 @@ const OUT_OF_SCOPE_CLASSIFIED: Record<string, number> = {
   // The unknown-write journal itself uses its own bounded storage operation.
   writeUnknownSnapshot: 2,
   resetUnknownWrites: 1,
+  // Wipe path (TASK-469 owns its bounded design): retains inherited same-process
+  // SET entries as delete entries (TASK-456 ruling A); journal bookkeeping only.
+  rewriteUnknownWritesAfterWipe: 2,
   deleteAccountLocked: 2,
   saveThrottle: 1,
   resetThrottle: 1,
@@ -78,7 +81,12 @@ test('all 51 original write sites stay classified', () => {
   const pending = sites('pinSetupPending.ts');
   const raw = [...secure.raw, ...pending.raw];
   const bounded = [...secure.bounded, ...pending.bounded];
-  expect(raw.length - 3 + bounded.length + secure.delegated.length).toBe(51);
+  // 2 raw journal writes in rewriteUnknownWritesAfterWipe were added after the
+  // original 51-site census (they are classified above, not part of the 51).
+  const addedAfterCensus = 2;
+  expect(
+    raw.length - 3 - addedAfterCensus + bounded.length + secure.delegated.length
+  ).toBe(51);
   expect(bounded.length).toBe(19);
   expect(secure.delegated).toEqual(['migrateLegacyAccountDataLocked']);
   expect(bounded.every((method) => IN_SCOPE.has(method))).toBe(true);

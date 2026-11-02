@@ -100,6 +100,33 @@ function pendingFor(adapter: WriteAdapter) {
   }
   return map;
 }
+// Non-secret bookkeeping keys (account list, per-account metadata, the
+// pending-create journal). An inherited same-process presence entry on one of
+// these DOWNGRADES after one successful read-back instead of staying refused
+// (TASK-456 ruling B). PIN, salt, every secret key and every delete entry stay
+// fail-closed. Literals are pinned to AccountSecureStorage by a drift test.
+export const BOOKKEEPING_KEYS = [
+  'voi_account_list',
+  'voi_pending_account_creates',
+];
+export const BOOKKEEPING_KEY_PREFIXES = ['voi_account_metadata_'];
+function isBookkeepingKey(key: string): boolean {
+  return (
+    BOOKKEEPING_KEYS.includes(key) ||
+    BOOKKEEPING_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+// Process-lifetime, never persisted: a cold start resets it. While any marker
+// exists a late stale bookkeeping write could make a live secret look orphaned,
+// so every reconcile in this process is non-destructive.
+const downgradedKeys = new Set<string>();
+export function hasDowngradedMarkers(): boolean {
+  return downgradedKeys.size > 0;
+}
+/** True when this process still tracks a timed-out write for the key. */
+export function hasPendingRecord(adapter: WriteAdapter, key: string): boolean {
+  return pendingFor(adapter).has(key) || pendingDeleteFor(adapter).has(key);
+}
 export function classifyUnknownWrite(
   entry: UnknownWriteEntry,
   rawValue: string | null
@@ -188,8 +215,18 @@ export async function assertKeyResolved(
   }
   const sessionId = opts.sessionId ?? (await currentSessionId());
   if (entry.sessionId === sessionId) {
-    if (classifyUnknownWrite(entry, value) !== 'written')
-      throw new WriteUnresolvedError('Unknown write may still land');
+    if (classifyUnknownWrite(entry, value) !== 'written') {
+      // Ruling B: one successful read-back downgrades an inherited presence
+      // entry on a NON-secret bookkeeping key; secrets, PIN/salt and delete
+      // entries stay refused.
+      if (
+        entry.op === 'set' &&
+        entry.verifier === 'presence' &&
+        isBookkeepingKey(key)
+      )
+        downgradedKeys.add(key);
+      else throw new WriteUnresolvedError('Unknown write may still land');
+    }
   } else classifyUnknownWrite(entry, value);
   try {
     await deadline(journal.remove(key), ms);
@@ -198,6 +235,47 @@ export async function assertKeyResolved(
       'Unknown-write journal could not be cleared'
     );
   }
+}
+// Ruling A: a delete that succeeds must not erase an inherited same-process SET
+// entry (the native set may still be hung after a JS reload and could land and
+// resurrect the key). Replace it with a delete UNKNOWN entry; later sets of the
+// key stay refused until a cold start.
+async function settleJournalAfterDelete(
+  journal: UnknownJournal,
+  adapter: WriteAdapter,
+  key: string,
+  sessionId: string,
+  ms: number
+): Promise<void> {
+  let entry: UnknownWriteEntry | undefined;
+  try {
+    entry = await deadline(journal.get(key), ms);
+  } catch {
+    // An unreadable/corrupt journal: the tolerant remove below repairs it, so a
+    // delete (and the sets it triggers) is never blocked by it.
+    await deadline(journal.remove(key), ms);
+    return;
+  }
+  if (
+    entry &&
+    entry.op === 'set' &&
+    entry.sessionId === sessionId &&
+    !hasPendingRecord(adapter, key)
+  ) {
+    await deadline(
+      journal.add({
+        key,
+        op: 'delete',
+        verifier: 'presence',
+        attempt: '',
+        sessionId,
+        at: Date.now(),
+      }),
+      ms
+    );
+    return;
+  }
+  await deadline(journal.remove(key), ms);
 }
 async function perform(
   adapter: WriteAdapter,
@@ -223,7 +301,13 @@ async function perform(
           : adapter.removeItem!(key);
     await deadline(operation, ms);
     if (op === 'delete' && !pendingFor(adapter).get(key)?.tombstone)
-      await deadline(opts.journal.remove(key), ms).catch(() => undefined);
+      await settleJournalAfterDelete(
+        opts.journal,
+        adapter,
+        key,
+        sessionId,
+        ms
+      ).catch(() => undefined);
     return;
   } catch (error) {
     if (!(error instanceof DeadlineError))

@@ -11,6 +11,10 @@ jest.mock('@/services/secure', () => ({
     dropPendingCreateEntries: jest.fn(),
   },
 }));
+jest.mock('@/services/secure/boundedWrites', () => ({
+  ...jest.requireActual('@/services/secure/boundedWrites'),
+  hasDowngradedMarkers: jest.fn(() => false),
+}));
 jest.mock('../index', () => ({
   MultiAccountWalletService: {
     getBlobAccountIdsStrict: jest.fn(),
@@ -20,7 +24,11 @@ jest.mock('../index', () => ({
 import { AccountSecureStorage } from '@/services/secure';
 import { MultiAccountWalletService } from '../index';
 import { reconcileCrossStoreHalfState } from '../crossStoreReconcile';
-import { UnknownJournalCorruptError } from '@/services/secure/boundedWrites';
+import {
+  UnknownJournalCorruptError,
+  hasDowngradedMarkers,
+} from '@/services/secure/boundedWrites';
+const downgraded = hasDowngradedMarkers as unknown as jest.Mock;
 const secure = AccountSecureStorage as unknown as Record<string, jest.Mock>;
 const wallet = MultiAccountWalletService as unknown as Record<
   string,
@@ -203,4 +211,37 @@ test('a METADATA delete entry never makes the id an orphan candidate (a separate
   });
   await reconcileCrossStoreHalfState();
   expect(secure.deleteAccount).not.toHaveBeenCalled();
+});
+describe('ruling B: a downgraded bookkeeping marker makes every reconcile non-destructive', () => {
+  afterEach(() => downgraded.mockReturnValue(false));
+  const staleListScenario = () => {
+    // The list/metadata write that would have recorded the account was stale or
+    // late: a live secret has a pending-create journal entry and no blob owner.
+    setup({ secrets: ['acct'] });
+    secure.readPendingCreatesStrict.mockResolvedValue({ acct: 't1' });
+  };
+  test('with a marker, a stale late list write causes NO delete and NO prune', async () => {
+    downgraded.mockReturnValue(true);
+    staleListScenario();
+    wallet.getBlobAccountIdsStrict.mockResolvedValue({
+      standardIds: ['phantom'],
+      allIds: ['phantom'],
+    });
+    secure.readAccountListStrict.mockResolvedValue(['phantom']);
+    await reconcileCrossStoreHalfState();
+    expect(secure.deleteAccount).not.toHaveBeenCalled();
+    expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
+  });
+  test('without a marker the orphan policy is unchanged (the orphan secret is deleted, the phantom pruned)', async () => {
+    downgraded.mockReturnValue(false);
+    staleListScenario();
+    wallet.getBlobAccountIdsStrict.mockResolvedValue({
+      standardIds: ['phantom'],
+      allIds: ['phantom'],
+    });
+    secure.readAccountListStrict.mockResolvedValue(['phantom']);
+    await reconcileCrossStoreHalfState();
+    expect(secure.deleteAccount).toHaveBeenCalledWith('acct');
+    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+  });
 });

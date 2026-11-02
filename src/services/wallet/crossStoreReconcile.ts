@@ -34,7 +34,10 @@ import { AccountSecureStorage } from '@/services/secure';
 
 import { MultiAccountWalletService } from './index';
 import { redactError } from '@/utils/logRedaction';
-import { UnknownJournalCorruptError } from '@/services/secure/boundedWrites';
+import {
+  UnknownJournalCorruptError,
+  hasDowngradedMarkers,
+} from '@/services/secure/boundedWrites';
 
 export interface ReconcileResult {
   /** false when Phase 1 hit a read/probe failure and the pass was aborted. */
@@ -184,17 +187,27 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const phantomsPruned: string[] = [];
   const orphansDeleted: string[] = [];
   const journalDropped: string[] = [];
+  // Ruling B: while any downgraded bookkeeping marker exists in this process a late
+  // STALE account-list/metadata write could make a live secret look orphaned, so
+  // the pass is REPORT ONLY (no phantom prune, no orphan delete) until a cold
+  // start. Resolved-entry and stale-journal bookkeeping drops may still happen.
+  const nonDestructive = hasDowngradedMarkers();
+  if (nonDestructive && (phantomIds.length > 0 || orphanSecretIds.length > 0))
+    console.log(
+      `[bootReconcile] non-destructive (downgraded write marker): would prune ` +
+        `${phantomIds.length} phantom(s) and delete ${orphanSecretIds.length} orphan secret(s)`
+    );
   try {
     // Prune phantoms FIRST — the only mutation that can change the boot lock
     // verdict (emptying the wallet ⇒ canonical clearAllWallets) — so the
     // verdict-affecting change is committed as early as possible.
-    if (phantomIds.length > 0) {
+    if (!nonDestructive && phantomIds.length > 0) {
       await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
       phantomsPruned.push(...phantomIds);
     }
     // Deletes: each acquires the key-mutation mutex, serialized against any secret
     // write. deleteAccount removes secret + secure metadata + account-list entry.
-    for (const id of orphanSecretIds) {
+    for (const id of nonDestructive ? [] : orphanSecretIds) {
       await AccountSecureStorage.deleteAccount(id);
       orphansDeleted.push(id);
     }

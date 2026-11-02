@@ -9,6 +9,7 @@ import {
   UNKNOWN_WRITE_MESSAGES,
   type UnknownWriteEntry,
   classifyUnknownWrite,
+  hasDowngradedMarkers,
 } from '../boundedWrites';
 
 const VALUE = 'private-test-value';
@@ -773,4 +774,81 @@ test('UNKNOWN errors expose the exact create and restore messages', () => {
   expect(new WriteOutcomeUnknownError(false, 'other').userMessage).toEqual(
     UNKNOWN_WRITE_MESSAGES.create
   );
+});
+
+const inherited = (
+  f: ReturnType<typeof fixture>,
+  key: string,
+  over: Partial<UnknownWriteEntry> = {}
+) =>
+  f.entries.set(key, {
+    key,
+    op: 'set',
+    verifier: 'presence',
+    attempt: '',
+    sessionId: 's',
+    at: 1,
+    ...over,
+  });
+const setOpts = (f: ReturnType<typeof fixture>) => ({
+  journal: f.journal,
+  verifier: 'presence' as const,
+  sessionId: 's',
+  timeoutMs: 10,
+});
+
+test('A: a delete never erases an inherited same-process SET entry; it becomes a delete entry and later sets stay refused', async () => {
+  const f = fixture();
+  f.values.set('voi_account_secret_x', 'old');
+  inherited(f, 'voi_account_secret_x', { verifier: 'nonce', attempt: 'n' });
+  await boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
+  expect(f.entries.get('voi_account_secret_x')?.op).toBe('delete');
+  await expect(
+    boundedSet(f.adapter, 'voi_account_secret_x', 'v', setOpts(f))
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
+});
+
+test('A: a delete still clears an earlier-process entry and an own-session delete entry as before', async () => {
+  const f = fixture();
+  f.values.set('k', 'old');
+  inherited(f, 'k', { sessionId: 'earlier-process' });
+  await boundedDelete(f.adapter, 'k', setOpts(f));
+  expect(f.entries.has('k')).toBe(false);
+});
+
+test('B: one successful read-back DOWNGRADES an inherited presence entry on a bookkeeping key (the set proceeds, a marker is recorded)', async () => {
+  const f = fixture();
+  expect(hasDowngradedMarkers()).toBe(false);
+  inherited(f, 'voi_account_list');
+  await expect(
+    boundedSet(f.adapter, 'voi_account_list', '[]', setOpts(f))
+  ).resolves.toBeUndefined();
+  expect(f.entries.has('voi_account_list')).toBe(false);
+  expect(hasDowngradedMarkers()).toBe(true);
+});
+
+test.each([
+  ['voi_wallet_pin', { verifier: 'presence' }],
+  ['voi_wallet_salt', { verifier: 'presence' }],
+  ['voi_account_secret_x', { verifier: 'presence' }],
+  ['voi_account_list', { op: 'delete' }],
+] as const)(
+  'B: %s with %j stays fail-closed (not downgraded)',
+  async (key, over) => {
+    const f = fixture();
+    inherited(f, key, over as Partial<UnknownWriteEntry>);
+    await expect(
+      boundedSet(f.adapter, key, 'v', setOpts(f))
+    ).rejects.toBeInstanceOf(WriteUnresolvedError);
+    expect(f.entries.has(key)).toBe(true);
+  }
+);
+
+test('B: a failed read-back keeps the bookkeeping set refused', async () => {
+  const f = fixture();
+  inherited(f, 'voi_pending_account_creates');
+  f.adapter.getItem.mockRejectedValueOnce(new Error('keychain locked'));
+  await expect(
+    boundedSet(f.adapter, 'voi_pending_account_creates', '{}', setOpts(f))
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
 });

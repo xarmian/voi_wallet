@@ -65,6 +65,8 @@ import {
   WriteOutcomeUnknownError,
   WriteUnresolvedError,
   UNKNOWN_WRITES_STORAGE_KEY,
+  BOOKKEEPING_KEYS,
+  BOOKKEEPING_KEY_PREFIXES,
 } from '../boundedWrites';
 const account = AccountSecureStorage as unknown as {
   saveSecret(id: string, payload: unknown): Promise<void>;
@@ -92,6 +94,10 @@ beforeEach(() => {
   mockHeldWrite = undefined;
   mockHoldJournalNext = false;
   mockLandJournal = undefined;
+  // Tests seed the journal in storage directly; drop the in-memory desired state.
+  (
+    AccountSecureStorage as unknown as Record<string, unknown>
+  ).unknownJournalDesired = undefined;
 });
 
 test('every secret payload write remints a 32-hex nonce, including append and reused object', async () => {
@@ -333,4 +339,53 @@ test('a late journal write cannot restore an entry removed by a later mutation',
   } finally {
     jest.useRealTimers();
   }
+});
+
+test('bookkeeping key literals in boundedWrites match AccountSecureStorage (drift guard)', () => {
+  const asPrivate = AccountSecureStorage as unknown as Record<string, string>;
+  expect(BOOKKEEPING_KEYS).toContain(asPrivate.METADATA_LIST_KEY);
+  expect(BOOKKEEPING_KEYS).toContain(asPrivate.PENDING_CREATES_KEY);
+  expect(BOOKKEEPING_KEY_PREFIXES).toContain(asPrivate.METADATA_KEY);
+  // PIN, salt and every secret key must NOT be bookkeeping keys.
+  for (const secretish of [
+    asPrivate.PIN_KEY,
+    asPrivate.SALT_KEY,
+    `${asPrivate.STORAGE_KEY_PREFIX}x`,
+  ]) {
+    expect(BOOKKEEPING_KEYS).not.toContain(secretish);
+    expect(
+      BOOKKEEPING_KEY_PREFIXES.some((prefix) => secretish.startsWith(prefix))
+    ).toBe(false);
+  }
+});
+
+test('clearAll keeps an inherited same-process SET entry as a delete entry (ruling A)', async () => {
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({
+      [key]: {
+        key,
+        op: 'set',
+        verifier: 'nonce',
+        attempt: 'a'.repeat(32),
+        sessionId: 'test-process-id',
+        at: 1,
+      },
+      voi_account_list: {
+        key: 'voi_account_list',
+        op: 'set',
+        verifier: 'presence',
+        attempt: '',
+        sessionId: 'earlier-process',
+        at: 1,
+      },
+    })
+  );
+  await AccountSecureStorage.clearAll();
+  const left = await AccountSecureStorage.readUnknownWritesStrict();
+  expect(Object.keys(left)).toEqual([key]);
+  expect(left[key].op).toBe('delete');
+  await expect(account.saveSecret('one', payload)).rejects.toBeInstanceOf(
+    WriteUnresolvedError
+  );
 });
