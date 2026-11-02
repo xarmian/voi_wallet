@@ -151,28 +151,82 @@ test('non-payload writes use presence verifier', async () => {
   }
 });
 
-test('boot drops an earlier-session entry over a legacy payload without a nonce', async () => {
-  mockSecureValues.set(key, JSON.stringify(payload));
+const earlierEntry = (over: Record<string, unknown> = {}) => ({
+  [key]: {
+    key,
+    op: 'set',
+    verifier: 'nonce',
+    attempt: 'a'.repeat(32),
+    sessionId: 'earlier',
+    at: 1,
+    ...over,
+  },
+});
+const seedEntry = (over: Record<string, unknown> = {}) =>
   mockPlainValues.set(
     UNKNOWN_WRITES_STORAGE_KEY,
-    JSON.stringify({
-      [key]: {
-        key,
-        op: 'set',
-        verifier: 'nonce',
-        attempt: 'a'.repeat(32),
-        sessionId: 'earlier',
-        at: 1,
-      },
-    })
+    JSON.stringify(earlierEntry(over))
+  );
+
+test('boot: an earlier-session nonce entry over a legacy payload (no nonce) stays UNRESOLVED', async () => {
+  mockSecureValues.set(key, JSON.stringify(payload));
+  seedEntry();
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    false
+  );
+  expect(
+    Object.keys(await AccountSecureStorage.readUnknownWritesStrict())
+  ).toEqual([key]);
+});
+
+test('boot: a payload carrying a DIFFERENT nonce is unresolved; the matching nonce is written', async () => {
+  seedEntry();
+  mockSecureValues.set(
+    key,
+    JSON.stringify({ ...payload, writeNonce: 'b'.repeat(32) })
+  );
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    false
+  );
+  mockSecureValues.set(
+    key,
+    JSON.stringify({ ...payload, writeNonce: 'a'.repeat(32) })
   );
   await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
     true
   );
-  expect(await AccountSecureStorage.readUnknownWritesStrict()).toEqual({});
-  expect(JSON.parse(mockSecureValues.get(key)!)).not.toHaveProperty(
-    'writeNonce'
+});
+
+test('boot: an absent key is resolved (not written); a corrupt value is unresolved; resolving never removes the entry', async () => {
+  seedEntry();
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
   );
+  mockSecureValues.set(key, '{corrupt');
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    false
+  );
+  expect(
+    Object.keys(await AccountSecureStorage.readUnknownWritesStrict())
+  ).toEqual([key]);
+});
+
+test('boot: a presence-verifier entry resolves on any successful probe', async () => {
+  seedEntry({ verifier: 'presence', attempt: '' });
+  mockSecureValues.set(key, 'anything');
+  await expect(AccountSecureStorage.resolveUnknownWrite(key)).resolves.toBe(
+    true
+  );
+});
+
+test('guard: a later mutation over an earlier-session nonce entry refuses on a mismatched or legacy payload and proceeds when absent', async () => {
+  seedEntry();
+  mockSecureValues.set(key, JSON.stringify(payload));
+  await expect(account.saveSecret('one', payload)).rejects.toBeInstanceOf(
+    WriteUnresolvedError
+  );
+  mockSecureValues.delete(key);
+  await expect(account.saveSecret('one', payload)).resolves.toBeUndefined();
 });
 
 test('legacy payload without an UNKNOWN entry remains readable', async () => {

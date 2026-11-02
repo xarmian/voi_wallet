@@ -4,6 +4,7 @@ jest.mock('@/services/secure', () => ({
     readPendingCreatesStrict: jest.fn(),
     readUnknownWritesStrict: jest.fn(),
     resolveUnknownWrite: jest.fn(),
+    dropUnknownWrite: jest.fn(),
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(),
     dropPendingCreateEntries: jest.fn(),
@@ -108,4 +109,42 @@ test('unresolvable UNKNOWN id is skipped without prune or orphan deletion', asyn
   await reconcileCrossStoreHalfState();
   expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
   expect(secure.deleteAccount).not.toHaveBeenCalled();
+});
+const entryFor = (key: string) => ({
+  key,
+  op: 'set',
+  verifier: 'nonce',
+  attempt: 'a',
+  sessionId: 'old',
+  at: 1,
+});
+test('resolved entries are dropped only after the whole pass; an unresolvable non-account key aborts before any journal change', async () => {
+  setup({
+    unknown: {
+      voi_account_secret_one: entryFor('voi_account_secret_one'),
+      voi_account_list: entryFor('voi_account_list'),
+    },
+  });
+  secure.resolveUnknownWrite.mockImplementation(
+    async (key: string) => key === 'voi_account_secret_one'
+  );
+  await expect(reconcileCrossStoreHalfState()).rejects.toThrow();
+  expect(secure.dropUnknownWrite).not.toHaveBeenCalled();
+  expect(secure.deleteAccount).not.toHaveBeenCalled();
+});
+test('resolved entries are dropped after the destructive phase, never before', async () => {
+  setup({
+    blob: ['gone'],
+    list: ['gone'],
+    unknown: { voi_account_secret_other: entryFor('voi_account_secret_other') },
+  });
+  const order: string[] = [];
+  wallet.pruneStandardAccounts.mockImplementation(async () => {
+    order.push('prune');
+  });
+  secure.dropUnknownWrite.mockImplementation(async () => {
+    order.push('drop');
+  });
+  await reconcileCrossStoreHalfState();
+  expect(order).toEqual(['prune', 'drop']);
 });

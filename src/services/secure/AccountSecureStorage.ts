@@ -391,6 +391,17 @@ export class AccountSecureStorage {
     return task;
   }
 
+  /**
+   * Decide whether an UNKNOWN entry from an EARLIER session is resolved. Never
+   * removes the entry (the boot reconcile drops resolved entries only after its
+   * whole pass, so a later unresolved entry cannot leave a half-applied journal).
+   * An entry from THIS session is never resolved here (a late write can still
+   * land). Verifier 'presence': resolved by any successful probe. Verifier
+   * 'nonce' (a secret set): absent everywhere = not written (the process
+   * restarted, nothing is in flight); present with writeNonce === entry.attempt
+   * = written; present with any other marker, a legacy payload or an unparsable
+   * value is UNRESOLVED and the entry stays (fail closed).
+   */
   static async resolveUnknownWrite(key: string): Promise<boolean> {
     const entries = await this.readUnknownWritesStrict();
     const entry = entries[key];
@@ -408,25 +419,26 @@ export class AccountSecureStorage {
             ? [secureStorage]
             : [storage];
     try {
+      const raws: (string | null)[] = [];
       for (const adapter of adapters) {
-        const raw = await this.withTimeout(
-          adapter.getItem(key),
-          WRITE_TIMEOUT_MS,
-          'unknown-write probe'
+        raws.push(
+          await this.withTimeout(
+            adapter.getItem(key),
+            WRITE_TIMEOUT_MS,
+            'unknown-write probe'
+          )
         );
-        if (entry.verifier === 'nonce' && raw !== null) {
-          try {
-            // A matching marker identifies this attempt; otherwise the current value stands.
-            const writtenByAttempt =
-              JSON.parse(raw).writeNonce === entry.attempt;
-            void writtenByAttempt;
-          } catch {
-            // A legacy or malformed payload is not this attempt.
-          }
-        }
       }
-      await this.unknownJournal.remove(key);
-      return true;
+      if (entry.verifier !== 'nonce' || entry.op !== 'set') return true;
+      const present = raws.filter((raw): raw is string => raw !== null);
+      if (present.length === 0) return true;
+      return present.every((raw) => {
+        try {
+          return JSON.parse(raw).writeNonce === entry.attempt;
+        } catch {
+          return false;
+        }
+      });
     } catch {
       return false;
     }
@@ -544,7 +556,7 @@ export class AccountSecureStorage {
     accountId: string,
     metadata: PersistedAccountMetadata
   ): Promise<void> {
-    await storage.setItem(
+    await this.boundedStorageSet(
       this.metadataKey(accountId),
       JSON.stringify(metadata)
     );

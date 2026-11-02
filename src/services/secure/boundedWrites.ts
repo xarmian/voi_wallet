@@ -125,6 +125,20 @@ export async function assertKeyResolved(
     }
     if (!matches)
       throw new WriteUnresolvedError('Unknown write may still land');
+  } else if (
+    entry.verifier === 'nonce' &&
+    entry.op === 'set' &&
+    value !== null
+  ) {
+    // An earlier session: nothing is in flight. A present payload must carry
+    // this attempt's marker; any other value leaves the entry unresolved.
+    let ours = false;
+    try {
+      ours = JSON.parse(value).writeNonce === entry.attempt;
+    } catch {
+      /* Unproven. */
+    }
+    if (!ours) throw new WriteUnresolvedError('Unknown write is unresolved');
   }
   try {
     await deadline(journal.remove(key), ms);

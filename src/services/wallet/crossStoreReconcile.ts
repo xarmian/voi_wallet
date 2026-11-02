@@ -77,6 +77,9 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const journalIds = Object.keys(journal);
   const unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
   const unresolvedIds = new Set<string>();
+  // Resolved entries are dropped only after the whole pass (below), so an
+  // unresolved entry found later cannot leave a half-applied journal.
+  const resolvedUnknownKeys: string[] = [];
   for (const key of Object.keys(unknownWrites)) {
     const id = key.startsWith('voi_account_secret_')
       ? key.slice('voi_account_secret_'.length)
@@ -84,6 +87,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
         ? key.slice('voi_account_metadata_'.length)
         : null;
     const resolved = await AccountSecureStorage.resolveUnknownWrite(key);
+    if (resolved) resolvedUnknownKeys.push(key);
     if (!resolved && id) unresolvedIds.add(id);
     if (!resolved && !id)
       throw new Error('Unknown write prevents safe reconcile');
@@ -177,6 +181,9 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     if (journalIdsToDrop.length > 0) {
       await AccountSecureStorage.dropPendingCreateEntries(journalIdsToDrop);
       journalDropped.push(...journalIdsToDrop);
+    }
+    for (const key of resolvedUnknownKeys) {
+      await AccountSecureStorage.dropUnknownWrite(key);
     }
   } catch (error) {
     // A Phase-2 repair failed after Phase 1 passed cleanly. Keep the partial
