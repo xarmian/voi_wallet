@@ -21,6 +21,8 @@ let mockThread: unknown;
 
 const mockStore = {
   isInitialized: true,
+  // The store holds the chat's account once the fetch has adopted it.
+  currentUserAddress: 'ME' as string | null,
   fetchThreadMessages: jest.fn(),
   fetchOlderMessages: jest.fn(),
   markThreadAsRead: jest.fn(),
@@ -34,6 +36,7 @@ const mockStore = {
   expireUnsettledPlaceholders: jest.fn(),
   registerMessagingKey: jest.fn(),
   checkKeyRegistration: jest.fn(async () => true),
+  loadCachedThreads: jest.fn(async () => {}),
 };
 
 jest.mock('@/store/messagesStore', () => ({
@@ -112,6 +115,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockThread = undefined;
   mockStore.threads = {};
+  mockStore.currentUserAddress = 'ME';
+  mockStore.loadCachedThreads.mockImplementation(async () => {});
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
@@ -281,4 +286,160 @@ it.each([
   expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
   expect(mockStore.failPendingMessage).not.toHaveBeenCalled();
   expect(Alert.alert).not.toHaveBeenCalled();
+});
+
+// Codex pass A #1 (TASK-462): a send that completes after the store switched
+// to another account writes nothing into that account.
+it.each([
+  ['success', () => Promise.resolve({ message: { id: 'TX9' } })],
+  ['pending', () => Promise.reject(new TransactionPendingError('TX9'))],
+  ['failure', () => Promise.reject(new Error('Recipient not registered'))],
+])(
+  'writes nothing to the store on a %s after a switch',
+  async (_l, outcome) => {
+    let settle!: () => void;
+    const gate = new Promise<void>((done) => {
+      settle = done;
+    });
+    sendMessage.mockImplementation((async () => {
+      await gate;
+      return outcome();
+    }) as never);
+    const view = await render(<ChatScreen />);
+    await act(async () => {
+      fireEvent.press(view.getByText('send'));
+    });
+    expect(mockStore.addPendingMessage).toHaveBeenCalled();
+
+    mockStore.currentUserAddress = 'OTHER';
+    await act(async () => settle());
+
+    expect(mockStore.removePendingMessage).not.toHaveBeenCalled();
+    expect(mockStore.addMessage).not.toHaveBeenCalled();
+    expect(mockStore.settlePendingMessage).not.toHaveBeenCalled();
+    expect(mockStore.failPendingMessage).not.toHaveBeenCalled();
+  }
+);
+
+it('still completes a send when the store holds the sender', async () => {
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  const tempId = mockStore.addPendingMessage.mock.calls[0][0].id as string;
+
+  expect(mockStore.removePendingMessage).toHaveBeenCalledWith(tempId);
+  expect(mockStore.addMessage).toHaveBeenCalledWith({ id: 'TX9' });
+});
+
+// Pass B #2 (TASK-462): a send before the chat's account is adopted adopts it
+// first, so the placeholder and the completion land on the sender's own map.
+it('adopts the sender before a cold-start send, then completes it', async () => {
+  mockStore.currentUserAddress = null;
+  mockStore.loadCachedThreads.mockImplementationOnce(async () => {
+    mockStore.currentUserAddress = 'ME';
+  });
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  expect(mockStore.loadCachedThreads).toHaveBeenCalledWith('ME');
+  const loadOrder = mockStore.loadCachedThreads.mock.invocationCallOrder[0];
+  const addOrder = mockStore.addPendingMessage.mock.invocationCallOrder[0];
+  expect(loadOrder).toBeLessThan(addOrder);
+  expect(mockStore.addMessage).toHaveBeenCalledWith({ id: 'TX9' });
+});
+
+it('refuses a send whose account the store cannot adopt, before sending', async () => {
+  mockStore.currentUserAddress = null;
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(mockStore.addPendingMessage).not.toHaveBeenCalled();
+  expect(Alert.alert).toHaveBeenCalledWith(
+    'Error',
+    'Messages are still loading for this account. Try again.'
+  );
+});
+
+// Pass C #1 (TASK-462): a double tap must not send twice, including during
+// the cold-start load that precedes a send.
+it.each([
+  ['during the cold-start load', true],
+  ['with the account already held', false],
+])('sends once on a double tap %s', async (_label, coldStart) => {
+  let loaded!: () => void;
+  if (coldStart) {
+    mockStore.currentUserAddress = null;
+    // Every caller waits on the same pending load, as the store's adoption
+    // would make them.
+    const load = new Promise<void>((done) => {
+      loaded = () => {
+        mockStore.currentUserAddress = 'ME';
+        done();
+      };
+    });
+    mockStore.loadCachedThreads.mockImplementation(() => load);
+  }
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    fireEvent.press(view.getByText('send'));
+    fireEvent.press(view.getByText('send'));
+  });
+  if (coldStart) await act(async () => loaded());
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(mockStore.addPendingMessage).toHaveBeenCalledTimes(1);
+
+  // The lock is released once the send settles.
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(2);
+});
+
+it('releases the lock when a send is refused', async () => {
+  mockStore.currentUserAddress = null;
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  mockStore.currentUserAddress = 'ME';
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+});
+
+// Pass D #1 (TASK-462): a cold-start load that throws must not strand the
+// composer behind the send lock.
+it('refuses, then releases the lock, when the cold-start load throws', async () => {
+  mockStore.currentUserAddress = null;
+  mockStore.loadCachedThreads.mockRejectedValueOnce(new Error('bad cache'));
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(Alert.alert).toHaveBeenCalledWith(
+    'Error',
+    'Messages are still loading for this account. Try again.'
+  );
+
+  mockStore.currentUserAddress = 'ME';
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(1);
 });

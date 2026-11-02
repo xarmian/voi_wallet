@@ -70,6 +70,8 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList>(null);
   // Placeholder ids with a send in flight (TASK-454).
   const inFlightRef = useRef(new Set<string>());
+  // Held by a new send from its first await until it settles (TASK-462).
+  const composeLockRef = useRef(false);
 
   // Experimental feature guard - redirect if messaging is not enabled
   const isMessagingEnabled = useIsMessagingEnabled();
@@ -137,7 +139,9 @@ export default function ChatScreen() {
           // Only fetch messages and mark as read if account can use messaging and store is initialized
           if (canUseMessaging && isInitialized) {
             fetchThreadMessages(activeAccount.address, friendAddress);
-            markThreadAsRead(friendAddress);
+            if (activeAccount?.address) {
+              markThreadAsRead(friendAddress, activeAccount.address);
+            }
           }
         }
       };
@@ -173,10 +177,19 @@ export default function ChatScreen() {
 
   // Mark as read when messages change
   useEffect(() => {
-    if (thread?.unreadCount && thread.unreadCount > 0) {
-      markThreadAsRead(friendAddress);
+    if (
+      activeAccount?.address &&
+      thread?.unreadCount &&
+      thread.unreadCount > 0
+    ) {
+      markThreadAsRead(friendAddress, activeAccount.address);
     }
-  }, [thread?.unreadCount, friendAddress, markThreadAsRead]);
+  }, [
+    thread?.unreadCount,
+    friendAddress,
+    activeAccount?.address,
+    markThreadAsRead,
+  ]);
 
   // Scroll to bottom when new message arrives
   useEffect(() => {
@@ -198,7 +211,41 @@ export default function ChatScreen() {
 
       if (!canUseMessaging) return;
 
+      // The store may switch accounts while a send is in flight. Its
+      // completion then belongs to an account the store no longer holds, so
+      // it writes nothing; the next load of that account shows the message
+      // from chain (TASK-462).
+      const sender = activeAccount.address;
+      const holdsSender = () =>
+        useMessagesStore.getState().currentUserAddress === sender;
+
       const isRetry = !!existingMessageId;
+      // isSending only disables the composer after a render, so a second tap
+      // could start a second send, most easily during the cold-start load
+      // below. A new send takes a synchronous lock instead.
+      if (!isRetry) {
+        if (composeLockRef.current) return;
+        composeLockRef.current = true;
+      }
+
+      if (!holdsSender()) {
+        // A failed load is refused like an unadopted one, so it releases the
+        // lock rather than stranding the composer (TASK-462).
+        try {
+          await useMessagesStore.getState().loadCachedThreads(sender);
+        } catch (error) {
+          console.error('Failed to load messages before sending:', error);
+        }
+        if (!holdsSender()) {
+          if (!isRetry) composeLockRef.current = false;
+          Alert.alert(
+            'Error',
+            'Messages are still loading for this account. Try again.'
+          );
+          return;
+        }
+      }
+
       const attemptedAt = Date.now();
       const tempId =
         existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
@@ -209,7 +256,11 @@ export default function ChatScreen() {
         useMessagesStore.getState().threads[friendAddress]?.messages ?? [];
       if (isRetry) {
         const row = currentThread.find((m) => m.id === tempId);
-        if (inFlightRef.current.has(tempId) || row?.status !== 'failed') {
+        if (
+          inFlightRef.current.has(tempId) ||
+          row?.status !== 'failed' ||
+          !holdsSender()
+        ) {
           return;
         }
       }
@@ -244,14 +295,17 @@ export default function ChatScreen() {
         );
 
         // Remove the pending message and add the confirmed one with real transaction ID
-        useMessagesStore.getState().removePendingMessage(tempId);
-        useMessagesStore.getState().addMessage(result.message);
+        if (holdsSender()) {
+          useMessagesStore.getState().removePendingMessage(tempId);
+          useMessagesStore.getState().addMessage(result.message);
+        }
       } catch (error) {
         console.error('Failed to send message:', error);
         // It may already be on chain: a 'failed' bubble's retry button would
         // send it twice. Keep the placeholder pending, with no retry: with a
         // txid the chain load confirms it, without one it ages out (TASK-454).
         if (toUnsettledTransactionAlert(error)) {
+          if (!holdsSender()) return;
           const txId = (error as { txId?: unknown }).txId;
           useMessagesStore
             .getState()
@@ -262,7 +316,9 @@ export default function ChatScreen() {
             );
           return;
         }
-        useMessagesStore.getState().failPendingMessage(tempId);
+        if (holdsSender()) {
+          useMessagesStore.getState().failPendingMessage(tempId);
+        }
         if (!isRetry) {
           // Only show alert for first-time sends, not retries
           Alert.alert(
@@ -275,6 +331,7 @@ export default function ChatScreen() {
       } finally {
         inFlightRef.current.delete(tempId);
         if (!isRetry) {
+          composeLockRef.current = false;
           setIsSending(false);
         }
       }

@@ -45,6 +45,7 @@ const mockMessages = {
   markThreadAsRead: jest.fn(),
   startPolling: jest.fn(),
   stopPolling: jest.fn(),
+  registerMessagingKey: jest.fn(),
 };
 const mockFriends = {
   friends: [{ address: 'FRIEND', envoiName: 'Friend' }],
@@ -284,6 +285,15 @@ describe.each([NewMessageScreen, ChatScreen, MessagesInboxScreen])(
       expect(Alert.alert).not.toHaveBeenCalled();
     });
 
+    it('passes the active account to markThreadAsRead from Chat focus (TASK-462)', async () => {
+      if (Screen !== ChatScreen) return;
+      await render(<ChatScreen />);
+      expect(mockMessages.markThreadAsRead).toHaveBeenCalledWith(
+        'FRIEND',
+        'SOURCE'
+      );
+    });
+
     it.each(['chain', 'secret'])(
       '%s error shows inline Retry and recovers without alerts',
       async (failure) => {
@@ -309,4 +319,44 @@ it('explains the disabled Inbox registration action', async () => {
   const view = await render(<MessagesInboxScreen />);
   expect(view.getByText(explanation)).toBeTruthy();
   expect(view.queryByText('Enable Messaging:false')).toBeNull();
+});
+
+it('does not sync or poll when Inbox registration resolves after blur (TASK-462)', async () => {
+  let resolve!: (registered: boolean) => void;
+  mockMessages.checkKeyRegistration.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    })
+  );
+  const view = await render(<MessagesInboxScreen />);
+  mockMessages.fetchAllThreads.mockClear();
+  mockMessages.startPolling.mockClear();
+  await focus(false);
+  await act(async () => resolve(true));
+  expect(mockMessages.fetchAllThreads).not.toHaveBeenCalled();
+  expect(mockMessages.startPolling).not.toHaveBeenCalled();
+  view.unmount();
+});
+
+it('fetches threads after registration; the store rejects a stale account (TASK-462)', async () => {
+  mockMessages.isKeyRegistered = false;
+  let finish!: (txId: string) => void;
+  mockMessages.registerMessagingKey.mockReturnValueOnce(
+    new Promise((done) => {
+      finish = done;
+    })
+  );
+  const view = await render(<MessagesInboxScreen />);
+  mockMessages.fetchAllThreads.mockClear();
+  await act(async () => {
+    fireEvent.press(view.getByText('Enable Messaging:false'));
+  });
+  expect(mockMessages.registerMessagingKey).toHaveBeenCalledWith('SOURCE');
+
+  await act(async () => finish('TXID'));
+
+  expect(
+    mockMessages.fetchAllThreads.mock.calls.map(([address]) => address)
+  ).toEqual(['SOURCE']);
+  view.unmount();
 });
