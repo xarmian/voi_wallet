@@ -53,6 +53,22 @@ import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
 import { redactError } from '@/utils/logRedaction';
+import {
+  boundedSet,
+  boundedDelete,
+  classifyUnknownWrite,
+  UnknownJournalCorruptError,
+  UNKNOWN_WRITES_STORAGE_KEY,
+  WRITE_TIMEOUT_MS,
+  WriteOutcomeUnknownError,
+  WriteUnresolvedError,
+  isCurrentSessionId,
+  hasPendingRecord,
+  newDeleteAttempt,
+  type UnknownWriteEntry,
+  type UnknownJournal,
+  type WriteContext,
+} from './boundedWrites';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
@@ -122,6 +138,8 @@ type PersistedAccountMetadata = Omit<
 >;
 
 interface AccountSecretPayload {
+  /** Random write marker outside the envelope MAC; never derived from a value. */
+  writeNonce?: string;
   accountId: string;
   /**
    * Legacy 4-colon (Format A/B/C) ciphertext, OR '' once fully migrated to v2.
@@ -300,6 +318,325 @@ export class AccountSecureStorage {
    *  Matches the 5 s wallet-blob legacy bound (TASK-443). */
   private static readonly KEYCHAIN_READ_TIMEOUT_MS = 5000;
 
+  private static unknownJournalChain: Promise<unknown> = Promise.resolve();
+  private static unknownJournalWriteCounter = 0;
+  private static unknownJournalDesired:
+    Record<string, UnknownWriteEntry> | null | undefined;
+  private static readonly unknownJournal: UnknownJournal = {
+    get: async (key) => (await this.readUnknownWritesStrict())[key],
+    add: (entry) =>
+      this.mutateUnknownWrites((entries) => {
+        entries[entry.key] = entry;
+      }),
+    remove: (key) =>
+      this.mutateUnknownWrites((entries) => {
+        delete entries[key];
+      }),
+    removeIf: (key, expected) =>
+      this.mutateUnknownWrites((entries) => {
+        const current = entries[key];
+        if (
+          current &&
+          current.op === expected.op &&
+          current.at === expected.at &&
+          current.attempt === expected.attempt &&
+          current.sessionId === expected.sessionId
+        )
+          delete entries[key];
+      }),
+  };
+
+  private static async readUnknownWritesTolerant(): Promise<
+    Record<string, UnknownWriteEntry>
+  > {
+    const raw = await this.withTimeout(
+      storage.getItem(UNKNOWN_WRITES_STORAGE_KEY),
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal read'
+    );
+    if (raw === null) return {};
+    try {
+      const entries = JSON.parse(raw) as Record<string, UnknownWriteEntry>;
+      return entries && typeof entries === 'object' && !Array.isArray(entries)
+        ? entries
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  static async readUnknownWritesStrict(): Promise<
+    Record<string, UnknownWriteEntry>
+  > {
+    const raw = await this.withTimeout(
+      storage.getItem(UNKNOWN_WRITES_STORAGE_KEY),
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal read'
+    );
+    if (raw === null) return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (!key || !entry || typeof entry !== 'object' || Array.isArray(entry))
+        throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+      const e = entry as UnknownWriteEntry;
+      if (
+        e.key !== key ||
+        !['set', 'delete'].includes(e.op) ||
+        !['nonce', 'presence'].includes(e.verifier) ||
+        typeof e.attempt !== 'string' ||
+        typeof e.sessionId !== 'string' ||
+        typeof e.at !== 'number' ||
+        !Number.isFinite(e.at)
+      )
+        throw new UnknownJournalCorruptError('Corrupt unknown-write journal');
+    }
+    return parsed as Record<string, UnknownWriteEntry>;
+  }
+
+  // Ruling A on the wipe path: a wipe never erases an inherited same-process
+  // SET entry (the native set may still be hung after a JS reload and could land
+  // and resurrect the key) and never drops a same-process delete entry. Runs on
+  // the journal chain from the in-memory desired state, so it cannot race another
+  // journal mutation; a transient read failure leaves the journal untouched and
+  // only a CORRUPT journal is reset.
+  private static rewriteUnknownWritesAfterWipe(): Promise<void> {
+    const task = this.unknownJournalChain.then(async () => {
+      let current: Record<string, UnknownWriteEntry>;
+      if (this.unknownJournalDesired !== undefined) {
+        current = this.unknownJournalDesired ?? {};
+      } else {
+        try {
+          current = await this.readUnknownWritesStrict();
+        } catch (error) {
+          if (!(error instanceof UnknownJournalCorruptError)) return;
+          current = {};
+        }
+      }
+      const kept: Record<string, UnknownWriteEntry> = {};
+      for (const [key, entry] of Object.entries(current)) {
+        if (!(await isCurrentSessionId(entry.sessionId))) continue;
+        const tracked = this.adaptersForKey(key).some((adapter) =>
+          hasPendingRecord(adapter, key)
+        );
+        // A tracked set keeps its original entry (the tombstone clears it on
+        // settle); an inherited set becomes a delete entry; a same-process delete
+        // entry stays as it is.
+        kept[key] =
+          entry.op === 'set' && !tracked
+            ? {
+                key,
+                op: 'delete',
+                verifier: 'presence',
+                attempt: newDeleteAttempt(),
+                sessionId: entry.sessionId,
+                at: Date.now(),
+              }
+            : entry;
+      }
+      const empty = Object.keys(kept).length === 0;
+      this.unknownJournalDesired = empty ? null : kept;
+      await this.writeUnknownSnapshot(empty ? null : kept).catch(() => {});
+    });
+    this.unknownJournalChain = task.catch(() => undefined);
+    return task;
+  }
+
+  static async resetUnknownWrites(): Promise<void> {
+    this.unknownJournalDesired = null;
+    this.unknownJournalWriteCounter += 1;
+    try {
+      await this.withTimeout(
+        storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY),
+        WRITE_TIMEOUT_MS,
+        'unknown-write journal reset'
+      );
+    } catch {
+      /* Best effort. */
+    }
+  }
+
+  private static writeUnknownSnapshot(
+    entries: Record<string, UnknownWriteEntry> | null
+  ): Promise<void> {
+    const counter = ++this.unknownJournalWriteCounter;
+    const write =
+      entries === null
+        ? storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY)
+        : storage.setItem(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(entries));
+    void write.then(
+      () => {
+        if (counter >= this.unknownJournalWriteCounter) return;
+        const repair = this.unknownJournalChain.then(async () => {
+          if (
+            counter < this.unknownJournalWriteCounter &&
+            this.unknownJournalDesired !== undefined
+          )
+            await this.writeUnknownSnapshot(this.unknownJournalDesired);
+        });
+        this.unknownJournalChain = repair.catch(() => undefined);
+      },
+      () => undefined
+    );
+    return this.withTimeout(
+      write,
+      WRITE_TIMEOUT_MS,
+      'unknown-write journal write'
+    );
+  }
+
+  private static mutateUnknownWrites(
+    change: (entries: Record<string, UnknownWriteEntry>) => void
+  ): Promise<void> {
+    const task = this.unknownJournalChain.then(async () => {
+      const stored = await this.readUnknownWritesTolerant();
+      const entries = {
+        ...(this.unknownJournalDesired === undefined
+          ? stored
+          : (this.unknownJournalDesired ?? {})),
+      };
+      change(entries);
+      this.unknownJournalDesired = entries;
+      await this.writeUnknownSnapshot(entries);
+    });
+    this.unknownJournalChain = task.catch(() => undefined);
+    return task;
+  }
+
+  /**
+   * Decide whether an UNKNOWN entry from an EARLIER session is resolved. Never
+   * removes the entry (the boot reconcile drops resolved entries only after its
+   * whole pass, so a later unresolved entry cannot leave a half-applied journal).
+   * An entry from THIS session is never resolved here (a late write can still
+   * land). Verifier 'presence': resolved by any successful probe. Verifier
+   * 'nonce' (a secret set): present with writeNonce === entry.attempt = written;
+   * absent, a different or missing marker, a legacy payload or an unparsable value
+   * = not written (no native call survives process death). Any successful probe
+   * resolves; only a probe that throws or times out leaves the entry unresolved.
+   */
+  /** The adapter(s) a journaled key can live in (shared by resolve and wipe). */
+  private static adaptersForKey(key: string) {
+    return key.startsWith(this.STORAGE_KEY_PREFIX)
+      ? [secureStorage]
+      : key.startsWith(this.METADATA_KEY) || key === this.PENDING_CREATES_KEY
+        ? [storage]
+        : key === this.METADATA_LIST_KEY ||
+            key === this.PIN_KEY ||
+            key === this.SALT_KEY
+          ? [storage, secureStorage]
+          : key.startsWith(this.LEGACY_STORAGE_KEY_PREFIX)
+            ? [secureStorage]
+            : [storage];
+  }
+
+  static async resolveUnknownWrite(key: string): Promise<boolean> {
+    const entries = await this.readUnknownWritesStrict();
+    const entry = entries[key];
+    if (!entry) return true;
+    if (await isCurrentSessionId(entry.sessionId)) return false;
+    const adapters = this.adaptersForKey(key);
+    try {
+      const raws: (string | null)[] = [];
+      for (const adapter of adapters) {
+        raws.push(
+          await this.withTimeout(
+            adapter.getItem(key),
+            WRITE_TIMEOUT_MS,
+            'unknown-write probe'
+          )
+        );
+      }
+      raws.forEach((raw) => {
+        classifyUnknownWrite(entry, raw);
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Drop a journal entry. With `expected` (the entry the caller resolved) it is a
+   * compare-and-remove: an entry journaled since (a same-process set/delete for the
+   * same key) is never erased by a boot-reconcile drop of an older entry.
+   */
+  static async dropUnknownWrite(
+    key: string,
+    expected?: UnknownWriteEntry
+  ): Promise<void> {
+    await this.mutateUnknownWrites((entries) => {
+      const current = entries[key];
+      if (
+        !expected ||
+        (current &&
+          current.at === expected.at &&
+          current.op === expected.op &&
+          current.attempt === expected.attempt &&
+          current.sessionId === expected.sessionId)
+      )
+        delete entries[key];
+    });
+  }
+
+  private static async freshWriteNonce(): Promise<string> {
+    const bytes = await platformCrypto.getRandomBytes(16);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+      ''
+    );
+  }
+
+  private static ignoreKnownWriteFailure(error: unknown): void {
+    if (
+      error instanceof WriteOutcomeUnknownError ||
+      error instanceof WriteUnresolvedError
+    )
+      throw error;
+  }
+
+  private static boundedSecureSet(
+    key: string,
+    value: string,
+    verifier: 'nonce' | 'presence',
+    attempt?: string,
+    context?: WriteContext
+  ): Promise<void> {
+    return boundedSet(secureStorage, key, value, {
+      journal: this.unknownJournal,
+      verifier,
+      attempt,
+      context,
+    });
+  }
+  private static boundedSecureDelete(key: string): Promise<void> {
+    return boundedDelete(secureStorage, key, {
+      journal: this.unknownJournal,
+      verifier: 'presence',
+    });
+  }
+  private static boundedStorageSet(
+    key: string,
+    value: string,
+    unguarded = false
+  ): Promise<void> {
+    return boundedSet(storage, key, value, {
+      journal: this.unknownJournal,
+      verifier: 'presence',
+      unguarded,
+    });
+  }
+  private static boundedStorageRemove(key: string): Promise<void> {
+    return boundedDelete(storage, key, {
+      journal: this.unknownJournal,
+      verifier: 'presence',
+    });
+  }
+
   // In-flight request deduplication to prevent cache stampede
   private static inFlightRequests: Map<string, Promise<Uint8Array>> = new Map();
 
@@ -360,7 +697,7 @@ export class AccountSecureStorage {
     accountId: string,
     metadata: PersistedAccountMetadata
   ): Promise<void> {
-    await storage.setItem(
+    await this.boundedStorageSet(
       this.metadataKey(accountId),
       JSON.stringify(metadata)
     );
@@ -398,6 +735,11 @@ export class AccountSecureStorage {
         ? (JSON.parse(migratedSecret) as AccountSecretPayload)
         : null;
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       console.warn(
         'Failed to parse account secret payload',
         redactError(error)
@@ -408,15 +750,20 @@ export class AccountSecureStorage {
 
   private static async saveSecret(
     accountId: string,
-    secret: AccountSecretPayload | null
+    secret: AccountSecretPayload | null,
+    context: WriteContext = 'other'
   ): Promise<void> {
     if (!secret) {
-      await secureStorage.deleteItem(this.secretKey(accountId));
+      await this.boundedSecureDelete(this.secretKey(accountId));
       return;
     }
-    await secureStorage.setItem(
+    const writeNonce = await this.freshWriteNonce();
+    await this.boundedSecureSet(
       this.secretKey(accountId),
-      JSON.stringify(secret)
+      JSON.stringify({ ...secret, writeNonce }),
+      'nonce',
+      writeNonce,
+      context
     );
   }
 
@@ -486,9 +833,15 @@ export class AccountSecureStorage {
     accountId: string,
     payload: AccountSecretPayload
   ): Promise<void> {
-    const serialized = JSON.stringify(payload);
+    const writeNonce = await this.freshWriteNonce();
+    const serialized = JSON.stringify({ ...payload, writeNonce });
     assertPayloadSizeWithinLimit(serialized, payload.blobs?.length ?? 0);
-    await secureStorage.setItem(this.secretKey(accountId), serialized);
+    await this.boundedSecureSet(
+      this.secretKey(accountId),
+      serialized,
+      'nonce',
+      writeNonce
+    );
   }
 
   /**
@@ -944,6 +1297,11 @@ export class AccountSecureStorage {
       // (P1-B). The OLD copy stays intact → nothing stranded → retried on a later
       // trigger. `finalized` guards against a hypothetical future post-finalize
       // throw dropping the ONLY remaining copy (mirrors changePin's `committed`).
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       if (!finalized && appended && newBlob) {
         try {
           const current = await this.readSecretLocked(accountId);
@@ -1051,11 +1409,17 @@ export class AccountSecureStorage {
 
       const { encryptedPrivateKey, ...metadata } = parsed;
       const persistable: PersistedAccountMetadata = metadata;
-      await storage.setItem(
+      await this.boundedStorageSet(
         this.metadataKey(accountId),
         JSON.stringify(persistable)
       );
-      await this.addToAccountList(accountId).catch(() => {});
+      await this.addToAccountList(accountId).catch((error) => {
+        if (
+          error instanceof WriteOutcomeUnknownError ||
+          error instanceof WriteUnresolvedError
+        )
+          throw error;
+      });
 
       if (encryptedPrivateKey) {
         const secretPayload: AccountSecretPayload = {
@@ -1063,14 +1427,16 @@ export class AccountSecureStorage {
           encryptedPrivateKey,
           authMethod: parsed.authMethod,
         };
-        await secureStorage.setItem(
-          this.secretKey(accountId),
-          JSON.stringify(secretPayload)
-        );
+        await this.saveSecret(accountId, secretPayload);
       } else {
         try {
-          await secureStorage.deleteItem(this.secretKey(accountId));
+          await this.boundedSecureDelete(this.secretKey(accountId));
         } catch (error) {
+          if (
+            error instanceof WriteOutcomeUnknownError ||
+            error instanceof WriteUnresolvedError
+          )
+            throw error;
           // Both entry points serve reads. Preserve the successful legacy read
           // and its discoverable blob when cleanup fails; retry on migration.
           console.warn('Legacy primary cleanup failed', redactError(error));
@@ -1079,14 +1445,24 @@ export class AccountSecureStorage {
       }
 
       try {
-        await secureStorage.deleteItem(legacyKey);
+        await this.boundedSecureDelete(legacyKey);
       } catch (error) {
+        if (
+          error instanceof WriteOutcomeUnknownError ||
+          error instanceof WriteUnresolvedError
+        )
+          throw error;
         // The migrated primary is readable. Keep the legacy copy discoverable
         // rather than turning a successful read into a retrieval failure.
         console.warn('Legacy account cleanup failed', redactError(error));
       }
       return persistable;
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       console.error(
         'Failed to migrate legacy account data',
         redactError(error)
@@ -1148,10 +1524,13 @@ export class AccountSecureStorage {
     journal: Record<string, string>
   ): Promise<void> {
     if (Object.keys(journal).length === 0) {
-      await storage.removeItem(this.PENDING_CREATES_KEY);
+      await this.boundedStorageRemove(this.PENDING_CREATES_KEY);
       return;
     }
-    await storage.setItem(this.PENDING_CREATES_KEY, JSON.stringify(journal));
+    await this.boundedStorageSet(
+      this.PENDING_CREATES_KEY,
+      JSON.stringify(journal)
+    );
   }
 
   /**
@@ -1172,7 +1551,8 @@ export class AccountSecureStorage {
   static async storeAccountForCreation(
     account: AccountMetadata,
     privateKey: Uint8Array,
-    creationGen: number
+    creationGen: number,
+    context: WriteContext = 'create'
   ): Promise<string> {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
@@ -1187,8 +1567,13 @@ export class AccountSecureStorage {
       await this.writePendingCreateJournal(journal);
       const progress = { secretWritten: false };
       try {
-        await this.storeAccountLocked(account, privateKey, progress);
+        await this.storeAccountLocked(account, privateKey, progress, context);
       } catch (error) {
+        if (
+          error instanceof WriteOutcomeUnknownError ||
+          error instanceof WriteUnresolvedError
+        )
+          throw error;
         // TASK-449: the caller never receives the token on a throw, so it cannot
         // roll back; do it here, in the same mutex task.
         await this.rollBackFailedCreateLocked(
@@ -1199,6 +1584,11 @@ export class AccountSecureStorage {
         throw error;
       }
       return token;
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
     });
   }
 
@@ -1242,13 +1632,19 @@ export class AccountSecureStorage {
    */
   static async storeAccountMetadataForCreation(
     account: AccountMetadata,
-    creationGen: number
+    creationGen: number,
+    context: WriteContext = 'restore'
   ): Promise<void> {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      await this.storeAccountLocked(account);
+      await this.storeAccountLocked(account, undefined, undefined, context);
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
     });
   }
 
@@ -1478,7 +1874,8 @@ export class AccountSecureStorage {
   private static async storeAccountLocked(
     account: AccountMetadata,
     privateKey?: Uint8Array,
-    progress?: { secretWritten: boolean }
+    progress?: { secretWritten: boolean },
+    context: WriteContext = 'other'
   ): Promise<void> {
     try {
       // TASK-449: bounded and strict. A timeout or read error fails the store,
@@ -1536,21 +1933,30 @@ export class AccountSecureStorage {
         privateKey
       ) {
         const encryptedPrivateKey = await this.encryptPrivateKey(privateKey);
-        await this.saveSecret(account.id, {
-          accountId: account.id,
-          encryptedPrivateKey,
-          authMethod: metadata.authMethod,
-        });
+        await this.saveSecret(
+          account.id,
+          {
+            accountId: account.id,
+            encryptedPrivateKey,
+            authMethod: metadata.authMethod,
+          },
+          context
+        );
         if (progress) {
           progress.secretWritten = true;
         }
       } else {
-        await this.saveSecret(account.id, null);
+        await this.saveSecret(account.id, null, context);
       }
 
       // Store metadata for quick access
       await this.storeAccountMetadata(metadata);
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to store account: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -2096,6 +2502,11 @@ export class AccountSecureStorage {
       // Update account list
       await this.removeFromAccountList(accountId);
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to delete account: ${(error as Error).message}`
       );
@@ -2118,13 +2529,20 @@ export class AccountSecureStorage {
         'Legacy account list read'
       );
       if (legacy) {
-        await storage.setItem(this.METADATA_LIST_KEY, legacy);
-        await secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {});
+        await this.boundedStorageSet(this.METADATA_LIST_KEY, legacy);
+        await this.boundedSecureDelete(this.METADATA_LIST_KEY).catch(
+          this.ignoreKnownWriteFailure
+        );
         return JSON.parse(legacy) as string[];
       }
 
       return [];
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountRetrievalError(
         `Failed to retrieve account list: ${(error as Error).message}`
       );
@@ -2440,12 +2858,17 @@ export class AccountSecureStorage {
       const accountIds = await this.getAllAccountIds();
       if (!accountIds.includes(accountId)) {
         accountIds.push(accountId);
-        await storage.setItem(
+        await this.boundedStorageSet(
           this.METADATA_LIST_KEY,
           JSON.stringify(accountIds)
         );
       }
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to update account list: ${(error as Error).message}`
       );
@@ -2456,8 +2879,18 @@ export class AccountSecureStorage {
     try {
       const accountIds = await this.getAllAccountIds();
       const updatedIds = accountIds.filter((id) => id !== accountId);
-      await storage.setItem(this.METADATA_LIST_KEY, JSON.stringify(updatedIds));
+      // A delete or wipe is never refused: this list rewrite skips the guard.
+      await this.boundedStorageSet(
+        this.METADATA_LIST_KEY,
+        JSON.stringify(updatedIds),
+        true
+      );
     } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError(
         `Failed to update account list: ${(error as Error).message}`
       );
@@ -3709,8 +4142,10 @@ export class AccountSecureStorage {
 
     const legacy = await storage.getItem(this.PIN_KEY);
     if (legacy) {
-      await secureStorage.setItem(this.PIN_KEY, legacy);
-      await storage.removeItem(this.PIN_KEY).catch(() => {});
+      await this.boundedSecureSet(this.PIN_KEY, legacy, 'presence');
+      await this.boundedStorageRemove(this.PIN_KEY).catch(
+        this.ignoreKnownWriteFailure
+      );
       const parsed = this.parseStoredPin(legacy);
       if (parsed) {
         return parsed;
@@ -3732,8 +4167,10 @@ export class AccountSecureStorage {
 
       const legacy = await storage.getItem(this.SALT_KEY);
       if (!regenerate && legacy) {
-        await secureStorage.setItem(this.SALT_KEY, legacy);
-        await storage.removeItem(this.SALT_KEY).catch(() => {});
+        await this.boundedSecureSet(this.SALT_KEY, legacy, 'presence');
+        await this.boundedStorageRemove(this.SALT_KEY).catch(
+          this.ignoreKnownWriteFailure
+        );
         return legacy;
       }
 
@@ -3742,10 +4179,17 @@ export class AccountSecureStorage {
       }
 
       const salt = await this.generateRandomHex(32);
-      await secureStorage.setItem(this.SALT_KEY, salt);
-      await storage.removeItem(this.SALT_KEY).catch(() => {});
+      await this.boundedSecureSet(this.SALT_KEY, salt, 'presence');
+      await this.boundedStorageRemove(this.SALT_KEY).catch(
+        this.ignoreKnownWriteFailure
+      );
       return salt;
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
       throw new AccountStorageError('Failed to generate or retrieve salt');
     }
   }
@@ -3927,6 +4371,10 @@ export class AccountSecureStorage {
           this.METADATA_LIST_KEY,
           this.PIN_TIMEOUT_KEY,
         ]);
+        // Ruling A: a wipe never erases an inherited same-process SET entry (the
+        // native set may still be hung and could resurrect the key); keep it as a
+        // delete UNKNOWN entry, drop everything else from the journal.
+        await this.rewriteUnknownWritesAfterWipe();
         // Clear from secure storage
         await Promise.all([
           secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),

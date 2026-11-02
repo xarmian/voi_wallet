@@ -17,6 +17,8 @@ jest.mock('../AccountSecureStorage', () => ({
     dropPendingCreateEntries: jest.fn(),
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
+    readUnknownWritesStrict: jest.fn(async () => ({})),
+    resolveUnknownWrite: jest.fn(async () => true),
     probeSecretPresenceStrict: jest.fn(),
     clearBiometricSecret: jest.fn(),
     setBiometricEnabled: jest.fn(),
@@ -62,6 +64,10 @@ beforeEach(() => {
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
     .mockResolvedValue({ journaled: 'attempt', listed: 'attempt' });
+  jest
+    .mocked(AccountSecureStorage.readUnknownWritesStrict)
+    .mockResolvedValue({});
+  jest.mocked(AccountSecureStorage.resolveUnknownWrite).mockResolvedValue(true);
   jest
     .mocked(AccountSecureStorage.probeSecretPresenceStrict)
     .mockResolvedValue(false);
@@ -483,4 +489,18 @@ describe('onboardingNeedsSecuritySetup (TASK-417)', () => {
       }
     }
   );
+});
+
+it('a reconcile pass that skipped unresolved UNKNOWN-write ids is unverifiable (their secrets were not checked)', async () => {
+  jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
+    ran: true,
+    skippedUnresolved: 1,
+    orphanSecretsDeleted: [],
+    phantomAccountsPruned: [],
+    staleJournalDropped: [],
+  });
+  await expect(clearOrphanPin()).rejects.toThrow(
+    ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+  );
+  expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
 });

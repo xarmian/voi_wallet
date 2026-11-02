@@ -367,7 +367,8 @@ export async function restoreAccounts(
             const token = await AccountSecureStorage.storeAccountForCreation(
               standardAccount,
               algoAccount.sk,
-              creationGen
+              creationGen,
+              'restore'
             );
             pendingCreates.push({ id: standardAccount.id, token });
           } finally {
@@ -437,7 +438,8 @@ export async function restoreAccounts(
               const token = await AccountSecureStorage.storeAccountForCreation(
                 rekeyedAccount,
                 derived.sk,
-                creationGen
+                creationGen,
+                'restore'
               );
               pendingCreates.push({ id: rekeyedAccount.id, token });
             } finally {

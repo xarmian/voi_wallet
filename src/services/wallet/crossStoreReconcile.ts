@@ -34,10 +34,18 @@ import { AccountSecureStorage } from '@/services/secure';
 
 import { MultiAccountWalletService } from './index';
 import { redactError } from '@/utils/logRedaction';
+import {
+  UnknownJournalCorruptError,
+  hasDowngradedMarkers,
+} from '@/services/secure/boundedWrites';
 
 export interface ReconcileResult {
   /** false when Phase 1 hit a read/probe failure and the pass was aborted. */
   ran: boolean;
+  /** true when a downgraded write marker made this pass report-only (nothing repaired). */
+  reportOnly?: boolean;
+  /** ids skipped because an UNKNOWN write for them is unresolved (nothing was verified for them). */
+  skippedUnresolved?: number;
   orphanSecretsDeleted: string[];
   phantomAccountsPruned: string[];
   staleJournalDropped: string[];
@@ -75,6 +83,43 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
   const journalIds = Object.keys(journal);
+  let unknownWrites: Awaited<
+    ReturnType<typeof AccountSecureStorage.readUnknownWritesStrict>
+  >;
+  try {
+    unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
+  } catch (error) {
+    if (!(error instanceof UnknownJournalCorruptError)) throw error;
+    await AccountSecureStorage.resetUnknownWrites();
+    return RECONCILE_ABORTED;
+  }
+  const unresolvedIds = new Set<string>();
+  // Resolved entries are dropped only after the whole pass (below), so an
+  // unresolved entry found later cannot leave a half-applied journal.
+  const resolvedUnknownKeys: string[] = [];
+  const deleteEntryIds: string[] = [];
+  for (const key of Object.keys(unknownWrites)) {
+    const id = key.startsWith('voi_account_secret_')
+      ? key.slice('voi_account_secret_'.length)
+      : key.startsWith('voi_account_metadata_')
+        ? key.slice('voi_account_metadata_'.length)
+        : null;
+    // A SECRET-key delete that never landed (or whose re-delete failed) leaves the
+    // secret behind with no owner (a metadata delete must never widen the orphan
+    // set): make the id a candidate so the existing orphan
+    // policy removes it (read-only here; nothing is mutated in Phase 1).
+    if (
+      id &&
+      key.startsWith('voi_account_secret_') &&
+      unknownWrites[key]?.op === 'delete'
+    )
+      deleteEntryIds.push(id);
+    const resolved = await AccountSecureStorage.resolveUnknownWrite(key);
+    if (resolved) resolvedUnknownKeys.push(key);
+    if (!resolved && id) unresolvedIds.add(id);
+    if (!resolved && !id)
+      throw new Error('Unknown write prevents safe reconcile');
+  }
 
   const blobStandardSet = new Set(blobStandardIds);
   const blobAnySet = new Set(blobAllIds);
@@ -86,6 +131,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     ...blobStandardIds,
     ...accountListIds,
     ...journalIds,
+    ...deleteEntryIds,
   ]);
 
   // Probe EVERY candidate's secret presence before touching anything. Run the
@@ -94,7 +140,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // the caller's boot timeout and never actually repair. Fail-closed is preserved:
   // Promise.all rejects on the FIRST probe throw/timeout, so the whole pass aborts
   // before any mutation — we never delete on a partially-read picture.
-  const candidateList = [...candidates];
+  const candidateList = [...candidates].filter((id) => !unresolvedIds.has(id));
   const presence = await Promise.all(
     candidateList.map((id) =>
       AccountSecureStorage.probeSecretPresenceStrict(id)
@@ -111,6 +157,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const staleJournalIds: string[] = [];
 
   for (const id of candidates) {
+    if (unresolvedIds.has(id)) continue;
     const hasSecret = secretPresent.get(id) === true;
     const inBlob = blobStandardSet.has(id);
     const ownedByBlob = blobAnySet.has(id);
@@ -144,17 +191,29 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const phantomsPruned: string[] = [];
   const orphansDeleted: string[] = [];
   const journalDropped: string[] = [];
+  // Ruling B: while any downgraded bookkeeping marker exists in this process a late
+  // STALE account-list/metadata write could make a live secret look orphaned, so
+  // the pass is REPORT ONLY (no phantom prune, no orphan delete) until a cold
+  // start. Resolved-entry and stale-journal bookkeeping drops may still happen.
+  const nonDestructive = hasDowngradedMarkers();
+  if (nonDestructive && (phantomIds.length > 0 || orphanSecretIds.length > 0))
+    console.log(
+      `[bootReconcile] non-destructive (downgraded write marker): would prune ` +
+        `${phantomIds.length} phantom(s) and delete ${orphanSecretIds.length} orphan secret(s)`
+    );
   try {
     // Prune phantoms FIRST — the only mutation that can change the boot lock
     // verdict (emptying the wallet ⇒ canonical clearAllWallets) — so the
     // verdict-affecting change is committed as early as possible.
-    if (phantomIds.length > 0) {
+    if (!nonDestructive && !hasDowngradedMarkers() && phantomIds.length > 0) {
       await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
       phantomsPruned.push(...phantomIds);
     }
     // Deletes: each acquires the key-mutation mutex, serialized against any secret
     // write. deleteAccount removes secret + secure metadata + account-list entry.
-    for (const id of orphanSecretIds) {
+    for (const id of nonDestructive ? [] : orphanSecretIds) {
+      // A downgrade that happened during this pass stops further destruction.
+      if (hasDowngradedMarkers()) break;
       await AccountSecureStorage.deleteAccount(id);
       orphansDeleted.push(id);
     }
@@ -163,6 +222,9 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     if (journalIdsToDrop.length > 0) {
       await AccountSecureStorage.dropPendingCreateEntries(journalIdsToDrop);
       journalDropped.push(...journalIdsToDrop);
+    }
+    for (const key of resolvedUnknownKeys) {
+      await AccountSecureStorage.dropUnknownWrite(key, unknownWrites[key]);
     }
   } catch (error) {
     // A Phase-2 repair failed after Phase 1 passed cleanly. Keep the partial
@@ -190,6 +252,8 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
 
   return {
     ran: true,
+    reportOnly: nonDestructive || undefined,
+    skippedUnresolved: unresolvedIds.size || undefined,
     orphanSecretsDeleted: orphansDeleted,
     phantomAccountsPruned: phantomsPruned,
     staleJournalDropped: staleJournalIds.filter((id) =>
