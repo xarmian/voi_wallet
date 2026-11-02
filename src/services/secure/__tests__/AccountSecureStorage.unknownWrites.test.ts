@@ -440,6 +440,8 @@ test('clearAll leaves the journal untouched on a transient (non-corrupt) read fa
     .spyOn(AccountSecureStorage, 'readUnknownWritesStrict')
     .mockRejectedValue(new Error('unknown-write journal read timed out'));
   await AccountSecureStorage.clearAll();
+  // The wipe rewrite really took the strict-read path (desired state was unset).
+  expect(spy.mock.calls.length).toBeGreaterThan(0);
   spy.mockRestore();
   expect(JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)).toEqual(
     entries
