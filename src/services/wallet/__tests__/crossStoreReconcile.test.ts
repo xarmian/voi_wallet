@@ -13,6 +13,8 @@ jest.mock('@/services/secure', () => ({
   AccountSecureStorage: {
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
+    readUnknownWritesStrict: jest.fn(async () => ({})),
+    resolveUnknownWrite: jest.fn(async () => true),
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(async () => {}),
     dropPendingCreateEntries: jest.fn(async () => {}),

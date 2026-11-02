@@ -17,6 +17,8 @@ jest.mock('../AccountSecureStorage', () => ({
     dropPendingCreateEntries: jest.fn(),
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
+    readUnknownWritesStrict: jest.fn(async () => ({})),
+    resolveUnknownWrite: jest.fn(async () => true),
     probeSecretPresenceStrict: jest.fn(),
     clearBiometricSecret: jest.fn(),
     setBiometricEnabled: jest.fn(),
@@ -62,6 +64,10 @@ beforeEach(() => {
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
     .mockResolvedValue({ journaled: 'attempt', listed: 'attempt' });
+  jest
+    .mocked(AccountSecureStorage.readUnknownWritesStrict)
+    .mockResolvedValue({});
+  jest.mocked(AccountSecureStorage.resolveUnknownWrite).mockResolvedValue(true);
   jest
     .mocked(AccountSecureStorage.probeSecretPresenceStrict)
     .mockResolvedValue(false);

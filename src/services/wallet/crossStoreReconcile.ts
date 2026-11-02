@@ -75,6 +75,19 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
   const journalIds = Object.keys(journal);
+  const unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
+  const unresolvedIds = new Set<string>();
+  for (const key of Object.keys(unknownWrites)) {
+    const id = key.startsWith('voi_account_secret_')
+      ? key.slice('voi_account_secret_'.length)
+      : key.startsWith('voi_account_metadata_')
+        ? key.slice('voi_account_metadata_'.length)
+        : null;
+    const resolved = await AccountSecureStorage.resolveUnknownWrite(key);
+    if (!resolved && id) unresolvedIds.add(id);
+    if (!resolved && !id)
+      throw new Error('Unknown write prevents safe reconcile');
+  }
 
   const blobStandardSet = new Set(blobStandardIds);
   const blobAnySet = new Set(blobAllIds);
@@ -94,7 +107,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // the caller's boot timeout and never actually repair. Fail-closed is preserved:
   // Promise.all rejects on the FIRST probe throw/timeout, so the whole pass aborts
   // before any mutation — we never delete on a partially-read picture.
-  const candidateList = [...candidates];
+  const candidateList = [...candidates].filter((id) => !unresolvedIds.has(id));
   const presence = await Promise.all(
     candidateList.map((id) =>
       AccountSecureStorage.probeSecretPresenceStrict(id)
@@ -111,6 +124,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   const staleJournalIds: string[] = [];
 
   for (const id of candidates) {
+    if (unresolvedIds.has(id)) continue;
     const hasSecret = secretPresent.get(id) === true;
     const inBlob = blobStandardSet.has(id);
     const ownedByBlob = blobAnySet.has(id);
