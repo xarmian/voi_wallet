@@ -70,7 +70,7 @@ interface PendingSet {
 // Delete entries carry no nonce, so give each a unique attempt token: entry
 // ownership (removeIfOwned) must never collide on a same-millisecond pair.
 // The per-module prefix is random so a JS reload (same process id, counter back
-// at zero) never repeats a token from before the reload.
+// at zero) practically never repeats a token from before the reload.
 const deleteAttemptPrefix = Math.random().toString(36).slice(2, 10);
 let deleteAttemptSeq = 0;
 export function newDeleteAttempt(): string {
@@ -185,7 +185,7 @@ export async function assertKeyResolved(
     throw new WriteUnresolvedError('Delete may still land');
   if (pendingDelete) {
     try {
-      await deadline(journal.remove(key), ms);
+      await removeIfOwned(journal, key, pendingDelete.entry);
     } catch {
       throw new WriteUnresolvedError(
         'Unknown-write journal could not be cleared'
@@ -198,7 +198,7 @@ export async function assertKeyResolved(
     throw new WriteUnresolvedError('Write may still land');
   if (pending) {
     try {
-      await deadline(journal.remove(key), ms);
+      await removeIfOwned(journal, key, pending.entry);
     } catch {
       throw new WriteUnresolvedError(
         'Unknown-write journal could not be cleared'
@@ -236,7 +236,8 @@ export async function assertKeyResolved(
     }
   } else classifyUnknownWrite(entry, value);
   try {
-    await deadline(journal.remove(key), ms);
+    // Only the entry this call observed: a newer entry journaled since survives.
+    await removeIfOwned(journal, key, entry);
   } catch {
     throw new WriteUnresolvedError(
       'Unknown-write journal could not be cleared'
@@ -289,7 +290,8 @@ async function settleJournalAfterDelete(
     );
     return;
   }
-  await deadline(journal.remove(key), ms);
+  // Only the entry that was observed above (nothing to remove when there was none).
+  await removeIfOwned(journal, key, entry);
 }
 async function perform(
   adapter: WriteAdapter,

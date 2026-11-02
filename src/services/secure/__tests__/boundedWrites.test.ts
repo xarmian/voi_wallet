@@ -968,7 +968,7 @@ test('a settled operation clears its entry through the ATOMIC conditional remove
   expect(f.entries.has('k')).toBe(false);
 });
 
-test('delete attempt tokens are unique per module instance (a JS reload never repeats a token)', () => {
+test('delete attempt tokens are unique per module instance (a JS reload practically never repeats a token)', () => {
   let first = '';
   let reloaded = '';
   // Two fresh module instances, each making its FIRST call: a bare counter would
@@ -981,4 +981,35 @@ test('delete attempt tokens are unique per module instance (a JS reload never re
   });
   expect(reloaded).not.toBe(first);
   expect(first).toMatch(/^d[a-z0-9]+-\d+$/);
+});
+
+// Every journal removal after an OBSERVED entry is conditional on that entry:
+// a newer entry journaled between the observation and the removal survives.
+const raceNewer = (f: ReturnType<typeof fixture>, key: string) =>
+  f.journal.get.mockImplementationOnce(async (k: string) => {
+    const observed = f.entries.get(k);
+    if (observed)
+      f.entries.set(k, { ...observed, at: 999999, attempt: 'newer-attempt' });
+    return observed;
+  });
+
+test('guard: a newer entry journaled between the guard observing an earlier-process entry and clearing it survives', async () => {
+  const f = fixture();
+  inherited(f, 'voi_account_secret_x', {
+    sessionId: 'earlier-process',
+    verifier: 'nonce',
+    attempt: 'old',
+  });
+  raceNewer(f, 'voi_account_secret_x');
+  await boundedSet(f.adapter, 'voi_account_secret_x', 'v', setOpts(f));
+  expect(f.entries.get('voi_account_secret_x')?.attempt).toBe('newer-attempt');
+});
+
+test('delete: a newer entry journaled between a delete observing an earlier-process entry and clearing it survives', async () => {
+  const f = fixture();
+  f.values.set('k', 'v');
+  inherited(f, 'k', { sessionId: 'earlier-process' });
+  raceNewer(f, 'k');
+  await boundedDelete(f.adapter, 'k', setOpts(f));
+  expect(f.entries.get('k')?.attempt).toBe('newer-attempt');
 });
