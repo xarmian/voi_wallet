@@ -1013,3 +1013,70 @@ test('delete: a newer entry journaled between a delete observing an earlier-proc
   await boundedDelete(f.adapter, 'k', setOpts(f));
   expect(f.entries.get('k')?.attempt).toBe('newer-attempt');
 });
+
+test('a write that settles WHILE the post-timeout read-back waits leaves no ownerless entry (set rejects)', async () => {
+  const f = fixture();
+  let rejectSet!: (error: Error) => void;
+  f.setWrite(
+    () =>
+      new Promise<void>((_, reject) => {
+        rejectSet = reject;
+      })
+  );
+  f.adapter.getItem.mockImplementationOnce(async () => {
+    rejectSet(new Error('late rejection')); // settles during the read-back
+    await flush();
+    return null; // the read-back saw nothing
+  });
+  const first = boundedSet(f.adapter, 'voi_account_secret_x', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  await flush();
+  expect(f.entries.has('voi_account_secret_x')).toBe(false);
+  f.setWrite(async (key, value) => {
+    f.values.set(key, value);
+  });
+  await expect(
+    boundedSet(f.adapter, 'voi_account_secret_x', 'v2', {
+      journal: f.journal,
+      verifier: 'nonce',
+      attempt: 'b',
+      sessionId: 's',
+      timeoutMs: 10,
+    })
+  ).resolves.toBeUndefined();
+});
+
+test('a delete that settles WHILE the post-timeout read-back waits leaves no ownerless delete entry', async () => {
+  const f = fixture();
+  f.values.set('k', 'v');
+  let settleDelete!: () => void;
+  f.setDelete(
+    () =>
+      new Promise<void>((resolve) => {
+        settleDelete = resolve;
+      })
+  );
+  f.adapter.getItem.mockImplementationOnce(async () => {
+    settleDelete();
+    await flush();
+    return null; // the key reads absent: UNKNOWN delete is journaled
+  });
+  const del = boundedDelete(f.adapter, 'k', setOpts(f));
+  const assertion = expect(del).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  await flush();
+  expect(f.entries.has('k')).toBe(false);
+});

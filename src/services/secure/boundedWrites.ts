@@ -329,8 +329,12 @@ async function perform(
     if (!(error instanceof DeadlineError))
       throw new WriteFailedError('Write rejected');
   }
+  // The record of THIS operation, captured at registration: the settle handler may
+  // clear it from the map before the entry below is journaled.
+  let own: PendingSet | undefined;
   if (op === 'set') {
     const pending: PendingSet = { settled: false, ok: false, tombstone: false };
+    own = pending;
     pendingFor(adapter).set(key, pending);
     // `settled` means the key is safe to write again: the abandoned set has
     // settled AND any tombstone re-delete has finished (a retry must never race a
@@ -383,6 +387,7 @@ async function perform(
       ok: false,
       tombstone: false,
     };
+    own = pendingDelete;
     pendingDeleteFor(adapter).set(key, pendingDelete);
     const settleDelete = async (landed: boolean) => {
       pendingDelete.ok = landed;
@@ -416,16 +421,17 @@ async function perform(
     sessionId,
     at: Date.now(),
   };
-  const own =
-    op === 'set'
-      ? pendingFor(adapter).get(key)
-      : pendingDeleteFor(adapter).get(key);
   if (own) own.entry = entry;
   let journaled = false;
   try {
     await deadline(opts.journal.add(entry), ms);
     journaled = true;
   } catch {}
+  // The operation may have settled while the read-back above was waiting; its
+  // settle handler then found no entry to clear. Clear the entry just journaled
+  // (only if it is still ours) so it cannot block sets with no owner.
+  if (journaled && own?.settled)
+    await removeIfOwned(opts.journal, key, entry).catch(() => undefined);
   throw new WriteOutcomeUnknownError(journaled, opts.context);
 }
 export function boundedSet(
