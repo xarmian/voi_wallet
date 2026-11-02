@@ -229,7 +229,13 @@ export default function ChatScreen() {
       }
 
       if (!holdsSender()) {
-        await useMessagesStore.getState().loadCachedThreads(sender);
+        // A failed load is refused like an unadopted one, so it releases the
+        // lock rather than stranding the composer (TASK-462).
+        try {
+          await useMessagesStore.getState().loadCachedThreads(sender);
+        } catch (error) {
+          console.error('Failed to load messages before sending:', error);
+        }
         if (!holdsSender()) {
           if (!isRetry) composeLockRef.current = false;
           Alert.alert(

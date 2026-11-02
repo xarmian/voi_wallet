@@ -419,3 +419,27 @@ it('releases the lock when a send is refused', async () => {
 
   expect(sendMessage).toHaveBeenCalledTimes(1);
 });
+
+// Pass D #1 (TASK-462): a cold-start load that throws must not strand the
+// composer behind the send lock.
+it('refuses, then releases the lock, when the cold-start load throws', async () => {
+  mockStore.currentUserAddress = null;
+  mockStore.loadCachedThreads.mockRejectedValueOnce(new Error('bad cache'));
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(Alert.alert).toHaveBeenCalledWith(
+    'Error',
+    'Messages are still loading for this account. Try again.'
+  );
+
+  mockStore.currentUserAddress = 'ME';
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+});
