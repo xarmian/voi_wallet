@@ -1,4 +1,4 @@
-import { crypto as platformCrypto } from '../../platform';
+import { getProcessSessionId } from './processSession';
 
 export const UNKNOWN_WRITES_STORAGE_KEY = 'voi_unknown_secure_writes';
 export const WRITE_TIMEOUT_MS = 5000;
@@ -96,21 +96,8 @@ export function classifyUnknownWrite(
     return 'not-written';
   }
 }
-let processSessionId: Promise<string> | undefined;
 function currentSessionId(): Promise<string> {
-  if (!processSessionId)
-    processSessionId = (async () => {
-      const bytes = platformCrypto?.getRandomBytes
-        ? await platformCrypto.getRandomBytes(16)
-        : globalThis.crypto.getRandomValues(new Uint8Array(16));
-      return Array.from(bytes, (byte) =>
-        byte.toString(16).padStart(2, '0')
-      ).join('');
-    })().catch((error) => {
-      processSessionId = undefined;
-      throw error;
-    });
-  return processSessionId;
+  return Promise.resolve(getProcessSessionId());
 }
 export async function isCurrentSessionId(id: string): Promise<boolean> {
   return id === (await currentSessionId());

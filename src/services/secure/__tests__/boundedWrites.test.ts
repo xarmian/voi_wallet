@@ -606,28 +606,123 @@ test('a tombstone re-delete timeout journals a delete UNKNOWN entry', async () =
   expect(f.entries.get('k')?.op).toBe('delete');
 });
 
-test('session ID generation retries after RNG rejects', async () => {
-  jest.resetModules();
-  const platform = require('../../../platform') as {
-    crypto: { getRandomBytes: (n: number) => Promise<Uint8Array> };
+test('native session id failure does not cache a JS fallback', async () => {
+  const nativeState = globalThis as typeof globalThis & {
+    __voiProcessSessionId: unknown;
   };
-  const original = platform.crypto.getRandomBytes;
-  const spy = jest
-    .spyOn(platform.crypto, 'getRandomBytes')
-    .mockRejectedValueOnce(new Error('rng failed'))
-    .mockResolvedValueOnce(new Uint8Array(16).fill(7));
-  try {
-    const fresh =
+  jest.resetModules();
+  const fresh =
+    require('../boundedWrites') as typeof import('../boundedWrites');
+  nativeState.__voiProcessSessionId = '';
+  await expect(fresh.isCurrentSessionId('x')).rejects.toThrow();
+  nativeState.__voiProcessSessionId = 'test-process-id';
+  await expect(fresh.isCurrentSessionId('test-process-id')).resolves.toBe(true);
+});
+
+test('session identity comes from native process memory', async () => {
+  const nativeState = globalThis as typeof globalThis & {
+    __voiProcessSessionId: string;
+  };
+  nativeState.__voiProcessSessionId = 'test-process-id';
+  jest.resetModules();
+  const fresh =
+    require('../boundedWrites') as typeof import('../boundedWrites');
+  await expect(fresh.isCurrentSessionId('test-process-id')).resolves.toBe(true);
+  await expect(fresh.isCurrentSessionId('other-process')).resolves.toBe(false);
+  const f = fixture();
+  f.setWrite(() => new Promise(() => {}));
+  const write = fresh.boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'attempt',
+    timeoutMs: 10,
+  });
+  const assertion = expect(write).rejects.toBeInstanceOf(
+    fresh.WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  expect(f.entries.get('k')?.sessionId).toBe('test-process-id');
+});
+
+test.each([
+  ['legacy payload', JSON.stringify({ legacy: true }), false],
+  ['different nonce', JSON.stringify({ writeNonce: 'other-attempt' }), false],
+  ['unparsable payload', '{bad', false],
+  ['matching nonce', JSON.stringify({ writeNonce: 'old-attempt' }), true],
+  ['absent key', null, false],
+])(
+  'inherited same-process entry over %s only clears on nonce',
+  async (_, raw, clears) => {
+    const f = fixture();
+    if (raw !== null) f.values.set('k', raw);
+    f.entries.set('k', {
+      key: 'k',
+      op: 'set',
+      verifier: 'nonce',
+      attempt: 'old-attempt',
+      sessionId: 'test-process-id',
+      at: 1,
+    });
+    jest.resetModules(); // The pending WeakMap is gone, while native memory remains.
+    const reloaded =
       require('../boundedWrites') as typeof import('../boundedWrites');
-    await expect(fresh.isCurrentSessionId('x')).rejects.toThrow('rng failed');
-    await expect(
-      fresh.isCurrentSessionId('07070707070707070707070707070707')
-    ).resolves.toBe(true);
-    expect(spy).toHaveBeenCalledTimes(2);
-  } finally {
-    spy.mockRestore();
-    platform.crypto.getRandomBytes = original;
+    const write = reloaded.boundedSet(f.adapter, 'k', VALUE, {
+      journal: f.journal,
+      verifier: 'nonce',
+      attempt: 'new-attempt',
+      timeoutMs: 10,
+    });
+    if (clears) {
+      await expect(write).resolves.toBeUndefined();
+      expect(f.entries.size).toBe(0);
+    } else {
+      await expect(write).rejects.toBeInstanceOf(reloaded.WriteUnresolvedError);
+      expect(f.entries.has('k')).toBe(true);
+      expect(f.adapter.setItem).not.toHaveBeenCalled();
+      f.values.set('k', JSON.stringify({ writeNonce: 'old-attempt' }));
+      await expect(
+        reloaded.boundedSet(f.adapter, 'k', VALUE, {
+          journal: f.journal,
+          verifier: 'nonce',
+          attempt: 'new-attempt',
+          timeoutMs: 10,
+        })
+      ).resolves.toBeUndefined();
+      expect(f.entries.size).toBe(0);
+    }
   }
+);
+
+test.each([
+  ['legacy payload', JSON.stringify({ legacy: true })],
+  ['different nonce', JSON.stringify({ writeNonce: 'other-attempt' })],
+  ['unparsable payload', '{bad'],
+  ['matching nonce', JSON.stringify({ writeNonce: 'old-attempt' })],
+  ['absent key', null],
+])('cold-start entry over %s is dropped by the boot rule', async (_, raw) => {
+  const f = fixture();
+  if (raw !== null) f.values.set('k', raw);
+  f.entries.set('k', {
+    key: 'k',
+    op: 'set',
+    verifier: 'nonce',
+    attempt: 'old-attempt',
+    sessionId: 'old-process-id',
+    at: 1,
+  });
+  jest.resetModules();
+  const coldStart =
+    require('../boundedWrites') as typeof import('../boundedWrites');
+  await expect(
+    coldStart.boundedSet(f.adapter, 'k', VALUE, {
+      journal: f.journal,
+      verifier: 'nonce',
+      attempt: 'new-attempt',
+      timeoutMs: 10,
+    })
+  ).resolves.toBeUndefined();
+  expect(f.entries.size).toBe(0);
 });
 
 test('UNKNOWN errors expose the exact create and restore messages', () => {

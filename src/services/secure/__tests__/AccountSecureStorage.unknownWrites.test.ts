@@ -196,6 +196,20 @@ test('boot: an earlier-session nonce entry over a legacy payload is resolved', a
   ).toEqual([key]);
 });
 
+test('reconcile after JS reload leaves a current-process unknown set unresolved', async () => {
+  seedEntry({ sessionId: 'test-process-id' });
+  mockSecureValues.set(key, JSON.stringify(payload));
+  jest.resetModules();
+  const reloaded =
+    require('../AccountSecureStorage') as typeof import('../AccountSecureStorage');
+  await expect(
+    reloaded.AccountSecureStorage.resolveUnknownWrite(key)
+  ).resolves.toBe(false);
+  expect(
+    Object.keys(await reloaded.AccountSecureStorage.readUnknownWritesStrict())
+  ).toEqual([key]);
+});
+
 test('boot: a payload carrying a different nonce resolves; the matching nonce also resolves', async () => {
   seedEntry();
   mockSecureValues.set(
