@@ -116,6 +116,7 @@ beforeEach(() => {
   mockThread = undefined;
   mockStore.threads = {};
   mockStore.currentUserAddress = 'ME';
+  mockStore.loadCachedThreads.mockImplementation(async () => {});
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 afterEach(() => jest.restoreAllMocks());
@@ -365,4 +366,56 @@ it('refuses a send whose account the store cannot adopt, before sending', async 
     'Error',
     'Messages are still loading for this account. Try again.'
   );
+});
+
+// Pass C #1 (TASK-462): a double tap must not send twice, including during
+// the cold-start load that precedes a send.
+it.each([
+  ['during the cold-start load', true],
+  ['with the account already held', false],
+])('sends once on a double tap %s', async (_label, coldStart) => {
+  let loaded!: () => void;
+  if (coldStart) {
+    mockStore.currentUserAddress = null;
+    // Every caller waits on the same pending load, as the store's adoption
+    // would make them.
+    const load = new Promise<void>((done) => {
+      loaded = () => {
+        mockStore.currentUserAddress = 'ME';
+        done();
+      };
+    });
+    mockStore.loadCachedThreads.mockImplementation(() => load);
+  }
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    fireEvent.press(view.getByText('send'));
+    fireEvent.press(view.getByText('send'));
+  });
+  if (coldStart) await act(async () => loaded());
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(mockStore.addPendingMessage).toHaveBeenCalledTimes(1);
+
+  // The lock is released once the send settles.
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(2);
+});
+
+it('releases the lock when a send is refused', async () => {
+  mockStore.currentUserAddress = null;
+  const view = await render(<ChatScreen />);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+  mockStore.currentUserAddress = 'ME';
+  sendMessage.mockResolvedValue({ message: { id: 'TX9' } } as never);
+  await act(async () => {
+    await fireEvent.press(view.getByText('send'));
+  });
+
+  expect(sendMessage).toHaveBeenCalledTimes(1);
 });

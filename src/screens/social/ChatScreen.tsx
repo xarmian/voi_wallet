@@ -70,6 +70,8 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList>(null);
   // Placeholder ids with a send in flight (TASK-454).
   const inFlightRef = useRef(new Set<string>());
+  // Held by a new send from its first await until it settles (TASK-462).
+  const composeLockRef = useRef(false);
 
   // Experimental feature guard - redirect if messaging is not enabled
   const isMessagingEnabled = useIsMessagingEnabled();
@@ -217,9 +219,19 @@ export default function ChatScreen() {
       const holdsSender = () =>
         useMessagesStore.getState().currentUserAddress === sender;
 
+      const isRetry = !!existingMessageId;
+      // isSending only disables the composer after a render, so a second tap
+      // could start a second send, most easily during the cold-start load
+      // below. A new send takes a synchronous lock instead.
+      if (!isRetry) {
+        if (composeLockRef.current) return;
+        composeLockRef.current = true;
+      }
+
       if (!holdsSender()) {
         await useMessagesStore.getState().loadCachedThreads(sender);
         if (!holdsSender()) {
+          if (!isRetry) composeLockRef.current = false;
           Alert.alert(
             'Error',
             'Messages are still loading for this account. Try again.'
@@ -228,7 +240,6 @@ export default function ChatScreen() {
         }
       }
 
-      const isRetry = !!existingMessageId;
       const attemptedAt = Date.now();
       const tempId =
         existingMessageId || `${PENDING_PLACEHOLDER_PREFIX}${Date.now()}`;
@@ -314,6 +325,7 @@ export default function ChatScreen() {
       } finally {
         inFlightRef.current.delete(tempId);
         if (!isRetry) {
+          composeLockRef.current = false;
           setIsSending(false);
         }
       }
