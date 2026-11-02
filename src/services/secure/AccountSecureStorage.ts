@@ -548,8 +548,27 @@ export class AccountSecureStorage {
     }
   }
 
-  static async dropUnknownWrite(key: string): Promise<void> {
-    await this.unknownJournal.remove(key);
+  /**
+   * Drop a journal entry. With `expected` (the entry the caller resolved) it is a
+   * compare-and-remove: an entry journaled since (a same-process set/delete for the
+   * same key) is never erased by a boot-reconcile drop of an older entry.
+   */
+  static async dropUnknownWrite(
+    key: string,
+    expected?: UnknownWriteEntry
+  ): Promise<void> {
+    await this.mutateUnknownWrites((entries) => {
+      const current = entries[key];
+      if (
+        !expected ||
+        (current &&
+          current.at === expected.at &&
+          current.op === expected.op &&
+          current.attempt === expected.attempt &&
+          current.sessionId === expected.sessionId)
+      )
+        delete entries[key];
+    });
   }
 
   private static async freshWriteNonce(): Promise<string> {

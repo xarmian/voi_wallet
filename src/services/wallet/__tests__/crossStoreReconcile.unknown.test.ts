@@ -192,7 +192,8 @@ test('a delete entry whose secret is still present makes the id an orphan candid
   await reconcileCrossStoreHalfState();
   expect(secure.deleteAccount).toHaveBeenCalledWith('gone');
   expect(secure.dropUnknownWrite).toHaveBeenCalledWith(
-    'voi_account_secret_gone'
+    'voi_account_secret_gone',
+    expect.objectContaining({ op: 'delete', sessionId: 'old' })
   );
 });
 test('a METADATA delete entry never makes the id an orphan candidate (a separate secret is not deleted)', async () => {

@@ -447,3 +447,32 @@ test('clearAll leaves the journal untouched on a transient (non-corrupt) read fa
     entries
   );
 });
+
+test('dropUnknownWrite(key, expected) never erases an entry journaled after the one it resolved', async () => {
+  const old = {
+    key,
+    op: 'set' as const,
+    verifier: 'nonce' as const,
+    attempt: 'a'.repeat(32),
+    sessionId: 'earlier-process',
+    at: 1,
+  };
+  const fresh = {
+    ...old,
+    op: 'delete' as const,
+    verifier: 'presence' as const,
+    attempt: '',
+    sessionId: 'test-process-id',
+    at: 2,
+  };
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({ [key]: fresh })
+  );
+  await AccountSecureStorage.dropUnknownWrite(key, old); // the reconcile resolved `old`
+  expect(await AccountSecureStorage.readUnknownWritesStrict()).toEqual({
+    [key]: fresh,
+  });
+  await AccountSecureStorage.dropUnknownWrite(key, fresh);
+  expect(await AccountSecureStorage.readUnknownWritesStrict()).toEqual({});
+});

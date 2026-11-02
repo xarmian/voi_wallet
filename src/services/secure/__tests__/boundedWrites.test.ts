@@ -875,3 +875,24 @@ test('A: a transient journal read failure during a delete never rewrites the jou
   expect(f.journal.remove).not.toHaveBeenCalled();
   expect(f.entries.has('other')).toBe(true);
 });
+
+test('A: a second successful delete keeps a same-process delete entry whose FIRST delete is still pending', async () => {
+  const f = fixture();
+  f.values.set('voi_account_secret_x', 'v');
+  f.setDelete((key) => {
+    f.values.delete(key); // gone already; the call itself never settles
+    return new Promise<void>(() => {});
+  });
+  const first = boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  expect(f.entries.get('voi_account_secret_x')?.op).toBe('delete');
+  f.setDelete(async (key) => {
+    f.values.delete(key);
+  });
+  await boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
+  expect(f.entries.get('voi_account_secret_x')?.op).toBe('delete');
+});

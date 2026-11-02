@@ -222,7 +222,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
       journalDropped.push(...journalIdsToDrop);
     }
     for (const key of resolvedUnknownKeys) {
-      await AccountSecureStorage.dropUnknownWrite(key);
+      await AccountSecureStorage.dropUnknownWrite(key, unknownWrites[key]);
     }
   } catch (error) {
     // A Phase-2 repair failed after Phase 1 passed cleanly. Keep the partial

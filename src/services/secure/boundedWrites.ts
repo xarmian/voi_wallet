@@ -259,12 +259,16 @@ async function settleJournalAfterDelete(
       await deadline(journal.remove(key), ms);
     return;
   }
+  // A same-process DELETE entry is always kept, even while its own first delete
+  // is still pending: a JS reload would lose the in-memory record while the hung
+  // native delete could still land and erase a newer value. (The pending delete's
+  // own settle clears only its own entry, by ownership.)
+  if (entry && entry.sessionId === sessionId && entry.op === 'delete') return;
   if (
     entry &&
     entry.sessionId === sessionId &&
     !hasPendingRecord(adapter, key)
   ) {
-    if (entry.op === 'delete') return; // keep: later sets stay refused until a cold start
     await deadline(
       journal.add({
         key,
