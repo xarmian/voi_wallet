@@ -203,37 +203,49 @@ async function perform(
   if (op === 'set') {
     const pending: PendingSet = { settled: false, ok: false, tombstone: false };
     pendingFor(adapter).set(key, pending);
-    operation!.then(
-      () => {
-        pending.settled = true;
-        pending.ok = true;
-        if (pending.tombstone)
-          void (async () => {
-            try {
-              await deadline(
-                adapter.deleteItem
-                  ? adapter.deleteItem(key)
-                  : adapter.removeItem!(key),
-                WRITE_TIMEOUT_MS
-              );
-              await opts.journal.remove(key).catch(() => undefined);
-            } catch {
-              await opts.journal
-                .add({
-                  key,
-                  op: 'delete',
-                  verifier: 'presence',
-                  attempt: '',
-                  sessionId,
-                  at: Date.now(),
-                })
-                .catch(() => undefined);
-            }
-          })();
-      },
-      () => {
-        pending.settled = true;
+    // `settled` means the key is safe to write again: the abandoned set has
+    // settled AND any tombstone re-delete has finished (a retry must never race a
+    // cleanup delete that could erase its newer value).
+    const finish = async (landed: boolean) => {
+      pending.ok = landed;
+      if (landed && pending.tombstone) {
+        try {
+          await deadline(
+            adapter.deleteItem
+              ? adapter.deleteItem(key)
+              : adapter.removeItem!(key),
+            WRITE_TIMEOUT_MS
+          );
+        } catch {
+          // The re-delete is unproven: the key stays guarded for this session and
+          // a delete UNKNOWN entry covers the next boot.
+          await opts.journal
+            .add({
+              key,
+              op: 'delete',
+              verifier: 'presence',
+              attempt: '',
+              sessionId,
+              at: Date.now(),
+            })
+            .catch(() => undefined);
+          return;
+        }
       }
+      pending.settled = true;
+      // Best effort: clear the entry and the record so nothing lingers; if the
+      // journal remove fails the record stays and the next set's guard retries it.
+      try {
+        await deadline(opts.journal.remove(key), WRITE_TIMEOUT_MS);
+        if (pendingFor(adapter).get(key) === pending)
+          pendingFor(adapter).delete(key);
+      } catch {
+        /* the guard drops the entry on the next set */
+      }
+    };
+    operation!.then(
+      () => void finish(true),
+      () => void finish(false)
     );
   }
   try {

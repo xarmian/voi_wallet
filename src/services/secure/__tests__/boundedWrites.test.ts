@@ -352,6 +352,88 @@ test('a timed-out set that lands after delete is deleted again', async () => {
   expect(f.entries.has('k')).toBe(false);
 });
 
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+};
+const hangUnknown = async (f: ReturnType<typeof fixture>) => {
+  let land!: () => void;
+  f.setWrite(
+    (key, value) =>
+      new Promise<void>((resolve) => {
+        land = () => {
+          f.values.set(key, value);
+          resolve();
+        };
+      })
+  );
+  const first = boundedSet(f.adapter, 'k', VALUE, {
+    journal: f.journal,
+    verifier: 'nonce',
+    attempt: 'a',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  return () => land();
+};
+
+test('a retry cannot race the tombstone cleanup delete (it would erase the newer value)', async () => {
+  const f = fixture();
+  const land = await hangUnknown(f);
+  await boundedDelete(f.adapter, 'k', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  let releaseCleanup!: () => void;
+  f.setDelete(
+    (key) =>
+      new Promise<void>((resolve) => {
+        releaseCleanup = () => {
+          f.values.delete(key);
+          resolve();
+        };
+      })
+  );
+  land(); // the hung set lands; the cleanup delete starts and is held open
+  await flush();
+  f.setWrite(async (key, value) => {
+    f.values.set(key, value);
+  });
+  await expect(
+    boundedSet(f.adapter, 'k', 'newer', {
+      journal: f.journal,
+      verifier: 'presence',
+      sessionId: 's',
+      timeoutMs: 10,
+    })
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
+  releaseCleanup();
+  await flush();
+  expect(f.values.has('k')).toBe(false);
+  await boundedSet(f.adapter, 'k', 'newer', {
+    journal: f.journal,
+    verifier: 'presence',
+    sessionId: 's',
+    timeoutMs: 10,
+  });
+  expect(f.values.get('k')).toBe('newer');
+});
+
+test('a settled pending record clears itself without a later set', async () => {
+  const f = fixture();
+  const land = await hangUnknown(f);
+  expect(f.entries.has('k')).toBe(true);
+  land();
+  await flush();
+  expect(f.entries.has('k')).toBe(false);
+});
+
 test('a timed-out set that later rejects permits the next set', async () => {
   const f = fixture();
   let rejectOld!: (error: Error) => void;
