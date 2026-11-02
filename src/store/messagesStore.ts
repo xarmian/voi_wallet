@@ -58,6 +58,64 @@ export const PENDING_PLACEHOLDER_TTL_MS = 10 * 60 * 1000;
 // and skip the gap between them.
 const inFlightThreadFetches = new Set<string>();
 
+// Account switches, newest request wins (TASK-460). Every adoptAccount call
+// takes a new epoch, and clearCache takes one too; a cache load that finishes
+// after a newer epoch commits nothing, so a slow load for A can't land after
+// the switch to B.
+let accountEpoch = 0;
+
+// Only the newest key-registration check writes isKeyRegistered (TASK-460),
+// so a slow check for A can't land after B's. A check also can't write once
+// the store has switched to another account since it began. It is not tied
+// to currentUserAddress outright: the inbox checks an unregistered account
+// while the store still holds the previous one (it never syncs), and that
+// result must land.
+let keyCheckSeq = 0;
+let accountSwitches = 0;
+
+interface KeyCheck {
+  seq: number;
+  switches: number;
+  userAddress: string;
+}
+
+const startKeyCheck = (userAddress: string): KeyCheck => ({
+  seq: ++keyCheckSeq,
+  switches: accountSwitches,
+  userAddress,
+});
+
+const keyCheckMayWrite = (check: KeyCheck, current: string | null) =>
+  check.seq === keyCheckSeq &&
+  (check.switches === accountSwitches || current === check.userAddress);
+
+// The newest action to set isLoading owns it (TASK-460). An action that
+// abandons a superseded result clears the flag only while it is still the
+// owner, so it can neither leave the spinner stuck nor end a newer action's.
+let loadingOwner = 0;
+
+/** isLoading: false, but only while `loading` still owns the flag. */
+const doneLoading = (loading: number): Partial<MessagesState> =>
+  loading === loadingOwner ? { isLoading: false } : {};
+
+/**
+ * A failed action's completion (TASK-460): nothing once a newer action owns
+ * the flag, and no lastError onto another account's state.
+ */
+function failedLoading(
+  loading: number,
+  userAddress: string,
+  error: unknown,
+  current: string | null
+): Partial<MessagesState> {
+  if (loading !== loadingOwner) return {};
+  if (current !== null && current !== userAddress) return { isLoading: false };
+  return {
+    lastError: error instanceof Error ? error.message : 'Unknown error',
+    isLoading: false,
+  };
+}
+
 // Helper to get storage key for a specific account
 const getStorageKey = (userAddress: string) =>
   `${STORAGE_KEY_PREFIX}${userAddress}`;
@@ -484,10 +542,13 @@ export const useMessagesStore = create<MessagesState>()(
      * Check if the user has registered their messaging key on-chain
      */
     checkKeyRegistration: async (userAddress: string) => {
+      const check = startKeyCheck(userAddress);
       try {
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
-        set({ isKeyRegistered: isRegistered });
+        if (keyCheckMayWrite(check, get().currentUserAddress)) {
+          set({ isKeyRegistered: isRegistered });
+        }
         return isRegistered;
       } catch (error) {
         console.error('Failed to check key registration:', error);
@@ -499,15 +560,22 @@ export const useMessagesStore = create<MessagesState>()(
      * Register the user's messaging key on-chain
      */
     registerMessagingKey: async (userAddress: string, pin?: string) => {
+      const check = startKeyCheck(userAddress);
+      const loading = ++loadingOwner;
       try {
         set({ isLoading: true, lastError: null });
         const txId = await MessagingService.registerKey(userAddress, pin);
-        set({ isKeyRegistered: true, isLoading: false });
+        if (keyCheckMayWrite(check, get().currentUserAddress)) {
+          set({ isKeyRegistered: true });
+        }
+        set(doneLoading(loading));
         return txId;
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        // The caller gets the error either way; the store's error and
+        // spinner are only this call's while it still owns them (TASK-460).
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
         throw error;
       }
     },
@@ -517,56 +585,21 @@ export const useMessagesStore = create<MessagesState>()(
      * Call this before fetchThreadMessages when switching accounts.
      */
     loadCachedThreads: async (userAddress: string) => {
-      const { currentUserAddress } = get();
-
-      // Only load if switching to a different account
-      if (currentUserAddress === userAddress) {
-        return;
-      }
-
-      const storageKey = getStorageKey(userAddress);
-      const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-      const rawStoredThreads = storedThreadsJson
-        ? JSON.parse(storedThreadsJson)
-        : {};
-
-      // Also load hidden threads for the new account
-      const hiddenStorageKey = getHiddenStorageKey(userAddress);
-      const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
-      const storedHidden = storedHiddenJson
-        ? new Set<string>(JSON.parse(storedHiddenJson))
-        : new Set<string>();
-
-      // Deduplicate messages for display. The durable sync cursor is loaded
-      // from its own key (falling back to the greatest held ingestion id) — NOT
-      // recomputed forward from these rows — so a persisted partial drain can't
-      // advance it past rows we never fetched.
-      const { threads: storedThreads } = deduplicateThreads(rawStoredThreads);
-      const committedId = await resolveCommittedCursor(
-        userAddress,
-        storedThreads
-      );
-
-      set({
-        threads: storedThreads,
-        currentUserAddress: userAddress,
-        committedId,
-        hiddenThreads: storedHidden,
-        showHiddenThreads: false,
-      });
-
-      // Re-persist if deduplication changed anything
-      if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
-        await persistThreads(userAddress, storedThreads);
-      }
+      await adoptAccount(userAddress, set, get);
     },
 
     /**
      * Fetch messages for a specific thread from the blockchain
      */
     fetchThreadMessages: async (userAddress, friendAddress, pin) => {
+      const loading = ++loadingOwner;
+      const abandon = () => set(doneLoading(loading));
       try {
         set({ isLoading: true, lastError: null });
+
+        // Merge only into this account's own threads, never into whichever
+        // account the store last held (TASK-460).
+        if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Derive messaging keypair (automatic for software wallets)
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -579,6 +612,10 @@ export const useMessagesStore = create<MessagesState>()(
           friendAddress,
           messagingKeyPair
         );
+
+        // The account may have switched while the fetch was in flight. From
+        // here to the set() below nothing awaits (TASK-460).
+        if (get().currentUserAddress !== userAddress) return abandon();
 
         const { threads } = get();
         const existingThread = threads[friendAddress];
@@ -612,30 +649,22 @@ export const useMessagesStore = create<MessagesState>()(
                 unreadCount: 0, // Reset when explicitly fetching
               },
             },
-            currentUserAddress: userAddress,
-            isLoading: false,
+            ...doneLoading(loading),
           });
 
           await persistThreads(userAddress, get().threads);
         } else if (existingThread) {
           // Its only message was a placeholder that aged out (TASK-454).
           const { [friendAddress]: _emptied, ...rest } = threads;
-          set({
-            threads: rest,
-            currentUserAddress: userAddress,
-            isLoading: false,
-          });
+          set({ threads: rest, ...doneLoading(loading) });
           await persistThreads(userAddress, get().threads);
         } else {
-          set({
-            currentUserAddress: userAddress,
-            isLoading: false,
-          });
+          set(doneLoading(loading));
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
       }
     },
 
@@ -651,6 +680,9 @@ export const useMessagesStore = create<MessagesState>()(
     ) => {
       try {
         // Don't set global isLoading to avoid UI flicker during pagination
+        if (!(await adoptAccount(userAddress, set, get))) {
+          return { hasMore: false };
+        }
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
           userAddress,
           pin
@@ -666,6 +698,11 @@ export const useMessagesStore = create<MessagesState>()(
         );
 
         if (messages.length === 0) {
+          return { hasMore: false };
+        }
+
+        // As in fetchThreadMessages: nothing awaits from here to the set().
+        if (get().currentUserAddress !== userAddress) {
           return { hasMore: false };
         }
 
@@ -731,64 +768,24 @@ export const useMessagesStore = create<MessagesState>()(
         return;
       }
       inFlightThreadFetches.add(userAddress);
+      const loading = ++loadingOwner;
+      const abandon = () => set(doneLoading(loading));
       try {
         set({ isLoading: true, lastError: null });
 
-        const { currentUserAddress } = get();
-
-        // If account changed, load from storage for the new account
-        if (currentUserAddress !== userAddress) {
-          const storageKey = getStorageKey(userAddress);
-          const storedThreadsJson = await AsyncStorage.getItem(storageKey);
-          const rawStoredThreads = storedThreadsJson
-            ? JSON.parse(storedThreadsJson)
-            : {};
-
-          // Also load hidden threads for the new account
-          const hiddenStorageKey = getHiddenStorageKey(userAddress);
-          const storedHiddenJson = await AsyncStorage.getItem(hiddenStorageKey);
-          const storedHidden = storedHiddenJson
-            ? new Set<string>(JSON.parse(storedHiddenJson))
-            : new Set<string>();
-
-          // Deduplicate messages for display. The durable sync cursor is
-          // loaded from its own key (falling back to the greatest held
-          // ingestion id) — NOT recomputed forward from these rows — so a
-          // persisted partial drain can't advance it past unfetched rows.
-          const { threads: storedThreads } =
-            deduplicateThreads(rawStoredThreads);
-          const committedId = await resolveCommittedCursor(
-            userAddress,
-            storedThreads
-          );
-
-          set({
-            threads: storedThreads,
-            currentUserAddress: userAddress,
-            committedId,
-            isKeyRegistered: false, // Will be checked below
-            hiddenThreads: storedHidden,
-            showHiddenThreads: false, // Reset to default when switching accounts
-          });
-
-          // Re-persist if deduplication changed anything
-          if (
-            JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)
-          ) {
-            await persistThreads(userAddress, storedThreads);
-          }
-        }
+        if (!(await adoptAccount(userAddress, set, get))) return abandon();
 
         // Check key registration status
+        const check = startKeyCheck(userAddress);
         const isRegistered =
           await MessagingService.isKeyRegistered(userAddress);
-        set({ isKeyRegistered: isRegistered });
+        if (get().currentUserAddress !== userAddress) return abandon();
+        if (keyCheckMayWrite(check, userAddress)) {
+          set({ isKeyRegistered: isRegistered });
+        }
 
         // If not registered, can't fetch messages (need to register first)
-        if (!isRegistered) {
-          set({ isLoading: false });
-          return;
-        }
+        if (!isRegistered) return abandon();
 
         // Derive messaging keypair (automatic for software wallets)
         const messagingKeyPair = await MessagingService.deriveMessagingKeyPair(
@@ -820,11 +817,16 @@ export const useMessagesStore = create<MessagesState>()(
 
         // The active account may have changed while this request was in flight
         // (account switch). Abandon the stale result rather than merge it into,
-        // or persist its cursor over, another account's state. Everything from
-        // here to the set() below runs without awaiting, so the account can't
-        // change mid-writeback.
-        if (get().currentUserAddress !== userAddress) {
-          return;
+        // or persist its cursor over, another account's state. The drain is
+        // also only valid against the cursor it started from: if that moved
+        // (a clearCache and reload), its rows are not the whole range above
+        // the cursor it would commit (TASK-460). Everything from here to the
+        // set() below runs without awaiting, so neither can change mid-writeback.
+        if (
+          get().currentUserAddress !== userAddress ||
+          get().committedId !== committed
+        ) {
+          return abandon();
         }
 
         const { threads: existingThreads } = get();
@@ -888,7 +890,7 @@ export const useMessagesStore = create<MessagesState>()(
           threads: newThreads,
           currentUserAddress: userAddress,
           committedId: nextCommitted,
-          isLoading: false,
+          ...doneLoading(loading),
         });
 
         // Persist the message rows BEFORE the cursor, and only advance the
@@ -896,14 +898,24 @@ export const useMessagesStore = create<MessagesState>()(
         // be durably ahead of the rows it represents: a stale (lower) cursor
         // just re-fetches on the next sync (dedup-safe), whereas the reverse
         // would skip the just-fetched rows below the advanced cursor.
+        // A clearCache or switch while the rows were being written leaves the
+        // durable cursor where it was, which is the safe direction (TASK-460).
+        // This check suffices because AsyncStorage runs operations in issue
+        // order (a serial queue on iOS and Android): a write issued here,
+        // before a clearCache, lands before that clearCache's removals.
         const rowsPersisted = await persistThreads(userAddress, newThreads);
-        if (rowsPersisted && nextCommitted !== previousCommitted) {
+        if (
+          rowsPersisted &&
+          nextCommitted !== previousCommitted &&
+          get().currentUserAddress === userAddress &&
+          get().committedId === nextCommitted
+        ) {
           await persistCommittedId(userAddress, nextCommitted);
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        set({ lastError: message, isLoading: false });
+        set(
+          failedLoading(loading, userAddress, error, get().currentUserAddress)
+        );
       } finally {
         inFlightThreadFetches.delete(userAddress);
       }
@@ -959,6 +971,8 @@ export const useMessagesStore = create<MessagesState>()(
       // Clear messaging key cache in the service
       MessagingService.clearKeyCache();
 
+      // A cache load still in flight must not re-install the cleared account.
+      accountEpoch++;
       set({
         threads: {},
         currentUserAddress: null,
@@ -1085,6 +1099,63 @@ function withoutMemoryOnlyPlaceholders(
     };
   }
   return out;
+}
+
+type SetState = (partial: Partial<MessagesState>) => void;
+type GetState = () => MessagesState;
+
+/**
+ * Make userAddress the store's account, loading its cache when the store
+ * holds another one (TASK-460). Resolves false when a newer adoptAccount or a
+ * clearCache superseded this call: the caller must then write nothing.
+ */
+async function adoptAccount(
+  userAddress: string,
+  set: SetState,
+  get: GetState
+): Promise<boolean> {
+  const epoch = ++accountEpoch;
+  if (get().currentUserAddress === userAddress) return true;
+
+  const storedThreadsJson = await AsyncStorage.getItem(
+    getStorageKey(userAddress)
+  );
+  const rawStoredThreads = storedThreadsJson
+    ? JSON.parse(storedThreadsJson)
+    : {};
+
+  // Also load hidden threads for the new account
+  const storedHiddenJson = await AsyncStorage.getItem(
+    getHiddenStorageKey(userAddress)
+  );
+  const storedHidden = storedHiddenJson
+    ? new Set<string>(JSON.parse(storedHiddenJson))
+    : new Set<string>();
+
+  // Deduplicate messages for display. The durable sync cursor is loaded from
+  // its own key (falling back to the greatest held ingestion id) — NOT
+  // recomputed forward from these rows — so a persisted partial drain can't
+  // advance it past rows we never fetched.
+  const { threads: storedThreads } = deduplicateThreads(rawStoredThreads);
+  const committedId = await resolveCommittedCursor(userAddress, storedThreads);
+
+  if (epoch !== accountEpoch) return false;
+
+  accountSwitches++;
+  set({
+    threads: storedThreads,
+    currentUserAddress: userAddress,
+    committedId,
+    isKeyRegistered: false, // Unknown for this account until checked
+    hiddenThreads: storedHidden,
+    showHiddenThreads: false, // Reset to default when switching accounts
+  });
+
+  // Re-persist if deduplication changed anything
+  if (JSON.stringify(storedThreads) !== JSON.stringify(rawStoredThreads)) {
+    await persistThreads(userAddress, storedThreads);
+  }
+  return get().currentUserAddress === userAddress;
 }
 
 /**
