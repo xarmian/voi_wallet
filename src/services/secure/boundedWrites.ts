@@ -65,6 +65,13 @@ interface PendingSet {
   // entry and never a newer operation's entry for the same key.
   entry?: UnknownWriteEntry;
 }
+// Delete entries carry no nonce, so give each a unique attempt token: entry
+// ownership (removeIfOwned) must never collide on a same-millisecond pair.
+let deleteAttemptSeq = 0;
+export function newDeleteAttempt(): string {
+  deleteAttemptSeq += 1;
+  return `d${deleteAttemptSeq}`;
+}
 async function removeIfOwned(
   journal: UnknownJournal,
   key: string,
@@ -76,7 +83,8 @@ async function removeIfOwned(
     current &&
     current.op === entry.op &&
     current.at === entry.at &&
-    current.attempt === entry.attempt
+    current.attempt === entry.attempt &&
+    current.sessionId === entry.sessionId
   )
     await deadline(journal.remove(key), WRITE_TIMEOUT_MS);
 }
@@ -274,7 +282,7 @@ async function settleJournalAfterDelete(
         key,
         op: 'delete',
         verifier: 'presence',
-        attempt: '',
+        attempt: newDeleteAttempt(),
         sessionId,
         at: Date.now(),
       }),
@@ -344,7 +352,7 @@ async function perform(
               key,
               op: 'delete',
               verifier: 'presence',
-              attempt: '',
+              attempt: newDeleteAttempt(),
               sessionId,
               at: Date.now(),
             })
@@ -403,7 +411,7 @@ async function perform(
     key,
     op,
     verifier: opts.verifier,
-    attempt: opts.attempt ?? '',
+    attempt: op === 'delete' ? newDeleteAttempt() : (opts.attempt ?? ''),
     sessionId,
     at: Date.now(),
   };

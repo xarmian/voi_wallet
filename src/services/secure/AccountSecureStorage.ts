@@ -64,6 +64,7 @@ import {
   WriteUnresolvedError,
   isCurrentSessionId,
   hasPendingRecord,
+  newDeleteAttempt,
   type UnknownWriteEntry,
   type UnknownJournal,
   type WriteContext,
@@ -421,7 +422,7 @@ export class AccountSecureStorage {
                 key,
                 op: 'delete',
                 verifier: 'presence',
-                attempt: '',
+                attempt: newDeleteAttempt(),
                 sessionId: entry.sessionId,
                 at: Date.now(),
               }

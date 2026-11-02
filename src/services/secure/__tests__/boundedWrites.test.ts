@@ -896,3 +896,30 @@ test('A: a second successful delete keeps a same-process delete entry whose FIRS
   await boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
   expect(f.entries.get('voi_account_secret_x')?.op).toBe('delete');
 });
+
+test('A: an older pending delete settling late never erases a NEWER same-process delete entry (same millisecond, empty attempt)', async () => {
+  const f = fixture();
+  f.values.set('voi_account_secret_x', 'v');
+  let settleOld!: () => void;
+  f.setDelete(
+    (key) =>
+      new Promise<void>((resolve) => {
+        f.values.delete(key);
+        settleOld = resolve;
+      })
+  );
+  const first = boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
+  const assertion = expect(first).rejects.toBeInstanceOf(
+    WriteOutcomeUnknownError
+  );
+  await tick();
+  await assertion;
+  const older = f.entries.get('voi_account_secret_x')!;
+  // A newer delete entry for the same key that collides on every field a weak
+  // ownership check could compare (op, at) and carries an empty attempt.
+  f.entries.set('voi_account_secret_x', { ...older, attempt: '' });
+  settleOld();
+  await flush();
+  expect(f.entries.has('voi_account_secret_x')).toBe(true);
+  expect(older.attempt).not.toBe('');
+});
