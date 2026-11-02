@@ -250,18 +250,21 @@ async function settleJournalAfterDelete(
   let entry: UnknownWriteEntry | undefined;
   try {
     entry = await deadline(journal.get(key), ms);
-  } catch {
-    // An unreadable/corrupt journal: the tolerant remove below repairs it, so a
-    // delete (and the sets it triggers) is never blocked by it.
-    await deadline(journal.remove(key), ms);
+  } catch (error) {
+    // A CORRUPT journal is repaired by the tolerant remove, so a delete (and the
+    // sets it triggers) is never blocked by it. Any other read failure (a
+    // transient timeout) must not rewrite the journal: that could drop other
+    // keys' inherited entries.
+    if (error instanceof UnknownJournalCorruptError)
+      await deadline(journal.remove(key), ms);
     return;
   }
   if (
     entry &&
-    entry.op === 'set' &&
     entry.sessionId === sessionId &&
     !hasPendingRecord(adapter, key)
   ) {
+    if (entry.op === 'delete') return; // keep: later sets stay refused until a cold start
     await deadline(
       journal.add({
         key,

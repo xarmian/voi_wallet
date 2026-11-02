@@ -42,6 +42,8 @@ import {
 export interface ReconcileResult {
   /** false when Phase 1 hit a read/probe failure and the pass was aborted. */
   ran: boolean;
+  /** true when a downgraded write marker made this pass report-only (nothing repaired). */
+  reportOnly?: boolean;
   orphanSecretsDeleted: string[];
   phantomAccountsPruned: string[];
   staleJournalDropped: string[];
@@ -201,13 +203,15 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     // Prune phantoms FIRST — the only mutation that can change the boot lock
     // verdict (emptying the wallet ⇒ canonical clearAllWallets) — so the
     // verdict-affecting change is committed as early as possible.
-    if (!nonDestructive && phantomIds.length > 0) {
+    if (!nonDestructive && !hasDowngradedMarkers() && phantomIds.length > 0) {
       await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
       phantomsPruned.push(...phantomIds);
     }
     // Deletes: each acquires the key-mutation mutex, serialized against any secret
     // write. deleteAccount removes secret + secure metadata + account-list entry.
     for (const id of nonDestructive ? [] : orphanSecretIds) {
+      // A downgrade that happened during this pass stops further destruction.
+      if (hasDowngradedMarkers()) break;
       await AccountSecureStorage.deleteAccount(id);
       orphansDeleted.push(id);
     }
@@ -246,6 +250,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
 
   return {
     ran: true,
+    reportOnly: nonDestructive || undefined,
     orphanSecretsDeleted: orphansDeleted,
     phantomAccountsPruned: phantomsPruned,
     staleJournalDropped: staleJournalIds.filter((id) =>

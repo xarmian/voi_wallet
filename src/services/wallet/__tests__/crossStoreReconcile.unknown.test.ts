@@ -228,7 +228,8 @@ describe('ruling B: a downgraded bookkeeping marker makes every reconcile non-de
       allIds: ['phantom'],
     });
     secure.readAccountListStrict.mockResolvedValue(['phantom']);
-    await reconcileCrossStoreHalfState();
+    const result = await reconcileCrossStoreHalfState();
+    expect(result.reportOnly).toBe(true);
     expect(secure.deleteAccount).not.toHaveBeenCalled();
     expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
   });

@@ -60,7 +60,8 @@ export async function clearOrphanPin(): Promise<void> {
     // second layer should any delete path ever unindex before it verifies.
     const before = await readCandidateIdsStrict();
     const result = await reconcileCrossStoreHalfState();
-    if (result?.ran !== true) {
+    // A report-only pass (a downgraded write marker) repaired nothing: unverifiable.
+    if (result?.ran !== true || result.reportOnly === true) {
       throw new Error(ORPHAN_PIN_UNVERIFIABLE_MESSAGE);
     }
     const after = await readCandidateIdsStrict();

@@ -305,6 +305,11 @@ test('clearAll tombstones a timed-out secret write that lands after the wipe', a
     await jest.advanceTimersByTimeAsync(5001);
     await assertion;
     await AccountSecureStorage.clearAll();
+    // The set is still tracked in memory: its durable entry is retained through the
+    // wipe (a JS reload now would lose the in-memory tombstone).
+    expect(
+      JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY) ?? '{}')
+    ).toHaveProperty(key);
     mockHeldWrite!.land();
     await jest.advanceTimersByTimeAsync(1);
     expect(mockSecureValues.has(key)).toBe(false);
@@ -387,5 +392,56 @@ test('clearAll keeps an inherited same-process SET entry as a delete entry (ruli
   expect(left[key].op).toBe('delete');
   await expect(account.saveSecret('one', payload)).rejects.toBeInstanceOf(
     WriteUnresolvedError
+  );
+});
+
+test('clearAll keeps the delete entry its own account deletion created, and pre-existing same-process delete entries (ruling A)', async () => {
+  mockPlainValues.set('voi_account_list', JSON.stringify(['one']));
+  mockPlainValues.set(
+    UNKNOWN_WRITES_STORAGE_KEY,
+    JSON.stringify({
+      [key]: {
+        key,
+        op: 'set',
+        verifier: 'nonce',
+        attempt: 'a'.repeat(32),
+        sessionId: 'test-process-id',
+        at: 1,
+      },
+      voi_pending_account_creates: {
+        key: 'voi_pending_account_creates',
+        op: 'delete',
+        verifier: 'presence',
+        attempt: '',
+        sessionId: 'test-process-id',
+        at: 1,
+      },
+    })
+  );
+  await AccountSecureStorage.clearAll();
+  const left = await AccountSecureStorage.readUnknownWritesStrict();
+  expect(left[key]?.op).toBe('delete'); // converted by the account deletion, kept by the wipe
+  expect(left.voi_pending_account_creates?.op).toBe('delete'); // pre-existing, kept
+});
+
+test('clearAll leaves the journal untouched on a transient (non-corrupt) read failure', async () => {
+  const entries = {
+    [key]: {
+      key,
+      op: 'set',
+      verifier: 'nonce',
+      attempt: 'a'.repeat(32),
+      sessionId: 'test-process-id',
+      at: 1,
+    },
+  };
+  mockPlainValues.set(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(entries));
+  const spy = jest
+    .spyOn(AccountSecureStorage, 'readUnknownWritesStrict')
+    .mockRejectedValue(new Error('unknown-write journal read timed out'));
+  await AccountSecureStorage.clearAll();
+  spy.mockRestore();
+  expect(JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)).toEqual(
+    entries
   );
 });

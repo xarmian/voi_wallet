@@ -387,46 +387,52 @@ export class AccountSecureStorage {
     return parsed as Record<string, UnknownWriteEntry>;
   }
 
-  private static async rewriteUnknownWritesAfterWipe(): Promise<void> {
-    let entries: Record<string, UnknownWriteEntry> = {};
-    try {
-      entries = await this.readUnknownWritesStrict();
-    } catch {
-      // Unreadable/corrupt journal: reset it (the boot reconcile resets too).
-      this.unknownJournalDesired = null;
-      this.unknownJournalWriteCounter += 1;
-      await storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY).catch(() => {});
-      return;
-    }
-    const kept: Record<string, UnknownWriteEntry> = {};
-    for (const [key, entry] of Object.entries(entries)) {
-      const adapter = key.startsWith(this.STORAGE_KEY_PREFIX)
-        ? secureStorage
-        : storage;
-      if (
-        entry.op === 'set' &&
-        (await isCurrentSessionId(entry.sessionId)) &&
-        !hasPendingRecord(adapter, key)
-      )
-        kept[key] = {
-          key,
-          op: 'delete',
-          verifier: 'presence',
-          attempt: '',
-          sessionId: entry.sessionId,
-          at: Date.now(),
-        };
-    }
-    // Keep the in-memory desired state in step so later journal mutations do not
-    // drop the retained delete entries.
-    this.unknownJournalDesired = Object.keys(kept).length === 0 ? null : kept;
-    this.unknownJournalWriteCounter += 1;
-    if (Object.keys(kept).length === 0)
-      await storage.removeItem(UNKNOWN_WRITES_STORAGE_KEY).catch(() => {});
-    else
-      await storage
-        .setItem(UNKNOWN_WRITES_STORAGE_KEY, JSON.stringify(kept))
-        .catch(() => {});
+  // Ruling A on the wipe path: a wipe never erases an inherited same-process
+  // SET entry (the native set may still be hung after a JS reload and could land
+  // and resurrect the key) and never drops a same-process delete entry. Runs on
+  // the journal chain from the in-memory desired state, so it cannot race another
+  // journal mutation; a transient read failure leaves the journal untouched and
+  // only a CORRUPT journal is reset.
+  private static rewriteUnknownWritesAfterWipe(): Promise<void> {
+    const task = this.unknownJournalChain.then(async () => {
+      let current: Record<string, UnknownWriteEntry>;
+      if (this.unknownJournalDesired !== undefined) {
+        current = this.unknownJournalDesired ?? {};
+      } else {
+        try {
+          current = await this.readUnknownWritesStrict();
+        } catch (error) {
+          if (!(error instanceof UnknownJournalCorruptError)) return;
+          current = {};
+        }
+      }
+      const kept: Record<string, UnknownWriteEntry> = {};
+      for (const [key, entry] of Object.entries(current)) {
+        if (!(await isCurrentSessionId(entry.sessionId))) continue;
+        const tracked = this.adaptersForKey(key).some((adapter) =>
+          hasPendingRecord(adapter, key)
+        );
+        // A tracked set keeps its original entry (the tombstone clears it on
+        // settle); an inherited set becomes a delete entry; a same-process delete
+        // entry stays as it is.
+        kept[key] =
+          entry.op === 'set' && !tracked
+            ? {
+                key,
+                op: 'delete',
+                verifier: 'presence',
+                attempt: '',
+                sessionId: entry.sessionId,
+                at: Date.now(),
+              }
+            : entry;
+      }
+      const empty = Object.keys(kept).length === 0;
+      this.unknownJournalDesired = empty ? null : kept;
+      await this.writeUnknownSnapshot(empty ? null : kept).catch(() => {});
+    });
+    this.unknownJournalChain = task.catch(() => undefined);
+    return task;
   }
 
   static async resetUnknownWrites(): Promise<void> {
@@ -501,12 +507,9 @@ export class AccountSecureStorage {
    * = not written (no native call survives process death). Any successful probe
    * resolves; only a probe that throws or times out leaves the entry unresolved.
    */
-  static async resolveUnknownWrite(key: string): Promise<boolean> {
-    const entries = await this.readUnknownWritesStrict();
-    const entry = entries[key];
-    if (!entry) return true;
-    if (await isCurrentSessionId(entry.sessionId)) return false;
-    const adapters = key.startsWith(this.STORAGE_KEY_PREFIX)
+  /** The adapter(s) a journaled key can live in (shared by resolve and wipe). */
+  private static adaptersForKey(key: string) {
+    return key.startsWith(this.STORAGE_KEY_PREFIX)
       ? [secureStorage]
       : key.startsWith(this.METADATA_KEY) || key === this.PENDING_CREATES_KEY
         ? [storage]
@@ -517,6 +520,14 @@ export class AccountSecureStorage {
           : key.startsWith(this.LEGACY_STORAGE_KEY_PREFIX)
             ? [secureStorage]
             : [storage];
+  }
+
+  static async resolveUnknownWrite(key: string): Promise<boolean> {
+    const entries = await this.readUnknownWritesStrict();
+    const entry = entries[key];
+    if (!entry) return true;
+    if (await isCurrentSessionId(entry.sessionId)) return false;
+    const adapters = this.adaptersForKey(key);
     try {
       const raws: (string | null)[] = [];
       for (const adapter of adapters) {

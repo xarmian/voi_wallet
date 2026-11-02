@@ -852,3 +852,26 @@ test('B: a failed read-back keeps the bookkeeping set refused', async () => {
     boundedSet(f.adapter, 'voi_pending_account_creates', '{}', setOpts(f))
   ).rejects.toBeInstanceOf(WriteUnresolvedError);
 });
+
+test('A: a second successful delete keeps an existing same-process delete entry (sets stay refused)', async () => {
+  const f = fixture();
+  f.values.set('voi_account_secret_x', 'v');
+  inherited(f, 'voi_account_secret_x', { op: 'delete' });
+  await boundedDelete(f.adapter, 'voi_account_secret_x', setOpts(f));
+  expect(f.entries.get('voi_account_secret_x')?.op).toBe('delete');
+  await expect(
+    boundedSet(f.adapter, 'voi_account_secret_x', 'v', setOpts(f))
+  ).rejects.toBeInstanceOf(WriteUnresolvedError);
+});
+
+test('A: a transient journal read failure during a delete never rewrites the journal', async () => {
+  const f = fixture();
+  f.values.set('k', 'v');
+  inherited(f, 'other', { op: 'set' });
+  f.journal.get.mockRejectedValueOnce(new Error('timed out'));
+  await expect(
+    boundedDelete(f.adapter, 'k', setOpts(f))
+  ).resolves.toBeUndefined();
+  expect(f.journal.remove).not.toHaveBeenCalled();
+  expect(f.entries.has('other')).toBe(true);
+});
