@@ -78,12 +78,26 @@ describe('message notification receiver switch (TASK-465)', () => {
   it('awaits hydration, switches to the receiver, then opens Chat', async () => {
     mockState.isInitialized = false;
     mockState.wallet = null;
-    mockState.initialize = jest.fn(async () => {
-      mockState.wallet = walletWith('other');
-      mockState.isInitialized = true;
-    });
+    let hydrate: () => void = () => {};
+    mockState.initialize = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          hydrate = () => {
+            mockState.wallet = walletWith('other');
+            mockState.isInitialized = true;
+            resolve();
+          };
+        })
+    );
 
-    await run();
+    const p = (service as any).handleNotificationNavigation(tap);
+    await jest.advanceTimersByTimeAsync(200);
+    // Still hydrating: nothing resolved or routed yet.
+    expect(mockState.setActiveAccount).not.toHaveBeenCalled();
+    expect(navigateToRoute).not.toHaveBeenCalled();
+    hydrate();
+    await jest.advanceTimersByTimeAsync(200);
+    await p;
 
     expect(mockState.initialize).toHaveBeenCalledTimes(1);
     expect(mockState.setActiveAccount).toHaveBeenCalledWith('recv');
@@ -102,6 +116,19 @@ describe('message notification receiver switch (TASK-465)', () => {
 
     expect(mockState.initialize).not.toHaveBeenCalled();
     expect(mockState.setActiveAccount).not.toHaveBeenCalled();
+    expect(routes()).toEqual(['MessagesInbox']);
+  });
+
+  it('still opens the inbox, not Chat, when hydration fails', async () => {
+    mockState.isInitialized = false;
+    mockState.wallet = null;
+    mockState.initialize = jest.fn(async () => {
+      throw new Error('boom');
+    });
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await run();
+
     expect(routes()).toEqual(['MessagesInbox']);
   });
 });

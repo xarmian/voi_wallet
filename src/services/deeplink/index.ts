@@ -519,27 +519,33 @@ export class DeepLinkService {
           // If receiver is provided, switch to that account first
           let openChat = true;
           if (data.receiver) {
-            let walletStore = useWalletStore.getState();
-            // A fast cold-start unlock can beat wallet hydration; initialize()
-            // shares the in-flight pass, so await it (TASK-465).
-            if (!walletStore.isInitialized) {
-              await walletStore.initialize();
-              walletStore = useWalletStore.getState();
-            }
-            const receiverAccount = walletStore.wallet?.accounts.find(
-              (acc) => acc.address === data.receiver
-            );
-            if (!receiverAccount) {
-              // Never open Chat under whichever account happens to be active.
-              openChat = false;
-            } else if (
-              walletStore.wallet?.activeAccountId !== receiverAccount.id
-            ) {
-              console.log(
-                'Switching to receiver account:',
-                redactAddress(receiverAccount.address)
+            try {
+              let walletStore = useWalletStore.getState();
+              // A fast cold-start unlock can beat wallet hydration; initialize()
+              // shares the in-flight pass, so await it (TASK-465).
+              if (!walletStore.isInitialized) {
+                await walletStore.initialize();
+                walletStore = useWalletStore.getState();
+              }
+              const receiverAccount = walletStore.wallet?.accounts.find(
+                (acc) => acc.address === data.receiver
               );
-              await walletStore.setActiveAccount(receiverAccount.id);
+              if (!receiverAccount) {
+                // Never open Chat under whichever account happens to be active.
+                openChat = false;
+              } else if (
+                walletStore.wallet?.activeAccountId !== receiverAccount.id
+              ) {
+                console.log(
+                  'Switching to receiver account:',
+                  redactAddress(receiverAccount.address)
+                );
+                await walletStore.setActiveAccount(receiverAccount.id);
+              }
+            } catch (error) {
+              // Hydration or the switch failed: still land on the inbox.
+              console.warn('Receiver account resolution failed:', error);
+              openChat = false;
             }
           }
 
