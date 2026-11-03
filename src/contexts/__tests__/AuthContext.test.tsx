@@ -1586,4 +1586,92 @@ describe('interrupted wipe (wipe-intent marker)', () => {
     expect(mockShowWipeComplete).not.toHaveBeenCalled();
     expect(result.current.authState.securityUnavailable).toBe(false);
   });
+
+  // The half-wiped wallet a failed Delete Everything leaves must not be unlockable:
+  // the user could create data that a later boot would then wipe.
+  test('unlock is refused while a wipe is pending; the finish runs instead and the PIN is never verified', async () => {
+    const { result } = await mountAuth();
+    mockReadWipeIntent.mockResolvedValue(true);
+    mockWipeWalletData.mockRejectedValueOnce(new WipeIncompleteError(['k']));
+    mockVerifyPin.mockClear();
+
+    let unlocked = true;
+    await act(async () => {
+      unlocked = await result.current.unlock(TEST_PIN);
+    });
+    await flush();
+
+    expect(unlocked).toBe(false);
+    expect(mockVerifyPin).not.toHaveBeenCalled();
+    expect(mockWipeWalletData).toHaveBeenCalledTimes(1);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+    expect(result.current.authState.securityUnavailable).toBe(true);
+  });
+
+  test('biometric unlock is refused while a wipe is pending', async () => {
+    const { result } = await mountAuth();
+    mockReadWipeIntent.mockResolvedValue(true);
+    mockWipeWalletData.mockRejectedValueOnce(new WipeIncompleteError(['k']));
+    mockBiometricUnlock.mockClear();
+
+    let unlocked = true;
+    await act(async () => {
+      unlocked = await result.current.unlockWithBiometrics();
+    });
+    await flush();
+
+    expect(unlocked).toBe(false);
+    expect(mockBiometricUnlock).not.toHaveBeenCalled();
+    expect(result.current.authState.isAuthenticated).toBe(false);
+  });
+
+  test('an unreadable marker at unlock refuses the unlock (fail closed)', async () => {
+    const { result } = await mountAuth();
+    mockReadWipeIntent.mockRejectedValue(new Error('read failed'));
+    mockVerifyPin.mockClear();
+    let unlocked = true;
+    await act(async () => {
+      // The refusal re-runs the boot check, whose marker read retries with
+      // backoff: pump the fake timers.
+      const attempt = result.current.unlock(TEST_PIN).then((value) => {
+        unlocked = value;
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+      }
+      await attempt;
+    });
+    expect(unlocked).toBe(false);
+    expect(mockVerifyPin).not.toHaveBeenCalled();
+    expect(result.current.authState.isAuthenticated).toBe(false);
+  });
+
+  test('with no pending wipe unlock works as before', async () => {
+    const { result } = await mountAuth();
+    let unlocked = false;
+    await act(async () => {
+      unlocked = await result.current.unlock(TEST_PIN);
+    });
+    expect(unlocked).toBe(true);
+    expect(result.current.authState.isAuthenticated).toBe(true);
+  });
+
+  test('a recheck on a live unlocked session does not read the marker', async () => {
+    const { result } = await mountAuth();
+    await act(async () => {
+      await result.current.unlock(TEST_PIN);
+    });
+    expect(result.current.authState.isAuthenticated).toBe(true);
+    mockReadWipeIntent.mockClear();
+    // Even an unreadable marker must not lock a healthy live session out.
+    mockReadWipeIntent.mockRejectedValue(new Error('slow store'));
+    await act(async () => {
+      await result.current.recheckAuthState();
+    });
+    await flush();
+    expect(mockReadWipeIntent).not.toHaveBeenCalled();
+    expect(result.current.authState.securityUnavailable).toBe(false);
+  });
 });

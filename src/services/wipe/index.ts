@@ -1,9 +1,17 @@
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { WipeIncompleteError } from '@/types/wallet';
+import {
+  LEGACY_WALLET_BLOB_NAME,
+  LEGACY_WALLET_SECURE_KEY,
+  WALLET_BLOB_NAME,
+} from './constants';
 
-/** Name reported when the wallet blob (account metadata) could not be cleared. */
-export const WALLET_BLOB_NAME = 'wallet_metadata';
+export {
+  LEGACY_WALLET_BLOB_NAME,
+  LEGACY_WALLET_SECURE_KEY,
+  WALLET_BLOB_NAME,
+} from './constants';
 
 /** Bound on each wallet-blob step, so a stalled store cannot hang a wipe. */
 export const BLOB_STEP_TIMEOUT_MS = 15000;
@@ -50,6 +58,17 @@ async function runWipe(): Promise<void> {
     if (stillThere !== false) throw new Error('wallet blob remains');
   } catch {
     throw new WipeIncompleteError([WALLET_BLOB_NAME]);
+  }
+  // clearAllWallets deletes the legacy secure-store copy fire-and-forget (so a
+  // hung keychain cannot block its write chain). The wipe confirms it here,
+  // bounded: the tombstone alone makes the copy unreadable, not gone.
+  try {
+    await bounded(
+      AccountSecureStorage.deleteSecureKeyVerified(LEGACY_WALLET_SECURE_KEY),
+      BLOB_STEP_TIMEOUT_MS
+    );
+  } catch {
+    throw new WipeIncompleteError([LEGACY_WALLET_BLOB_NAME]);
   }
   await AccountSecureStorage.endWipe();
 }

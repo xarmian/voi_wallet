@@ -2811,12 +2811,24 @@ export class AccountSecureStorage {
   /** TASK-469: record the wipe request. If it cannot be written, the wipe does not start. */
   static async beginWipe(): Promise<void> {
     try {
-      // Unguarded: a stale unresolved record for this key from an earlier attempt
-      // must not stop a user from retrying Delete Everything.
-      await this.boundedStorageSet(this.WIPE_INTENT_KEY, '1', true);
+      // GUARDED: if an earlier attempt left a delete of this key that can still
+      // land (a timed-out endWipe), writing the marker now would let that late
+      // delete erase it mid-wipe, and a wipe that then failed would have no
+      // marker to finish it. The refusal reads as incomplete: restart and retry.
+      await this.boundedStorageSet(this.WIPE_INTENT_KEY, '1');
     } catch {
       throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
     }
+  }
+
+  /**
+   * TASK-469: delete one secure-store key through the bounded, journaled delete.
+   * Rejects (never swallows) if the delete cannot be confirmed. Used by the wipe
+   * for the legacy wallet-metadata copy, which clearAllWallets deletes only
+   * fire-and-forget.
+   */
+  static async deleteSecureKeyVerified(key: string): Promise<void> {
+    await this.boundedSecureDelete(key);
   }
 
   /** TASK-469: clear the wipe request. Only a COMPLETE wipe calls this. */

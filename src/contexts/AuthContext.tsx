@@ -307,7 +307,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // "deleted" notice is shown only after the wipe reports complete, and only
       // by the caller that started it (a wipe already running is joined, not
       // duplicated).
-      {
+      // Skipped on a LIVE unlocked session (a recheck after ChangePin etc.): unlock
+      // refuses while a wipe is pending (below) and wipes start from the lock and
+      // recovery screens, so an unlocked session cannot have one pending, and a
+      // slow marker read must not lock a healthy session out.
+      const sessionIsLive =
+        authStateRef.current.isAuthenticated && !authStateRef.current.isLocked;
+      if (!sessionIsLive) {
         const failClosed = () =>
           setAuthState((prev) => ({
             ...prev,
@@ -806,6 +812,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, timeoutMs);
   };
 
+  // TASK-469: a pending wipe request blocks EVERY unlock. Without this the user
+  // could unlock the half-wiped wallet a failed Delete Everything leaves behind,
+  // create or import new data, and have a later boot (which finishes the wipe)
+  // erase it. If a wipe is pending, run the same finish the boot does (it routes
+  // to onboarding on success or the recovery screen on failure) and refuse. An
+  // unreadable marker refuses too: fail closed.
+  const refuseUnlockWhilePendingWipe = async (): Promise<boolean> => {
+    let pending = true;
+    try {
+      pending = await withTimeout(
+        AccountSecureStorage.readWipeIntentStrict(),
+        STRICT_READ_TIMEOUT_MS,
+        'wipe intent read (unlock)'
+      );
+    } catch (error) {
+      console.error(
+        'Wipe-intent read failed at unlock; refusing:',
+        redactError(error)
+      );
+    }
+    if (!pending) return false;
+    await checkInitialAuthState();
+    return true;
+  };
+
   const unlock = async (
     secret: string,
     isCurrent = () => true
@@ -817,6 +848,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!secret) {
         return false;
       }
+
+      if (await refuseUnlockWhilePendingWipe()) return false;
 
       const isValid = await AccountSecureStorage.verifyPin(secret);
 
@@ -865,6 +898,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!authState.biometricEnabled || !isCurrent()) {
         return false;
       }
+
+      if (await refuseUnlockWhilePendingWipe()) return false;
 
       // Read the biometric-convenience secret behind the OS biometric gate and,
       // on success, populate the SessionKeyVault (DOC-137 §3.3, PR6). The single

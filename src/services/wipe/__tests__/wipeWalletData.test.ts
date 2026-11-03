@@ -10,6 +10,9 @@ let mockHoldNext = false;
 let mockHeldWrite: { key: string; land: () => void } | undefined;
 let mockMarkerSetFailure = false;
 let mockMarkerRemoveFailure = false;
+let mockMarkerRemoveHang = false;
+let mockHeldMarkerRemove: (() => void) | undefined;
+let mockLegacyDeleteFailure = false;
 let mockWalletsFailure = false;
 let mockWalletsHang = false;
 let mockBlobStillThere = false;
@@ -42,6 +45,8 @@ jest.mock('@/platform', () => ({
       return Promise.resolve();
     }),
     deleteItem: jest.fn(async (key: string) => {
+      if (key === 'voi_wallet_metadata' && mockLegacyDeleteFailure)
+        throw new Error('legacy delete failed');
       mockEvents.push(`secure-delete:${key}`);
       mockSecureValues.delete(key);
     }),
@@ -57,6 +62,13 @@ jest.mock('@/platform', () => ({
     removeItem: jest.fn(async (key: string) => {
       if (key === 'voi_wipe_intent' && mockMarkerRemoveFailure)
         throw new Error('marker remove failed');
+      if (key === 'voi_wipe_intent' && mockMarkerRemoveHang)
+        return new Promise<void>((resolve) => {
+          mockHeldMarkerRemove = () => {
+            mockPlainValues.delete(key);
+            resolve();
+          };
+        });
       mockEvents.push(`remove:${key}`);
       mockPlainValues.delete(key);
     }),
@@ -89,6 +101,8 @@ import {
   wipeWalletData,
   isWipeInFlight,
   WALLET_BLOB_NAME,
+  LEGACY_WALLET_BLOB_NAME,
+  LEGACY_WALLET_SECURE_KEY,
   BLOB_STEP_TIMEOUT_MS,
 } from '../index';
 
@@ -124,6 +138,10 @@ const expectEverythingGone = (ids: string[]) => {
 afterEach(async () => {
   mockHeldWrite?.land();
   mockHeldWrite = undefined;
+  // A deliberately hung marker clear must land after its test, or its unsettled
+  // record would refuse every later request write in this file.
+  mockHeldMarkerRemove?.();
+  mockHeldMarkerRemove = undefined;
   for (let i = 0; i < 5; i++) await Promise.resolve();
 });
 beforeEach(() => {
@@ -133,6 +151,8 @@ beforeEach(() => {
   mockHoldNext = false;
   mockMarkerSetFailure = false;
   mockMarkerRemoveFailure = false;
+  mockMarkerRemoveHang = false;
+  mockLegacyDeleteFailure = false;
   mockWalletsFailure = false;
   mockWalletsHang = false;
   mockBlobStillThere = false;
@@ -264,6 +284,56 @@ describe('the wallet-blob step is bounded and verified', () => {
         keys: [WALLET_BLOB_NAME],
       });
       expect(mockPlainValues.get(MARKER)).toBe('1');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('the legacy wallet copy and the marker write', () => {
+  test('the legacy secure-store copy is deleted and confirmed before the request is cleared', async () => {
+    seedWallet(['one']);
+    mockSecureValues.set(LEGACY_WALLET_SECURE_KEY, '{"accounts":["a"]}');
+    await wipeWalletData();
+    expect(mockSecureValues.has(LEGACY_WALLET_SECURE_KEY)).toBe(false);
+    expect(
+      mockEvents.indexOf(`secure-delete:${LEGACY_WALLET_SECURE_KEY}`)
+    ).toBeLessThan(mockEvents.lastIndexOf(`remove:${MARKER}`));
+  });
+
+  test('a legacy copy that cannot be deleted leaves the wipe incomplete, named', async () => {
+    seedWallet(['one']);
+    mockSecureValues.set(LEGACY_WALLET_SECURE_KEY, '{"accounts":["a"]}');
+    mockLegacyDeleteFailure = true;
+    await expect(wipeWalletData()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: [LEGACY_WALLET_BLOB_NAME],
+    });
+    expect(mockPlainValues.get(MARKER)).toBe('1');
+  });
+
+  test('a retry in the same session cannot write the request while an earlier clear of it can still land', async () => {
+    jest.useFakeTimers();
+    try {
+      seedWallet(['one']);
+      mockMarkerRemoveHang = true;
+      const first = wipeWalletData().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      await jest.advanceTimersByTimeAsync(5001);
+      expect(await first).toMatchObject({
+        name: 'WipeIncompleteError',
+        keys: [MARKER],
+      });
+
+      // Data is already gone. A second Delete Everything this session must not
+      // write the request over a delete that can still land and erase it mid-wipe.
+      mockMarkerRemoveHang = false;
+      await expect(wipeWalletData()).rejects.toMatchObject({
+        name: 'WipeIncompleteError',
+        keys: [MARKER],
+      });
     } finally {
       jest.useRealTimers();
     }
