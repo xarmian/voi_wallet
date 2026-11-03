@@ -2414,6 +2414,15 @@ export class MultiAccountWalletService {
       ) {
         throw new Error('Corrupt wallet blob: malformed account entry');
       }
+      if (
+        acc.type === AccountType.STANDARD &&
+        (typeof acc.address !== 'string' ||
+          (acc.label !== undefined && typeof acc.label !== 'string'))
+      ) {
+        throw new Error(
+          'Corrupt wallet blob: malformed standard account details'
+        );
+      }
     }
     return parsed.accounts
       .filter((acc) => acc.type === AccountType.STANDARD)
@@ -2431,6 +2440,7 @@ export class MultiAccountWalletService {
   static async getBlobAccountIdsStrict(): Promise<{
     standardIds: string[];
     allIds: string[];
+    standardAccounts: { id: string; address: string; label: string }[];
   }> {
     const rawPrimary = await storage.getItem(this.WALLET_KEY);
     if (rawPrimary === '') {
@@ -2438,7 +2448,7 @@ export class MultiAccountWalletService {
     }
     const walletData = await this.getStoredValueStrict(this.WALLET_KEY);
     if (walletData == null) {
-      return { standardIds: [], allIds: [] };
+      return { standardIds: [], allIds: [], standardAccounts: [] };
     }
     const parsed = JSON.parse(walletData) as Wallet;
     if (!Array.isArray(parsed.accounts)) {
@@ -2456,6 +2466,17 @@ export class MultiAccountWalletService {
       ) {
         throw new Error('Corrupt wallet blob: malformed account entry');
       }
+      // The reconcile persists a STANDARD phantom's address + label before it
+      // prunes, so those must be well-formed (same check as the sibling reader).
+      if (
+        acc.type === AccountType.STANDARD &&
+        (typeof acc.address !== 'string' ||
+          (acc.label !== undefined && typeof acc.label !== 'string'))
+      ) {
+        throw new Error(
+          'Corrupt wallet blob: malformed standard account details'
+        );
+      }
     }
     // A duplicated id is CORRUPTION: pruneStandardAccounts filters by id, so a
     // STANDARD phantom sharing an id with another entry would remove both.
@@ -2470,6 +2491,13 @@ export class MultiAccountWalletService {
         .filter((acc) => acc.type === AccountType.STANDARD)
         .map((acc) => acc.id),
       allIds: parsed.accounts.map((acc) => acc.id),
+      standardAccounts: parsed.accounts
+        .filter((acc) => acc.type === AccountType.STANDARD)
+        .map((acc) => ({
+          id: acc.id,
+          address: acc.address,
+          label: acc.label ?? '',
+        })),
     };
   }
 

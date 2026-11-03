@@ -15,9 +15,17 @@ jest.mock('@/services/secure', () => ({
     readPendingCreatesStrict: jest.fn(),
     readUnknownWritesStrict: jest.fn(async () => ({})),
     resolveUnknownWrite: jest.fn(async () => true),
+    dropUnknownWrite: jest.fn(async () => {}),
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(async () => {}),
     dropPendingCreateEntries: jest.fn(async () => {}),
+    readQuarantinedIdsSalvaged: jest.fn(async () => []),
+    addQuarantinedIds: jest.fn(async () => {}),
+    removeQuarantinedIds: jest.fn(async () => {}),
+    readReconcileRecoveryMarker: jest.fn(async () => false),
+    setReconcileRecoveryMarker: jest.fn(async () => {}),
+    clearReconcileRecoveryMarker: jest.fn(async () => {}),
+    recordUnexplainedRemovals: jest.fn(async () => {}),
   },
 }));
 
@@ -36,9 +44,13 @@ import { reconcileCrossStoreHalfState } from '../crossStoreReconcile';
 const secure = AccountSecureStorage as unknown as {
   readAccountListStrict: jest.Mock;
   readPendingCreatesStrict: jest.Mock;
+  readUnknownWritesStrict: jest.Mock;
   probeSecretPresenceStrict: jest.Mock;
   deleteAccount: jest.Mock;
   dropPendingCreateEntries: jest.Mock;
+  readQuarantinedIdsSalvaged: jest.Mock;
+  addQuarantinedIds: jest.Mock;
+  recordUnexplainedRemovals: jest.Mock;
 };
 const wallet = MultiAccountWalletService as unknown as {
   getStandardAccountIdsStrict: jest.Mock;
@@ -64,10 +76,17 @@ function setup(opts: {
   const secrets = new Set(opts.secrets ?? []);
   secure.readAccountListStrict.mockResolvedValue(opts.list ?? []);
   secure.readPendingCreatesStrict.mockResolvedValue(opts.journal ?? {});
+  secure.readUnknownWritesStrict.mockResolvedValue({});
+  secure.readQuarantinedIdsSalvaged.mockResolvedValue([]);
   wallet.getStandardAccountIdsStrict.mockResolvedValue(opts.blob ?? []);
   wallet.getBlobAccountIdsStrict.mockResolvedValue({
     standardIds: opts.blob ?? [],
     allIds: [...(opts.blob ?? []), ...(opts.others ?? [])],
+    standardAccounts: (opts.blob ?? []).map((id) => ({
+      id,
+      address: `addr-${id}`,
+      label: `label-${id}`,
+    })),
   });
   secure.probeSecretPresenceStrict.mockImplementation(async (id: string) =>
     secrets.has(id)
@@ -153,8 +172,7 @@ describe('reconcileCrossStoreHalfState — fail-closed abort (delete nothing)', 
 });
 
 describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => {
-  it('deletes an orphan secret (present, no blob account) and drops its journal entry', async () => {
-    // 'orphan' has a secret + a journal entry but no wallet-blob account.
+  it('quarantines an orphan with only a pending-create entry', async () => {
     setup({
       blob: [],
       list: ['orphan'],
@@ -164,13 +182,16 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
 
     const result = await reconcileCrossStoreHalfState();
 
-    expect(secure.deleteAccount).toHaveBeenCalledTimes(1);
-    expect(secure.deleteAccount).toHaveBeenCalledWith('orphan');
-    expect(secure.dropPendingCreateEntries).toHaveBeenCalledWith(['orphan']);
+    expect(secure.deleteAccount).not.toHaveBeenCalled();
+    expect(secure.addQuarantinedIds).toHaveBeenCalledWith(['orphan']);
+    expect(secure.dropPendingCreateEntries).not.toHaveBeenCalled();
     expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       ran: true,
-      orphanSecretsDeleted: ['orphan'],
+      reportOnly: undefined,
+      skippedUnresolved: undefined,
+      orphanSecretsDeleted: [],
+      orphanSecretsQuarantined: ['orphan'],
       phantomAccountsPruned: [],
       staleJournalDropped: [],
     });
@@ -189,6 +210,37 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
       phantomAccountsPruned: ['phantom'],
       orphanSecretsDeleted: [],
     });
+  });
+
+  it('records only address and label before pruning a phantom', async () => {
+    setup({ blob: ['phantom'], list: ['phantom'], secrets: [] });
+    const calls: string[] = [];
+    secure.recordUnexplainedRemovals.mockImplementation(async () => {
+      calls.push('record');
+    });
+    wallet.pruneStandardAccounts.mockImplementation(async () => {
+      calls.push('prune');
+    });
+    await reconcileCrossStoreHalfState();
+    expect(secure.recordUnexplainedRemovals).toHaveBeenCalledWith([
+      { id: 'phantom', address: 'addr-phantom', label: 'label-phantom' },
+    ]);
+    expect(calls).toEqual(['record', 'prune']);
+    expect(
+      JSON.stringify(secure.recordUnexplainedRemovals.mock.calls[0][0])
+    ).not.toMatch(/secret|mnemonic|key/i);
+  });
+
+  it('skips phantom prune when recording the removal fails', async () => {
+    setup({ blob: ['phantom'], list: ['phantom'], secrets: [] });
+    secure.recordUnexplainedRemovals.mockRejectedValueOnce(
+      new Error('write failed')
+    );
+    await expect(reconcileCrossStoreHalfState()).resolves.toMatchObject({
+      ran: true,
+      phantomAccountsPruned: [],
+    });
+    expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
   });
 
   it('drops a stale journal entry (no secret, no blob account)', async () => {
@@ -210,7 +262,10 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
     assertNoMutation();
     expect(result).toEqual({
       ran: true,
+      reportOnly: undefined,
+      skippedUnresolved: undefined,
       orphanSecretsDeleted: [],
+      orphanSecretsQuarantined: [],
       phantomAccountsPruned: [],
       staleJournalDropped: [],
     });
@@ -237,18 +292,20 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
 
     const result = await reconcileCrossStoreHalfState();
 
-    // orphan: secret present, not in blob → delete + journal drop
-    expect(secure.deleteAccount).toHaveBeenCalledWith('orphan');
+    // Pending-create provenance is not permission to erase a live secret.
+    expect(secure.deleteAccount).not.toHaveBeenCalled();
     // phantom: blob STANDARD, secret absent → prune
     expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
-    // stale + orphan journal ids dropped; 'ok' untouched
-    const dropped = secure.dropPendingCreateEntries.mock
-      .calls[0][0] as string[];
-    expect(dropped.sort()).toEqual(['orphan', 'stale']);
-    expect(secure.deleteAccount).toHaveBeenCalledTimes(1); // NOT 'ok'
+    // Only the stale journal entry is dropped; the orphan entry is retained.
+    const dropped = secure.dropPendingCreateEntries.mock.calls.flatMap(
+      (call) => call[0] as string[]
+    );
+    expect(dropped.sort()).toEqual(['phantom', 'stale']);
+    expect(secure.addQuarantinedIds).toHaveBeenCalledWith(['orphan']);
     expect(result).toMatchObject({
       ran: true,
-      orphanSecretsDeleted: ['orphan'],
+      orphanSecretsDeleted: [],
+      orphanSecretsQuarantined: ['orphan'],
       phantomAccountsPruned: ['phantom'],
       staleJournalDropped: ['stale'],
     });
@@ -256,7 +313,7 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
 });
 
 describe('reconcileCrossStoreHalfState — Phase 2 is best-effort (partial failure)', () => {
-  // Codex P2: prune runs first; if a later orphan delete throws, the outcome must
+  // Codex P2: prune runs first; if a later journaled orphan delete throws, the outcome must
   // still report the completed prune so the caller can refresh the (now stale)
   // lock verdict — the reconcile must NOT throw away the result.
   it('preserves a completed phantom prune when a later orphan delete throws', async () => {
@@ -264,7 +321,10 @@ describe('reconcileCrossStoreHalfState — Phase 2 is best-effort (partial failu
       blob: ['phantom'],
       list: ['orphan'],
       journal: {},
-      secrets: ['orphan'], // orphan has a secret, no blob → orphan-delete
+      secrets: ['orphan'],
+    });
+    secure.readUnknownWritesStrict.mockResolvedValue({
+      voi_account_secret_orphan: { op: 'delete' },
     });
     secure.deleteAccount.mockRejectedValueOnce(
       new Error('keychain delete failed')
@@ -280,7 +340,7 @@ describe('reconcileCrossStoreHalfState — Phase 2 is best-effort (partial failu
     // ...but the failed orphan delete is NOT reported as done.
     expect(result.orphanSecretsDeleted).toEqual([]);
     // Journal drop for the failed orphan did not run (retried next boot).
-    expect(secure.dropPendingCreateEntries).not.toHaveBeenCalled();
+    expect(secure.dropPendingCreateEntries).toHaveBeenCalledWith(['phantom']);
   });
 
   it('reports no completed work when the phantom prune itself throws', async () => {
@@ -310,7 +370,7 @@ describe('reconcileCrossStoreHalfState — non-STANDARD owners (TASK-419)', () =
     assertNoMutation();
   });
 
-  it('still deletes a secret that no blob account of any type owns', async () => {
+  it('quarantines a secret that no blob account of any type owns without provenance', async () => {
     setup({
       others: ['rekeyed'],
       list: ['rekeyed', 'orphan'],
@@ -319,9 +379,9 @@ describe('reconcileCrossStoreHalfState — non-STANDARD owners (TASK-419)', () =
 
     const result = await reconcileCrossStoreHalfState();
 
-    expect(secure.deleteAccount).toHaveBeenCalledTimes(1);
-    expect(secure.deleteAccount).toHaveBeenCalledWith('orphan');
-    expect(result.orphanSecretsDeleted).toEqual(['orphan']);
+    expect(secure.deleteAccount).not.toHaveBeenCalled();
+    expect(result.orphanSecretsDeleted).toEqual([]);
+    expect(result.orphanSecretsQuarantined).toEqual(['orphan']);
   });
 
   it('never prunes a non-STANDARD blob account as a phantom', async () => {

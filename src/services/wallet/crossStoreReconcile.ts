@@ -47,6 +47,7 @@ export interface ReconcileResult {
   /** ids skipped because an UNKNOWN write for them is unresolved (nothing was verified for them). */
   skippedUnresolved?: number;
   orphanSecretsDeleted: string[];
+  orphanSecretsQuarantined: string[];
   phantomAccountsPruned: string[];
   staleJournalDropped: string[];
 }
@@ -54,6 +55,7 @@ export interface ReconcileResult {
 const EMPTY_RESULT: ReconcileResult = {
   ran: false,
   orphanSecretsDeleted: [],
+  orphanSecretsQuarantined: [],
   phantomAccountsPruned: [],
   staleJournalDropped: [],
 };
@@ -78,10 +80,15 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // readAccountListStrict (not getAllAccountIds) is READ-ONLY — getAllAccountIds
   // migrates a legacy list (write + delete), which would mutate the store during
   // this abort-safe read phase (Codex P2).
-  const { standardIds: blobStandardIds, allIds: blobAllIds } =
-    await MultiAccountWalletService.getBlobAccountIdsStrict();
+  const {
+    standardIds: blobStandardIds,
+    allIds: blobAllIds,
+    standardAccounts,
+  } = await MultiAccountWalletService.getBlobAccountIdsStrict();
   const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
+  const quarantinedIds =
+    await AccountSecureStorage.readQuarantinedIdsSalvaged();
   const journalIds = Object.keys(journal);
   let unknownWrites: Awaited<
     ReturnType<typeof AccountSecureStorage.readUnknownWritesStrict>
@@ -90,9 +97,14 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
   } catch (error) {
     if (!(error instanceof UnknownJournalCorruptError)) throw error;
+    // Marker first: if the reset then fails, the next pass is still report-only,
+    // and a failure to set the marker cannot mask the reset's own error.
+    await AccountSecureStorage.setReconcileRecoveryMarker();
     await AccountSecureStorage.resetUnknownWrites();
     return RECONCILE_ABORTED;
   }
+  const recoveryMarked =
+    await AccountSecureStorage.readReconcileRecoveryMarker();
   const unresolvedIds = new Set<string>();
   // Resolved entries are dropped only after the whole pass (below), so an
   // unresolved entry found later cannot leave a half-applied journal.
@@ -106,8 +118,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
         : null;
     // A SECRET-key delete that never landed (or whose re-delete failed) leaves the
     // secret behind with no owner (a metadata delete must never widen the orphan
-    // set): make the id a candidate so the existing orphan
-    // policy removes it (read-only here; nothing is mutated in Phase 1).
+    // set): only this explicit secret-delete journal entry authorizes deletion.
     if (
       id &&
       key.startsWith('voi_account_secret_') &&
@@ -132,6 +143,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     ...accountListIds,
     ...journalIds,
     ...deleteEntryIds,
+    ...quarantinedIds,
   ]);
 
   // Probe EVERY candidate's secret presence before touching anything. Run the
@@ -153,6 +165,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // ── Phase 2: classify + act. Reached ONLY when every read/probe above
   // succeeded, so an "absent" below is a true absence, never a swallowed error.
   const orphanSecretIds: string[] = [];
+  const quarantinedOrphanIds: string[] = [];
   const phantomIds: string[] = [];
   const staleJournalIds: string[] = [];
 
@@ -167,7 +180,8 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
       // Orphan secret: a live secret with NO wallet-blob account of any type.
       // Delete the secret (+ its secure metadata/list entry) and drop any
       // journal entry. A REKEYED account's retained key is owned, never this.
-      orphanSecretIds.push(id);
+      if (deleteEntryIds.includes(id)) orphanSecretIds.push(id);
+      else quarantinedOrphanIds.push(id);
     } else if (!hasSecret && inBlob) {
       // Phantom account: a blob STANDARD account whose secret is gone. Prune it
       // from the blob (the account is unusable — no key to sign with).
@@ -195,19 +209,49 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // STALE account-list/metadata write could make a live secret look orphaned, so
   // the pass is REPORT ONLY (no phantom prune, no orphan delete) until a cold
   // start. Resolved-entry and stale-journal bookkeeping drops may still happen.
-  const nonDestructive = hasDowngradedMarkers();
+  const nonDestructive = hasDowngradedMarkers() || recoveryMarked;
   if (nonDestructive && (phantomIds.length > 0 || orphanSecretIds.length > 0))
     console.log(
       `[bootReconcile] non-destructive (downgraded write marker): would prune ` +
         `${phantomIds.length} phantom(s) and delete ${orphanSecretIds.length} orphan secret(s)`
     );
+  if (quarantinedOrphanIds.length > 0)
+    console.log(
+      `[bootReconcile] quarantined ${quarantinedOrphanIds.length} orphan secret(s)`
+    );
   try {
+    if (quarantinedOrphanIds.length > 0) {
+      await AccountSecureStorage.addQuarantinedIds(quarantinedOrphanIds);
+    }
     // Prune phantoms FIRST — the only mutation that can change the boot lock
     // verdict (emptying the wallet ⇒ canonical clearAllWallets) — so the
     // verdict-affecting change is committed as early as possible.
     if (!nonDestructive && !hasDowngradedMarkers() && phantomIds.length > 0) {
-      await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
-      phantomsPruned.push(...phantomIds);
+      const removalRecords = standardAccounts
+        .filter(
+          (account) =>
+            phantomIds.includes(account.id) &&
+            !deleteEntryIds.includes(account.id)
+        )
+        .map(({ id, address, label }) => ({ id, address, label }));
+      let removalRecordWriteFailed = false;
+      try {
+        if (removalRecords.length > 0)
+          await AccountSecureStorage.recordUnexplainedRemovals(removalRecords);
+      } catch {
+        removalRecordWriteFailed = true;
+        console.warn(
+          `[bootReconcile] skipped phantom prune(s) for ids ${phantomIds.join(',')}: removal record write failed`
+        );
+      }
+      if (!removalRecordWriteFailed && !hasDowngradedMarkers()) {
+        await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
+        phantomsPruned.push(...phantomIds);
+        await AccountSecureStorage.dropPendingCreateEntries(phantomIds);
+        journalDropped.push(
+          ...phantomIds.filter((id) => journal[id] !== undefined)
+        );
+      }
     }
     // Deletes: each acquires the key-mutation mutex, serialized against any secret
     // write. deleteAccount removes secret + secure metadata + account-list entry.
@@ -226,6 +270,8 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     for (const key of resolvedUnknownKeys) {
       await AccountSecureStorage.dropUnknownWrite(key, unknownWrites[key]);
     }
+    if (recoveryMarked && !hasDowngradedMarkers())
+      await AccountSecureStorage.clearReconcileRecoveryMarker();
   } catch (error) {
     // A Phase-2 repair failed after Phase 1 passed cleanly. Keep the partial
     // outcome (below) so the caller can still refresh the verdict; the remaining
@@ -255,6 +301,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     reportOnly: nonDestructive || undefined,
     skippedUnresolved: unresolvedIds.size || undefined,
     orphanSecretsDeleted: orphansDeleted,
+    orphanSecretsQuarantined: quarantinedOrphanIds,
     phantomAccountsPruned: phantomsPruned,
     staleJournalDropped: staleJournalIds.filter((id) =>
       journalDropped.includes(id)

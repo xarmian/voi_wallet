@@ -342,19 +342,27 @@ describe('strict probes — bounded legacy read (TASK-450)', () => {
   );
 
   // Exact answers for the legacy blob below: a truthy check would also pass on
-  // the ID probes' absence results ([] and { standardIds: [], allIds: [] }).
+  // the ID probes' absence results ([] and the empty blob-ID projection).
   const slowAnswers: [string, () => Promise<unknown>, unknown][] = [
     [probes[0][0], probes[0][1], true],
     [probes[1][0], probes[1][1], true],
     [probes[2][0], probes[2][1], ['a']],
-    [probes[3][0], probes[3][1], { standardIds: ['a'], allIds: ['a'] }],
+    [
+      probes[3][0],
+      probes[3][1],
+      {
+        standardIds: ['a'],
+        allIds: ['a'],
+        standardAccounts: [{ id: 'a', address: 'ADDR', label: '' }],
+      },
+    ],
   ];
 
   it.each(slowAnswers)(
     '%s still answers from a slow legacy read that lands inside the bound',
     async (_name, probe, expected) => {
       const legacyBlob = JSON.stringify({
-        accounts: [{ id: 'a', type: 'standard' }],
+        accounts: [{ id: 'a', type: 'standard', address: 'ADDR' }],
       });
       mockSecureGet.mockImplementation(
         () =>
