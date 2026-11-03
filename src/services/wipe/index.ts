@@ -10,7 +10,10 @@ export const BLOB_STEP_TIMEOUT_MS = 15000;
 
 function bounded<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('wipe step timed out')), ms);
+    const timer = setTimeout(
+      () => reject(new Error('wipe step timed out')),
+      ms
+    );
     promise.then(
       (value) => {
         clearTimeout(timer);
