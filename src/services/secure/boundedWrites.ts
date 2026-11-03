@@ -139,6 +139,22 @@ export function hasDowngradedMarkers(): boolean {
 export function hasPendingRecord(adapter: WriteAdapter, key: string): boolean {
   return pendingFor(adapter).has(key) || pendingDeleteFor(adapter).has(key);
 }
+/**
+ * True only when this process still has a timed-out write or delete for the key
+ * that has NOT settled, i.e. the native operation can still land (TASK-469).
+ * Unlike hasPendingRecord, a record whose operation already settled does not
+ * count: it is kept only until the next guard cleans it up.
+ */
+export function hasUnsettledPendingRecord(
+  adapter: WriteAdapter,
+  key: string
+): boolean {
+  const set = pendingFor(adapter).get(key);
+  const del = pendingDeleteFor(adapter).get(key);
+  return (
+    (set !== undefined && !set.settled) || (del !== undefined && !del.settled)
+  );
+}
 export function classifyUnknownWrite(
   entry: UnknownWriteEntry,
   rawValue: string | null

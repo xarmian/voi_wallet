@@ -445,6 +445,21 @@ export class AccountStorageError extends AccountError {
   }
 }
 
+export class WipeIncompleteError extends AccountStorageError {
+  /** Storage key NAMES (and opaque account ids inside them) that are unresolved. Never values. */
+  readonly keys: string[];
+
+  constructor(keys: string[], message?: string) {
+    const uniqueKeys = [...new Set(keys)].sort();
+    super(
+      message ??
+        `Wipe incomplete: ${uniqueKeys.length} item(s) unresolved. Restart and try again.`
+    );
+    this.name = 'WipeIncompleteError';
+    this.keys = uniqueKeys;
+  }
+}
+
 /**
  * TASK-424: a deletion's caller-stated expectation (identity, type, or no own
  * key) no longer holds for the stored account, so nothing was deleted.
