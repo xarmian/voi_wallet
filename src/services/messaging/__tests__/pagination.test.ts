@@ -37,7 +37,7 @@ describe('drainByCursor', () => {
     const result = await drainByCursor(3, fetchPage, (r) => r.id);
 
     expect(result.rows.map((r) => r.id)).toEqual([1, 2]);
-    expect(result.complete).toBe(true);
+    expect(result.stop).toBe('complete');
     expect(calls).toEqual([undefined]); // one fetch only
   });
 
@@ -56,7 +56,7 @@ describe('drainByCursor', () => {
     expect(result.rows.map((r) => r.id)).toEqual([
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     ]);
-    expect(result.complete).toBe(true);
+    expect(result.stop).toBe('complete');
   });
 
   it('drains all messages sharing one round (unique-id keyset, no tie stall)', async () => {
@@ -74,10 +74,10 @@ describe('drainByCursor', () => {
     expect(new Set(result.rows.map((r) => r.id))).toEqual(
       new Set([1, 2, 3, 4, 5])
     );
-    expect(result.complete).toBe(true);
+    expect(result.stop).toBe('complete');
   });
 
-  it('reports incomplete (does not spin) when the cursor cannot advance', async () => {
+  it('reports a stalled cursor (does not spin) when the cursor cannot advance', async () => {
     // A broken source that ignores the cursor and keeps returning a full page.
     let pageCount = 0;
     const fetchPage = async (): Promise<Row[]> => {
@@ -90,12 +90,12 @@ describe('drainByCursor', () => {
 
     const result = await drainByCursor(2, fetchPage, (r) => r.id);
 
-    // Bails via the no-progress guard almost immediately, flagged incomplete.
+    // Bails via the no-progress guard almost immediately, with its own reason.
     expect(pageCount).toBe(2);
-    expect(result.complete).toBe(false);
+    expect(result.stop).toBe('stalled-cursor');
   });
 
-  it('reports incomplete when it hits the maxPages safety cap', async () => {
+  it('reports the page cap, a distinct stop from a stalled cursor, at maxPages', async () => {
     let pageCount = 0;
     // Always returns a full page of strictly newer ids => would drain forever
     // without the cap.
@@ -113,7 +113,23 @@ describe('drainByCursor', () => {
     const result = await drainByCursor(2, fetchPage, (r) => r.id, 5);
 
     expect(pageCount).toBe(5);
-    expect(result.complete).toBe(false);
+    expect(result.stop).toBe('page-cap');
+    // A cap stop is a contiguous oldest-first prefix: strictly increasing ids.
+    expect(result.rows.map((r) => r.id)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    ]);
+  });
+
+  it('does not infer the stop from row counts: a full last page at the cap is still a cap stop', async () => {
+    // Exactly maxPages full pages, then an empty source. The drain cannot know
+    // the range ended, so it must report the cap, never 'complete'.
+    const { fetchPage } = makeCursorSource(
+      Array.from({ length: 6 }, (_, i) => ({ id: i + 1, round: i + 1 })),
+      2
+    );
+    const result = await drainByCursor(2, fetchPage, (r) => r.id, 3);
+    expect(result.rows).toHaveLength(6);
+    expect(result.stop).toBe('page-cap');
   });
 
   it('defaults its safety cap to MAX_DRAIN_PAGES', () => {
@@ -140,6 +156,6 @@ describe('drainByCursor', () => {
     const result = await drainByCursor(10, drainFrom, (r) => r.id);
 
     expect(result.rows.map((r) => r.id)).toEqual([3000]);
-    expect(result.complete).toBe(true);
+    expect(result.stop).toBe('complete');
   });
 });
