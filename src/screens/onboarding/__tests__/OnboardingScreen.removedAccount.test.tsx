@@ -119,6 +119,28 @@ describe('OnboardingScreen removed-account card (TASK-477)', () => {
     expect(await storedRemovals()).toEqual([REMOVAL]);
   });
 
+  it.each([
+    ['Import Account', 'MnemonicImport'],
+    ['Connect Ledger', 'LedgerAccountImport'],
+    ['Import via QR Code', 'QRAccountImport'],
+    ['Add Watch Account', 'AddWatchAccount'],
+    ['or restore from backup', 'RestoreWallet'],
+  ])(
+    'choosing "%s" navigates to %s and leaves the record in place',
+    async (label, route) => {
+      const { navigation, screen } = await renderOnboarding();
+      await screen.findByText('Re-import');
+      await act(async () => {
+        fireEvent.press(screen.getByText(label));
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith(
+        route,
+        expect.anything()
+      );
+      expect(await storedRemovals()).toEqual([REMOVAL]);
+    }
+  );
+
   it('Re-import clears the record and goes straight to import', async () => {
     const { navigation, screen } = await renderOnboarding();
     await act(async () => {
