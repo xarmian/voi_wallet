@@ -22,7 +22,7 @@ jest.mock('react-native-reanimated', () => {
 
 const body =
   "This device could no longer read this account's key, so the account was removed from your list. Your funds on the network are not affected. Re-import the account's recovery phrase to bring it back. Without the recovery phrase, this device can't reach those funds.";
-const title = 'Savings (ABCDEF...WXYZ) was removed from this device';
+const title = 'Savings (ABCDEF...WXYZ) was removed from your accounts';
 const props = {
   address: 'ABCDEF123456WXYZ',
   label: 'Savings',
@@ -46,13 +46,13 @@ describe('RemovedAccountNotice', () => {
       <RemovedAccountNotice {...props} label="" />
     );
     expect(
-      getByText('ABCDEF...WXYZ was removed from this device')
+      getByText('ABCDEF...WXYZ was removed from your accounts')
     ).toBeTruthy();
     const markup = await render(
       <RemovedAccountNotice {...props} label="<img>" />
     );
     expect(
-      markup.getByText('<img> (ABCDEF...WXYZ) was removed from this device')
+      markup.getByText('<img> (ABCDEF...WXYZ) was removed from your accounts')
     ).toBeTruthy();
   });
   it('re-imports only from the Re-import button', async () => {

@@ -28,7 +28,7 @@ export default function RemovedAccountNotice({
   const reducedMotion = useReducedMotion();
   const shortAddress = formatAddress(address);
   const name = label ? `${label} (${shortAddress})` : shortAddress;
-  const title = `${name} was removed from this device`;
+  const title = `${name} was removed from your accounts`;
 
   return (
     <Animated.View

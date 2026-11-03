@@ -1,8 +1,16 @@
 import React from 'react';
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import RemovedAccountNoticeHost from '../RemovedAccountNoticeHost';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 
+jest.mock('@react-navigation/native', () =>
+  require('@/__tests__/fixtures/navigationFocus').createNavigationFocusMock()
+);
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    getAllAccounts: jest.fn().mockResolvedValue([]),
+  },
+}));
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     readUnexplainedRemovals: jest.fn(),
@@ -31,92 +39,17 @@ describe('RemovedAccountNoticeHost', () => {
       AccountSecureStorage.clearUnexplainedRemoval as jest.Mock
     ).mockResolvedValue(undefined);
   });
-  it('clears the record first and only then calls reimport', async () => {
+  it('re-import calls onReimport and does not clear the record', async () => {
     (
       AccountSecureStorage.readUnexplainedRemovals as jest.Mock
     ).mockResolvedValue([record]);
-    let release: () => void = () => {};
-    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
-      new Promise<void>((resolve) => (release = resolve))
-    );
     const onReimport = jest.fn();
     const screen = await render(
       <RemovedAccountNoticeHost onReimport={onReimport} />
     );
     fireEvent.press(await screen.findByText('Re-import'));
-    await waitFor(() =>
-      expect(AccountSecureStorage.clearUnexplainedRemoval).toHaveBeenCalledWith(
-        'one'
-      )
-    );
-    expect(onReimport).not.toHaveBeenCalled();
-    release();
-    await waitFor(() => expect(onReimport).toHaveBeenCalledTimes(1));
-  });
-  it('re-imports once when Re-import is tapped twice before the clear settles', async () => {
-    (
-      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
-    ).mockResolvedValue([record]);
-    let release: () => void = () => {};
-    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
-      new Promise<void>((resolve) => (release = resolve))
-    );
-    const onReimport = jest.fn();
-    const screen = await render(
-      <RemovedAccountNoticeHost onReimport={onReimport} />
-    );
-    const button = await screen.findByText('Re-import');
-    await act(async () => {
-      fireEvent.press(button);
-      fireEvent.press(button);
-    });
-    await act(async () => {
-      release();
-    });
     expect(onReimport).toHaveBeenCalledTimes(1);
-    expect(AccountSecureStorage.clearUnexplainedRemoval).toHaveBeenCalledTimes(
-      1
-    );
-  });
-  it('does not navigate if the host unmounts while the clear is pending', async () => {
-    (
-      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
-    ).mockResolvedValue([record]);
-    let release: () => void = () => {};
-    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
-      new Promise<void>((resolve) => (release = resolve))
-    );
-    const onReimport = jest.fn();
-    const screen = await render(
-      <RemovedAccountNoticeHost onReimport={onReimport} />
-    );
-    const button = await screen.findByText('Re-import');
-    await act(async () => {
-      fireEvent.press(button);
-    });
-    await act(async () => {
-      screen.unmount();
-    });
-    await act(async () => {
-      release();
-    });
-    expect(onReimport).not.toHaveBeenCalled();
-  });
-  it('still navigates to re-import when clearing the record fails', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    (
-      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
-    ).mockResolvedValue([record]);
-    (
-      AccountSecureStorage.clearUnexplainedRemoval as jest.Mock
-    ).mockRejectedValue(new Error('bad'));
-    const onReimport = jest.fn();
-    const screen = await render(
-      <RemovedAccountNoticeHost onReimport={onReimport} />
-    );
-    fireEvent.press(await screen.findByText('Re-import'));
-    await waitFor(() => expect(onReimport).toHaveBeenCalledTimes(1));
-    warn.mockRestore();
+    expect(AccountSecureStorage.clearUnexplainedRemoval).not.toHaveBeenCalled();
   });
   it('dismisses and clears without reimport', async () => {
     (

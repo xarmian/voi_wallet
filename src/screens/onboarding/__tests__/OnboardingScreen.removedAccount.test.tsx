@@ -64,6 +64,14 @@ import OnboardingScreen from '../OnboardingScreen';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { formatAddress } from '@/utils/address';
 import { makeAddress } from '@/__tests__/fixtures/algorand';
+import { MultiAccountWalletService } from '@/services/wallet';
+import { refocus } from '@/__tests__/fixtures/navigationFocus';
+jest.mock('@react-navigation/native', () =>
+  require('@/__tests__/fixtures/navigationFocus').createNavigationFocusMock()
+);
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: { getAllAccounts: jest.fn() },
+}));
 
 // A real, checksummed address: formatAddress only shortens valid ones.
 const REMOVAL = {
@@ -84,6 +92,10 @@ const storedRemovals = () => AccountSecureStorage.readUnexplainedRemovals();
 
 describe('OnboardingScreen removed-account card (TASK-477)', () => {
   beforeEach(async () => {
+    jest.clearAllMocks();
+    (MultiAccountWalletService.getAllAccounts as jest.Mock).mockResolvedValue(
+      []
+    );
     mockPlainValues.clear();
     await AccountSecureStorage.recordUnexplainedRemovals([REMOVAL]);
   });
@@ -92,7 +104,7 @@ describe('OnboardingScreen removed-account card (TASK-477)', () => {
     const { screen } = await renderOnboarding();
     expect(
       await screen.findByText(
-        `Savings (${formatAddress(REMOVAL.address)}) was removed from this device`
+        `Savings (${formatAddress(REMOVAL.address)}) was removed from your accounts`
       )
     ).toBeTruthy();
     expect(await storedRemovals()).toEqual([REMOVAL]);
@@ -141,7 +153,7 @@ describe('OnboardingScreen removed-account card (TASK-477)', () => {
     }
   );
 
-  it('Re-import clears the record and goes straight to import', async () => {
+  it('Re-import navigates and retains the record until wallet refocus sees it', async () => {
     const { navigation, screen } = await renderOnboarding();
     await act(async () => {
       fireEvent.press(await screen.findByText('Re-import'));
@@ -150,6 +162,18 @@ describe('OnboardingScreen removed-account card (TASK-477)', () => {
     expect(navigation.navigate).toHaveBeenCalledWith('MnemonicImport', {
       isOnboarding: true,
     });
+    expect(await storedRemovals()).toEqual([REMOVAL]);
+    await act(async () => {
+      refocus();
+    });
+    expect(await storedRemovals()).toEqual([REMOVAL]);
+    (MultiAccountWalletService.getAllAccounts as jest.Mock).mockResolvedValue([
+      { address: REMOVAL.address },
+    ]);
+    await act(async () => {
+      refocus();
+    });
+    expect(screen.queryByText('Re-import')).toBeNull();
     expect(await storedRemovals()).toEqual([]);
   });
 

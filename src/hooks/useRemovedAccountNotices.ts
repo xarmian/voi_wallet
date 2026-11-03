@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { MultiAccountWalletService } from '@/services/wallet';
+import { AccountType } from '@/types/wallet';
 
 export type RemovedAccountRecord = {
   id: string;
@@ -10,26 +13,65 @@ export type RemovedAccountRecord = {
 export function useRemovedAccountNotices() {
   const [notices, setNotices] = useState<RemovedAccountRecord[]>([]);
 
-  useEffect(() => {
-    let mounted = true;
-    void AccountSecureStorage.readUnexplainedRemovals()
-      .then((records) => {
-        if (mounted) setNotices(records);
-      })
-      .catch(() => {
-        console.warn('Unable to read removed account notices');
-        if (mounted) setNotices([]);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void (async () => {
+        let records: RemovedAccountRecord[];
+        try {
+          records = await AccountSecureStorage.readUnexplainedRemovals();
+        } catch {
+          console.warn('Unable to read removed account notices');
+          if (active) setNotices([]);
+          return;
+        }
+        if (!active) return;
+        if (records.length === 0) {
+          setNotices([]);
+          return;
+        }
 
-  /**
-   * Hides the notice immediately, then resolves once its stored record is
-   * cleared (a clear failure is logged by id and swallowed). Callers that
-   * navigate away await this so a slow write cannot bring the notice back.
-   */
+        let addresses: Set<string>;
+        try {
+          const accounts = await MultiAccountWalletService.getAllAccounts();
+          // A watch-only account for the address does not bring the key back,
+          // so it must not clear the card; every signing type does.
+          addresses = new Set(
+            accounts
+              .filter((account) => account.type !== AccountType.WATCH)
+              .map((account) => account.address)
+          );
+        } catch {
+          if (active) setNotices(records);
+          return;
+        }
+        if (!active) return;
+
+        const restored = records.filter((record) =>
+          addresses.has(record.address)
+        );
+        const remaining = records.filter(
+          (record) => !addresses.has(record.address)
+        );
+        if (restored.length) {
+          await Promise.all(
+            restored.map(async ({ id }) => {
+              try {
+                await AccountSecureStorage.clearUnexplainedRemoval(id);
+              } catch {
+                console.warn('Unable to clear removed account notice', id);
+              }
+            })
+          );
+        }
+        if (active) setNotices(remaining);
+      })();
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
   const dismiss = useCallback(async (id: string): Promise<void> => {
     setNotices((current) => current.filter((record) => record.id !== id));
     try {
