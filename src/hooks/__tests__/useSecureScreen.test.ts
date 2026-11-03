@@ -143,20 +143,96 @@ describe('useSecureScreen', () => {
       ).not.toHaveBeenCalled();
     });
 
-    it('retries the enable for a later guard after a rejected enable', async () => {
+    it('retries the enable for a later guard after the enable and its one retry both failed', async () => {
       const { useSecureScreen, screenCapture, renderHook } =
         loadHookForPlatform('ios');
       jest
         .mocked(screenCapture.enableAppSwitcherProtectionAsync)
+        .mockRejectedValueOnce(new Error('native unavailable'))
         .mockRejectedValueOnce(new Error('native unavailable'));
 
       await renderHook(() => useSecureScreen());
-      // Let the rejection settle, then mount a second secret screen while the
-      // first is still mounted: it must take the blur, not trust a failed one.
-      await Promise.resolve();
-      await Promise.resolve();
-      await renderHook(() => useSecureScreen());
+      // The mount's call and its single in-place retry both fail; the blur is
+      // off while the first screen is still mounted.
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(2);
 
+      // A later secret screen must take the blur itself rather than trust the
+      // failed one.
+      await renderHook(() => useSecureScreen());
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(3);
+    });
+
+    it('retries once when a pending enable rejects while screens are still mounted', async () => {
+      const { useSecureScreen, screenCapture, renderHook } =
+        loadHookForPlatform('ios');
+      let rejectFirst!: (e: Error) => void;
+      jest
+        .mocked(screenCapture.enableAppSwitcherProtectionAsync)
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_, reject) => {
+              rejectFirst = reject;
+            })
+        );
+
+      await renderHook(() => useSecureScreen());
+      // A second secret screen mounts while the first enable is still pending:
+      // it sees the blur as already requested and does not call enable itself.
+      await renderHook(() => useSecureScreen());
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(1);
+
+      // The pending enable now fails while both screens are mounted: the blur
+      // must be requested again, not left off.
+      rejectFirst(new Error('native unavailable'));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not re-enable when the enable rejects after the last screen unmounted', async () => {
+      const { useSecureScreen, screenCapture, renderHook } =
+        loadHookForPlatform('ios');
+      let rejectFirst!: (e: Error) => void;
+      jest
+        .mocked(screenCapture.enableAppSwitcherProtectionAsync)
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((_, reject) => {
+              rejectFirst = reject;
+            })
+        );
+
+      const view = await renderHook(() => useSecureScreen());
+      await view.unmount();
+      rejectFirst(new Error('native unavailable'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops retrying when the native enable keeps failing (no loop)', async () => {
+      const { useSecureScreen, screenCapture, renderHook } =
+        loadHookForPlatform('ios');
+      jest
+        .mocked(screenCapture.enableAppSwitcherProtectionAsync)
+        .mockRejectedValue(new Error('native unavailable'));
+
+      await renderHook(() => useSecureScreen());
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // The mount's call plus exactly one retry, then it stops.
       expect(
         screenCapture.enableAppSwitcherProtectionAsync
       ).toHaveBeenCalledTimes(2);
