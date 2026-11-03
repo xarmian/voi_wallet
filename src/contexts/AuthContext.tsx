@@ -21,6 +21,8 @@ import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
 import { redactError } from '@/utils/logRedaction';
+import { isWipeInFlight, wipeWalletData } from '@/services/wipe';
+import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 // Helper to check if biometrics are available (web-safe)
 const checkBiometricAvailability = async (): Promise<{
@@ -97,6 +99,13 @@ export interface AuthContextType {
   enableBiometrics: (enabled: boolean, secret?: string) => Promise<void>;
   recheckAuthState: () => Promise<void>;
   updateTimeoutSetting: () => Promise<void>;
+  /**
+   * TASK-469: why the last unlock returned false, if it was not a wrong secret.
+   * A refusal because a wipe is pending is NOT an incorrect PIN: the caller must
+   * not show "Incorrect PIN" or touch the attempt counter. Read once, then
+   * cleared. Synchronous (a ref), so it is never stale after the awaited unlock.
+   */
+  consumeUnlockRefusal: () => 'wipe_pending' | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -133,6 +142,9 @@ const STRICT_READ_BACKOFF_MS = 200;
 // keychain/keystore read (<100 ms), so it never trips on a healthy-but-slow read;
 // a genuinely wedged read still times out → retries → fails CLOSED to recovery.
 const STRICT_READ_TIMEOUT_MS = 1500;
+// TASK-469: finishing an interrupted wipe at boot runs several bounded 5 s
+// deletes; allow for them, then fail closed to the recovery screen.
+const WIPE_FINISH_TIMEOUT_MS = 30000;
 
 // Web-safe delay. Used only for the bounded strict-read backoff above.
 const delay = (ms: number): Promise<void> =>
@@ -284,6 +296,91 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkInitialAuthState = async () => {
     try {
+      // ── Interrupted wipe (TASK-469) ────────────────────────────────────────
+      // A persisted wipe request means Delete Everything started and did not
+      // finish (a crash, a timeout, or an incomplete wipe). The state it left can
+      // route to onboarding as if it had succeeded (phantom accounts pruned, PIN
+      // gone), so finish it BEFORE reading the lock state.
+      //
+      // Read on EVERY check, not only the first of a launch: a wipe started this
+      // session that did not finish leaves the marker set, and the recovery
+      // screen's Retry (recheckAuthState) must find it, or the recheck would route
+      // to onboarding with the marker still set and a later boot would wipe the
+      // new wallet. The read is one bounded general-storage read.
+      //
+      // Fails CLOSED: if the marker cannot be read (after the same bounded retries
+      // as the lock reads) or the wipe cannot finish, go to the recovery screen
+      // (zero wallet access; its Retry runs this again); never onboarding. The
+      // "deleted" notice is shown only after the wipe reports complete, and only
+      // by the caller that started it (a wipe already running is joined, not
+      // duplicated).
+      // Skipped on a LIVE unlocked session (a recheck after ChangePin etc.): unlock
+      // refuses while a wipe is pending (below) and wipes start from the lock and
+      // recovery screens, so an unlocked session cannot have one pending, and a
+      // slow marker read must not lock a healthy session out.
+      const sessionIsLive =
+        authStateRef.current.isAuthenticated && !authStateRef.current.isLocked;
+      if (!sessionIsLive) {
+        const failClosed = () =>
+          setAuthState((prev) => ({
+            ...prev,
+            isLocked: true,
+            isAuthenticated: false,
+            securityUnavailable: true,
+            authChecked: true,
+            pinSetupResume: false,
+            biometricEnabled: false,
+            backgroundedAt: null,
+          }));
+        let wipePending: boolean | undefined;
+        let wipeReadError: unknown;
+        for (
+          let attempt = 1;
+          attempt <= STRICT_READ_MAX_ATTEMPTS;
+          attempt += 1
+        ) {
+          try {
+            wipePending = await withTimeout(
+              AccountSecureStorage.readWipeIntentStrict(),
+              STRICT_READ_TIMEOUT_MS,
+              'wipe intent read'
+            );
+            break;
+          } catch (error) {
+            wipeReadError = error;
+            if (attempt < STRICT_READ_MAX_ATTEMPTS) {
+              await delay(STRICT_READ_BACKOFF_MS * attempt);
+            }
+          }
+        }
+        if (wipePending === undefined) {
+          console.error(
+            'Wipe-intent read failed; failing closed:',
+            redactError(wipeReadError)
+          );
+          failClosed();
+          return;
+        }
+        if (wipePending) {
+          const startedHere = !isWipeInFlight();
+          try {
+            await withTimeout(
+              wipeWalletData(),
+              WIPE_FINISH_TIMEOUT_MS,
+              'interrupted wipe finish'
+            );
+          } catch (error) {
+            console.error(
+              'Interrupted wipe could not be finished; failing closed:',
+              redactError(error)
+            );
+            failClosed();
+            return;
+          }
+          if (startedHere) showWipeCompleteNotice();
+        }
+      }
+
       // ── Non-lock-determining reads (display/config only) ───────────────────
       // Biometric availability, the biometric-enabled flag, and the PIN timeout
       // do NOT gate wallet access, so a failure here falls back to safe display
@@ -722,6 +819,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, timeoutMs);
   };
 
+  // TASK-469: a pending wipe request blocks EVERY unlock. Without this the user
+  // could unlock the half-wiped wallet a failed Delete Everything leaves behind,
+  // create or import new data, and have a later boot (which finishes the wipe)
+  // erase it. If a wipe is pending, run the same finish the boot does (it routes
+  // to onboarding on success or the recovery screen on failure) and refuse. An
+  // unreadable marker refuses too: fail closed.
+  const unlockRefusalRef = useRef<'wipe_pending' | null>(null);
+  const consumeUnlockRefusal = (): 'wipe_pending' | null => {
+    const reason = unlockRefusalRef.current;
+    unlockRefusalRef.current = null;
+    return reason;
+  };
+
+  const refuseUnlockWhilePendingWipe = async (): Promise<boolean> => {
+    unlockRefusalRef.current = null;
+    let pending = true;
+    try {
+      pending = await withTimeout(
+        AccountSecureStorage.readWipeIntentStrict(),
+        STRICT_READ_TIMEOUT_MS,
+        'wipe intent read (unlock)'
+      );
+    } catch (error) {
+      console.error(
+        'Wipe-intent read failed at unlock; refusing:',
+        redactError(error)
+      );
+    }
+    if (!pending) return false;
+    unlockRefusalRef.current = 'wipe_pending';
+    await checkInitialAuthState();
+    return true;
+  };
+
   const unlock = async (
     secret: string,
     isCurrent = () => true
@@ -730,9 +861,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // PR7: accept a PIN or a passphrase — verifyPin validates the format
       // against the STORED credential kind, so no 6-digit gate here (that would
       // reject a passphrase). An empty secret can never be valid.
+      unlockRefusalRef.current = null;
       if (!secret) {
         return false;
       }
+
+      if (await refuseUnlockWhilePendingWipe()) return false;
 
       const isValid = await AccountSecureStorage.verifyPin(secret);
 
@@ -781,6 +915,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!authState.biometricEnabled || !isCurrent()) {
         return false;
       }
+
+      if (await refuseUnlockWhilePendingWipe()) return false;
 
       // Read the biometric-convenience secret behind the OS biometric gate and,
       // on success, populate the SessionKeyVault (DOC-137 §3.3, PR6). The single
@@ -987,6 +1123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     enableBiometrics,
     recheckAuthState,
     updateTimeoutSetting,
+    consumeUnlockRefusal,
   };
 
   return (

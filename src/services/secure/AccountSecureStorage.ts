@@ -30,6 +30,7 @@ import {
   RekeyedAccountMetadata,
   SecureAccountStorage,
   AccountStorageError,
+  WipeIncompleteError,
   AccountRetrievalError,
   AccountNotFoundError,
   AccountDeletionPreconditionError,
@@ -64,6 +65,7 @@ import {
   WriteUnresolvedError,
   isCurrentSessionId,
   hasPendingRecord,
+  hasUnsettledPendingRecord,
   newDeleteAttempt,
   type UnknownWriteEntry,
   type UnknownJournal,
@@ -265,6 +267,15 @@ export class AccountSecureStorage {
   // inside clearAll (non-reentrant chain → deadlock).
   // ───────────────────────────────────────────────────────────────────────────
   private static readonly SECURE_WIPE_TOMBSTONE_KEY = 'voi_secure_wiped';
+  /**
+   * TASK-469: durable "a wipe was requested and has not completed" marker, in
+   * general storage (non-secret). Written, and verified, BEFORE the first delete;
+   * cleared only after the whole wipe is complete. A boot that finds it finishes
+   * the wipe before routing anywhere, so a wipe that left the device in a state
+   * that routes to onboarding (phantom accounts pruned, PIN gone) cannot be
+   * mistaken for a finished one.
+   */
+  static readonly WIPE_INTENT_KEY = 'voi_wipe_intent';
   private static readonly PENDING_CREATES_KEY = 'voi_pending_account_creates';
   private static readonly QUARANTINED_IDS_KEY = 'voi_reconcile_quarantined_ids';
   private static readonly UNEXPLAINED_REMOVALS_KEY =
@@ -2699,7 +2710,7 @@ export class AccountSecureStorage {
       // Remove from secure storage
       await this.saveSecret(accountId, null);
 
-      await secureStorage.deleteItem(
+      await this.boundedSecureDelete(
         `${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`
       );
       if (await this.probeSecretPresenceStrict(accountId)) {
@@ -2707,7 +2718,7 @@ export class AccountSecureStorage {
       }
 
       // Only discard metadata and indexing after verified secret removal.
-      await storage.removeItem(this.metadataKey(accountId));
+      await this.boundedStorageRemove(this.metadataKey(accountId));
 
       // Update account list
       await this.removeFromAccountList(accountId);
@@ -2721,6 +2732,34 @@ export class AccountSecureStorage {
         `Failed to delete account: ${(error as Error).message}`
       );
     }
+  }
+
+  private static async assertWipeComplete(
+    coveredKeys: Set<string>,
+    unresolved: Set<string>
+  ): Promise<void> {
+    for (const key of coveredKeys) {
+      if (
+        this.adaptersForKey(key).some((adapter) =>
+          hasUnsettledPendingRecord(adapter, key)
+        )
+      )
+        unresolved.add(key);
+    }
+    try {
+      // ANY surviving same-session entry means a write or delete may still land
+      // on a wallet key (secrets, PIN/salt, bookkeeping): the journal holds
+      // nothing else, and an entry for an id the wipe did not know about is
+      // exactly the one it could not have deleted. Earlier-session entries were
+      // already dropped by the wipe's journal rewrite.
+      const entries = await this.readUnknownWritesStrict();
+      for (const [key, entry] of Object.entries(entries)) {
+        if (await isCurrentSessionId(entry.sessionId)) unresolved.add(key);
+      }
+    } catch {
+      unresolved.add(UNKNOWN_WRITES_STORAGE_KEY);
+    }
+    if (unresolved.size > 0) throw new WipeIncompleteError([...unresolved]);
   }
 
   static async getAllAccountIds(): Promise<string[]> {
@@ -2769,6 +2808,56 @@ export class AccountSecureStorage {
    * a corrupt (unparseable) list so the reconcile fails closed. Resolves `[]`
    * only for genuine absence.
    */
+  /** TASK-469: record the wipe request. If it cannot be written, the wipe does not start. */
+  static async beginWipe(): Promise<void> {
+    try {
+      // GUARDED: if an earlier attempt left a delete of this key that can still
+      // land (a timed-out endWipe), writing the marker now would let that late
+      // delete erase it mid-wipe, and a wipe that then failed would have no
+      // marker to finish it. The refusal reads as incomplete: restart and retry.
+      await this.boundedStorageSet(this.WIPE_INTENT_KEY, '1');
+    } catch {
+      throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
+    }
+  }
+
+  /**
+   * TASK-469: delete one secure-store key through the bounded, journaled delete.
+   * Rejects (never swallows) if the delete cannot be confirmed. Used by the wipe
+   * for the legacy wallet-metadata copy, which clearAllWallets deletes only
+   * fire-and-forget.
+   */
+  static async deleteSecureKeyVerified(key: string): Promise<void> {
+    await this.boundedSecureDelete(key);
+  }
+
+  /** TASK-469: clear the wipe request. Only a COMPLETE wipe calls this. */
+  static async endWipe(): Promise<void> {
+    try {
+      await this.boundedStorageRemove(this.WIPE_INTENT_KEY);
+    } catch {
+      // The data is gone but the marker is not: report incomplete so the user
+      // restarts and the boot finishes (a no-op) and clears it, rather than a
+      // stale marker later wiping a NEW wallet.
+      throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
+    }
+  }
+
+  /**
+   * TASK-469: true when a wipe was requested and never completed. STRICT and
+   * bounded: a read failure throws (the caller fails closed), it never reads as
+   * "no wipe pending".
+   */
+  static async readWipeIntentStrict(): Promise<boolean> {
+    const value = await this.withTimeout(
+      storage.getItem(this.WIPE_INTENT_KEY),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Wipe intent read'
+    );
+    // Any stored value counts: an unexpected one is still a request.
+    return value !== null;
+  }
+
   static async readAccountListStrict(): Promise<string[]> {
     // `!= null` (not truthiness): a present-but-EMPTY value ('') is CORRUPTION,
     // not absence — a genuinely absent list is null. Routing '' to the parser
@@ -4541,7 +4630,19 @@ export class AccountSecureStorage {
         // removal — if the app dies mid-wipe we are left tombstone-set (legacy
         // resurrection blocked) rather than secrets-gone-without-a-marker. A
         // committed creation/restore clears it later.
-        await storage.setItem(this.SECURE_WIPE_TOMBSTONE_KEY, '1');
+        const unresolved = new Set<string>();
+        try {
+          // Bounded and unguarded: a stalled store must not hold the key mutex,
+          // and an earlier unresolved record must not stop a retry. If the
+          // tombstone cannot be written, nothing has been deleted yet.
+          await this.boundedStorageSet(
+            this.SECURE_WIPE_TOMBSTONE_KEY,
+            '1',
+            true
+          );
+        } catch {
+          throw new WipeIncompleteError([this.SECURE_WIPE_TOMBSTONE_KEY]);
+        }
 
         // TASK-220: drain the pending-creation journal — an in-flight creation
         // may have written a secret that is not yet in the account list (the
@@ -4561,46 +4662,75 @@ export class AccountSecureStorage {
 
         // Delete all accounts (listed + in-flight-journaled)
         let failedCount = 0;
+        const failedKeys = new Set<string>();
         for (const accountId of idsToDelete) {
           try {
             await this.deleteAccountLocked(accountId);
           } catch {
             failedCount += 1;
+            failedKeys.add(this.secretKey(accountId));
           }
         }
         if (failedCount > 0) {
-          throw new AccountStorageError(
+          throw new WipeIncompleteError(
+            [...failedKeys],
             `Failed to delete ${failedCount} account(s) from secure storage`
           );
         }
-        await this.writePendingCreateJournal({});
-        await storage.removeItem(this.QUARANTINED_IDS_KEY);
-        await storage.removeItem(this.UNEXPLAINED_REMOVALS_KEY);
+        // Bounded, and a failure is reported instead of aborting or stalling.
+        try {
+          await this.writePendingCreateJournal({});
+        } catch {
+          unresolved.add(this.PENDING_CREATES_KEY);
+        }
+        for (const registryKey of [
+          this.QUARANTINED_IDS_KEY,
+          this.UNEXPLAINED_REMOVALS_KEY,
+        ]) {
+          try {
+            await this.boundedStorageRemove(registryKey);
+          } catch {
+            unresolved.add(registryKey);
+          }
+        }
 
         // Clear PIN and settings from general storage
         // NOTE: DEVICE_ID_KEY is intentionally NOT cleared - it's used for key derivation
         // and must remain consistent across restore operations to decrypt private keys
-        await storage.multiRemove([
+        for (const key of [
           this.PIN_KEY,
           this.SALT_KEY,
           this.BIOMETRIC_ENABLED_KEY,
           this.METADATA_LIST_KEY,
           this.PIN_TIMEOUT_KEY,
-        ]);
+        ]) {
+          try {
+            await this.boundedStorageRemove(key);
+          } catch {
+            unresolved.add(key);
+          }
+        }
         // Ruling A: a wipe never erases an inherited same-process SET entry (the
         // native set may still be hung and could resurrect the key); keep it as a
         // delete UNKNOWN entry, drop everything else from the journal.
         await this.rewriteUnknownWritesAfterWipe();
         // Clear from secure storage
-        await Promise.all([
-          secureStorage.deleteItem(this.PIN_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.SALT_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.BIOMETRIC_ENABLED_KEY).catch(() => {}),
+        const secureDeletes = [
+          this.PIN_KEY,
+          this.SALT_KEY,
+          this.BIOMETRIC_ENABLED_KEY,
           // Drop the auth-gated biometric-convenience secret on a full wipe.
-          secureStorage.deleteItem(this.BIOMETRIC_SECRET_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.METADATA_LIST_KEY).catch(() => {}),
-          secureStorage.deleteItem(this.PIN_TIMEOUT_KEY).catch(() => {}),
-        ]);
+          this.BIOMETRIC_SECRET_KEY,
+          this.METADATA_LIST_KEY,
+          this.PIN_TIMEOUT_KEY,
+        ];
+        const secureDeleteResults = await Promise.allSettled(
+          secureDeletes.map((key) => this.boundedSecureDelete(key))
+        );
+        secureDeleteResults.forEach((result, index) => {
+          if (result.status === 'rejected')
+            unresolved.add(secureDeletes[index]);
+        });
         // Wipe the persistent PIN throttle THROUGH the throttle serialization
         // mutex verifyPin uses (a SEPARATE mutex from the key-mutation lock; the
         // two never deadlock because nothing acquires the key mutex inside the
@@ -4609,9 +4739,31 @@ export class AccountSecureStorage {
         // is then wiped here — it can never land AFTER the wipe and leave a stale
         // lockout (which would phantom-lock the freshly reset/restored wallet).
         await this.runThrottleExclusive(async () => {
-          await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
+          try {
+            await this.boundedSecureDelete(this.PIN_THROTTLE_KEY);
+          } catch {
+            unresolved.add(this.PIN_THROTTLE_KEY);
+          }
           this.throttleMirror = null;
         });
+        const coveredKeys = new Set<string>([
+          this.PIN_KEY,
+          this.SALT_KEY,
+          this.BIOMETRIC_ENABLED_KEY,
+          this.BIOMETRIC_SECRET_KEY,
+          this.METADATA_LIST_KEY,
+          this.PIN_TIMEOUT_KEY,
+          this.PIN_THROTTLE_KEY,
+          this.PENDING_CREATES_KEY,
+          this.QUARANTINED_IDS_KEY,
+          this.UNEXPLAINED_REMOVALS_KEY,
+        ]);
+        for (const id of idsToDelete) {
+          coveredKeys.add(this.secretKey(id));
+          coveredKeys.add(`${this.LEGACY_STORAGE_KEY_PREFIX}${id}`);
+          coveredKeys.add(this.metadataKey(id));
+        }
+        await this.assertWipeComplete(coveredKeys, unresolved);
       } catch (error) {
         if (error instanceof AccountStorageError) throw error;
         throw new AccountStorageError('Failed to clear all secure storage');
