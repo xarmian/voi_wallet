@@ -49,6 +49,49 @@ describe('fresh authentication capabilities', () => {
     unregister();
   });
 
+  it('invalidates a capability that was never used once the callback returns', async () => {
+    const unregister = registerFreshAuthPrompter(async () => true);
+    const cap = await withFreshAuth('reveal_recovery_phrase', async (c) => c);
+    expect(() => consumeFreshAuth(cap, 'reveal_recovery_phrase')).toThrow(
+      FreshAuthError
+    );
+    unregister();
+  });
+
+  it('invalidates a capability when the callback throws', async () => {
+    const unregister = registerFreshAuthPrompter(async () => true);
+    let leaked: Parameters<typeof consumeFreshAuth>[0] | undefined;
+    await expect(
+      withFreshAuth('reveal_recovery_phrase', async (c) => {
+        leaked = c;
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+    expect(() => consumeFreshAuth(leaked!, 'reveal_recovery_phrase')).toThrow(
+      FreshAuthError
+    );
+    unregister();
+  });
+
+  it('does not abort the prompt signal after a successful prompt while the export runs', async () => {
+    jest.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const unregister = registerFreshAuthPrompter(async (_reason, s) => {
+      signal = s;
+      return true;
+    });
+    let release: () => void = () => {};
+    const work = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = withFreshAuth('export_backup', async () => work);
+    await jest.advanceTimersByTimeAsync(200000);
+    expect(signal?.aborted).toBe(false);
+    release();
+    await run;
+    unregister();
+  });
+
   it('limits reads and binds capabilities to their reason', async () => {
     const unregister = registerFreshAuthPrompter(async () => true);
     await withFreshAuth('export_backup', async (cap) => {
