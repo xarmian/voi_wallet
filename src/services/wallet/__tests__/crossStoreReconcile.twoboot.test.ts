@@ -31,7 +31,7 @@ jest.mock('@/services/secure', () => ({
         ids: string[],
         action: (
           absent: string[],
-          signal: { aborted: boolean }
+          signal: { aborted: boolean; committed: boolean }
         ) => Promise<boolean>
       ) => {
         const states = await Promise.all(
@@ -44,7 +44,7 @@ jest.mock('@/services/secure', () => ({
           .filter(([, present]) => !present)
           .map(([id]) => id);
         const acted = confirmedAbsent.length
-          ? await action(confirmedAbsent, { aborted: false })
+          ? await action(confirmedAbsent, { aborted: false, committed: false })
           : false;
         return { confirmedAbsent, liveIds, acted };
       }

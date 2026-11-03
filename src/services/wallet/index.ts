@@ -2513,7 +2513,7 @@ export class MultiAccountWalletService {
    */
   static async pruneStandardAccounts(
     ids: string[],
-    options?: { shouldAbort?: () => boolean }
+    options?: { shouldAbort?: () => boolean; onCommit?: () => void }
   ): Promise<boolean> {
     if (ids.length === 0) return false;
     // An already-aborted run must not even cancel the subscribe passes below.
@@ -2532,6 +2532,8 @@ export class MultiAccountWalletService {
       const remaining = wallet.accounts.filter((acc) => !toPrune.has(acc.id));
       if (remaining.length === wallet.accounts.length) return false;
       if (options?.shouldAbort?.()) return false;
+      // Commit point: after this synchronous callback, the bounded caller waits for the write.
+      options?.onCommit?.();
       if (remaining.length === 0) {
         // Make the empty-wallet decision and removal in the same queue task;
         // calling clearAllWallets after releasing the queue could erase an add.

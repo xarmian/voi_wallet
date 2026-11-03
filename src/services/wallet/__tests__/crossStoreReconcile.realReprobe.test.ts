@@ -149,6 +149,71 @@ it('bounds the locked prune action and releases the mutex after five seconds', a
   }
 });
 
+it('holds the mutex past timeout after prune commit, then reports the prune', async () => {
+  jest.useFakeTimers();
+  try {
+    mockPresence = () => null;
+    let finish!: (value: boolean) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    mockPrune.mockImplementation((_ids, options) => {
+      (options as { onCommit: () => void }).onCommit();
+      entered();
+      return new Promise<boolean>((resolve) => {
+        finish = resolve;
+      });
+    });
+    const reconcile = reconcileCrossStoreHalfState();
+    await started;
+    const writer = AccountSecureStorage.addQuarantinedIds(['after-commit']);
+    const settled = jest.fn();
+    reconcile.then(settled);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(mockKv.has('voi_reconcile_quarantined_ids')).toBe(false);
+    finish(true);
+    await expect(reconcile).resolves.toMatchObject({
+      phantomAccountsPruned: ['a'],
+    });
+    await expect(
+      AccountSecureStorage.readUnexplainedRemovals()
+    ).resolves.toHaveLength(1);
+    await writer;
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('retains the removal record when the committed prune throws', async () => {
+  jest.useFakeTimers();
+  try {
+    mockPresence = () => null;
+    const failure = new Error('wallet write failed');
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    mockPrune.mockImplementation((_ids, options) => {
+      (options as { onCommit: () => void }).onCommit();
+      entered();
+      return Promise.reject(failure);
+    });
+    const reconcile = reconcileCrossStoreHalfState();
+    await started;
+    await jest.advanceTimersByTimeAsync(0);
+    await expect(reconcile).resolves.toMatchObject({
+      phantomAccountsPruned: [],
+    });
+    await expect(
+      AccountSecureStorage.readUnexplainedRemovals()
+    ).resolves.toEqual([{ id: 'a', address: 'address-a', label: 'A' }]);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 it('does not store a removal record when a delayed record write resumes after timeout', async () => {
   jest.useFakeTimers();
   try {

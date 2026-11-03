@@ -163,7 +163,10 @@ describe('runWithConfirmedAbsentSecrets', () => {
       liveIds: ['live'],
       acted: true,
     });
-    expect(action).toHaveBeenCalledWith(['gone'], { aborted: false });
+    expect(action).toHaveBeenCalledWith(['gone'], {
+      aborted: false,
+      committed: false,
+    });
   });
 
   it('does not call the action when every id is live', async () => {
@@ -240,7 +243,7 @@ describe('runWithConfirmedAbsentSecrets', () => {
     jest.useFakeTimers();
     try {
       let finish!: (value: boolean) => void;
-      let signal!: { aborted: boolean };
+      let signal!: { aborted: boolean; committed: boolean };
       const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
         ['gone'],
         (_ids, receivedSignal) => {
@@ -260,6 +263,94 @@ describe('runWithConfirmedAbsentSecrets', () => {
       finish(true);
       await Promise.resolve();
       await Promise.resolve();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('waits past the bound once committed and holds the mutex until settlement', async () => {
+    jest.useFakeTimers();
+    try {
+      let finish!: (value: boolean) => void;
+      let signal!: { aborted: boolean; committed: boolean };
+      const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
+        ['gone'],
+        (_ids, received) => {
+          signal = received;
+          signal.committed = true;
+          return new Promise<boolean>((resolve) => {
+            finish = resolve;
+          });
+        }
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      const writer = AccountSecureStorage.addQuarantinedIds(['after-commit']);
+      const settled = jest.fn();
+      task.then(settled);
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(settled).not.toHaveBeenCalled();
+      expect(signal.aborted).toBe(false);
+      expect(mockKv.has('voi_reconcile_quarantined_ids')).toBe(false);
+      finish(true);
+      await expect(task).resolves.toMatchObject({ acted: true });
+      await writer;
+      expect(mockKv.get('voi_reconcile_quarantined_ids')).toBe(
+        '["after-commit"]'
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('lets a commit at 4999ms win the timeout race', async () => {
+    jest.useFakeTimers();
+    try {
+      let signal!: { aborted: boolean; committed: boolean };
+      let finish!: (value: boolean) => void;
+      const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
+        ['gone'],
+        (_ids, received) => {
+          signal = received;
+          return new Promise<boolean>((resolve) => {
+            finish = resolve;
+          });
+        }
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(4999);
+      signal.committed = true;
+      await jest.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(false);
+      finish(true);
+      await expect(task).resolves.toMatchObject({ acted: true });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('propagates a post-commit rejection and releases the mutex after it settles', async () => {
+    jest.useFakeTimers();
+    try {
+      let fail!: (error: Error) => void;
+      const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
+        ['gone'],
+        (_ids, signal) => {
+          signal.committed = true;
+          return new Promise<boolean>((_resolve, reject) => {
+            fail = reject;
+          });
+        }
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(5000);
+      fail(new Error('write failed'));
+      await expect(task).rejects.toThrow('write failed');
+      await expect(
+        AccountSecureStorage.addQuarantinedIds(['after-reject'])
+      ).resolves.toBeUndefined();
     } finally {
       jest.useRealTimers();
     }

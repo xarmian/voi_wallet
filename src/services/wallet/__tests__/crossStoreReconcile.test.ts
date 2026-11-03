@@ -33,12 +33,14 @@ jest.mock('@/services/secure', () => ({
         ids: string[],
         action: (
           ids: string[],
-          signal: { aborted: boolean }
+          signal: { aborted: boolean; committed: boolean }
         ) => Promise<boolean>
       ) => ({
         confirmedAbsent: ids,
         liveIds: [],
-        acted: ids.length ? await action(ids, { aborted: false }) : false,
+        acted: ids.length
+          ? await action(ids, { aborted: false, committed: false })
+          : false,
       })
     ),
   },
@@ -259,12 +261,12 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
         ids: string[],
         action: (
           ids: string[],
-          signal: { aborted: boolean }
+          signal: { aborted: boolean; committed: boolean }
         ) => Promise<boolean>
       ) => ({
         confirmedAbsent: ids,
         liveIds: [],
-        acted: await action(ids, { aborted: true }),
+        acted: await action(ids, { aborted: true, committed: false }),
       })
     );
     await reconcileCrossStoreHalfState();

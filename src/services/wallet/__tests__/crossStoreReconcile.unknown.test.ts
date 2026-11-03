@@ -11,12 +11,14 @@ jest.mock('@/services/secure', () => ({
         ids: string[],
         action: (
           ids: string[],
-          signal: { aborted: boolean }
+          signal: { aborted: boolean; committed: boolean }
         ) => Promise<boolean>
       ) => ({
         confirmedAbsent: ids,
         liveIds: [],
-        acted: ids.length ? await action(ids, { aborted: false }) : false,
+        acted: ids.length
+          ? await action(ids, { aborted: false, committed: false })
+          : false,
       })
     ),
     readUnknownWritesStrict: jest.fn(),

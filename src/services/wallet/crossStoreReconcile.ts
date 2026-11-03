@@ -271,11 +271,16 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
               pruneSucceeded =
                 await MultiAccountWalletService.pruneStandardAccounts(
                   confirmedAbsent,
-                  { shouldAbort: () => signal.aborted }
+                  {
+                    shouldAbort: () => signal.aborted,
+                    onCommit: () => {
+                      signal.committed = true;
+                    },
+                  }
                 );
               return pruneSucceeded;
             } finally {
-              if (!pruneSucceeded) {
+              if (!pruneSucceeded && !signal.committed) {
                 for (const id of writtenIds) {
                   try {
                     await AccountSecureStorage.clearUnexplainedRemoval(id);

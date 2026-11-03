@@ -226,10 +226,13 @@ describe('pruneStandardAccounts abort boundaries', () => {
     jest.mocked(storage.getItem).mockClear();
     jest.mocked(storage.setItem).mockClear();
     jest.mocked(invalidateAccountSubscribePasses).mockClear();
+    const onCommit = jest.fn();
     const result = await Service.pruneStandardAccounts([first.id], {
       shouldAbort: () => true,
+      onCommit,
     });
     expect(result).toBe(false);
+    expect(onCommit).not.toHaveBeenCalled();
     expect(invalidateAccountSubscribePasses).not.toHaveBeenCalled();
     expect(storage.getItem).not.toHaveBeenCalled();
     expect(storage.setItem).not.toHaveBeenCalled();
@@ -251,12 +254,15 @@ describe('pruneStandardAccounts abort boundaries', () => {
     });
     const before = mockStore[WALLET_KEY];
     let checks = 0;
+    const onCommit = jest.fn();
     jest.mocked(storage.setItem).mockClear();
     const result = await Service.pruneStandardAccounts([first.id], {
       shouldAbort: () => ++checks === 2,
+      onCommit,
     });
     const readsAfterPrune = jest.mocked(storage.getItem).mock.calls.length;
     expect(result).toBe(false);
+    expect(onCommit).not.toHaveBeenCalled();
     expect(readsAfterPrune).toBeGreaterThan(0);
     expect(mockStore[WALLET_KEY]).toBe(before);
     expect(storage.setItem).not.toHaveBeenCalled();
@@ -293,6 +299,115 @@ describe('pruneStandardAccounts abort boundaries', () => {
     });
     expect(await Service.pruneStandardAccounts([first.id])).toBe(true);
     expect(readWallet().accounts.map(({ id }) => id)).toEqual([second.id]);
+  });
+
+  it('commits after reads and synchronously before the first multi-wallet write', async () => {
+    const first = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'First',
+    });
+    await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Second',
+    });
+    const order: string[] = [];
+    jest.mocked(storage.getItem).mockImplementation(async (key) => {
+      order.push(`read:${key}`);
+      return mockStore[key] ?? null;
+    });
+    jest.mocked(storage.setItem).mockImplementation(async (key, value) => {
+      order.push(`write:${key}`);
+      mockStore[key] = value;
+    });
+    let checks = 0;
+    let ticked = false;
+    const onCommit = jest.fn(() => {
+      expect(ticked).toBe(false);
+      order.push('commit');
+    });
+    const result = await Service.pruneStandardAccounts([first.id], {
+      shouldAbort: () => {
+        if (++checks === 2)
+          void Promise.resolve().then(() => {
+            ticked = true;
+          });
+        return false;
+      },
+      onCommit,
+    });
+    expect(result).toBe(true);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(order.indexOf('commit')).toBeGreaterThan(
+      order.findLastIndex((entry) => entry.startsWith('read:'))
+    );
+    expect(order.indexOf('commit')).toBeLessThan(
+      order.findIndex((entry) => entry.startsWith('write:'))
+    );
+  });
+
+  it('calls onCommit before the empty-wallet tombstone write', async () => {
+    const only = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Only',
+    });
+    const order: string[] = [];
+    jest.mocked(storage.setItem).mockImplementation(async (key, value) => {
+      order.push(`write:${key}`);
+      mockStore[key] = value;
+    });
+    const onCommit = jest.fn(() => order.push('commit'));
+    await Service.pruneStandardAccounts([only.id], { onCommit });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(order.indexOf('commit')).toBeLessThan(
+      order.findIndex((entry) => entry.startsWith('write:'))
+    );
+  });
+
+  it('does not commit when the wallet is missing or no requested id matches', async () => {
+    const missingCommit = jest.fn();
+    await expect(
+      Service.pruneStandardAccounts(['missing'], { onCommit: missingCommit })
+    ).resolves.toBe(false);
+    expect(missingCommit).not.toHaveBeenCalled();
+
+    await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Existing',
+    });
+    const noMatchCommit = jest.fn();
+    await expect(
+      Service.pruneStandardAccounts(['not-in-wallet'], {
+        onCommit: noMatchCommit,
+      })
+    ).resolves.toBe(false);
+    expect(noMatchCommit).not.toHaveBeenCalled();
+  });
+
+  it('does not commit when the wallet reset epoch changes during the read', async () => {
+    const only = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Only',
+    });
+    let releaseRead!: (value: string | null) => void;
+    let enteredRead!: () => void;
+    const readEntered = new Promise<void>((resolve) => {
+      enteredRead = resolve;
+    });
+    jest.mocked(storage.getItem).mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          releaseRead = resolve;
+          enteredRead();
+        })
+    );
+    const onCommit = jest.fn();
+    const prune = Service.pruneStandardAccounts([only.id], { onCommit });
+    await readEntered;
+    const reset = Service.clearAllWallets();
+    releaseRead(mockStore[WALLET_KEY]);
+    await expect(prune).resolves.toBe(false);
+    await reset;
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });
 
