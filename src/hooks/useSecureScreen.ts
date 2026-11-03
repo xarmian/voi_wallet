@@ -61,6 +61,9 @@ export function useSecureScreen(): void {
 // iOS app-switcher blur is one global switch, so it is ref-counted: a second
 // guarded screen pushed over the first must not lift the blur when it leaves.
 let appSwitcherProtectionUsers = 0;
+// Whether the native blur is believed to be on. A rejected enable clears it, so
+// the next guard to mount retries instead of trusting a blur that never took.
+let appSwitcherProtectionEnabled = false;
 
 /**
  * useAppSwitcherProtection (TASK-437)
@@ -76,12 +79,16 @@ export function useAppSwitcherProtection(): void {
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
     appSwitcherProtectionUsers++;
-    if (appSwitcherProtectionUsers === 1) {
-      enableAppSwitcherProtectionAsync(1).catch(() => {});
+    if (!appSwitcherProtectionEnabled) {
+      appSwitcherProtectionEnabled = true;
+      enableAppSwitcherProtectionAsync(1).catch(() => {
+        appSwitcherProtectionEnabled = false;
+      });
     }
     return () => {
       appSwitcherProtectionUsers--;
       if (appSwitcherProtectionUsers === 0) {
+        appSwitcherProtectionEnabled = false;
         disableAppSwitcherProtectionAsync().catch(() => {});
       }
     };

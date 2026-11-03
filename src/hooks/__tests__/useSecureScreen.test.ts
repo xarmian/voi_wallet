@@ -143,6 +143,25 @@ describe('useSecureScreen', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('retries the enable for a later guard after a rejected enable', async () => {
+      const { useSecureScreen, screenCapture, renderHook } =
+        loadHookForPlatform('ios');
+      jest
+        .mocked(screenCapture.enableAppSwitcherProtectionAsync)
+        .mockRejectedValueOnce(new Error('native unavailable'));
+
+      await renderHook(() => useSecureScreen());
+      // Let the rejection settle, then mount a second secret screen while the
+      // first is still mounted: it must take the blur, not trust a failed one.
+      await Promise.resolve();
+      await Promise.resolve();
+      await renderHook(() => useSecureScreen());
+
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(2);
+    });
+
     it('a rejected native call never throws into the screen', async () => {
       const { useSecureScreen, screenCapture, renderHook } =
         loadHookForPlatform('ios');
