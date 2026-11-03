@@ -21,6 +21,7 @@ import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
 import { WalletAccount } from '@/types/wallet';
 import { KEY_REGISTRATION_PREFIX, MessagingKeyRegistration } from './types';
+import { withMessagingDeadline } from './requestDeadline';
 import { redactAddress, redactError } from '@/utils/logRedaction';
 
 /**
@@ -162,14 +163,17 @@ async function lookupMessagingKeyViaMimir(
 
   try {
     // Query the latest key registration for this address from voiwallet schema
-    const { data, error } = await supabase
-      .schema('voiwallet')
-      .from('message_keys')
-      .select('*')
-      .eq('address', address)
-      .order('round', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data, error } = await withMessagingDeadline(
+      supabase
+        .schema('voiwallet')
+        .from('message_keys')
+        .select('*')
+        .eq('address', address)
+        .order('round', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      'key registry (Mimir)'
+    );
 
     if (error) {
       console.error(
@@ -221,11 +225,14 @@ async function lookupMessagingKeyViaIndexer(
 
     // Query payment transactions for this address
     // Key registrations are self-transfers with the key in the note
-    const response = await indexer
-      .lookupAccountTransactions(address)
-      .txType('pay')
-      .limit(50) // Check recent transactions
-      .do();
+    const response = await withMessagingDeadline(
+      indexer
+        .lookupAccountTransactions(address)
+        .txType('pay')
+        .limit(50) // Check recent transactions
+        .do(),
+      'key registry (indexer)'
+    );
 
     // Search for the most recent key registration
     let latestRegistration: MessagingKeyRegistration | null = null;

@@ -17,6 +17,7 @@ import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { getSupabaseClient } from '@/services/supabase';
 import { NetworkId } from '@/types/network';
+import { withMessagingDeadline } from './requestDeadline';
 import { WalletAccount } from '@/types/wallet';
 import {
   Message,
@@ -293,7 +294,10 @@ export class MessagingService {
       query = query.lt('round', beforeRound);
     }
 
-    const { data, error } = await query;
+    const { data, error } = await withMessagingDeadline(
+      query,
+      'messages (Mimir)'
+    );
 
     if (error) {
       throw new Error(`MIMIR query failed: ${error.message}`);
@@ -390,7 +394,10 @@ export class MessagingService {
       query = query.maxRound(beforeRound - 1);
     }
 
-    const response = await query.do();
+    const response = await withMessagingDeadline(
+      query.do(),
+      'messages (indexer)'
+    );
 
     // Filter for transactions between user and friend
     const allTxns = (response.transactions || []).filter((txn) => {
@@ -543,13 +550,16 @@ export class MessagingService {
     // before. We commit the greatest ingestion id fetched as the durable
     // cursor; older history is loaded on demand via pagination.
     if (afterId === undefined) {
-      const { data, error } = await supabase
-        .schema('voiwallet')
-        .from('messages')
-        .select('*')
-        .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
-        .order('round', { ascending: false })
-        .limit(limit);
+      const { data, error } = await withMessagingDeadline(
+        supabase
+          .schema('voiwallet')
+          .from('messages')
+          .select('*')
+          .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+          .order('round', { ascending: false })
+          .limit(limit),
+        'conversations bootstrap (Mimir)'
+      );
       if (error) {
         throw new Error(`MIMIR query failed: ${error.message}`);
       }
@@ -573,14 +583,17 @@ export class MessagingService {
     const fetchPage = async (
       cursor: number | undefined
     ): Promise<MimirMessage[]> => {
-      const { data, error } = await supabase
-        .schema('voiwallet')
-        .from('messages')
-        .select('*')
-        .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
-        .gt('id', cursor ?? afterId)
-        .order('id', { ascending: true })
-        .limit(limit);
+      const { data, error } = await withMessagingDeadline(
+        supabase
+          .schema('voiwallet')
+          .from('messages')
+          .select('*')
+          .or(`sender.eq.${userAddress},receiver.eq.${userAddress}`)
+          .gt('id', cursor ?? afterId)
+          .order('id', { ascending: true })
+          .limit(limit),
+        'conversations page (Mimir)'
+      );
       if (error) {
         throw new Error(`MIMIR query failed: ${error.message}`);
       }
@@ -684,11 +697,14 @@ export class MessagingService {
     // when MIMIR recovers it resumes from where it left off. Residual: a message
     // indexed late AND older than the window isn't picked up on this fallback
     // path (documented, fallback-only).
-    const response = await indexer
-      .lookupAccountTransactions(userAddress)
-      .txType('pay')
-      .limit(limit)
-      .do();
+    const response = await withMessagingDeadline(
+      indexer
+        .lookupAccountTransactions(userAddress)
+        .txType('pay')
+        .limit(limit)
+        .do(),
+      'conversations (indexer)'
+    );
     const txns = response.transactions || [];
     const complete = true;
 
