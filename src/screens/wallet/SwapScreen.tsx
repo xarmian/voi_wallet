@@ -3,7 +3,7 @@
  * Allows users to swap tokens on Voi Network using Snowball DEX aggregator
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -45,6 +45,7 @@ import { SwapService, SwapToken, UnifiedSwapQuote } from '@/services/swap';
 import { NetworkId } from '@/types/network';
 import tokenMappingService from '@/services/token-mapping';
 import { NetworkService } from '@/services/network';
+import { useSwapNetworkBalance } from '@/hooks/useSwapNetworkBalance';
 import { getTokenImageSource } from '@/utils/tokenImages';
 import {
   getUserFacingMessage,
@@ -106,117 +107,15 @@ export default function SwapScreen() {
   const accounts = useWalletStore((state) => state.wallet?.accounts);
   const currentAccount = accounts?.find((acc) => acc.id === accountId);
 
-  // Get account balance from store (for VOI network)
-  const singleNetworkBalance = useWalletStore((state) =>
-    accountId ? state.accountStates[accountId]?.balance : undefined
-  );
-
-  // Network-specific balance state
-  const [networkBalance, setNetworkBalance] = useState<AccountBalance | null>(
-    null
-  );
-  // Failure of the network-specific fetch below. It served a non-VOI selection
-  // entirely on its own and reported nothing but a console.error, so an
-  // Algorand balance failure left the same dead end the store path used to.
-  const [networkBalanceError, setNetworkBalanceError] = useState<string | null>(
-    null
-  );
-  // Bumped by Retry to re-run the network-specific effect, which has no other
-  // trigger once its inputs have settled.
-  const [networkBalanceReloadToken, setNetworkBalanceReloadToken] = useState(0);
-
-  // Load balance if not available
-  const loadAccountBalance = useWalletStore(
-    (state) => state.loadAccountBalance
-  );
-
-  // Failure of the STORE-backed load. This describes `loadAccountBalance`, which
-  // fetches on the app's current network — the same source `accountBalance`
-  // below falls back to, and only for VOI. Scoping matters: see
-  // `balanceErrorForSelectedNetwork`.
-  const storeBalanceError = useWalletStore((state) =>
-    accountId ? state.accountStates[accountId]?.balanceError : undefined
-  );
-
-  useEffect(() => {
-    if (accountId && !singleNetworkBalance) {
-      loadAccountBalance(accountId);
-    }
-  }, [accountId, singleNetworkBalance, loadAccountBalance]);
-
-  // Load network-specific balance when network or account changes
-  useEffect(() => {
-    let isCancelled = false;
-
-    const loadNetworkSpecificBalance = async () => {
-      const address = currentAccount?.address;
-      if (!address || !selectedNetwork) return;
-
-      try {
-        // For non-VOI networks, fetch directly from NetworkService
-        if (selectedNetwork !== NetworkId.VOI_MAINNET) {
-          const networkService = NetworkService.getInstance(selectedNetwork);
-          const balance = await networkService.getAccountBalance(address);
-          if (!isCancelled) {
-            setNetworkBalance(balance);
-            setNetworkBalanceError(null);
-          }
-        } else {
-          // For VOI network, use the store balance
-          if (!isCancelled) {
-            setNetworkBalance(singleNetworkBalance || null);
-            setNetworkBalanceError(null);
-          }
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          console.error('Error loading network balance:', redactError(error));
-          setNetworkBalanceError(
-            error instanceof Error ? error.message : 'Failed to load balance'
-          );
-        }
-      }
-    };
-
-    loadNetworkSpecificBalance();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    currentAccount,
-    selectedNetwork,
-    singleNetworkBalance,
-    networkBalanceReloadToken,
-  ]);
-
-  // Use network-specific balance - only fall back to store balance for VOI
-  const accountBalance =
-    selectedNetwork === NetworkId.VOI_MAINNET
-      ? networkBalance || singleNetworkBalance
-      : networkBalance;
-
-  // Report the failure that belongs to the network being swapped on, not
-  // whichever one the store happens to hold. The store is only consulted for
-  // VOI (see `accountBalance` above), so on an Algorand selection a stale VOI
-  // failure would raise an alarm about a swap that is working fine — and its
-  // Retry would re-run the wrong request. Each branch retries its own loader.
-  const isStoreBackedNetwork = selectedNetwork === NetworkId.VOI_MAINNET;
-  const balanceErrorForSelectedNetwork = isStoreBackedNetwork
-    ? storeBalanceError
-    : networkBalanceError;
-
-  const retryBalanceLoad = useCallback(() => {
-    if (isStoreBackedNetwork) {
-      // Force: the unforced path early-returns on a fresh cache, and a retry
-      // must survive a partially-populated state.
-      if (accountId) {
-        void loadAccountBalance(accountId, true);
-      }
-      return;
-    }
-    setNetworkBalanceReloadToken((token) => token + 1);
-  }, [isStoreBackedNetwork, accountId, loadAccountBalance]);
+  // Balance on the network being swapped on, fetched from that network itself.
+  // The wallet store balance follows the app's current network, so it must not
+  // back a swap on a different one.
+  const {
+    balance: accountBalance,
+    error: balanceErrorForSelectedNetwork,
+    retry: retryBalanceLoad,
+    refresh: refreshSelectedNetworkBalance,
+  } = useSwapNetworkBalance(currentAccount?.address, selectedNetwork);
 
   // Token selection state
   const [inputToken, setInputToken] = useState<SwapToken | null>(null);
@@ -502,7 +401,6 @@ export default function SwapScreen() {
     setSelectedNetwork(networkId);
     setQuote(null);
     setQuoteError(null);
-    setNetworkBalance(null);
 
     // Try to find equivalent tokens on the new network
     const newProvider = SwapService.getProvider(networkId);
@@ -838,6 +736,9 @@ export default function SwapScreen() {
           store.loadAccountBalance(accountId, true);
         }
         store.refreshAllBalances();
+        // The screen's own balance is fetched per network, so the store refresh
+        // above does not reach it.
+        refreshSelectedNetworkBalance();
         delayedRefreshTimeout.current = null;
       }, 5000);
 
