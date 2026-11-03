@@ -139,4 +139,102 @@ describe('networkStore.switchNetwork rollback (TASK-486)', () => {
     expect(AppStorage.saveSelectedNetwork).not.toHaveBeenCalled();
     expect(useNetworkStore.getState().currentNetwork).toBe(DEFAULT_NETWORK_ID);
   });
+
+  describe('overlapping switches are serialized', () => {
+    // Lets a test decide when, and how, each preference save settles.
+    function controllableSaves() {
+      const saves: { resolve: () => void; reject: (e: Error) => void }[] = [];
+      (AppStorage.saveSelectedNetwork as jest.Mock).mockImplementation(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            saves.push({ resolve, reject });
+          })
+      );
+      return saves;
+    }
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+
+    it('a failed first switch cannot leave the service behind a second one that succeeded', async () => {
+      const saves = controllableSaves();
+      const first = useNetworkStore.getState().switchNetwork(TARGET);
+      const second = useNetworkStore.getState().switchNetwork(TARGET);
+      first.catch(() => {});
+      await tick();
+
+      saves[0].reject(new Error('disk full'));
+      await expect(first).rejects.toThrow();
+      await tick();
+      // The second switch only starts after the first has finished, so it sees
+      // the restored network and performs a real switch of its own.
+      saves[1].resolve();
+      await second;
+
+      expect(useNetworkStore.getState().currentNetwork).toBe(TARGET);
+      expect(serviceNetwork).toBe(TARGET);
+    });
+
+    it('the second switch does not touch the service until the first has finished', async () => {
+      const saves = controllableSaves();
+      const first = useNetworkStore.getState().switchNetwork(TARGET);
+      const second = useNetworkStore
+        .getState()
+        .switchNetwork(DEFAULT_NETWORK_ID);
+      await tick();
+
+      // Only the first switch has reached the service so far.
+      expect(fakeService.switchNetwork).toHaveBeenCalledTimes(1);
+      saves[0].resolve();
+      await first;
+      await tick();
+      saves[1].resolve();
+      await second; // the store is on TARGET by now, so this really switches back
+
+      expect(serviceNetwork).toBe(DEFAULT_NETWORK_ID);
+      expect(useNetworkStore.getState().currentNetwork).toBe(
+        DEFAULT_NETWORK_ID
+      );
+    });
+
+    it('a queued switch to the network the first one just reached is a no-op', async () => {
+      const saves = controllableSaves();
+      const first = useNetworkStore.getState().switchNetwork(TARGET);
+      const second = useNetworkStore.getState().switchNetwork(TARGET);
+      await tick();
+      saves[0].resolve();
+      await first;
+      await second;
+
+      expect(fakeService.switchNetwork).toHaveBeenCalledTimes(1);
+      expect(saves).toHaveLength(1);
+    });
+
+    it('the post-switch health probe does not hold up the next switch', async () => {
+      const saves = controllableSaves();
+      // A hung node: the probe after the FIRST switch never settles.
+      fakeService.checkNetworkHealth.mockReturnValueOnce(new Promise(() => {}));
+
+      const first = useNetworkStore.getState().switchNetwork(TARGET);
+      first.catch(() => {});
+      await tick();
+      saves[0].resolve();
+      await tick();
+      expect(useNetworkStore.getState().currentNetwork).toBe(TARGET);
+
+      // `first` is still awaiting its probe; the next switch must not queue
+      // behind it.
+      const second = useNetworkStore
+        .getState()
+        .switchNetwork(DEFAULT_NETWORK_ID);
+      await tick();
+      saves[1].resolve();
+      const outcome = await Promise.race([
+        second.then(() => 'switched'),
+        new Promise((r) => setTimeout(() => r('blocked'), 50)),
+      ]);
+      expect(outcome).not.toBe('blocked');
+      expect(useNetworkStore.getState().currentNetwork).toBe(
+        DEFAULT_NETWORK_ID
+      );
+    });
+  });
 });

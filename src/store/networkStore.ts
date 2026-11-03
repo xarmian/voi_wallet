@@ -34,6 +34,101 @@ interface NetworkStoreState extends NetworkState {
 // per-network instance) can't overwrite fresher status for the same network.
 const refreshSeq: Partial<Record<NetworkId, number>> = {};
 
+// Tail of the switch queue. switchNetwork moves a shared service, a persisted
+// preference and the store in several awaited steps, so two overlapping calls
+// (the Settings picker and a deep link, say) would interleave them: each reads
+// its "previous" network before the other has finished, and a rollback in one
+// would undo a switch the other completed. Switches run one at a time, and
+// each reads the store only once its turn starts.
+let switchQueueTail: Promise<void> = Promise.resolve();
+
+/**
+ * One switch, run on its turn of the queue. Returns true when it switched, false
+ * when the store was already on `networkId`.
+ */
+async function switchUnderTurn(
+  networkId: NetworkId,
+  get: () => NetworkStoreState,
+  set: (partial: Partial<NetworkStoreState>) => void
+): Promise<boolean> {
+  const state = get();
+
+  if (state.currentNetwork === networkId) {
+    return false; // Already on this network
+  }
+
+  if (!AVAILABLE_NETWORKS.includes(networkId)) {
+    throw new Error(`Network ${networkId} is not available`);
+  }
+
+  set({ isSwitching: true });
+
+  // True once the service has moved to the new network. A failure after that
+  // point (the preference save) must move it back, or the service keeps serving
+  // the new network while the store and UI stay on the old one. A service
+  // switch that fails restores itself, so it needs no help.
+  let serviceSwitched = false;
+  const previousNetwork = state.currentNetwork;
+
+  try {
+    // Switch the network service. First invalidate every in-flight balance
+    // fetch (TASK-59): one that straddles the switch must not land the old
+    // network's balances in the new network's UI or cache — including after
+    // a quick A→B→A, where the network id alone would match again.
+    invalidateBalanceRequests();
+    const networkService = NetworkService.getInstance();
+    await networkService.switchNetwork(networkId);
+    serviceSwitched = true;
+
+    // Save the network preference to persistent storage
+    await AppStorage.saveSelectedNetwork(networkId);
+
+    // Clear single-network cache when switching networks
+    // This prevents wrong network data from being displayed
+    try {
+      const clearSingleNetworkCache =
+        useWalletStore.getState().clearSingleNetworkCache;
+      await clearSingleNetworkCache(); // Clear all single-network caches
+      console.log(
+        '[NetworkStore] Cleared single-network cache after network switch'
+      );
+    } catch (cacheError) {
+      console.warn(
+        '[NetworkStore] Failed to clear single-network cache:',
+        cacheError
+      );
+    }
+
+    // Update store state
+    set({
+      currentNetwork: networkId,
+      isSwitching: false,
+    });
+    return true;
+  } catch (error) {
+    if (serviceSwitched) {
+      try {
+        await NetworkService.getInstance().switchNetwork(previousNetwork);
+      } catch (rollbackError) {
+        // Keep the original failure as the one reported.
+        console.error(
+          `Failed to restore ${previousNetwork} after a failed switch to ${networkId}:`,
+          rollbackError
+        );
+      }
+      // Fetches that started against the new network while it was active
+      // must not land in the restored one.
+      invalidateBalanceRequests();
+    }
+    set({ isSwitching: false });
+    const networkError =
+      error instanceof NetworkError
+        ? error
+        : new NetworkError(`Failed to switch to ${networkId}`, networkId);
+    throw networkError;
+  }
+}
+
 export const useNetworkStore = create<NetworkStoreState>()(
   subscribeWithSelector((set, get) => ({
     // Initial state
@@ -112,85 +207,25 @@ export const useNetworkStore = create<NetworkStoreState>()(
     },
 
     async switchNetwork(networkId: NetworkId) {
-      const state = get();
+      const turn = switchQueueTail;
+      let finishTurn!: () => void;
+      switchQueueTail = new Promise<void>((resolve) => {
+        finishTurn = resolve;
+      });
 
-      if (state.currentNetwork === networkId) {
-        return; // Already on this network
-      }
-
-      if (!AVAILABLE_NETWORKS.includes(networkId)) {
-        throw new Error(`Network ${networkId} is not available`);
-      }
-
-      set({ isSwitching: true });
-
-      // True once the service has moved to the new network. A failure after
-      // that point (the preference save) must move it back, or the service
-      // keeps serving the new network while the store and UI stay on the old
-      // one. A service switch that fails restores itself, so it needs no help.
-      let serviceSwitched = false;
-      const previousNetwork = state.currentNetwork;
-
+      let switched: boolean;
       try {
-        // Switch the network service. First invalidate every in-flight balance
-        // fetch (TASK-59): one that straddles the switch must not land the old
-        // network's balances in the new network's UI or cache — including after
-        // a quick A→B→A, where the network id alone would match again.
-        invalidateBalanceRequests();
-        const networkService = NetworkService.getInstance();
-        await networkService.switchNetwork(networkId);
-        serviceSwitched = true;
+        await turn;
+        switched = await switchUnderTurn(networkId, get, set);
+      } finally {
+        finishTurn();
+      }
 
-        // Save the network preference to persistent storage
-        await AppStorage.saveSelectedNetwork(networkId);
-
-        // Clear single-network cache when switching networks
-        // This prevents wrong network data from being displayed
-        try {
-          const clearSingleNetworkCache =
-            useWalletStore.getState().clearSingleNetworkCache;
-          await clearSingleNetworkCache(); // Clear all single-network caches
-          console.log(
-            '[NetworkStore] Cleared single-network cache after network switch'
-          );
-        } catch (cacheError) {
-          console.warn(
-            '[NetworkStore] Failed to clear single-network cache:',
-            cacheError
-          );
-        }
-
-        // Update store state
-        set({
-          currentNetwork: networkId,
-          isSwitching: false,
-        });
-
-        // Refresh network status
+      if (switched) {
+        // Outside the turn: the probe can take ~15s on an unavailable node and
+        // must not hold up the next switch.
         await get().refreshNetworkStatus(networkId);
-
         console.log(`Successfully switched to network: ${networkId}`);
-      } catch (error) {
-        if (serviceSwitched) {
-          try {
-            await NetworkService.getInstance().switchNetwork(previousNetwork);
-          } catch (rollbackError) {
-            // Keep the original failure as the one reported.
-            console.error(
-              `Failed to restore ${previousNetwork} after a failed switch to ${networkId}:`,
-              rollbackError
-            );
-          }
-          // Fetches that started against the new network while it was active
-          // must not land in the restored one.
-          invalidateBalanceRequests();
-        }
-        set({ isSwitching: false });
-        const networkError =
-          error instanceof NetworkError
-            ? error
-            : new NetworkError(`Failed to switch to ${networkId}`, networkId);
-        throw networkError;
       }
     },
 
