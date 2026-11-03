@@ -49,6 +49,7 @@ export interface ReconcileResult {
   orphanSecretsDeleted: string[];
   orphanSecretsQuarantined: string[];
   phantomAccountsPruned: string[];
+  phantomAccountsSkippedLive: string[];
   staleJournalDropped: string[];
 }
 
@@ -57,6 +58,7 @@ const EMPTY_RESULT: ReconcileResult = {
   orphanSecretsDeleted: [],
   orphanSecretsQuarantined: [],
   phantomAccountsPruned: [],
+  phantomAccountsSkippedLive: [],
   staleJournalDropped: [],
 };
 
@@ -203,6 +205,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   // see phantomAccountsPruned so it can refresh the (now stale) lock verdict (Codex
   // P2). So track completed work and return it even if a step throws.
   const phantomsPruned: string[] = [];
+  const phantomsSkippedLive: string[] = [];
   const orphansDeleted: string[] = [];
   const journalDropped: string[] = [];
   // Ruling B: while any downgraded bookkeeping marker exists in this process a late
@@ -227,29 +230,83 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     // verdict (emptying the wallet ⇒ canonical clearAllWallets) — so the
     // verdict-affecting change is committed as early as possible.
     if (!nonDestructive && !hasDowngradedMarkers() && phantomIds.length > 0) {
-      const removalRecords = standardAccounts
-        .filter(
-          (account) =>
-            phantomIds.includes(account.id) &&
-            !deleteEntryIds.includes(account.id)
-        )
-        .map(({ id, address, label }) => ({ id, address, label }));
-      let removalRecordWriteFailed = false;
-      try {
-        if (removalRecords.length > 0)
-          await AccountSecureStorage.recordUnexplainedRemovals(removalRecords);
-      } catch {
-        removalRecordWriteFailed = true;
-        console.warn(
-          `[bootReconcile] skipped phantom prune(s) for ids ${phantomIds.join(',')}: removal record write failed`
+      const { liveIds, acted } =
+        await AccountSecureStorage.runWithConfirmedAbsentSecrets(
+          phantomIds,
+          async (confirmedAbsent, signal) => {
+            if (signal.aborted) {
+              console.log(
+                `[bootReconcile] skipped aborted phantom prune for ids ${confirmedAbsent.join(',')}`
+              );
+              return false;
+            }
+            const removalRecords = standardAccounts
+              .filter(
+                (account) =>
+                  confirmedAbsent.includes(account.id) &&
+                  !deleteEntryIds.includes(account.id)
+              )
+              .map(({ id, address, label }) => ({ id, address, label }));
+            const writtenIds = removalRecords.map(({ id }) => id);
+            let pruneSucceeded = false;
+            try {
+              try {
+                if (removalRecords.length > 0)
+                  await AccountSecureStorage.recordUnexplainedRemovalsLocked(
+                    removalRecords
+                  );
+              } catch {
+                console.warn(
+                  `[bootReconcile] skipped phantom prune(s) for ids ${confirmedAbsent.join(',')}: removal record write failed`
+                );
+                return false;
+              }
+              if (signal.aborted) {
+                console.log(
+                  `[bootReconcile] skipped aborted phantom prune for ids ${confirmedAbsent.join(',')}`
+                );
+                return false;
+              }
+              if (hasDowngradedMarkers()) return false;
+              pruneSucceeded =
+                await MultiAccountWalletService.pruneStandardAccounts(
+                  confirmedAbsent,
+                  {
+                    shouldAbort: () => signal.aborted,
+                    onCommit: () => {
+                      signal.committed = true;
+                    },
+                  }
+                );
+              return pruneSucceeded;
+            } finally {
+              if (!pruneSucceeded && !signal.committed) {
+                for (const id of writtenIds) {
+                  try {
+                    await AccountSecureStorage.clearUnexplainedRemoval(id);
+                  } catch {
+                    console.warn(
+                      `[bootReconcile] failed to clear removal record for id ${id}`
+                    );
+                  }
+                }
+              }
+            }
+          }
         );
-      }
-      if (!removalRecordWriteFailed && !hasDowngradedMarkers()) {
-        await MultiAccountWalletService.pruneStandardAccounts(phantomIds);
-        phantomsPruned.push(...phantomIds);
-        await AccountSecureStorage.dropPendingCreateEntries(phantomIds);
+      phantomsSkippedLive.push(...liveIds);
+      if (liveIds.length > 0)
+        console.log(
+          `[bootReconcile] skipped ${liveIds.length} live phantom candidate(s)`
+        );
+      if (acted) {
+        const confirmedAbsent = phantomIds.filter(
+          (id) => !liveIds.includes(id)
+        );
+        phantomsPruned.push(...confirmedAbsent);
+        await AccountSecureStorage.dropPendingCreateEntries(confirmedAbsent);
         journalDropped.push(
-          ...phantomIds.filter((id) => journal[id] !== undefined)
+          ...confirmedAbsent.filter((id) => journal[id] !== undefined)
         );
       }
     }
@@ -303,6 +360,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     orphanSecretsDeleted: orphansDeleted,
     orphanSecretsQuarantined: quarantinedOrphanIds,
     phantomAccountsPruned: phantomsPruned,
+    phantomAccountsSkippedLive: phantomsSkippedLive,
     staleJournalDropped: staleJournalIds.filter((id) =>
       journalDropped.includes(id)
     ),

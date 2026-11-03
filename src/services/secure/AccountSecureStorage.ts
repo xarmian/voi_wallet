@@ -70,6 +70,12 @@ import {
   type WriteContext,
 } from './boundedWrites';
 
+/** Handed to a runWithConfirmedAbsentSecrets action; set when its time bound fires. */
+export type ConfirmedAbsentActionSignal = {
+  aborted: boolean;
+  committed: boolean;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
 //
@@ -265,6 +271,7 @@ export class AccountSecureStorage {
     'voi_reconcile_unexplained_removals';
   private static readonly RECONCILE_RECOVERY_MARKER_KEY =
     'voi_reconcile_recovery_required';
+  private static readonly RECONCILE_ACTION_TIMEOUT_MS = 5000;
   private static secureResetGeneration = 0;
   private static pendingCreateTokenCounter = 0;
 
@@ -2574,21 +2581,78 @@ export class AccountSecureStorage {
   static async recordUnexplainedRemovals(
     records: { id: string; address: string; label: string }[]
   ): Promise<void> {
+    return this.runKeyMutationExclusive(() =>
+      this.recordUnexplainedRemovalsLocked(records)
+    );
+  }
+
+  /** Caller must hold the key-mutation mutex. */
+  static async recordUnexplainedRemovalsLocked(
+    records: { id: string; address: string; label: string }[]
+  ): Promise<void> {
+    let current: Record<string, { address: string; label: string }> = {};
+    try {
+      current = await this.readUnexplainedRemovalsMap();
+    } catch {
+      console.warn('[reconcile] removal records unreadable; starting fresh');
+    }
+    for (const { id, address, label } of records)
+      current[id] = { address, label };
+    await storage.setItem(
+      this.UNEXPLAINED_REMOVALS_KEY,
+      JSON.stringify(current)
+    );
+  }
+
+  static async runWithConfirmedAbsentSecrets(
+    ids: string[],
+    action: (
+      confirmedAbsent: string[],
+      signal: ConfirmedAbsentActionSignal
+    ) => Promise<boolean>
+  ): Promise<{ confirmedAbsent: string[]; liveIds: string[]; acted: boolean }> {
     return this.runKeyMutationExclusive(async () => {
-      // The records are public data: a corrupt map is replaced rather than
-      // allowed to block the phantom prune that is waiting on this write.
-      let current: Record<string, { address: string; label: string }> = {};
-      try {
-        current = await this.readUnexplainedRemovalsMap();
-      } catch {
-        console.warn('[reconcile] removal records unreadable; starting fresh');
-      }
-      for (const { id, address, label } of records)
-        current[id] = { address, label };
-      await storage.setItem(
-        this.UNEXPLAINED_REMOVALS_KEY,
-        JSON.stringify(current)
+      const states = await Promise.all(
+        ids.map(async (id) => ({
+          id,
+          present: await this.probeSecretPresenceStrict(id),
+        }))
       );
+      const liveIds = states
+        .filter(({ present }) => present)
+        .map(({ id }) => id);
+      const confirmedAbsent = states
+        .filter(({ present }) => !present)
+        .map(({ id }) => id);
+      const signal: ConfirmedAbsentActionSignal = {
+        aborted: false,
+        committed: false,
+      };
+      const acted = confirmedAbsent.length
+        ? await new Promise<boolean>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              // Timer and commit callbacks run atomically on the JS thread; exactly one wins.
+              if (signal.committed) return;
+              signal.aborted = true;
+              reject(
+                new Error(
+                  `Confirmed-absent reconcile action timed out after ${this.RECONCILE_ACTION_TIMEOUT_MS}ms`
+                )
+              );
+            }, this.RECONCILE_ACTION_TIMEOUT_MS);
+            action(confirmedAbsent, signal).then(
+              (value) => {
+                clearTimeout(timer);
+                resolve(value);
+              },
+              (error) => {
+                clearTimeout(timer);
+                reject(error);
+              }
+            );
+          })
+        : false;
+      return { confirmedAbsent, liveIds, acted };
     });
   }
 

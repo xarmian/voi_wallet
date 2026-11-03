@@ -4,6 +4,23 @@ jest.mock('@/services/secure', () => ({
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
     recordUnexplainedRemovals: jest.fn(async () => {}),
+    recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
+    clearUnexplainedRemoval: jest.fn(async () => {}),
+    runWithConfirmedAbsentSecrets: jest.fn(
+      async (
+        ids: string[],
+        action: (
+          ids: string[],
+          signal: { aborted: boolean; committed: boolean }
+        ) => Promise<boolean>
+      ) => ({
+        confirmedAbsent: ids,
+        liveIds: [],
+        acted: ids.length
+          ? await action(ids, { aborted: false, committed: false })
+          : false,
+      })
+    ),
     readUnknownWritesStrict: jest.fn(),
     resolveUnknownWrite: jest.fn(),
     dropUnknownWrite: jest.fn(),
@@ -76,7 +93,7 @@ function setup({
   });
   secure.deleteAccount.mockResolvedValue(undefined);
   secure.dropPendingCreateEntries.mockResolvedValue(undefined);
-  wallet.pruneStandardAccounts.mockResolvedValue(undefined);
+  wallet.pruneStandardAccounts.mockResolvedValue(true);
 }
 beforeEach(() => {
   jest.clearAllMocks();
@@ -119,7 +136,7 @@ test('corrupt journal marker survives a process restart and makes the next pass 
       { id: 'phantom', address: 'addr-phantom', label: 'phantom' },
     ],
   });
-  freshWallet.pruneStandardAccounts.mockResolvedValue(undefined);
+  freshWallet.pruneStandardAccounts.mockResolvedValue(true);
   await expect(freshReconcile()).resolves.toMatchObject({
     ran: true,
     reportOnly: true,
@@ -130,7 +147,10 @@ test('corrupt journal marker survives a process restart and makes the next pass 
   await expect(freshReconcile()).resolves.toMatchObject({
     ran: true,
   });
-  expect(freshWallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+  expect(freshWallet.pruneStandardAccounts).toHaveBeenCalledWith(
+    ['phantom'],
+    expect.objectContaining({ shouldAbort: expect.any(Function) })
+  );
 });
 test('orphan secret with no list entry and no journal is not invented as a candidate', async () => {
   setup({ secrets: ['orphan'] });
@@ -303,6 +323,9 @@ describe('ruling B: a downgraded bookkeeping marker makes every reconcile non-de
     const result = await reconcileCrossStoreHalfState();
     expect(secure.deleteAccount).not.toHaveBeenCalled();
     expect(result.orphanSecretsQuarantined).toEqual(['acct']);
-    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(
+      ['phantom'],
+      expect.objectContaining({ shouldAbort: expect.any(Function) })
+    );
   });
 });

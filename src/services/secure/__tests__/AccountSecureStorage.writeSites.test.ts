@@ -39,7 +39,7 @@ const OUT_OF_SCOPE_CLASSIFIED: Record<string, number> = {
   removeQuarantinedIds: 2,
   setReconcileRecoveryMarker: 1,
   clearReconcileRecoveryMarker: 1,
-  recordUnexplainedRemovals: 1,
+  recordUnexplainedRemovalsLocked: 1,
   clearUnexplainedRemoval: 2,
   clearUnexplainedRemovals: 1,
   deleteAccount: 2,

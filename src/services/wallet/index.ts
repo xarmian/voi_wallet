@@ -2511,8 +2511,13 @@ export class MultiAccountWalletService {
    * empty accounts array. Epoch-guarded like every other blob mutation so a reset
    * racing boot is not undone. A no-op when nothing matches.
    */
-  static async pruneStandardAccounts(ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
+  static async pruneStandardAccounts(
+    ids: string[],
+    options?: { shouldAbort?: () => boolean; onCommit?: () => void }
+  ): Promise<boolean> {
+    if (ids.length === 0) return false;
+    // An already-aborted run must not even cancel the subscribe passes below.
+    if (options?.shouldAbort?.()) return false;
     // TASK-192: this removes a SUBSET of accounts without going through
     // deleteAccount or clearAllWallets, so neither of those guards covers it.
     // A boot-time subscribe pass holding the pre-prune snapshot would otherwise
@@ -2526,6 +2531,9 @@ export class MultiAccountWalletService {
       const toPrune = new Set(ids);
       const remaining = wallet.accounts.filter((acc) => !toPrune.has(acc.id));
       if (remaining.length === wallet.accounts.length) return false;
+      if (options?.shouldAbort?.()) return false;
+      // Commit point: after this synchronous callback, the bounded caller waits for the write.
+      options?.onCommit?.();
       if (remaining.length === 0) {
         // Make the empty-wallet decision and removal in the same queue task;
         // calling clearAllWallets after releasing the queue could erase an add.
@@ -2555,6 +2563,7 @@ export class MultiAccountWalletService {
       return true;
     });
     if (wrote) void this.clearLegacyValue(this.WALLET_KEY);
+    return wrote;
   }
 
   /**

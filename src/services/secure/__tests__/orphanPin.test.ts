@@ -25,6 +25,22 @@ jest.mock('../AccountSecureStorage', () => ({
     readUnknownWritesStrict: jest.fn(async () => ({})),
     resolveUnknownWrite: jest.fn(async () => true),
     probeSecretPresenceStrict: jest.fn(),
+    recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
+    runWithConfirmedAbsentSecrets: jest.fn(
+      async (
+        ids: string[],
+        action: (
+          ids: string[],
+          signal: { aborted: boolean; committed: boolean }
+        ) => Promise<boolean>
+      ) => ({
+        confirmedAbsent: ids,
+        liveIds: [],
+        acted: ids.length
+          ? await action(ids, { aborted: false, committed: false })
+          : false,
+      })
+    ),
     clearBiometricSecret: jest.fn(),
     setBiometricEnabled: jest.fn(),
   },
@@ -62,6 +78,7 @@ beforeEach(() => {
     orphanSecretsDeleted: [],
     orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
+    phantomAccountsSkippedLive: [],
     staleJournalDropped: [],
   });
   jest
@@ -117,6 +134,7 @@ it('aborts when reconcile did not run', async () => {
     orphanSecretsDeleted: [],
     orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
+    phantomAccountsSkippedLive: [],
     staleJournalDropped: [],
   });
   await expect(clearOrphanPin()).rejects.toThrow(
@@ -326,6 +344,7 @@ it('probes ids indexed only BEFORE reconcile (pre ∪ post second layer)', async
       orphanSecretsDeleted: [],
       orphanSecretsQuarantined: [],
       phantomAccountsPruned: [],
+      phantomAccountsSkippedLive: [],
       staleJournalDropped: [],
     };
   });
@@ -534,6 +553,7 @@ it('a reconcile pass that skipped unresolved UNKNOWN-write ids is unverifiable (
     orphanSecretsDeleted: [],
     orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
+    phantomAccountsSkippedLive: [],
     staleJournalDropped: [],
   });
   await expect(clearOrphanPin()).rejects.toThrow(
