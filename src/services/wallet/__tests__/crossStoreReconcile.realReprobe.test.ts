@@ -81,6 +81,8 @@ beforeEach(() => {
   mockPresence = () => null;
   mockOrder = [];
   mockRecordWriteGate = null;
+  mockPrune.mockReset();
+  mockBlobRead.mockReset();
   jest.restoreAllMocks();
   mockBlobRead.mockResolvedValue({
     standardIds: ['a'],
@@ -109,7 +111,7 @@ it('keeps a secret that appears between Phase 1 and the locked re-probe', async 
 it('records confirmed absence before pruning and reports the prune', async () => {
   mockPresence = () => null;
   const result = await reconcileCrossStoreHalfState();
-  expect(mockOrder).toEqual(['storage', 'prune']);
+  expect(mockPrune).toHaveBeenCalledTimes(1);
   expect(result.phantomAccountsPruned).toEqual(['a']);
 });
 
@@ -147,7 +149,7 @@ it('bounds the locked prune action and releases the mutex after five seconds', a
   }
 });
 
-it('does not prune when the abandoned reconcile action resumes after timeout', async () => {
+it('does not store a removal record when a delayed record write resumes after timeout', async () => {
   jest.useFakeTimers();
   try {
     mockPresence = () => null;
@@ -174,7 +176,40 @@ it('does not prune when the abandoned reconcile action resumes after timeout', a
     await Promise.resolve();
     expect(mockPrune).not.toHaveBeenCalled();
     expect(mockOrder).not.toContain('prune');
+    await expect(
+      AccountSecureStorage.readUnexplainedRemovals()
+    ).resolves.toEqual([]);
   } finally {
     jest.useRealTimers();
   }
+});
+
+it('clears a removal record when pruning returns false', async () => {
+  mockPresence = () => null;
+  mockPrune.mockResolvedValueOnce(false);
+  await reconcileCrossStoreHalfState();
+  await expect(AccountSecureStorage.readUnexplainedRemovals()).resolves.toEqual(
+    []
+  );
+  expect(mockPrune).toHaveBeenCalledTimes(1);
+});
+
+it('clears a removal record when pruning throws and reconcile swallows the error', async () => {
+  mockPresence = () => null;
+  mockPrune.mockRejectedValueOnce(new Error('prune failed'));
+  await expect(reconcileCrossStoreHalfState()).resolves.toMatchObject({
+    phantomAccountsPruned: [],
+  });
+  await expect(AccountSecureStorage.readUnexplainedRemovals()).resolves.toEqual(
+    []
+  );
+});
+
+it('keeps removal records after successful prune, with record before prune', async () => {
+  mockPresence = () => null;
+  await reconcileCrossStoreHalfState();
+  expect(mockOrder).toEqual(['storage', 'prune']);
+  await expect(AccountSecureStorage.readUnexplainedRemovals()).resolves.toEqual(
+    [{ id: 'a', address: 'address-a', label: 'A' }]
+  );
 });

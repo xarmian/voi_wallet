@@ -2525,7 +2525,6 @@ export class MultiAccountWalletService {
     invalidateAccountSubscribePasses();
     const readEpoch = walletResetEpoch;
     const wrote = await this.enqueueWalletWrite(async () => {
-      if (options?.shouldAbort?.()) return false;
       const raw = await this.readWalletForMutation();
       if (raw == null || readEpoch !== walletResetEpoch) return false;
       const wallet = JSON.parse(raw) as Wallet;

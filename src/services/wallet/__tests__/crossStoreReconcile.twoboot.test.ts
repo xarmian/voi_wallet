@@ -21,6 +21,11 @@ jest.mock('@/services/secure', () => ({
         mockRemovalRecords.push(...records.map(({ id }) => id));
       }
     ),
+    clearUnexplainedRemoval: jest.fn(async (id: string) => {
+      mockRemovalRecords = mockRemovalRecords.filter(
+        (recordId) => recordId !== id
+      );
+    }),
     runWithConfirmedAbsentSecrets: jest.fn(
       async (
         ids: string[],

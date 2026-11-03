@@ -27,6 +27,7 @@ jest.mock('@/services/secure', () => ({
     clearReconcileRecoveryMarker: jest.fn(async () => {}),
     recordUnexplainedRemovals: jest.fn(async () => {}),
     recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
+    clearUnexplainedRemoval: jest.fn(async () => {}),
     runWithConfirmedAbsentSecrets: jest.fn(
       async (
         ids: string[],
@@ -249,6 +250,26 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
     expect(
       JSON.stringify(secure.recordUnexplainedRemovalsLocked.mock.calls[0][0])
     ).not.toMatch(/secret|mnemonic|key/i);
+  });
+
+  it('does not write a removal record when the bounded action is already aborted', async () => {
+    setup({ blob: ['phantom'], list: ['phantom'], secrets: [] });
+    secure.runWithConfirmedAbsentSecrets.mockImplementationOnce(
+      async (
+        ids: string[],
+        action: (
+          ids: string[],
+          signal: { aborted: boolean }
+        ) => Promise<boolean>
+      ) => ({
+        confirmedAbsent: ids,
+        liveIds: [],
+        acted: await action(ids, { aborted: true }),
+      })
+    );
+    await reconcileCrossStoreHalfState();
+    expect(secure.recordUnexplainedRemovalsLocked).not.toHaveBeenCalled();
+    expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
   });
 
   it('skips phantom prune when recording the removal fails', async () => {

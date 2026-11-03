@@ -20,6 +20,9 @@ jest.mock('@/services/ledger/transport', () => ({
 }));
 jest.mock('@/services/ledger/algorand', () => ({ ledgerAlgorandService: {} }));
 jest.mock('@/services/network', () => ({ NetworkService: {} }));
+jest.mock('@/services/notifications/subscribePass', () => ({
+  invalidateAccountSubscribePasses: jest.fn(),
+}));
 jest.mock('../../secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     getResetGeneration: () => 0,
@@ -30,6 +33,7 @@ jest.mock('../../secure/AccountSecureStorage', () => ({
 }));
 
 import { storage, secureStorage } from '@/platform';
+import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { AccountType, ResetRacedError, Wallet } from '@/types/wallet';
 import { MultiAccountWalletService as Service } from '../index';
 
@@ -206,16 +210,10 @@ it('preserves a new account while reconciliation prunes the old account (#5)', a
   }
 });
 
-// pruneStandardAccounts consults shouldAbort at three points, in order: (1)
-// before it queues anything, (2) at the start of its wallet-chain task, (3)
-// right before the first write. Each is covered on its own below so removing
-// any one of them turns exactly one test red.
-describe.each([
-  [1, 'before it queues anything'],
-  [2, 'at the start of its wallet-chain task'],
-  [3, 'right before the first write'],
-])('prune aborted at check %i (%s)', (abortAt) => {
-  it('writes nothing when the wallet would only lose one of several accounts', async () => {
+// The two abort checks are before queue/invalidation and immediately before
+// the first write (after the read and no-op checks).
+describe('pruneStandardAccounts abort boundaries', () => {
+  it('check 1 aborts before queueing, invalidation, reads, or writes', async () => {
     const first = await Service.createStandardAccount({
       type: AccountType.STANDARD,
       label: 'First',
@@ -225,11 +223,16 @@ describe.each([
       label: 'Second',
     });
     const before = mockStore[WALLET_KEY];
-    let checks = 0;
+    jest.mocked(storage.getItem).mockClear();
+    jest.mocked(storage.setItem).mockClear();
+    jest.mocked(invalidateAccountSubscribePasses).mockClear();
     const result = await Service.pruneStandardAccounts([first.id], {
-      shouldAbort: () => ++checks >= abortAt,
+      shouldAbort: () => true,
     });
     expect(result).toBe(false);
+    expect(invalidateAccountSubscribePasses).not.toHaveBeenCalled();
+    expect(storage.getItem).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
     expect(mockStore[WALLET_KEY]).toBe(before);
     expect(readWallet().accounts.map(({ id }) => id)).toEqual([
       first.id,
@@ -237,19 +240,59 @@ describe.each([
     ]);
   });
 
-  it('wipes nothing when the prune would have emptied the wallet', async () => {
+  it('check 2 leaves a multi-account wallet byte-identical', async () => {
+    const first = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'First',
+    });
+    await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Second',
+    });
+    const before = mockStore[WALLET_KEY];
+    let checks = 0;
+    jest.mocked(storage.setItem).mockClear();
+    const result = await Service.pruneStandardAccounts([first.id], {
+      shouldAbort: () => ++checks === 2,
+    });
+    const readsAfterPrune = jest.mocked(storage.getItem).mock.calls.length;
+    expect(result).toBe(false);
+    expect(readsAfterPrune).toBeGreaterThan(0);
+    expect(mockStore[WALLET_KEY]).toBe(before);
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('check 2 leaves an empty-wallet prune byte-identical without tombstone or cache clear', async () => {
     const only = await Service.createStandardAccount({
       type: AccountType.STANDARD,
       label: 'Only',
     });
     const before = mockStore[WALLET_KEY];
     let checks = 0;
+    jest.mocked(storage.getItem).mockClear();
+    jest.mocked(storage.setItem).mockClear();
     const result = await Service.pruneStandardAccounts([only.id], {
-      shouldAbort: () => ++checks >= abortAt,
+      shouldAbort: () => ++checks === 2,
     });
+    const readsAfterPrune = jest.mocked(storage.getItem).mock.calls.length;
     expect(result).toBe(false);
     expect(mockStore[WALLET_KEY]).toBe(before);
     expect(readWallet().accounts.map(({ id }) => id)).toEqual([only.id]);
+    expect(mockStore['voi_wallet_wipe_tombstone']).toBeUndefined();
+    expect(readsAfterPrune).toBeGreaterThan(0);
+  });
+
+  it('never aborting prunes the account and returns true', async () => {
+    const first = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'First',
+    });
+    const second = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Second',
+    });
+    expect(await Service.pruneStandardAccounts([first.id])).toBe(true);
+    expect(readWallet().accounts.map(({ id }) => id)).toEqual([second.id]);
   });
 });
 

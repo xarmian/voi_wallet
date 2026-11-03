@@ -234,6 +234,12 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
         await AccountSecureStorage.runWithConfirmedAbsentSecrets(
           phantomIds,
           async (confirmedAbsent, signal) => {
+            if (signal.aborted) {
+              console.log(
+                `[bootReconcile] skipped aborted phantom prune for ids ${confirmedAbsent.join(',')}`
+              );
+              return false;
+            }
             const removalRecords = standardAccounts
               .filter(
                 (account) =>
@@ -241,28 +247,46 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
                   !deleteEntryIds.includes(account.id)
               )
               .map(({ id, address, label }) => ({ id, address, label }));
+            const writtenIds = removalRecords.map(({ id }) => id);
+            let pruneSucceeded = false;
             try {
-              if (removalRecords.length > 0)
-                await AccountSecureStorage.recordUnexplainedRemovalsLocked(
-                  removalRecords
+              try {
+                if (removalRecords.length > 0)
+                  await AccountSecureStorage.recordUnexplainedRemovalsLocked(
+                    removalRecords
+                  );
+              } catch {
+                console.warn(
+                  `[bootReconcile] skipped phantom prune(s) for ids ${confirmedAbsent.join(',')}: removal record write failed`
                 );
-            } catch {
-              console.warn(
-                `[bootReconcile] skipped phantom prune(s) for ids ${confirmedAbsent.join(',')}: removal record write failed`
-              );
-              return false;
+                return false;
+              }
+              if (signal.aborted) {
+                console.log(
+                  `[bootReconcile] skipped aborted phantom prune for ids ${confirmedAbsent.join(',')}`
+                );
+                return false;
+              }
+              if (hasDowngradedMarkers()) return false;
+              pruneSucceeded =
+                await MultiAccountWalletService.pruneStandardAccounts(
+                  confirmedAbsent,
+                  { shouldAbort: () => signal.aborted }
+                );
+              return pruneSucceeded;
+            } finally {
+              if (!pruneSucceeded) {
+                for (const id of writtenIds) {
+                  try {
+                    await AccountSecureStorage.clearUnexplainedRemoval(id);
+                  } catch {
+                    console.warn(
+                      `[bootReconcile] failed to clear removal record for id ${id}`
+                    );
+                  }
+                }
+              }
             }
-            if (signal.aborted) {
-              console.log(
-                `[bootReconcile] skipped aborted phantom prune for ids ${confirmedAbsent.join(',')}`
-              );
-              return false;
-            }
-            if (hasDowngradedMarkers()) return false;
-            return await MultiAccountWalletService.pruneStandardAccounts(
-              confirmedAbsent,
-              { shouldAbort: () => signal.aborted }
-            );
           }
         );
       phantomsSkippedLive.push(...liveIds);
