@@ -206,19 +206,51 @@ it('preserves a new account while reconciliation prunes the old account (#5)', a
   }
 });
 
-it('aborts a prune on its in-chain pre-write check without changing the wallet', async () => {
-  const first = await Service.createStandardAccount({
-    type: AccountType.STANDARD,
-    label: 'First',
+// pruneStandardAccounts consults shouldAbort at three points, in order: (1)
+// before it queues anything, (2) at the start of its wallet-chain task, (3)
+// right before the first write. Each is covered on its own below so removing
+// any one of them turns exactly one test red.
+describe.each([
+  [1, 'before it queues anything'],
+  [2, 'at the start of its wallet-chain task'],
+  [3, 'right before the first write'],
+])('prune aborted at check %i (%s)', (abortAt) => {
+  it('writes nothing when the wallet would only lose one of several accounts', async () => {
+    const first = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'First',
+    });
+    const second = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Second',
+    });
+    const before = mockStore[WALLET_KEY];
+    let checks = 0;
+    const result = await Service.pruneStandardAccounts([first.id], {
+      shouldAbort: () => ++checks >= abortAt,
+    });
+    expect(result).toBe(false);
+    expect(mockStore[WALLET_KEY]).toBe(before);
+    expect(readWallet().accounts.map(({ id }) => id)).toEqual([
+      first.id,
+      second.id,
+    ]);
   });
-  const before = mockStore[WALLET_KEY];
-  let checks = 0;
-  const result = await Service.pruneStandardAccounts([first.id], {
-    shouldAbort: () => ++checks > 1,
+
+  it('wipes nothing when the prune would have emptied the wallet', async () => {
+    const only = await Service.createStandardAccount({
+      type: AccountType.STANDARD,
+      label: 'Only',
+    });
+    const before = mockStore[WALLET_KEY];
+    let checks = 0;
+    const result = await Service.pruneStandardAccounts([only.id], {
+      shouldAbort: () => ++checks >= abortAt,
+    });
+    expect(result).toBe(false);
+    expect(mockStore[WALLET_KEY]).toBe(before);
+    expect(readWallet().accounts.map(({ id }) => id)).toEqual([only.id]);
   });
-  expect(result).toBe(false);
-  expect(mockStore[WALLET_KEY]).toBe(before);
-  expect(readWallet().accounts.map(({ id }) => id)).toEqual([first.id]);
 });
 
 // Review follow-up (TASK-440): a mutation on the write chain must not wait
