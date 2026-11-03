@@ -327,13 +327,18 @@ describe('the legacy wallet copy and the marker write', () => {
         keys: [MARKER],
       });
 
-      // Data is already gone. A second Delete Everything this session must not
-      // write the request over a delete that can still land and erase it mid-wipe.
+      // A second Delete Everything this session must not START while the earlier
+      // clear of the request can still land: that late delete would erase the new
+      // request mid-wipe, and a wipe that then failed would have no marker to be
+      // finished at boot. It is refused up front, so nothing is deleted.
       mockMarkerRemoveHang = false;
+      seedWallet(['two']);
       await expect(wipeWalletData()).rejects.toMatchObject({
         name: 'WipeIncompleteError',
         keys: [MARKER],
       });
+      expect(mockSecureValues.get(secretKey('two'))).toBe('secret-two');
+      expect(mockSecureValues.get(service.PIN_KEY)).toBe('pin');
     } finally {
       jest.useRealTimers();
     }
