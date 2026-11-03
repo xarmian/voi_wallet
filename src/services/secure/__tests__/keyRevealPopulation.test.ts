@@ -68,3 +68,34 @@ it('keeps secret reveal APIs and direct key reads within the reviewed population
     );
   expect(problems).toEqual([]);
 });
+
+// The reveal calls must sit behind a prompt: a screen or flow that calls
+// revealMnemonic / revealPrivateKey has to obtain the capability from
+// withFreshAuth, and the backup collectors have to take it as a parameter.
+it('keeps every reveal caller behind withFreshAuth', () => {
+  const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
+  const gated = [
+    'screens/settings/ShowRecoveryPhraseScreen.tsx',
+    'screens/wallet/VerifyBackupScreen.tsx',
+    'components/remoteSigner/TransferToAirgapFlow.tsx',
+  ];
+  for (const rel of gated) {
+    const source = read(rel);
+    expect(`${rel}: ${/withFreshAuth\(/.test(source)}`).toBe(`${rel}: true`);
+    // The reveal call must be written inside the withFreshAuth callback.
+    expect(
+      `${rel}: ${/withFreshAuth\([\s\S]*?\(cap\)\s*=>[\s\S]*?reveal(Mnemonic|PrivateKey)\(/.test(source)}`
+    ).toBe(`${rel}: true`);
+  }
+  expect(
+    /cap: FreshAuthCapability/.test(read('services/backup/collectors.ts'))
+  ).toBe(true);
+  expect(
+    /cap: FreshAuthCapability/.test(read('services/backup/index.ts'))
+  ).toBe(true);
+  expect(
+    /withFreshAuth\(\s*'export_backup'/.test(
+      read('screens/settings/BackupWalletScreen.tsx')
+    )
+  ).toBe(true);
+});

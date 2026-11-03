@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -76,10 +76,23 @@ export default function BackupWalletScreen() {
     setShowPasswordModal(true);
   }, [accounts.length]);
 
+  // Aborted when the screen goes away: closes an open fresh-auth prompt so the
+  // backup is never exported for a screen that no longer exists.
+  const exportAbortRef = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      exportAbortRef.current?.abort();
+    },
+    []
+  );
+
   const handlePasswordConfirm = useCallback(
     async (password: string) => {
       setShowPasswordModal(false);
       setError(undefined);
+      exportAbortRef.current?.abort();
+      const abort = new AbortController();
+      exportAbortRef.current = abort;
 
       try {
         const result = await withFreshAuth(
@@ -89,7 +102,7 @@ export default function BackupWalletScreen() {
             setIsCreatingBackup(true);
             return BackupService.createBackup(password, cap);
           },
-          { maxReads: accounts.length }
+          { maxReads: accounts.length, signal: abort.signal }
         );
         setShowProgressModal(false);
         if (result.rekeyedKeyCount) {

@@ -126,6 +126,9 @@ describe('TransferToAirgapFlow key export gate', () => {
     await act(async () => {});
     expect(mockReveal).not.toHaveBeenCalled();
     expect(view.queryByText(/QR:/)).toBeNull();
+    // Shows nothing: back at the disclaimer, no error screen.
+    expect(view.getByText('I Understand, Continue')).toBeTruthy();
+    expect(view.queryByText(/Authentication required/)).toBeNull();
   });
 
   it('drops the key-bearing QR and returns to the disclaimer when the app backgrounds', async () => {

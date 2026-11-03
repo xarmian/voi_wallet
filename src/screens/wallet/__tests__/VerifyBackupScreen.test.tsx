@@ -24,15 +24,23 @@ jest.mock('@/services/secure/keyManager', () => ({
   },
 }));
 const mockAuthSignals: (AbortSignal | undefined)[] = [];
+const mockAuthReasons: string[] = [];
 let mockAuthCalls = 0;
+let mockAuthFailure: string | null = null;
 jest.mock('@/services/secure/freshAuth', () => ({
   withFreshAuth: (
-    _reason: string,
+    reason: string,
     fn: (cap: object) => unknown,
     opts?: { signal?: AbortSignal }
   ) => {
     mockAuthCalls += 1;
+    mockAuthReasons.push(reason);
     mockAuthSignals.push(opts?.signal);
+    if (mockAuthFailure) {
+      return Promise.reject(
+        Object.assign(new Error(mockAuthFailure), { code: mockAuthFailure })
+      );
+    }
     return Promise.resolve(fn({}));
   },
 }));
@@ -102,6 +110,8 @@ const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
 beforeEach(() => {
   mockAuthCalls = 0;
+  mockAuthFailure = null;
+  mockAuthReasons.length = 0;
   mockWalletHydrated = true;
   mockAuthSignals.length = 0;
   mockNavigation.goBack.mockClear();
@@ -126,6 +136,26 @@ async function renderLoaded() {
 
 describe('VerifyBackupScreen', () => {
   // TASK-485: the phrase must not outlive the screen or the foreground.
+  it('reads the stored phrase only through the verify_backup gate, and a refused prompt reads nothing', async () => {
+    mockAuthFailure = 'cancelled';
+    await render(<VerifyBackupScreen />);
+    await waitFor(() => expect(mockNavigation.goBack).toHaveBeenCalled());
+    expect(mockAuthReasons).toEqual(['verify_backup']);
+    expect(mockGetMnemonic).not.toHaveBeenCalled();
+  });
+
+  it('keeps the screen with a message, without leaving, when authentication fails (not cancelled)', async () => {
+    mockAuthFailure = 'failed';
+    const screen = await render(<VerifyBackupScreen />);
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Could not load your recovery phrase/)
+      ).toBeTruthy()
+    );
+    expect(mockNavigation.goBack).not.toHaveBeenCalled();
+    expect(mockGetMnemonic).not.toHaveBeenCalled();
+  });
+
   it('asks for authentication once per mount', async () => {
     await renderLoaded();
     expect(mockAuthCalls).toBe(1);

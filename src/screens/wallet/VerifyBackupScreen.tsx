@@ -130,11 +130,16 @@ export default function VerifyBackupScreen() {
         if (abort.signal.aborted) return;
         setMnemonic(phrase);
         setLoadError(null);
-      } catch {
+      } catch (error) {
         // Never surface the underlying error text — it can echo key-store
         // internals. The user just needs to know it failed.
         if (abort.signal.aborted) return;
-        navigation.goBack();
+        // A cancelled prompt shows nothing and leaves; any other failure keeps
+        // the screen with the message, as before the gate.
+        if ((error as { code?: string } | null)?.code === 'cancelled') {
+          navigation.goBack();
+          return;
+        }
         setLoadError(
           'Could not load your recovery phrase. Please try again from Settings.'
         );

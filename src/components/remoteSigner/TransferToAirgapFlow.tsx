@@ -135,6 +135,11 @@ export function TransferToAirgapFlow({
     } catch (err) {
       // Closed or backgrounded mid-prompt: the flow was already reset.
       if (abort.signal.aborted) return;
+      // A cancelled prompt shows nothing: back to the disclaimer, no error.
+      if ((err as { code?: string } | null)?.code === 'cancelled') {
+        setState('disclaimer');
+        return;
+      }
       const message =
         err instanceof Error ? err.message : 'Failed to prepare transfer';
       // Check for authentication errors

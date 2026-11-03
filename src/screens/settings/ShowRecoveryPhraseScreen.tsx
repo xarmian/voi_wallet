@@ -144,7 +144,7 @@ export default function ShowRecoveryPhraseScreen() {
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) setIsLoading(false);
     }
   }, [targetAddress, navigation]);
 

@@ -45,7 +45,10 @@ jest.mock('@/services/backup', () => ({
   BackupError: class extends Error {},
 }));
 let mockAuthFailure: string | null = null;
-const mockAuthCalls: { reason: string; opts?: { maxReads?: number } }[] = [];
+const mockAuthCalls: {
+  reason: string;
+  opts?: { maxReads?: number; signal?: AbortSignal };
+}[] = [];
 jest.mock('@/services/secure/freshAuth', () => {
   class FreshAuthError extends Error {
     code: string;
@@ -58,7 +61,7 @@ jest.mock('@/services/secure/freshAuth', () => {
     withFreshAuth: (
       reason: string,
       fn: (cap: object) => unknown,
-      opts?: { maxReads?: number }
+      opts?: { maxReads?: number; signal?: AbortSignal }
     ) => {
       mockAuthCalls.push({ reason, opts });
       if (mockAuthFailure)
@@ -88,9 +91,22 @@ it('asks for fresh authentication sized to the account count, before creating th
   await fireEvent.press(view.getByText('Create Backup'));
   await fireEvent.press(view.getByText('Confirm password'));
   expect(mockAuthCalls).toEqual([
-    { reason: 'export_backup', opts: { maxReads: 1 } },
+    {
+      reason: 'export_backup',
+      opts: { maxReads: 1, signal: expect.any(AbortSignal) },
+    },
   ]);
   expect(BackupService.createBackup).toHaveBeenCalledTimes(1);
+});
+
+it('cancels the pending prompt when the screen unmounts', async () => {
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  const signal = mockAuthCalls[0].opts?.signal;
+  expect(signal?.aborted).toBe(false);
+  await view.unmount();
+  expect(signal?.aborted).toBe(true);
 });
 
 it('a cancelled prompt creates no backup and shows no error', async () => {
