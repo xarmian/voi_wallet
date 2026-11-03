@@ -197,6 +197,19 @@ describe('verified secret deletion', () => {
 
   it('reconcile retains failed id in BOTH list and journal and retries next run', async () => {
     seed(['A']);
+    mockKv.set(
+      'voi_unknown_secure_writes',
+      JSON.stringify({
+        voi_account_secret_A: {
+          key: 'voi_account_secret_A',
+          op: 'delete',
+          verifier: 'presence',
+          attempt: '',
+          sessionId: 'old-session',
+          at: 1,
+        },
+      })
+    );
     failDelete(`${SECRET_PREFIX}A`);
     const first = await reconcileCrossStoreHalfState();
     expect(first).toMatchObject({ ran: true, orphanSecretsDeleted: [] });

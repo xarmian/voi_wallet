@@ -251,6 +251,7 @@ beforeEach(() => {
   jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
     ran: true,
     orphanSecretsDeleted: [],
+    orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
     staleJournalDropped: [],
   });
@@ -751,6 +752,7 @@ describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
       jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
         ran: false,
         orphanSecretsDeleted: [],
+        orphanSecretsQuarantined: [],
         phantomAccountsPruned: [],
         staleJournalDropped: [],
       });

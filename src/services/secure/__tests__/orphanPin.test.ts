@@ -17,6 +17,11 @@ jest.mock('../AccountSecureStorage', () => ({
     dropPendingCreateEntries: jest.fn(),
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
+    readQuarantinedIdsStrict: jest.fn(async () => []),
+    addQuarantinedIds: jest.fn(async () => {}),
+    readReconcileRecoveryMarker: jest.fn(async () => false),
+    setReconcileRecoveryMarker: jest.fn(async () => {}),
+    clearReconcileRecoveryMarker: jest.fn(async () => {}),
     readUnknownWritesStrict: jest.fn(async () => ({})),
     resolveUnknownWrite: jest.fn(async () => true),
     probeSecretPresenceStrict: jest.fn(),
@@ -55,6 +60,7 @@ beforeEach(() => {
   jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
     ran: true,
     orphanSecretsDeleted: [],
+    orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
     staleJournalDropped: [],
   });
@@ -64,6 +70,21 @@ beforeEach(() => {
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
     .mockResolvedValue({ journaled: 'attempt', listed: 'attempt' });
+  jest
+    .mocked(AccountSecureStorage.readQuarantinedIdsStrict)
+    .mockResolvedValue([]);
+  jest
+    .mocked(AccountSecureStorage.addQuarantinedIds)
+    .mockResolvedValue(undefined);
+  jest
+    .mocked(AccountSecureStorage.readReconcileRecoveryMarker)
+    .mockResolvedValue(false);
+  jest
+    .mocked(AccountSecureStorage.setReconcileRecoveryMarker)
+    .mockResolvedValue(undefined);
+  jest
+    .mocked(AccountSecureStorage.clearReconcileRecoveryMarker)
+    .mockResolvedValue(undefined);
   jest
     .mocked(AccountSecureStorage.readUnknownWritesStrict)
     .mockResolvedValue({});
@@ -94,6 +115,7 @@ it('aborts when reconcile did not run', async () => {
   jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
     ran: false,
     orphanSecretsDeleted: [],
+    orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
     staleJournalDropped: [],
   });
@@ -246,7 +268,7 @@ it.each(['clear', 'disable', 'both'])(
   }
 );
 
-it('drains a journal-only failed import using the real reconcile before removing the PIN', async () => {
+it('quarantines a journal-only failed import and keeps the PIN while the secret remains', async () => {
   const secretIds = new Set(['orphan']);
   let journal: Record<string, string> = { orphan: 'attempt' };
   jest
@@ -254,7 +276,7 @@ it('drains a journal-only failed import using the real reconcile before removing
     .mockResolvedValue([]);
   jest
     .mocked(MultiAccountWalletService.getBlobAccountIdsStrict)
-    .mockResolvedValue({ standardIds: [], allIds: [] });
+    .mockResolvedValue({ standardIds: [], allIds: [], standardAccounts: [] });
   jest.mocked(AccountSecureStorage.readAccountListStrict).mockResolvedValue([]);
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
@@ -282,12 +304,15 @@ it('drains a journal-only failed import using the real reconcile before removing
     expect(secretIds.size).toBe(0);
     expect(journal).toEqual({});
   });
-  await clearOrphanPin();
-  expect(AccountSecureStorage.deleteAccount).toHaveBeenCalledWith('orphan');
-  expect(AccountSecureStorage.dropPendingCreateEntries).toHaveBeenCalledWith([
+  await expect(clearOrphanPin()).rejects.toThrow(
+    ORPHAN_PIN_UNVERIFIABLE_MESSAGE
+  );
+  expect(AccountSecureStorage.deleteAccount).not.toHaveBeenCalled();
+  expect(AccountSecureStorage.dropPendingCreateEntries).not.toHaveBeenCalled();
+  expect(AccountSecureStorage.addQuarantinedIds).toHaveBeenCalledWith([
     'orphan',
   ]);
-  expect(AccountSecureStorage.deletePin).toHaveBeenCalledTimes(1);
+  expect(AccountSecureStorage.deletePin).not.toHaveBeenCalled();
 });
 
 it('probes ids indexed only BEFORE reconcile (pre ∪ post second layer)', async () => {
@@ -299,6 +324,7 @@ it('probes ids indexed only BEFORE reconcile (pre ∪ post second layer)', async
     return {
       ran: true,
       orphanSecretsDeleted: [],
+      orphanSecretsQuarantined: [],
       phantomAccountsPruned: [],
       staleJournalDropped: [],
     };
@@ -332,11 +358,21 @@ it("given TASK-415's contract, a failed orphan delete stays indexed: the gate re
     .mockResolvedValue([]);
   jest
     .mocked(MultiAccountWalletService.getBlobAccountIdsStrict)
-    .mockResolvedValue({ standardIds: [], allIds: [] });
+    .mockResolvedValue({ standardIds: [], allIds: [], standardAccounts: [] });
   jest.mocked(AccountSecureStorage.readAccountListStrict).mockResolvedValue([]);
   jest
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
     .mockImplementation(async () => ({ ...journal }));
+  jest.mocked(AccountSecureStorage.readUnknownWritesStrict).mockResolvedValue({
+    voi_account_secret_orphan: {
+      key: 'voi_account_secret_orphan',
+      op: 'delete',
+      verifier: 'presence',
+      attempt: '',
+      sessionId: 'old',
+      at: 1,
+    },
+  });
   jest
     .mocked(AccountSecureStorage.probeSecretPresenceStrict)
     .mockImplementation(async (id) => secretIds.has(id));
@@ -496,6 +532,7 @@ it('a reconcile pass that skipped unresolved UNKNOWN-write ids is unverifiable (
     ran: true,
     skippedUnresolved: 1,
     orphanSecretsDeleted: [],
+    orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
     staleJournalDropped: [],
   });

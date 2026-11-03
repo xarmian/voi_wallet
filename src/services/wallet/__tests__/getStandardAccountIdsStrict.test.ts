@@ -44,7 +44,9 @@ const WALLET_KEY = 'voi_wallet_metadata';
 const mockStorageGet = storage.getItem as jest.Mock;
 const mockSecureGet = secureStorage.getItem as jest.Mock;
 
-function blob(accounts: { id: string; type: string }[]): string {
+function blob(
+  accounts: { id: string; type: string; address?: string }[]
+): string {
   return JSON.stringify({
     id: 'w1',
     version: '1',
@@ -189,19 +191,23 @@ it('does not write or migrate (pure read)', async () => {
 describe('getBlobAccountIdsStrict (TASK-419)', () => {
   it('returns STANDARD ids and every account id, REKEYED included', async () => {
     mockStore[WALLET_KEY] = blob([
-      { id: 's1', type: 'standard' },
+      { id: 's1', type: 'standard', address: 'ADDR' },
       { id: 'k1', type: 'rekeyed' },
       { id: 'w1', type: 'watch' },
     ]);
     await expect(
       MultiAccountWalletService.getBlobAccountIdsStrict()
-    ).resolves.toEqual({ standardIds: ['s1'], allIds: ['s1', 'k1', 'w1'] });
+    ).resolves.toEqual({
+      standardIds: ['s1'],
+      allIds: ['s1', 'k1', 'w1'],
+      standardAccounts: [{ id: 's1', address: 'ADDR', label: '' }],
+    });
   });
 
   it('returns empty lists for genuine absence', async () => {
     await expect(
       MultiAccountWalletService.getBlobAccountIdsStrict()
-    ).resolves.toEqual({ standardIds: [], allIds: [] });
+    ).resolves.toEqual({ standardIds: [], allIds: [], standardAccounts: [] });
   });
 
   it.each([

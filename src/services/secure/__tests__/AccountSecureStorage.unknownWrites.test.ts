@@ -293,6 +293,98 @@ test('corrupt UNKNOWN journal does not refuse saveSecret(null), deleteAccount, o
   expect(mockPlainValues.has(UNKNOWN_WRITES_STORAGE_KEY)).toBe(false);
 });
 
+test('clearAll deletes and clears quarantined ids even when they are unindexed', async () => {
+  mockSecureValues.set('voi_account_secret_hidden', JSON.stringify(payload));
+  mockPlainValues.set(
+    'voi_reconcile_quarantined_ids',
+    JSON.stringify(['hidden'])
+  );
+  await expect(
+    AccountSecureStorage.readQuarantinedIdsStrict()
+  ).resolves.toEqual(['hidden']);
+  await AccountSecureStorage.clearAll();
+  expect(mockSecureValues.has('voi_account_secret_hidden')).toBe(false);
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
+});
+
+test('clearAll still completes and drops the registry when it is corrupt', async () => {
+  mockPlainValues.set('voi_reconcile_quarantined_ids', '{not json');
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
+});
+
+test('clearAll removes unexplained removal records and deleteAccount removes its id', async () => {
+  const key = 'voi_reconcile_unexplained_removals';
+  mockPlainValues.set(
+    key,
+    JSON.stringify({
+      one: { address: 'A', label: 'One' },
+      two: { address: 'B', label: 'Two' },
+    })
+  );
+  await AccountSecureStorage.deleteAccount('one');
+  expect(JSON.parse(mockPlainValues.get(key)!)).toEqual({
+    two: { address: 'B', label: 'Two' },
+  });
+  mockPlainValues.set(
+    key,
+    JSON.stringify({ two: { address: 'B', label: 'Two' } })
+  );
+  await AccountSecureStorage.clearAll();
+  expect(mockPlainValues.has(key)).toBe(false);
+});
+
+test('unexplained removal records overwrite by account id and expose only public fields', async () => {
+  await AccountSecureStorage.recordUnexplainedRemovals([
+    { id: 'same', address: 'ADDR1', label: 'First' },
+  ]);
+  await AccountSecureStorage.recordUnexplainedRemovals([
+    { id: 'same', address: 'ADDR2', label: 'Second' },
+  ]);
+  expect(await AccountSecureStorage.readUnexplainedRemovals()).toEqual([
+    { id: 'same', address: 'ADDR2', label: 'Second' },
+  ]);
+  expect(
+    JSON.parse(mockPlainValues.get('voi_reconcile_unexplained_removals')!)
+  ).toEqual({
+    same: { address: 'ADDR2', label: 'Second' },
+  });
+});
+
+test('clearAll keeps quarantine registry and throws when a quarantined delete fails', async () => {
+  mockPlainValues.set(
+    'voi_reconcile_quarantined_ids',
+    JSON.stringify(['hidden'])
+  );
+  await expect(
+    AccountSecureStorage.readQuarantinedIdsStrict()
+  ).resolves.toEqual(['hidden']);
+  const deleteLocked = jest
+    .spyOn(
+      AccountSecureStorage as unknown as {
+        deleteAccountLocked: (id: string) => Promise<void>;
+      },
+      'deleteAccountLocked'
+    )
+    .mockRejectedValue(new Error('delete failed'));
+  await expect(AccountSecureStorage.clearAll()).rejects.toThrow('1 account(s)');
+  expect(deleteLocked).toHaveBeenCalledWith('hidden');
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(true);
+  deleteLocked.mockRestore();
+});
+
+test('user delete removes the id from the quarantine registry', async () => {
+  mockSecureValues.set('voi_account_secret_hidden', JSON.stringify(payload));
+  mockPlainValues.set(
+    'voi_reconcile_quarantined_ids',
+    JSON.stringify(['hidden', 'other'])
+  );
+  await AccountSecureStorage.deleteAccount('hidden');
+  expect(
+    JSON.parse(mockPlainValues.get('voi_reconcile_quarantined_ids')!)
+  ).toEqual(['other']);
+});
+
 test('clearAll tombstones a timed-out secret write that lands after the wipe', async () => {
   jest.useFakeTimers();
   try {
