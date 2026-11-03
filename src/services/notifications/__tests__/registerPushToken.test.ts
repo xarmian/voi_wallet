@@ -199,6 +199,70 @@ describe('notificationService.registerPushToken (TASK-433)', () => {
     }
   );
 
+  // TASK-405: a registration that returns null must say why, once per cause,
+  // so a production device log names the failing step.
+  it.each([
+    ['Supabase', 'Supabase client unavailable'],
+    ['device ID', 'device ID unavailable'],
+  ])('logs the cause once when %s is missing', async (missing, cause) => {
+    if (missing === 'Supabase') mockSupabaseConfigured = false;
+    else Object.assign(notificationService, { deviceId: null });
+
+    expect(await notificationService.registerPushToken()).toBeNull();
+    expect(await notificationService.registerPushToken()).toBeNull();
+
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith(
+      '[Notifications] Push registration skipped:',
+      cause
+    );
+  });
+
+  it('logs a different cause separately from an earlier one', async () => {
+    mockSupabaseConfigured = false;
+    await notificationService.registerPushToken();
+    mockSupabaseConfigured = true;
+    Object.assign(notificationService, { deviceId: null });
+    await notificationService.registerPushToken();
+
+    expect(jest.mocked(console.warn).mock.calls).toEqual([
+      [
+        '[Notifications] Push registration skipped:',
+        'Supabase client unavailable',
+      ],
+      ['[Notifications] Push registration skipped:', 'device ID unavailable'],
+    ]);
+  });
+
+  it('logs a missing EAS project ID and never asks for a token', async () => {
+    const Constants = jest.requireMock('expo-constants').default;
+    const saved = Constants.expoConfig;
+    Constants.expoConfig = { extra: {} };
+    try {
+      expect(await notificationService.registerPushToken()).toBeNull();
+    } finally {
+      Constants.expoConfig = saved;
+    }
+
+    expect(console.error).toHaveBeenCalledWith('EAS project ID not configured');
+    expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('logs the permission state when permission blocks registration', async () => {
+    jest
+      .mocked(Notifications.getPermissionsAsync)
+      .mockResolvedValue(permissions('denied'));
+
+    expect(
+      await notificationService.registerPushToken({ prompt: false })
+    ).toBeNull();
+
+    expect(console.log).toHaveBeenCalledWith(
+      'Push notification permissions not granted'
+    );
+  });
+
   it('still requests permission by default for the explicit Settings opt-in', async () => {
     jest
       .mocked(Notifications.getPermissionsAsync)

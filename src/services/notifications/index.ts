@@ -260,13 +260,31 @@ class NotificationService {
   }
 
   /**
+   * Name why registration returned null before reaching the token step
+   * (TASK-405), once per cause so a launch-time call doesn't repeat it.
+   */
+  private warnRegistrationSkippedOnce(cause: string): void {
+    const key = `skipped|${cause}`;
+    if (this.pushTokenWarningsLogged.has(key)) return;
+    this.pushTokenWarningsLogged.add(key);
+    console.warn('[Notifications] Push registration skipped:', cause);
+  }
+
+  /**
    * Register push token with the server
    * @param options.prompt Whether to prompt for permission (false during startup)
    * @returns The Expo push token or null if failed
    */
   async registerPushToken({ prompt = true } = {}): Promise<string | null> {
     const supabase = getSupabaseClient();
-    if (!supabase || !this.deviceId) return null;
+    if (!supabase) {
+      this.warnRegistrationSkippedOnce('Supabase client unavailable');
+      return null;
+    }
+    if (!this.deviceId) {
+      this.warnRegistrationSkippedOnce('device ID unavailable');
+      return null;
+    }
 
     const hasPermission = await this.requestPermissions({ prompt });
     if (!hasPermission) return null;
