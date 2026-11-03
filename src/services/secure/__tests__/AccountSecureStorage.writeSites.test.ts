@@ -8,8 +8,9 @@ import ts from 'typescript';
 // removals) onto the bounded wrappers; clearAll now loops, so six textual deletes plus the
 // multiRemove collapse into three call sites, which lowers the textual total from
 // 64 to 59; the wipe-intent marker (beginWipe, endWipe) adds two bounded sites, and the tombstone and
-// registry removals two more: 60.
-// 28 now call bounded wrappers, one
+// registry removals two more, and the verified single-key delete the wipe
+// uses for the legacy wallet copy one more: 61.
+// 29 now call bounded wrappers, one
 // delegates to saveSecret, and 32 remain raw. The unknown journal adds one
 // three raw journal sites (write, late-write repair, reset). Counts prevent a
 // new raw write in an allowed method from passing.
@@ -28,6 +29,7 @@ const IN_SCOPE = new Set([
   'clearAll',
   'beginWipe',
   'endWipe',
+  'deleteSecureKeyVerified',
 ]);
 const OUT_OF_SCOPE_CLASSIFIED: Record<string, number> = {
   // The unknown-write journal itself uses its own bounded storage operation.
@@ -95,8 +97,8 @@ test('all original and removal-record write sites stay classified', () => {
   const pending = sites('pinSetupPending.ts');
   const raw = [...secure.raw, ...pending.raw];
   const bounded = [...secure.bounded, ...pending.bounded];
-  expect(raw.length - 3 + bounded.length + secure.delegated.length).toBe(60);
-  expect(bounded.length).toBe(28);
+  expect(raw.length - 3 + bounded.length + secure.delegated.length).toBe(61);
+  expect(bounded.length).toBe(29);
   expect(secure.delegated).toEqual(['migrateLegacyAccountDataLocked']);
   expect(bounded.every((method) => IN_SCOPE.has(method))).toBe(true);
   const actual = raw.reduce<Record<string, number>>((counts, method) => {
