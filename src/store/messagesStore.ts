@@ -840,12 +840,12 @@ export const useMessagesStore = create<MessagesState>()(
         // committed cursor yet (first sync for this account), afterId is
         // undefined and the service bootstraps from the newest window. The
         // service drains the range so a burst of more than the page limit can't
-        // be truncated, and returns `complete` + `maxId` so we advance the
-        // durable cursor only through a fully-drained range.
+        // be truncated, and returns `stop` + `maxId` so we advance the durable
+        // cursor through the rows it fetched (see computeSyncCursor).
         const committed = get().committedId;
         const afterId = committed != null ? committed : undefined;
 
-        const { conversations, complete, maxId } =
+        const { conversations, stop, maxId } =
           await MessagingService.fetchAllConversations(
             userAddress,
             messagingKeyPair,
@@ -913,14 +913,16 @@ export const useMessagesStore = create<MessagesState>()(
           }
         }
 
-        // Advance the durable committed cursor ONLY through a fully-drained
-        // range, to the greatest ingestion id fetched (see computeSyncCursor).
-        // A truncated drain, or the indexer fallback (maxId null), leaves the
-        // cursor untouched so nothing below it is skipped.
+        // Advance the durable committed cursor to the greatest ingestion id
+        // fetched (see computeSyncCursor). That covers a complete drain AND one
+        // stopped by the page cap: the rows are a contiguous prefix, and not
+        // advancing would refetch the same prefix on every poll. A stalled
+        // drain, or the indexer fallback (maxId null), leaves the cursor
+        // untouched so nothing below it is skipped.
         const previousCommitted = get().committedId;
         const nextCommitted = computeSyncCursor({
           previous: previousCommitted,
-          complete,
+          stop,
           maxId,
         });
 

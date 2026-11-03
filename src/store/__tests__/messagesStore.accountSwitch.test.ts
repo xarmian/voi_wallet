@@ -115,7 +115,7 @@ function holdWriteOf(
 const CURSOR_KEY = `@messages/committedid/${A}`;
 const drain = (maxId: number, messages: Message[]) => ({
   conversations: new Map([[FA, messages]]),
-  complete: true,
+  stop: 'complete',
   maxId,
 });
 
@@ -156,7 +156,7 @@ describe('messagesStore account switches (TASK-460)', () => {
     mockIsKeyRegistered.mockReset().mockResolvedValue(true);
     mockFetchAllConversations.mockReset().mockResolvedValue({
       conversations: new Map(),
-      complete: true,
+      stop: 'complete',
       maxId: null,
     });
   });

@@ -11,19 +11,27 @@
  * gap-free and monotonic.
  *
  * Rules (see computeSyncCursor):
- * - The cursor advances ONLY when a fetch fully drained its range (`complete`).
- * - It advances to the greatest ingestion id fetched (`maxId`).
- * - A truncated drain, or a source with no ingestion id (the indexer fallback,
+ * - The cursor advances to the greatest ingestion id fetched (`maxId`) when the
+ *   drain stopped because its range was exhausted ('complete') OR because it
+ *   hit the page cap ('page-cap'). The drain is oldest-first on a unique
+ *   ascending id for this user, so either way every row up to `maxId` has been
+ *   fetched, and the rows it did not reach are above the new cursor for the
+ *   next poll. Not advancing on a cap stop would wedge the sync on the same
+ *   prefix forever.
+ * - A stalled drain ('stalled-cursor': the id stopped advancing, a broken
+ *   source), or a source with no ingestion id (the indexer fallback,
  *   `maxId == null`), leaves the cursor untouched so nothing below it is
  *   skipped.
  * - It never moves backwards.
  */
 
+import type { DrainStop } from './pagination';
+
 export interface SyncCursorInput {
   /** The current committed cursor (null before the first successful sync). */
   previous: number | null;
-  /** Whether the fetch drained its entire range. */
-  complete: boolean;
+  /** Why the drain stopped (see drainByCursor). */
+  stop: DrainStop;
   /**
    * Greatest MIMIR ingestion id fetched, or null when the source exposes no
    * ingestion id (indexer fallback) or nothing was fetched.
@@ -32,14 +40,14 @@ export interface SyncCursorInput {
 }
 
 /**
- * Decide the next committed sync cursor. Never advances on a truncated drain or
- * a source without an ingestion id, and never moves backwards.
+ * Decide the next committed sync cursor. Never advances on a stalled drain or a
+ * source without an ingestion id, and never moves backwards.
  */
 export function computeSyncCursor(input: SyncCursorInput): number | null {
-  const { previous, complete, maxId } = input;
+  const { previous, stop, maxId } = input;
 
-  // Only a fully-drained fetch from an ingestion-ordered source may advance.
-  if (!complete || maxId == null) return previous;
+  // Only a contiguous prefix from an ingestion-ordered source may advance.
+  if (stop === 'stalled-cursor' || maxId == null) return previous;
 
   return previous == null ? maxId : Math.max(previous, maxId);
 }
