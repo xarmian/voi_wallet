@@ -71,6 +71,7 @@ import {
   useVisibleClaimableCountForAccount,
 } from '@/store/claimableStore';
 import UpdateBanner from '@/components/update/UpdateBanner';
+import RemovedAccountNoticeHost from '@/components/account/RemovedAccountNoticeHost';
 import { useUpdateStore } from '@/store/updateStore';
 import { useUpdates } from 'expo-updates';
 import OnboardingOptionsModal from '@/components/onboarding/OnboardingOptionsModal';
@@ -1481,6 +1482,11 @@ export default function HomeScreen() {
 
           {activeAccount && (
             <>
+              <RemovedAccountNoticeHost
+                onReimport={() =>
+                  navigation.navigate('MnemonicImport', { isOnboarding: false })
+                }
+              />
               {/* Update Available Banner */}
               {isUpdateAvailable && (
                 <UpdateBanner
