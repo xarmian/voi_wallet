@@ -163,7 +163,7 @@ describe('runWithConfirmedAbsentSecrets', () => {
       liveIds: ['live'],
       acted: true,
     });
-    expect(action).toHaveBeenCalledWith(['gone']);
+    expect(action).toHaveBeenCalledWith(['gone'], { aborted: false });
   });
 
   it('does not call the action when every id is live', async () => {
@@ -231,6 +231,35 @@ describe('runWithConfirmedAbsentSecrets', () => {
       expect(mockKv.get('voi_reconcile_quarantined_ids')).toBe(
         '["after-timeout"]'
       );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('aborts the abandoned action before releasing the mutex and handles its late result', async () => {
+    jest.useFakeTimers();
+    try {
+      let finish!: (value: boolean) => void;
+      let signal!: { aborted: boolean };
+      const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
+        ['gone'],
+        (_ids, receivedSignal) => {
+          signal = receivedSignal;
+          return new Promise<boolean>((resolve) => {
+            finish = resolve;
+          });
+        }
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      const assertion = expect(task).rejects.toThrow('timed out after 5000ms');
+      await jest.advanceTimersByTimeAsync(5000);
+      await assertion;
+      expect(signal.aborted).toBe(true);
+      await AccountSecureStorage.addQuarantinedIds(['after-timeout']);
+      finish(true);
+      await Promise.resolve();
+      await Promise.resolve();
     } finally {
       jest.useRealTimers();
     }

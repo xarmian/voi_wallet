@@ -70,6 +70,9 @@ import {
   type WriteContext,
 } from './boundedWrites';
 
+/** Handed to a runWithConfirmedAbsentSecrets action; set when its time bound fires. */
+export type ConfirmedAbsentActionSignal = { aborted: boolean };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PIN THROTTLE — THREAT MODEL (DOC-137 §8 / TASK-26). READ BEFORE CHANGING.
 //
@@ -2600,7 +2603,10 @@ export class AccountSecureStorage {
 
   static async runWithConfirmedAbsentSecrets(
     ids: string[],
-    action: (confirmedAbsent: string[]) => Promise<boolean>
+    action: (
+      confirmedAbsent: string[],
+      signal: ConfirmedAbsentActionSignal
+    ) => Promise<boolean>
   ): Promise<{ confirmedAbsent: string[]; liveIds: string[]; acted: boolean }> {
     return this.runKeyMutationExclusive(async () => {
       const states = await Promise.all(
@@ -2615,12 +2621,28 @@ export class AccountSecureStorage {
       const confirmedAbsent = states
         .filter(({ present }) => !present)
         .map(({ id }) => id);
+      const signal: ConfirmedAbsentActionSignal = { aborted: false };
       const acted = confirmedAbsent.length
-        ? await this.withTimeout(
-            action(confirmedAbsent),
-            this.RECONCILE_ACTION_TIMEOUT_MS,
-            'Confirmed-absent reconcile action'
-          )
+        ? await new Promise<boolean>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              signal.aborted = true;
+              reject(
+                new Error(
+                  `Confirmed-absent reconcile action timed out after ${this.RECONCILE_ACTION_TIMEOUT_MS}ms`
+                )
+              );
+            }, this.RECONCILE_ACTION_TIMEOUT_MS);
+            action(confirmedAbsent, signal).then(
+              (value) => {
+                clearTimeout(timer);
+                resolve(value);
+              },
+              (error) => {
+                clearTimeout(timer);
+                reject(error);
+              }
+            );
+          })
         : false;
       return { confirmedAbsent, liveIds, acted };
     });

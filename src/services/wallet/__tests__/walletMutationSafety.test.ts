@@ -206,6 +206,21 @@ it('preserves a new account while reconciliation prunes the old account (#5)', a
   }
 });
 
+it('aborts a prune on its in-chain pre-write check without changing the wallet', async () => {
+  const first = await Service.createStandardAccount({
+    type: AccountType.STANDARD,
+    label: 'First',
+  });
+  const before = mockStore[WALLET_KEY];
+  let checks = 0;
+  const result = await Service.pruneStandardAccounts([first.id], {
+    shouldAbort: () => ++checks > 1,
+  });
+  expect(result).toBe(false);
+  expect(mockStore[WALLET_KEY]).toBe(before);
+  expect(readWallet().accounts.map(({ id }) => id)).toEqual([first.id]);
+});
+
 // Review follow-up (TASK-440): a mutation on the write chain must not wait
 // on the legacy keychain without bound, and must never mutate (and so
 // sanitize away the secrets of) an unmigrated legacy wallet copy.

@@ -28,10 +28,16 @@ jest.mock('@/services/secure', () => ({
     recordUnexplainedRemovals: jest.fn(async () => {}),
     recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
     runWithConfirmedAbsentSecrets: jest.fn(
-      async (ids: string[], action: (ids: string[]) => Promise<boolean>) => ({
+      async (
+        ids: string[],
+        action: (
+          ids: string[],
+          signal: { aborted: boolean }
+        ) => Promise<boolean>
+      ) => ({
         confirmedAbsent: ids,
         liveIds: [],
-        acted: ids.length ? await action(ids) : false,
+        acted: ids.length ? await action(ids, { aborted: false }) : false,
       })
     ),
   },
@@ -213,7 +219,10 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
     const result = await reconcileCrossStoreHalfState();
 
     expect(wallet.pruneStandardAccounts).toHaveBeenCalledTimes(1);
-    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(
+      ['phantom'],
+      expect.objectContaining({ shouldAbort: expect.any(Function) })
+    );
     expect(secure.deleteAccount).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       ran: true,
@@ -334,7 +343,10 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
     // Pending-create provenance is not permission to erase a live secret.
     expect(secure.deleteAccount).not.toHaveBeenCalled();
     // phantom: blob STANDARD, secret absent → prune
-    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(
+      ['phantom'],
+      expect.objectContaining({ shouldAbort: expect.any(Function) })
+    );
     // Only the stale journal entry is dropped; the orphan entry is retained.
     const dropped = secure.dropPendingCreateEntries.mock.calls.flatMap(
       (call) => call[0] as string[]
@@ -372,7 +384,10 @@ describe('reconcileCrossStoreHalfState — Phase 2 is best-effort (partial failu
     // Does NOT reject — Phase 2 is best-effort.
     const result = await reconcileCrossStoreHalfState();
 
-    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(['phantom']);
+    expect(wallet.pruneStandardAccounts).toHaveBeenCalledWith(
+      ['phantom'],
+      expect.objectContaining({ shouldAbort: expect.any(Function) })
+    );
     expect(result.ran).toBe(true);
     // The prune completed and is reported so the caller refreshes the verdict...
     expect(result.phantomAccountsPruned).toEqual(['phantom']);

@@ -3,6 +3,9 @@ const mockKv = new Map<string, string>();
 let mockProbeReads = 0;
 let mockPresence: (count: number) => string | null = () => null;
 let mockOrder: string[] = [];
+// When set, the removal-record write waits on it (simulates a slow storage
+// write that outlives the locked action's bound).
+let mockRecordWriteGate: Promise<void> | null = null;
 const mockBlobRead = jest.fn();
 const mockPrune = jest.fn();
 
@@ -32,6 +35,8 @@ jest.mock('@/platform', () => {
     storage: {
       getItem: jest.fn(async (key: string) => mockKv.get(key) ?? null),
       setItem: jest.fn(async (key: string, value: string) => {
+        if (key === 'voi_reconcile_unexplained_removals' && mockRecordWriteGate)
+          await mockRecordWriteGate;
         mockOrder.push('storage');
         mockKv.set(key, value);
       }),
@@ -75,6 +80,7 @@ beforeEach(() => {
   mockProbeReads = 0;
   mockPresence = () => null;
   mockOrder = [];
+  mockRecordWriteGate = null;
   jest.restoreAllMocks();
   mockBlobRead.mockResolvedValue({
     standardIds: ['a'],
@@ -136,6 +142,38 @@ it('bounds the locked prune action and releases the mutex after five seconds', a
     expect(JSON.parse(mockKv.get('voi_reconcile_quarantined_ids')!)).toContain(
       'writer-after-timeout'
     );
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it('does not prune when the abandoned reconcile action resumes after timeout', async () => {
+  jest.useFakeTimers();
+  try {
+    mockPresence = () => null;
+    // The removal-record write is stuck past the 5 s bound, so the bound fires
+    // while the action is still BEFORE its prune call. The mutex is released,
+    // a create/import may now land, and only then does the action resume.
+    let releaseWrite!: () => void;
+    mockRecordWriteGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const reconcile = reconcileCrossStoreHalfState();
+    const noThrow = expect(reconcile).resolves.toMatchObject({
+      ran: true,
+      phantomAccountsPruned: [],
+    });
+    await jest.advanceTimersByTimeAsync(5000);
+    await noThrow;
+    expect(mockPrune).not.toHaveBeenCalled();
+    // A secret write for the same id lands in the window after the mutex release.
+    mockPresence = () => JSON.stringify({ live: true });
+    // The abandoned action now resumes; it must NOT prune.
+    releaseWrite();
+    await jest.advanceTimersByTimeAsync(10);
+    await Promise.resolve();
+    expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockOrder).not.toContain('prune');
   } finally {
     jest.useRealTimers();
   }

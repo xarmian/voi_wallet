@@ -27,10 +27,16 @@ jest.mock('../AccountSecureStorage', () => ({
     probeSecretPresenceStrict: jest.fn(),
     recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
     runWithConfirmedAbsentSecrets: jest.fn(
-      async (ids: string[], action: (ids: string[]) => Promise<boolean>) => ({
+      async (
+        ids: string[],
+        action: (
+          ids: string[],
+          signal: { aborted: boolean }
+        ) => Promise<boolean>
+      ) => ({
         confirmedAbsent: ids,
         liveIds: [],
-        acted: ids.length ? await action(ids) : false,
+        acted: ids.length ? await action(ids, { aborted: false }) : false,
       })
     ),
     clearBiometricSecret: jest.fn(),

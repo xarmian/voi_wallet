@@ -22,7 +22,13 @@ jest.mock('@/services/secure', () => ({
       }
     ),
     runWithConfirmedAbsentSecrets: jest.fn(
-      async (ids: string[], action: (absent: string[]) => Promise<boolean>) => {
+      async (
+        ids: string[],
+        action: (
+          absent: string[],
+          signal: { aborted: boolean }
+        ) => Promise<boolean>
+      ) => {
         const states = await Promise.all(
           ids.map(async (id) => [id, await mockProbe(id)] as const)
         );
@@ -33,7 +39,7 @@ jest.mock('@/services/secure', () => ({
           .filter(([, present]) => !present)
           .map(([id]) => id);
         const acted = confirmedAbsent.length
-          ? await action(confirmedAbsent)
+          ? await action(confirmedAbsent, { aborted: false })
           : false;
         return { confirmedAbsent, liveIds, acted };
       }

@@ -233,7 +233,7 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
       const { liveIds, acted } =
         await AccountSecureStorage.runWithConfirmedAbsentSecrets(
           phantomIds,
-          async (confirmedAbsent) => {
+          async (confirmedAbsent, signal) => {
             const removalRecords = standardAccounts
               .filter(
                 (account) =>
@@ -252,9 +252,16 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
               );
               return false;
             }
+            if (signal.aborted) {
+              console.log(
+                `[bootReconcile] skipped aborted phantom prune for ids ${confirmedAbsent.join(',')}`
+              );
+              return false;
+            }
             if (hasDowngradedMarkers()) return false;
             return await MultiAccountWalletService.pruneStandardAccounts(
-              confirmedAbsent
+              confirmedAbsent,
+              { shouldAbort: () => signal.aborted }
             );
           }
         );
