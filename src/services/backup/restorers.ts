@@ -344,7 +344,7 @@ export async function restoreAccounts(
             avatarUrl: backupAccount.avatarUrl,
             // TASK-111: Never persist the 25-word mnemonic to general storage.
             // The secret key is passed separately to storeAccount() below
-            // (expo-secure-store); getMnemonic() re-derives the phrase from the
+            // (expo-secure-store); the secure key manager re-derives the phrase from the
             // sk on demand, so Show-Recovery-Phrase still works.
             mnemonic: '',
             derivationPath: backupAccount.derivationPath,

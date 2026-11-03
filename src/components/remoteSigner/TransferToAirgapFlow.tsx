@@ -13,7 +13,7 @@
  * 7. Convert account to REMOTE_SIGNER type
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import {
   ActivityIndicator,
   Modal,
   ScrollView,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,7 +33,8 @@ import { keyBelongsToAddress } from '@/utils/keyIdentity';
 import { RemoteSignerService } from '@/services/remoteSigner';
 import { RemoteSignerResponse } from '@/types/remoteSigner';
 import { MultiAccountWalletService } from '@/services/wallet';
-import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { SecureKeyManager } from '@/services/secure/keyManager';
+import { withFreshAuth } from '@/services/secure/freshAuth';
 import { AnimatedQRCode } from '@/components/remoteSigner/AnimatedQRCode';
 import { AnimatedQRScanner } from '@/components/remoteSigner/AnimatedQRScanner';
 import { verifyAirgapTransferConfirmation } from '@/utils/signatureVerification';
@@ -83,9 +85,16 @@ export function TransferToAirgapFlow({
   // so keep only the (undefined) value passed to convertStandardToRemoteSigner.
   const [verifiedSignerDeviceName] = useState<string | undefined>(undefined);
 
+  // Cancels a pending fresh-auth prompt/read when the flow goes away or the app
+  // goes to the background.
+  const exportAbortRef = useRef<AbortController | null>(null);
+
   // Handle disclaimer acceptance
   const handleAcceptDisclaimer = useCallback(async () => {
     setState('generating');
+    exportAbortRef.current?.abort();
+    const abort = new AbortController();
+    exportAbortRef.current = abort;
 
     // Hoisted so the finally block can zero the raw secret key on EVERY path
     // (success, error, early throw), not just success.
@@ -93,7 +102,15 @@ export function TransferToAirgapFlow({
 
     try {
       // Retrieve the private key (will prompt for biometric/PIN authentication internally)
-      privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+      privateKey = await withFreshAuth(
+        'export_private_key',
+        (cap) => SecureKeyManager.revealPrivateKey(account.id, cap),
+        { signal: abort.signal }
+      );
+
+      // Backgrounded or closed while authenticating: show nothing. The finally
+      // block zeroes the key that was read.
+      if (abort.signal.aborted) return;
 
       if (!privateKey) {
         throw new Error('Could not retrieve private key for this account');
@@ -116,6 +133,13 @@ export function TransferToAirgapFlow({
       setPrivateKeyQrData(arc300Uri);
       setState('displaying_qr');
     } catch (err) {
+      // Closed or backgrounded mid-prompt: the flow was already reset.
+      if (abort.signal.aborted) return;
+      // A cancelled prompt shows nothing: back to the disclaimer, no error.
+      if ((err as { code?: string } | null)?.code === 'cancelled') {
+        setState('disclaimer');
+        return;
+      }
       const message =
         err instanceof Error ? err.message : 'Failed to prepare transfer';
       // Check for authentication errors
@@ -278,8 +302,23 @@ export function TransferToAirgapFlow({
   // dismissed while the QR is on screen).
   useEffect(() => {
     return () => {
+      exportAbortRef.current?.abort();
       setPrivateKeyQrData(null);
     };
+  }, []);
+
+  // Going to the background drops the key-bearing QR and returns to the
+  // disclaimer: coming back shows no key and a new export needs a new prompt.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'background') {
+        exportAbortRef.current?.abort();
+        setPrivateKeyQrData(null);
+        setError(null);
+        setState('disclaimer');
+      }
+    });
+    return () => subscription?.remove?.();
   }, []);
 
   // Handle back to QR

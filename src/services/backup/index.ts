@@ -29,6 +29,7 @@ import {
   collectFriends,
   collectExperimental,
 } from './collectors';
+import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { performFullRestore, validateRetainedKeys } from './restorers';
 
 /**
@@ -104,7 +105,7 @@ export class BackupService {
    */
   static async createBackup(
     password: string,
-    pin?: string
+    cap: FreshAuthCapability
   ): Promise<BackupResult> {
     try {
       // Step 0: Enforce the passphrase policy at the service boundary. The UI
@@ -129,7 +130,7 @@ export class BackupService {
         message: 'Collecting account data...',
       });
 
-      const accounts = await collectAccounts(pin);
+      const accounts = await collectAccounts(cap);
 
       this.reportProgress({
         step: 'collecting',

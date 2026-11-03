@@ -78,7 +78,7 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
 
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
-    getMnemonic: jest.fn(async () => mockMnemonicForCollect),
+    revealMnemonic: jest.fn(async () => mockMnemonicForCollect),
   },
 }));
 
@@ -123,7 +123,9 @@ it('collectAccounts fails when the confirmed wallet read throws', async () => {
   mockGetCurrentWalletConfirmed.mockRejectedValueOnce(
     new Error('Wallet storage did not respond; try again')
   );
-  await expect(collectAccounts()).rejects.toThrow();
+  await expect(
+    collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+  ).rejects.toThrow();
 });
 
 describe('collectAccounts — backupVerified is not collected', () => {
@@ -154,7 +156,9 @@ describe('collectAccounts — backupVerified is not collected', () => {
       settings: {},
     });
 
-    const collected = await collectAccounts();
+    const collected = await collectAccounts({
+      __brand: 'FreshAuthCapability',
+    } as never);
 
     expect(collected).toHaveLength(1);
     expect(collected[0]).not.toHaveProperty('backupVerified');
@@ -250,7 +254,9 @@ describe('round trip against an existing (pre-TASK-45) payload shape', () => {
       settings: {},
     });
 
-    const collected = await collectAccounts();
+    const collected = await collectAccounts({
+      __brand: 'FreshAuthCapability',
+    } as never);
 
     // Simulate the wire hop exactly as the encrypted payload does.
     const wire: BackupAccountData[] = JSON.parse(JSON.stringify(collected));
@@ -277,7 +283,7 @@ describe('round trip against an existing (pre-TASK-45) payload shape', () => {
 });
 
 const secure = AccountSecureStorage;
-const mnemonicRead = jest.mocked(SecureKeyManager.getMnemonic);
+const mnemonicRead = jest.mocked(SecureKeyManager.revealMnemonic);
 function retained(overrides: object = {}): BackupAccountData {
   const fresh = freshAccount();
   return {
@@ -306,10 +312,22 @@ it('round trips the original retained key, signs as its address, and wipes the w
       stored = new Uint8Array(key);
       return 'token';
     });
-  const wire = JSON.parse(JSON.stringify(await collectAccounts()));
+  const wire = JSON.parse(
+    JSON.stringify(
+      await collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+    )
+  );
   expect(wire[0].mnemonic).toBe(record.mnemonic);
-  expect(mnemonicRead).toHaveBeenCalledWith(record.address);
-  expect(mnemonicRead).not.toHaveBeenCalledWith(record.authAddress);
+  expect(mnemonicRead).toHaveBeenCalledWith(
+    record.address,
+    expect.anything(),
+    'export_backup'
+  );
+  expect(mnemonicRead).not.toHaveBeenCalledWith(
+    record.authAddress,
+    expect.anything(),
+    'export_backup'
+  );
   await restoreAccounts(wire);
   const restored = (
     mockPersistRestoredWallet.mock.calls[0] as unknown as [
@@ -347,7 +365,10 @@ it.each([false, true])(
     const record = retained({ mnemonic: undefined, originalOwner });
     if (!originalOwner) {
       exportWallet(record);
-      expect((await collectAccounts())[0].mnemonic).toBeUndefined();
+      expect(
+        (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))[0]
+          .mnemonic
+      ).toBeUndefined();
       expect(mnemonicRead).not.toHaveBeenCalled();
     }
     await restoreAccounts([record]);
@@ -364,7 +385,10 @@ it('probe-present exports its own key even without originalOwner', async () => {
   const record = retained({ originalOwner: false });
   exportWallet(record);
   jest.mocked(secure.probeSecretPresenceStrict).mockResolvedValueOnce(true);
-  expect((await collectAccounts())[0].mnemonic).toBe(record.mnemonic);
+  expect(
+    (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))[0]
+      .mnemonic
+  ).toBe(record.mnemonic);
 });
 
 it('probe error aborts export instead of silently omitting the key', async () => {
@@ -372,15 +396,17 @@ it('probe error aborts export instead of silently omitting the key', async () =>
   jest
     .mocked(secure.probeSecretPresenceStrict)
     .mockRejectedValueOnce(new Error('probe failed'));
-  await expect(collectAccounts()).rejects.toThrow(
-    'Failed to retrieve retained key'
-  );
+  await expect(
+    collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+  ).rejects.toThrow('Failed to retrieve retained key');
 });
 
 it('getMnemonic error aborts export for an expected key', async () => {
   exportWallet(retained());
   mnemonicRead.mockRejectedValueOnce(new Error('read failed'));
-  await expect(collectAccounts()).rejects.toThrow('read failed');
+  await expect(
+    collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+  ).rejects.toThrow('read failed');
 });
 
 it.each(['address', 'publicKey'])(
@@ -516,7 +542,9 @@ it.each([false, true])(
     const record = retained({ canSign, rekeyedAt: '2026-01-01T00:00:00.000Z' });
     exportWallet(record);
     const wire: BackupAccountData[] = JSON.parse(
-      JSON.stringify(await collectAccounts())
+      JSON.stringify(
+        await collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+      )
     );
     expect(wire[0]).toMatchObject({
       type: AccountType.REKEYED,

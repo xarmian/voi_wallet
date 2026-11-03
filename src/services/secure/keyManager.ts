@@ -18,6 +18,11 @@ import { NetworkService } from '@/services/network';
 import { findOwnKeySigner } from '@/services/wallet/ownKeyCustody';
 import { redactError } from '@/utils/logRedaction';
 import { assertSignableKeyreg } from '@/utils/keyregSafety';
+import {
+  consumeFreshAuth,
+  FreshAuthCapability,
+  FreshAuthReason,
+} from './freshAuth';
 
 /**
  * Secure Key Manager - Simplified version using AccountSecureStorage
@@ -587,7 +592,24 @@ export class SecureKeyManager {
    * Get mnemonic for specific address from account metadata (when wallet is unlocked)
    * This is much simpler than going through private key decryption
    */
-  static async getMnemonic(address: string): Promise<string> {
+  static async revealMnemonic(
+    address: string,
+    cap: FreshAuthCapability,
+    reason: FreshAuthReason = 'reveal_recovery_phrase'
+  ): Promise<string> {
+    consumeFreshAuth(cap, reason);
+    return this.readMnemonicUnchecked(address);
+  }
+
+  static async revealPrivateKey(
+    accountId: string,
+    cap: FreshAuthCapability
+  ): Promise<Uint8Array> {
+    consumeFreshAuth(cap, 'export_private_key');
+    return AccountSecureStorage.getPrivateKey(accountId);
+  }
+
+  private static async readMnemonicUnchecked(address: string): Promise<string> {
     try {
       // Find the account by address
       const wallet = await MultiAccountWalletService.getCurrentWallet();

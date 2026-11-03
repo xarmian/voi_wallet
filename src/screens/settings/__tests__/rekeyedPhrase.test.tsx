@@ -1,6 +1,6 @@
 import React from 'react';
-import { Alert } from 'react-native';
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { Alert, AppState, AppStateStatus } from 'react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import SettingsScreen from '../SettingsScreen';
 import ShowRecoveryPhraseScreen from '../ShowRecoveryPhraseScreen';
 import { AccountMetadata, AccountType } from '@/types/wallet';
@@ -11,8 +11,9 @@ let mockActive: AccountMetadata;
 let mockAccounts: AccountMetadata[];
 let mockParams: { accountAddress?: string };
 const mockNavigate = jest.fn();
+const mockGoBack = jest.fn();
 const mockSecureScreen = jest.fn();
-const mockNavigation = { navigate: mockNavigate, goBack: jest.fn() };
+const mockNavigation = { navigate: mockNavigate, goBack: mockGoBack };
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => mockNavigation,
   useRoute: () => ({ params: mockParams }),
@@ -42,8 +43,33 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: { probeSecretPresenceStrict: jest.fn() },
 }));
 jest.mock('@/services/secure/keyManager', () => ({
-  SecureKeyManager: { getMnemonic: jest.fn() },
+  SecureKeyManager: { revealMnemonic: jest.fn() },
 }));
+const mockAuthSignals: (AbortSignal | undefined)[] = [];
+let mockAuthFailure: string | null = null;
+jest.mock('@/services/secure/freshAuth', () => {
+  class FreshAuthError extends Error {
+    code: string;
+    constructor(code: string) {
+      super(code);
+      this.code = code;
+    }
+  }
+  return {
+    FreshAuthError,
+    withFreshAuth: (
+      _reason: string,
+      fn: (cap: object) => unknown,
+      opts?: { signal?: AbortSignal }
+    ) => {
+      mockAuthSignals.push(opts?.signal);
+      if (mockAuthFailure) {
+        return Promise.reject(new FreshAuthError(mockAuthFailure));
+      }
+      return Promise.resolve(fn({}));
+    },
+  };
+});
 jest.mock('@/hooks/useSecureScreen', () => ({
   useSecureScreen: () => mockSecureScreen(),
 }));
@@ -64,8 +90,22 @@ jest.mock('@/components/common/GlassCard', () => ({
 }));
 jest.mock('@/components/wallet/MnemonicDisplay', () => {
   const { Text } = require('react-native');
-  return function MockMnemonicDisplay({ isBlurred }: { isBlurred: boolean }) {
-    return <Text>{isBlurred ? 'phrase blurred' : 'phrase visible'}</Text>;
+  return function MockMnemonicDisplay({
+    isBlurred,
+    mnemonic,
+  }: {
+    isBlurred: boolean;
+    mnemonic: string;
+  }) {
+    return (
+      <Text>
+        {isBlurred
+          ? mnemonic
+            ? 'phrase blurred with phrase'
+            : 'phrase blurred'
+          : `phrase visible ${mnemonic}`}
+      </Text>
+    );
   };
 });
 
@@ -83,15 +123,81 @@ const account = (overrides: object = {}): AccountMetadata =>
   }) as AccountMetadata;
 
 beforeEach(() => {
+  mockAuthFailure = null;
+  mockAuthSignals.length = 0;
   mockActive = account();
   mockAccounts = [mockActive];
   mockParams = {};
+  mockGoBack.mockReset();
   mockAllSelf = true;
   mockHintDelegated = false;
   mockFreshCheck.mockReset();
   probe.mockReset();
   probe.mockResolvedValue(false);
-  jest.mocked(SecureKeyManager.getMnemonic).mockResolvedValue('');
+  jest.mocked(SecureKeyManager.revealMnemonic).mockResolvedValue('');
+});
+
+it('a cancelled prompt shows nothing and returns', async () => {
+  mockAuthFailure = 'cancelled';
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const view = await render(<ShowRecoveryPhraseScreen />);
+  await waitFor(() => expect(mockGoBack).toHaveBeenCalled());
+  expect(alert).not.toHaveBeenCalled();
+  expect(SecureKeyManager.revealMnemonic).not.toHaveBeenCalled();
+  expect(view.queryByText('phrase blurred with phrase')).toBeNull();
+  expect(view.queryByText(/phrase visible/)).toBeNull();
+});
+
+it('cancels the pending prompt when the screen unmounts', async () => {
+  const view = await render(<ShowRecoveryPhraseScreen />);
+  await waitFor(() => expect(mockAuthSignals.length).toBe(1));
+  expect(mockAuthSignals[0]?.aborted).toBe(false);
+  await view.unmount();
+  expect(mockAuthSignals[0]?.aborted).toBe(true);
+});
+
+it('keeps the specific message for a non-authentication failure', async () => {
+  jest
+    .mocked(SecureKeyManager.revealMnemonic)
+    .mockRejectedValue(
+      new Error('This account type does not have a recovery phrase')
+    );
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  await render(<ShowRecoveryPhraseScreen />);
+  await waitFor(() =>
+    expect(alert).toHaveBeenCalledWith(
+      'Error',
+      'This account type does not have a recovery phrase.',
+      expect.any(Array)
+    )
+  );
+});
+
+it('clears the loaded phrase and returns after the app backgrounds', async () => {
+  jest
+    .mocked(SecureKeyManager.revealMnemonic)
+    .mockResolvedValue('phrase-secret');
+  const listeners: ((state: AppStateStatus) => void)[] = [];
+  const listenerSpy = jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation((_event, listener) => {
+      listeners.push(listener as (state: AppStateStatus) => void);
+      return { remove: jest.fn() } as never;
+    });
+  const view = await render(<ShowRecoveryPhraseScreen />);
+  await waitFor(() =>
+    expect(view.getByText('phrase blurred with phrase')).toBeTruthy()
+  );
+  const readsBeforeBackground = jest.mocked(SecureKeyManager.revealMnemonic)
+    .mock.calls.length;
+  await act(async () => listeners[listeners.length - 1]('background'));
+  expect(view.queryByText(/phrase visible phrase-secret/)).toBeNull();
+  expect(view.queryByText('phrase blurred with phrase')).toBeNull();
+  expect(mockGoBack).toHaveBeenCalled();
+  expect(jest.mocked(SecureKeyManager.revealMnemonic)).toHaveBeenCalledTimes(
+    readsBeforeBackground
+  );
+  listenerSpy.mockRestore();
 });
 afterEach(() => jest.restoreAllMocks());
 
@@ -163,7 +269,10 @@ it.each([AccountType.REKEYED, AccountType.STANDARD])(
     mockParams = { accountAddress: 'TARGET_ADDRESS' };
     const view = await render(<ShowRecoveryPhraseScreen />);
     expect(Boolean(view.queryByText(note))).toBe(type === AccountType.REKEYED);
-    expect(SecureKeyManager.getMnemonic).toHaveBeenCalledWith('TARGET_ADDRESS');
+    expect(SecureKeyManager.revealMnemonic).toHaveBeenCalledWith(
+      'TARGET_ADDRESS',
+      expect.anything()
+    );
     expect(view.getByText('phrase blurred')).toBeTruthy();
     expect(mockSecureScreen).toHaveBeenCalled();
   }
@@ -232,6 +341,9 @@ it('pins the target for the screen lifetime', async () => {
   mockParams = { accountAddress: 'B_ADDRESS' };
   await view.rerender(<ShowRecoveryPhraseScreen />);
   expect(mockFreshCheck).not.toHaveBeenCalledWith('B_ADDRESS');
-  expect(SecureKeyManager.getMnemonic).not.toHaveBeenCalledWith('B_ADDRESS');
-  expect(SecureKeyManager.getMnemonic).toHaveBeenCalledWith('A_ADDRESS');
+  expect(SecureKeyManager.revealMnemonic).not.toHaveBeenCalledWith('B_ADDRESS');
+  expect(SecureKeyManager.revealMnemonic).toHaveBeenCalledWith(
+    'A_ADDRESS',
+    expect.anything()
+  );
 });

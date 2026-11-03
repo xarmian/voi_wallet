@@ -121,6 +121,7 @@ import nacl from 'tweetnacl';
 import { NetworkId } from '@/types/network';
 import { AccountType, AuthenticationRequiredError } from '@/types/wallet';
 import { SecureKeyManager } from '../keyManager';
+import { registerFreshAuthPrompter, withFreshAuth } from '../freshAuth';
 import { SimplifiedKeyManager } from '../simplifiedKeyManager';
 import {
   makeAccount,
@@ -129,6 +130,17 @@ import {
   type TestAccount,
 } from '@/__tests__/fixtures/algorand';
 import { PermanentNonParticipationError } from '@/utils/keyregSafety';
+
+async function revealMnemonic(address: string): Promise<string> {
+  const unregister = registerFreshAuthPrompter(async () => true);
+  try {
+    return await withFreshAuth('reveal_recovery_phrase', (cap) =>
+      SecureKeyManager.revealMnemonic(address, cap)
+    );
+  } finally {
+    unregister();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures — real, deterministic, algosdk-derived accounts.
@@ -801,7 +813,7 @@ describe('SecureKeyManager key cleanup', () => {
         OWNER.addr
       );
       // Mnemonic derived from a retrieved key (not a cached plaintext phrase).
-      await SecureKeyManager.getMnemonic(OWNER.addr);
+      await revealMnemonic(OWNER.addr);
       // Error path — failure logging is a classic leak site.
       await expect(
         SecureKeyManager.signTransaction(null, OWNER.addr)
@@ -867,10 +879,23 @@ describe('SecureKeyManager key cleanup', () => {
 // ===========================================================================
 
 describe('SecureKeyManager.getMnemonic', () => {
+  it('rejects a forged capability before reading secret storage', async () => {
+    const account = standardAccount(OWNER, 'acc-owner');
+    (account as { mnemonic: string }).mnemonic = '';
+    setWallet([account]);
+
+    await expect(
+      SecureKeyManager.revealMnemonic(OWNER.addr, {
+        __brand: 'FreshAuthCapability',
+      } as never)
+    ).rejects.toMatchObject({ code: 'failed' });
+    expect(mockSecureGetPrivateKey).not.toHaveBeenCalled();
+  });
+
   it('returns the stored mnemonic without touching the secure store', async () => {
     setWallet([standardAccount(OWNER, 'acc-owner')]);
 
-    const mnemonic = await SecureKeyManager.getMnemonic(OWNER.addr);
+    const mnemonic = await revealMnemonic(OWNER.addr);
 
     // Boolean equality so a mismatch does not render the mnemonic into CI output.
     expect(mnemonic === OWNER.mnemonic).toBe(true);
@@ -885,7 +910,7 @@ describe('SecureKeyManager.getMnemonic', () => {
     (acct as { mnemonic: string }).mnemonic = '';
     setWallet([acct]);
 
-    const mnemonic = await SecureKeyManager.getMnemonic(OWNER.addr);
+    const mnemonic = await revealMnemonic(OWNER.addr);
 
     // Real derivation from the real key (checked via the public address, so no
     // secret is rendered on failure).
@@ -909,7 +934,7 @@ describe('SecureKeyManager.getMnemonic', () => {
       };
       keyRegistry.set(account.id, REKEYED.sk);
       setWallet([account, standardAccount(AUTH, 'acc-auth')]);
-      const mnemonic = await SecureKeyManager.getMnemonic(REKEYED.addr);
+      const mnemonic = await revealMnemonic(REKEYED.addr);
       expect(addressForMnemonic(mnemonic)).toBe(REKEYED.addr);
       expect(mockSecureGetPrivateKey).toHaveBeenCalledWith(account.id);
       expect(handedOutKeys).toHaveLength(1);
@@ -933,7 +958,7 @@ describe('SecureKeyManager.getMnemonic', () => {
       setWallet([account]);
       const foreign = Uint8Array.from(AUTH.sk);
       mockSecureGetPrivateKey.mockResolvedValueOnce(foreign);
-      await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+      await expect(revealMnemonic(REKEYED.addr)).rejects.toThrow(
         'does not match this account'
       );
       expect(foreign.every((byte) => byte === 0)).toBe(true);
@@ -950,7 +975,7 @@ describe('SecureKeyManager.getMnemonic', () => {
     spliced.set(AUTH.sk.slice(0, 32), 0);
     spliced.set(REKEYED.sk.slice(32, 64), 32);
     mockSecureGetPrivateKey.mockResolvedValueOnce(spliced);
-    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+    await expect(revealMnemonic(REKEYED.addr)).rejects.toThrow(
       'does not match this account'
     );
     expect(spliced.every((byte) => byte === 0)).toBe(true);
@@ -962,7 +987,7 @@ describe('SecureKeyManager.getMnemonic', () => {
     ]);
     const invalidKey = REKEYED.sk.slice(0, 31);
     mockSecureGetPrivateKey.mockResolvedValueOnce(invalidKey);
-    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+    await expect(revealMnemonic(REKEYED.addr)).rejects.toThrow(
       'Failed to retrieve recovery phrase'
     );
     expect(invalidKey.every((byte) => byte === 0)).toBe(true);
@@ -977,19 +1002,17 @@ describe('SecureKeyManager.getMnemonic', () => {
         mnemonic: AUTH.mnemonic,
       },
     ]);
-    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
+    await expect(revealMnemonic(REKEYED.addr)).rejects.toThrow(
       'Failed to retrieve recovery phrase: No key stored'
     );
     mockSecureGetPrivateKey.mockRejectedValueOnce(new Error('vault locked'));
-    await expect(SecureKeyManager.getMnemonic(REKEYED.addr)).rejects.toThrow(
-      'vault locked'
-    );
+    await expect(revealMnemonic(REKEYED.addr)).rejects.toThrow('vault locked');
   });
 
   it('rejects for account types without a recovery phrase', async () => {
     setWallet([ledgerAccount(LEDGER, 'acc-ledger')]);
 
-    await expect(SecureKeyManager.getMnemonic(LEDGER.addr)).rejects.toThrow(
+    await expect(revealMnemonic(LEDGER.addr)).rejects.toThrow(
       'does not have a recovery phrase'
     );
   });
@@ -1001,7 +1024,7 @@ describe('SecureKeyManager.getMnemonic', () => {
     // and fails there — it is not rejected up front. This documents the current
     // behavior; see report note about the permissive watch branch.
     setWallet([watchAccount(OTHER, 'acc-watch')]); // no key in the registry
-    await expect(SecureKeyManager.getMnemonic(OTHER.addr)).rejects.toThrow(
+    await expect(revealMnemonic(OTHER.addr)).rejects.toThrow(
       'Failed to retrieve recovery phrase'
     );
     expect(mockSecureGetPrivateKey).toHaveBeenCalledWith('acc-watch');
@@ -1010,7 +1033,7 @@ describe('SecureKeyManager.getMnemonic', () => {
   it('wraps a missing account in a descriptive error', async () => {
     setWallet([standardAccount(OWNER, 'acc-owner')]);
 
-    await expect(SecureKeyManager.getMnemonic(OTHER.addr)).rejects.toThrow(
+    await expect(revealMnemonic(OTHER.addr)).rejects.toThrow(
       'Failed to retrieve recovery phrase: Account not found'
     );
   });
