@@ -1674,4 +1674,44 @@ describe('interrupted wipe (wipe-intent marker)', () => {
     expect(mockReadWipeIntent).not.toHaveBeenCalled();
     expect(result.current.authState.securityUnavailable).toBe(false);
   });
+
+  // LockScreen must be able to tell a refusal from a wrong PIN.
+  test('a refused unlock records why (wipe_pending), readable once; a wrong PIN records nothing', async () => {
+    const { result } = await mountAuth();
+
+    mockReadWipeIntent.mockResolvedValue(true);
+    mockWipeWalletData.mockRejectedValueOnce(new WipeIncompleteError(['k']));
+    await act(async () => {
+      await result.current.unlock(TEST_PIN);
+    });
+    await flush();
+    expect(result.current.consumeUnlockRefusal()).toBe('wipe_pending');
+    expect(result.current.consumeUnlockRefusal()).toBeNull();
+
+    // A wrong PIN is not a refusal.
+    mockReadWipeIntent.mockResolvedValue(false);
+    mockVerifyPin.mockResolvedValue(false);
+    await act(async () => {
+      await result.current.unlock('wrong1');
+    });
+    await flush();
+    expect(result.current.consumeUnlockRefusal()).toBeNull();
+  });
+
+  test('an unreadable marker at unlock also records wipe_pending, and the PIN counter is never touched', async () => {
+    const { result } = await mountAuth();
+    mockReadWipeIntent.mockRejectedValue(new Error('read failed'));
+    mockVerifyPin.mockClear();
+    await act(async () => {
+      const attempt = result.current.unlock(TEST_PIN);
+      for (let i = 0; i < 12; i += 1) {
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+        await Promise.resolve();
+      }
+      await attempt;
+    });
+    expect(result.current.consumeUnlockRefusal()).toBe('wipe_pending');
+    expect(mockVerifyPin).not.toHaveBeenCalled();
+  });
 });

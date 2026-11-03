@@ -99,6 +99,13 @@ export interface AuthContextType {
   enableBiometrics: (enabled: boolean, secret?: string) => Promise<void>;
   recheckAuthState: () => Promise<void>;
   updateTimeoutSetting: () => Promise<void>;
+  /**
+   * TASK-469: why the last unlock returned false, if it was not a wrong secret.
+   * A refusal because a wipe is pending is NOT an incorrect PIN: the caller must
+   * not show "Incorrect PIN" or touch the attempt counter. Read once, then
+   * cleared. Synchronous (a ref), so it is never stale after the awaited unlock.
+   */
+  consumeUnlockRefusal: () => 'wipe_pending' | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -818,7 +825,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // erase it. If a wipe is pending, run the same finish the boot does (it routes
   // to onboarding on success or the recovery screen on failure) and refuse. An
   // unreadable marker refuses too: fail closed.
+  const unlockRefusalRef = useRef<'wipe_pending' | null>(null);
+  const consumeUnlockRefusal = (): 'wipe_pending' | null => {
+    const reason = unlockRefusalRef.current;
+    unlockRefusalRef.current = null;
+    return reason;
+  };
+
   const refuseUnlockWhilePendingWipe = async (): Promise<boolean> => {
+    unlockRefusalRef.current = null;
     let pending = true;
     try {
       pending = await withTimeout(
@@ -833,6 +848,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
     if (!pending) return false;
+    unlockRefusalRef.current = 'wipe_pending';
     await checkInitialAuthState();
     return true;
   };
@@ -845,6 +861,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // PR7: accept a PIN or a passphrase — verifyPin validates the format
       // against the STORED credential kind, so no 6-digit gate here (that would
       // reject a passphrase). An empty secret can never be valid.
+      unlockRefusalRef.current = null;
       if (!secret) {
         return false;
       }
@@ -1106,6 +1123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     enableBiometrics,
     recheckAuthState,
     updateTimeoutSetting,
+    consumeUnlockRefusal,
   };
 
   return (

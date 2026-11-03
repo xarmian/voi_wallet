@@ -67,8 +67,13 @@ export default function LockScreen() {
   const navigation = useNavigation();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const { authState, unlock, unlockWithBiometrics, recheckAuthState } =
-    useAuth();
+  const {
+    authState,
+    unlock,
+    unlockWithBiometrics,
+    recheckAuthState,
+    consumeUnlockRefusal,
+  } = useAuth();
   const [pin, setPin] = useState('');
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
@@ -214,6 +219,12 @@ export default function LockScreen() {
         });
         return;
       }
+
+      // TASK-469: unlock refused because a wipe is pending. The PIN was never
+      // checked and the attempt counter was not touched, so this is NOT an
+      // incorrect PIN: say nothing here and leave the throttle as it is. The
+      // auth check the refusal ran shows the right screen or notice itself.
+      if (consumeUnlockRefusal() === 'wipe_pending') return;
 
       hapticNotify('error');
       // getPinThrottleState() returns lockedUntil=null once a lockout has
