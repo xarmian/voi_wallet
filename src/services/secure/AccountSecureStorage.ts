@@ -265,6 +265,7 @@ export class AccountSecureStorage {
     'voi_reconcile_unexplained_removals';
   private static readonly RECONCILE_RECOVERY_MARKER_KEY =
     'voi_reconcile_recovery_required';
+  private static readonly RECONCILE_ACTION_TIMEOUT_MS = 5000;
   private static secureResetGeneration = 0;
   private static pendingCreateTokenCounter = 0;
 
@@ -2614,8 +2615,13 @@ export class AccountSecureStorage {
       const confirmedAbsent = states
         .filter(({ present }) => !present)
         .map(({ id }) => id);
-      const acted =
-        confirmedAbsent.length > 0 ? await action(confirmedAbsent) : false;
+      const acted = confirmedAbsent.length
+        ? await this.withTimeout(
+            action(confirmedAbsent),
+            this.RECONCILE_ACTION_TIMEOUT_MS,
+            'Confirmed-absent reconcile action'
+          )
+        : false;
       return { confirmedAbsent, liveIds, acted };
     });
   }

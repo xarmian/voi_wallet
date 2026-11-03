@@ -253,10 +253,9 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
               return false;
             }
             if (hasDowngradedMarkers()) return false;
-            await MultiAccountWalletService.pruneStandardAccounts(
+            return await MultiAccountWalletService.pruneStandardAccounts(
               confirmedAbsent
             );
-            return true;
           }
         );
       phantomsSkippedLive.push(...liveIds);

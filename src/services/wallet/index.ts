@@ -2511,8 +2511,8 @@ export class MultiAccountWalletService {
    * empty accounts array. Epoch-guarded like every other blob mutation so a reset
    * racing boot is not undone. A no-op when nothing matches.
    */
-  static async pruneStandardAccounts(ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
+  static async pruneStandardAccounts(ids: string[]): Promise<boolean> {
+    if (ids.length === 0) return false;
     // TASK-192: this removes a SUBSET of accounts without going through
     // deleteAccount or clearAllWallets, so neither of those guards covers it.
     // A boot-time subscribe pass holding the pre-prune snapshot would otherwise
@@ -2555,6 +2555,7 @@ export class MultiAccountWalletService {
       return true;
     });
     if (wrote) void this.clearLegacyValue(this.WALLET_KEY);
+    return wrote;
   }
 
   /**

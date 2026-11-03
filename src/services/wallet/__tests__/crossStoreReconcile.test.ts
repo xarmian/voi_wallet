@@ -41,7 +41,7 @@ jest.mock('../index', () => ({
   MultiAccountWalletService: {
     getStandardAccountIdsStrict: jest.fn(),
     getBlobAccountIdsStrict: jest.fn(),
-    pruneStandardAccounts: jest.fn(async () => {}),
+    pruneStandardAccounts: jest.fn(async () => true),
   },
 }));
 
@@ -230,6 +230,7 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
     });
     wallet.pruneStandardAccounts.mockImplementation(async () => {
       calls.push('prune');
+      return true;
     });
     await reconcileCrossStoreHalfState();
     expect(secure.recordUnexplainedRemovalsLocked).toHaveBeenCalledWith([
@@ -252,6 +253,32 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
       phantomAccountsSkippedLive: [],
     });
     expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
+  });
+
+  it('keeps a phantom journal entry when prune reports no write', async () => {
+    setup({
+      blob: ['phantom'],
+      list: ['phantom'],
+      journal: { phantom: 'token' },
+    });
+    wallet.pruneStandardAccounts.mockResolvedValueOnce(false);
+    const result = await reconcileCrossStoreHalfState();
+    expect(result.phantomAccountsPruned).toEqual([]);
+    expect(secure.dropPendingCreateEntries).not.toHaveBeenCalledWith([
+      'phantom',
+    ]);
+  });
+
+  it('reports and drops the journal only when prune reports a write', async () => {
+    setup({
+      blob: ['phantom'],
+      list: ['phantom'],
+      journal: { phantom: 'token' },
+    });
+    wallet.pruneStandardAccounts.mockResolvedValueOnce(true);
+    const result = await reconcileCrossStoreHalfState();
+    expect(result.phantomAccountsPruned).toEqual(['phantom']);
+    expect(secure.dropPendingCreateEntries).toHaveBeenCalledWith(['phantom']);
   });
 
   it('drops a stale journal entry (no secret, no blob account)', async () => {

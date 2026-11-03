@@ -84,7 +84,7 @@ function setup({
   });
   secure.deleteAccount.mockResolvedValue(undefined);
   secure.dropPendingCreateEntries.mockResolvedValue(undefined);
-  wallet.pruneStandardAccounts.mockResolvedValue(undefined);
+  wallet.pruneStandardAccounts.mockResolvedValue(true);
 }
 beforeEach(() => {
   jest.clearAllMocks();
@@ -127,7 +127,7 @@ test('corrupt journal marker survives a process restart and makes the next pass 
       { id: 'phantom', address: 'addr-phantom', label: 'phantom' },
     ],
   });
-  freshWallet.pruneStandardAccounts.mockResolvedValue(undefined);
+  freshWallet.pruneStandardAccounts.mockResolvedValue(true);
   await expect(freshReconcile()).resolves.toMatchObject({
     ran: true,
     reportOnly: true,

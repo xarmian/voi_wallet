@@ -81,6 +81,7 @@ jest.mock('../index', () => ({
     pruneStandardAccounts: jest.fn(async (ids: string[]) => {
       mockMutationOrder.push('prune');
       ids.forEach((id) => mockBlob.delete(id));
+      return true;
     }),
   },
 }));

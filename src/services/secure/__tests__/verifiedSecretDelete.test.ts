@@ -75,7 +75,7 @@ jest.mock('@/services/wallet', () => ({
       standardIds: [],
       allIds: [],
     })),
-    pruneStandardAccounts: jest.fn(async () => {}),
+    pruneStandardAccounts: jest.fn(async () => true),
   },
 }));
 

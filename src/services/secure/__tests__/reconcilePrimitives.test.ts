@@ -203,21 +203,37 @@ describe('runWithConfirmedAbsentSecrets', () => {
       }
     );
     await started;
-    let writeFinished = false;
-    const write = (
-      AccountSecureStorage as unknown as {
-        saveSecret: (id: string, value: unknown) => Promise<void>;
-      }
-    )
-      .saveSecret('new', { value: 'secret' })
-      .then(() => {
-        writeFinished = true;
-      });
+    const writer = AccountSecureStorage.addQuarantinedIds(['new']);
     await Promise.resolve();
-    expect(writeFinished).toBe(false);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockKv.has('voi_reconcile_quarantined_ids')).toBe(false);
     release();
-    await Promise.all([task, write]);
-    expect(writeFinished).toBe(true);
+    await Promise.all([task, writer]);
+    expect(mockKv.get('voi_reconcile_quarantined_ids')).toBe('["new"]');
+  });
+
+  it('releases the key mutex when the bounded action times out', async () => {
+    jest.useFakeTimers();
+    try {
+      const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
+        ['gone'],
+        () => new Promise<boolean>(() => {})
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      const writer = AccountSecureStorage.addQuarantinedIds(['after-timeout']);
+      const assertion = expect(task).rejects.toThrow(
+        'Confirmed-absent reconcile action timed out after 5000ms'
+      );
+      await jest.advanceTimersByTimeAsync(5000);
+      await assertion;
+      await writer;
+      expect(mockKv.get('voi_reconcile_quarantined_ids')).toBe(
+        '["after-timeout"]'
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('allows the locked removal-record writer in the action and keeps the public writer usable', async () => {
