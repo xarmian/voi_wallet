@@ -6,6 +6,8 @@ let mockHoldNext = false;
 let mockDeleteFailure: string | undefined;
 let mockHangDeleteKey: string | undefined;
 let mockRemoveFailureKey: string | undefined;
+let mockSetFailureKey: string | undefined;
+let mockHangSetKey: string | undefined;
 let mockHangRemoveKey: string | undefined;
 
 jest.mock('@/platform', () => ({
@@ -43,6 +45,8 @@ jest.mock('@/platform', () => ({
   storage: {
     getItem: jest.fn(async (key: string) => mockPlainValues.get(key) ?? null),
     setItem: jest.fn(async (key: string, value: string) => {
+      if (mockSetFailureKey === key) throw new Error('set failed');
+      if (mockHangSetKey === key) return new Promise<void>(() => {});
       mockPlainValues.set(key, value);
     }),
     removeItem: jest.fn(async (key: string) => {
@@ -76,6 +80,9 @@ const service = AccountSecureStorage as unknown as {
   PIN_THROTTLE_KEY: string;
   STORAGE_KEY_PREFIX: string;
   LEGACY_STORAGE_KEY_PREFIX: string;
+  SECURE_WIPE_TOMBSTONE_KEY: string;
+  QUARANTINED_IDS_KEY: string;
+  UNEXPLAINED_REMOVALS_KEY: string;
   boundedSecureSet(
     key: string,
     value: string,
@@ -119,6 +126,8 @@ beforeEach(() => {
   mockDeleteFailure = undefined;
   mockHangDeleteKey = undefined;
   mockRemoveFailureKey = undefined;
+  mockSetFailureKey = undefined;
+  mockHangSetKey = undefined;
   mockHangRemoveKey = undefined;
   (
     AccountSecureStorage as unknown as Record<string, unknown>
@@ -387,6 +396,59 @@ test('an unsettled pending SET is reported by the pending-record check even when
     });
     mockHeldWrite!.land();
     await jest.advanceTimersByTimeAsync(1);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('if the wipe tombstone cannot be written the wipe does not start: nothing is deleted', async () => {
+  mockPlainValues.set(service.METADATA_LIST_KEY, JSON.stringify(['one']));
+  mockSecureValues.set(secret, 'secure');
+  mockSecureValues.set(service.PIN_KEY, 'pin');
+  mockSetFailureKey = service.SECURE_WIPE_TOMBSTONE_KEY;
+  await expect(AccountSecureStorage.clearAll()).rejects.toMatchObject({
+    name: 'WipeIncompleteError',
+    keys: [service.SECURE_WIPE_TOMBSTONE_KEY],
+  });
+  expect(mockSecureValues.get(secret)).toBe('secure');
+  expect(mockSecureValues.get(service.PIN_KEY)).toBe('pin');
+});
+
+it.each([
+  ['the quarantine registry', 'QUARANTINED_IDS_KEY'],
+  ['the unexplained-removals registry', 'UNEXPLAINED_REMOVALS_KEY'],
+] as const)(
+  'a failed removal of %s is reported, and the rest of the wipe still ran',
+  async (_name, field) => {
+    mockPlainValues.set(service.METADATA_LIST_KEY, '[]');
+    mockSecureValues.set(service.PIN_KEY, 'pin');
+    mockRemoveFailureKey = service[field];
+    await expect(AccountSecureStorage.clearAll()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: expect.arrayContaining([service[field]]),
+    });
+    expect(mockSecureValues.has(service.PIN_KEY)).toBe(false);
+  }
+);
+
+test('a hung wipe-tombstone write is bounded: the wipe does not start, nothing is deleted, the mutex is released', async () => {
+  jest.useFakeTimers();
+  try {
+    mockSecureValues.set(secret, 'secure');
+    mockHangSetKey = service.SECURE_WIPE_TOMBSTONE_KEY;
+    const outcome = AccountSecureStorage.clearAll().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    await jest.advanceTimersByTimeAsync(5001);
+    expect(await outcome).toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: [service.SECURE_WIPE_TOMBSTONE_KEY],
+    });
+    expect(mockSecureValues.get(secret)).toBe('secure');
+    await expect(service.runKeyMutationExclusive(async () => 1)).resolves.toBe(
+      1
+    );
   } finally {
     jest.useRealTimers();
   }

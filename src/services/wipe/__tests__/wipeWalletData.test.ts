@@ -11,6 +11,9 @@ let mockHeldWrite: { key: string; land: () => void } | undefined;
 let mockMarkerSetFailure = false;
 let mockMarkerRemoveFailure = false;
 let mockWalletsFailure = false;
+let mockWalletsHang = false;
+let mockBlobStillThere = false;
+let mockBlobVerifyFailure = false;
 let mockNonceCounter = 0;
 
 jest.mock('@/platform', () => ({
@@ -68,8 +71,13 @@ jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     clearAllWallets: jest.fn(async () => {
       mockEvents.push('wallet-blob');
+      if (mockWalletsHang) return new Promise<void>(() => {});
       if (mockWalletsFailure) throw new Error('wallet clear failed');
       mockPlainValues.delete('voi_wallet_metadata');
+    }),
+    hasWalletWithAccountsStrict: jest.fn(async () => {
+      if (mockBlobVerifyFailure) throw new Error('verify read failed');
+      return mockBlobStillThere;
     }),
   },
 }));
@@ -77,7 +85,12 @@ jest.mock('@/services/wallet', () => ({
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { WipeIncompleteError } from '@/types/wallet';
 import { UNKNOWN_WRITES_STORAGE_KEY } from '@/services/secure/boundedWrites';
-import { wipeWalletData, WALLET_BLOB_NAME } from '../index';
+import {
+  wipeWalletData,
+  isWipeInFlight,
+  WALLET_BLOB_NAME,
+  BLOB_STEP_TIMEOUT_MS,
+} from '../index';
 
 const MARKER = 'voi_wipe_intent';
 const service = AccountSecureStorage as unknown as {
@@ -121,6 +134,9 @@ beforeEach(() => {
   mockMarkerSetFailure = false;
   mockMarkerRemoveFailure = false;
   mockWalletsFailure = false;
+  mockWalletsHang = false;
+  mockBlobStillThere = false;
+  mockBlobVerifyFailure = false;
   mockNonceCounter = 0;
   (
     AccountSecureStorage as unknown as Record<string, unknown>
@@ -209,6 +225,74 @@ describe('marker lifecycle', () => {
       }
     );
     await expect(AccountSecureStorage.readWipeIntentStrict()).rejects.toThrow();
+  });
+});
+
+describe('the wallet-blob step is bounded and verified', () => {
+  test('a blob that still reads back present is incomplete, and the request stays', async () => {
+    seedWallet(['one']);
+    mockBlobStillThere = true;
+    await expect(wipeWalletData()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: [WALLET_BLOB_NAME],
+    });
+    expect(mockPlainValues.get(MARKER)).toBe('1');
+  });
+
+  test('a verification read that fails is incomplete, never "gone"', async () => {
+    seedWallet(['one']);
+    mockBlobVerifyFailure = true;
+    await expect(wipeWalletData()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: [WALLET_BLOB_NAME],
+    });
+    expect(mockPlainValues.get(MARKER)).toBe('1');
+  });
+
+  test('a hung blob clear is bounded and reported', async () => {
+    jest.useFakeTimers();
+    try {
+      seedWallet(['one']);
+      mockWalletsHang = true;
+      const outcome = wipeWalletData().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      await jest.advanceTimersByTimeAsync(BLOB_STEP_TIMEOUT_MS + 1);
+      expect(await outcome).toMatchObject({
+        name: 'WipeIncompleteError',
+        keys: [WALLET_BLOB_NAME],
+      });
+      expect(mockPlainValues.get(MARKER)).toBe('1');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('one wipe at a time', () => {
+  test('a call made while a wipe runs joins it: one request written, one wallet clear', async () => {
+    seedWallet(['one']);
+    const first = wipeWalletData();
+    expect(isWipeInFlight()).toBe(true);
+    const second = wipeWalletData();
+    await Promise.all([first, second]);
+    expect(mockEvents.filter((e) => e === `set:${MARKER}`)).toHaveLength(1);
+    expect(mockEvents.filter((e) => e === 'wallet-blob')).toHaveLength(1);
+    expect(isWipeInFlight()).toBe(false);
+  });
+
+  test('both callers see the same failure, and a later call starts a fresh wipe', async () => {
+    seedWallet(['one']);
+    mockWalletsFailure = true;
+    const first = wipeWalletData();
+    const second = wipeWalletData();
+    await expect(first).rejects.toBeInstanceOf(WipeIncompleteError);
+    await expect(second).rejects.toBeInstanceOf(WipeIncompleteError);
+    expect(isWipeInFlight()).toBe(false);
+    mockWalletsFailure = false;
+    await wipeWalletData();
+    expectEverythingGone(['one']);
   });
 });
 

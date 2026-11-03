@@ -24,7 +24,7 @@ import { AuthProvider, useAuth } from '../AuthContext';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { reconcileCrossStoreHalfState } from '@/services/wallet/crossStoreReconcile';
 import { AccountSecureStorage } from '@/services/secure';
-import { wipeWalletData } from '@/services/wipe';
+import { isWipeInFlight, wipeWalletData } from '@/services/wipe';
 import { showWipeCompleteNotice } from '@/services/wipe/notices';
 import { WipeIncompleteError } from '@/types/wallet';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
@@ -78,7 +78,10 @@ jest.mock('@/services/secure', () => ({
 }));
 
 // TASK-469: the wipe orchestrator and its notices are driven by the tests.
-jest.mock('@/services/wipe', () => ({ wipeWalletData: jest.fn() }));
+jest.mock('@/services/wipe', () => ({
+  wipeWalletData: jest.fn(),
+  isWipeInFlight: jest.fn(),
+}));
 jest.mock('@/services/wipe/notices', () => ({
   showWipeCompleteNotice: jest.fn(),
 }));
@@ -153,6 +156,7 @@ const mockReconcile = reconcileCrossStoreHalfState as jest.Mock;
 const mockReadWipeIntent =
   AccountSecureStorage.readWipeIntentStrict as jest.Mock;
 const mockWipeWalletData = wipeWalletData as jest.Mock;
+const mockIsWipeInFlight = isWipeInFlight as jest.Mock;
 const mockShowWipeComplete = showWipeCompleteNotice as jest.Mock;
 
 // A clean, no-op reconcile result (nothing to repair).
@@ -269,6 +273,7 @@ beforeEach(() => {
   // TASK-469: no pending wipe by default; a wipe finish succeeds unless a test says otherwise.
   mockReadWipeIntent.mockResolvedValue(false);
   mockWipeWalletData.mockResolvedValue(undefined);
+  mockIsWipeInFlight.mockReturnValue(false);
   mockShowWipeComplete.mockClear();
 });
 
@@ -1497,7 +1502,9 @@ describe('interrupted wipe (wipe-intent marker)', () => {
 
   test('an unreadable marker fails closed: it is never read as "no wipe pending"', async () => {
     mockReadWipeIntent.mockRejectedValue(new Error('read failed'));
-    const { result } = await mountAuth();
+    const { result } = await mountAuthWithRetries();
+    // Retried like the lock reads before giving up.
+    expect(mockReadWipeIntent).toHaveBeenCalledTimes(3);
     expect(result.current.authState.securityUnavailable).toBe(true);
     expect(mockWipeWalletData).not.toHaveBeenCalled();
     expect(mockShowWipeComplete).not.toHaveBeenCalled();
@@ -1523,17 +1530,60 @@ describe('interrupted wipe (wipe-intent marker)', () => {
     expect(result.current.authState.securityUnavailable).toBe(false);
   });
 
-  test('after a finished wipe the marker is not consulted again this launch', async () => {
-    mockReadWipeIntent.mockResolvedValue(true);
-    mockHasWalletStrict.mockResolvedValue(false);
-    mockHasPinStrict.mockResolvedValue(false);
+  test('a transient marker read failure is retried and does not send a healthy user to recovery', async () => {
+    mockReadWipeIntent
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValue(false);
+    const { result } = await mountAuthWithRetries();
+    expect(mockReadWipeIntent).toHaveBeenCalledTimes(2);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(mockWipeWalletData).not.toHaveBeenCalled();
+  });
+
+  test('a wipe that fails AFTER boot saw no marker is found and finished by the recheck (no onboarding with a stale marker)', async () => {
+    // Boot: no marker, the app is healthy.
+    mockReadWipeIntent.mockResolvedValue(false);
     const { result } = await mountAuth();
+    expect(mockWipeWalletData).not.toHaveBeenCalled();
+
+    // The user ran a wipe from the recovery screen; it set the marker and did not
+    // finish. Retry re-checks: the marker must be seen NOW, not skipped because
+    // boot already looked.
+    mockReadWipeIntent.mockResolvedValue(true);
+    mockWipeWalletData.mockRejectedValueOnce(new WipeIncompleteError(['k']));
     await act(async () => {
       await result.current.recheckAuthState();
     });
     await flush();
-    expect(mockReadWipeIntent).toHaveBeenCalledTimes(1);
     expect(mockWipeWalletData).toHaveBeenCalledTimes(1);
+    expect(result.current.authState.securityUnavailable).toBe(true);
+    expect(mockShowWipeComplete).not.toHaveBeenCalled();
+    // And no lock-state read happened for the failed pass, so no onboarding.
+    const readsAfterFailedFinish = mockHasWalletStrict.mock.calls.length;
+
+    // Retry again: the finish completes and routing proceeds.
+    mockHasWalletStrict.mockResolvedValue(false);
+    mockHasPinStrict.mockResolvedValue(false);
+    await act(async () => {
+      await result.current.recheckAuthState();
+    });
+    await flush();
+    expect(mockWipeWalletData).toHaveBeenCalledTimes(2);
     expect(mockShowWipeComplete).toHaveBeenCalledTimes(1);
+    expect(result.current.authState.securityUnavailable).toBe(false);
+    expect(mockHasWalletStrict.mock.calls.length).toBeGreaterThan(
+      readsAfterFailedFinish
+    );
+  });
+
+  test('a wipe already running is joined, not duplicated, and its notice is left to whoever started it', async () => {
+    mockReadWipeIntent.mockResolvedValue(true);
+    mockIsWipeInFlight.mockReturnValue(true);
+    mockHasWalletStrict.mockResolvedValue(false);
+    mockHasPinStrict.mockResolvedValue(false);
+    const { result } = await mountAuth();
+    expect(mockWipeWalletData).toHaveBeenCalledTimes(1); // the join
+    expect(mockShowWipeComplete).not.toHaveBeenCalled();
+    expect(result.current.authState.securityUnavailable).toBe(false);
   });
 });

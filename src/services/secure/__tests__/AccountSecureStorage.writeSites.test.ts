@@ -3,12 +3,13 @@ import path from 'path';
 import ts from 'typescript';
 
 // The original 51 source write sites plus eight quarantine/recovery bookkeeping
-// writes. TASK-469 moved deleteAccountLocked's two raw deletes and all but three
-// of clearAll's raw writes (the wipe tombstone and two bookkeeping removals)
-// onto the bounded wrappers; clearAll now loops, so six textual deletes plus the
+// writes. TASK-469 moved deleteAccountLocked's two raw deletes and ALL of
+// clearAll's raw writes (including the wipe tombstone and the two registry
+// removals) onto the bounded wrappers; clearAll now loops, so six textual deletes plus the
 // multiRemove collapse into three call sites, which lowers the textual total from
-// 64 to 59; the wipe-intent marker (beginWipe, endWipe) adds two bounded sites, 61.
-// 26 now call bounded wrappers, one
+// 64 to 59; the wipe-intent marker (beginWipe, endWipe) adds two bounded sites, and the tombstone and
+// registry removals two more: 60.
+// 28 now call bounded wrappers, one
 // delegates to saveSecret, and 32 remain raw. The unknown journal adds one
 // three raw journal sites (write, late-write repair, reset). Counts prevent a
 // new raw write in an allowed method from passing.
@@ -42,7 +43,6 @@ const OUT_OF_SCOPE_CLASSIFIED: Record<string, number> = {
   setPinTimeout: 2,
   getPinTimeout: 2,
   persistPinCredential: 4,
-  clearAll: 3,
   addQuarantinedIds: 1,
   removeQuarantinedIds: 2,
   setReconcileRecoveryMarker: 1,
@@ -95,8 +95,8 @@ test('all original and removal-record write sites stay classified', () => {
   const pending = sites('pinSetupPending.ts');
   const raw = [...secure.raw, ...pending.raw];
   const bounded = [...secure.bounded, ...pending.bounded];
-  expect(raw.length - 3 + bounded.length + secure.delegated.length).toBe(61);
-  expect(bounded.length).toBe(26);
+  expect(raw.length - 3 + bounded.length + secure.delegated.length).toBe(60);
+  expect(bounded.length).toBe(28);
   expect(secure.delegated).toEqual(['migrateLegacyAccountDataLocked']);
   expect(bounded.every((method) => IN_SCOPE.has(method))).toBe(true);
   const actual = raw.reduce<Record<string, number>>((counts, method) => {

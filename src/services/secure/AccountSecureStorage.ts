@@ -4618,7 +4618,19 @@ export class AccountSecureStorage {
         // removal — if the app dies mid-wipe we are left tombstone-set (legacy
         // resurrection blocked) rather than secrets-gone-without-a-marker. A
         // committed creation/restore clears it later.
-        await storage.setItem(this.SECURE_WIPE_TOMBSTONE_KEY, '1');
+        const unresolved = new Set<string>();
+        try {
+          // Bounded and unguarded: a stalled store must not hold the key mutex,
+          // and an earlier unresolved record must not stop a retry. If the
+          // tombstone cannot be written, nothing has been deleted yet.
+          await this.boundedStorageSet(
+            this.SECURE_WIPE_TOMBSTONE_KEY,
+            '1',
+            true
+          );
+        } catch {
+          throw new WipeIncompleteError([this.SECURE_WIPE_TOMBSTONE_KEY]);
+        }
 
         // TASK-220: drain the pending-creation journal — an in-flight creation
         // may have written a secret that is not yet in the account list (the
@@ -4653,14 +4665,26 @@ export class AccountSecureStorage {
             `Failed to delete ${failedCount} account(s) from secure storage`
           );
         }
-        await this.writePendingCreateJournal({});
-        await storage.removeItem(this.QUARANTINED_IDS_KEY);
-        await storage.removeItem(this.UNEXPLAINED_REMOVALS_KEY);
+        // Bounded, and a failure is reported instead of aborting or stalling.
+        try {
+          await this.writePendingCreateJournal({});
+        } catch {
+          unresolved.add(this.PENDING_CREATES_KEY);
+        }
+        for (const registryKey of [
+          this.QUARANTINED_IDS_KEY,
+          this.UNEXPLAINED_REMOVALS_KEY,
+        ]) {
+          try {
+            await this.boundedStorageRemove(registryKey);
+          } catch {
+            unresolved.add(registryKey);
+          }
+        }
 
         // Clear PIN and settings from general storage
         // NOTE: DEVICE_ID_KEY is intentionally NOT cleared - it's used for key derivation
         // and must remain consistent across restore operations to decrypt private keys
-        const unresolved = new Set<string>();
         for (const key of [
           this.PIN_KEY,
           this.SALT_KEY,

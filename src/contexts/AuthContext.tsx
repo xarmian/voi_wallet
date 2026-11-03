@@ -21,7 +21,7 @@ import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
 import { redactError } from '@/utils/logRedaction';
-import { wipeWalletData } from '@/services/wipe';
+import { isWipeInFlight, wipeWalletData } from '@/services/wipe';
 import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 // Helper to check if biometrics are available (web-safe)
@@ -221,11 +221,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // so a boot where the reconcile could not run (strict reads failed) retries next boot.
   const bootReconcileDoneRef = useRef(false);
 
-  // TASK-469: one-shot latch for the boot-time wipe finish. Set only after the
-  // marker was read (and any interrupted wipe finished), so a boot where that
-  // could not be done fails closed and the recovery screen's Retry runs it again.
-  const wipeIntentHandledRef = useRef(false);
-
   useEffect(() => {
     checkInitialAuthState();
     // Capture the subscription remover so the effect cleanup can tear the
@@ -296,14 +291,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       // ── Interrupted wipe (TASK-469) ────────────────────────────────────────
       // A persisted wipe request means Delete Everything started and did not
-      // finish (a crash, or an incomplete wipe the user restarted after). The
-      // state it left can route to onboarding as if it had succeeded (phantom
-      // accounts pruned, PIN gone), so finish it BEFORE reading the lock state.
-      // Fails CLOSED: if the marker cannot be read or the wipe cannot finish, go
-      // to the recovery screen (zero wallet access, its Retry runs this again);
-      // never onboarding, and the "deleted" notice is shown only after the wipe
-      // reports complete.
-      if (!wipeIntentHandledRef.current) {
+      // finish (a crash, a timeout, or an incomplete wipe). The state it left can
+      // route to onboarding as if it had succeeded (phantom accounts pruned, PIN
+      // gone), so finish it BEFORE reading the lock state.
+      //
+      // Read on EVERY check, not only the first of a launch: a wipe started this
+      // session that did not finish leaves the marker set, and the recovery
+      // screen's Retry (recheckAuthState) must find it, or the recheck would route
+      // to onboarding with the marker still set and a later boot would wipe the
+      // new wallet. The read is one bounded general-storage read.
+      //
+      // Fails CLOSED: if the marker cannot be read (after the same bounded retries
+      // as the lock reads) or the wipe cannot finish, go to the recovery screen
+      // (zero wallet access; its Retry runs this again); never onboarding. The
+      // "deleted" notice is shown only after the wipe reports complete, and only
+      // by the caller that started it (a wipe already running is joined, not
+      // duplicated).
+      {
         const failClosed = () =>
           setAuthState((prev) => ({
             ...prev,
@@ -315,22 +319,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             biometricEnabled: false,
             backgroundedAt: null,
           }));
-        let wipePending: boolean;
-        try {
-          wipePending = await withTimeout(
-            AccountSecureStorage.readWipeIntentStrict(),
-            STRICT_READ_TIMEOUT_MS,
-            'wipe intent read'
-          );
-        } catch (error) {
+        let wipePending: boolean | undefined;
+        let wipeReadError: unknown;
+        for (
+          let attempt = 1;
+          attempt <= STRICT_READ_MAX_ATTEMPTS;
+          attempt += 1
+        ) {
+          try {
+            wipePending = await withTimeout(
+              AccountSecureStorage.readWipeIntentStrict(),
+              STRICT_READ_TIMEOUT_MS,
+              'wipe intent read'
+            );
+            break;
+          } catch (error) {
+            wipeReadError = error;
+            if (attempt < STRICT_READ_MAX_ATTEMPTS) {
+              await delay(STRICT_READ_BACKOFF_MS * attempt);
+            }
+          }
+        }
+        if (wipePending === undefined) {
           console.error(
             'Wipe-intent read failed; failing closed:',
-            redactError(error)
+            redactError(wipeReadError)
           );
           failClosed();
           return;
         }
         if (wipePending) {
+          const startedHere = !isWipeInFlight();
           try {
             await withTimeout(
               wipeWalletData(),
@@ -345,9 +364,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             failClosed();
             return;
           }
-          showWipeCompleteNotice();
+          if (startedHere) showWipeCompleteNotice();
         }
-        wipeIntentHandledRef.current = true;
       }
 
       // ── Non-lock-determining reads (display/config only) ───────────────────

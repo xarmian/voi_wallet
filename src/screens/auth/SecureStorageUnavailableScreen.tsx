@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
+import { redactError } from '@/utils/logRedaction';
 import { wipeWalletData } from '@/services/wipe';
 import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
@@ -183,7 +184,10 @@ export default function SecureStorageUnavailableScreen({
       // A throw here (or a recheck that re-lands on recovery without throwing)
       // leaves this screen mounted; resetAttempted stays true and the inline
       // "reset didn't resolve it" guidance renders — no silent loop.
-      console.error('Reset of secure storage state failed:', error);
+      console.error(
+        'Reset of secure storage state failed:',
+        redactError(error)
+      );
     } finally {
       if (mountedRef.current) {
         setIsResetting(false);

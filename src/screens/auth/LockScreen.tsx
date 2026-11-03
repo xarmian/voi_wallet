@@ -24,6 +24,7 @@ import {
   showWipeIncompleteNotice,
 } from '@/services/wipe/notices';
 import { hapticNotify } from '@/utils/haptics';
+import { redactError } from '@/utils/logRedaction';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 
 // Cross-platform alert helper
@@ -292,7 +293,7 @@ export default function LockScreen() {
     try {
       await wipeWalletData();
     } catch (error) {
-      console.error('Reset error:', error);
+      console.error('Reset error:', redactError(error));
       showWipeIncompleteNotice();
       return;
     }
@@ -308,7 +309,7 @@ export default function LockScreen() {
     try {
       await recheckAuthState();
     } catch (error) {
-      console.error('Reset recheck error:', error);
+      console.error('Reset recheck error:', redactError(error));
     }
 
     // Shown only here: after the wipe reported complete.
