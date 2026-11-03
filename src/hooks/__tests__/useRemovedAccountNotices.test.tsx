@@ -86,6 +86,23 @@ describe('useRemovedAccountNotices', () => {
     );
     expect(values.at(-1)?.notices).toEqual([records[1]]);
   });
+  it('a run that lost focus while the wallet was being read clears nothing', async () => {
+    let release: (accounts: unknown[]) => void = () => {};
+    (MultiAccountWalletService.getAllAccounts as jest.Mock).mockReturnValue(
+      new Promise<unknown[]>((resolve) => (release = resolve))
+    );
+    const values: ReturnType<typeof useRemovedAccountNotices>[] = [];
+    const screen = await render(<Harness onValue={(v) => values.push(v)} />);
+    // Blur/unmount while the account read is still pending, then the read
+    // resolves with an account that matches the record.
+    await act(async () => {
+      screen.unmount();
+    });
+    await act(async () => {
+      release([{ address: 'ADDRONE', type: 'standard' }]);
+    });
+    expect(AccountSecureStorage.clearUnexplainedRemoval).not.toHaveBeenCalled();
+  });
   it('shows all records when wallet lookup fails and clears nothing', async () => {
     (MultiAccountWalletService.getAllAccounts as jest.Mock).mockRejectedValue(
       new Error('bad')
