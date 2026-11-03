@@ -42,7 +42,11 @@ interface Probe {
  * Fake algod. `hangs(id)` decides whether getAssetByID(id) never answers (it
  * then only ends when the caller aborts the signal it was handed).
  */
-function makeProbe(assets: unknown[], hangs: (id: number) => boolean): Probe {
+function makeProbe(
+  assets: unknown[],
+  hangs: (id: number) => boolean,
+  ignoresAbort = false
+): Probe {
   const started: number[] = [];
   let live = 0;
   let maxLive = 0;
@@ -63,6 +67,8 @@ function makeProbe(assets: unknown[], hangs: (id: number) => boolean): Probe {
           });
         }
         return new Promise((_resolve, reject) => {
+          // A runtime that ignores the signal never ends the request itself.
+          if (ignoresAbort) return;
           options?.signal?.addEventListener('abort', () => {
             live -= 1;
             aborted += 1;
@@ -190,5 +196,23 @@ describe('NetworkService.getAccountBalance: bounded ASA metadata pass (TASK-489)
     expect(jest.getTimerCount()).toBe(0);
     await jest.advanceTimersByTimeAsync(BUDGET_MS * 2);
     expect(probe.aborted()).toBe(0);
+  });
+
+  it('if the runtime ignores the abort, dispatch still stops at the budget and the pass ends within one request timeout of it', async () => {
+    // The worst case when fetch does not honour the signal: lookups already in
+    // flight only end at their own 15 s timeout, but nothing new is dispatched
+    // after the budget, so the pass ends by BUDGET + REQUEST_TIMEOUT.
+    const probe = makeProbe(makeAssets(40), () => true, true);
+    (service as any).algodClient = probe.algodClient;
+
+    const run = service.getAccountBalance(ADDRESS);
+    await jest.advanceTimersByTimeAsync(BUDGET_MS + 1);
+    const startedAtBudget = probe.started.length;
+    await jest.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    const result = await run;
+
+    expect(result.assets).toEqual([]);
+    expect(probe.started.length).toBe(startedAtBudget);
+    expect(probe.started.length).toBeLessThan(40);
   });
 });
