@@ -149,6 +149,102 @@ describe('probeSecretPresenceStrict', () => {
   });
 });
 
+describe('runWithConfirmedAbsentSecrets', () => {
+  it('excludes ids present at the locked re-probe', async () => {
+    mockSecure.set(`${SECRET_PREFIX}live`, JSON.stringify({ any: 'payload' }));
+    const action = jest.fn(async () => true);
+    await expect(
+      AccountSecureStorage.runWithConfirmedAbsentSecrets(
+        ['live', 'gone'],
+        action
+      )
+    ).resolves.toEqual({
+      confirmedAbsent: ['gone'],
+      liveIds: ['live'],
+      acted: true,
+    });
+    expect(action).toHaveBeenCalledWith(['gone']);
+  });
+
+  it('does not call the action when every id is live', async () => {
+    mockSecure.set(`${SECRET_PREFIX}live`, JSON.stringify({ any: 'payload' }));
+    const action = jest.fn(async () => true);
+    await AccountSecureStorage.runWithConfirmedAbsentSecrets(['live'], action);
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it('rejects a failed probe before running the action', async () => {
+    const probe = jest
+      .spyOn(AccountSecureStorage, 'probeSecretPresenceStrict')
+      .mockRejectedValueOnce(new Error('read failed'));
+    const action = jest.fn(async () => true);
+    await expect(
+      AccountSecureStorage.runWithConfirmedAbsentSecrets(['bad'], action)
+    ).rejects.toThrow('read failed');
+    expect(action).not.toHaveBeenCalled();
+    probe.mockRestore();
+  });
+
+  it('holds the key mutex through the action', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const task = AccountSecureStorage.runWithConfirmedAbsentSecrets(
+      ['gone'],
+      async () => {
+        entered();
+        await gate;
+        return true;
+      }
+    );
+    await started;
+    let writeFinished = false;
+    const write = (
+      AccountSecureStorage as unknown as {
+        saveSecret: (id: string, value: unknown) => Promise<void>;
+      }
+    )
+      .saveSecret('new', { value: 'secret' })
+      .then(() => {
+        writeFinished = true;
+      });
+    await Promise.resolve();
+    expect(writeFinished).toBe(false);
+    release();
+    await Promise.all([task, write]);
+    expect(writeFinished).toBe(true);
+  });
+
+  it('allows the locked removal-record writer in the action and keeps the public writer usable', async () => {
+    await expect(
+      Promise.race([
+        AccountSecureStorage.runWithConfirmedAbsentSecrets(
+          ['gone'],
+          async (ids) => {
+            await AccountSecureStorage.recordUnexplainedRemovalsLocked(
+              ids.map((id) => ({ id, address: 'a', label: 'l' }))
+            );
+            return true;
+          }
+        ),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('timed out')), 500)
+        ),
+      ])
+    ).resolves.toMatchObject({ acted: true });
+    await expect(
+      AccountSecureStorage.recordUnexplainedRemovals([
+        { id: 'outside', address: 'a', label: 'l' },
+      ])
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('readPendingCreatesStrict', () => {
   it('returns the journal contents', async () => {
     mockKv.set(PENDING_CREATES_KEY, JSON.stringify({ a: 't1', b: 't2' }));

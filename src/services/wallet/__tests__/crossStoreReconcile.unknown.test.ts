@@ -4,6 +4,14 @@ jest.mock('@/services/secure', () => ({
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
     recordUnexplainedRemovals: jest.fn(async () => {}),
+    recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
+    runWithConfirmedAbsentSecrets: jest.fn(
+      async (ids: string[], action: (ids: string[]) => Promise<boolean>) => ({
+        confirmedAbsent: ids,
+        liveIds: [],
+        acted: ids.length ? await action(ids) : false,
+      })
+    ),
     readUnknownWritesStrict: jest.fn(),
     resolveUnknownWrite: jest.fn(),
     dropUnknownWrite: jest.fn(),

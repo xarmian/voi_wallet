@@ -26,6 +26,14 @@ jest.mock('@/services/secure', () => ({
     setReconcileRecoveryMarker: jest.fn(async () => {}),
     clearReconcileRecoveryMarker: jest.fn(async () => {}),
     recordUnexplainedRemovals: jest.fn(async () => {}),
+    recordUnexplainedRemovalsLocked: jest.fn(async () => {}),
+    runWithConfirmedAbsentSecrets: jest.fn(
+      async (ids: string[], action: (ids: string[]) => Promise<boolean>) => ({
+        confirmedAbsent: ids,
+        liveIds: [],
+        acted: ids.length ? await action(ids) : false,
+      })
+    ),
   },
 }));
 
@@ -51,6 +59,8 @@ const secure = AccountSecureStorage as unknown as {
   readQuarantinedIdsSalvaged: jest.Mock;
   addQuarantinedIds: jest.Mock;
   recordUnexplainedRemovals: jest.Mock;
+  recordUnexplainedRemovalsLocked: jest.Mock;
+  runWithConfirmedAbsentSecrets: jest.Mock;
 };
 const wallet = MultiAccountWalletService as unknown as {
   getStandardAccountIdsStrict: jest.Mock;
@@ -215,30 +225,31 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
   it('records only address and label before pruning a phantom', async () => {
     setup({ blob: ['phantom'], list: ['phantom'], secrets: [] });
     const calls: string[] = [];
-    secure.recordUnexplainedRemovals.mockImplementation(async () => {
+    secure.recordUnexplainedRemovalsLocked.mockImplementation(async () => {
       calls.push('record');
     });
     wallet.pruneStandardAccounts.mockImplementation(async () => {
       calls.push('prune');
     });
     await reconcileCrossStoreHalfState();
-    expect(secure.recordUnexplainedRemovals).toHaveBeenCalledWith([
+    expect(secure.recordUnexplainedRemovalsLocked).toHaveBeenCalledWith([
       { id: 'phantom', address: 'addr-phantom', label: 'label-phantom' },
     ]);
     expect(calls).toEqual(['record', 'prune']);
     expect(
-      JSON.stringify(secure.recordUnexplainedRemovals.mock.calls[0][0])
+      JSON.stringify(secure.recordUnexplainedRemovalsLocked.mock.calls[0][0])
     ).not.toMatch(/secret|mnemonic|key/i);
   });
 
   it('skips phantom prune when recording the removal fails', async () => {
     setup({ blob: ['phantom'], list: ['phantom'], secrets: [] });
-    secure.recordUnexplainedRemovals.mockRejectedValueOnce(
+    secure.recordUnexplainedRemovalsLocked.mockRejectedValueOnce(
       new Error('write failed')
     );
     await expect(reconcileCrossStoreHalfState()).resolves.toMatchObject({
       ran: true,
       phantomAccountsPruned: [],
+      phantomAccountsSkippedLive: [],
     });
     expect(wallet.pruneStandardAccounts).not.toHaveBeenCalled();
   });
@@ -267,6 +278,7 @@ describe('reconcileCrossStoreHalfState — repairs (clean read picture)', () => 
       orphanSecretsDeleted: [],
       orphanSecretsQuarantined: [],
       phantomAccountsPruned: [],
+      phantomAccountsSkippedLive: [],
       staleJournalDropped: [],
     });
   });

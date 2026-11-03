@@ -2574,21 +2574,49 @@ export class AccountSecureStorage {
   static async recordUnexplainedRemovals(
     records: { id: string; address: string; label: string }[]
   ): Promise<void> {
+    return this.runKeyMutationExclusive(() =>
+      this.recordUnexplainedRemovalsLocked(records)
+    );
+  }
+
+  /** Caller must hold the key-mutation mutex. */
+  static async recordUnexplainedRemovalsLocked(
+    records: { id: string; address: string; label: string }[]
+  ): Promise<void> {
+    let current: Record<string, { address: string; label: string }> = {};
+    try {
+      current = await this.readUnexplainedRemovalsMap();
+    } catch {
+      console.warn('[reconcile] removal records unreadable; starting fresh');
+    }
+    for (const { id, address, label } of records)
+      current[id] = { address, label };
+    await storage.setItem(
+      this.UNEXPLAINED_REMOVALS_KEY,
+      JSON.stringify(current)
+    );
+  }
+
+  static async runWithConfirmedAbsentSecrets(
+    ids: string[],
+    action: (confirmedAbsent: string[]) => Promise<boolean>
+  ): Promise<{ confirmedAbsent: string[]; liveIds: string[]; acted: boolean }> {
     return this.runKeyMutationExclusive(async () => {
-      // The records are public data: a corrupt map is replaced rather than
-      // allowed to block the phantom prune that is waiting on this write.
-      let current: Record<string, { address: string; label: string }> = {};
-      try {
-        current = await this.readUnexplainedRemovalsMap();
-      } catch {
-        console.warn('[reconcile] removal records unreadable; starting fresh');
-      }
-      for (const { id, address, label } of records)
-        current[id] = { address, label };
-      await storage.setItem(
-        this.UNEXPLAINED_REMOVALS_KEY,
-        JSON.stringify(current)
+      const states = await Promise.all(
+        ids.map(async (id) => ({
+          id,
+          present: await this.probeSecretPresenceStrict(id),
+        }))
       );
+      const liveIds = states
+        .filter(({ present }) => present)
+        .map(({ id }) => id);
+      const confirmedAbsent = states
+        .filter(({ present }) => !present)
+        .map(({ id }) => id);
+      const acted =
+        confirmedAbsent.length > 0 ? await action(confirmedAbsent) : false;
+      return { confirmedAbsent, liveIds, acted };
     });
   }
 

@@ -253,6 +253,7 @@ beforeEach(() => {
     orphanSecretsDeleted: [],
     orphanSecretsQuarantined: [],
     phantomAccountsPruned: [],
+    phantomAccountsSkippedLive: [],
     staleJournalDropped: [],
   });
   jest
@@ -754,6 +755,7 @@ describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
         orphanSecretsDeleted: [],
         orphanSecretsQuarantined: [],
         phantomAccountsPruned: [],
+        phantomAccountsSkippedLive: [],
         staleJournalDropped: [],
       });
     if (failure === 'reconcile throws')
