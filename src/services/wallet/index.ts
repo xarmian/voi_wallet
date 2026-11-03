@@ -2466,6 +2466,17 @@ export class MultiAccountWalletService {
       ) {
         throw new Error('Corrupt wallet blob: malformed account entry');
       }
+      // The reconcile persists a STANDARD phantom's address + label before it
+      // prunes, so those must be well-formed (same check as the sibling reader).
+      if (
+        acc.type === AccountType.STANDARD &&
+        (typeof acc.address !== 'string' ||
+          (acc.label !== undefined && typeof acc.label !== 'string'))
+      ) {
+        throw new Error(
+          'Corrupt wallet blob: malformed standard account details'
+        );
+      }
     }
     // A duplicated id is CORRUPTION: pruneStandardAccounts filters by id, so a
     // STANDARD phantom sharing an id with another entry would remove both.

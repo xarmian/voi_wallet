@@ -1830,10 +1830,28 @@ export class AccountSecureStorage {
     return [...new Set(parsed)];
   }
 
+  /**
+   * Erase-path reader: the registry is the only index of quarantined secrets
+   * (the keychain cannot list keys), so when it is corrupt recover every quoted
+   * id from the raw text instead of dropping it. A storage read failure still
+   * propagates. Ids only; nothing is logged but the fact of recovery.
+   */
+  static async readQuarantinedIdsSalvaged(): Promise<string[]> {
+    try {
+      return await this.readQuarantinedIdsStrict();
+    } catch (error) {
+      const raw = await storage.getItem(this.QUARANTINED_IDS_KEY);
+      if (raw == null) throw error;
+      console.warn('[quarantine] registry unreadable; salvaging ids');
+      const ids = [...raw.matchAll(/"([^"\\]+)"/g)].map((m) => m[1]);
+      return [...new Set(ids)];
+    }
+  }
+
   static async addQuarantinedIds(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     return this.runKeyMutationExclusive(async () => {
-      const existing = await this.readQuarantinedIdsStrict();
+      const existing = await this.readQuarantinedIdsSalvaged();
       const next = [...new Set([...existing, ...ids])];
       await storage.setItem(this.QUARANTINED_IDS_KEY, JSON.stringify(next));
     });
@@ -1843,7 +1861,7 @@ export class AccountSecureStorage {
     if (ids.length === 0) return;
     return this.runKeyMutationExclusive(async () => {
       const removed = new Set(ids);
-      const next = (await this.readQuarantinedIdsStrict()).filter(
+      const next = (await this.readQuarantinedIdsSalvaged()).filter(
         (id) => !removed.has(id)
       );
       if (next.length === 0) await storage.removeItem(this.QUARANTINED_IDS_KEY);
@@ -2531,18 +2549,24 @@ export class AccountSecureStorage {
         );
       }
       await this.deleteAccountLocked(accountId);
-      const quarantine = await this.readQuarantinedIdsStrict();
-      if (quarantine.includes(accountId)) {
-        const remaining = quarantine.filter((id) => id !== accountId);
-        if (remaining.length === 0)
-          await storage.removeItem(this.QUARANTINED_IDS_KEY);
-        else
-          await storage.setItem(
-            this.QUARANTINED_IDS_KEY,
-            JSON.stringify(remaining)
-          );
+      // The secret is gone. Bookkeeping cleanup is best-effort: a corrupt
+      // registry or record must never turn a completed delete into a failure.
+      try {
+        const quarantine = await this.readQuarantinedIdsSalvaged();
+        if (quarantine.includes(accountId)) {
+          const remaining = quarantine.filter((id) => id !== accountId);
+          if (remaining.length === 0)
+            await storage.removeItem(this.QUARANTINED_IDS_KEY);
+          else
+            await storage.setItem(
+              this.QUARANTINED_IDS_KEY,
+              JSON.stringify(remaining)
+            );
+        }
+        await this.clearUnexplainedRemoval(accountId);
+      } catch {
+        console.warn('[deleteAccount] reconcile record cleanup failed');
       }
-      await this.clearUnexplainedRemoval(accountId);
     });
   }
 
@@ -2550,13 +2574,22 @@ export class AccountSecureStorage {
   static async recordUnexplainedRemovals(
     records: { id: string; address: string; label: string }[]
   ): Promise<void> {
-    const current = await this.readUnexplainedRemovalsMap();
-    for (const { id, address, label } of records)
-      current[id] = { address, label };
-    await storage.setItem(
-      this.UNEXPLAINED_REMOVALS_KEY,
-      JSON.stringify(current)
-    );
+    return this.runKeyMutationExclusive(async () => {
+      // The records are public data: a corrupt map is replaced rather than
+      // allowed to block the phantom prune that is waiting on this write.
+      let current: Record<string, { address: string; label: string }> = {};
+      try {
+        current = await this.readUnexplainedRemovalsMap();
+      } catch {
+        console.warn('[reconcile] removal records unreadable; starting fresh');
+      }
+      for (const { id, address, label } of records)
+        current[id] = { address, label };
+      await storage.setItem(
+        this.UNEXPLAINED_REMOVALS_KEY,
+        JSON.stringify(current)
+      );
+    });
   }
 
   /** Read public removal records for the later recovery UI. */
@@ -4454,14 +4487,7 @@ export class AccountSecureStorage {
         const journal = await this.readPendingCreateJournal();
         // A corrupt quarantine registry must never block a user-requested wipe:
         // erase what the listed + journaled ids cover and still drop the registry.
-        let quarantinedIds: string[] = [];
-        try {
-          quarantinedIds = await this.readQuarantinedIdsStrict();
-        } catch {
-          console.warn(
-            '[clearAll] quarantine registry unreadable; clearing it'
-          );
-        }
+        const quarantinedIds = await this.readQuarantinedIdsSalvaged();
         const listedIds = await this.getAllAccountIds();
         const idsToDelete = new Set<string>([
           ...listedIds,

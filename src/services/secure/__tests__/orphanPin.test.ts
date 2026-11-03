@@ -17,7 +17,7 @@ jest.mock('../AccountSecureStorage', () => ({
     dropPendingCreateEntries: jest.fn(),
     readAccountListStrict: jest.fn(),
     readPendingCreatesStrict: jest.fn(),
-    readQuarantinedIdsStrict: jest.fn(async () => []),
+    readQuarantinedIdsSalvaged: jest.fn(async () => []),
     addQuarantinedIds: jest.fn(async () => {}),
     readReconcileRecoveryMarker: jest.fn(async () => false),
     setReconcileRecoveryMarker: jest.fn(async () => {}),
@@ -71,7 +71,7 @@ beforeEach(() => {
     .mocked(AccountSecureStorage.readPendingCreatesStrict)
     .mockResolvedValue({ journaled: 'attempt', listed: 'attempt' });
   jest
-    .mocked(AccountSecureStorage.readQuarantinedIdsStrict)
+    .mocked(AccountSecureStorage.readQuarantinedIdsSalvaged)
     .mockResolvedValue([]);
   jest
     .mocked(AccountSecureStorage.addQuarantinedIds)

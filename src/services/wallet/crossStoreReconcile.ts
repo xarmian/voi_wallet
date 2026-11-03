@@ -87,7 +87,8 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
   } = await MultiAccountWalletService.getBlobAccountIdsStrict();
   const accountListIds = await AccountSecureStorage.readAccountListStrict();
   const journal = await AccountSecureStorage.readPendingCreatesStrict();
-  const quarantinedIds = await AccountSecureStorage.readQuarantinedIdsStrict();
+  const quarantinedIds =
+    await AccountSecureStorage.readQuarantinedIdsSalvaged();
   const journalIds = Object.keys(journal);
   let unknownWrites: Awaited<
     ReturnType<typeof AccountSecureStorage.readUnknownWritesStrict>
@@ -96,11 +97,10 @@ export async function reconcileCrossStoreHalfState(): Promise<ReconcileResult> {
     unknownWrites = await AccountSecureStorage.readUnknownWritesStrict();
   } catch (error) {
     if (!(error instanceof UnknownJournalCorruptError)) throw error;
-    try {
-      await AccountSecureStorage.resetUnknownWrites();
-    } finally {
-      await AccountSecureStorage.setReconcileRecoveryMarker();
-    }
+    // Marker first: if the reset then fails, the next pass is still report-only,
+    // and a failure to set the marker cannot mask the reset's own error.
+    await AccountSecureStorage.setReconcileRecoveryMarker();
+    await AccountSecureStorage.resetUnknownWrites();
     return RECONCILE_ABORTED;
   }
   const recoveryMarked =

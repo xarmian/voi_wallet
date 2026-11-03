@@ -307,6 +307,34 @@ test('clearAll deletes and clears quarantined ids even when they are unindexed',
   expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
 });
 
+test('clearAll salvages quarantined ids from a corrupt registry and deletes their secrets', async () => {
+  mockSecureValues.set('voi_account_secret_hidden', JSON.stringify(payload));
+  mockPlainValues.set('voi_reconcile_quarantined_ids', '["hidden", {oops');
+  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  expect(mockSecureValues.has('voi_account_secret_hidden')).toBe(false);
+  expect(mockPlainValues.has('voi_reconcile_quarantined_ids')).toBe(false);
+});
+
+test('deleteAccount succeeds even when the cleanup records are corrupt', async () => {
+  mockSecureValues.set('voi_account_secret_one', JSON.stringify(payload));
+  mockPlainValues.set('voi_reconcile_quarantined_ids', '{not json');
+  mockPlainValues.set('voi_reconcile_unexplained_removals', '{not json');
+  await expect(
+    AccountSecureStorage.deleteAccount('one')
+  ).resolves.toBeUndefined();
+  expect(mockSecureValues.has('voi_account_secret_one')).toBe(false);
+});
+
+test('recordUnexplainedRemovals replaces a corrupt map instead of blocking the prune', async () => {
+  mockPlainValues.set('voi_reconcile_unexplained_removals', '{not json');
+  await AccountSecureStorage.recordUnexplainedRemovals([
+    { id: 'a', address: 'ADDR', label: 'Main' },
+  ]);
+  expect(
+    JSON.parse(mockPlainValues.get('voi_reconcile_unexplained_removals')!)
+  ).toEqual({ a: { address: 'ADDR', label: 'Main' } });
+});
+
 test('clearAll still completes and drops the registry when it is corrupt', async () => {
   mockPlainValues.set('voi_reconcile_quarantined_ids', '{not json');
   await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();

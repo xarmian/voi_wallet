@@ -19,7 +19,7 @@ jest.mock('@/services/secure', () => ({
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(async () => {}),
     dropPendingCreateEntries: jest.fn(async () => {}),
-    readQuarantinedIdsStrict: jest.fn(async () => []),
+    readQuarantinedIdsSalvaged: jest.fn(async () => []),
     addQuarantinedIds: jest.fn(async () => {}),
     removeQuarantinedIds: jest.fn(async () => {}),
     readReconcileRecoveryMarker: jest.fn(async () => false),
@@ -48,7 +48,7 @@ const secure = AccountSecureStorage as unknown as {
   probeSecretPresenceStrict: jest.Mock;
   deleteAccount: jest.Mock;
   dropPendingCreateEntries: jest.Mock;
-  readQuarantinedIdsStrict: jest.Mock;
+  readQuarantinedIdsSalvaged: jest.Mock;
   addQuarantinedIds: jest.Mock;
   recordUnexplainedRemovals: jest.Mock;
 };
@@ -77,7 +77,7 @@ function setup(opts: {
   secure.readAccountListStrict.mockResolvedValue(opts.list ?? []);
   secure.readPendingCreatesStrict.mockResolvedValue(opts.journal ?? {});
   secure.readUnknownWritesStrict.mockResolvedValue({});
-  secure.readQuarantinedIdsStrict.mockResolvedValue([]);
+  secure.readQuarantinedIdsSalvaged.mockResolvedValue([]);
   wallet.getStandardAccountIdsStrict.mockResolvedValue(opts.blob ?? []);
   wallet.getBlobAccountIdsStrict.mockResolvedValue({
     standardIds: opts.blob ?? [],

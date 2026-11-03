@@ -11,7 +11,7 @@ jest.mock('@/services/secure', () => ({
     probeSecretPresenceStrict: jest.fn(),
     deleteAccount: jest.fn(),
     dropPendingCreateEntries: jest.fn(),
-    readQuarantinedIdsStrict: jest.fn(async () => []),
+    readQuarantinedIdsSalvaged: jest.fn(async () => []),
     addQuarantinedIds: jest.fn(async () => {}),
     readReconcileRecoveryMarker: jest.fn(async () => mockRecoveryMarked),
     setReconcileRecoveryMarker: jest.fn(async () => {
@@ -105,7 +105,7 @@ test('corrupt journal marker survives a process restart and makes the next pass 
     .reconcileCrossStoreHalfState as typeof reconcileCrossStoreHalfState;
   freshSecure.readAccountListStrict.mockResolvedValue(['phantom']);
   freshSecure.readPendingCreatesStrict.mockResolvedValue({});
-  freshSecure.readQuarantinedIdsStrict.mockResolvedValue([]);
+  freshSecure.readQuarantinedIdsSalvaged.mockResolvedValue([]);
   freshSecure.readUnknownWritesStrict.mockResolvedValue({});
   freshSecure.resolveUnknownWrite.mockResolvedValue(true);
   freshSecure.probeSecretPresenceStrict.mockResolvedValue(false);

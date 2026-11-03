@@ -25,7 +25,7 @@ jest.mock('@/services/secure', () => ({
     dropPendingCreateEntries: jest.fn(async (ids: string[]) => {
       ids.forEach((id) => delete mockPending[id]);
     }),
-    readQuarantinedIdsStrict: jest.fn(async () => [...mockQuarantined]),
+    readQuarantinedIdsSalvaged: jest.fn(async () => [...mockQuarantined]),
     addQuarantinedIds: jest.fn(async (ids: string[]) => {
       ids.forEach((id) => mockQuarantined.add(id));
     }),
