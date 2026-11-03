@@ -65,14 +65,22 @@ let appSwitcherProtectionUsers = 0;
 // the next guard to mount retries instead of trusting a blur that never took.
 let appSwitcherProtectionEnabled = false;
 
-// Requests the native blur. A rejection clears the flag so the NEXT guard to
-// mount retries; and if screens are still mounted when it rejects (a later
-// guard saw the pending request and skipped its own), it retries once here so
-// those screens are not left unprotected. One retry only: a persistently
-// failing native call must not become a loop.
+// Identifies the latest enable request. A rejection only acts if its request is
+// still the latest, so a stale request (one that was superseded by a newer
+// mount, or released by the last unmount) can neither clobber the newer
+// request's state nor start a retry.
+let appSwitcherEnableGeneration = 0;
+
+// Requests the native blur. A rejection of the LATEST request clears the flag so
+// the next guard to mount retries; and if screens are still mounted when it
+// rejects (a later guard saw the pending request and skipped its own), it
+// retries once here so those screens are not left unprotected. One retry only:
+// a persistently failing native call must not become a loop.
 function enableAppSwitcherBlur(retryOnFailure: boolean): void {
   appSwitcherProtectionEnabled = true;
+  const generation = ++appSwitcherEnableGeneration;
   enableAppSwitcherProtectionAsync(1).catch(() => {
+    if (generation !== appSwitcherEnableGeneration) return;
     appSwitcherProtectionEnabled = false;
     if (retryOnFailure && appSwitcherProtectionUsers > 0) {
       enableAppSwitcherBlur(false);

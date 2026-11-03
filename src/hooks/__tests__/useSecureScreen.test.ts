@@ -238,6 +238,42 @@ describe('useSecureScreen', () => {
       ).toHaveBeenCalledTimes(2);
     });
 
+    it('ignores a stale enable that rejects after a newer screen took the blur', async () => {
+      const { useSecureScreen, screenCapture, renderHook } =
+        loadHookForPlatform('ios');
+      const deferred: { resolve: () => void; reject: (e: Error) => void }[] =
+        [];
+      jest
+        .mocked(screenCapture.enableAppSwitcherProtectionAsync)
+        .mockImplementation(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              deferred.push({ resolve, reject });
+            })
+        );
+
+      // Screen A asks for the blur; its call is still pending when A leaves.
+      const a = await renderHook(() => useSecureScreen());
+      await a.unmount();
+      // Screen B mounts and asks again (a newer request).
+      await renderHook(() => useSecureScreen());
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(2);
+
+      // The newer request succeeds, THEN the stale one rejects.
+      deferred[1].resolve();
+      deferred[0].reject(new Error('native unavailable'));
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+
+      // The stale rejection must not retry and must not clear B's state: a
+      // third screen mounting while B is up needs no further enable.
+      await renderHook(() => useSecureScreen());
+      expect(
+        screenCapture.enableAppSwitcherProtectionAsync
+      ).toHaveBeenCalledTimes(2);
+    });
+
     it('a rejected native call never throws into the screen', async () => {
       const { useSecureScreen, screenCapture, renderHook } =
         loadHookForPlatform('ios');
