@@ -214,7 +214,7 @@ it('retains the removal record when the committed prune throws', async () => {
   }
 });
 
-it('does not store a removal record when a delayed record write resumes after timeout', async () => {
+it('clears the removal record a delayed write stores after the bound fired, and does not prune', async () => {
   jest.useFakeTimers();
   try {
     mockPresence = () => null;
