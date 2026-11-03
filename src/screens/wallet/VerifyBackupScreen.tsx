@@ -17,7 +17,14 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  AppState,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
@@ -87,12 +94,21 @@ export default function VerifyBackupScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // The load starts ONCE per mount. A second start while the first prompt is
+  // still open would be refused as busy and discard the user's authentication
+  // (the wallet-hydration flip below re-runs this effect), so a ref guards it.
+  const loadStartedRef = useRef(false);
+  const loadAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     // Still hydrating and nothing pinned yet — stay in the loading state and
     // wait for the next render rather than declaring the account unverifiable.
     if (!walletLoaded && !target) return;
+    if (loadStartedRef.current) return;
+    loadStartedRef.current = true;
 
-    let cancelled = false;
+    const abort = new AbortController();
+    loadAbortRef.current = abort;
 
     const load = async () => {
       if (!target) {
@@ -101,34 +117,58 @@ export default function VerifyBackupScreen() {
         return;
       }
       try {
-        const phrase = await withFreshAuth('verify_backup', (cap) =>
-          SecureKeyManager.revealMnemonic(target.address, cap, 'verify_backup')
+        const phrase = await withFreshAuth(
+          'verify_backup',
+          (cap) =>
+            SecureKeyManager.revealMnemonic(
+              target.address,
+              cap,
+              'verify_backup'
+            ),
+          { signal: abort.signal }
         );
-        if (cancelled) return;
+        if (abort.signal.aborted) return;
         setMnemonic(phrase);
         setLoadError(null);
       } catch {
         // Never surface the underlying error text — it can echo key-store
         // internals. The user just needs to know it failed.
-        if (cancelled) return;
+        if (abort.signal.aborted) return;
         navigation.goBack();
         setLoadError(
           'Could not load your recovery phrase. Please try again from Settings.'
         );
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!abort.signal.aborted) setIsLoading(false);
       }
     };
 
     void load();
-
-    return () => {
-      cancelled = true;
-      // Drop the phrase from component state as soon as we leave.
-      setMnemonic('');
-    };
     // `target` is pinned once resolved, so the load runs exactly once.
   }, [target, walletLoaded, navigation]);
+
+  // The app going to the background cancels a pending prompt and drops the
+  // phrase from component state.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        loadAbortRef.current?.abort();
+        setMnemonic('');
+        navigation.goBack();
+      }
+    });
+    return () => subscription?.remove?.();
+  }, [navigation]);
+
+  // Leaving the screen cancels a pending prompt and drops the phrase. Its own
+  // effect with no dependencies, so a changed `navigation` never aborts a load.
+  useEffect(
+    () => () => {
+      loadAbortRef.current?.abort();
+      setMnemonic('');
+    },
+    []
+  );
 
   const handleVerified = useCallback(async () => {
     if (!target) return;

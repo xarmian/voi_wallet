@@ -1423,10 +1423,6 @@ export class MultiAccountWalletService {
     }, readEpoch);
   }
 
-  static async getPrivateKey(accountId: string): Promise<Uint8Array> {
-    return await AccountSecureStorage.getPrivateKey(accountId);
-  }
-
   /**
    * TASK-424: `expected` is what the caller checked before confirming. It is
    * re-validated here, against this read, and (for a keyless deletion) inside

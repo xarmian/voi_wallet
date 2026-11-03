@@ -49,20 +49,29 @@ export function registerFreshAuthPrompter(p: FreshAuthPrompter): () => void {
 export async function withFreshAuth<T>(
   reason: FreshAuthReason,
   fn: (cap: FreshAuthCapability) => Promise<T>,
-  opts?: { maxReads?: number; timeoutMs?: number }
+  opts?: { maxReads?: number; timeoutMs?: number; signal?: AbortSignal }
 ): Promise<T> {
   if (!prompter) throw new FreshAuthError('unavailable');
   if (promptOpen) throw new FreshAuthError('busy');
+  // A caller that has already gone away (its screen unmounted) reads nothing.
+  if (opts?.signal?.aborted) throw new FreshAuthError('cancelled');
   promptOpen = true;
   const controller = new AbortController();
+  // The caller's signal closes the open prompt and cancels the request, so an
+  // unmounted screen cannot be left with an app-wide modal and a pending read.
+  const onCallerAbort = () => controller.abort();
+  opts?.signal?.addEventListener('abort', onCallerAbort, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const currentPrompter = prompter;
     if (!currentPrompter) throw new FreshAuthError('unavailable');
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        controller.abort();
+        // Reject BEFORE aborting: the prompter reacts to the abort by resolving
+        // false, and that must not win the race and relabel a timeout as a
+        // cancel.
         reject(new FreshAuthError('timeout'));
+        controller.abort();
       }, opts?.timeoutMs ?? 120000);
     });
     let authenticated: boolean;
@@ -80,7 +89,9 @@ export async function withFreshAuth<T>(
       if (timer) clearTimeout(timer);
       timer = undefined;
     }
-    if (!authenticated) throw new FreshAuthError('cancelled');
+    if (!authenticated || opts?.signal?.aborted) {
+      throw new FreshAuthError('cancelled');
+    }
     const cap = Object.freeze({ __brand: 'FreshAuthCapability' as const });
     capabilities.set(cap, {
       reason,
@@ -96,6 +107,7 @@ export async function withFreshAuth<T>(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    opts?.signal?.removeEventListener('abort', onCallerAbort);
     promptOpen = false;
   }
 }

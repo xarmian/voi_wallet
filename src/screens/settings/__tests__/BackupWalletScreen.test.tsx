@@ -44,17 +44,84 @@ jest.mock('@/services/backup', () => ({
   },
   BackupError: class extends Error {},
 }));
-jest.mock('@/services/secure/freshAuth', () => ({
-  withFreshAuth: (_reason: string, fn: (cap: object) => unknown) =>
-    Promise.resolve(fn({})),
-  FreshAuthError: class FreshAuthError extends Error {
+let mockAuthFailure: string | null = null;
+const mockAuthCalls: { reason: string; opts?: { maxReads?: number } }[] = [];
+jest.mock('@/services/secure/freshAuth', () => {
+  class FreshAuthError extends Error {
     code: string;
     constructor(code: string) {
       super(code);
       this.code = code;
     }
-  },
-}));
+  }
+  return {
+    withFreshAuth: (
+      reason: string,
+      fn: (cap: object) => unknown,
+      opts?: { maxReads?: number }
+    ) => {
+      mockAuthCalls.push({ reason, opts });
+      if (mockAuthFailure)
+        return Promise.reject(new FreshAuthError(mockAuthFailure));
+      return Promise.resolve(fn({}));
+    },
+    FreshAuthError,
+  };
+});
+
+beforeEach(() => {
+  mockAuthFailure = null;
+  mockAuthCalls.length = 0;
+  jest.mocked(BackupService.createBackup).mockClear();
+});
+
+// TASK-485: the backup export needs a fresh prompt, and a refused prompt must
+// stop the export before any key is collected.
+it('asks for fresh authentication sized to the account count, before creating the backup', async () => {
+  jest.mocked(BackupService.createBackup).mockResolvedValue({
+    rekeyedKeyCount: 0,
+    filename: 'backup',
+    size: 100,
+    accountCount: 1,
+  } as BackupResult);
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  expect(mockAuthCalls).toEqual([
+    { reason: 'export_backup', opts: { maxReads: 1 } },
+  ]);
+  expect(BackupService.createBackup).toHaveBeenCalledTimes(1);
+});
+
+it('a cancelled prompt creates no backup and shows no error', async () => {
+  mockAuthFailure = 'cancelled';
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  expect(BackupService.createBackup).not.toHaveBeenCalled();
+  expect(alert).not.toHaveBeenCalled();
+  expect(view.queryByText('Backup Created')).toBeNull();
+  alert.mockRestore();
+});
+
+it.each(['unavailable', 'failed', 'timeout', 'busy'])(
+  'a %s prompt creates no backup and reports the failure',
+  async (code) => {
+    mockAuthFailure = code;
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const view = await render(<BackupWalletScreen />);
+    await fireEvent.press(view.getByText('Create Backup'));
+    await fireEvent.press(view.getByText('Confirm password'));
+    expect(BackupService.createBackup).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledWith(
+      'Backup Failed',
+      expect.any(String),
+      expect.any(Array)
+    );
+    alert.mockRestore();
+  }
+);
 
 it.each([0, 1, 2])(
   'warns before save/share exactly when %s REKEYED keys were included',

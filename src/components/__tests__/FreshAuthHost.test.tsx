@@ -99,6 +99,55 @@ describe('FreshAuthHost', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
+  it('closes the modal when the prompt times out, and a second prompt then works', async () => {
+    jest.useFakeTimers();
+    try {
+      await render(<FreshAuthHost />);
+      let first: Promise<string | undefined> = Promise.resolve(undefined);
+      await act(async () => {
+        first = withFreshAuth('reveal_recovery_phrase', async () => 'ok', {
+          timeoutMs: 1000,
+        }).then(
+          () => 'ok',
+          (e: { code?: string }) => e.code
+        );
+      });
+      expect(mockModalProps?.visible).toBe(true);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1500);
+      });
+      expect(await first).toBe('timeout');
+      expect(mockModalProps?.visible).toBe(false);
+
+      let second: ReturnType<typeof start> | undefined;
+      await act(async () => {
+        second = start();
+      });
+      expect(mockModalProps?.visible).toBe(true);
+      await act(async () => mockModalProps?.onSuccess());
+      expect(await second!.settled).toEqual({ ok: true, v: 'revealed' });
+      expect(second!.fn).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('closes the modal when the requesting caller aborts', async () => {
+    await render(<FreshAuthHost />);
+    const abort = new AbortController();
+    const run = withFreshAuth('reveal_recovery_phrase', async () => 1, {
+      signal: abort.signal,
+    }).then(
+      () => 'ok',
+      (e: { code?: string }) => e.code
+    );
+    await act(async () => {});
+    expect(mockModalProps?.visible).toBe(true);
+    await act(async () => abort.abort());
+    expect(await run).toBe('cancelled');
+    expect(mockModalProps?.visible).toBe(false);
+  });
+
   it('removes the prompter on unmount so a later request is unavailable', async () => {
     const view = await render(<FreshAuthHost />);
     await view.unmount();

@@ -78,6 +78,9 @@ export default function ShowRecoveryPhraseScreen() {
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
   const mountedRef = useRef(true);
   const loadGenerationRef = useRef(0);
+  // Aborted on unmount and on background: closes an open fresh-auth prompt and
+  // stops a pending reveal from reading the phrase for a gone screen.
+  const loadAbortRef = useRef<AbortController | null>(null);
   // Monotonic per-copy token: only the latest tap's continuation may install/keep
   // a clear handle, so a superseded copy can't leak a timer or wipe newer content.
   const copyGenRef = useRef(0);
@@ -87,6 +90,9 @@ export default function ShowRecoveryPhraseScreen() {
 
   const loadMnemonic = useCallback(async () => {
     const generation = ++loadGenerationRef.current;
+    loadAbortRef.current?.abort();
+    const abort = new AbortController();
+    loadAbortRef.current = abort;
     if (!targetAddress) {
       Alert.alert('Error', 'No account selected');
       navigation.goBack();
@@ -97,7 +103,8 @@ export default function ShowRecoveryPhraseScreen() {
     try {
       const recoveredMnemonic = await withFreshAuth(
         'reveal_recovery_phrase',
-        (cap) => SecureKeyManager.revealMnemonic(targetAddress, cap)
+        (cap) => SecureKeyManager.revealMnemonic(targetAddress, cap),
+        { signal: abort.signal }
       );
       if (generation !== loadGenerationRef.current) return;
       setMnemonic(recoveredMnemonic);
@@ -153,6 +160,7 @@ export default function ShowRecoveryPhraseScreen() {
       // abort the load it is authorising.
       if (state === 'background') {
         loadGenerationRef.current += 1;
+        loadAbortRef.current?.abort();
         setMnemonic('');
         setIsBlurred(true);
         setIsLoading(false);
@@ -259,6 +267,10 @@ export default function ShowRecoveryPhraseScreen() {
       // Mark unmounted so an in-flight handleCopy wipes the clipboard itself
       // instead of scheduling a timer that would outlive this component.
       mountedRef.current = false;
+      // Invalidate and cancel any load still waiting on the prompt, so a late
+      // authentication cannot read the phrase into a screen that is gone.
+      loadGenerationRef.current += 1;
+      loadAbortRef.current?.abort();
 
       // Clear sensitive data when component unmounts
       setMnemonic('');

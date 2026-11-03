@@ -92,6 +92,78 @@ describe('fresh authentication capabilities', () => {
     unregister();
   });
 
+  describe('caller abort signal (TASK-485)', () => {
+    it('an already-aborted caller reads nothing and never prompts', async () => {
+      const prompt = jest.fn(async () => true);
+      const unregister = registerFreshAuthPrompter(prompt);
+      const fn = jest.fn();
+      const abort = new AbortController();
+      abort.abort();
+      await expect(
+        withFreshAuth('reveal_recovery_phrase', fn, { signal: abort.signal })
+      ).rejects.toMatchObject({ code: 'cancelled' });
+      expect(prompt).not.toHaveBeenCalled();
+      expect(fn).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('aborting while the prompt is open closes it and never runs the function', async () => {
+      let promptSignal: AbortSignal | undefined;
+      const unregister = registerFreshAuthPrompter(
+        (_reason, signal) =>
+          new Promise<boolean>((resolve) => {
+            promptSignal = signal;
+            signal.addEventListener('abort', () => resolve(false));
+          })
+      );
+      const fn = jest.fn();
+      const abort = new AbortController();
+      const run = withFreshAuth('reveal_recovery_phrase', fn, {
+        signal: abort.signal,
+      });
+      abort.abort();
+      await expect(run).rejects.toMatchObject({ code: 'cancelled' });
+      expect(promptSignal?.aborted).toBe(true);
+      expect(fn).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('a prompt that succeeds after the caller aborted still reads nothing', async () => {
+      // A prompter that ignores the signal and resolves true late.
+      let resolvePrompt: (ok: boolean) => void = () => {};
+      const unregister = registerFreshAuthPrompter(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolvePrompt = resolve;
+          })
+      );
+      const fn = jest.fn();
+      const abort = new AbortController();
+      const run = withFreshAuth('reveal_recovery_phrase', fn, {
+        signal: abort.signal,
+      });
+      abort.abort();
+      resolvePrompt(true);
+      await expect(run).rejects.toMatchObject({ code: 'cancelled' });
+      expect(fn).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('releases the busy flag after an aborted call', async () => {
+      const unregister = registerFreshAuthPrompter(async () => true);
+      const abort = new AbortController();
+      const first = withFreshAuth('reveal_recovery_phrase', async () => 1, {
+        signal: abort.signal,
+      });
+      abort.abort();
+      await first.catch(() => undefined);
+      await expect(
+        withFreshAuth('reveal_recovery_phrase', async () => 'again')
+      ).resolves.toBe('again');
+      unregister();
+    });
+  });
+
   it('limits reads and binds capabilities to their reason', async () => {
     const unregister = registerFreshAuthPrompter(async () => true);
     await withFreshAuth('export_backup', async (cap) => {

@@ -23,9 +23,18 @@ jest.mock('@/services/secure/keyManager', () => ({
     revealMnemonic: (...args: unknown[]) => mockGetMnemonic(...(args as [])),
   },
 }));
+const mockAuthSignals: (AbortSignal | undefined)[] = [];
+let mockAuthCalls = 0;
 jest.mock('@/services/secure/freshAuth', () => ({
-  withFreshAuth: (_reason: string, fn: (cap: object) => unknown) =>
-    Promise.resolve(fn({})),
+  withFreshAuth: (
+    _reason: string,
+    fn: (cap: object) => unknown,
+    opts?: { signal?: AbortSignal }
+  ) => {
+    mockAuthCalls += 1;
+    mockAuthSignals.push(opts?.signal);
+    return Promise.resolve(fn({}));
+  },
 }));
 
 const mockMarkBackupVerified = jest.fn(async () => {});
@@ -33,6 +42,7 @@ const mockMarkBackupVerified = jest.fn(async () => {});
 let mockAccounts: { id: string; address: string; type: string }[] | undefined =
   [];
 let mockActiveAccountId = 'acc-a';
+let mockWalletHydrated = true;
 
 jest.mock('@/store/walletStore', () => ({
   useActiveAccount: () =>
@@ -42,7 +52,9 @@ jest.mock('@/store/walletStore', () => ({
       markBackupVerified: mockMarkBackupVerified,
       // `undefined` accounts models the pre-hydration store.
       wallet:
-        mockAccounts === undefined ? undefined : { accounts: mockAccounts },
+        mockAccounts === undefined || !mockWalletHydrated
+          ? undefined
+          : { accounts: mockAccounts },
     }),
 }));
 
@@ -78,7 +90,7 @@ jest.mock('@/components/common/UniversalHeader', () => {
   return { __esModule: true, default: () => <View /> };
 });
 
-import { Alert } from 'react-native';
+import { Alert, AppState, AppStateStatus } from 'react-native';
 import VerifyBackupScreen from '../VerifyBackupScreen';
 import {
   completeQuiz,
@@ -89,6 +101,10 @@ import { MAX_MISTAKES } from '@/components/wallet/mnemonicQuiz';
 const MOCK_WORDS = MOCK_MNEMONIC.split(' ');
 
 beforeEach(() => {
+  mockAuthCalls = 0;
+  mockWalletHydrated = true;
+  mockAuthSignals.length = 0;
+  mockNavigation.goBack.mockClear();
   mockAccounts = [
     { id: 'acc-a', address: 'ADDRESS_A', type: 'standard' },
     { id: 'acc-b', address: 'ADDRESS_B', type: 'standard' },
@@ -109,6 +125,60 @@ async function renderLoaded() {
 }
 
 describe('VerifyBackupScreen', () => {
+  // TASK-485: the phrase must not outlive the screen or the foreground.
+  it('asks for authentication once per mount', async () => {
+    await renderLoaded();
+    expect(mockAuthCalls).toBe(1);
+  });
+
+  it('does not start a second prompt when the wallet hydrates after the target pins', async () => {
+    // Entered with no address param: the active account pins the target while
+    // the wallet blob is still hydrating, then the hydration flag flips.
+    mockRouteParams = {};
+    mockWalletHydrated = false;
+    const screen = await render(<VerifyBackupScreen />);
+    await waitFor(() => screen.getByTestId('verify-backup-root'));
+    expect(mockAuthCalls).toBe(1);
+    mockWalletHydrated = true;
+    await screen.rerender(<VerifyBackupScreen />);
+    await act(async () => {});
+    expect(mockAuthCalls).toBe(1);
+  });
+
+  it('cancels the pending prompt when the screen unmounts', async () => {
+    const screen = await renderLoaded();
+    expect(mockAuthSignals[0]?.aborted).toBe(false);
+    await screen.unmount();
+    expect(mockAuthSignals[0]?.aborted).toBe(true);
+  });
+
+  it('cancels the prompt, drops the phrase and leaves when the app backgrounds', async () => {
+    const listeners: ((state: AppStateStatus) => void)[] = [];
+    jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, listener) => {
+        listeners.push(listener as (state: AppStateStatus) => void);
+        return { remove: jest.fn() } as never;
+      });
+    await renderLoaded();
+    await act(async () => listeners.forEach((l) => l('background')));
+    expect(mockAuthSignals[0]?.aborted).toBe(true);
+    expect(mockNavigation.goBack).toHaveBeenCalled();
+  });
+
+  it('does not leave on inactive (the Face ID sheet makes the app inactive)', async () => {
+    const listeners: ((state: AppStateStatus) => void)[] = [];
+    jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, listener) => {
+        listeners.push(listener as (state: AppStateStatus) => void);
+        return { remove: jest.fn() } as never;
+      });
+    await renderLoaded();
+    await act(async () => listeners.forEach((l) => l('inactive')));
+    expect(mockNavigation.goBack).not.toHaveBeenCalled();
+  });
+
   it('loads the phrase for the routed address, not from a nav param', async () => {
     await renderLoaded();
     expect(mockGetMnemonic).toHaveBeenCalledWith(

@@ -6,7 +6,6 @@ const allowedPrivateReads = new Set([
   'screens/remoteSigner/SignatureDisplayScreen.tsx',
   'services/secure/simplifiedKeyManager.ts',
   'services/secure/keyManager.ts',
-  'services/wallet/index.ts',
   'services/remoteSigner/index.ts',
   'services/messaging/index.ts',
   'services/wallet/ownKeyCustody.ts',
@@ -29,7 +28,11 @@ it('keeps secret reveal APIs and direct key reads within the reviewed population
   const files = sources(root);
   const hits = (pattern: RegExp) =>
     files
-      .filter((file) => pattern.test(fs.readFileSync(file, 'utf8')))
+      // Fresh regex per file: a shared /g regex keeps lastIndex between files
+      // and can skip a violating file after an earlier hit.
+      .filter((file) =>
+        new RegExp(pattern.source).test(fs.readFileSync(file, 'utf8'))
+      )
       .map((file) => path.relative(root, file))
       .sort();
   const problems: string[] = [];
