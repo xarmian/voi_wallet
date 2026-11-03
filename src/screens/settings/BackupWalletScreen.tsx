@@ -25,6 +25,7 @@ import {
   BackupResult,
   BackupError,
 } from '@/services/backup';
+import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
 
 export default function BackupWalletScreen() {
   const navigation = useNavigation();
@@ -75,39 +76,49 @@ export default function BackupWalletScreen() {
     setShowPasswordModal(true);
   }, [accounts.length]);
 
-  const handlePasswordConfirm = useCallback(async (password: string) => {
-    setShowPasswordModal(false);
-    setShowProgressModal(true);
-    setIsCreatingBackup(true);
-    setError(undefined);
+  const handlePasswordConfirm = useCallback(
+    async (password: string) => {
+      setShowPasswordModal(false);
+      setError(undefined);
 
-    try {
-      const result = await BackupService.createBackup(password);
-      setShowProgressModal(false);
-      if (result.rekeyedKeyCount) {
-        Alert.alert(
-          'Update required when restoring',
-          `Restore this backup with this version of Voi Wallet or newer, or the key for ${result.rekeyedKeyCount} rekeyed account(s) won't be restored.`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Continue', onPress: () => setBackupResult(result) },
-          ]
+      try {
+        const result = await withFreshAuth(
+          'export_backup',
+          async (cap) => {
+            setShowProgressModal(true);
+            setIsCreatingBackup(true);
+            return BackupService.createBackup(password, cap);
+          },
+          { maxReads: accounts.length }
         );
-      } else {
-        setBackupResult(result);
+        setShowProgressModal(false);
+        if (result.rekeyedKeyCount) {
+          Alert.alert(
+            'Update required when restoring',
+            `Restore this backup with this version of Voi Wallet or newer, or the key for ${result.rekeyedKeyCount} rekeyed account(s) won't be restored.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Continue', onPress: () => setBackupResult(result) },
+            ]
+          );
+        } else {
+          setBackupResult(result);
+        }
+        // Show success state - user will see save/share options in the UI
+      } catch (err) {
+        setShowProgressModal(false);
+        if (err instanceof FreshAuthError && err.code === 'cancelled') return;
+        const message =
+          err instanceof BackupError
+            ? err.message
+            : 'Failed to create backup. Please try again.';
+        Alert.alert('Backup Failed', message, [{ text: 'OK' }]);
+      } finally {
+        setIsCreatingBackup(false);
       }
-      // Show success state - user will see save/share options in the UI
-    } catch (err) {
-      setShowProgressModal(false);
-      const message =
-        err instanceof BackupError
-          ? err.message
-          : 'Failed to create backup. Please try again.';
-      Alert.alert('Backup Failed', message, [{ text: 'OK' }]);
-    } finally {
-      setIsCreatingBackup(false);
-    }
-  }, []);
+    },
+    [accounts.length]
+  );
 
   const handleCancel = useCallback(() => {
     setShowPasswordModal(false);

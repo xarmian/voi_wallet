@@ -44,6 +44,17 @@ jest.mock('@/services/backup', () => ({
   },
   BackupError: class extends Error {},
 }));
+jest.mock('@/services/secure/freshAuth', () => ({
+  withFreshAuth: (_reason: string, fn: (cap: object) => unknown) =>
+    Promise.resolve(fn({})),
+  FreshAuthError: class FreshAuthError extends Error {
+    code: string;
+    constructor(code: string) {
+      super(code);
+      this.code = code;
+    }
+  },
+}));
 
 it.each([0, 1, 2])(
   'warns before save/share exactly when %s REKEYED keys were included',

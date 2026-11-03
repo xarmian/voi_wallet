@@ -10,7 +10,7 @@
  * ## Key handling (DR-9)
  *
  * The phrase is NOT passed in — the route carries only the account ADDRESS, and
- * the screen loads the phrase itself via `SecureKeyManager.getMnemonic()`, the
+ * the screen loads the phrase itself through a fresh-auth gated service, the
  * same PIN/biometric-gated path `ShowRecoveryPhraseScreen` already uses. So no
  * new mnemonic reaches navigation state, storage, or logs. The phrase lives in
  * component state for the duration of the quiz and is cleared on unmount.
@@ -21,6 +21,7 @@ import { View, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { withFreshAuth } from '@/services/secure/freshAuth';
 import { useActiveAccount, useWalletStore } from '@/store/walletStore';
 import { AccountType } from '@/types/wallet';
 import MnemonicVerification from '@/components/wallet/MnemonicVerification';
@@ -100,7 +101,9 @@ export default function VerifyBackupScreen() {
         return;
       }
       try {
-        const phrase = await SecureKeyManager.getMnemonic(target.address);
+        const phrase = await withFreshAuth('verify_backup', (cap) =>
+          SecureKeyManager.revealMnemonic(target.address, cap, 'verify_backup')
+        );
         if (cancelled) return;
         setMnemonic(phrase);
         setLoadError(null);
@@ -108,6 +111,7 @@ export default function VerifyBackupScreen() {
         // Never surface the underlying error text — it can echo key-store
         // internals. The user just needs to know it failed.
         if (cancelled) return;
+        navigation.goBack();
         setLoadError(
           'Could not load your recovery phrase. Please try again from Settings.'
         );
@@ -124,7 +128,7 @@ export default function VerifyBackupScreen() {
       setMnemonic('');
     };
     // `target` is pinned once resolved, so the load runs exactly once.
-  }, [target, walletLoaded]);
+  }, [target, walletLoaded, navigation]);
 
   const handleVerified = useCallback(async () => {
     if (!target) return;

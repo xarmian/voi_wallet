@@ -7,6 +7,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import type { FreshAuthCapability } from '@/services/secure/freshAuth';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import {
   AccountType,
@@ -72,7 +73,7 @@ const REMOTE_SIGNER_STORAGE_KEYS = {
  * For standard accounts, retrieves the mnemonic (requires PIN/biometric auth)
  */
 export async function collectAccounts(
-  pin?: string
+  cap: FreshAuthCapability
 ): Promise<BackupAccountData[]> {
   try {
     // Confirmed read (TASK-443): a swallowed read error or a timed-out legacy
@@ -104,8 +105,10 @@ export async function collectAccounts(
           const standardAccount = account as StandardAccountMetadata;
           try {
             // Get mnemonic - this may require PIN auth
-            const mnemonic = await SecureKeyManager.getMnemonic(
-              account.address
+            const mnemonic = await SecureKeyManager.revealMnemonic(
+              account.address,
+              cap,
+              'export_backup'
             );
             backupAccounts.push({
               ...baseData,
@@ -147,7 +150,11 @@ export async function collectAccounts(
                 account.id
               ));
             if (holdsKey) {
-              mnemonic = await SecureKeyManager.getMnemonic(account.address);
+              mnemonic = await SecureKeyManager.revealMnemonic(
+                account.address,
+                cap,
+                'export_backup'
+              );
               if (!mnemonic)
                 throw new Error('Expected account key is unavailable');
             }

@@ -20,8 +20,12 @@ const MOCK_MNEMONIC =
 const mockGetMnemonic = jest.fn(async () => MOCK_MNEMONIC);
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
-    getMnemonic: (...args: unknown[]) => mockGetMnemonic(...(args as [])),
+    revealMnemonic: (...args: unknown[]) => mockGetMnemonic(...(args as [])),
   },
+}));
+jest.mock('@/services/secure/freshAuth', () => ({
+  withFreshAuth: (_reason: string, fn: (cap: object) => unknown) =>
+    Promise.resolve(fn({})),
 }));
 
 const mockMarkBackupVerified = jest.fn(async () => {});
@@ -107,7 +111,11 @@ async function renderLoaded() {
 describe('VerifyBackupScreen', () => {
   it('loads the phrase for the routed address, not from a nav param', async () => {
     await renderLoaded();
-    expect(mockGetMnemonic).toHaveBeenCalledWith('ADDRESS_A');
+    expect(mockGetMnemonic).toHaveBeenCalledWith(
+      'ADDRESS_A',
+      expect.anything(),
+      'verify_backup'
+    );
     // The route never carries key material.
     expect(JSON.stringify(mockRouteParams)).not.toContain('abandon');
   });
@@ -132,7 +140,11 @@ describe('VerifyBackupScreen', () => {
       // Entered with no address param, so the active account is the entry default.
       mockRouteParams = undefined;
       const screen = await renderLoaded();
-      expect(mockGetMnemonic).toHaveBeenCalledWith('ADDRESS_A');
+      expect(mockGetMnemonic).toHaveBeenCalledWith(
+        'ADDRESS_A',
+        expect.anything(),
+        'verify_backup'
+      );
 
       // The user switches accounts elsewhere. The store hooks are mocked, so the
       // re-render has to be forced explicitly — otherwise this test would pass
@@ -178,7 +190,11 @@ describe('VerifyBackupScreen', () => {
     });
 
     await waitFor(() => screen.getByTestId('verify-backup-root'));
-    expect(mockGetMnemonic).toHaveBeenCalledWith('ADDRESS_A');
+    expect(mockGetMnemonic).toHaveBeenCalledWith(
+      'ADDRESS_A',
+      expect.anything(),
+      'verify_backup'
+    );
     expect(screen.queryByTestId('verify-backup-error')).toBeNull();
   });
 
