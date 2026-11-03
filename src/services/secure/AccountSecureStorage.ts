@@ -267,6 +267,15 @@ export class AccountSecureStorage {
   // inside clearAll (non-reentrant chain → deadlock).
   // ───────────────────────────────────────────────────────────────────────────
   private static readonly SECURE_WIPE_TOMBSTONE_KEY = 'voi_secure_wiped';
+  /**
+   * TASK-469: durable "a wipe was requested and has not completed" marker, in
+   * general storage (non-secret). Written, and verified, BEFORE the first delete;
+   * cleared only after the whole wipe is complete. A boot that finds it finishes
+   * the wipe before routing anywhere, so a wipe that left the device in a state
+   * that routes to onboarding (phantom accounts pruned, PIN gone) cannot be
+   * mistaken for a finished one.
+   */
+  static readonly WIPE_INTENT_KEY = 'voi_wipe_intent';
   private static readonly PENDING_CREATES_KEY = 'voi_pending_account_creates';
   private static readonly QUARANTINED_IDS_KEY = 'voi_reconcile_quarantined_ids';
   private static readonly UNEXPLAINED_REMOVALS_KEY =
@@ -2799,6 +2808,44 @@ export class AccountSecureStorage {
    * a corrupt (unparseable) list so the reconcile fails closed. Resolves `[]`
    * only for genuine absence.
    */
+  /** TASK-469: record the wipe request. If it cannot be written, the wipe does not start. */
+  static async beginWipe(): Promise<void> {
+    try {
+      // Unguarded: a stale unresolved record for this key from an earlier attempt
+      // must not stop a user from retrying Delete Everything.
+      await this.boundedStorageSet(this.WIPE_INTENT_KEY, '1', true);
+    } catch {
+      throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
+    }
+  }
+
+  /** TASK-469: clear the wipe request. Only a COMPLETE wipe calls this. */
+  static async endWipe(): Promise<void> {
+    try {
+      await this.boundedStorageRemove(this.WIPE_INTENT_KEY);
+    } catch {
+      // The data is gone but the marker is not: report incomplete so the user
+      // restarts and the boot finishes (a no-op) and clears it, rather than a
+      // stale marker later wiping a NEW wallet.
+      throw new WipeIncompleteError([this.WIPE_INTENT_KEY]);
+    }
+  }
+
+  /**
+   * TASK-469: true when a wipe was requested and never completed. STRICT and
+   * bounded: a read failure throws (the caller fails closed), it never reads as
+   * "no wipe pending".
+   */
+  static async readWipeIntentStrict(): Promise<boolean> {
+    const value = await this.withTimeout(
+      storage.getItem(this.WIPE_INTENT_KEY),
+      this.KEYCHAIN_READ_TIMEOUT_MS,
+      'Wipe intent read'
+    );
+    // Any stored value counts: an unexpected one is still a request.
+    return value !== null;
+  }
+
   static async readAccountListStrict(): Promise<string[]> {
     // `!= null` (not truthiness): a present-but-EMPTY value ('') is CORRUPTION,
     // not absence — a genuinely absent list is null. Routing '' to the parser

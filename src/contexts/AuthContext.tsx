@@ -21,6 +21,8 @@ import { AppLockSignal } from '@/services/secure/appLockState';
 import { SecurityUtils } from '@/utils/security';
 import { DeepLinkService } from '@/services/deeplink';
 import { redactError } from '@/utils/logRedaction';
+import { wipeWalletData } from '@/services/wipe';
+import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 // Helper to check if biometrics are available (web-safe)
 const checkBiometricAvailability = async (): Promise<{
@@ -133,6 +135,9 @@ const STRICT_READ_BACKOFF_MS = 200;
 // keychain/keystore read (<100 ms), so it never trips on a healthy-but-slow read;
 // a genuinely wedged read still times out → retries → fails CLOSED to recovery.
 const STRICT_READ_TIMEOUT_MS = 1500;
+// TASK-469: finishing an interrupted wipe at boot runs several bounded 5 s
+// deletes; allow for them, then fail closed to the recovery screen.
+const WIPE_FINISH_TIMEOUT_MS = 30000;
 
 // Web-safe delay. Used only for the bounded strict-read backoff above.
 const delay = (ms: number): Promise<void> =>
@@ -216,6 +221,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // so a boot where the reconcile could not run (strict reads failed) retries next boot.
   const bootReconcileDoneRef = useRef(false);
 
+  // TASK-469: one-shot latch for the boot-time wipe finish. Set only after the
+  // marker was read (and any interrupted wipe finished), so a boot where that
+  // could not be done fails closed and the recovery screen's Retry runs it again.
+  const wipeIntentHandledRef = useRef(false);
+
   useEffect(() => {
     checkInitialAuthState();
     // Capture the subscription remover so the effect cleanup can tear the
@@ -284,6 +294,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkInitialAuthState = async () => {
     try {
+      // ── Interrupted wipe (TASK-469) ────────────────────────────────────────
+      // A persisted wipe request means Delete Everything started and did not
+      // finish (a crash, or an incomplete wipe the user restarted after). The
+      // state it left can route to onboarding as if it had succeeded (phantom
+      // accounts pruned, PIN gone), so finish it BEFORE reading the lock state.
+      // Fails CLOSED: if the marker cannot be read or the wipe cannot finish, go
+      // to the recovery screen (zero wallet access, its Retry runs this again);
+      // never onboarding, and the "deleted" notice is shown only after the wipe
+      // reports complete.
+      if (!wipeIntentHandledRef.current) {
+        const failClosed = () =>
+          setAuthState((prev) => ({
+            ...prev,
+            isLocked: true,
+            isAuthenticated: false,
+            securityUnavailable: true,
+            authChecked: true,
+            pinSetupResume: false,
+            biometricEnabled: false,
+            backgroundedAt: null,
+          }));
+        let wipePending: boolean;
+        try {
+          wipePending = await withTimeout(
+            AccountSecureStorage.readWipeIntentStrict(),
+            STRICT_READ_TIMEOUT_MS,
+            'wipe intent read'
+          );
+        } catch (error) {
+          console.error(
+            'Wipe-intent read failed; failing closed:',
+            redactError(error)
+          );
+          failClosed();
+          return;
+        }
+        if (wipePending) {
+          try {
+            await withTimeout(
+              wipeWalletData(),
+              WIPE_FINISH_TIMEOUT_MS,
+              'interrupted wipe finish'
+            );
+          } catch (error) {
+            console.error(
+              'Interrupted wipe could not be finished; failing closed:',
+              redactError(error)
+            );
+            failClosed();
+            return;
+          }
+          showWipeCompleteNotice();
+        }
+        wipeIntentHandledRef.current = true;
+      }
+
       // ── Non-lock-determining reads (display/config only) ───────────────────
       // Biometric availability, the biometric-enabled flag, and the PIN timeout
       // do NOT gate wallet access, so a failure here falls back to safe display

@@ -13,8 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
-import { AccountSecureStorage } from '@/services/secure';
-import { MultiAccountWalletService } from '@/services/wallet';
+import { wipeWalletData } from '@/services/wipe';
+import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
 // Cross-platform confirm dialog (mirrors LockScreen.showAlert): on web there is
 // no native Alert, so fall back to window.confirm for the multi-button
@@ -155,12 +155,15 @@ export default function SecureStorageUnavailableScreen({
     try {
       try {
         await withTimeout(
-          // TASK-415: reset fails closed when key material can't be verifiably
-          // erased. A keychain that fails every read can't support wallet setup
+          // TASK-415 / TASK-469: reset fails closed when key material can't be
+          // verifiably erased. wipeWalletData records the wipe request first, then
+          // erases secure storage and the wallet blob, and clears the request only
+          // when all of it is complete; an incomplete wipe is finished by the next
+          // launch. A keychain that fails every read can't support wallet setup
           // either; wiping metadata here would recreate TASK-413's orphan-PIN state.
-          AccountSecureStorage.clearAll(),
+          wipeWalletData(),
           RESET_STEP_TIMEOUT_MS,
-          'clearAll'
+          'wipe'
         );
       } catch (error) {
         if (mountedRef.current) {
@@ -170,18 +173,8 @@ export default function SecureStorageUnavailableScreen({
         }
         throw error;
       }
-      try {
-        await withTimeout(
-          MultiAccountWalletService.clearAllWallets(),
-          RESET_STEP_TIMEOUT_MS,
-          'clearAllWallets'
-        );
-      } catch (error) {
-        console.error(
-          'Reset: clearAllWallets failed/timed out (continuing):',
-          error
-        );
-      }
+      // Only after the wipe reported complete.
+      showWipeCompleteNotice();
       // Re-run the auth check: with local data wiped it resolves to genuine
       // absence ⇒ unlocked setup ⇒ Onboarding (restore-from-recovery-phrase).
       // Bounded too, so a recheck that never settles can't strand "Resetting…".

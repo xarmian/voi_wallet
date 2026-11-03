@@ -240,9 +240,9 @@ test('a hung account delete is bounded, reported by name, and releases the key m
     expect(thrown).toBeInstanceOf(WipeIncompleteError);
     expect(thrown.keys).toContain(secret);
     // The mutex is free: a later key mutation runs instead of queueing forever.
-    await expect(
-      AccountSecureStorage.runKeyMutationExclusive(async () => 1)
-    ).resolves.toBe(1);
+    await expect(service.runKeyMutationExclusive(async () => 1)).resolves.toBe(
+      1
+    );
   } finally {
     jest.useRealTimers();
   }
@@ -353,9 +353,9 @@ test('a hung account-metadata removal is bounded, reported by name, and releases
     const thrown = (await outcome) as WipeIncompleteError;
     expect(thrown).toBeInstanceOf(WipeIncompleteError);
     expect(thrown.keys).toContain(secret);
-    await expect(
-      AccountSecureStorage.runKeyMutationExclusive(async () => 1)
-    ).resolves.toBe(1);
+    await expect(service.runKeyMutationExclusive(async () => 1)).resolves.toBe(
+      1
+    );
   } finally {
     jest.useRealTimers();
   }

@@ -24,6 +24,18 @@ jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: { clearAllWallets: jest.fn(async () => {}) },
 }));
 
+// TASK-469: the screen resets through wipeWalletData(); here it is the plain
+// composition of the two mocked calls, so the assertions below stay about what
+// the wipe does and in what order.
+jest.mock('@/services/wipe', () => ({
+  wipeWalletData: jest.fn(async () => {
+    const { AccountSecureStorage: secure } = require('@/services/secure');
+    const { MultiAccountWalletService: wallet } = require('@/services/wallet');
+    await secure.clearAll();
+    await wallet.clearAllWallets();
+  }),
+}));
+
 // Keep the render host-component-light: theme + native leaves are opaque.
 jest.mock('@/hooks/useThemedStyles', () => ({
   useThemedStyles: () => ({}),

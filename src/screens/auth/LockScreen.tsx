@@ -18,7 +18,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import type { PinThrottleState } from '@/services/secure';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
-import { MultiAccountWalletService } from '@/services/wallet';
+import { wipeWalletData } from '@/services/wipe';
+import {
+  showWipeCompleteNotice,
+  showWipeIncompleteNotice,
+} from '@/services/wipe/notices';
 import { hapticNotify } from '@/utils/haptics';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 
@@ -282,36 +286,33 @@ export default function LockScreen() {
   };
 
   const performReset = async () => {
+    // TASK-469: one bounded, verified wipe. It resolves ONLY when everything is
+    // erased; on any failure the user stays on this screen with a plain message
+    // and the wipe request stays recorded, so the next launch finishes it.
     try {
-      // Clear all secure storage
-      await AccountSecureStorage.clearAll();
-
-      // Clear wallet data
-      await MultiAccountWalletService.clearAllWallets();
-
-      // Reset local state (clearAll() also wipes the persisted PIN throttle).
-      setPin('');
-      setThrottle({
-        lockedUntil: null,
-        attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
-      });
-
-      // Force the AuthContext to re-check the initial state
-      await recheckAuthState();
-
-      showAlert(
-        'Reset Complete',
-        'All application data has been cleared. You can now set up a new wallet.',
-        [
-          {
-            text: 'OK',
-          },
-        ]
-      );
+      await wipeWalletData();
     } catch (error) {
       console.error('Reset error:', error);
-      showAlert('Error', 'Failed to reset application. Please try again.');
+      showWipeIncompleteNotice();
+      return;
     }
+
+    // Reset local state (the wipe also erased the persisted PIN throttle).
+    setPin('');
+    setThrottle({
+      lockedUntil: null,
+      attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
+    });
+
+    // Force the AuthContext to re-check the initial state
+    try {
+      await recheckAuthState();
+    } catch (error) {
+      console.error('Reset recheck error:', error);
+    }
+
+    // Shown only here: after the wipe reported complete.
+    showWipeCompleteNotice();
   };
 
   const renderPinDots = () => {
