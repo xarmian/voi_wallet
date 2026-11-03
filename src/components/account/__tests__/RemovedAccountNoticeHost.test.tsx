@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import RemovedAccountNoticeHost from '../RemovedAccountNoticeHost';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 
@@ -52,6 +52,55 @@ describe('RemovedAccountNoticeHost', () => {
     expect(onReimport).not.toHaveBeenCalled();
     release();
     await waitFor(() => expect(onReimport).toHaveBeenCalledTimes(1));
+  });
+  it('re-imports once when Re-import is tapped twice before the clear settles', async () => {
+    (
+      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
+    ).mockResolvedValue([record]);
+    let release: () => void = () => {};
+    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
+      new Promise<void>((resolve) => (release = resolve))
+    );
+    const onReimport = jest.fn();
+    const screen = await render(
+      <RemovedAccountNoticeHost onReimport={onReimport} />
+    );
+    const button = await screen.findByText('Re-import');
+    await act(async () => {
+      fireEvent.press(button);
+      fireEvent.press(button);
+    });
+    await act(async () => {
+      release();
+    });
+    expect(onReimport).toHaveBeenCalledTimes(1);
+    expect(AccountSecureStorage.clearUnexplainedRemoval).toHaveBeenCalledTimes(
+      1
+    );
+  });
+  it('does not navigate if the host unmounts while the clear is pending', async () => {
+    (
+      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
+    ).mockResolvedValue([record]);
+    let release: () => void = () => {};
+    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
+      new Promise<void>((resolve) => (release = resolve))
+    );
+    const onReimport = jest.fn();
+    const screen = await render(
+      <RemovedAccountNoticeHost onReimport={onReimport} />
+    );
+    const button = await screen.findByText('Re-import');
+    await act(async () => {
+      fireEvent.press(button);
+    });
+    await act(async () => {
+      screen.unmount();
+    });
+    await act(async () => {
+      release();
+    });
+    expect(onReimport).not.toHaveBeenCalled();
   });
   it('still navigates to re-import when clearing the record fails', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
