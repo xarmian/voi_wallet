@@ -25,11 +25,18 @@ export function useRemovedAccountNotices() {
     };
   }, []);
 
-  const dismiss = useCallback((id: string) => {
+  /**
+   * Hides the notice immediately, then resolves once its stored record is
+   * cleared (a clear failure is logged by id and swallowed). Callers that
+   * navigate away await this so a slow write cannot bring the notice back.
+   */
+  const dismiss = useCallback(async (id: string): Promise<void> => {
     setNotices((current) => current.filter((record) => record.id !== id));
-    void AccountSecureStorage.clearUnexplainedRemoval(id).catch(() => {
+    try {
+      await AccountSecureStorage.clearUnexplainedRemoval(id);
+    } catch {
       console.warn('Unable to clear removed account notice', id);
-    });
+    }
   }, []);
 
   return { notices: notices.slice(0, 1), dismiss };

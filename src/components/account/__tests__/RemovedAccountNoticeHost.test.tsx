@@ -31,10 +31,14 @@ describe('RemovedAccountNoticeHost', () => {
       AccountSecureStorage.clearUnexplainedRemoval as jest.Mock
     ).mockResolvedValue(undefined);
   });
-  it('clears and then calls reimport', async () => {
+  it('clears the record first and only then calls reimport', async () => {
     (
       AccountSecureStorage.readUnexplainedRemovals as jest.Mock
     ).mockResolvedValue([record]);
+    let release: () => void = () => {};
+    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
+      new Promise<void>((resolve) => (release = resolve))
+    );
     const onReimport = jest.fn();
     const screen = await render(
       <RemovedAccountNoticeHost onReimport={onReimport} />
@@ -45,7 +49,25 @@ describe('RemovedAccountNoticeHost', () => {
         'one'
       )
     );
-    expect(onReimport).toHaveBeenCalledTimes(1);
+    expect(onReimport).not.toHaveBeenCalled();
+    release();
+    await waitFor(() => expect(onReimport).toHaveBeenCalledTimes(1));
+  });
+  it('still navigates to re-import when clearing the record fails', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (
+      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
+    ).mockResolvedValue([record]);
+    (
+      AccountSecureStorage.clearUnexplainedRemoval as jest.Mock
+    ).mockRejectedValue(new Error('bad'));
+    const onReimport = jest.fn();
+    const screen = await render(
+      <RemovedAccountNoticeHost onReimport={onReimport} />
+    );
+    fireEvent.press(await screen.findByText('Re-import'));
+    await waitFor(() => expect(onReimport).toHaveBeenCalledTimes(1));
+    warn.mockRestore();
   });
   it('dismisses and clears without reimport', async () => {
     (

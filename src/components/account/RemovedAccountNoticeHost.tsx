@@ -9,9 +9,9 @@ export default function RemovedAccountNoticeHost({
 }) {
   const { notices, dismiss } = useRemovedAccountNotices();
   const notice = notices[0];
-  const handleReimport = useCallback(() => {
+  const handleReimport = useCallback(async () => {
     if (!notice) return;
-    dismiss(notice.id);
+    await dismiss(notice.id);
     onReimport();
   }, [dismiss, notice, onReimport]);
 
@@ -20,8 +20,12 @@ export default function RemovedAccountNoticeHost({
     <RemovedAccountNotice
       label={notice.label}
       address={notice.address}
-      onReimport={handleReimport}
-      onDismiss={() => dismiss(notice.id)}
+      onReimport={() => {
+        void handleReimport();
+      }}
+      onDismiss={() => {
+        void dismiss(notice.id);
+      }}
     />
   );
 }

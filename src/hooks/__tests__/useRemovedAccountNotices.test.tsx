@@ -57,15 +57,48 @@ describe('useRemovedAccountNotices', () => {
     (
       AccountSecureStorage.readUnexplainedRemovals as jest.Mock
     ).mockResolvedValue([]);
-    const { rerender } = await render(
-      <Harness onValue={(v) => values.push(v)} />
-    );
+    await render(<Harness onValue={(v) => values.push(v)} />);
     expect(values.at(-1)?.notices).toEqual([]);
+  });
+  it('returns empty and does not throw when the records are unreadable', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     (
       AccountSecureStorage.readUnexplainedRemovals as jest.Mock
     ).mockRejectedValue(new Error('bad'));
-    await rerender(<Harness onValue={(v) => values.push(v)} />);
+    const values: ReturnType<typeof useRemovedAccountNotices>[] = [];
+    await render(<Harness onValue={(v) => values.push(v)} />);
+    await act(async () => {});
+    expect(AccountSecureStorage.readUnexplainedRemovals).toHaveBeenCalledTimes(
+      1
+    );
+    expect(warn).toHaveBeenCalled();
     expect(values.at(-1)?.notices).toEqual([]);
+    warn.mockRestore();
+  });
+  it('dismiss resolves only after the record is cleared', async () => {
+    (
+      AccountSecureStorage.readUnexplainedRemovals as jest.Mock
+    ).mockResolvedValue(records.slice(0, 1));
+    let release: () => void = () => {};
+    (AccountSecureStorage.clearUnexplainedRemoval as jest.Mock).mockReturnValue(
+      new Promise<void>((resolve) => (release = resolve))
+    );
+    const values: ReturnType<typeof useRemovedAccountNotices>[] = [];
+    await render(<Harness onValue={(v) => values.push(v)} />);
+    let settled = false;
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = values.at(-1)?.dismiss('one');
+      void pending?.then(() => {
+        settled = true;
+      });
+    });
+    expect(settled).toBe(false);
+    await act(async () => {
+      release();
+      await pending;
+    });
+    expect(settled).toBe(true);
   });
   it('keeps a dismissal local if storage clearing fails', async () => {
     (

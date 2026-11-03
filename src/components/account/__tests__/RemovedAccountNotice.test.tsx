@@ -37,7 +37,9 @@ describe('RemovedAccountNotice', () => {
     );
     expect(getByText(title)).toBeTruthy();
     expect(getByText(body)).toBeTruthy();
-    expect(getByLabelText(`${title}. ${body}`)).toBeTruthy();
+    // The card is not a pressable group: the text stays readable per element
+    // and both controls are directly reachable by a screen reader.
+    expect(getByLabelText('Dismiss notice')).toBeTruthy();
   });
   it('shows address only when label is empty and treats label as plain text', async () => {
     const { getByText } = await render(
@@ -53,10 +55,10 @@ describe('RemovedAccountNotice', () => {
       markup.getByText('<img> (ABCDEF...WXYZ) was removed from this device')
     ).toBeTruthy();
   });
-  it('calls reimport and supports visible and accessibility dismiss controls', async () => {
+  it('re-imports only from the Re-import button', async () => {
     const onReimport = jest.fn();
     const onDismiss = jest.fn();
-    const { getByText, container } = await render(
+    const { getByText } = await render(
       <RemovedAccountNotice
         {...props}
         onReimport={onReimport}
@@ -65,18 +67,30 @@ describe('RemovedAccountNotice', () => {
     );
     fireEvent.press(getByText('Re-import'));
     expect(onReimport).toHaveBeenCalledTimes(1);
-    fireEvent.press(
-      container.queryAll(
-        (n: any) => n.props?.testID === 'removed-account-dismiss'
-      )[0]
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+  it('dismisses without ever triggering re-import, and the card itself is not pressable', async () => {
+    const onReimport = jest.fn();
+    const onDismiss = jest.fn();
+    const { getByLabelText, container } = await render(
+      <RemovedAccountNotice
+        {...props}
+        onReimport={onReimport}
+        onDismiss={onDismiss}
+      />
     );
+    const dismiss = getByLabelText('Dismiss notice');
+    expect(dismiss.props.accessibilityRole).toBe('button');
+    expect(dismiss.props.accessibilityElementsHidden).not.toBe(true);
+    fireEvent.press(dismiss);
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    const card = container.queryAll((n: any) =>
-      Array.isArray(n.props?.accessibilityActions)
-    )[0];
-    card.props.onAccessibilityAction({
-      nativeEvent: { actionName: 'dismiss' },
-    });
-    expect(onDismiss).toHaveBeenCalledTimes(2);
+    expect(onReimport).not.toHaveBeenCalled();
+    // No node in the card carries a card-level press that re-imports: pressing
+    // every pressable node other than the two buttons must do nothing.
+    expect(
+      container.queryAll((n: any) =>
+        Array.isArray(n.props?.accessibilityActions)
+      )
+    ).toHaveLength(0);
   });
 });

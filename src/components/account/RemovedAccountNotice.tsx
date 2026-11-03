@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  AccessibilityActionEvent,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown, FadeOutUp } from 'react-native-reanimated';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -35,9 +29,6 @@ export default function RemovedAccountNotice({
   const shortAddress = formatAddress(address);
   const name = label ? `${label} (${shortAddress})` : shortAddress;
   const title = `${name} was removed from this device`;
-  const handleAction = (event: AccessibilityActionEvent) => {
-    if (event.nativeEvent.actionName === 'dismiss') onDismiss();
-  };
 
   return (
     <Animated.View
@@ -47,14 +38,7 @@ export default function RemovedAccountNotice({
       exiting={reducedMotion ? undefined : FadeOutUp.duration(300)}
       style={styles.container}
     >
-      <GlassCard
-        variant="medium"
-        padding="md"
-        onPress={onReimport}
-        accessibilityLabel={`${title}. ${BODY}`}
-        accessibilityActions={[{ name: 'dismiss', label: 'Dismiss notice' }]}
-        onAccessibilityAction={handleAction}
-      >
+      <GlassCard variant="medium" padding="md">
         <View style={styles.content}>
           <View style={styles.textContainer}>
             <Text style={styles.title}>{title}</Text>
@@ -65,8 +49,8 @@ export default function RemovedAccountNotice({
             onPress={onDismiss}
             style={styles.dismissButton}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss notice"
           >
             <Ionicons name="close" size={20} color={styles.dismissIcon.color} />
           </TouchableOpacity>
