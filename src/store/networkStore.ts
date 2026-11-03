@@ -124,6 +124,13 @@ export const useNetworkStore = create<NetworkStoreState>()(
 
       set({ isSwitching: true });
 
+      // True once the service has moved to the new network. A failure after
+      // that point (the preference save) must move it back, or the service
+      // keeps serving the new network while the store and UI stay on the old
+      // one. A service switch that fails restores itself, so it needs no help.
+      let serviceSwitched = false;
+      const previousNetwork = state.currentNetwork;
+
       try {
         // Switch the network service. First invalidate every in-flight balance
         // fetch (TASK-59): one that straddles the switch must not land the old
@@ -132,6 +139,7 @@ export const useNetworkStore = create<NetworkStoreState>()(
         invalidateBalanceRequests();
         const networkService = NetworkService.getInstance();
         await networkService.switchNetwork(networkId);
+        serviceSwitched = true;
 
         // Save the network preference to persistent storage
         await AppStorage.saveSelectedNetwork(networkId);
@@ -163,6 +171,20 @@ export const useNetworkStore = create<NetworkStoreState>()(
 
         console.log(`Successfully switched to network: ${networkId}`);
       } catch (error) {
+        if (serviceSwitched) {
+          try {
+            await NetworkService.getInstance().switchNetwork(previousNetwork);
+          } catch (rollbackError) {
+            // Keep the original failure as the one reported.
+            console.error(
+              `Failed to restore ${previousNetwork} after a failed switch to ${networkId}:`,
+              rollbackError
+            );
+          }
+          // Fetches that started against the new network while it was active
+          // must not land in the restored one.
+          invalidateBalanceRequests();
+        }
         set({ isSwitching: false });
         const networkError =
           error instanceof NetworkError
