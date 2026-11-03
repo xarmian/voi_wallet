@@ -24,6 +24,10 @@ import {
  *   iOS versions this is a no-op. (iOS cannot hard-block a screenshot the way
  *   Android can; the OS blanks the captured secret content instead.)
  *
+ * iOS app switcher (TASK-493): the call also keeps the screen out of the
+ * app-switcher snapshot for as long as it is mounted (see
+ * useAppSwitcherProtection). Android's FLAG_SECURE already blanks that preview.
+ *
  * Cross-target: expo-screen-capture is a native module. On the web / browser-
  * extension target (`Platform.OS === 'web'`, react-native-web) there is no
  * equivalent capability and calling the native hook throws an
@@ -48,6 +52,10 @@ export function useSecureScreen(): void {
   // idempotent.
   const key = useId();
   usePreventCapture(key);
+  // TASK-493: screen-capture prevention does not cover the iOS app-switcher
+  // snapshot. Taking the blur here, from the same call, means a secret screen
+  // cannot have one protection and miss the other. A no-op off iOS.
+  useAppSwitcherProtection();
 }
 
 // iOS app-switcher blur is one global switch, so it is ref-counted: a second
