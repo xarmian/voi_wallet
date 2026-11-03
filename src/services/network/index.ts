@@ -60,6 +60,14 @@ type AlgodAccountInfo = Awaited<
 // ASAs can't fan out and rate-limit the node.
 const ASSET_METADATA_CONCURRENCY = 8;
 
+// Total wall-clock budget for the ASA metadata pass of ONE balance load
+// (TASK-489). Past it the in-flight lookups are aborted, nothing more is
+// dispatched, and the balance publishes with every still-unresolved asset
+// omitted, exactly as a failed lookup already is. Whatever did resolve is
+// cached, so each refresh gets further. Longer than one request timeout
+// (REQUEST_TIMEOUT_MS) so a single slow lookup is not cut short by it.
+const ASSET_METADATA_BUDGET_MS = 20_000;
+
 // Re-export types for backwards compatibility
 export type {
   NetworkConfiguration as NetworkConfig,
@@ -445,6 +453,16 @@ export class NetworkService {
       // Resolve a single ASA holding to an AssetBalance, or null to omit it.
       // Cache hits skip the network entirely; misses fetch the immutable params
       // and populate the cache (guarded against a mid-refresh network switch).
+      //
+      // Lookups are bounded in time and in LIVE requests (TASK-489): each one
+      // carries an AbortController (a timed-out lookup is aborted, not left
+      // running), and one budget timer, started by the first cache miss, aborts
+      // whatever is still in flight and stops further dispatch.
+      const liveLookups = new Set<AbortController>();
+      let metadataBudgetSpent = false;
+      let metadataBudgetTimer: ReturnType<typeof setTimeout> | undefined;
+      let omittedForBudget = 0;
+
       const resolveAssetBalance = async (
         asset: (typeof accountAssets)[number]
       ): Promise<AssetBalance | null> => {
@@ -465,9 +483,22 @@ export class NetworkService {
           };
         }
 
+        if (metadataBudgetSpent) {
+          omittedForBudget += 1;
+          return null;
+        }
+        metadataBudgetTimer ??= setTimeout(() => {
+          metadataBudgetSpent = true;
+          for (const lookup of liveLookups) lookup.abort();
+        }, ASSET_METADATA_BUDGET_MS);
+
+        const lookup = new AbortController();
+        liveLookups.add(lookup);
         try {
           const assetInfo = await this.withTimeout(
-            this.algodClient.getAssetByID(assetId).do(),
+            this.algodClient
+              .getAssetByID(assetId)
+              .do(undefined, { signal: lookup.signal }),
             `asset ${assetId}`
           );
           // Only trust a genuine finite non-negative integer decimals. A real
@@ -510,38 +541,58 @@ export class NetworkService {
           // display a 10^N x inflated balance. Omit the asset until a later
           // refresh can resolve its real params.
           return null;
+        } finally {
+          // A timed-out lookup keeps running unless it is aborted; abort is a
+          // no-op for one that already settled.
+          lookup.abort();
+          liveLookups.delete(lookup);
         }
       };
 
-      // Resolve holdings in concurrency-capped batches so cache-miss lookups run
-      // in parallel instead of one-at-a-time, without fanning out to all N at
-      // once (which could rate-limit the node). Each holding is isolated — a
+      // Resolve holdings with a pool of ASSET_METADATA_CONCURRENCY workers so
+      // cache-miss lookups run in parallel without fanning out to all N at once
+      // (which could rate-limit the node). Each holding is isolated — a
       // rejected lookup resolves to null and only omits that one asset — and
-      // output order matches the holdings order.
-      //
-      // NOTE: this caps how many lookups are DISPATCHED per batch, not the total
-      // live requests. withTimeout (shared, unchanged here) is a non-aborting
-      // Promise.race, so on a hung node a batch can all time out while their
-      // underlying requests stay live, and the next batch dispatches on top —
-      // in-flight can exceed the cap (more aggressively than the old serial
-      // loop, which added one per timeout). It never drops or fabricates assets,
-      // so this is an acceptable resource residual on a degraded-node path; a
-      // true hard cap on live requests would require an AbortController on the
-      // shared withTimeout (out of scope here).
-      const algodAssets: AssetBalance[] = [];
-      for (
-        let i = 0;
-        i < accountAssets.length;
-        i += ASSET_METADATA_CONCURRENCY
-      ) {
-        const batch = accountAssets.slice(i, i + ASSET_METADATA_CONCURRENCY);
-        const resolved = await Promise.all(batch.map(resolveAssetBalance));
-        for (const assetBalance of resolved) {
-          if (assetBalance) {
-            algodAssets.push(assetBalance);
-          }
+      // output order matches the holdings order. Because every lookup is
+      // aborted when it times out or the budget runs out, the cap holds for
+      // LIVE requests, not just dispatches.
+      const resolvedHoldings: (AssetBalance | null)[] = new Array(
+        accountAssets.length
+      ).fill(null);
+      let nextHolding = 0;
+      const worker = async (): Promise<void> => {
+        while (nextHolding < accountAssets.length) {
+          const index = nextHolding++;
+          resolvedHoldings[index] = await resolveAssetBalance(
+            accountAssets[index]
+          );
         }
+      };
+      try {
+        await Promise.all(
+          Array.from(
+            {
+              length: Math.min(
+                ASSET_METADATA_CONCURRENCY,
+                accountAssets.length
+              ),
+            },
+            worker
+          )
+        );
+      } finally {
+        clearTimeout(metadataBudgetTimer);
       }
+      if (metadataBudgetSpent) {
+        console.warn(
+          `Asset metadata budget (${ASSET_METADATA_BUDGET_MS}ms) spent for ${redactAddress(address)}; ` +
+            `publishing without the assets that did not resolve (${omittedForBudget} never asked), ` +
+            'which a later refresh retries'
+        );
+      }
+      const algodAssets: AssetBalance[] = resolvedHoldings.filter(
+        (assetBalance): assetBalance is AssetBalance => assetBalance !== null
+      );
 
       // Merge with Mimir data if available
       let assets = algodAssets;
