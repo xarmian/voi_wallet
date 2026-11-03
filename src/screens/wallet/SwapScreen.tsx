@@ -114,6 +114,7 @@ export default function SwapScreen() {
     balance: accountBalance,
     error: balanceErrorForSelectedNetwork,
     retry: retryBalanceLoad,
+    refresh: refreshSelectedNetworkBalance,
   } = useSwapNetworkBalance(currentAccount?.address, selectedNetwork);
 
   // Token selection state
@@ -735,6 +736,9 @@ export default function SwapScreen() {
           store.loadAccountBalance(accountId, true);
         }
         store.refreshAllBalances();
+        // The screen's own balance is fetched per network, so the store refresh
+        // above does not reach it.
+        refreshSelectedNetworkBalance();
         delayedRefreshTimeout.current = null;
       }, 5000);
 

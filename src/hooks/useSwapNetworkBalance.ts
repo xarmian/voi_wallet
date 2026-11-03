@@ -7,7 +7,10 @@ import { redactError } from '@/utils/logRedaction';
 export interface SwapNetworkBalance {
   balance: AccountBalance | null;
   error: string | null;
+  /** Clears the shown balance and error, then fetches again. */
   retry: () => void;
+  /** Fetches again, keeping the current balance on screen until it lands. */
+  refresh: () => void;
 }
 
 /**
@@ -67,11 +70,16 @@ export function useSwapNetworkBalance(
     setReloadToken((token) => token + 1);
   }, []);
 
+  const refresh = useCallback(() => {
+    setReloadToken((token) => token + 1);
+  }, []);
+
   // Only results for the current (network, address) pair are exposed.
   const current = state && state.key === key ? state : null;
   return {
     balance: current?.balance ?? null,
     error: current?.error ?? null,
     retry,
+    refresh,
   };
 }

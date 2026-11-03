@@ -82,4 +82,19 @@ describe('useSwapNetworkBalance', () => {
     await act(async () => resolveVoi(bal('777')));
     expect(result.current.balance?.amount).toBe('9');
   });
+
+  it('refresh refetches and keeps the shown balance until the new one lands', async () => {
+    let resolveSecond!: (b: unknown) => void;
+    mockGetAccountBalance[NetworkId.VOI_MAINNET]
+      .mockResolvedValueOnce(bal('5'))
+      .mockReturnValueOnce(new Promise((r) => (resolveSecond = r)));
+    const { result } = await renderHook(() =>
+      useSwapNetworkBalance('ADDR', NetworkId.VOI_MAINNET)
+    );
+    await waitFor(() => expect(result.current.balance?.amount).toBe('5'));
+    await act(async () => result.current.refresh());
+    expect(result.current.balance?.amount).toBe('5');
+    await act(async () => resolveSecond(bal('3')));
+    expect(result.current.balance?.amount).toBe('3');
+  });
 });
