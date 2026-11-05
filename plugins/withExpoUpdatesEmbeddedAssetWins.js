@@ -64,6 +64,17 @@ function countOf(haystack, needle) {
 
 function patchSource(source) {
   if (source.includes(MARKER)) {
+    // The marker sits in the first edit only. Accept the file as already
+    // patched only if BOTH edits are present byte for byte; a half-written file
+    // or one patched by an older version of this plugin must stop the build.
+    if (
+      !source.includes(KEYS_REPLACEMENT) ||
+      !source.includes(ROW_REPLACEMENT)
+    ) {
+      throw new Error(
+        'withExpoUpdatesEmbeddedAssetWins: DatabaseLauncher.kt carries the marker but not both current edits (partial or older patch). Reinstall expo-updates and rebuild (TASK-503).'
+      );
+    }
     return source;
   }
   for (const [name, anchor] of [
@@ -98,7 +109,11 @@ function patchExpoUpdates(packageDir) {
   const before = fs.readFileSync(file, 'utf8');
   const after = patchSource(before);
   if (after !== before) {
-    fs.writeFileSync(file, after);
+    // Write beside the target and rename, so an interrupted write can never
+    // leave a half-patched DatabaseLauncher.kt behind.
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, after);
+    fs.renameSync(tmp, file);
   }
   return after;
 }

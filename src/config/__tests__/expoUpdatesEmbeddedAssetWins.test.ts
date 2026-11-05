@@ -18,6 +18,7 @@
  * which worktrees share.
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -38,6 +39,10 @@ const appConfig = require('../../../app.config.js').default as {
 const LAUNCHER_REL =
   'android/src/main/java/expo/modules/updates/launcher/DatabaseLauncher.kt';
 const MARKER = 'TASK-503: embedded android_res asset wins';
+const UPSTREAM_SHA256 =
+  'ffa2225c312d8dc31ec46da291f743e7178ac9edc8037d36da6128795c30e1ef';
+const PATCHED_SHA256 =
+  'e64d09259db5ae3c90141756cda311cd37c2121e65b74e125bfcdc110055f0d2';
 
 const realPackageDir = path.dirname(
   require.resolve('expo-updates/package.json')
@@ -89,8 +94,6 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
     const plain = patched.indexOf('this[asset] = filename');
     expect(skip).toBeGreaterThan(loopAt);
     expect(skip).toBeLessThan(plain);
-    // A key the embedded manifest does NOT have still maps to its stored path.
-    expect(patched).toMatch(/\} else \{\n\s+this\[asset\] = filename\n\s+\}/);
   });
 
   it('logs only when the stored path really differs from the embedded one', () => {
@@ -132,6 +135,47 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
     const writes = (s: string) =>
       (s.match(/assetDao\(\)\.\w*[uU]pdate\w*/g) ?? []).length;
     expect(writes(patched)).toBe(writes(original));
+  });
+
+  it('produces exactly the Kotlin that was reviewed and built', () => {
+    // Golden hashes of upstream's file and of the patched result. A change to
+    // either the plugin's output or upstream's file must be a reviewed change
+    // (it is native code that runs on every cold start). The patched hash is
+    // the output of the build proven on the emulator (TASK-503).
+    const sha = (s: string) =>
+      crypto.createHash('sha256').update(s).digest('hex');
+    expect(sha(original)).toBe(UPSTREAM_SHA256);
+    expect(sha(plugin.patchSource(original))).toBe(PATCHED_SHA256);
+  });
+
+  it('refuses a file that has the marker but not both current edits', () => {
+    const patched = plugin.patchSource(original);
+    // Only the first edit survived (an interrupted write), or an older plugin
+    // version's output: neither may be accepted as "already patched".
+    const firstEditOnly = original.replace(
+      'val downloadJobs = mutableListOf',
+      '// TASK-503: embedded android_res asset wins (old)\n      val downloadJobs = mutableListOf'
+    );
+    expect(firstEditOnly).toContain(MARKER);
+    expect(() => plugin.patchSource(firstEditOnly)).toThrow(
+      /partial or older patch/
+    );
+    const rowEditMissing = patched.replace(
+      'embeddedFiles.containsKey(it)',
+      'embeddedFiles.isEmpty()'
+    );
+    expect(() => plugin.patchSource(rowEditMissing)).toThrow(
+      /partial or older patch/
+    );
+    // The complete patch is still accepted unchanged.
+    expect(plugin.patchSource(patched)).toBe(patched);
+  });
+
+  it('leaves no temp file beside the patched source', () => {
+    const dir = copyPackage();
+    plugin.patchExpoUpdates(dir);
+    const launcherDir = path.dirname(path.join(dir, LAUNCHER_REL));
+    expect(fs.readdirSync(launcherDir)).toEqual(['DatabaseLauncher.kt']);
   });
 
   it('is idempotent', () => {
