@@ -89,6 +89,10 @@ export default function RestoreWalletScreen() {
 
   const endOldPinSession = useCallback(
     (backTo: 'needed' | null) => {
+      // Every way out of the step (background, leaving, the forgotten link,
+      // cancel, finishing, the timer) invalidates a PIN check that is still
+      // running, so it cannot fill the vault or arm a session when it ends.
+      oldPinGeneration.current += 1;
       if (sessionTimer.current) clearTimeout(sessionTimer.current);
       sessionTimer.current = null;
       // Only a verified session has anything to end. A background event on a
@@ -129,14 +133,10 @@ export default function RestoreWalletScreen() {
   // or the session times out; the step returns.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') {
-        oldPinGeneration.current += 1;
-        endOldPinSession('needed');
-      }
+      if (state !== 'active') endOldPinSession('needed');
     });
     return () => {
       sub.remove();
-      oldPinGeneration.current += 1;
       endOldPinSession(null);
     };
   }, [endOldPinSession]);

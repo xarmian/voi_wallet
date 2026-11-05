@@ -439,6 +439,12 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
         expect(current()).toBe(false);
       });
 
+      it('is no longer current after the user taps "I don\'t remember it"', async () => {
+        const { view, current } = await pending();
+        await fireEvent.press(view.getByText("I don't remember it"));
+        expect(current()).toBe(false);
+      });
+
       it('is no longer current after the screen is left', async () => {
         const { view, current } = await pending();
         await view.unmount();
