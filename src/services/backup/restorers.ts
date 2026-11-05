@@ -291,6 +291,97 @@ async function reportOutcomeForDeviceRecord(
   return { outcome: allEmpty ? 'device-key-unreadable' : 'device-key-problem' };
 }
 
+/**
+ * TASK-504 (DOC-507 5.2): a read-only classification of the file for the
+ * forgotten-PIN consent screen. Nothing is read from or written to the device.
+ * `total` (T) is the accounts in the file after records that share an address are
+ * merged (they are one account), `addable` (N) the ones a restore would add, and
+ * `addableWithKey` how many of those carry a key. A record the restore would
+ * reject is listed in `notAdded` with its label and address. On the forgotten-PIN
+ * path the device has no accounts, so no record is skipped for being on it.
+ */
+export interface RestorePlan {
+  total: number;
+  addable: number;
+  addableWithKey: number;
+  notAdded: { label?: string; address: string }[];
+}
+
+export function planRestore(backupAccounts: BackupAccountData[]): RestorePlan {
+  const { accounts } = dedupeAccountsByAddress(backupAccounts);
+  const notAdded: RestorePlan['notAdded'] = [];
+  let addable = 0;
+  let addableWithKey = 0;
+  for (const account of accounts) {
+    const invalid =
+      (account.type === AccountType.REMOTE_SIGNER &&
+        (!account.signerDeviceId || !account.pairedAt)) ||
+      !Object.values(AccountType).includes(account.type as AccountType);
+    if (invalid) {
+      notAdded.push({ label: account.label, address: account.address });
+      continue;
+    }
+    addable++;
+    if (fileHoldsKey(account)) addableWithKey++;
+  }
+  return { total: accounts.length, addable, addableWithKey, notAdded };
+}
+
+/**
+ * TASK-504 (DOC-507 5.4, step B): remove the old PIN credential for a restore on
+ * a device whose PIN is forgotten. The caller has shown the consent screen and the
+ * user has confirmed; this is the first write of the step. It refuses, with
+ * nothing changed, unless the restore can give the user back something to sign
+ * with (5.2 item 5: the file adds at least one record and at least one of them
+ * carries a key) and the device really has no accounts. Order is the caller's to
+ * keep: B, then performFullRestore (which decides "fresh", then sets the
+ * breadcrumb, then writes keys). The session vault is emptied first: the step
+ * must not carry a verified old PIN past B.
+ */
+export async function removeOldPinForRestore(
+  backupAccounts: BackupAccountData[]
+): Promise<void> {
+  const plan = planRestore(backupAccounts);
+  if (plan.addable === 0) {
+    throw new BackupError(
+      "There's nothing in this backup that can be added to this phone. Your PIN is still here, and nothing has changed.",
+      'RESTORE_FAILED'
+    );
+  }
+  if (plan.addableWithKey === 0) {
+    throw new BackupError(
+      "This backup doesn't hold any account keys, so restoring it without your PIN wouldn't give you back any account you can sign with. Your PIN is still on this phone, and nothing has changed.",
+      'RESTORE_FAILED'
+    );
+  }
+  let deviceAccounts: number;
+  try {
+    deviceAccounts =
+      (await MultiAccountWalletService.readWalletStrict())?.accounts.length ??
+      0;
+  } catch {
+    throw new BackupError(
+      "We couldn't read this wallet. Nothing was changed. Try again.",
+      'RESTORE_FAILED'
+    );
+  }
+  if (deviceAccounts > 0) {
+    throw new BackupError(
+      'This phone already has accounts, so its PIN is not removed. Nothing was changed.',
+      'RESTORE_FAILED'
+    );
+  }
+  SessionKeyVault.clear();
+  try {
+    await AccountSecureStorage.removeCredentialForForgottenPin();
+  } catch (error) {
+    throw new BackupError(
+      `Failed to remove the old PIN: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'RESTORE_FAILED'
+    );
+  }
+}
+
 /** A file record whose phrase is in the file, so the file can supply its key. */
 function fileHoldsKey(account: BackupAccountData): boolean {
   return (

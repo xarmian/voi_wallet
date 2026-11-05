@@ -32,7 +32,12 @@ import {
   collectExperimental,
 } from './collectors';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
-import { performFullRestore, validateRetainedKeys } from './restorers';
+import {
+  performFullRestore,
+  planRestore,
+  removeOldPinForRestore,
+  validateRetainedKeys,
+} from './restorers';
 
 /**
  * Format date for filename
@@ -335,6 +340,23 @@ export class BackupService {
       assertEnvelopeMatchesPayload(encrypted, backup);
       validateRetainedKeys(backup.accounts);
 
+      // The forgotten-PIN step (DOC-507 5.4): B first. performFullRestore then
+      // decides "fresh", sets the breadcrumb, and writes keys, in that order.
+      if (options.removeOldPin) {
+        if (options.oldPinSession) {
+          throw new BackupError(
+            'The PIN cannot be both entered and removed',
+            'RESTORE_FAILED'
+          );
+        }
+        this.reportProgress({
+          step: 'validating',
+          progress: 50,
+          message: 'Removing the old PIN...',
+        });
+        await removeOldPinForRestore(backup.accounts);
+      }
+
       // Step 5: Add the file's data to this device (nothing is cleared)
       this.reportProgress({
         step: 'restoring',
@@ -451,6 +473,7 @@ export class BackupService {
         friendsCount: backup.friends?.length || 0,
         hasRemoteSignerSettings: !!backup.settings?.remoteSigner,
         ...(backup.incomplete ? { incomplete: backup.incomplete } : {}),
+        restorePlan: planRestore(backup.accounts),
       };
     } catch (error) {
       if (error instanceof BackupError) {

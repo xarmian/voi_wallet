@@ -424,6 +424,11 @@ export type RestoreRecordOutcome =
  */
 export interface RestoreOptions {
   oldPinSession?: { epoch: number };
+  /**
+   * The forgotten-PIN step (DOC-507 section 5): remove the old PIN credential
+   * first (step B), then restore add-only. Never together with `oldPinSession`.
+   */
+  removeOldPin?: boolean;
 }
 
 export interface RestoreRecordResult {
@@ -496,6 +501,13 @@ export interface BackupInfo {
   hasRemoteSignerSettings: boolean;
   /** Set when the file is incomplete: the accounts whose keys it lacks */
   incomplete?: BackupIncomplete;
+  /** What a restore would add, for the forgotten-PIN consent screen */
+  restorePlan: {
+    total: number;
+    addable: number;
+    addableWithKey: number;
+    notAdded: { label?: string; address: string }[];
+  };
 }
 
 /**

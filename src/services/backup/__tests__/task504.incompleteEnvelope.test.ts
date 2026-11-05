@@ -52,8 +52,23 @@ jest.mock('../collectors', () => ({
   collectExperimental: jest.fn(async () => ({})),
 }));
 const mockRestore = jest.fn();
+const mockRemovePin = jest.fn();
+const mockCalls: string[] = [];
 jest.mock('../restorers', () => ({
-  performFullRestore: (...a: unknown[]) => mockRestore(...a),
+  performFullRestore: (...a: unknown[]) => {
+    mockCalls.push('restore');
+    return mockRestore(...a);
+  },
+  removeOldPinForRestore: (...a: unknown[]) => {
+    mockCalls.push('removePin');
+    return mockRemovePin(...a);
+  },
+  planRestore: () => ({
+    total: 2,
+    addable: 2,
+    addableWithKey: 1,
+    notAdded: [],
+  }),
   validateRetainedKeys: jest.fn(),
 }));
 
@@ -75,6 +90,8 @@ beforeEach(() => {
   mockFiles.clear();
   mockCollect.mockReset();
   mockRestore.mockReset();
+  mockRemovePin.mockReset();
+  mockCalls.length = 0;
 });
 
 function payload(extra: object = {}): VoiBackupFile {
@@ -289,5 +306,63 @@ describe('TASK-504: createBackup and restoreBackup', () => {
     const made = await BackupService.createBackup(PASSWORD, CAP);
     const info = await BackupService.validateBackupFile(made.fileUri, PASSWORD);
     expect(info.incomplete).toEqual({ leftOut: LEFT_OUT });
+  });
+});
+
+describe('TASK-504: the forgotten-PIN option and the restore plan', () => {
+  async function madeFile() {
+    mockCollect.mockResolvedValue({ accounts: [], leftOut: [], total: 0 });
+    return BackupService.createBackup(PASSWORD, CAP);
+  }
+
+  it('removeOldPin runs step B first, then the restore', async () => {
+    const made = await madeFile();
+    mockRestore.mockResolvedValue({ records: [], settingsRestored: true });
+
+    await BackupService.restoreBackup(made.fileUri, PASSWORD, {
+      removeOldPin: true,
+    });
+
+    expect(mockCalls).toEqual(['removePin', 'restore']);
+  });
+
+  it('without the option, no PIN is touched', async () => {
+    const made = await madeFile();
+    mockRestore.mockResolvedValue({ records: [], settingsRestored: true });
+    await BackupService.restoreBackup(made.fileUri, PASSWORD);
+    expect(mockCalls).toEqual(['restore']);
+  });
+
+  it('a refused step B stops before any restore', async () => {
+    const made = await madeFile();
+    mockRemovePin.mockRejectedValue(new Error('refused'));
+    await expect(
+      BackupService.restoreBackup(made.fileUri, PASSWORD, {
+        removeOldPin: true,
+      })
+    ).rejects.toThrow('refused');
+    expect(mockRestore).not.toHaveBeenCalled();
+  });
+
+  it('entering the PIN and removing it together is refused before anything runs', async () => {
+    const made = await madeFile();
+    await expect(
+      BackupService.restoreBackup(made.fileUri, PASSWORD, {
+        removeOldPin: true,
+        oldPinSession: { epoch: 1 },
+      })
+    ).rejects.toMatchObject({ code: 'RESTORE_FAILED' });
+    expect(mockCalls).toEqual([]);
+  });
+
+  it('validateBackupFile reports what a restore would add', async () => {
+    const made = await madeFile();
+    const info = await BackupService.validateBackupFile(made.fileUri, PASSWORD);
+    expect(info.restorePlan).toEqual({
+      total: 2,
+      addable: 2,
+      addableWithKey: 1,
+      notAdded: [],
+    });
   });
 });
