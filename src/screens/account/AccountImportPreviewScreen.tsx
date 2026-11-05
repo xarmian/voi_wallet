@@ -1,3 +1,4 @@
+import { useWalletStore } from '@/store/walletStore';
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
@@ -255,8 +256,10 @@ export default function AccountImportPreviewScreen({
         Alert.alert('Import Complete', message, [
           {
             text: 'OK',
-            onPress: () =>
-              navigation.navigate('Main' as any, { screen: 'Home' }),
+            onPress: async () => {
+              await useWalletStore.getState().refresh();
+              navigation.navigate('Main' as any, { screen: 'Home' });
+            },
           },
         ]);
       } else {

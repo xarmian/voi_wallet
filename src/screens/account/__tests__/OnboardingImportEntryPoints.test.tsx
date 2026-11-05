@@ -23,8 +23,11 @@ jest.mock('@react-navigation/native', () => ({
   },
 }));
 jest.mock('@/store/walletStore', () => ({
-  useWalletStore: (selector: (state: unknown) => unknown) =>
-    selector({ addWatchAccount: mockAddWatchAccount, refresh: mockRefresh }),
+  useWalletStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({ addWatchAccount: mockAddWatchAccount, refresh: mockRefresh }),
+    { getState: () => ({ refresh: mockRefresh }) }
+  ),
   useAccounts: () => mockExistingAccounts,
 }));
 jest.mock('@/services/wallet', () => ({
@@ -755,4 +758,46 @@ describe('QR camera handoff', () => {
       expect(mockNavigation.navigate).toHaveBeenCalledTimes(2);
     }
   );
+});
+
+it('TASK-514: direct QR import awaits refresh before Home', async () => {
+  const events: string[] = [];
+  let resolve!: () => void;
+  const pending = new Promise<void>((done) => {
+    resolve = done;
+  });
+  jest.mocked(onboardingNeedsSecuritySetup).mockResolvedValue(false);
+  jest
+    .mocked(MultiAccountWalletService.importStandardAccount)
+    .mockImplementation(async () => {
+      events.push('import');
+      return {} as never;
+    });
+  mockRefresh.mockImplementation(() => {
+    events.push('refresh');
+    return pending;
+  });
+  mockNavigation.navigate.mockImplementation(() => {
+    events.push('navigate');
+  });
+  await renderQRPreview(true);
+  await pressAlert('Import Accounts', 'Import');
+  const action = jest
+    .mocked(Alert.alert)
+    .mock.calls.findLast(
+      ([title]) => title === 'Import Complete'
+    )?.[2]?.[0].onPress;
+  expect(action).toEqual(expect.any(Function));
+  await act(async () => {
+    void action?.();
+  });
+  expect(events).toEqual(['import', 'refresh']);
+  expect(mockNavigation.navigate).not.toHaveBeenCalled();
+  await act(async () => {
+    resolve();
+  });
+  expect(events).toEqual(['import', 'refresh', 'navigate']);
+  expect(mockNavigation.navigate).toHaveBeenCalledWith('Main', {
+    screen: 'Home',
+  });
 });

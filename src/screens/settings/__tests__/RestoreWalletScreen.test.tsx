@@ -15,6 +15,7 @@ import {
   SETTINGS_STAY_TEXT,
 } from '@/services/backup/restoreReport';
 
+const mockRefresh = jest.fn();
 const mockGoBack = jest.fn();
 const mockDispatch = jest.fn();
 const mockRecheck = jest.fn(async () => {});
@@ -53,12 +54,13 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
   },
 }));
 jest.mock('@/store/walletStore', () => ({
-  useWalletStore: (
-    selector: (state: { wallet: { accounts: unknown[] } }) => unknown
-  ) =>
-    selector({
-      wallet: { accounts: new Array(mockAccountCount).fill({}) },
-    }),
+  useWalletStore: Object.assign(
+    (selector: (state: { wallet: { accounts: unknown[] } }) => unknown) =>
+      selector({
+        wallet: { accounts: new Array(mockAccountCount).fill({}) },
+      }),
+    { getState: () => ({ refresh: mockRefresh }) }
+  ),
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({
   useThemedStyles: () => ({}),
@@ -168,6 +170,7 @@ async function restoreThroughScreen(result: object) {
 }
 
 beforeEach(() => {
+  mockRefresh.mockReset().mockResolvedValue(undefined);
   mockGoBack.mockClear();
   mockDispatch.mockClear();
   mockRecheck.mockClear();
@@ -188,7 +191,8 @@ describe('restore screen landings', () => {
     );
     expect(title).toBe('Restore complete');
     expect(message).not.toContain(NOT_FRESH_LINE);
-    pressOk();
+    await pressOk();
+    expect(mockRefresh).not.toHaveBeenCalled();
     expect(mockDispatch).toHaveBeenCalledTimes(1);
     expect(mockDispatch.mock.calls[0][0]).toMatchObject({
       type: 'RESET',
@@ -204,7 +208,7 @@ describe('restore screen landings', () => {
       restoreResult(false)
     );
     expect(message.endsWith(NOT_FRESH_LINE)).toBe(true);
-    pressOk();
+    await pressOk();
     expect(mockGoBack).toHaveBeenCalledTimes(1);
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(mockRecheck).not.toHaveBeenCalled();
@@ -216,7 +220,7 @@ describe('restore screen landings', () => {
       restoreResult(false)
     );
     expect(message.endsWith(NOT_FRESH_LINE)).toBe(true);
-    pressOk();
+    await pressOk();
     expect(mockRecheck).toHaveBeenCalledTimes(1);
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(mockGoBack).not.toHaveBeenCalled();
@@ -344,7 +348,7 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       { oldPinSession: { epoch: 42 } }
     );
     const buttons = alert.mock.calls[0][2] as { onPress: () => void }[];
-    buttons[0].onPress();
+    await buttons[0].onPress();
     expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
     expect(mockRecheck).toHaveBeenCalledTimes(1);
     expect(mockDispatch).not.toHaveBeenCalled();
@@ -450,6 +454,43 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       });
     });
 
+    it('finishing a restore in a verified session clears the vault BEFORE the store refresh, and the refresh finishes before the auth recheck', async () => {
+      const view = await verified();
+      jest
+        .mocked(BackupService.validateBackupFile)
+        .mockResolvedValue({ accountCount: 1 } as never);
+      jest
+        .mocked(BackupService.restoreBackup)
+        .mockResolvedValue(restoreResult(false) as never);
+      const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+      let resolveRefresh!: () => void;
+      mockRefresh.mockReturnValue(
+        new Promise<void>((done) => {
+          resolveRefresh = done;
+        })
+      );
+      await fireEvent.press(await view.findByText('Select Backup File'));
+      await fireEvent.press(await view.findByText('Confirm password'));
+      await fireEvent.press(await view.findByText('Confirm restore'));
+      await waitFor(() => expect(alert).toHaveBeenCalledTimes(1));
+      mockClearRestoreVault.mockClear();
+      const buttons = alert.mock.calls[0][2] as { onPress: () => void }[];
+      let completion: unknown;
+      await act(async () => {
+        completion = buttons[0].onPress();
+      });
+
+      // The unlocked old-PIN vault is already empty while the store refreshes.
+      expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRecheck).not.toHaveBeenCalled();
+      await act(async () => {
+        resolveRefresh();
+        await completion;
+      });
+      expect(mockRecheck).toHaveBeenCalledTimes(1);
+    });
+
     it('a background event before any PIN is verified clears nothing and changes nothing', async () => {
       const view = await openOnboardingWithPin();
       await view.findByText(NORMAL);
@@ -535,7 +576,7 @@ describe('restore screen: the forgotten-PIN step', () => {
       { removeOldPin: true }
     );
     const buttons = alert.mock.calls[0][2] as { onPress: () => void }[];
-    buttons[0].onPress();
+    await buttons[0].onPress();
     expect(mockDispatch.mock.calls[0][0]).toMatchObject({
       routes: [{ name: 'SecuritySetup' }],
     });
@@ -573,4 +614,34 @@ describe('restore screen: the forgotten-PIN step', () => {
       expect(view.queryByText('Enter my PIN instead')).toBeNull()
     );
   });
+});
+
+describe('TASK-514: restore refresh landings', () => {
+  it.each([true, false])(
+    'awaits refresh before leaving (onboarding: %s)',
+    async (isOnboarding) => {
+      mockParams = { isOnboarding };
+      let resolve!: () => void;
+      const pending = new Promise<void>((done) => {
+        resolve = done;
+      });
+      mockRefresh.mockReturnValue(pending);
+      const { pressOk } = await restoreThroughScreen(restoreResult(false));
+      let completion: unknown;
+      await act(async () => {
+        completion = pressOk();
+      });
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRecheck).not.toHaveBeenCalled();
+      expect(mockGoBack).not.toHaveBeenCalled();
+      // No old-PIN session in this scenario, so there is no vault to clear; the
+      // ordering against a real session is the test in the old-PIN block below.
+      expect(mockClearRestoreVault).not.toHaveBeenCalled();
+      await act(async () => {
+        resolve();
+        await completion;
+      });
+      expect(isOnboarding ? mockRecheck : mockGoBack).toHaveBeenCalledTimes(1);
+    }
+  );
 });

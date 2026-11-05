@@ -278,7 +278,7 @@ export default function RestoreWalletScreen() {
       Alert.alert(report.title, formatRestoreReport(report), [
         {
           text: 'OK',
-          onPress: () => {
+          onPress: async () => {
             // Restore is add-only and never clears a PIN, so SecuritySetup is
             // right ONLY for a fresh device (no PIN, no accounts before it),
             // where the restored keys still have no PIN. Anything else keeps
@@ -299,10 +299,15 @@ export default function RestoreWalletScreen() {
               );
             } else if (isOnboarding) {
               // The old-PIN vault is cleared first: the normal unlock fills it
-              // again (and runs the sweep that upgrades the restored keys).
+              // again (and runs the sweep that upgrades the restored keys). It
+              // must not stay open while the store refreshes.
               endOldPinSession(null);
+              // The accounts are committed; the store was hydrated empty at boot
+              // and must see them before Home mounts (TASK-514).
+              await useWalletStore.getState().refresh();
               void recheckAuthState();
             } else {
+              await useWalletStore.getState().refresh();
               navigation.goBack();
             }
           },
