@@ -388,6 +388,8 @@ export interface RestoreResult {
   friendsCount: number;
   /** Whether remote signer settings were restored */
   remoteSignerSettingsRestored: boolean;
+  /** Airgap signer pairings the file held, none of which are restored */
+  pairedSignersNotRestored: number;
 }
 
 /**

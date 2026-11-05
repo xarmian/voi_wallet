@@ -231,6 +231,8 @@ export async function restoreAccounts(
   remoteSigner: number;
   duplicatesDropped: number;
   records: RestoreRecordResult[];
+  /** The wallet blob re-read inside the commit task already held accounts. */
+  deviceHadAccountsAtCommit: boolean;
 }> {
   // Defensive: the full-restore entry points validate first, but a direct call
   // must not bypass the duplicate-id and key-identity checks.
@@ -245,6 +247,7 @@ export async function restoreAccounts(
     ledger: 0,
     remoteSigner: 0,
     records: [] as RestoreRecordResult[],
+    deviceHadAccountsAtCommit: false,
   };
 
   if (accounts.length === 0) {
@@ -601,6 +604,7 @@ export async function restoreAccounts(
         creationGen,
         shell
       );
+      counts.deviceHadAccountsAtCommit = merged.hadAccounts;
 
       // A record the blob took in the meantime (another writer added the same
       // id or address after the device read): it is not added, so what this
@@ -903,13 +907,15 @@ export async function performFullRestore(
   validateRetainedKeys(stagedAccounts);
 
   // Decide "fresh" BEFORE any account is added, from strict reads: a read
-  // error stops the restore here, with nothing written.
+  // error stops the restore here, with nothing written. The decision runs
+  // inside a wallet-queue task on the re-read blob (no PIN, no accounts, empty
+  // account list, journal and quarantine set, no breadcrumb; DOC-507 section 1
+  // rule 2). It is checked again at the commit below.
   let hasPin: boolean;
   let fresh: boolean;
   try {
-    const deviceWallet = await MultiAccountWalletService.readWalletStrict();
     hasPin = await AccountSecureStorage.hasPinStrict();
-    fresh = !hasPin && (deviceWallet?.accounts.length ?? 0) === 0;
+    fresh = await MultiAccountWalletService.isDeviceFreshStrict();
   } catch (error) {
     throw new BackupError(
       `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -929,6 +935,12 @@ export async function performFullRestore(
   }
 
   const accountCounts = await restoreAccounts(stagedAccounts);
+
+  // The device was fresh when this restore began; if another writer put an
+  // account on the wallet before our commit, it is not fresh now, and the file
+  // changes accounts only. A stale "fresh" can only affect display settings: a
+  // fresh restore never sets a PIN or protection state from the file.
+  fresh = fresh && !accountCounts.deviceHadAccountsAtCommit;
 
   let remoteSignerSettingsRestored = false;
   let friendsCount = 0;
@@ -953,5 +965,8 @@ export async function performFullRestore(
     settingsRestored: fresh,
     friendsCount,
     remoteSignerSettingsRestored,
+    // Pairings are never taken from a file (a pairing is trust). The count lets
+    // the report say so when the file held any.
+    pairedSignersNotRestored: settings.remoteSigner?.pairedSigners?.length ?? 0,
   };
 }

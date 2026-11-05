@@ -49,7 +49,10 @@ import {
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import type { SecretSource } from './SessionKeyVault';
-import { clearPinSetupPending } from './pinSetupPending';
+import {
+  clearPinSetupPending,
+  readPinSetupPendingStrict,
+} from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
@@ -2139,6 +2142,27 @@ export class AccountSecureStorage {
       );
     }
     return parsed as Record<string, string>;
+  }
+
+  /**
+   * TASK-504: the key-side half of "this device is fresh". True only when ALL of
+   * these read successfully and hold nothing: no PIN credential (either copy),
+   * an empty account list, an empty pending-creates journal, an empty
+   * quarantine registry, and no pin-setup-pending breadcrumb. Any read error
+   * THROWS (the caller stops); a failed read is never "empty". It reads only,
+   * takes no lock (so it may run inside a wallet-queue task, DOC-507 section 1
+   * rule 2), and writes nothing. The wallet blob is the other half and is read by
+   * the wallet service inside its queue.
+   */
+  static async isKeyStateEmptyStrict(): Promise<boolean> {
+    if (await this.hasPinStrict()) return false;
+    if ((await this.readAccountListStrict()).length > 0) return false;
+    if (Object.keys(await this.readPendingCreatesStrict()).length > 0) {
+      return false;
+    }
+    if ((await this.readQuarantinedIdsStrict()).length > 0) return false;
+    if (await readPinSetupPendingStrict()) return false;
+    return true;
   }
 
   /** Strict, id-only quarantine registry used by boot reconcile and full wipes. */

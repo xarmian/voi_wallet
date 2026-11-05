@@ -73,7 +73,11 @@ jest.mock('@/services/wallet', () => ({
           ...args: unknown[]
         ) => Promise<void>
       )({ ...shell, accounts, activeAccountId: accounts[0].id }, gen);
-      return { added: accounts.map((a) => a.id), skipped: [] };
+      return {
+        added: accounts.map((a) => a.id),
+        skipped: [],
+        hadAccounts: false,
+      };
     },
   },
 }));

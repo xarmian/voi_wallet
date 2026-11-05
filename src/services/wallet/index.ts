@@ -2203,6 +2203,29 @@ export class MultiAccountWalletService {
   }
 
   /**
+   * TASK-504: "this device is fresh", decided INSIDE a wallet-queue task on the
+   * wallet blob re-read there, so no other wallet write can commit between the
+   * blob read and this answer (DOC-507 section 1 rule 2). Fresh means the blob
+   * holds zero accounts (absent counts) AND the key side reads empty
+   * (AccountSecureStorage.isKeyStateEmptyStrict). The key-side reads take no
+   * lock, so nothing here nests the key mutex inside the queue. Any read error,
+   * a corrupt blob, or an un-migrated legacy blob THROWS; it is never "fresh".
+   */
+  static async isDeviceFreshStrict(): Promise<boolean> {
+    return this.enqueueWalletWrite(async () => {
+      const raw = await this.readWalletForMutation();
+      if (raw != null) {
+        const current = JSON.parse(raw) as Wallet | null;
+        if (!current || !Array.isArray(current.accounts)) {
+          throw new Error('Corrupt wallet blob: accounts is not an array');
+        }
+        if (current.accounts.length > 0) return false;
+      }
+      return AccountSecureStorage.isKeyStateEmptyStrict();
+    });
+  }
+
+  /**
    * Add-only restore commit (TASK-504). Runs on the serialized write chain and
    * merges `accounts` into the LATEST wallet blob, re-read inside the task, so
    * nothing is written back from a snapshot taken earlier. An account whose id
@@ -2219,11 +2242,17 @@ export class MultiAccountWalletService {
   ): Promise<{
     added: string[];
     skipped: { id: string; reason: 'id' | 'address' }[];
+    /** The blob re-read inside the task already held accounts (not a fresh
+     *  device at the moment of the commit). */
+    hadAccounts: boolean;
   }> {
-    if (accounts.length === 0) return { added: [], skipped: [] };
+    if (accounts.length === 0) {
+      return { added: [], skipped: [], hadAccounts: false };
+    }
     const readEpoch = walletResetEpoch;
     let added: string[] = [];
     let skipped: { id: string; reason: 'id' | 'address' }[] = [];
+    let hadAccounts = false;
     await this.storeWallet(
       (current) => {
         added = [];
@@ -2246,7 +2275,7 @@ export class MultiAccountWalletService {
             added.push(account.id);
           }
         }
-        const hadAccounts = base.accounts.length > 0;
+        hadAccounts = base.accounts.length > 0;
         const activeStillListed = base.accounts.some(
           (existing) => existing.id === base.activeAccountId
         );
@@ -2262,7 +2291,7 @@ export class MultiAccountWalletService {
       readEpoch,
       creationGen
     );
-    return { added, skipped };
+    return { added, skipped, hadAccounts };
   }
 
   private static getDefaultWalletSettings(): WalletSettings {

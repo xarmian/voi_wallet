@@ -46,9 +46,14 @@ jest.mock('@/services/wallet', () => ({
       order.push('clearWallet');
     }),
     readWalletStrict: jest.fn(async () => null),
+    isDeviceFreshStrict: jest.fn(async () => true),
     mergeRestoredAccounts: jest.fn(async (accounts: { id: string }[]) => {
       order.push('persistList');
-      return { added: accounts.map((a) => a.id), skipped: [] };
+      return {
+        added: accounts.map((a) => a.id),
+        skipped: [],
+        hadAccounts: false,
+      };
     }),
   },
 }));
@@ -162,10 +167,10 @@ describe('performFullRestore — add-only (TASK-504)', () => {
 
   it('a failed device read stops the restore before anything is written', async () => {
     const { MultiAccountWalletService } = require('@/services/wallet');
-    MultiAccountWalletService.readWalletStrict.mockRejectedValueOnce(
+    MultiAccountWalletService.isDeviceFreshStrict.mockRejectedValueOnce(
       new Error('disk I/O failure')
     );
-    await expect(restoreOnce()).rejects.toThrow();
+    await expect(restoreOnce()).rejects.toThrow('disk I/O failure');
     expect(mockMark).not.toHaveBeenCalled();
     expect(order).not.toContain('storeAccount');
   });
