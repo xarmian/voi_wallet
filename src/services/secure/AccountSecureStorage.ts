@@ -114,6 +114,13 @@ export type ConfirmedAbsentActionSignal = {
 const { PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_DURATION } = SECURITY_CONFIG;
 const THROTTLE_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000; // hard cap: 24h
 
+/** TASK-504: what an account id's secret slot holds, and the vault state the
+ *  answer was taken under. See AccountSecureStorage.inspectSecretSlot. */
+export interface SecretSlotInspection {
+  state: 'empty' | 'key-matches' | 'key-other' | 'occupied-unreadable';
+  vault: 'locked' | 'unlocked';
+}
+
 /**
  * Persisted PIN-throttle record. Lives in SecureStore under
  * `voi_pin_throttle` so the lockout SURVIVES an app relaunch (killing the app
@@ -1788,6 +1795,123 @@ export class AccountSecureStorage {
     );
     // Truthiness to match migrateLegacyAccountDataLocked's `if (!legacyData)`.
     return !!legacy;
+  }
+
+  /**
+   * TASK-504: READ-ONLY check of what an account id's secret slot holds, for a
+   * restore deciding per record whether to write a key, add the record only, or
+   * skip. It writes nothing, migrates nothing and takes no lock.
+   *
+   *   empty               primary secret, legacy blob and wipe tombstone each
+   *                       read SUCCESSFULLY and the slot holds nothing.
+   *   key-matches         a key reads under this id and derives to
+   *                       `expectedAddress` (seed AND public half).
+   *   key-other           a key reads under this id and derives to another
+   *                       address.
+   *   occupied-unreadable something is there that does not open: a payload no
+   *                       reader accepts, a user-secret-wrapped key with the
+   *                       vault locked, or a surviving legacy blob (counted as
+   *                       occupied whether or not a wipe tombstone is set; this
+   *                       check never decides a legacy blob is dead).
+   *
+   * Any READ failure (or timeout) THROWS. A failed read is never "empty" and
+   * never "occupied": the caller stops. probeOwnKey is deliberately not used
+   * (its tombstone branch can return false-absent), and the "Private key not
+   * available" alert text proves nothing because it has two producers.
+   */
+  static async inspectSecretSlot(
+    accountId: string,
+    expectedAddress: string,
+    timeoutMs: number = 1500
+  ): Promise<SecretSlotInspection> {
+    // The vault state this result is taken under. A caller that classifies
+    // again after an unlock must act on the NEW result, never an older one.
+    const vault: SecretSlotInspection['vault'] = SessionKeyVault.isUnlocked()
+      ? 'unlocked'
+      : 'locked';
+    const primary = await this.withTimeout(
+      secureStorage.getItem(this.secretKey(accountId)),
+      timeoutMs,
+      'secret slot primary read'
+    );
+    const tombstone = await this.withTimeout(
+      storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY),
+      timeoutMs,
+      'secret slot tombstone read'
+    );
+    const legacy = await this.withTimeout(
+      secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
+      timeoutMs,
+      'secret slot legacy read'
+    );
+
+    if (!primary) {
+      // The tombstone only decides whether the reader would resurrect a legacy
+      // blob. Here a legacy blob of any kind makes the slot occupied.
+      void tombstone;
+      return { state: legacy ? 'occupied-unreadable' : 'empty', vault };
+    }
+
+    // A payload no reader would accept is not a key, and not empty.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(primary);
+    } catch {
+      return { state: 'occupied-unreadable', vault };
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      (typeof (parsed as { encryptedPrivateKey?: unknown })
+        .encryptedPrivateKey !== 'string' &&
+        !Array.isArray((parsed as { blobs?: unknown }).blobs))
+    ) {
+      return { state: 'occupied-unreadable', vault };
+    }
+
+    // Read the key the way getPrivateKey does (same gate, same decrypt order)
+    // but WITHOUT its side effects: getPrivateKey updates the account's
+    // lastAccessed metadata, caches the key for 60 s, and with an unlocked vault
+    // fires a lazy re-wrap of a device-key account (migrateAccountToV2). A check
+    // that only looks must do none of those.
+    const payload = parsed as AccountSecretPayload;
+    // §6.4 reader gate: on a device with a PIN the vault itself must be
+    // unlocked. hasPinStrict throws on a read failure; that is read OUTSIDE the
+    // try below so a failed read propagates instead of becoming "unreadable".
+    const vaultUnlocked = vault === 'unlocked';
+    if (!vaultUnlocked && (await this.hasPinStrict())) {
+      return { state: 'occupied-unreadable', vault };
+    }
+    let key: Uint8Array | undefined;
+    try {
+      if (
+        vaultUnlocked &&
+        Array.isArray(payload.blobs) &&
+        payload.blobs.length > 0
+      ) {
+        key = await this.tryDecryptV2Blobs(accountId, payload.blobs, undefined);
+      }
+      if (!key && typeof payload.encryptedPrivateKey === 'string') {
+        key = await this.decryptPrivateKey(payload.encryptedPrivateKey);
+      }
+    } catch {
+      // A wrong wrap secret, a corrupt blob, a vault that locked mid-read:
+      // something is there and it does not open. "Occupied", never "empty".
+      return { state: 'occupied-unreadable', vault };
+    }
+    if (!key) {
+      return { state: 'occupied-unreadable', vault };
+    }
+    try {
+      return {
+        state: keyBelongsToAddress(key, expectedAddress)
+          ? 'key-matches'
+          : 'key-other',
+        vault,
+      };
+    } finally {
+      key.fill(0);
+    }
   }
 
   /**
