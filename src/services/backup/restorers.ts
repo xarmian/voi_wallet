@@ -939,7 +939,11 @@ export function restoreAccounts(
   const run = restoreChain.then(() =>
     restoreAccountsNow(backupAccounts, options)
   );
-  restoreChain = run.catch(() => undefined);
+  // The chain keeps only the order, never a result.
+  restoreChain = run.then(
+    () => undefined,
+    () => undefined
+  );
   return run;
 }
 
