@@ -20,6 +20,7 @@ import {
   OLD_PIN_WRONG_TEXT,
   oldPinLockedText,
 } from '@/services/backup/oldPinCopy';
+import { FORGOT_LINK_TEXT } from '@/services/backup/forgottenPinCopy';
 import type { RestoreUnlockResult } from '@/contexts/AuthContext';
 
 interface Props {
@@ -28,6 +29,10 @@ interface Props {
    *  of the stored throttle, never a screen counter. */
   readLockedUntil: () => Promise<number | null>;
   onVerified: (epoch: number) => void;
+  /** "I don't remember it": leads only to the forgotten-PIN step, which needs a
+   *  verified backup file and its password. Offered while PIN entry is paused
+   *  too, so the screen never dead-ends. */
+  onForgotten: () => void;
   now?: () => number;
 }
 
@@ -35,6 +40,7 @@ export default function OldPinStep({
   unlock,
   readLockedUntil,
   onVerified,
+  onForgotten,
   now = Date.now,
 }: Props) {
   const styles = useThemedStyles(createStyles);
@@ -141,6 +147,13 @@ export default function OldPinStep({
           </TouchableOpacity>
         </>
       )}
+      <TouchableOpacity
+        onPress={onForgotten}
+        style={styles.link}
+        accessibilityRole="button"
+      >
+        <Text style={styles.linkText}>{FORGOT_LINK_TEXT}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -172,5 +185,7 @@ const createStyles = (theme: Theme) =>
       padding: theme.spacing.md,
       alignItems: 'center',
     },
+    link: { marginTop: theme.spacing.md, alignItems: 'center' },
+    linkText: { color: theme.colors.primary },
     buttonText: { color: theme.colors.buttonText, fontWeight: '600' },
   });

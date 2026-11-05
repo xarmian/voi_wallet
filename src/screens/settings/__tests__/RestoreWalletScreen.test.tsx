@@ -6,7 +6,7 @@
 import React from 'react';
 import { Alert, AppState } from 'react-native';
 import algosdk from 'algosdk';
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import RestoreWalletScreen from '../RestoreWalletScreen';
 import { BackupService } from '@/services/backup';
 import {
@@ -393,5 +393,106 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
         jest.useRealTimers();
       }
     });
+  });
+});
+
+// DOC-507 section 5: the forgotten-PIN step on the screen.
+describe('restore screen: the forgotten-PIN step', () => {
+  const NORMAL =
+    'This phone still has a PIN from before. Enter it to restore your backup.';
+  const plan = { total: 2, addable: 2, addableWithKey: 1, notAdded: [] };
+
+  async function chooseForgotten(extraInfo: object = {}) {
+    mockParams = { isOnboarding: true };
+    mockHasPin = true;
+    jest.mocked(BackupService.validateBackupFile).mockResolvedValue({
+      accountCount: 2,
+      restorePlan: plan,
+      ...extraInfo,
+    } as never);
+    const view = await render(<RestoreWalletScreen />);
+    await view.findByText(NORMAL);
+    await fireEvent.press(view.getByText("I don't remember it"));
+    return view;
+  }
+
+  async function toConsent(view: Awaited<ReturnType<typeof chooseForgotten>>) {
+    await fireEvent.press(await view.findByText('Select Backup File'));
+    await fireEvent.press(await view.findByText('Confirm password'));
+    return view.findByText('Remove old PIN and restore');
+  }
+
+  it('the link leads to the file chooser, with the PIN field gone and nothing written', async () => {
+    const view = await chooseForgotten();
+    expect(await view.findByText('Select Backup File')).toBeTruthy();
+    expect(view.queryByLabelText('Old PIN')).toBeNull();
+    expect(BackupService.restoreBackup).not.toHaveBeenCalled();
+    expect(mockUnlockForRestore).not.toHaveBeenCalled();
+  });
+
+  it('consent appears only after the file is verified; Cancel leaves the device untouched', async () => {
+    const view = await chooseForgotten();
+    await toConsent(view);
+    expect(
+      view.getByText(/^Restore without your PIN\? 2 accounts/)
+    ).toBeTruthy();
+    expect(BackupService.validateBackupFile).toHaveBeenCalledTimes(1);
+    await fireEvent.press(view.getByText('Cancel'));
+    expect(BackupService.restoreBackup).not.toHaveBeenCalled();
+    expect(view.queryByText('Remove old PIN and restore')).toBeNull();
+  });
+
+  it('confirming runs the step with removeOldPin, and a fresh result lands on SecuritySetup', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    jest
+      .mocked(BackupService.restoreBackup)
+      .mockResolvedValue(restoreResult(true) as never);
+    const view = await chooseForgotten();
+    await fireEvent.press(await toConsent(view));
+    await view.findByText('Select Backup File');
+
+    expect(BackupService.restoreBackup).toHaveBeenCalledWith(
+      'file:///b.voibackup',
+      'pw',
+      { removeOldPin: true }
+    );
+    const buttons = alert.mock.calls[0][2] as { onPress: () => void }[];
+    buttons[0].onPress();
+    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
+      routes: [{ name: 'SecuritySetup' }],
+    });
+  });
+
+  it('a file with no key shows the explanation and no way to remove the PIN', async () => {
+    const view = await chooseForgotten({
+      restorePlan: { total: 2, addable: 2, addableWithKey: 0, notAdded: [] },
+    });
+    await fireEvent.press(await view.findByText('Select Backup File'));
+    await fireEvent.press(await view.findByText('Confirm password'));
+    expect(await view.findByText(/doesn't hold any account keys/)).toBeTruthy();
+    expect(view.queryByText('Remove old PIN and restore')).toBeNull();
+    expect(BackupService.restoreBackup).not.toHaveBeenCalled();
+  });
+
+  it('"Enter my PIN instead" returns to PIN entry', async () => {
+    const view = await chooseForgotten();
+    await fireEvent.press(await view.findByText('Enter my PIN instead'));
+    expect(await view.findByText(NORMAL)).toBeTruthy();
+  });
+
+  it('a restore that fails after the PIN went shows the truth: no PIN, so the plain chooser', async () => {
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    jest
+      .mocked(BackupService.restoreBackup)
+      .mockRejectedValue(new Error('boom'));
+    const view = await chooseForgotten();
+    const remove = await toConsent(view);
+    // The step removed the PIN before it failed: the next read finds none.
+    mockHasPin = false;
+    await fireEvent.press(remove);
+    await view.findByText('Select Backup File');
+    await waitFor(() =>
+      expect(view.queryByText('Enter my PIN instead')).toBeNull()
+    );
   });
 });

@@ -26,7 +26,9 @@ import PasswordInputModal from '@/components/backup/PasswordInputModal';
 import BackupProgressModal from '@/components/backup/BackupProgressModal';
 import RestoreConfirmationModal from '@/components/backup/RestoreConfirmationModal';
 import OldPinStep from '@/components/backup/OldPinStep';
+import ForgottenPinConsent from '@/components/backup/ForgottenPinConsent';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { ENTER_PIN_INSTEAD_TEXT } from '@/services/backup/forgottenPinCopy';
 import {
   BackupService,
   RestoreProgress,
@@ -75,8 +77,9 @@ export default function RestoreWalletScreen() {
   // chosen. 'needed' blocks the file chooser; 'verified' carries the vault epoch
   // the verify produced.
   const [oldPin, setOldPin] = useState<
-    'checking' | 'none' | 'needed' | 'verified'
+    'checking' | 'none' | 'needed' | 'verified' | 'forgotten'
   >(isOnboarding ? 'checking' : 'none');
+  const [showForgottenConsent, setShowForgottenConsent] = useState(false);
   const oldPinEpoch = useRef<number | null>(null);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -215,7 +218,9 @@ export default function RestoreWalletScreen() {
 
         setBackupInfo(info);
         setShowPasswordModal(false);
-        setShowConfirmationModal(true);
+        // The forgotten-PIN step has its own consent screen (DOC-507 5.3).
+        if (oldPin === 'forgotten') setShowForgottenConsent(true);
+        else setShowConfirmationModal(true);
       } catch (err) {
         if (err instanceof BackupError) {
           if (err.code === 'INTEGRITY_CHECK_FAILED') {
@@ -230,22 +235,25 @@ export default function RestoreWalletScreen() {
         setIsValidating(false);
       }
     },
-    [selectedFile]
+    [selectedFile, oldPin]
   );
 
   const handleConfirmRestore = useCallback(async () => {
     if (!selectedFile || !password) return;
 
     setShowConfirmationModal(false);
+    setShowForgottenConsent(false);
     setShowProgressModal(true);
 
     try {
       const result = await BackupService.restoreBackup(
         selectedFile.uri,
         password,
-        oldPinEpoch.current !== null
-          ? { oldPinSession: { epoch: oldPinEpoch.current } }
-          : {}
+        oldPin === 'forgotten'
+          ? { removeOldPin: true }
+          : oldPinEpoch.current !== null
+            ? { oldPinSession: { epoch: oldPinEpoch.current } }
+            : {}
       );
       setShowProgressModal(false);
 
@@ -296,6 +304,12 @@ export default function RestoreWalletScreen() {
           ? err.message
           : 'Failed to restore backup. Please try again.';
       Alert.alert('Restore Failed', message, [{ text: 'OK' }]);
+      if (oldPin === 'forgotten') {
+        // The step may have removed the PIN before it failed: show what is true.
+        AccountSecureStorage.hasPinStrict()
+          .then((hasPin) => setOldPin(hasPin ? 'forgotten' : 'none'))
+          .catch(() => {});
+      }
     } finally {
       setPassword('');
     }
@@ -307,6 +321,7 @@ export default function RestoreWalletScreen() {
     isOnboarding,
     recheckAuthState,
     endOldPinSession,
+    oldPin,
   ]);
 
   const handleCancelPassword = useCallback(() => {
@@ -316,8 +331,15 @@ export default function RestoreWalletScreen() {
     setPassword('');
   }, []);
 
+  const handleForgotten = useCallback(() => {
+    // The vault must not carry a verified PIN into the step (DOC-507 5.4).
+    endOldPinSession(null);
+    setOldPin('forgotten');
+  }, [endOldPinSession]);
+
   const handleCancelConfirmation = useCallback(() => {
     setShowConfirmationModal(false);
+    setShowForgottenConsent(false);
     setBackupInfo(null);
     setPassword('');
   }, []);
@@ -433,11 +455,31 @@ export default function RestoreWalletScreen() {
             unlock={unlockForRestore}
             readLockedUntil={readLockedUntil}
             onVerified={handleOldPinVerified}
+            onForgotten={handleForgotten}
           />
         )}
 
+        {oldPin === 'forgotten' && showForgottenConsent && backupInfo && (
+          <ForgottenPinConsent
+            info={backupInfo}
+            onConfirm={handleConfirmRestore}
+            onCancel={handleCancelConfirmation}
+          />
+        )}
+
+        {oldPin === 'forgotten' && !showForgottenConsent && (
+          <TouchableOpacity
+            onPress={() => setOldPin('needed')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.stepText}>{ENTER_PIN_INSTEAD_TEXT}</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Select File Button */}
-        {(oldPin === 'none' || oldPin === 'verified') && (
+        {(oldPin === 'none' ||
+          oldPin === 'verified' ||
+          (oldPin === 'forgotten' && !showForgottenConsent)) && (
           <TouchableOpacity
             style={styles.selectButton}
             onPress={handleSelectFile}

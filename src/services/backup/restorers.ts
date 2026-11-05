@@ -13,6 +13,7 @@ import {
   AccountSecureStorage,
   VaultChangedDuringReadError,
 } from '@/services/secure/AccountSecureStorage';
+import { NOTHING_TO_ADD_TEXT, NO_KEYS_TEXT } from './forgottenPinTexts';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { markPinSetupPending } from '@/services/secure/pinSetupPending';
 import {
@@ -343,16 +344,10 @@ export async function removeOldPinForRestore(
 ): Promise<void> {
   const plan = planRestore(backupAccounts);
   if (plan.addable === 0) {
-    throw new BackupError(
-      "There's nothing in this backup that can be added to this phone. Your PIN is still here, and nothing has changed.",
-      'RESTORE_FAILED'
-    );
+    throw new BackupError(NOTHING_TO_ADD_TEXT, 'RESTORE_FAILED');
   }
   if (plan.addableWithKey === 0) {
-    throw new BackupError(
-      "This backup doesn't hold any account keys, so restoring it without your PIN wouldn't give you back any account you can sign with. Your PIN is still on this phone, and nothing has changed.",
-      'RESTORE_FAILED'
-    );
+    throw new BackupError(NO_KEYS_TEXT, 'RESTORE_FAILED');
   }
   let deviceAccounts: number;
   try {

@@ -47,6 +47,7 @@ describe('OldPinStep countdown', () => {
         unlock={unlock}
         readLockedUntil={async () => stored}
         onVerified={jest.fn()}
+        onForgotten={jest.fn()}
         now={() => clock}
       />
     );
@@ -75,10 +76,44 @@ describe('OldPinStep countdown', () => {
         unlock={unlock}
         readLockedUntil={async () => Date.now() + 60_000}
         onVerified={jest.fn()}
+        onForgotten={jest.fn()}
       />
     );
     await act(async () => {});
     expect(view.queryByText('Continue')).toBeNull();
     expect(unlock).not.toHaveBeenCalled();
+  });
+});
+
+describe('OldPinStep: "I don\'t remember it"', () => {
+  it('is reachable while PIN entry is paused, and leads only to the callback', async () => {
+    const onForgotten = jest.fn();
+    const unlock = jest.fn();
+    const view = await render(
+      <OldPinStep
+        unlock={unlock}
+        readLockedUntil={async () => Date.now() + 60_000}
+        onVerified={jest.fn()}
+        onForgotten={onForgotten}
+      />
+    );
+    await act(async () => {});
+    expect(view.getByText(/Too many wrong tries/)).toBeTruthy();
+    await fireEvent.press(view.getByText("I don't remember it"));
+    expect(onForgotten).toHaveBeenCalledTimes(1);
+    expect(unlock).not.toHaveBeenCalled();
+  });
+
+  it('is there in the normal state too', async () => {
+    const view = await render(
+      <OldPinStep
+        unlock={jest.fn()}
+        readLockedUntil={async () => null}
+        onVerified={jest.fn()}
+        onForgotten={jest.fn()}
+      />
+    );
+    await act(async () => {});
+    expect(view.getByText("I don't remember it")).toBeTruthy();
   });
 });
