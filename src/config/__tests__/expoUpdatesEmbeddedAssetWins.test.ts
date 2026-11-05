@@ -102,6 +102,25 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
     );
   });
 
+  it('leaves an over-the-air asset on its original branch', () => {
+    // A downloaded asset has a plain file path, not file:///android_res/. It
+    // takes the first branch (ensureAssetExists), which must stay byte for byte
+    // as upstream wrote it, ahead of the new branch.
+    const patched = plugin.patchSource(original);
+    const firstBranch =
+      'if (!AndroidResourceAssetUtils.isAndroidResourceAsset(filename)) {\n' +
+      '          val job = scope.async {\n' +
+      '            val assetFile = ensureAssetExists(asset, database, embeddedUpdate, extraHeaders)\n' +
+      '            Pair(asset, assetFile)\n' +
+      '          }\n' +
+      '          downloadJobs.add(job)\n' +
+      '        } else if (asset.key?.let { embeddedFiles.containsKey(it) } == true) {';
+    expect(original).toContain(firstBranch.split(' else if')[0]);
+    expect(patched).toContain(firstBranch);
+    // And the new branch only ever sees android_res paths, because it is
+    // reached only when the first branch's condition was false.
+  });
+
   it('does not write the DB or change anything else', () => {
     const patched = plugin.patchSource(original);
     const removed = original
