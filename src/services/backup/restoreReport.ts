@@ -8,6 +8,7 @@
  * product wording yet; the lines below stand until product rewords them.
  */
 import { formatAddress } from '@/utils/address';
+import { AccountType } from '@/types/wallet';
 import type {
   RestoreRecordOutcome,
   RestoreRecordResult,
@@ -25,7 +26,48 @@ export const NOT_FRESH_LINE =
 export const PAIRINGS_LINE =
   "Airgap signer pairings in this backup weren't restored. To sign with one, pair it again.";
 
+/**
+ * The advice to remove an account and restore again. OFF until the dev lead's
+ * removal checks are shown (cb78f6f1 item 2: removal by id with duplicates, the
+ * classifyKeyHolding loop, and last-account removal not reaching a reset, with
+ * the key coming back through the old-PIN screen). With it off, the two rows
+ * that carry it end at their first sentences; the rows stay either way.
+ */
+export const REMOVE_ADVICE_SHOWN = false;
+export const REMOVE_ADVICE =
+  'To use it, remove this account from the wallet, then restore this backup again.';
+
+function withAdvice(text: string): string {
+  return REMOVE_ADVICE_SHOWN ? `${text} ${REMOVE_ADVICE}` : text;
+}
+
+export const KEY_UNREADABLE_TEXT =
+  "On this device, but its key can't be read here. This backup has the key.";
+export const KEY_PROBLEM_TEXT =
+  "On this device, but its key can't be read here. There may be a problem with the stored key. This backup has the key.";
+
+const KEYLESS_TYPE_NAME = {
+  [AccountType.WATCH]: 'Watch Only',
+  [AccountType.LEDGER]: 'Ledger',
+  [AccountType.REMOTE_SIGNER]: 'Airgap',
+} as const;
+
+export function keylessDeviceText(
+  deviceType: keyof typeof KEYLESS_TYPE_NAME
+): string {
+  return withAdvice(
+    `On this device as ${KEYLESS_TYPE_NAME[deviceType]}. The key in this backup wasn't added.`
+  );
+}
+
 export const OUTCOME_TEXT: Record<RestoreRecordOutcome, string> = {
+  'device-key-unreadable': withAdvice(KEY_UNREADABLE_TEXT),
+  'device-key-problem': KEY_PROBLEM_TEXT,
+  // The text depends on the device record's type: see keylessDeviceText. This
+  // entry is the type-less fallback and is not shown when a type is known.
+  'device-keyless': withAdvice(
+    "On this device without a key. The key in this backup wasn't added."
+  ),
   added: 'Added',
   'added-in-place': 'Added. Its key was already on this phone.',
   'added-new-id':
@@ -71,7 +113,10 @@ function rowFor(record: RestoreRecordResult): RestoreReportRow {
   return {
     label: record.label || 'Account',
     shortAddress: formatAddress(record.address),
-    text: OUTCOME_TEXT[record.outcome],
+    text:
+      record.outcome === 'device-keyless' && record.deviceType
+        ? keylessDeviceText(record.deviceType)
+        : OUTCOME_TEXT[record.outcome],
   };
 }
 

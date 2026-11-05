@@ -211,6 +211,90 @@ function conflictWithDevice(
   return null;
 }
 
+type KeylessDeviceType = NonNullable<RestoreRecordResult['deviceType']>;
+
+/**
+ * TASK-504: what a record the device already has should SAY, when the file holds
+ * the record's phrase. A report input only: it reads, it never writes, and
+ * nothing it returns is a write decision. The conflict outcome the caller already
+ * reached (`already-present`, `kept-device-record`) stands unless every device
+ * record at the address can be shown not to hold a readable key.
+ *
+ * Every device record at the address is read, not one (TASK-423 duplicates):
+ *  - any entry with a readable key at that address: the conflict outcome stands
+ *    ("Already on this device", the only case where that line is true);
+ *  - all entries key-less (Watch Only, Ledger, Airgap): `device-keyless`, from
+ *    the record types alone, with no slot read;
+ *  - otherwise a keyed entry's slot proven empty: `device-key-unreadable`;
+ *  - otherwise (another account's key, something unreadable, a failed read):
+ *    `device-key-problem`.
+ * A slot read happens in its own key-mutation task at this record's turn, and a
+ * result counts only under a trusted vault state (see
+ * AccountSecureStorage.inspectSlotForRestoreReport). A result that does not
+ * count stops the restore at this record with nothing reported from it.
+ */
+async function reportOutcomeForDeviceRecord(
+  conflict: RestoreRecordOutcome,
+  address: string,
+  deviceAccounts: { id: string; address: string; type: AccountType }[]
+): Promise<{ outcome: RestoreRecordOutcome; deviceType?: KeylessDeviceType }> {
+  const entries = deviceAccounts.filter((a) => a.address === address);
+  const keyless = entries.filter(
+    (a) =>
+      a.type === AccountType.WATCH ||
+      a.type === AccountType.LEDGER ||
+      a.type === AccountType.REMOTE_SIGNER
+  );
+  const keyed = entries.filter((a) => !keyless.includes(a));
+  if (keyed.length === 0 && keyless.length > 0) {
+    return {
+      outcome: 'device-keyless',
+      deviceType: keyless[0].type as KeylessDeviceType,
+    };
+  }
+
+  let allEmpty = true;
+  let uncounted = false;
+  for (const entry of keyed) {
+    let state: 'empty' | 'key-matches' | 'other';
+    try {
+      const slot = await AccountSecureStorage.inspectSlotForRestoreReport(
+        entry.id,
+        address
+      );
+      if (!slot.counts) {
+        uncounted = true;
+        continue;
+      }
+      state =
+        slot.state === 'empty' || slot.state === 'key-matches'
+          ? slot.state
+          : 'other';
+    } catch {
+      // This read decides no write: a failure takes the "problem" row. It is
+      // caught here only; inspectSecretSlot itself still throws.
+      state = 'other';
+    }
+    if (state === 'key-matches') return { outcome: conflict };
+    if (state !== 'empty') allEmpty = false;
+  }
+  if (uncounted) {
+    throw new BackupError(
+      'Unlock the wallet to restore accounts',
+      'AUTHENTICATION_REQUIRED'
+    );
+  }
+  return { outcome: allEmpty ? 'device-key-unreadable' : 'device-key-problem' };
+}
+
+/** A file record whose phrase is in the file, so the file can supply its key. */
+function fileHoldsKey(account: BackupAccountData): boolean {
+  return (
+    (account.type === AccountType.STANDARD && !!account.mnemonic) ||
+    (account.type === AccountType.REKEYED && account.mnemonic !== undefined)
+  );
+}
+
 /**
  * Add-only restore of the file's accounts (TASK-504). Nothing already on the
  * device is deleted or overwritten. Each record is decided against the device
@@ -312,6 +396,19 @@ export async function restoreAccounts(
       );
       if (conflict) {
         record.outcome = conflict;
+        if (
+          (conflict === 'already-present' ||
+            conflict === 'kept-device-record') &&
+          fileHoldsKey(backupAccount)
+        ) {
+          const report = await reportOutcomeForDeviceRecord(
+            conflict,
+            address,
+            deviceWallet?.accounts ?? []
+          );
+          record.outcome = report.outcome;
+          if (report.deviceType) record.deviceType = report.deviceType;
+        }
         counts.records.push(record);
         continue;
       }

@@ -208,7 +208,8 @@ describe('TASK-504: add-only restore, per-record results', () => {
     const incoming = keyed('file-1');
     await restoreAccounts([watch('dev-w', incoming.address)]);
     const result = await restoreAccounts([incoming.record]);
-    expect(result.records[0].outcome).toBe('kept-device-record');
+    expect(result.records[0].outcome).toBe('device-keyless');
+    expect(result.records[0].deviceType).toBe(AccountType.WATCH);
     expect(mockPlatform.__secure.has(`${SECRET}file-1`)).toBe(false);
   });
 

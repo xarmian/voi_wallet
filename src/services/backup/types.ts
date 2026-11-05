@@ -344,6 +344,21 @@ export type RestoreRecordOutcome =
   | 'already-present'
   /** The address is already on this device under another id or type. */
   | 'kept-device-record'
+  /**
+   * The address is on this device with a key slot proven empty, and the file
+   * holds the key (report input only: it decides no write).
+   */
+  | 'device-key-unreadable'
+  /**
+   * The address is on this device and its stored key is not readable here, or
+   * reads as another account's, or the read failed. The file holds the key.
+   */
+  | 'device-key-problem'
+  /**
+   * The address is on this device as a record that holds no key (Watch Only,
+   * Ledger or Airgap). `deviceType` names which. The file's key was not added.
+   */
+  | 'device-keyless'
   /** The id is on this device with a different address. */
   | 'rejected-id-conflict'
   /** The id's key slot holds a different key that derives to another address. */
@@ -360,6 +375,9 @@ export interface RestoreRecordResult {
   outcome: RestoreRecordOutcome;
   /** The id the record was stored under, when it differs from the file's. */
   storedId?: string;
+  /** The type of the key-less device record, for `device-keyless` only. */
+  deviceType?:
+    AccountType.WATCH | AccountType.LEDGER | AccountType.REMOTE_SIGNER;
 }
 
 /**

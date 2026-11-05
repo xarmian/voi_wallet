@@ -2100,6 +2100,50 @@ export class AccountSecureStorage {
   }
 
   /**
+   * TASK-504: the slot check a restore REPORT row is built from. A report input
+   * only: it writes nothing, migrates nothing, and its result decides no write.
+   * It runs as one key-mutation task, so it is taken at the record's turn and
+   * never inside a queue task.
+   *
+   * The result counts (`counts: true`) only when it was taken under a state that
+   * can be trusted: the device has no PIN, or the vault was unlocked and held the
+   * same epoch before and after the read. Under a locked vault a healthy
+   * PIN-wrapped key reads `occupied-unreadable`, which a row must never present
+   * as a problem with the stored key. A result that does not count carries no
+   * state, so no row can be built from it.
+   *
+   * A read failure THROWS, as in inspectSecretSlot; the caller decides what a
+   * failed report read means (it is never a write decision).
+   */
+  static async inspectSlotForRestoreReport(
+    accountId: string,
+    expectedAddress: string,
+    timeoutMs?: number
+  ): Promise<
+    { counts: true; state: SecretSlotInspection['state'] } | { counts: false }
+  > {
+    return this.runKeyMutationExclusive(async () => {
+      const hasPin = await this.hasPinStrict();
+      const unlockedBefore = SessionKeyVault.isUnlocked();
+      const epochBefore = SessionKeyVault.currentEpoch();
+      const slot = await this.inspectSecretSlot(
+        accountId,
+        expectedAddress,
+        timeoutMs
+      );
+      if (hasPin) {
+        const stable =
+          unlockedBefore &&
+          slot.vault === 'unlocked' &&
+          SessionKeyVault.isUnlocked() &&
+          SessionKeyVault.currentEpoch() === epochBefore;
+        if (!stable) return { counts: false as const };
+      }
+      return { counts: true as const, state: slot.state };
+    });
+  }
+
+  /**
    * STRICT read of the durable pending-creation journal (TASK-222). Unlike the
    * tolerant private readPendingCreateJournal (which degrades bad JSON to `{}` —
    * a safe default on the WRITE paths), this FAILS CLOSED for the reconcile: a
