@@ -125,6 +125,19 @@ export interface SecretSlotInspection {
 }
 
 /**
+ * TASK-504: the session vault was locked, unlocked or replaced while a restore's
+ * slot check was reading. A result taken across that change was not taken under
+ * ONE vault state (a healthy PIN-wrapped key reads occupied-unreadable once the
+ * vault empties), so it must never decide a write. The restore stops.
+ */
+export class VaultChangedDuringReadError extends Error {
+  constructor() {
+    super('The session vault changed while a stored key was being checked');
+    this.name = 'VaultChangedDuringReadError';
+  }
+}
+
+/**
  * Persisted PIN-throttle record. Lives in SecureStore under
  * `voi_pin_throttle` so the lockout SURVIVES an app relaunch (killing the app
  * no longer resets the guess counter).
@@ -1674,7 +1687,10 @@ export class AccountSecureStorage {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      const own = await this.inspectSecretSlot(account.id, account.address);
+      const own = await this.inspectSlotUnderOneVaultState(
+        account.id,
+        account.address
+      );
       if (own.state === 'empty') {
         const token = await this.storeAccountForCreationLocked(
           account,
@@ -1704,7 +1720,10 @@ export class AccountSecureStorage {
       }
       // Only 'occupied-unreadable' is left: the new-id route.
       const id = await this.freshAccountId();
-      const fresh = await this.inspectSecretSlot(id, account.address);
+      const fresh = await this.inspectSlotUnderOneVaultState(
+        id,
+        account.address
+      );
       if (fresh.state !== 'empty') {
         throw new AccountStorageError(
           'Could not find an empty secret slot for a restored key'
@@ -1808,10 +1827,13 @@ export class AccountSecureStorage {
       }
       let id = account.id;
       let reassigned = false;
-      const own = await this.inspectSecretSlot(id, account.address);
+      const own = await this.inspectSlotUnderOneVaultState(id, account.address);
       if (own.state !== 'empty') {
         id = await this.freshAccountId();
-        const fresh = await this.inspectSecretSlot(id, account.address);
+        const fresh = await this.inspectSlotUnderOneVaultState(
+          id,
+          account.address
+        );
         if (fresh.state !== 'empty') {
           throw new AccountStorageError(
             'Could not find an empty secret slot for a key-less record'
@@ -2097,6 +2119,27 @@ export class AccountSecureStorage {
     } finally {
       key.fill(0);
     }
+  }
+
+  /**
+   * TASK-504: inspectSecretSlot for a result that DECIDES A WRITE. The vault
+   * state is recorded with the result, but a vault that locks, unlocks or is
+   * replaced WHILE the read runs leaves a result that no single state produced.
+   * Compare the vault epoch before and after; any change throws
+   * VaultChangedDuringReadError and the caller writes nothing.
+   */
+  private static async inspectSlotUnderOneVaultState(
+    accountId: string,
+    expectedAddress: string
+  ): Promise<SecretSlotInspection> {
+    // Every set, rotate and clear bumps the epoch, so the epoch alone sees a
+    // lock, an unlock and a replacement alike.
+    const epochBefore = SessionKeyVault.currentEpoch();
+    const slot = await this.inspectSecretSlot(accountId, expectedAddress);
+    if (SessionKeyVault.currentEpoch() !== epochBefore) {
+      throw new VaultChangedDuringReadError();
+    }
+    return slot;
   }
 
   /**

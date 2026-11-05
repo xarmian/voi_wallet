@@ -85,6 +85,7 @@ jest.mock('@/services/wallet', () => ({
 jest.mock('@/services/secure/AccountSecureStorage', () => {
   const storeAccountForCreation = jest.fn(async () => 'token');
   return {
+    VaultChangedDuringReadError: class VaultChangedDuringReadError extends Error {},
     AccountSecureStorage: {
       getResetGeneration: () => 0,
       clearAll: jest.fn(),

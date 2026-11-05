@@ -9,7 +9,10 @@ import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 import * as Crypto from 'expo-crypto';
 import { MultiAccountWalletService } from '@/services/wallet';
-import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import {
+  AccountSecureStorage,
+  VaultChangedDuringReadError,
+} from '@/services/secure/AccountSecureStorage';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { markPinSetupPending } from '@/services/secure/pinSetupPending';
 import {
@@ -792,6 +795,14 @@ export async function restoreAccounts(
     }
     if (error instanceof ResetRacedError || error instanceof BackupError)
       throw error;
+    // A vault that changed while a slot was being checked is a session state:
+    // the same stop as a locked vault at the start, nothing written.
+    if (error instanceof VaultChangedDuringReadError) {
+      throw new BackupError(
+        'Unlock the wallet to restore accounts',
+        'AUTHENTICATION_REQUIRED'
+      );
+    }
     throw new BackupError(
       `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'RESTORE_FAILED'
