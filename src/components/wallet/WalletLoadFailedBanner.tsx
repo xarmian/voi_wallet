@@ -6,9 +6,12 @@
  *
  *  - Shown only when the last wallet load failed (`walletLoadFailed`), never for a
  *    balance or network failure: those do not set it.
- *  - Dismissible. A dismissal covers the failure the user saw; it comes back only
- *    on the NEXT failed load (the failure count moves on). A successful load
- *    clears it. If Try again fails, the new failure keeps it showing.
+ *  - Dismissible. A dismissal covers the failure the user saw while this banner
+ *    stays mounted; it comes back on the NEXT failed load (the failure count
+ *    moves on). The dismissal is local to the component, so a remount (Home
+ *    remounting, or the active account going away and back) shows a still-failed
+ *    load again. A successful load clears it. If Try again fails, the new failure
+ *    keeps it showing.
  *  - Sits above the account view and replaces nothing; it never offers Get Started.
  */
 

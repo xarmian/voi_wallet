@@ -16,6 +16,7 @@
 const mockGetCurrentWallet = jest.fn();
 const mockHasWalletWithAccountsStrict = jest.fn();
 
+const mockGetAccount = jest.fn(async (): Promise<unknown> => null);
 const mockGetAccountBalance = jest.fn(async () => ({}));
 jest.mock('@/services/network', () => ({
   NetworkService: {
@@ -30,7 +31,7 @@ jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getCurrentWallet: () => mockGetCurrentWallet(),
     hasWalletWithAccountsStrict: () => mockHasWalletWithAccountsStrict(),
-    getAccount: jest.fn(async () => null),
+    getAccount: () => mockGetAccount(),
     updateAccountMetadata: jest.fn(async () => {}),
   },
 }));
@@ -95,6 +96,10 @@ beforeEach(() => {
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   mockGetCurrentWallet.mockReset();
   mockHasWalletWithAccountsStrict.mockReset();
+  mockGetAccount.mockReset();
+  mockGetAccount.mockResolvedValue(null);
+  mockGetAccountBalance.mockReset();
+  mockGetAccountBalance.mockResolvedValue({});
   clearWalletUICache();
   useWalletStore.setState({
     wallet: null,
@@ -251,10 +256,16 @@ describe('TASK-514: the failure counter and what does NOT count as a failed wall
   it('a balance or network failure is never a failed wallet read', async () => {
     mockGetCurrentWallet.mockResolvedValue(walletWith(['a']));
     await store().initialize();
+    // The account resolves, so the balance fetch itself is what rejects: a null
+    // account would throw on `account.address` before the fetch is reached, and
+    // the test could not tell a network failure from a missing account.
+    mockGetAccount.mockResolvedValue({ address: 'ADDR-a' });
     mockGetAccountBalance.mockRejectedValue(new Error('network down'));
 
     await store().loadAccountBalance('a', true);
 
+    expect(mockGetAccountBalance).toHaveBeenCalledTimes(1);
+    expect(store().accountStates['a']?.balanceError).toBeTruthy();
     expect(store().walletLoadFailed).toBe(false);
     expect(store().walletLoadFailures).toBe(0);
   });

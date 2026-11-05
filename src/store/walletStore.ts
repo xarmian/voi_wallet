@@ -273,8 +273,11 @@ interface WalletState {
   /**
    * TASK-514: the last load could not tell whether a wallet exists (a storage
    * read failed, or the wallet blob is unreadable). Distinct from a load that
-   * succeeded and found no wallet. Home shows "We couldn't load your accounts"
-   * with Try again when this is set, and Get Started only when it is not.
+   * succeeded and found no wallet. With no active account Home shows "We
+   * couldn't load your accounts" with Try again when this is set, and Get
+   * Started only when it is not. With an active account on screen (the store
+   * keeps the wallet it had) Home shows WalletLoadFailedBanner instead; it never
+   * offers Get Started.
    */
   walletLoadFailed: boolean;
   /**
