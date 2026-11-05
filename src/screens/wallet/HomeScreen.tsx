@@ -1,3 +1,4 @@
+import HomeEmptyState from '@/components/wallet/HomeEmptyState';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -380,6 +381,7 @@ export default function HomeScreen() {
   }));
 
   const initialize = useWalletStore((state) => state.initialize);
+  const walletLoadFailed = useWalletStore((state) => state.walletLoadFailed);
   // Wallet-store hydration flag (F-48, TASK-182). This is the SAME signal the
   // splash readiness owner (AppStack) gates on, so the "Loading wallet..."
   // placeholder and the splash hide stay in lockstep. Once the store is
@@ -1829,38 +1831,13 @@ export default function HomeScreen() {
             </>
           )}
           {!activeAccount && (
-            <View style={styles.emptyStateContainer}>
-              <GlassCard
-                variant="medium"
-                style={styles.emptyStateCard}
-                borderRadius={theme.borderRadius.xl}
-                padding="lg"
-              >
-                <View style={styles.emptyStateIconContainer}>
-                  <Ionicons
-                    name="wallet-outline"
-                    size={64}
-                    color={theme.colors.primary}
-                  />
-                </View>
-                <Text style={styles.emptyStateTitle}>
-                  Welcome to Voi Wallet
-                </Text>
-                <Text style={styles.emptyStateSubtitle}>
-                  Set up an account to access all wallet features including
-                  sending, receiving, and managing your assets.
-                </Text>
-                <Pressable
-                  style={[
-                    styles.emptyStateButton,
-                    { backgroundColor: theme.colors.primary },
-                  ]}
-                  onPress={() => setIsOnboardingModalVisible(true)}
-                >
-                  <Text style={styles.emptyStateButtonText}>Get Started</Text>
-                </Pressable>
-              </GlassCard>
-            </View>
+            <HomeEmptyState
+              walletLoadFailed={walletLoadFailed}
+              onGetStarted={() => setIsOnboardingModalVisible(true)}
+              onTryAgain={() => {
+                void useWalletStore.getState().refresh();
+              }}
+            />
           )}
         </ScrollView>
 
@@ -2215,48 +2192,4 @@ const createStyles = (theme: Theme) =>
       padding: theme.spacing.xs,
     },
     // Empty State (no account)
-    emptyStateContainer: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingVertical: theme.spacing.xxl,
-    },
-    emptyStateCard: {
-      alignItems: 'center',
-      width: '100%',
-    },
-    emptyStateIconContainer: {
-      width: 120,
-      height: 120,
-      borderRadius: 60,
-      backgroundColor: `${theme.colors.primary}15`,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginBottom: theme.spacing.lg,
-    },
-    emptyStateTitle: {
-      fontSize: theme.typography.heading2.fontSize,
-      fontWeight: '700',
-      color: theme.colors.text,
-      textAlign: 'center',
-      marginBottom: theme.spacing.sm,
-    },
-    emptyStateSubtitle: {
-      fontSize: theme.typography.body.fontSize,
-      color: theme.colors.textMuted,
-      textAlign: 'center',
-      lineHeight: 22,
-      marginBottom: theme.spacing.xl,
-      paddingHorizontal: theme.spacing.md,
-    },
-    emptyStateButton: {
-      paddingVertical: theme.spacing.md,
-      paddingHorizontal: theme.spacing.xxl,
-      borderRadius: theme.borderRadius.lg,
-    },
-    emptyStateButtonText: {
-      fontSize: theme.typography.body.fontSize,
-      fontWeight: '600',
-      color: theme.colors.buttonText,
-    },
   });

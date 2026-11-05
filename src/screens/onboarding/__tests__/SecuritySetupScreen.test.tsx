@@ -18,6 +18,10 @@
 import React from 'react';
 import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 
+const mockRefresh = jest.fn();
+jest.mock('@/store/walletStore', () => ({
+  useWalletStore: { getState: () => ({ refresh: mockRefresh }) },
+}));
 const mockImportStandardAccount = jest.fn();
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
@@ -248,6 +252,7 @@ async function submitPin(
 }
 
 beforeEach(() => {
+  mockRefresh.mockReset().mockResolvedValue(undefined);
   jest.mocked(reconcileCrossStoreHalfState).mockResolvedValue({
     ran: true,
     orphanSecretsDeleted: [],
@@ -847,4 +852,68 @@ describe('SecuritySetupScreen — orphan PIN healing (TASK-413)', () => {
     expect(mockAuthSetupPin).toHaveBeenCalledTimes(1);
     await screen.unmount();
   });
+});
+
+describe('TASK-514: refresh before leaving security setup', () => {
+  it.each(['create', 'qr', 'restore'])(
+    '%s awaits refresh after setup/import',
+    async (source) => {
+      const events: string[] = [];
+      const pending = deferred();
+      mockAuthSetupPin.mockImplementation(async () => {
+        events.push('setup');
+      });
+      mockImportStandardAccount.mockImplementation(async () => {
+        events.push('import');
+        return { address: 'FAKEADDRESS' };
+      });
+      mockRefresh.mockImplementation(() => {
+        events.push('refresh');
+        return pending.promise;
+      });
+      const secretId = storeMnemonicSecret(FAKE_MNEMONIC);
+      const { screen, navigation } = await renderScreen({
+        source,
+        ...(source === 'create' ? { mnemonicSecretId: secretId } : {}),
+        ...(source === 'qr'
+          ? {
+              accounts: [
+                {
+                  id: 'qr',
+                  type: 'standard',
+                  address: 'FAKEADDRESS',
+                  isValid: true,
+                  secretId,
+                },
+              ],
+            }
+          : {}),
+      });
+      navigation.navigate.mockImplementation(() => {
+        events.push('navigate');
+      });
+      await enterPin(screen);
+      await act(async () => {
+        void mockCompleteOnPress.current!();
+      });
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(
+        source === 'restore'
+          ? ['setup', 'refresh']
+          : ['setup', 'import', 'refresh']
+      );
+      expect(navigation.navigate).not.toHaveBeenCalled();
+      expect(navigation.emitBeforeRemove()).toBe(true);
+      await act(async () => {
+        pending.resolve();
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith('Main');
+      expect(events).toEqual(
+        source === 'restore'
+          ? ['setup', 'refresh', 'navigate']
+          : ['setup', 'import', 'refresh', 'navigate']
+      );
+      await screen.unmount();
+    }
+  );
 });
