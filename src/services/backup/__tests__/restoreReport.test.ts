@@ -183,41 +183,75 @@ describe('restore report closing lines', () => {
   });
 });
 
-describe('TASK-504: an incomplete file adds "Not in this backup"', () => {
-  const leftOut = [
-    { address: address(), label: 'Gone', reason: 'key-unreadable' as const },
-    { address: address(), reason: 'no-key-on-device' as const },
-  ];
+describe('TASK-504: a record added without its key (product e7912207 item 3)', () => {
+  const watchOnly = (label = 'Std'): RestoreRecordResult => ({
+    ...rec('added', label),
+    withoutKey: 'watch-only',
+  });
+  const rekeyed = (label = 'Rk'): RestoreRecordResult => ({
+    ...rec('added', label),
+    withoutKey: 'rekeyed',
+  });
 
-  it('names each left-out account with its address and reason', () => {
-    const report = buildRestoreReport(
-      result([rec('added')], { leftOut, settingsRestored: false })
-    );
-    expect(report.notInBackup?.title).toBe('Not in this backup');
-    expect(report.notInBackup?.rows.map((r) => [r.label, r.text])).toEqual([
-      ['Gone', "Couldn't read this key"],
-      ['Account', 'No key on this device'],
+  it('a standard record: "Added as Watch Only. This backup doesn\'t have its key."', () => {
+    const report = buildRestoreReport(result([watchOnly()]));
+    expect(report.rows.map((r) => [r.label, r.text])).toEqual([
+      ['Std', "Added as Watch Only. This backup doesn't have its key."],
     ]);
-    expect(
-      report.notInBackup?.rows.every((r) => r.shortAddress.length > 0)
-    ).toBe(true);
   });
 
-  it('the section comes before the closing line, which stays last', () => {
+  it('a rekeyed record: "Added without its key."', () => {
+    const report = buildRestoreReport(result([rekeyed()]));
+    expect(report.rows.map((r) => r.text)).toEqual(['Added without its key.']);
+  });
+
+  it('under a new id: the same row, then the new-id sentence', () => {
+    const w: RestoreRecordResult = {
+      ...rec('added-new-id', 'W'),
+      withoutKey: 'watch-only',
+    };
+    const k: RestoreRecordResult = {
+      ...rec('added-new-id', 'K'),
+      withoutKey: 'rekeyed',
+    };
+    const suffix =
+      " This phone was already storing something else in this account's place, and we left that alone.";
+    expect(buildRestoreReport(result([w, k])).rows.map((r) => r.text)).toEqual([
+      `Added as Watch Only. This backup doesn't have its key.${suffix}`,
+      `Added without its key.${suffix}`,
+    ]);
+  });
+
+  it('the row filter does not hide them: only a plain added record is hidden', () => {
     const report = buildRestoreReport(
-      result([rec('added')], { leftOut, settingsRestored: false })
+      result([rec('added', 'Plain'), watchOnly('Hidden?'), rekeyed('Hidden2?')])
     );
-    const text = formatRestoreReport(report);
-    expect(text).toContain('Not in this backup');
-    expect(text.indexOf('Not in this backup')).toBeLessThan(
-      text.indexOf(NOT_FRESH_LINE)
-    );
-    expect(text.endsWith(NOT_FRESH_LINE)).toBe(true);
+    expect(report.rows.map((r) => r.label)).toEqual(['Hidden?', 'Hidden2?']);
   });
 
-  it('a complete file has no such section', () => {
-    const report = buildRestoreReport(result([rec('added')]));
-    expect(report.notInBackup).toBeUndefined();
+  it('the title is never "Restore complete" when any record was added without its key', () => {
+    const all = buildRestoreReport(result([rec('added'), watchOnly()]));
+    expect(all.title).toBe('Restore finished');
+    expect(all.summary).toBe('Added 2 of 2 accounts. Check the list below.');
+    // Control: the same file without a flagged record is "Restore complete".
+    expect(buildRestoreReport(result([rec('added'), rec('added')])).title).toBe(
+      'Restore complete'
+    );
+  });
+
+  it('a record that took its surviving key reads as the ordinary in-place row', () => {
+    const bound = rec('added-in-place', 'Bound');
+    expect(buildRestoreReport(result([bound])).rows.map((r) => r.text)).toEqual(
+      ['Added. Its key was already on this phone.']
+    );
+  });
+
+  it('there is no "Not in this backup" section any more: those accounts are in the file', () => {
+    const report = buildRestoreReport(
+      result([watchOnly()], { settingsRestored: false })
+    );
+    expect(report).not.toHaveProperty('notInBackup');
     expect(formatRestoreReport(report)).not.toContain('Not in this backup');
+    expect(formatRestoreReport(report).endsWith(NOT_FRESH_LINE)).toBe(true);
   });
 });

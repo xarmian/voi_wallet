@@ -9,7 +9,6 @@
  */
 import { formatAddress } from '@/utils/address';
 import { AccountType } from '@/types/wallet';
-import { LEFT_OUT_REASON_TEXT } from './backupReport';
 import type {
   RestoreRecordOutcome,
   RestoreRecordResult,
@@ -63,6 +62,14 @@ export function keylessDeviceText(
   );
 }
 
+/** A record the file carries WITHOUT its key, added without one (e7912207 item 3). */
+export const ADDED_WATCH_ONLY_TEXT =
+  "Added as Watch Only. This backup doesn't have its key.";
+export const ADDED_WITHOUT_KEY_TEXT = 'Added without its key.';
+/** Appended when such a record went under a fresh id. */
+export const NEW_ID_SUFFIX =
+  " This phone was already storing something else in this account's place, and we left that alone.";
+
 export const OUTCOME_TEXT: Record<RestoreRecordOutcome, string> = {
   'device-key-unreadable': KEY_UNREADABLE_TEXT,
   'device-key-problem': KEY_PROBLEM_TEXT,
@@ -102,22 +109,26 @@ export interface RestoreReportRow {
   text: string;
 }
 
-export const NOT_IN_BACKUP_TITLE = 'Not in this backup';
-
 export interface RestoreReport {
   title: string;
   summary: string;
   /** Every record that was not simply added, so an exception is never hidden */
   rows: RestoreReportRow[];
-  /** An incomplete file's left-out accounts; absent for a complete file */
-  notInBackup?: { title: string; rows: RestoreReportRow[] };
   /** Lines under the rows; the accounts-only line, when it applies, is last */
   notes: string[];
 }
 
 function rowFor(record: RestoreRecordResult): RestoreReportRow {
   let text: string;
-  if (record.outcome === 'device-keyless') {
+  if (record.withoutKey !== undefined) {
+    // Added without its key. The accounts ARE in the file now, so there is no
+    // separate "not in this backup" list; this row says what happened.
+    text =
+      record.withoutKey === 'watch-only'
+        ? ADDED_WATCH_ONLY_TEXT
+        : ADDED_WITHOUT_KEY_TEXT;
+    if (record.outcome === 'added-new-id') text += NEW_ID_SUFFIX;
+  } else if (record.outcome === 'device-keyless') {
     text = record.deviceType
       ? keylessDeviceText(record.deviceType, record.deviceEntries)
       : withAdvice(OUTCOME_TEXT[record.outcome], record.deviceEntries);
@@ -141,9 +152,12 @@ export function buildRestoreReport(result: RestoreResult): RestoreReport {
   ).length;
   const other = records.length - added - already;
 
+  // A record added without its key is never "Restore complete" (e7912207 item 3).
+  const withoutKey = records.some((r) => r.withoutKey !== undefined);
+
   let title: string;
   let summary: string;
-  if (other === 0 && already === 0 && added > 0) {
+  if (other === 0 && already === 0 && added > 0 && !withoutKey) {
     title = 'Restore complete';
     summary = `Added ${added} of ${records.length} accounts.`;
   } else if (added === 0 && other === 0) {
@@ -154,7 +168,11 @@ export function buildRestoreReport(result: RestoreResult): RestoreReport {
     summary = `Added ${added} of ${records.length} accounts. Check the list below.`;
   }
 
-  const rows = records.filter((r) => r.outcome !== 'added').map(rowFor);
+  // Only a plain 'added' is hidden. A record added without its key shows its
+  // row even though its outcome is 'added' (the old filter would have hidden it).
+  const rows = records
+    .filter((r) => r.outcome !== 'added' || r.withoutKey !== undefined)
+    .map(rowFor);
 
   const notes: string[] = [];
   if (result.ledgerAccountCount > 0) {
@@ -177,24 +195,10 @@ export function buildRestoreReport(result: RestoreResult): RestoreReport {
     notes.push(NOT_FRESH_LINE);
   }
 
-  const leftOut = result.leftOut ?? [];
-  const notInBackup =
-    leftOut.length > 0
-      ? {
-          title: NOT_IN_BACKUP_TITLE,
-          rows: leftOut.map((a) => ({
-            label: a.label || 'Account',
-            shortAddress: formatAddress(a.address),
-            text: LEFT_OUT_REASON_TEXT[a.reason],
-          })),
-        }
-      : undefined;
-
   return {
     title,
     summary,
     rows,
-    ...(notInBackup ? { notInBackup } : {}),
     notes,
   };
 }
@@ -207,14 +211,6 @@ export function formatRestoreReport(report: RestoreReport): string {
       report.rows
         .map((r) => `• ${r.label} (${r.shortAddress}): ${r.text}`)
         .join('\n')
-    );
-  }
-  if (report.notInBackup) {
-    parts.push(
-      `${report.notInBackup.title}\n` +
-        report.notInBackup.rows
-          .map((r) => `• ${r.label} (${r.shortAddress}): ${r.text}`)
-          .join('\n')
     );
   }
   if (report.notes.length > 0) {

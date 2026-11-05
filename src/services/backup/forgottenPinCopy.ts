@@ -4,6 +4,7 @@
  * pinned by tests. Pure: the consent screen only displays what these return.
  */
 import { formatAddress } from '@/utils/address';
+import { LEFT_OUT_REASON_TEXT } from './backupReport';
 import type { BackupInfo } from './types';
 import { NOTHING_TO_ADD_TEXT, NO_KEYS_TEXT } from './forgottenPinTexts';
 
@@ -41,7 +42,7 @@ export function forgottenPinConsentText(plan: Plan): string {
   const first =
     n === plan.total
       ? `${n} ${accounts} from your backup will be restored, and you'll set a new PIN.`
-      : `${n} of the ${plan.total} accounts in your backup will be restored. The rest are listed below, with the reason.`;
+      : `${n} of the ${plan.total} accounts in your backup will be restored, and you'll set a new PIN. The rest are listed below, with the reason.`;
   return `Restore without your PIN? ${first} ${LOCKED_KEYS_SENTENCE}`;
 }
 
@@ -71,6 +72,11 @@ export function forgottenPinIncompleteWarning(
     rows: leftOut.map((a) => ({
       label: a.label || 'Account',
       shortAddress: formatAddress(a.address),
+      // An account whose own key IS in the file shows why it is listed, so the
+      // sentence above does not mislead (db99d45f item 3).
+      ...(a.reason === 'other-key-on-device'
+        ? { text: LEFT_OUT_REASON_TEXT[a.reason] }
+        : {}),
     })),
   };
 }

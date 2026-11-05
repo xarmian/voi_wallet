@@ -280,9 +280,7 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
     await view.findByText(NORMAL);
     await fireEvent.changeText(view.getByLabelText('Old PIN'), '000000');
     await fireEvent.press(view.getByText('Continue'));
-    expect(
-      await view.findByText('That PIN is not right. Try again.')
-    ).toBeTruthy();
+    expect(await view.findByText('Incorrect PIN. Try again.')).toBeTruthy();
     expect(view.queryByText('Select Backup File')).toBeNull();
   });
 

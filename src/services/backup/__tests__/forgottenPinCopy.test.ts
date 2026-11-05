@@ -35,7 +35,7 @@ describe('TASK-504: forgotten-PIN copy (product, verbatim)', () => {
 
   it('some records not added', () => {
     expect(forgottenPinConsentText(plan({ addable: 2 }))).toBe(
-      "Restore without your PIN? 2 of the 3 accounts in your backup will be restored. The rest are listed below, with the reason. Any other key on this phone that's locked with your old PIN, such as an account added after this backup, can't be opened by the app."
+      "Restore without your PIN? 2 of the 3 accounts in your backup will be restored, and you'll set a new PIN. The rest are listed below, with the reason. Any other key on this phone that's locked with your old PIN, such as an account added after this backup, can't be opened by the app."
     );
   });
 
@@ -65,6 +65,26 @@ describe('TASK-504: forgotten-PIN copy (product, verbatim)', () => {
     );
     expect(w?.rows.map((r) => r.label)).toEqual(['Lost', 'Account']);
     expect(forgottenPinIncompleteWarning({})).toBeNull();
+  });
+
+  it('an account whose own key IS in the file is in the list, with the reason line, and the warning text is unchanged (db99d45f item 3)', () => {
+    const w = forgottenPinIncompleteWarning({
+      incomplete: {
+        leftOut: [
+          { address: addr(), label: 'Lost', reason: 'key-unreadable' },
+          { address: addr(), label: 'Has own', reason: 'other-key-on-device' },
+        ],
+      },
+    });
+    // M includes it (2), exactly as before.
+    expect(w?.text).toContain('for these 2 accounts');
+    expect(w?.rows.map((r) => [r.label, r.text])).toEqual([
+      ['Lost', undefined],
+      [
+        'Has own',
+        "Its own key is in this backup. A different key stored with it isn't.",
+      ],
+    ]);
   });
 
   it('the step is unavailable for a file that adds nothing or holds no key', () => {

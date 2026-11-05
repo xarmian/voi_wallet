@@ -5,7 +5,8 @@
 export const OLD_PIN_NORMAL_TEXT =
   'This phone still has a PIN from before. Enter it to restore your backup.';
 
-export const OLD_PIN_WRONG_TEXT = 'That PIN is not right. Try again.';
+// Matches the lock screen (product e7912207 item 6).
+export const OLD_PIN_WRONG_TEXT = 'Incorrect PIN. Try again.';
 
 /** The time left in hours and minutes, e.g. "2 hr 5 min", "5 min". */
 export function formatTimeLeft(ms: number): string {
