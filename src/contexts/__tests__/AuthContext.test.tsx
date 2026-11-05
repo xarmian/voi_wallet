@@ -625,6 +625,25 @@ describe('AuthContext — TASK-213 fail-closed recovery on storage read failure'
     errorSpy.mockRestore();
   });
 
+  it('(j3) TASK-508: key-bearing + breadcrumb SET but the strict PIN read ERRORS ⇒ RECOVERY, never a resume (a PIN that cannot be read is not a PIN that is absent)', async () => {
+    // The breadcrumb is only trusted when the strict PIN read RESOLVED absent. A
+    // read that throws (keychain unreadable) must fail closed even with a live
+    // breadcrumb, or a real PIN that stopped reading could be set over.
+    mockHasWalletStrict.mockResolvedValue(true);
+    mockHasPinStrict.mockRejectedValue(new Error('keychain read failed'));
+    mockHasKeyBearing.mockResolvedValue(true);
+    mockIsPinSetupPending.mockResolvedValue(true);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { result } = await mountAuthWithRetries();
+
+    expect(result.current.authState.securityUnavailable).toBe(true);
+    expect(result.current.authState.pinSetupResume).toBe(false);
+    expect(result.current.authState.isAuthenticated).toBe(false);
+
+    errorSpy.mockRestore();
+  });
+
   it('(k) anti-fail-open: a STALE breadcrumb + key-bearing wallet WITH a readable PIN ⇒ LOCKED (not resume), breadcrumb self-healed', async () => {
     // The dangerous case: a PIN was set (setupPin should have cleared it) but a
     // stale breadcrumb lingers. A readable PIN means the guard does NOT fire and

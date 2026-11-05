@@ -3701,24 +3701,30 @@ export class AccountSecureStorage {
   ): Promise<void> {
     try {
       this.validateSecret(newSecret, secretSource);
-      // TASK-213 (fail-OPEN closure): clear the restore-before-PIN breadcrumb —
-      // with CONFIRMED removal — BEFORE committing the PIN, not after. A PIN
-      // credential must never come to exist on disk while a live breadcrumb could
-      // still be read: otherwise a commit that partially fails (e.g. the Android
-      // presence-sentinel write fails, so a later keystore break makes the PIN read
-      // resolve absent) would let the stale breadcrumb route that wallet to
-      // SecuritySetup — a NEW PIN over a real wallet. Clearing FIRST makes every
-      // such race fail CLOSED (recovery), never open. If removal cannot be
-      // CONFIRMED (a wedged/unhealthy store), ABORT rather than commit a PIN into
-      // that ambiguous state — the caller simply retries. clearPinSetupPending is
-      // bounded + verifying + never-throwing; a no-op when no breadcrumb exists
-      // (normal onboarding) on a healthy store.
-      const breadcrumbCleared = await clearPinSetupPending();
-      if (!breadcrumbCleared) {
-        throw new Error(
-          'Could not clear the restore setup marker before establishing the PIN'
-        );
-      }
+      // TASK-213 (fail-OPEN closure) and TASK-508. The restore-before-PIN
+      // breadcrumb is cleared, with CONFIRMED removal, BEFORE the PIN credential
+      // is committed (rewrapAndCommitCredentialLocked does it, after the rewrap
+      // and its read-back, immediately before the credential write). A credential
+      // must never come to exist on disk while a live breadcrumb could still be
+      // read: otherwise a commit that partially fails (e.g. the Android
+      // presence-sentinel write fails, so a later keystore break makes the PIN
+      // read resolve absent) would let the stale breadcrumb route that wallet to
+      // SecuritySetup, a NEW PIN over a real wallet.
+      //
+      // The clear used to run FIRST, ahead of the rewrap loop (one scrypt per
+      // account, seconds). A kill anywhere in that loop then left key-bearing
+      // accounts, no PIN and no breadcrumb, which boots to the recovery screen
+      // (TASK-508). With the clear just before the credential write, a kill in
+      // the loop leaves the breadcrumb set and no PIN, which is the legitimate
+      // resume state: SecuritySetup, and setupPin is run again. What remains on
+      // recovery is the gap between the confirmed clear and the credential
+      // write (one storage remove, one secure write).
+      //
+      // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
+      // ABORTED and the pre-commit rollback drops this attempt's new blobs, so
+      // the accounts still read through their device-key copy and no credential
+      // exists; the caller simply retries.
+      //
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
       // to verify (first-secret setup).
@@ -3727,6 +3733,7 @@ export class AccountSecureStorage {
           currentSecret: undefined,
           newSecret,
           newSource: secretSource,
+          clearBreadcrumbBeforeCommit: true,
         })
       );
       this.legacyCheckRequired = false;
@@ -4236,6 +4243,14 @@ export class AccountSecureStorage {
     newSecret: string;
     /** Kind of the new secret (folded into the credential + each blob). */
     newSource: SecretSource;
+    /**
+     * setupPin only (TASK-508): confirm removal of the restore-before-PIN
+     * breadcrumb after the rewrap and read-back and immediately before the
+     * credential write; abort (pre-commit rollback) if it cannot be confirmed.
+     * clearPinSetupPending takes no lock, so running it inside the key mutex
+     * nests nothing (DOC-507 section 1).
+     */
+    clearBreadcrumbBeforeCommit?: boolean;
   }): Promise<void> {
     const { currentSecret, newSecret, newSource } = opts;
 
@@ -4360,6 +4375,17 @@ export class AccountSecureStorage {
           }
         } finally {
           check?.fill(0);
+        }
+      }
+
+      // PHASE 3b (setupPin, TASK-508): the breadcrumb is gone, CONFIRMED, before
+      // the credential exists. An unconfirmed removal throws here, pre-commit, so
+      // the rollback below drops the unproven new blobs.
+      if (opts.clearBreadcrumbBeforeCommit) {
+        if (!(await clearPinSetupPending())) {
+          throw new AccountStorageError(
+            'Could not clear the restore setup marker before establishing the PIN'
+          );
         }
       }
 
