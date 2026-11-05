@@ -1111,6 +1111,18 @@ describe('AuthContext — old-PIN verify for a restore (TASK-504)', () => {
     expect(mockVaultSet).not.toHaveBeenCalled();
   });
 
+  it('clearRestoreVault keeps its identity across provider renders', async () => {
+    const { result } = await mountAuth();
+    const first = result.current.clearRestoreVault;
+    await act(async () => {
+      result.current.updateActivity();
+    });
+    await act(async () => {
+      await result.current.unlockForRestore(TEST_PIN);
+    });
+    expect(result.current.clearRestoreVault).toBe(first);
+  });
+
   it('clearRestoreVault empties the vault', async () => {
     const { result } = await mountAuth();
     await act(async () => {

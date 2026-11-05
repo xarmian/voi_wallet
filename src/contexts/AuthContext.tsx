@@ -4,6 +4,7 @@ import React, {
   useState,
   useEffect,
   useRef,
+  useCallback,
 } from 'react';
 import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -960,9 +961,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const clearRestoreVault = () => {
+  // Stable across provider renders: the restore screen puts it in the deps of
+  // an effect whose cleanup ends the old-PIN session, so a new identity on every
+  // render would end a live session (and cancel a PIN check) at each re-render.
+  const clearRestoreVault = useCallback(() => {
     SessionKeyVault.clear();
-  };
+  }, []);
 
   const unlockWithBiometrics = async (
     isCurrent = () => true
