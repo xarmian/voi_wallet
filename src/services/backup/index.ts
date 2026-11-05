@@ -512,7 +512,9 @@ export class BackupService {
       for (const account of backup.accounts) {
         switch (account.type) {
           case 'standard':
-            accountTypes.standard++;
+            // A record the file carries without its key is added as Watch Only.
+            if (account.withoutKey === true) accountTypes.watch++;
+            else accountTypes.standard++;
             break;
           case 'watch':
             accountTypes.watch++;

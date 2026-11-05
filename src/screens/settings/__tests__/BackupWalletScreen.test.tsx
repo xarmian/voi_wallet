@@ -258,7 +258,7 @@ it.each([
     await fireEvent.press(view.getByText(/confirm password/i));
     if (report.incomplete) {
       expect(
-        view.getByRole('button', { name: report.acknowledgeText })
+        await view.findByRole('button', { name: report.acknowledgeText })
       ).toBeTruthy();
       expect(mockExportButtons.length).toBeGreaterThanOrEqual(2);
       for (const button of mockExportButtons.slice(-2)) {
@@ -279,7 +279,7 @@ it.each([
         FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync
       ).not.toHaveBeenCalled();
       await fireEvent.press(
-        view.getByRole('button', { name: report.acknowledgeText })
+        await view.findByRole('button', { name: report.acknowledgeText })
       );
       expect(view.getAllByText(report.title!)).toHaveLength(2);
       for (const block of [report.withoutKey, report.otherKey]) {
@@ -345,11 +345,49 @@ it('shows the acknowledgement after the update-required alert, and gates iOS exp
   });
   expect(BackupService.shareBackup).not.toHaveBeenCalled();
   await fireEvent.press(
-    view.getByRole('button', { name: report.acknowledgeText })
+    await view.findByRole('button', { name: report.acknowledgeText })
   );
   await fireEvent.press(view.getByText('Export Backup'));
   expect(BackupService.shareBackup).toHaveBeenCalledWith(result.fileUri);
   expect(mockScrollTo).toHaveBeenCalledWith({ y: 0, animated: true });
   Platform.OS = originalOS;
   alert.mockRestore();
+});
+
+it('the modal is not mounted in the same commit as the result: it opens after a delay, with Save and Share disabled meanwhile', async () => {
+  // iOS can silently drop a Modal presented while the progress modal is still
+  // dismissing (hunter r4); a dropped modal would leave nothing to press.
+  const result = {
+    filename: 'backup.voibackup',
+    fileUri: 'file:///x',
+    fileContent: '{}',
+    size: 100,
+    accountCount: 1,
+    incomplete: {
+      leftOut: [{ address: 'A'.repeat(58), reason: 'key-unreadable' as const }],
+    },
+  } as BackupResult;
+  const report = buildBackupReport(result);
+  const originalOS = Platform.OS;
+  Platform.OS = 'android'; // Save and Share are two disabled export buttons
+  jest.mocked(BackupService.createBackup).mockResolvedValue(result);
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  mockExportButtons.length = 0;
+  await fireEvent.press(view.getByText(/confirm password/i));
+
+  // The result is on screen, the modal is not yet, and nothing can be saved.
+  expect(view.getAllByText(report.title!).length).toBeGreaterThan(0);
+  expect(
+    view.queryByRole('button', { name: report.acknowledgeText })
+  ).toBeNull();
+  expect(mockExportButtons.length).toBeGreaterThanOrEqual(2);
+  for (const button of mockExportButtons.slice(-2)) {
+    expect(button.disabled).toBe(true);
+  }
+  // Then the modal opens.
+  expect(
+    await view.findByRole('button', { name: report.acknowledgeText })
+  ).toBeTruthy();
+  Platform.OS = originalOS;
 });

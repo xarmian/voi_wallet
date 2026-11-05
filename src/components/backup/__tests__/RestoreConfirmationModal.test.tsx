@@ -57,18 +57,28 @@ describe('RestoreConfirmationModal', () => {
   });
 });
 
-it.each([1, 3, 0])(
+// The expected text is written out here, not computed by the function under
+// test: the wording is product's (e7912207 item 5) and the modal must show it.
+it.each([
+  [
+    1,
+    "This backup doesn't have the key for 1 account. It'll be added without it.",
+  ],
+  [
+    3,
+    "This backup doesn't have the keys for 3 accounts. They'll be added without them.",
+  ],
+  [0, null],
+])(
   'shows the missing-own-key line for %s accounts',
-  async (count) => {
-    const {
-      restoreConfirmationKeysLine,
-    } = require('@/services/backup/backupReport');
+  async (count, expected) => {
     const incomplete = {
       leftOut: [
         ...Array.from({ length: count }, (_, i) => ({
           address: String(i).repeat(58),
           reason: 'no-key-on-device' as const,
         })),
+        // An account whose own key IS in the file never counts here.
         { address: 'Z'.repeat(58), reason: 'other-key-on-device' as const },
       ],
     };
@@ -81,8 +91,7 @@ it.each([1, 3, 0])(
         onConfirm={jest.fn()}
       />
     );
-    const line = restoreConfirmationKeysLine(incomplete);
-    if (line) expect(view.getByText(line)).toBeTruthy();
+    if (expected) expect(view.getByText(expected)).toBeTruthy();
     else expect(view.queryByText(/This backup doesn't have/)).toBeNull();
   }
 );

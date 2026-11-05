@@ -34,6 +34,15 @@ import {
   buildBackupReport,
 } from '@/services/backup/backupReport';
 
+/**
+ * How long the result screen shows before the keys-not-in-backup modal opens.
+ * The progress modal is torn down in the same commit that sets the result; on iOS
+ * a Modal presented while another is still dismissing can be dropped silently,
+ * which would leave the user with disabled Save and Share and nothing to press
+ * (hunter r4). Save and Share stay disabled throughout.
+ */
+const MODAL_PRESENT_DELAY_MS = 500;
+
 export default function BackupWalletScreen() {
   const navigation = useNavigation();
   const styles = useThemedStyles(createStyles);
@@ -50,11 +59,21 @@ export default function BackupWalletScreen() {
   const [error, setError] = useState<string | undefined>();
 
   const [acknowledged, setAcknowledged] = useState(false);
+  const [modalReady, setModalReady] = useState(false);
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
   const needsAcknowledgement =
     !!backupResult &&
     buildBackupReport(backupResult).incomplete &&
     !acknowledged;
+  useEffect(() => {
+    if (!needsAcknowledgement) return;
+    const timer = setTimeout(() => setModalReady(true), MODAL_PRESENT_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+      // Not ready again until the next result has waited its own delay.
+      setModalReady(false);
+    };
+  }, [needsAcknowledgement]);
 
   // Account counts
   const standardAccounts = accounts.filter(
@@ -429,7 +448,7 @@ export default function BackupWalletScreen() {
           </TouchableOpacity>
         </ScrollView>
         <KeysNotInBackupModal
-          visible={needsAcknowledgement}
+          visible={needsAcknowledgement && modalReady}
           report={report}
           onAcknowledge={() => setAcknowledged(true)}
         />

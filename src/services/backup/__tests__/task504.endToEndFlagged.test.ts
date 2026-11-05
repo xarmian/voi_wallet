@@ -310,3 +310,83 @@ describe('TASK-504 end to end: the file round-trips', () => {
     expect(wallet?.accounts).toHaveLength(4);
   });
 });
+
+describe('TASK-504 end to end: shapes the first tests did not cover (hunter r4 A)', () => {
+  async function innerOf(content: string) {
+    return JSON.parse(
+      await decryptBackup(JSON.parse(content), PASSWORD)
+    ) as VoiBackupFile;
+  }
+
+  it('a real collectAccounts result with an other-key-on-device entry passes the export check and the import check', async () => {
+    const a = keyed('dup-a');
+    const x = keyed('x-other');
+    await restoreAccounts([a, x]);
+    const blob = JSON.parse(mockPlatform.__kv.get('voi_wallet_metadata')!);
+    blob.accounts.push({ ...blob.accounts[0], id: 'dup-b', label: 'dup-b' });
+    mockPlatform.__kv.set('voi_wallet_metadata', JSON.stringify(blob));
+    mockPlatform.__secure.set(
+      `${SECRET}dup-b`,
+      mockPlatform.__secure.get(`${SECRET}x-other`)!
+    );
+
+    const made = await BackupService.createBackup(PASSWORD, CAP);
+
+    expect(made.incomplete?.leftOut).toEqual([
+      expect.objectContaining({
+        address: a.address,
+        label: 'dup-b',
+        reason: 'other-key-on-device',
+      }),
+    ]);
+    expect(made.accountCount).toBe(2);
+    // The importer accepts what the exporter wrote.
+    const info = await BackupService.validateBackupFile(made.fileUri, PASSWORD);
+    expect(info.incomplete?.leftOut).toHaveLength(1);
+    const report = buildBackupReport(made);
+    expect(report.withoutKeyCount).toBe(0);
+    expect(report.otherKeyCount).toBe(1);
+    expect(report.title).toBe("A key isn't in this backup");
+  });
+
+  it('a flagged rekeyed record goes out and comes back: key-less rekeyed, its rekey fields kept', async () => {
+    const lost = {
+      ...keyed('rk'),
+      type: AccountType.REKEYED,
+      authAddress: algosdk.generateAccount().addr.toString(),
+      originalOwner: true,
+      canSign: false,
+      rekeyedAt: '2026-10-01T00:00:00.000Z',
+    } as unknown as BackupAccountData;
+    await restoreAccounts([lost]);
+    mockPlatform.__secure.delete(`${SECRET}rk`);
+
+    const made = await BackupService.createBackup(PASSWORD, CAP);
+    const inner = await innerOf(made.fileContent);
+    expect(inner.accounts[0].withoutKey).toBe(true);
+    expect(inner.accounts[0].authAddress).toBe(lost.authAddress);
+    expect(made.incomplete?.leftOut.map((x) => x.reason)).toEqual([
+      'no-key-on-device',
+    ]);
+
+    mockPlatform.__reset();
+    SessionKeyVault.clear();
+    AccountSecureStorage.clearPrivateKeyCache();
+    const result = await restoreAccounts(inner.accounts);
+
+    expect(result.records[0].withoutKey).toBe('rekeyed');
+    const [stored] = (await MultiAccountWalletService.getCurrentWallet())!
+      .accounts;
+    expect(stored.type).toBe(AccountType.REKEYED);
+    expect((stored as { authAddress: string }).authAddress).toBe(
+      lost.authAddress
+    );
+  });
+
+  it('the preview counts a flagged standard record as Watch Only, as the restore does', async () => {
+    const { made } = await backUpWalletWithUnreadableKey();
+    const info = await BackupService.validateBackupFile(made.fileUri, PASSWORD);
+    // good = standard; watch + the flagged broken one = watch.
+    expect(info.accountTypes).toMatchObject({ standard: 1, watch: 2 });
+  });
+});

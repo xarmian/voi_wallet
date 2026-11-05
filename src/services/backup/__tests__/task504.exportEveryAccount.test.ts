@@ -173,6 +173,14 @@ async function addDuplicateRecord(fromId: string, newId: string) {
   mockPlatform.__kv.set('voi_wallet_metadata', JSON.stringify(blob));
 }
 
+/** Like addDuplicateRecord, but the duplicate comes BEFORE the original. */
+async function addDuplicateRecordFirst(fromId: string, newId: string) {
+  const blob = JSON.parse(mockPlatform.__kv.get('voi_wallet_metadata')!);
+  const src = blob.accounts.find((a: { id: string }) => a.id === fromId);
+  blob.accounts.unshift({ ...src, id: newId, label: newId });
+  mockPlatform.__kv.set('voi_wallet_metadata', JSON.stringify(blob));
+}
+
 describe('TASK-504: every account goes in the file', () => {
   it('a standard account whose key cannot be read is a record of its real type, no phrase, flagged; the list names it; the others carry their keys', async () => {
     const ok = standard('ok');
@@ -335,5 +343,38 @@ describe('TASK-504: two records at one address (dev lead 89d3f459)', () => {
       { address: bad.address, label: 'bad', reason: 'key-unreadable' },
     ]);
     expect(c.accounts.find((r) => r.id === 'bad')?.withoutKey).toBe(true);
+  });
+});
+
+describe('TASK-504: the same-address decision does not depend on record order (hunter r4 A)', () => {
+  it('the empty or unreadable duplicate comes BEFORE the exported record: still out of the list and not written', async () => {
+    const a = standard('dup-a');
+    await restoreAccounts([a]);
+    await addDuplicateRecordFirst('dup-a', 'dup-first'); // wallet order: dup-first, dup-a
+    mockPlatform.__secure.set(`${SECRET}dup-first`, 'not json');
+
+    const c = await collectAccounts(CAP);
+
+    expect(c.accounts.map((x) => x.id)).toEqual(['dup-a']);
+    expect(c.accounts[0].withoutKey).toBeUndefined();
+    expect(c.leftOut).toEqual([]);
+  });
+
+  it('the other-key duplicate comes BEFORE the exported record: named once, not written, the exported record unflagged', async () => {
+    const a = standard('dup-a');
+    const x = standard('x-other');
+    await restoreAccounts([a, x]);
+    await addDuplicateRecordFirst('dup-a', 'dup-first');
+    mockPlatform.__secure.set(
+      `${SECRET}dup-first`,
+      mockPlatform.__secure.get(`${SECRET}x-other`)!
+    );
+
+    const c = await collectAccounts(CAP);
+
+    expect(c.accounts.map((r) => r.id)).toEqual(['dup-a', 'x-other']);
+    expect(c.leftOut).toEqual([
+      { address: a.address, label: 'dup-first', reason: 'other-key-on-device' },
+    ]);
   });
 });

@@ -161,6 +161,11 @@ export function validateRetainedKeys(accounts: BackupAccountData[]): void {
  */
 function restoredAddress(account: BackupAccountData): string | null {
   if (account.type !== AccountType.STANDARD) return account.address;
+  // A record the file carries WITHOUT its key has no phrase to derive from; it is
+  // restored under the address the payload gives it, so it competes with the
+  // other records at that address like any key-less record (TASK-504). Returning
+  // null would keep it out of the per-address dedupe entirely.
+  if (account.withoutKey === true) return account.address;
   if (!account.mnemonic) return null;
   try {
     const derived = algosdk.mnemonicToSecretKey(account.mnemonic);
@@ -890,6 +895,8 @@ async function restoreAccountsNow(
         if (record) {
           record.outcome =
             skip.reason === 'id' ? 'already-present' : 'kept-device-record';
+          // It was not added after all, so it was not added without a key either.
+          delete record.withoutKey;
         }
         const token = tokenByStoredId.get(skip.id);
         try {
@@ -927,7 +934,13 @@ async function restoreAccountsNow(
         continue;
       }
       counts.total++;
-      switch (typeOfRecord.get(record.id)) {
+      // A flagged standard record that was stored as Watch Only is a Watch Only
+      // account; one that took its surviving key is a standard account.
+      switch (
+        record.withoutKey === 'watch-only'
+          ? AccountType.WATCH
+          : typeOfRecord.get(record.id)
+      ) {
         case AccountType.STANDARD:
           counts.standard++;
           break;

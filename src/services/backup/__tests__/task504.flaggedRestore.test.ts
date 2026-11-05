@@ -373,3 +373,86 @@ describe('TASK-504 4.1 items 8 and 9 on a flagged record', () => {
     expect(mockPlatform.__secure.get(ORPHAN_SLOT)).toBe(slotBefore);
   });
 });
+
+describe('TASK-504: a flagged standard record still competes at its address (hunter r4 A P2-1)', () => {
+  /** A Ledger record at the same address as `base`. */
+  function ledgerAt(
+    base: BackupAccountData,
+    id = 'ledger-1'
+  ): BackupAccountData {
+    return {
+      id,
+      address: base.address,
+      publicKey: base.publicKey,
+      type: AccountType.LEDGER,
+      label: 'ledger',
+      color: '#000000',
+      isHidden: false,
+      createdAt: new Date().toISOString(),
+      deviceId: 'ledger-1',
+      derivationIndex: 0,
+      ledgerDerivationPath: "44'/283'/0'/0/0",
+    } as unknown as BackupAccountData;
+  }
+
+  it('a Ledger record at the same address beats a flagged standard record that comes first: the signing-capable record is kept', async () => {
+    const a = keyed('s-1');
+    const result = await restoreAccounts([flagged(a), ledgerAt(a)]);
+
+    expect(result.duplicatesDropped).toBe(1);
+    expect(result.records.map((r) => [r.id, r.outcome])).toEqual([
+      ['ledger-1', 'added'],
+    ]);
+    const stored = await deviceAccounts();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].type).toBe(AccountType.LEDGER);
+    expect(result.records[0].withoutKey).toBeUndefined();
+  });
+
+  it('a keyed record at the same address beats a flagged standard record that comes first: the key is kept', async () => {
+    const a = keyed('s-1');
+    const result = await restoreAccounts([
+      flagged(a),
+      { ...a, id: 's-2' } as BackupAccountData,
+    ]);
+
+    expect(result.duplicatesDropped).toBe(1);
+    const stored = await deviceAccounts();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].type).toBe(AccountType.STANDARD);
+    const key = await AccountSecureStorage.getPrivateKey('s-2');
+    expect(Buffer.from(key.slice(32)).toString('hex')).toBe(a.publicKey);
+  });
+
+  it('two flagged records at one address merge into one account (as two watch records would)', async () => {
+    const a = keyed('s-1');
+    const result = await restoreAccounts([
+      flagged(a),
+      flagged({ ...a, id: 's-2' } as BackupAccountData),
+    ]);
+    expect(result.duplicatesDropped).toBe(1);
+    expect(await deviceAccounts()).toHaveLength(1);
+  });
+
+  it('a flagged record that the blob merge skips is reported as the device record it lost to, never as added without a key', async () => {
+    const a = keyed('s-1');
+    jest
+      .spyOn(MultiAccountWalletService, 'mergeRestoredAccounts')
+      .mockResolvedValue({
+        hadAccounts: false,
+        skipped: [{ id: 's-1', reason: 'address' }],
+      } as never);
+
+    const result = await restoreAccounts([flagged(a)]);
+
+    expect(result.records[0].outcome).toBe('kept-device-record');
+    expect(result.records[0].withoutKey).toBeUndefined();
+  });
+
+  it('the counts: a flagged standard record is a Watch Only account, not a standard one', async () => {
+    const result = await restoreAccounts([keyed('k'), flagged(keyed('f'))]);
+    expect(result.standard).toBe(1);
+    expect(result.watch).toBe(1);
+    expect(result.total).toBe(2);
+  });
+});
