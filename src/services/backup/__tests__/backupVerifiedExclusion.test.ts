@@ -89,6 +89,11 @@ jest.mock('@/services/secure/AccountSecureStorage', () => {
       getResetGeneration: () => 0,
       clearAll: jest.fn(),
       probeSecretPresenceStrict: jest.fn(async () => false),
+      // The collector reads the slot under each record's own id (TASK-504).
+      inspectSecretSlot: jest.fn(async () => ({
+        state: 'key-matches' as const,
+        vault: 'unlocked' as const,
+      })),
       storeKeylessAccountForRestore: jest.fn(
         async (account: { id: string }) => ({
           id: account.id,
@@ -119,6 +124,7 @@ jest.mock('@/services/secure/AccountSecureStorage', () => {
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
     revealMnemonic: jest.fn(async () => mockMnemonicForCollect),
+    revealMnemonicForRecord: jest.fn(async () => mockMnemonicForCollect),
   },
 }));
 
@@ -200,12 +206,12 @@ describe('collectAccounts — backupVerified is not collected', () => {
       __brand: 'FreshAuthCapability',
     } as never);
 
-    expect(collected).toHaveLength(1);
-    expect(collected[0]).not.toHaveProperty('backupVerified');
+    expect(collected.accounts).toHaveLength(1);
+    expect(collected.accounts[0]).not.toHaveProperty('backupVerified');
     // Legacy field still travels, unchanged.
-    expect(collected[0].hasBackup).toBe(true);
+    expect(collected.accounts[0].hasBackup).toBe(true);
     // Sanity: the payload really is the phrase-bearing record.
-    expect(collected[0].mnemonic).toBe(fresh.mnemonic);
+    expect(collected.accounts[0].mnemonic).toBe(fresh.mnemonic);
   });
 });
 
@@ -299,7 +305,9 @@ describe('round trip against an existing (pre-TASK-45) payload shape', () => {
     } as never);
 
     // Simulate the wire hop exactly as the encrypted payload does.
-    const wire: BackupAccountData[] = JSON.parse(JSON.stringify(collected));
+    const wire: BackupAccountData[] = JSON.parse(
+      JSON.stringify(collected.accounts)
+    );
     expect(wire[0]).not.toHaveProperty('backupVerified');
 
     await restoreAccounts(wire);
@@ -323,7 +331,7 @@ describe('round trip against an existing (pre-TASK-45) payload shape', () => {
 });
 
 const secure = AccountSecureStorage;
-const mnemonicRead = jest.mocked(SecureKeyManager.revealMnemonic);
+const mnemonicRead = jest.mocked(SecureKeyManager.revealMnemonicForRecord);
 function retained(overrides: object = {}): BackupAccountData {
   const fresh = freshAccount();
   return {
@@ -354,17 +362,18 @@ it('round trips the original retained key, signs as its address, and wipes the w
     });
   const wire = JSON.parse(
     JSON.stringify(
-      await collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+      (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))
+        .accounts
     )
   );
   expect(wire[0].mnemonic).toBe(record.mnemonic);
   expect(mnemonicRead).toHaveBeenCalledWith(
-    record.address,
+    expect.objectContaining({ id: record.id, address: record.address }),
     expect.anything(),
     'export_backup'
   );
   expect(mnemonicRead).not.toHaveBeenCalledWith(
-    record.authAddress,
+    expect.objectContaining({ address: record.authAddress }),
     expect.anything(),
     'export_backup'
   );
@@ -405,10 +414,16 @@ it.each([false, true])(
     const record = retained({ mnemonic: undefined, originalOwner });
     if (!originalOwner) {
       exportWallet(record);
-      expect(
-        (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))[0]
-          .mnemonic
-      ).toBeUndefined();
+      jest.mocked(secure.inspectSecretSlot).mockResolvedValueOnce({
+        state: 'empty',
+        vault: 'unlocked',
+      });
+      const collected = await collectAccounts({
+        __brand: 'FreshAuthCapability',
+      } as never);
+      expect(collected.accounts[0].mnemonic).toBeUndefined();
+      // An absence that is expected leaves nothing out.
+      expect(collected.leftOut).toEqual([]);
       expect(mnemonicRead).not.toHaveBeenCalled();
     }
     await restoreAccounts([record]);
@@ -421,32 +436,47 @@ it.each([false, true])(
   }
 );
 
-it('probe-present exports its own key even without originalOwner', async () => {
+it('a readable key under the record own id is exported even without originalOwner', async () => {
   const record = retained({ originalOwner: false });
   exportWallet(record);
-  jest.mocked(secure.probeSecretPresenceStrict).mockResolvedValueOnce(true);
   expect(
-    (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))[0]
-      .mnemonic
+    (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))
+      .accounts[0].mnemonic
   ).toBe(record.mnemonic);
 });
 
-it('probe error aborts export instead of silently omitting the key', async () => {
-  exportWallet(retained({ originalOwner: false }));
+it('a slot that cannot be read leaves the key out and names the account, it never aborts the backup', async () => {
+  const record = retained({ originalOwner: false });
+  exportWallet(record);
   jest
-    .mocked(secure.probeSecretPresenceStrict)
+    .mocked(secure.inspectSecretSlot)
     .mockRejectedValueOnce(new Error('probe failed'));
-  await expect(
-    collectAccounts({ __brand: 'FreshAuthCapability' } as never)
-  ).rejects.toThrow('Failed to retrieve retained key');
+  const collected = await collectAccounts({
+    __brand: 'FreshAuthCapability',
+  } as never);
+  expect(collected.accounts).toEqual([]);
+  expect(collected.leftOut).toEqual([
+    expect.objectContaining({
+      address: record.address,
+      reason: 'key-unreadable',
+    }),
+  ]);
 });
 
-it('getMnemonic error aborts export for an expected key', async () => {
-  exportWallet(retained());
+it('a key read that fails for an expected key leaves it out as unreadable', async () => {
+  const record = retained();
+  exportWallet(record);
   mnemonicRead.mockRejectedValueOnce(new Error('read failed'));
-  await expect(
-    collectAccounts({ __brand: 'FreshAuthCapability' } as never)
-  ).rejects.toThrow('read failed');
+  const collected = await collectAccounts({
+    __brand: 'FreshAuthCapability',
+  } as never);
+  expect(collected.accounts).toEqual([]);
+  expect(collected.leftOut).toEqual([
+    expect.objectContaining({
+      address: record.address,
+      reason: 'key-unreadable',
+    }),
+  ]);
 });
 
 it.each(['address', 'publicKey'])(
@@ -583,7 +613,8 @@ it.each([false, true])(
     exportWallet(record);
     const wire: BackupAccountData[] = JSON.parse(
       JSON.stringify(
-        await collectAccounts({ __brand: 'FreshAuthCapability' } as never)
+        (await collectAccounts({ __brand: 'FreshAuthCapability' } as never))
+          .accounts
       )
     );
     expect(wire[0]).toMatchObject({

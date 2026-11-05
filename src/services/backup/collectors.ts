@@ -7,8 +7,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { SecureKeyManager } from '@/services/secure/keyManager';
-import type { FreshAuthCapability } from '@/services/secure/freshAuth';
+import {
+  FreshAuthError,
+  type FreshAuthCapability,
+} from '@/services/secure/freshAuth';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import {
   AccountType,
   StandardAccountMetadata,
@@ -17,7 +21,6 @@ import {
   LedgerAccountMetadata,
   RemoteSignerAccountMetadata,
   withDefaultAuthLevel,
-  classifyKeyHolding,
 } from '@/types/wallet';
 import { Friend } from '@/types/social';
 import { NetworkId } from '@/types/network';
@@ -32,6 +35,8 @@ import {
   BackupRemoteSignerSettings,
   BackupSignerConfig,
   BackupPairedSigner,
+  BackupLeftOutAccount,
+  BackupLeftOutReason,
   BackupError,
 } from './types';
 
@@ -68,23 +73,121 @@ const REMOTE_SIGNER_STORAGE_KEYS = {
   PAIRED_SIGNERS: '@voi_paired_signers',
 };
 
+/** What collectAccounts hands back: the records to save, and every account
+ *  whose key the file does not hold (TASK-504). */
+export interface CollectedAccounts {
+  accounts: BackupAccountData[];
+  leftOut: BackupLeftOutAccount[];
+  /** Accounts in the wallet when the backup was taken. */
+  total: number;
+}
+
+const UNLOCK_MESSAGE = 'Unlock the wallet to create a backup';
+
+type KeyOutcome =
+  | { kind: 'exported'; mnemonic: string }
+  | { kind: 'left-out'; reason: BackupLeftOutReason };
+
 /**
- * Collect all accounts with their data for backup
- * For standard accounts, retrieves the mnemonic (requires PIN/biometric auth)
+ * TASK-504: what the wallet holds under ONE record's own id, and so whether its
+ * key goes in the file. The decision rests on the secret under that id (never on
+ * the record's type, and never on originalOwner, which can outlive the key,
+ * TASK-425 U4); the type only says whether an absence is expected.
+ *
+ *  - a readable key that derives to the record's address: exported;
+ *  - a slot proven empty: a clean absence ('no-key-on-device'); for a record
+ *    that is expected to hold a key (STANDARD, or REKEYED with originalOwner) it
+ *    is reported, otherwise the absence is expected and nothing is left out;
+ *  - anything else (another account's key, something no reader opens, a read
+ *    that failed): a key the wallet expects and cannot read, 'key-unreadable',
+ *    never quietly skipped.
+ * A locked vault or an unusable fresh-auth capability is a session state, not a
+ * key problem: it stops the whole backup.
+ */
+async function collectKeyForRecord(
+  account: { id: string; address: string },
+  expectsKey: boolean,
+  cap: FreshAuthCapability
+): Promise<KeyOutcome | { kind: 'none' }> {
+  let slot;
+  try {
+    slot = await AccountSecureStorage.inspectSecretSlot(
+      account.id,
+      account.address
+    );
+  } catch {
+    // A read that failed is a key the wallet cannot read, not an empty slot.
+    await stopIfLocked();
+    return { kind: 'left-out', reason: 'key-unreadable' };
+  }
+  if (slot.vault === 'locked') await stopIfLocked();
+  if (slot.state === 'empty') {
+    return expectsKey
+      ? { kind: 'left-out', reason: 'no-key-on-device' }
+      : { kind: 'none' };
+  }
+  if (slot.state !== 'key-matches') {
+    return { kind: 'left-out', reason: 'key-unreadable' };
+  }
+  try {
+    const mnemonic = await SecureKeyManager.revealMnemonicForRecord(
+      account,
+      cap,
+      'export_backup'
+    );
+    if (!mnemonic) return { kind: 'left-out', reason: 'key-unreadable' };
+    return { kind: 'exported', mnemonic };
+  } catch (error) {
+    if (error instanceof FreshAuthError) {
+      throw new BackupError(UNLOCK_MESSAGE, 'AUTHENTICATION_REQUIRED');
+    }
+    await stopIfLocked();
+    return { kind: 'left-out', reason: 'key-unreadable' };
+  }
+}
+
+/** A PIN device whose vault is locked cannot give any key: stop the backup. */
+async function stopIfLocked(): Promise<void> {
+  if (
+    !SessionKeyVault.isUnlocked() &&
+    (await AccountSecureStorage.hasPinStrict())
+  ) {
+    throw new BackupError(UNLOCK_MESSAGE, 'AUTHENTICATION_REQUIRED');
+  }
+}
+
+/**
+ * Collect all accounts with their data for backup.
+ *
+ * Saves what it can and names what it leaves out (TASK-504). Only a locked
+ * vault or a fresh-auth failure stops the backup; every other account whose key
+ * cannot be exported is left out of the file and listed in `leftOut`, so the
+ * file is marked incomplete and the user is told which accounts and why.
  */
 export async function collectAccounts(
   cap: FreshAuthCapability
-): Promise<BackupAccountData[]> {
+): Promise<CollectedAccounts> {
   try {
     // Confirmed read (TASK-443): a swallowed read error or a timed-out legacy
     // read must fail the backup, never save an empty one that a later restore
     // would use to clear the wallet.
     const wallet = await MultiAccountWalletService.getCurrentWalletConfirmed();
     if (!wallet || wallet.accounts.length === 0) {
-      return [];
+      return { accounts: [], leftOut: [], total: 0 };
+    }
+
+    // A locked vault stops the backup before anything is read: a skip here
+    // would turn a locked session into a "successful" backup with no keys.
+    if (
+      wallet.accounts.some(
+        (a) => a.type === AccountType.STANDARD || a.type === AccountType.REKEYED
+      )
+    ) {
+      await stopIfLocked();
     }
 
     const backupAccounts: BackupAccountData[] = [];
+    const leftOut: BackupLeftOutAccount[] = [];
 
     for (const account of wallet.accounts) {
       const baseData: BackupAccountData = {
@@ -103,29 +206,25 @@ export async function collectAccounts(
       switch (account.type) {
         case AccountType.STANDARD: {
           const standardAccount = account as StandardAccountMetadata;
-          try {
-            // Get mnemonic - this may require PIN auth
-            const mnemonic = await SecureKeyManager.revealMnemonic(
-              account.address,
-              cap,
-              'export_backup'
-            );
+          const outcome = await collectKeyForRecord(account, true, cap);
+          if (outcome.kind === 'exported') {
             backupAccounts.push({
               ...baseData,
-              mnemonic,
+              mnemonic: outcome.mnemonic,
               derivationPath: standardAccount.derivationPath,
               hasBackup: standardAccount.hasBackup,
               // TASK-45/DR-11: `backupVerified` is intentionally NOT collected.
               // It describes what the user of THIS device proved, so it must not
               // travel inside a portable encrypted backup.
             });
-          } catch (error) {
-            throw new BackupError(
-              `Failed to retrieve mnemonic for account ${account.label || account.address}: ${
-                error instanceof Error ? error.message : 'Unknown error'
-              }`,
-              'AUTHENTICATION_REQUIRED'
-            );
+          } else if (outcome.kind === 'left-out') {
+            // A standard account the wallet expects a key for: no record that
+            // could restore as an account able to sign goes in the file.
+            leftOut.push({
+              address: account.address,
+              label: account.label,
+              reason: 'key-unreadable',
+            });
           }
           break;
         }
@@ -142,31 +241,37 @@ export async function collectAccounts(
 
         case AccountType.REKEYED: {
           const rekeyedAccount = account as RekeyedAccountMetadata;
-          let mnemonic: string | undefined;
-          try {
-            const holdsKey =
-              classifyKeyHolding(rekeyedAccount) === 'present' ||
-              (await AccountSecureStorage.probeSecretPresenceStrict(
-                account.id
-              ));
-            if (holdsKey) {
-              mnemonic = await SecureKeyManager.revealMnemonic(
-                account.address,
-                cap,
-                'export_backup'
-              );
-              if (!mnemonic)
-                throw new Error('Expected account key is unavailable');
-            }
-          } catch (error) {
-            throw new BackupError(
-              `Failed to retrieve retained key for account ${account.label || account.address}: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              'COLLECTION_FAILED'
-            );
+          // originalOwner says a key is EXPECTED here; whether one is held is
+          // read from the secret under this record's id.
+          const outcome = await collectKeyForRecord(
+            account,
+            rekeyedAccount.originalOwner === true,
+            cap
+          );
+          if (
+            outcome.kind === 'left-out' &&
+            outcome.reason === 'key-unreadable'
+          ) {
+            leftOut.push({
+              address: account.address,
+              label: account.label,
+              reason: 'key-unreadable',
+            });
+            break;
+          }
+          if (outcome.kind === 'left-out') {
+            // A clean absence on an account that should hold its key: the
+            // metadata still goes in the file (as in 0.1.x), without a key.
+            leftOut.push({
+              address: account.address,
+              label: account.label,
+              reason: 'no-key-on-device',
+            });
           }
           backupAccounts.push({
             ...baseData,
-            mnemonic,
+            mnemonic:
+              outcome.kind === 'exported' ? outcome.mnemonic : undefined,
             hasBackup: rekeyedAccount.hasBackup,
             authAddress: rekeyedAccount.authAddress,
             rekeyedAt: rekeyedAccount.rekeyedAt,
@@ -217,7 +322,7 @@ export async function collectAccounts(
       }
     }
 
-    return backupAccounts;
+    return { accounts: backupAccounts, leftOut, total: wallet.accounts.length };
   } catch (error) {
     if (error instanceof BackupError) {
       throw error;

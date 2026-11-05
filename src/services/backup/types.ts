@@ -26,6 +26,31 @@ export interface VoiBackupFile {
   friends: Friend[];
   /** Experimental feature flags */
   experimental: BackupExperimentalFlags;
+  /**
+   * Present only on an INCOMPLETE backup (TASK-504): the accounts whose keys
+   * the file does not hold. Address, label and reason only, never key material.
+   * Its presence and the v3 envelope must agree; a new app refuses a file where
+   * they do not.
+   */
+  incomplete?: BackupIncomplete;
+}
+
+/** Why an account's key is not in an incomplete backup. */
+export type BackupLeftOutReason =
+  /** The wallet holds no key for this account (a clean absence). */
+  | 'no-key-on-device'
+  /** The wallet expects a key it could not read (decrypt, integrity, mismatch,
+   *  a standard account with no key). A possible key problem. */
+  | 'key-unreadable';
+
+export interface BackupLeftOutAccount {
+  address: string;
+  label?: string;
+  reason: BackupLeftOutReason;
+}
+
+export interface BackupIncomplete {
+  leftOut: BackupLeftOutAccount[];
 }
 
 /**
@@ -303,11 +328,29 @@ export interface EncryptedBackupFileV2 {
 }
 
 /**
+ * v3 encrypted backup envelope: the v2 construction (scrypt + AES-256-CTR +
+ * encrypt-then-MAC) under version 3. It is written only for an INCOMPLETE
+ * backup (TASK-504), so an app that predates it refuses the file at the
+ * envelope (VERSION_MISMATCH, before any decrypt) and never restores it with a
+ * wipe that would destroy a key the file leaves out. The version is inside the
+ * MAC's authenticated parameters, so editing it to 2 fails the integrity check
+ * on every build. The envelope carries the version only: no address, label or
+ * count lives outside the encryption.
+ */
+export interface EncryptedBackupFileV3 extends Omit<
+  EncryptedBackupFileV2,
+  'version'
+> {
+  version: 3;
+}
+
+/**
  * Encrypted backup file structure (written to .voibackup file).
  *
  * Discriminated union on `version`: v1 = legacy PBKDF2, v2 = scrypt.
  */
-export type EncryptedBackupFile = EncryptedBackupFileV1 | EncryptedBackupFileV2;
+export type EncryptedBackupFile =
+  EncryptedBackupFileV1 | EncryptedBackupFileV2 | EncryptedBackupFileV3;
 
 /**
  * Result of creating a backup
@@ -326,6 +369,10 @@ export interface BackupResult {
   accountCount: number;
   /** Backup creation timestamp */
   createdAt: string;
+  /** Total accounts in the wallet when the backup was taken */
+  totalAccountCount: number;
+  /** Set when any key was left out: the file is incomplete (TASK-504) */
+  incomplete?: BackupIncomplete;
 }
 
 /**
@@ -408,6 +455,8 @@ export interface RestoreResult {
   remoteSignerSettingsRestored: boolean;
   /** Airgap signer pairings the file held, none of which are restored */
   pairedSignersNotRestored: number;
+  /** An incomplete file's left-out accounts, so the report can name them */
+  leftOut?: BackupLeftOutAccount[];
 }
 
 /**
@@ -434,6 +483,8 @@ export interface BackupInfo {
   friendsCount: number;
   /** Whether backup contains remote signer settings */
   hasRemoteSignerSettings: boolean;
+  /** Set when the file is incomplete: the accounts whose keys it lacks */
+  incomplete?: BackupIncomplete;
 }
 
 /**

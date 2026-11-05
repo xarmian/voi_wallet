@@ -601,6 +601,34 @@ export class SecureKeyManager {
     return this.readMnemonicUnchecked(address);
   }
 
+  /**
+   * TASK-504: the recovery phrase for ONE wallet record, read from the secret
+   * under that record's own id. revealMnemonic re-resolves the FIRST record with
+   * an address, so with duplicate entries (TASK-423) it can read another
+   * record's key; a backup that probed one record must export that record's.
+   * The fresh-auth capability is consumed first and its failure propagates as
+   * is (it is a session state, never a key problem); every read failure after
+   * that throws.
+   */
+  static async revealMnemonicForRecord(
+    account: { id: string; address: string },
+    cap: FreshAuthCapability,
+    reason: FreshAuthReason = 'export_backup'
+  ): Promise<string> {
+    consumeFreshAuth(cap, reason);
+    let privateKey: Uint8Array | null = null;
+    try {
+      privateKey = await AccountSecureStorage.getPrivateKey(account.id);
+      // Never export a phrase for a key that isn't this record's own.
+      if (!keyBelongsToAddress(privateKey, account.address)) {
+        throw new Error('The stored key does not match this account');
+      }
+      return algosdk.secretKeyToMnemonic(privateKey);
+    } finally {
+      if (privateKey) privateKey.fill(0);
+    }
+  }
+
   static async revealPrivateKey(
     accountId: string,
     cap: FreshAuthCapability
