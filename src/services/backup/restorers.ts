@@ -178,9 +178,12 @@ function restoredAddress(account: BackupAccountData): string | null {
 
 /** TASK-423: lower wins when two records share an address. */
 function dedupeRank(account: BackupAccountData): number {
+  // A flagged record offers no key whatever else it carries (TASK-504), as in
+  // fileHoldsKey and restoredAddress.
   const keyBearing =
-    (account.type === AccountType.STANDARD && !!account.mnemonic) ||
-    (account.type === AccountType.REKEYED && account.mnemonic !== undefined);
+    account.withoutKey !== true &&
+    ((account.type === AccountType.STANDARD && !!account.mnemonic) ||
+      (account.type === AccountType.REKEYED && account.mnemonic !== undefined));
   if (keyBearing) return 0;
   if (
     account.type === AccountType.LEDGER ||

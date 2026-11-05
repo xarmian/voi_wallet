@@ -75,6 +75,7 @@ import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountType } from '@/types/wallet';
 import {
+  dedupeAccountsByAddress,
   planRestore,
   restoreAccounts,
   validateRetainedKeys,
@@ -426,6 +427,33 @@ describe('TASK-504: a flagged standard record still competes at its address (hun
     expect(stored[0].type).toBe(AccountType.STANDARD);
     const key = await AccountSecureStorage.getPrivateKey('s-2');
     expect(Buffer.from(key.slice(32)).toString('hex')).toBe(a.publicKey);
+  });
+
+  it('the order does not matter: a keyed or Ledger record BEFORE the flagged record wins just the same', async () => {
+    const a = keyed('s-1');
+    const keyedFirst = await restoreAccounts([
+      { ...a, id: 's-2' } as BackupAccountData,
+      flagged(a),
+    ]);
+    expect(keyedFirst.duplicatesDropped).toBe(1);
+    expect((await deviceAccounts())[0].type).toBe(AccountType.STANDARD);
+
+    mockPlatform.__reset();
+    SessionKeyVault.clear();
+    AccountSecureStorage.clearPrivateKeyCache();
+    const b = keyed('s-3');
+    const ledgerFirst = await restoreAccounts([ledgerAt(b), flagged(b)]);
+    expect(ledgerFirst.duplicatesDropped).toBe(1);
+    expect((await deviceAccounts())[0].type).toBe(AccountType.LEDGER);
+  });
+
+  it('a flagged record never ranks as key-bearing, even if it also carries a phrase (planRestore on unvalidated input)', () => {
+    const a = keyed('s-1');
+    const odd = { ...a, id: 'odd', withoutKey: true } as BackupAccountData; // flag AND phrase
+    const ledger = ledgerAt(a);
+    // The Ledger record must win: the flagged record is not rank 0.
+    const { accounts } = dedupeAccountsByAddress([odd, ledger]);
+    expect(accounts.map((x) => x.id)).toEqual(['ledger-1']);
   });
 
   it('two flagged records at one address merge into one account (as two watch records would)', async () => {

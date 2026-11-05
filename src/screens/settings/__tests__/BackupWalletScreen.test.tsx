@@ -391,3 +391,42 @@ it('the modal is not mounted in the same commit as the result: it opens after a 
   ).toBeTruthy();
   Platform.OS = originalOS;
 });
+
+it('the modal opens after exactly the pinned delay, not before and not never', async () => {
+  // Pins the value (500 ms): a zero or one-millisecond timeout would put the
+  // modal back in the commit that tears down the progress modal (hunter r5).
+  jest.useFakeTimers();
+  try {
+    const result = {
+      filename: 'backup.voibackup',
+      fileUri: 'file:///x',
+      fileContent: '{}',
+      size: 100,
+      accountCount: 1,
+      incomplete: {
+        leftOut: [
+          { address: 'A'.repeat(58), reason: 'key-unreadable' as const },
+        ],
+      },
+    } as BackupResult;
+    const report = buildBackupReport(result);
+    jest.mocked(BackupService.createBackup).mockResolvedValue(result);
+    const view = await render(<BackupWalletScreen />);
+    await fireEvent.press(view.getByText('Create Backup'));
+    await fireEvent.press(view.getByText(/confirm password/i));
+    const ack = () =>
+      view.queryByRole('button', { name: report.acknowledgeText });
+
+    expect(ack()).toBeNull();
+    await act(async () => {
+      jest.advanceTimersByTime(499);
+    });
+    expect(ack()).toBeNull();
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(ack()).not.toBeNull();
+  } finally {
+    jest.useRealTimers();
+  }
+});
