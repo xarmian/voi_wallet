@@ -270,6 +270,13 @@ interface WalletState {
   isInitialized: boolean;
   isLoading: boolean;
   lastError: string | null;
+  /**
+   * TASK-514: the last load could not tell whether a wallet exists (a storage
+   * read failed, or the wallet blob is unreadable). Distinct from a load that
+   * succeeded and found no wallet. Home shows "We couldn't load your accounts"
+   * with Try again when this is set, and Get Started only when it is not.
+   */
+  walletLoadFailed: boolean;
 
   // Account-specific UI states
   accountStates: Record<string, AccountUIState>;
@@ -714,6 +721,7 @@ export const useWalletStore = create<WalletState>()(
     isInitialized: false,
     isLoading: false,
     lastError: null,
+    walletLoadFailed: false,
     accountStates: {},
     tokenMetadataCache: {},
     pendingTokenRequests: new Set(),
@@ -865,9 +873,22 @@ export const useWalletStore = create<WalletState>()(
             wallet,
             accountStates,
             isInitialized: true,
+            walletLoadFailed: false,
           });
         } else {
-          set({ isInitialized: true });
+          // getCurrentWallet() swallows storage read errors and resolves null, so
+          // null alone does not mean "no wallet" (TASK-514). Only a STRICT read
+          // that succeeds and finds no accounts is a genuine empty wallet; a
+          // read that fails, or that finds accounts the first read missed, is a
+          // failed load, and Home must not tell the user to get started.
+          let loadFailed: boolean;
+          try {
+            loadFailed =
+              await MultiAccountWalletService.hasWalletWithAccountsStrict();
+          } catch {
+            loadFailed = true;
+          }
+          set({ isInitialized: true, walletLoadFailed: loadFailed });
         }
       } catch (error) {
         set({
@@ -876,6 +897,8 @@ export const useWalletStore = create<WalletState>()(
               ? error.message
               : 'Failed to initialize wallet',
           isInitialized: true,
+          // An exception during a load is not "no wallet" either.
+          walletLoadFailed: true,
         });
       } finally {
         set({ isLoading: false });
