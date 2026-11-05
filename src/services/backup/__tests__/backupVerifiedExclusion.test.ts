@@ -61,23 +61,56 @@ jest.mock('@/services/wallet', () => ({
       mockGetCurrentWalletConfirmed(...args),
     persistRestoredWallet: (...args: unknown[]) =>
       mockPersistRestoredWallet(...(args as [])),
+    readWalletStrict: async () => null,
+    // The add-only commit: the same single wallet write the tests inspect.
+    mergeRestoredAccounts: async (
+      accounts: { id: string }[],
+      gen: number,
+      shell: object
+    ) => {
+      await (
+        mockPersistRestoredWallet as unknown as (
+          ...args: unknown[]
+        ) => Promise<void>
+      )({ ...shell, accounts, activeAccountId: accounts[0].id }, gen);
+      return { added: accounts.map((a) => a.id), skipped: [] };
+    },
   },
 }));
 
-jest.mock('@/services/secure/AccountSecureStorage', () => ({
-  AccountSecureStorage: {
-    getResetGeneration: () => 0,
-    clearAll: jest.fn(),
-    probeSecretPresenceStrict: jest.fn(async () => false),
-    storeKeylessAccountForRestore: jest.fn(async (account: { id: string }) => ({
-      id: account.id,
-      reassigned: false,
-    })),
-    storeAccountForCreation: jest.fn(async () => 'token'),
-    commitPendingCreate: jest.fn(async () => {}),
-    deleteAccountIfAttemptMatches: jest.fn(async () => {}),
-  },
-}));
+jest.mock('@/services/secure/AccountSecureStorage', () => {
+  const storeAccountForCreation = jest.fn(async () => 'token');
+  return {
+    AccountSecureStorage: {
+      getResetGeneration: () => 0,
+      clearAll: jest.fn(),
+      probeSecretPresenceStrict: jest.fn(async () => false),
+      storeKeylessAccountForRestore: jest.fn(
+        async (account: { id: string }) => ({
+          id: account.id,
+          reassigned: false,
+        })
+      ),
+      hasPinStrict: jest.fn(async () => false),
+      removeAccountMetadataOnly: jest.fn(async () => {}),
+      storeAccountForCreation,
+      storeAccountForRestore: jest.fn(
+        async (account: { id: string }, key: unknown, gen: number) => ({
+          kind: 'written' as const,
+          id: account.id,
+          token: await (
+            storeAccountForCreation as unknown as (
+              ...a: unknown[]
+            ) => Promise<string>
+          )(account, key, gen, 'restore'),
+          reassigned: false,
+        })
+      ),
+      commitPendingCreate: jest.fn(async () => {}),
+      deleteAccountIfAttemptMatches: jest.fn(async () => {}),
+    },
+  };
+});
 
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {

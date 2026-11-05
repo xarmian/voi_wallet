@@ -329,9 +329,43 @@ export interface BackupResult {
 }
 
 /**
+ * What restore did with one record of the file (TASK-504). Every record gets
+ * exactly one result; anything other than `added` or `added-in-place` means the
+ * device was left as it was for that record.
+ */
+export type RestoreRecordOutcome =
+  /** Added under the id the file gave it. */
+  | 'added'
+  /** Added under a fresh id because the file's id names an occupied key slot. */
+  | 'added-new-id'
+  /** Added against a key already on this device that derives to the same address. */
+  | 'added-in-place'
+  /** Same id and same address already on this device. */
+  | 'already-present'
+  /** The address is already on this device under another id or type. */
+  | 'kept-device-record'
+  /** The id is on this device with a different address. */
+  | 'rejected-id-conflict'
+  /** A key for this record could not be placed safely. */
+  | 'rejected-no-safe-slot'
+  /** The record lacks fields restore needs (for example a signer device). */
+  | 'rejected-invalid';
+
+export interface RestoreRecordResult {
+  id: string;
+  address: string;
+  label?: string;
+  outcome: RestoreRecordOutcome;
+  /** The id the record was stored under, when it differs from the file's. */
+  storedId?: string;
+}
+
+/**
  * Result of restoring a backup
  */
 export interface RestoreResult {
+  /** One result per record of the file (TASK-504) */
+  records: RestoreRecordResult[];
   /** Number of accounts restored */
   accountCount: number;
   /** Number of Ledger accounts (metadata only) */
@@ -397,7 +431,7 @@ export interface BackupProgress {
  */
 export interface RestoreProgress {
   /** Current step */
-  step: 'reading' | 'decrypting' | 'validating' | 'clearing' | 'restoring';
+  step: 'reading' | 'decrypting' | 'validating' | 'restoring';
   /** Progress percentage (0-100) */
   progress: number;
   /** Current step description */

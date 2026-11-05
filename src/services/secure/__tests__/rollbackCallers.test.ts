@@ -148,10 +148,24 @@ it.each(['create', 'import'] as const)(
 
 it('restore rolls back all three accounts despite the second failure and preserves the original error', async () => {
   seedCreation();
+  // Restore writes keys through storeAccountForRestore; seed it with the same
+  // fake creation so each key is journaled with a known token.
+  jest
+    .spyOn(AccountSecureStorage, 'storeAccountForRestore')
+    .mockImplementation(async (account, key, gen) => ({
+      kind: 'written',
+      id: account.id,
+      token: await AccountSecureStorage.storeAccountForCreation(
+        account,
+        key,
+        gen
+      ),
+      reassigned: false,
+    }));
   const original = new ResetRacedError();
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest
-    .spyOn(MultiAccountWalletService, 'persistRestoredWallet')
+    .spyOn(MultiAccountWalletService, 'mergeRestoredAccounts')
     .mockRejectedValueOnce(original);
   const rollback = jest.spyOn(
     AccountSecureStorage,

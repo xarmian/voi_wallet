@@ -8,9 +8,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import algosdk from 'algosdk';
 import { Buffer } from 'buffer';
 import * as Crypto from 'expo-crypto';
-import { storage } from '@/platform';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { markPinSetupPending } from '@/services/secure/pinSetupPending';
 import {
   AccountType,
@@ -31,9 +31,10 @@ import {
   BackupRemoteSignerSettings,
   BackupError,
   RestoreResult,
+  RestoreRecordOutcome,
+  RestoreRecordResult,
 } from './types';
 import { redactAddress, redactError } from '@/utils/logRedaction';
-import { removePersistedBalanceCaches } from '@/store/walletStore';
 
 // Storage keys for various settings
 const STORAGE_KEYS = {
@@ -58,9 +59,6 @@ const STORAGE_KEYS = {
   FRIENDS_LIST: '@friends/list',
   // Experimental
   EXPERIMENTAL: 'experimental-features',
-  // Wallet
-  WALLET_KEY: 'voi_wallet_metadata',
-  ACCOUNT_LIST: 'voi_account_list',
 };
 
 // Remote signer storage keys
@@ -68,7 +66,6 @@ const REMOTE_SIGNER_STORAGE_KEYS = {
   APP_MODE: '@voi_remote_signer_mode',
   SIGNER_CONFIG: '@voi_signer_config',
   PAIRED_SIGNERS: '@voi_paired_signers',
-  PROCESSED_REQUESTS: '@voi_processed_requests',
 };
 
 /**
@@ -84,78 +81,7 @@ function generateDeviceId(): string {
   return `voi-signer-${timestamp}-${randomPart}`;
 }
 
-/**
- * Clear all existing wallet data before restore
- * This ensures a clean slate for the restore operation
- */
-export async function clearAllData(): Promise<void> {
-  try {
-    // Clear all accounts via AccountSecureStorage
-    await AccountSecureStorage.clearAll();
-
-    // Clear wallet metadata. TASK-212: funnel the wipe through the wallet
-    // service (instead of removing voi_wallet_metadata directly) so it bumps the
-    // reset epoch + serializes on the write chain — an in-flight getCurrentWallet
-    // read-repair write can no longer resurrect the wallet blob mid-restore.
-    await MultiAccountWalletService.clearAllWallets();
-    await storage.removeItem(STORAGE_KEYS.ACCOUNT_LIST);
-
-    // Clear settings
-    await AsyncStorage.multiRemove([
-      STORAGE_KEYS.THEME_MODE,
-      STORAGE_KEYS.NFT_THEME,
-      STORAGE_KEYS.NFT_THEME_ENABLED,
-      STORAGE_KEYS.NFT_THEME_PALETTE_INDEX,
-      STORAGE_KEYS.NFT_THEME_BACKGROUND_ENABLED,
-      STORAGE_KEYS.NFT_THEME_OVERLAY_INTENSITY,
-      STORAGE_KEYS.NETWORK,
-      STORAGE_KEYS.PIN_TIMEOUT,
-      STORAGE_KEYS.ASSET_SORT_BY,
-      STORAGE_KEYS.ASSET_SORT_ORDER,
-      STORAGE_KEYS.ASSET_BALANCE_THRESHOLD,
-      STORAGE_KEYS.ASSET_VALUE_THRESHOLD,
-      STORAGE_KEYS.ASSET_NATIVE_FIRST,
-      STORAGE_KEYS.FRIENDS_LIST,
-      STORAGE_KEYS.EXPERIMENTAL,
-      // Remote signer storage keys
-      // NOTE: PROCESSED_REQUESTS is intentionally cleared and NOT restored from backup
-      // to prevent replay attacks. The request timestamp validation in the remote signer
-      // protocol provides protection against old requests being re-processed after restore.
-      REMOTE_SIGNER_STORAGE_KEYS.APP_MODE,
-      REMOTE_SIGNER_STORAGE_KEYS.SIGNER_CONFIG,
-      REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS,
-      REMOTE_SIGNER_STORAGE_KEYS.PROCESSED_REQUESTS,
-    ]);
-
-    // Clear balance caches. Balance-cache keys go through the store's
-    // balance-cache chain so an in-flight deferred single-network persist can't
-    // re-add its entry after the removal (TASK-398). The multi-network cache
-    // has no chain, so this doesn't stop its writers; claimable/messages keys
-    // aren't chain-owned either.
-    const allKeys = await AsyncStorage.getAllKeys();
-    const balanceCacheKeys = allKeys.filter((key) =>
-      key.includes('balance_cache')
-    );
-    const otherCacheKeys = allKeys.filter(
-      (key) =>
-        !key.includes('balance_cache') &&
-        (key.includes('claimable') || key.includes('messages'))
-    );
-    // Always, even when nothing was enumerated: a deferred first persist may
-    // not have created its key yet.
-    await removePersistedBalanceCaches(balanceCacheKeys);
-    if (otherCacheKeys.length > 0) {
-      await AsyncStorage.multiRemove(otherCacheKeys);
-    }
-  } catch (error) {
-    throw new BackupError(
-      `Failed to clear existing data: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'RESTORE_FAILED'
-    );
-  }
-}
-
-/** Validate required standard phrases and retained keys before destructive work. */
+/** Validate required standard phrases and retained keys before any write. */
 export function validateRetainedKeys(accounts: BackupAccountData[]): void {
   // A later record reusing an id would overwrite (or, metadata-only, delete)
   // the key an earlier record stored, so ids must be unique.
@@ -266,7 +192,34 @@ export function dedupeAccountsByAddress(accounts: BackupAccountData[]): {
   return { accounts: kept, dropped: accounts.length - kept.length };
 }
 
-/** Restore account metadata and journal every restored local key. */
+/** Where each record of the file stands against the accounts already on the
+ *  device, decided before anything is written for it (TASK-504). */
+function conflictWithDevice(
+  id: string,
+  address: string,
+  deviceAccounts: { id: string; address: string }[]
+): RestoreRecordOutcome | null {
+  const sameId = deviceAccounts.find((account) => account.id === id);
+  if (sameId) {
+    return sameId.address === address
+      ? 'already-present'
+      : 'rejected-id-conflict';
+  }
+  if (deviceAccounts.some((account) => account.address === address)) {
+    return 'kept-device-record';
+  }
+  return null;
+}
+
+/**
+ * Add-only restore of the file's accounts (TASK-504). Nothing already on the
+ * device is deleted or overwritten. Each record is decided against the device
+ * and gets exactly one result. Key slots are read and written inside one
+ * key-mutation task, a record whose id names an occupied slot is stored under a
+ * fresh id, and the wallet blob is merged once, at the end, into the latest
+ * blob re-read inside the write queue. Rollback touches only what this attempt
+ * wrote: journaled key slots, and metadata it added for key-less records.
+ */
 export async function restoreAccounts(
   backupAccounts: BackupAccountData[]
 ): Promise<{
@@ -277,9 +230,10 @@ export async function restoreAccounts(
   ledger: number;
   remoteSigner: number;
   duplicatesDropped: number;
+  records: RestoreRecordResult[];
 }> {
-  // Defensive: the full-restore entry points validate before clearing, but a
-  // direct call must not bypass the duplicate-id and key-identity checks.
+  // Defensive: the full-restore entry points validate first, but a direct call
+  // must not bypass the duplicate-id and key-identity checks.
   validateRetainedKeys(backupAccounts);
   const { accounts, dropped } = dedupeAccountsByAddress(backupAccounts);
   const counts = {
@@ -290,21 +244,22 @@ export async function restoreAccounts(
     rekeyed: 0,
     ledger: 0,
     remoteSigner: 0,
+    records: [] as RestoreRecordResult[],
   };
 
   if (accounts.length === 0) {
     return counts;
   }
 
-  // TASK-220: this runs AFTER performFullRestore's clearAllData() (restore's own
-  // reset). Capture the secure reset generation now so the whole restore —
-  // per-account secret writes AND the final wallet-metadata commit — is atomic
-  // against ANOTHER full reset racing the restore: on such a race every write
-  // aborts (ResetRacedError) and the STANDARD secrets already written are rolled
-  // back (ownership-checked), so the racing reset wins with no orphaned key or
-  // resurrected wallet (DR-2).
+  // TASK-220: capture the secure reset generation now so the whole restore, the
+  // per-account secret writes and the final wallet-metadata commit, aborts
+  // (ResetRacedError) if a full reset races it, and the secrets written so far
+  // are rolled back (ownership-checked), so the racing reset wins (DR-2).
   const creationGen = AccountSecureStorage.getResetGeneration();
+  // Slots this attempt wrote (journaled, with the ownership token).
   const pendingCreates: { id: string; token: string }[] = [];
+  // Metadata this attempt added without writing a slot.
+  const metadataOnly = new Set<string>();
   // Once the wallet blob MAY reference the restored accounts, their secrets
   // must never be rolled back: deleting them would leave persisted accounts
   // keyless. storeWallet writes the blob and THEN clears the wipe tombstone, so
@@ -312,6 +267,23 @@ export async function restoreAccounts(
   let persistAttempted = false;
 
   try {
+    // The device is read first and strictly: a failed read stops here with
+    // nothing written, and is never taken as an empty device.
+    const deviceWallet = await MultiAccountWalletService.readWalletStrict();
+    const deviceAccounts = deviceWallet?.accounts ?? [];
+    // A restored key must end up under the same protection as the device's
+    // other keys, and a locked vault cannot give that: stop, device unchanged.
+    if (
+      deviceAccounts.length > 0 &&
+      (await AccountSecureStorage.hasPinStrict()) &&
+      !SessionKeyVault.isUnlocked()
+    ) {
+      throw new BackupError(
+        'Unlock the wallet to restore accounts',
+        'AUTHENTICATION_REQUIRED'
+      );
+    }
+
     const restoredAccounts: (
       | StandardAccountMetadata
       | WatchAccountMetadata
@@ -319,8 +291,49 @@ export async function restoreAccounts(
       | LedgerAccountMetadata
       | RemoteSignerAccountMetadata
     )[] = [];
+    const resultByStoredId = new Map<string, RestoreRecordResult>();
+    const tokenByStoredId = new Map<string, string>();
 
     for (const backupAccount of accounts) {
+      const address = restoredAddress(backupAccount) ?? backupAccount.address;
+      const record: RestoreRecordResult = {
+        id: backupAccount.id,
+        address,
+        label: backupAccount.label,
+        outcome: 'added',
+      };
+      const conflict = conflictWithDevice(
+        backupAccount.id,
+        address,
+        deviceAccounts
+      );
+      if (conflict) {
+        record.outcome = conflict;
+        counts.records.push(record);
+        continue;
+      }
+
+      // Records the file cannot supply: reported, never silently dropped.
+      if (
+        backupAccount.type === AccountType.REMOTE_SIGNER &&
+        (!backupAccount.signerDeviceId || !backupAccount.pairedAt)
+      ) {
+        console.warn(
+          `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing signer fields`
+        );
+        record.outcome = 'rejected-invalid';
+        counts.records.push(record);
+        continue;
+      }
+
+      let stored: { id: string; reassigned: boolean; inPlace?: boolean };
+      let account:
+        | StandardAccountMetadata
+        | WatchAccountMetadata
+        | RekeyedAccountMetadata
+        | LedgerAccountMetadata
+        | RemoteSignerAccountMetadata;
+
       switch (backupAccount.type) {
         case AccountType.STANDARD: {
           // Derive account from mnemonic
@@ -343,7 +356,7 @@ export async function restoreAccounts(
             lastUsed: new Date().toISOString(),
             avatarUrl: backupAccount.avatarUrl,
             // TASK-111: Never persist the 25-word mnemonic to general storage.
-            // The secret key is passed separately to storeAccount() below
+            // The secret key is passed separately to the store below
             // (expo-secure-store); the secure key manager re-derives the phrase from the
             // sk on demand, so Show-Recovery-Phrase still works.
             mnemonic: '',
@@ -360,25 +373,28 @@ export async function restoreAccounts(
             backupVerified: false,
           };
 
-          // Store account securely (this encrypts the private key). TASK-220:
-          // the guarded atomic write journals ownership + aborts if a reset
-          // raced; the token lets us roll back precisely this secret.
           try {
-            const token = await AccountSecureStorage.storeAccountForCreation(
+            const written = await AccountSecureStorage.storeAccountForRestore(
               standardAccount,
               algoAccount.sk,
-              creationGen,
-              'restore'
+              creationGen
             );
-            pendingCreates.push({ id: standardAccount.id, token });
+            stored = {
+              id: written.id,
+              reassigned: written.kind === 'written' && written.reassigned,
+              inPlace: written.kind === 'in-place',
+            };
+            if (written.kind === 'written') {
+              pendingCreates.push({ id: written.id, token: written.token });
+              tokenByStoredId.set(written.id, written.token);
+            } else {
+              metadataOnly.add(written.id);
+            }
           } finally {
             // Clear secret key from memory regardless of outcome.
             algoAccount.sk.fill(0);
           }
-
-          restoredAccounts.push(standardAccount);
-          counts.standard++;
-          counts.total++;
+          account = standardAccount;
           break;
         }
 
@@ -398,15 +414,12 @@ export async function restoreAccounts(
             notes: backupAccount.notes,
           };
 
-          const storedWatchAccount =
-            await AccountSecureStorage.storeKeylessAccountForRestore(
-              watchAccount,
-              creationGen
-            );
-          watchAccount.id = storedWatchAccount.id;
-          restoredAccounts.push(watchAccount);
-          counts.watch++;
-          counts.total++;
+          stored = await AccountSecureStorage.storeKeylessAccountForRestore(
+            watchAccount,
+            creationGen
+          );
+          metadataOnly.add(stored.id);
+          account = watchAccount;
           break;
         }
 
@@ -424,8 +437,8 @@ export async function restoreAccounts(
             avatarUrl: backupAccount.avatarUrl,
             authAddress: backupAccount.authAddress || '',
             rekeyedAt: backupAccount.rekeyedAt,
-            // Restore wipes first, so without a mnemonic no key exists here:
-            // a backed-up originalOwner would claim one (TASK-425 U4).
+            // A record claims a retained key only when the file holds the phrase
+            // (TASK-425 U4).
             originalOwner: !!backupAccount.mnemonic,
             hasBackup: backupAccount.hasBackup ?? false,
             backupVerified: false,
@@ -437,27 +450,33 @@ export async function restoreAccounts(
             validateRetainedKeys([backupAccount]);
             const derived = algosdk.mnemonicToSecretKey(backupAccount.mnemonic);
             try {
-              const token = await AccountSecureStorage.storeAccountForCreation(
+              const written = await AccountSecureStorage.storeAccountForRestore(
                 rekeyedAccount,
                 derived.sk,
-                creationGen,
-                'restore'
+                creationGen
               );
-              pendingCreates.push({ id: rekeyedAccount.id, token });
+              stored = {
+                id: written.id,
+                reassigned: written.kind === 'written' && written.reassigned,
+                inPlace: written.kind === 'in-place',
+              };
+              if (written.kind === 'written') {
+                pendingCreates.push({ id: written.id, token: written.token });
+                tokenByStoredId.set(written.id, written.token);
+              } else {
+                metadataOnly.add(written.id);
+              }
             } finally {
               derived.sk.fill(0);
             }
           } else {
-            const storedRekeyedAccount =
-              await AccountSecureStorage.storeKeylessAccountForRestore(
-                rekeyedAccount,
-                creationGen
-              );
-            rekeyedAccount.id = storedRekeyedAccount.id;
+            stored = await AccountSecureStorage.storeKeylessAccountForRestore(
+              rekeyedAccount,
+              creationGen
+            );
+            metadataOnly.add(stored.id);
           }
-          restoredAccounts.push(rekeyedAccount);
-          counts.rekeyed++;
-          counts.total++;
+          account = rekeyedAccount;
           break;
         }
 
@@ -481,34 +500,16 @@ export async function restoreAccounts(
             deviceName: backupAccount.deviceName,
           };
 
-          const storedLedgerAccount =
-            await AccountSecureStorage.storeKeylessAccountForRestore(
-              ledgerAccount,
-              creationGen
-            );
-          ledgerAccount.id = storedLedgerAccount.id;
-          restoredAccounts.push(ledgerAccount);
-          counts.ledger++;
-          counts.total++;
+          stored = await AccountSecureStorage.storeKeylessAccountForRestore(
+            ledgerAccount,
+            creationGen
+          );
+          metadataOnly.add(stored.id);
+          account = ledgerAccount;
           break;
         }
 
         case AccountType.REMOTE_SIGNER: {
-          // Validate required fields for remote signer accounts
-          if (!backupAccount.signerDeviceId) {
-            console.warn(
-              `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing signerDeviceId`
-            );
-            continue;
-          }
-
-          if (!backupAccount.pairedAt) {
-            console.warn(
-              `Skipping remote signer account ${redactAddress(backupAccount.address)} - missing pairedAt`
-            );
-            continue;
-          }
-
           // Remote signer accounts only have metadata - keys are on signer device
           const remoteSignerAccount: RemoteSignerAccountMetadata = {
             id: backupAccount.id,
@@ -522,39 +523,47 @@ export async function restoreAccounts(
             importedAt: backupAccount.importedAt,
             lastUsed: new Date().toISOString(),
             avatarUrl: backupAccount.avatarUrl,
-            signerDeviceId: backupAccount.signerDeviceId,
+            signerDeviceId: backupAccount.signerDeviceId!,
             signerDeviceName: backupAccount.signerDeviceName,
-            pairedAt: backupAccount.pairedAt,
+            pairedAt: backupAccount.pairedAt!,
             lastSigningActivity: backupAccount.lastSigningActivity,
             // Conservative default for backups written before this field existed.
             authLevel: withDefaultAuthLevel(backupAccount.authLevel),
           };
 
-          const storedRemoteSignerAccount =
-            await AccountSecureStorage.storeKeylessAccountForRestore(
-              remoteSignerAccount,
-              creationGen
-            );
-          remoteSignerAccount.id = storedRemoteSignerAccount.id;
-          restoredAccounts.push(remoteSignerAccount);
-          counts.remoteSigner++;
-          counts.total++;
+          stored = await AccountSecureStorage.storeKeylessAccountForRestore(
+            remoteSignerAccount,
+            creationGen
+          );
+          metadataOnly.add(stored.id);
+          account = remoteSignerAccount;
           break;
         }
 
         default:
           console.warn(`Unknown account type: ${backupAccount.type}`);
+          record.outcome = 'rejected-invalid';
+          counts.records.push(record);
+          continue;
       }
+
+      account.id = stored.id;
+      record.outcome = stored.reassigned
+        ? 'added-new-id'
+        : stored.inPlace
+          ? 'added-in-place'
+          : 'added';
+      if (stored.id !== backupAccount.id) record.storedId = stored.id;
+      resultByStoredId.set(stored.id, record);
+      counts.records.push(record);
+      restoredAccounts.push(account);
     }
 
-    // Create wallet structure
     if (restoredAccounts.length > 0) {
-      const wallet: Wallet = {
+      const shell: Omit<Wallet, 'accounts' | 'activeAccountId'> = {
         id: `wallet_${Date.now()}`,
         version: '2.0',
         createdAt: new Date().toISOString(),
-        accounts: restoredAccounts,
-        activeAccountId: restoredAccounts[0].id,
         settings: {
           theme: 'system',
           currency: 'USD',
@@ -570,29 +579,84 @@ export async function restoreAccounts(
         },
       };
 
-      // Store wallet metadata.
-      // TASK-111: route through the sanitizing wrapper instead of a raw
-      // storage.setItem so any per-account mnemonic is stripped before
-      // persistence and legacy secure-store copies are cleared.
-      // TASK-220: generation-guarded so a reset racing the restore aborts this
-      // commit (ResetRacedError) instead of resurrecting the wallet.
+      // Merge into the latest wallet blob inside the write queue (TASK-111:
+      // sanitized like every other write; TASK-220: generation-guarded so a
+      // reset racing the restore aborts this commit instead of resurrecting the
+      // wallet).
       persistAttempted = true;
-      await MultiAccountWalletService.persistRestoredWallet(
-        wallet,
-        creationGen
+      const merged = await MultiAccountWalletService.mergeRestoredAccounts(
+        restoredAccounts,
+        creationGen,
+        shell
       );
+
+      // A record the blob took in the meantime (another writer added the same
+      // id or address after the device read): it is not added, so what this
+      // attempt wrote for it is undone, and the report says so.
+      for (const skip of merged.skipped) {
+        const record = resultByStoredId.get(skip.id);
+        if (record) {
+          record.outcome =
+            skip.reason === 'id' ? 'already-present' : 'kept-device-record';
+        }
+        const token = tokenByStoredId.get(skip.id);
+        try {
+          if (token !== undefined) {
+            await AccountSecureStorage.deleteAccountIfAttemptMatches(
+              skip.id,
+              token
+            );
+            tokenByStoredId.delete(skip.id);
+          } else if (metadataOnly.has(skip.id)) {
+            await AccountSecureStorage.removeAccountMetadataOnly(skip.id);
+          }
+        } catch (undoError) {
+          console.warn('Restore undo failed:', redactError(undoError));
+        }
+        const index = pendingCreates.findIndex((p) => p.id === skip.id);
+        if (index >= 0) pendingCreates.splice(index, 1);
+      }
     }
 
-    // TASK-220: metadata committed — finalize each STANDARD secret (drop its
-    // pending-creation journal entry). The secure wipe tombstone stays sticky.
+    // TASK-220: metadata committed — finalize each secret this attempt wrote
+    // (drop its pending-creation journal entry). The secure wipe tombstone stays
+    // sticky. A metadata-only record never had a journal entry.
     for (const p of pendingCreates) {
       await AccountSecureStorage.commitPendingCreate(p.id, p.token);
     }
 
+    const typeOfRecord = new Map(accounts.map((a) => [a.id, a.type] as const));
+    for (const record of counts.records) {
+      if (
+        record.outcome !== 'added' &&
+        record.outcome !== 'added-new-id' &&
+        record.outcome !== 'added-in-place'
+      ) {
+        continue;
+      }
+      counts.total++;
+      switch (typeOfRecord.get(record.id)) {
+        case AccountType.STANDARD:
+          counts.standard++;
+          break;
+        case AccountType.WATCH:
+          counts.watch++;
+          break;
+        case AccountType.REKEYED:
+          counts.rekeyed++;
+          break;
+        case AccountType.LEDGER:
+          counts.ledger++;
+          break;
+        case AccountType.REMOTE_SIGNER:
+          counts.remoteSigner++;
+          break;
+      }
+    }
     return counts;
   } catch (error) {
-    // Roll back this attempt's journaled secrets only when no blob can have
-    // been written: before the persist call, or a reset race, which storeWallet
+    // Roll back this attempt's own writes only when no blob can have been
+    // written: before the persist call, or a reset race, which storeWallet
     // throws before its write (TASK-220 DR-2). Any other persist-time or later
     // failure keeps them; an orphan journaled secret is reconciled at boot,
     // a keyless persisted account is not (TASK-421 U3).
@@ -605,7 +669,16 @@ export async function restoreAccounts(
         console.warn('Restore rollback failed:', redactError(rollbackError));
       }
     }
-    if (error instanceof ResetRacedError) throw error;
+    // Metadata added without a slot is undone by id; the slot is never touched.
+    for (const id of rollback ? metadataOnly : []) {
+      try {
+        await AccountSecureStorage.removeAccountMetadataOnly(id);
+      } catch (rollbackError) {
+        console.warn('Restore rollback failed:', redactError(rollbackError));
+      }
+    }
+    if (error instanceof ResetRacedError || error instanceof BackupError)
+      throw error;
     throw new BackupError(
       `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'RESTORE_FAILED'
@@ -657,18 +730,9 @@ export async function restoreSettings(settings: BackupSettings): Promise<void> {
       keyValuePairs.push([STORAGE_KEYS.NETWORK, settings.network]);
     }
 
-    // Security settings (PIN timeout - NOT PIN hash)
-    if (settings.security) {
-      keyValuePairs.push([
-        STORAGE_KEYS.PIN_TIMEOUT,
-        String(settings.security.pinTimeout),
-      ]);
-
-      // Biometric enabled is stored via AccountSecureStorage
-      await AccountSecureStorage.setBiometricEnabled(
-        settings.security.biometricEnabled
-      );
-    }
+    // Security settings are never taken from a file: neither the PIN timeout
+    // nor the biometric switch (TASK-504). A file does not get to loosen how
+    // this device locks.
 
     // Asset filter settings
     if (settings.assetFilters) {
@@ -793,55 +857,8 @@ export async function restoreRemoteSignerSettings(
       );
     }
 
-    // Restore paired signers (if present)
-    if (settings.pairedSigners && settings.pairedSigners.length > 0) {
-      // Validate and filter paired signers before restoring
-      const validSigners = settings.pairedSigners.filter((signer) => {
-        // Validate required fields
-        if (!signer.deviceId) {
-          console.warn('Skipping paired signer - missing deviceId');
-          return false;
-        }
-        if (typeof signer.pairedAt !== 'number') {
-          console.warn(
-            `Skipping paired signer ${signer.deviceId} - invalid pairedAt`
-          );
-          return false;
-        }
-        // Validate addresses array
-        if (!Array.isArray(signer.addresses) || signer.addresses.length === 0) {
-          console.warn(
-            `Skipping paired signer ${signer.deviceId} - invalid or empty addresses`
-          );
-          return false;
-        }
-        return true;
-      });
-
-      if (validSigners.length > 0) {
-        // Convert back to Map serialization format [deviceId, info][]
-        const mapEntries = validSigners.map((signer) => [
-          signer.deviceId,
-          {
-            deviceId: signer.deviceId,
-            deviceName: signer.deviceName,
-            pairedAt: signer.pairedAt,
-            addresses: signer.addresses,
-            lastActivity: signer.lastActivity,
-          },
-        ]);
-        keyValuePairs.push([
-          REMOTE_SIGNER_STORAGE_KEYS.PAIRED_SIGNERS,
-          JSON.stringify(mapEntries),
-        ]);
-
-        if (validSigners.length < settings.pairedSigners.length) {
-          console.warn(
-            `Restored ${validSigners.length} of ${settings.pairedSigners.length} paired signers (some were invalid)`
-          );
-        }
-      }
-    }
+    // Paired signers are NOT restored (TASK-504): a pairing is trust, and a
+    // file does not get to grant it. The user pairs again on this device.
 
     // Write all settings at once
     if (keyValuePairs.length > 0) {
@@ -856,8 +873,11 @@ export async function restoreRemoteSignerSettings(
 }
 
 /**
- * Full restore operation
- * Clears existing data and restores from backup
+ * Full restore operation (TASK-504): add-only. It never clears anything. The
+ * file's accounts are added to what the device already holds; on a device that
+ * is still fresh (no PIN and no accounts) the file's display settings, friends
+ * and experimental flags are taken as well, and on any other device they are
+ * not touched.
  */
 export async function performFullRestore(
   accounts: BackupAccountData[],
@@ -866,42 +886,51 @@ export async function performFullRestore(
   experimental: BackupExperimentalFlags
 ): Promise<RestoreResult> {
   // Stage a private copy so callers cannot change validated phrases while
-  // the destructive storage operations below are awaiting completion.
+  // the storage operations below are awaiting completion.
   const stagedAccounts = accounts.map((account) => ({ ...account }));
   validateRetainedKeys(stagedAccounts);
 
-  // Clear all existing data only after every required phrase has decoded.
-  await clearAllData();
+  // Decide "fresh" BEFORE any account is added, from strict reads: a read
+  // error stops the restore here, with nothing written.
+  let hasPin: boolean;
+  let fresh: boolean;
+  try {
+    const deviceWallet = await MultiAccountWalletService.readWalletStrict();
+    hasPin = await AccountSecureStorage.hasPinStrict();
+    fresh = !hasPin && (deviceWallet?.accounts.length ?? 0) === 0;
+  } catch (error) {
+    throw new BackupError(
+      `Failed to restore accounts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'RESTORE_FAILED'
+    );
+  }
 
-  // TASK-213 (restore-before-PIN false-lockout fix): set the durable plaintext
-  // breadcrumb NOW — after the old PIN is wiped, BEFORE any key-bearing (STANDARD)
-  // account is persisted below. Restore writes STANDARD account key material with
-  // NO PIN yet (the user sets the PIN afterward on SecuritySetup). A cold-kill in
-  // that window would otherwise boot into the fail-closed recovery screen (whose
-  // Reset WIPES this just-restored wallet); the breadcrumb lets checkInitialAuthState
-  // route to SecuritySetup (resume PIN setup) instead. setupPin clears it on
-  // success. Placed BEFORE restoreAccounts so the breadcrumb can never be missing
-  // while a key-bearing account sits on disk without a PIN.
-  await markPinSetupPending();
+  // TASK-213 (restore-before-PIN false-lockout fix): with no PIN, set the
+  // durable plaintext breadcrumb BEFORE any key-bearing (STANDARD) account is
+  // persisted below. Restore writes key material with NO PIN yet (the user sets
+  // it afterward on SecuritySetup). A cold-kill in that window would otherwise
+  // boot into the fail-closed recovery screen (whose Reset WIPES this
+  // just-restored wallet); the breadcrumb lets checkInitialAuthState route to
+  // SecuritySetup (resume PIN setup) instead. setupPin clears it on success.
+  if (!hasPin) {
+    await markPinSetupPending();
+  }
 
-  // Restore accounts
   const accountCounts = await restoreAccounts(stagedAccounts);
 
-  // Restore settings
-  await restoreSettings(settings);
-
-  // Restore remote signer settings (check if present for backward compatibility)
-  const remoteSignerSettingsRestored = await restoreRemoteSignerSettings(
-    settings.remoteSigner
-  );
-
-  // Restore friends
-  const friendsCount = await restoreFriends(friends);
-
-  // Restore experimental flags
-  await restoreExperimental(experimental);
+  let remoteSignerSettingsRestored = false;
+  let friendsCount = 0;
+  if (fresh) {
+    await restoreSettings(settings);
+    remoteSignerSettingsRestored = await restoreRemoteSignerSettings(
+      settings.remoteSigner
+    );
+    friendsCount = await restoreFriends(friends);
+    await restoreExperimental(experimental);
+  }
 
   return {
+    records: accountCounts.records,
     accountCount: accountCounts.total,
     ledgerAccountCount: accountCounts.ledger,
     standardAccountCount: accountCounts.standard,
@@ -909,7 +938,7 @@ export async function performFullRestore(
     rekeyedAccountCount: accountCounts.rekeyed,
     remoteSignerAccountCount: accountCounts.remoteSigner,
     duplicateAccountsDropped: accountCounts.duplicatesDropped,
-    settingsRestored: true,
+    settingsRestored: fresh,
     friendsCount,
     remoteSignerSettingsRestored,
   };

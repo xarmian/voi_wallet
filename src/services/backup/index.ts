@@ -291,14 +291,7 @@ export class BackupService {
 
       validateRetainedKeys(backup.accounts);
 
-      // Step 5: Clear existing data
-      this.reportProgress({
-        step: 'clearing',
-        progress: 50,
-        message: 'Clearing existing data...',
-      });
-
-      // Step 6: Restore all data
+      // Step 5: Add the file's data to this device (nothing is cleared)
       this.reportProgress({
         step: 'restoring',
         progress: 60,

@@ -1584,36 +1584,124 @@ export class AccountSecureStorage {
     creationGen: number,
     context: WriteContext = 'create'
   ): Promise<string> {
+    return this.runKeyMutationExclusive(() =>
+      this.storeAccountForCreationLocked(
+        account,
+        privateKey,
+        creationGen,
+        context
+      )
+    ).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
+    });
+  }
+
+  /** The body of storeAccountForCreation, assuming the key-mutation mutex is
+   *  HELD. */
+  private static async storeAccountForCreationLocked(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    context: WriteContext
+  ): Promise<string> {
+    if (this.secureResetGeneration !== creationGen) {
+      throw new ResetRacedError();
+    }
+    const journal = await this.readPendingCreateJournal();
+    if (journal[account.id] !== undefined) {
+      throw new DuplicatePendingCreateError();
+    }
+    const token = this.nextPendingCreateToken();
+    journal[account.id] = token;
+    await this.writePendingCreateJournal(journal);
+    const progress = { secretWritten: false };
+    try {
+      await this.storeAccountLocked(account, privateKey, progress, context);
+    } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
+      // TASK-449: the caller never receives the token on a throw, so it cannot
+      // roll back; do it here, in the same mutex task.
+      await this.rollBackFailedCreateLocked(
+        account.id,
+        token,
+        progress.secretWritten
+      );
+      throw error;
+    }
+    return token;
+  }
+
+  /**
+   * Add-only restore of a record that carries a key (TASK-504). One key-mutation
+   * mutex task reads the id's secret slot and acts on what that read shows:
+   *  - empty: the key is written under the file id, journaled, as for any new
+   *    account (`written`, with the ownership token);
+   *  - holds the key for this address: nothing is written and nothing is
+   *    journaled, only the account metadata is added (`in-place`);
+   *  - holds another key, or something no reader accepts: the record is stored
+   *    under a fresh id whose own slot reads empty first (`written`,
+   *    `reassigned`), and the occupied slot is not touched.
+   * A slot read that cannot complete throws and writes nothing.
+   */
+  static async storeAccountForRestore(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    context: WriteContext = 'restore'
+  ): Promise<
+    | { kind: 'written'; id: string; token: string; reassigned: boolean }
+    | { kind: 'in-place'; id: string }
+  > {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      const journal = await this.readPendingCreateJournal();
-      if (journal[account.id] !== undefined) {
-        throw new DuplicatePendingCreateError();
-      }
-      const token = this.nextPendingCreateToken();
-      journal[account.id] = token;
-      await this.writePendingCreateJournal(journal);
-      const progress = { secretWritten: false };
-      try {
-        await this.storeAccountLocked(account, privateKey, progress, context);
-      } catch (error) {
-        if (
-          error instanceof WriteOutcomeUnknownError ||
-          error instanceof WriteUnresolvedError
-        )
-          throw error;
-        // TASK-449: the caller never receives the token on a throw, so it cannot
-        // roll back; do it here, in the same mutex task.
-        await this.rollBackFailedCreateLocked(
-          account.id,
-          token,
-          progress.secretWritten
+      const own = await this.inspectSecretSlot(account.id, account.address);
+      if (own.state === 'empty') {
+        const token = await this.storeAccountForCreationLocked(
+          account,
+          privateKey,
+          creationGen,
+          context
         );
-        throw error;
+        return {
+          kind: 'written' as const,
+          id: account.id,
+          token,
+          reassigned: false,
+        };
       }
-      return token;
+      if (own.state === 'key-matches') {
+        await this.storeAccountLocked(
+          account,
+          undefined,
+          undefined,
+          context,
+          true
+        );
+        return { kind: 'in-place' as const, id: account.id };
+      }
+      const id = await this.freshAccountId();
+      const fresh = await this.inspectSecretSlot(id, account.address);
+      if (fresh.state !== 'empty') {
+        throw new AccountStorageError(
+          'Could not find an empty secret slot for a restored key'
+        );
+      }
+      const token = await this.storeAccountForCreationLocked(
+        { ...account, id } as AccountMetadata,
+        privateKey,
+        creationGen,
+        context
+      );
+      return { kind: 'written' as const, id, token, reassigned: true };
     }).catch((error: unknown) => {
       if (error instanceof WriteOutcomeUnknownError) {
         throw new WriteOutcomeUnknownError(error.journaled, context);
@@ -1729,6 +1817,19 @@ export class AccountSecureStorage {
         throw new WriteOutcomeUnknownError(error.journaled, context);
       }
       throw error;
+    });
+  }
+
+  /**
+   * Undo a metadata-only restore write (a key-less record, or a key added
+   * against a key already on the device): removes the account's metadata and
+   * its account-list entry and NEVER touches the secret slot, because this
+   * attempt did not write one (TASK-504).
+   */
+  static async removeAccountMetadataOnly(accountId: string): Promise<void> {
+    await this.runKeyMutationExclusive(async () => {
+      await this.boundedStorageRemove(this.metadataKey(accountId));
+      await this.removeFromAccountList(accountId);
     });
   }
 
@@ -4801,7 +4902,7 @@ export class AccountSecureStorage {
     // TASK-192: cancel any in-flight deferred notification subscribe pass, here
     // rather than only in clearAllWallets. Every reset path awaits THIS method
     // first and reaches clearAllWallets second (LockScreen.performReset,
-    // SecureStorageUnavailableScreen, backup restorers.clearAllData,
+    // SecureStorageUnavailableScreen,
     // keyManager), so invalidating downstream leaves a window the length of a
     // full secure-storage wipe in which the boot-time batch can still write
     // subscriptions for accounts being erased. Synchronous and before the mutex,
