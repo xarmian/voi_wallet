@@ -120,8 +120,9 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
       '        } else if (asset.key?.let { embeddedFiles.containsKey(it) } == true) {';
     expect(original).toContain(firstBranch.split(' else if')[0]);
     expect(patched).toContain(firstBranch);
-    // And the new branch only ever sees android_res paths, because it is
-    // reached only when the first branch's condition was false.
+    // And the new branch only ever sees embedded resource paths (android_res or
+    // android_asset), because it is reached only when the first branch's
+    // condition (isAndroidResourceAsset) was false.
   });
 
   it('does not write the DB or change anything else', () => {

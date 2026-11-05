@@ -18,7 +18,11 @@ const { withDangerousMod } = require('expo/config-plugins');
 // and every icon stays an empty <Text /> (no tofu, no log in a release build).
 //
 // The fix is in memory only: when the embedded manifest already maps a key, the
-// DB row's android_res path for that key is ignored. The DB is not written.
+// DB row's embedded resource path (android_res or android_asset: both name
+// something inside this APK, and both are what the launcher's own
+// isAndroidResourceAsset check accepts) for that key is ignored. The DB is not
+// written. A downloaded (over-the-air) asset has a plain file path and keeps its
+// original branch.
 //
 // This edits node_modules, so it must fail loudly rather than do nothing:
 //  - it throws unless expo-updates is exactly the version this was written for
