@@ -461,6 +461,14 @@ export interface RestoreRecordResult {
   outcome: RestoreRecordOutcome;
   /** The id the record was stored under, when it differs from the file's. */
   storedId?: string;
+  /**
+   * Set when a record the file carries WITHOUT its key was added without one
+   * (TASK-504): `watch-only` for a flagged standard record (stored as a Watch
+   * Only account), `rekeyed` for a flagged rekeyed record (stored key-less, with
+   * its rekey fields). Absent when the record took a surviving key on the
+   * old-PIN screen (item 9) or was not added.
+   */
+  withoutKey?: 'watch-only' | 'rekeyed';
   /** The type of the key-less device record, for `device-keyless` only. */
   deviceType?:
     AccountType.WATCH | AccountType.LEDGER | AccountType.REMOTE_SIGNER;

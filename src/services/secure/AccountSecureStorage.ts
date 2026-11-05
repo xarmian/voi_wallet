@@ -1820,7 +1820,8 @@ export class AccountSecureStorage {
     account: AccountMetadata,
     creationGen: number,
     context: WriteContext = 'restore',
-    bind?: { epoch: number }
+    bind?: { epoch: number },
+    unboundAs?: AccountMetadata
   ): Promise<{ id: string; reassigned: boolean; bound?: boolean }> {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
@@ -1841,7 +1842,8 @@ export class AccountSecureStorage {
       if (
         own.state === 'key-matches' &&
         bind !== undefined &&
-        account.type === AccountType.REKEYED &&
+        (account.type === AccountType.REKEYED ||
+          account.type === AccountType.STANDARD) &&
         (await this.hasPinStrict()) &&
         SessionKeyVault.isUnlocked() &&
         SessionKeyVault.currentEpoch() === bind.epoch &&
@@ -1861,8 +1863,12 @@ export class AccountSecureStorage {
         }
         reassigned = true;
       }
+      // A record that did not bind is written as `unboundAs` when the caller
+      // gave one (a flagged standard record is stored as Watch Only), never as
+      // its real type: a standard record without a key is a phantom.
+      const written = bound ? account : (unboundAs ?? account);
       await this.storeAccountLocked(
-        reassigned ? ({ ...account, id } as AccountMetadata) : account,
+        reassigned ? ({ ...written, id } as AccountMetadata) : written,
         undefined,
         undefined,
         context,

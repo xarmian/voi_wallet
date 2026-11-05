@@ -101,6 +101,22 @@ export function validateRetainedKeys(accounts: BackupAccountData[]): void {
     ids.add(account.id);
   }
   for (const account of accounts) {
+    if (account.withoutKey !== undefined) {
+      // A record the file carries WITHOUT its key (TASK-504): it needs no phrase,
+      // and it must not carry one. Only a standard or rekeyed record can be one.
+      if (
+        account.withoutKey !== true ||
+        account.mnemonic !== undefined ||
+        (account.type !== AccountType.STANDARD &&
+          account.type !== AccountType.REKEYED)
+      ) {
+        throw new BackupError(
+          'A record in the backup is marked as having no key but is not valid',
+          'INVALID_FILE_FORMAT'
+        );
+      }
+      continue;
+    }
     const standard = account.type === AccountType.STANDARD;
     if (
       !standard &&
@@ -379,6 +395,8 @@ export async function removeOldPinForRestore(
 
 /** A file record whose phrase is in the file, so the file can supply its key. */
 function fileHoldsKey(account: BackupAccountData): boolean {
+  // A flagged record offers no key whatever else it carries (TASK-504).
+  if (account.withoutKey === true) return false;
   return (
     (account.type === AccountType.STANDARD && !!account.mnemonic) ||
     (account.type === AccountType.REKEYED && account.mnemonic !== undefined)
@@ -545,6 +563,49 @@ async function restoreAccountsNow(
 
       switch (backupAccount.type) {
         case AccountType.STANDARD: {
+          if (backupAccount.withoutKey === true) {
+            // The file does not hold this account's key (TASK-504). It is added
+            // as Watch Only; on the old-PIN screen, with every item-9 condition
+            // holding at this write, it instead takes the surviving key under
+            // its own id and comes back as the working standard account it was.
+            const base = {
+              id: backupAccount.id,
+              address: backupAccount.address,
+              publicKey: backupAccount.publicKey,
+              label: backupAccount.label,
+              color: backupAccount.color,
+              isHidden: backupAccount.isHidden,
+              createdAt: backupAccount.createdAt,
+              lastUsed: new Date().toISOString(),
+              avatarUrl: backupAccount.avatarUrl,
+            };
+            const asStandard: StandardAccountMetadata = {
+              ...base,
+              type: AccountType.STANDARD,
+              importedAt: backupAccount.importedAt,
+              mnemonic: '',
+              derivationPath: backupAccount.derivationPath,
+              hasBackup: backupAccount.hasBackup ?? false,
+              backupVerified: false,
+            };
+            const asWatch: WatchAccountMetadata = {
+              ...base,
+              type: AccountType.WATCH,
+            };
+            const keyless =
+              await AccountSecureStorage.storeKeylessAccountForRestore(
+                asStandard,
+                creationGen,
+                'restore',
+                options.oldPinSession,
+                asWatch
+              );
+            stored = { ...keyless, inPlace: keyless.bound === true };
+            metadataOnly.add(stored.id);
+            account = keyless.bound === true ? asStandard : asWatch;
+            if (keyless.bound !== true) record.withoutKey = 'watch-only';
+            break;
+          }
           // Derive account from mnemonic
           const algoAccount = algosdk.mnemonicToSecretKey(
             backupAccount.mnemonic!
@@ -702,6 +763,9 @@ async function restoreAccountsNow(
             // the device: reported like any key already in place.
             stored = { ...keyless, inPlace: keyless.bound === true };
             metadataOnly.add(stored.id);
+            if (backupAccount.withoutKey === true && keyless.bound !== true) {
+              record.withoutKey = 'rekeyed';
+            }
           }
           account = rekeyedAccount;
           break;
