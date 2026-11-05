@@ -303,9 +303,10 @@ export default {
       // line, remove it — the Nitro module still autolinks without the plugin.
       "react-native-quick-crypto",
       withImageColorsJvmTarget,
-      // TASK-503: an embedded android_res asset wins over a stale expo-updates
-      // DB row (blank icons after an in-place update from a build whose
-      // node_modules layout differed). Throws if expo-updates changes.
+      // TASK-503: an embedded resource path (android_res or android_asset) wins
+      // over a stale expo-updates DB row for the same key (blank icons after an
+      // in-place update from a build whose node_modules layout differed).
+      // Throws if expo-updates changes.
       withExpoUpdatesEmbeddedAssetWins,
     ]
   }

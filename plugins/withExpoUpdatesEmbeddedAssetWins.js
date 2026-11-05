@@ -68,15 +68,19 @@ function countOf(haystack, needle) {
 
 function patchSource(source) {
   if (source.includes(MARKER)) {
-    // The marker sits in the first edit only. Accept the file as already
-    // patched only if BOTH edits are present byte for byte; a half-written file
-    // or one patched by an older version of this plugin must stop the build.
+    // The marker sits in the first edit only, so it proves nothing about the
+    // second. Accept the file as already patched only if BOTH of this plugin's
+    // edits are present byte for byte. This is not an integrity check of the
+    // whole file: a truncated or doubled file that still contains both strings
+    // is stopped later, by the Kotlin compile. A file with the marker but not
+    // both edits (an interrupted write, or output of an older version of this
+    // plugin) stops the build here.
     if (
       !source.includes(KEYS_REPLACEMENT) ||
       !source.includes(ROW_REPLACEMENT)
     ) {
       throw new Error(
-        'withExpoUpdatesEmbeddedAssetWins: DatabaseLauncher.kt carries the marker but not both current edits (partial or older patch). Reinstall expo-updates and rebuild (TASK-503).'
+        'withExpoUpdatesEmbeddedAssetWins: DatabaseLauncher.kt carries the marker but not both current edits (partial or older patch). Run `npm ci` (it removes node_modules and reinstalls expo-updates unpatched) and rebuild (TASK-503).'
       );
     }
     return source;
@@ -113,8 +117,9 @@ function patchExpoUpdates(packageDir) {
   const before = fs.readFileSync(file, 'utf8');
   const after = patchSource(before);
   if (after !== before) {
-    // Write beside the target and rename, so an interrupted write can never
-    // leave a half-patched DatabaseLauncher.kt behind.
+    // Write beside the target and rename, so an interrupted write should not
+    // leave a half-patched DatabaseLauncher.kt behind (a rename within one
+    // directory is atomic on the filesystems we build on).
     const tmp = `${file}.tmp-${process.pid}`;
     fs.writeFileSync(tmp, after);
     fs.renameSync(tmp, file);

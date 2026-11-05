@@ -81,7 +81,7 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
     expect(original).toMatch(/\} else \{\n\s+this\[asset\] = filename\n\s+\}/);
   });
 
-  it('makes a stored android_res path lose to an embedded entry for the same key', () => {
+  it('makes a stored embedded-resource path lose to an embedded entry for the same key', () => {
     const patched = plugin.patchSource(original);
     // The set of keys the embedded manifest already mapped is taken BEFORE the
     // DB rows are merged in...
@@ -106,7 +106,7 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
   });
 
   it('leaves an over-the-air asset on its original branch', () => {
-    // A downloaded asset has a plain file path, not file:///android_res/. It
+    // A downloaded asset has a plain file path, not an embedded resource path. It
     // takes the first branch (ensureAssetExists), which must stay byte for byte
     // as upstream wrote it, ahead of the new branch.
     const patched = plugin.patchSource(original);
@@ -151,32 +151,62 @@ describe('withExpoUpdatesEmbeddedAssetWins', () => {
 
   it('refuses a file that has the marker but not both current edits', () => {
     const patched = plugin.patchSource(original);
-    // Only the first edit survived (an interrupted write), or an older plugin
-    // version's output: neither may be accepted as "already patched".
-    const firstEditOnly = original.replace(
-      'val downloadJobs = mutableListOf',
-      '// TASK-503: embedded android_res asset wins (old)\n      val downloadJobs = mutableListOf'
+    // Fixtures are cut from the REAL patched output, not invented.
+    //
+    // (1) Only the first (keys) edit survived: the real patched file with the
+    // second (row) edit cut back out to upstream's text.
+    const rowStart = patched.indexOf('        } else if (asset.key?.let');
+    const rowEnd = patched.indexOf(
+      '        } else {\n          this[asset] = filename',
+      rowStart
     );
+    expect(rowStart).toBeGreaterThan(-1);
+    expect(rowEnd).toBeGreaterThan(rowStart);
+    const firstEditOnly = patched.slice(0, rowStart) + patched.slice(rowEnd);
     expect(firstEditOnly).toContain(MARKER);
+    expect(firstEditOnly).toContain('val embeddedFiles = ');
     expect(() => plugin.patchSource(firstEditOnly)).toThrow(
       /partial or older patch/
     );
-    const rowEditMissing = patched.replace(
+    // (2) The keys edit damaged but the row edit intact: the marker is still
+    // there (it sits in the keys edit's comment), so only a check of the keys
+    // half itself can refuse this.
+    const keysDamaged = patched.replace(
+      'val embeddedFiles = entries.mapNotNull',
+      'val embeddedFilez = entries.mapNotNull'
+    );
+    expect(keysDamaged).toContain(MARKER);
+    expect(keysDamaged).toContain('embeddedFiles.containsKey(it)');
+    expect(() => plugin.patchSource(keysDamaged)).toThrow(
+      /partial or older patch/
+    );
+    // (3) The row edit damaged, keys edit intact.
+    const rowDamaged = patched.replace(
       'embeddedFiles.containsKey(it)',
       'embeddedFiles.isEmpty()'
     );
-    expect(() => plugin.patchSource(rowEditMissing)).toThrow(
+    expect(() => plugin.patchSource(rowDamaged)).toThrow(
       /partial or older patch/
     );
+    // The way out is named in the message.
+    expect(() => plugin.patchSource(keysDamaged)).toThrow(/npm ci/);
     // The complete patch is still accepted unchanged.
     expect(plugin.patchSource(patched)).toBe(patched);
   });
 
   it('leaves no temp file beside the patched source', () => {
     const dir = copyPackage();
+    const target = path.join(dir, LAUNCHER_REL);
+    const before = fs.readFileSync(target, 'utf8');
     plugin.patchExpoUpdates(dir);
-    const launcherDir = path.dirname(path.join(dir, LAUNCHER_REL));
-    expect(fs.readdirSync(launcherDir)).toEqual(['DatabaseLauncher.kt']);
+    // The copy really was patched (a no-op would also leave no temp file)...
+    const after = fs.readFileSync(target, 'utf8');
+    expect(after).not.toBe(before);
+    expect(after).toContain(MARKER);
+    // ...and nothing but the target is left beside it.
+    expect(fs.readdirSync(path.dirname(target))).toEqual([
+      'DatabaseLauncher.kt',
+    ]);
   });
 
   it('is idempotent', () => {
