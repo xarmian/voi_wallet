@@ -450,7 +450,7 @@ it('getMnemonic error aborts export for an expected key', async () => {
 });
 
 it.each(['address', 'publicKey'])(
-  'mismatched %s rejects the whole restore before clearing',
+  'mismatched %s rejects the whole restore before anything is written',
   async (field) => {
     const other = freshAccount();
     await expect(
@@ -541,7 +541,7 @@ it('rolls back on a reset race at persist, which storeWallet throws before writi
   jest.mocked(secure.storeAccountForCreation).mockResolvedValue('token');
 });
 
-it('rejects duplicate account ids before clearing anything', async () => {
+it('rejects duplicate account ids before anything is written', async () => {
   const keyed = retained();
   const { mnemonic: _drop, ...metadataOnly } = retained();
   await expect(
@@ -557,7 +557,7 @@ it('rejects duplicate account ids before clearing anything', async () => {
 });
 
 it.each([null, '', 'not a recovery phrase', 42])(
-  'rejects an invalid retained phrase (%p) cleanly before clearing',
+  'rejects an invalid retained phrase (%p) cleanly before anything is written',
   async (mnemonic) => {
     await expect(
       performFullRestore([retained({ mnemonic })], {} as never, [], {} as never)

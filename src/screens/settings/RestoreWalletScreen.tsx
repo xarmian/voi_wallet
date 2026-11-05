@@ -8,10 +8,16 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import {
+  useNavigation,
+  useRoute,
+  CommonActions,
+} from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useWalletStore } from '@/store/walletStore';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -24,9 +30,23 @@ import {
   BackupInfo,
   BackupError,
 } from '@/services/backup';
+import {
+  buildRestoreReport,
+  formatRestoreReport,
+  RESTORE_ADDS_TEXT,
+  SETTINGS_STAY_TEXT,
+} from '@/services/backup/restoreReport';
 
 export default function RestoreWalletScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
+    ?.isOnboarding;
+  const { recheckAuthState } = useAuth();
+  // One selector, one primitive (a derived object would loop the store).
+  const deviceAccountCount = useWalletStore(
+    (state) => state.wallet?.accounts.length ?? 0
+  );
   const { reloadTheme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
@@ -146,30 +166,21 @@ export default function RestoreWalletScreen() {
       // Reload theme to reflect restored settings
       await reloadTheme();
 
-      // Show success message
-      const ledgerNote =
-        result.ledgerAccountCount > 0
-          ? `\n\nNote: ${result.ledgerAccountCount} Ledger account(s) will need to be re-paired with your device.`
-          : '';
-      const duplicateNote =
-        result.duplicateAccountsDropped > 0
-          ? `\n\n${result.duplicateAccountsDropped} duplicate account record(s) in the backup were merged.`
-          : '';
+      // Report what happened to each record. The words are product's and are
+      // built (and tested) in restoreReport.
+      const report = buildRestoreReport(result);
 
-      Alert.alert(
-        'Restore Complete',
-        `Successfully restored:\n\n` +
-          `• ${result.standardAccountCount} Standard account(s)\n` +
-          `• ${result.watchAccountCount} Watch account(s)\n` +
-          `• ${result.rekeyedAccountCount} Rekeyed account(s)\n` +
-          `• ${result.ledgerAccountCount} Ledger account(s)\n` +
-          `• ${result.friendsCount} Friend(s)${ledgerNote}${duplicateNote}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              // Always go to security setup to set PIN after restore
-              // (restore clears existing PIN, so user must set a new one)
+      Alert.alert(report.title, formatRestoreReport(report), [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Restore is add-only and never clears a PIN, so SecuritySetup is
+            // right ONLY for a fresh device (no PIN, no accounts before it),
+            // where the restored keys still have no PIN. Anything else keeps
+            // the PIN it has: from Settings the session simply carries on, and
+            // from onboarding the auth state is re-read, which now finds a
+            // wallet and a PIN and lands on the normal unlock (DOC-507 3.6).
+            if (result.settingsRestored) {
               navigation.dispatch(
                 CommonActions.reset({
                   index: 0,
@@ -181,10 +192,14 @@ export default function RestoreWalletScreen() {
                   ],
                 })
               );
-            },
+            } else if (isOnboarding) {
+              void recheckAuthState();
+            } else {
+              navigation.goBack();
+            }
           },
-        ]
-      );
+        },
+      ]);
     } catch (err) {
       setShowProgressModal(false);
       const message =
@@ -195,7 +210,14 @@ export default function RestoreWalletScreen() {
     } finally {
       setPassword('');
     }
-  }, [selectedFile, password, navigation, reloadTheme]);
+  }, [
+    selectedFile,
+    password,
+    navigation,
+    reloadTheme,
+    isOnboarding,
+    recheckAuthState,
+  ]);
 
   const handleCancelPassword = useCallback(() => {
     setShowPasswordModal(false);
@@ -235,19 +257,22 @@ export default function RestoreWalletScreen() {
           </View>
           <Text style={styles.infoTitle}>Restore Your Wallet</Text>
           <Text style={styles.infoText}>
-            Select a Voi Wallet backup file (.voibackup) to restore your
-            accounts, settings, and preferences. You will need the password you
-            used when creating the backup.
+            Select a Voi Wallet backup file (.voibackup) to add its accounts to
+            this wallet. You will need the password you used when creating the
+            backup.
           </Text>
         </GlassCard>
 
-        {/* Warning */}
+        {/* What restore does: it only adds */}
         <View style={styles.warningContainer}>
-          <Ionicons name="alert-circle" size={20} color={colors.error} />
+          <Ionicons
+            name="information-circle"
+            size={20}
+            color={colors.primary}
+          />
           <Text style={styles.warningText}>
-            Restoring from a backup will replace ALL existing accounts and
-            settings. Make sure you have backed up your current wallet if
-            needed.
+            {RESTORE_ADDS_TEXT}
+            {deviceAccountCount > 0 ? ` ${SETTINGS_STAY_TEXT}` : ''}
           </Text>
         </View>
 
@@ -305,7 +330,7 @@ export default function RestoreWalletScreen() {
               <Text style={styles.stepNumberText}>4</Text>
             </View>
             <Text style={styles.stepText}>
-              Set up a new PIN for your restored wallet
+              Set up a PIN if this phone doesn&apos;t have one yet
             </Text>
           </View>
         </GlassCard>
@@ -336,6 +361,7 @@ export default function RestoreWalletScreen() {
       <RestoreConfirmationModal
         visible={showConfirmationModal}
         backupInfo={backupInfo}
+        deviceHasAccounts={deviceAccountCount > 0}
         onCancel={handleCancelConfirmation}
         onConfirm={handleConfirmRestore}
       />

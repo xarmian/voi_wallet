@@ -11,10 +11,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { BackupInfo } from '@/services/backup';
+import {
+  RESTORE_ADDS_TEXT,
+  SETTINGS_STAY_TEXT,
+} from '@/services/backup/restoreReport';
 
 interface RestoreConfirmationModalProps {
   visible: boolean;
   backupInfo: BackupInfo | null;
+  /** The wallet already has accounts: settings and friends are not taken. */
+  deviceHasAccounts: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -22,6 +28,7 @@ interface RestoreConfirmationModalProps {
 export default function RestoreConfirmationModal({
   visible,
   backupInfo,
+  deviceHasAccounts,
   onCancel,
   onConfirm,
 }: RestoreConfirmationModalProps) {
@@ -114,7 +121,7 @@ export default function RestoreConfirmationModal({
                   </Text>
                 </View>
               )}
-              {backupInfo.hasFriends && (
+              {backupInfo.hasFriends && !deviceHasAccounts && (
                 <View style={styles.accountRow}>
                   <Ionicons name="people" size={18} color={colors.primary} />
                   <Text style={styles.accountLabel}>Friends</Text>
@@ -127,10 +134,14 @@ export default function RestoreConfirmationModal({
 
             {/* Warnings */}
             <View style={styles.warningContainer}>
-              <Ionicons name="alert-circle" size={18} color={colors.error} />
+              <Ionicons
+                name="information-circle"
+                size={18}
+                color={colors.primary}
+              />
               <Text style={styles.warningText}>
-                This will replace ALL existing accounts and settings. This
-                action cannot be undone.
+                {RESTORE_ADDS_TEXT}
+                {deviceHasAccounts ? ` ${SETTINGS_STAY_TEXT}` : ''}
               </Text>
             </View>
 
