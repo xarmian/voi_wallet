@@ -29,7 +29,7 @@ export const OUTCOME_TEXT: Record<RestoreRecordOutcome, string> = {
   added: 'Added',
   'added-in-place': 'Added. Its key was already on this phone.',
   'added-new-id':
-    'Added. A different key was already stored in its old place, and it was left as it is.',
+    "Added. This phone was already storing something else in this account's place. We left that alone and added the account separately.",
   'already-present': 'Already on this device',
   'kept-device-record': 'Already on this device',
   'rejected-id-conflict':

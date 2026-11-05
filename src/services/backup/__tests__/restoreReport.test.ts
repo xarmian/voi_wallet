@@ -99,6 +99,9 @@ describe('restore report rows', () => {
 
   it("uses product's row texts verbatim", () => {
     expect(OUTCOME_TEXT.added).toBe('Added');
+    expect(OUTCOME_TEXT['added-new-id']).toBe(
+      "Added. This phone was already storing something else in this account's place. We left that alone and added the account separately."
+    );
     expect(OUTCOME_TEXT['already-present']).toBe('Already on this device');
     expect(OUTCOME_TEXT['kept-device-record']).toBe('Already on this device');
     expect(OUTCOME_TEXT['rejected-id-conflict']).toBe(
