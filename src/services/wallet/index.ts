@@ -60,9 +60,9 @@ import { withTimeout } from '@/utils/withTimeout';
  * raw stored string. Because this feeds signing (a stale wallet after a
  * restore/reset/rekey must NEVER be signed), it holds to these invariants:
  *   1. The current stored raw string is read on EVERY call (never cached), so
- *      external wipes/rewrites that bypass this service — restore clearAllData()
- *      removes voi_wallet_metadata directly (backup/restorers.ts), and
- *      migrateLegacyValue rewrites it — are always observed. A null read busts
+ *      external wipes/rewrites that bypass this service (a reset that removes
+ *      voi_wallet_metadata directly, and migrateLegacyValue rewriting it) are
+ *      always observed. A null read busts
  *      the memo and returns null (no stale wallet survives a reset).
  *   2. Cache HIT only when the raw string is byte-identical to the cached key;
  *      any change (including removal) re-parses.
@@ -923,10 +923,9 @@ export class MultiAccountWalletService {
       const readEpoch = walletResetEpoch;
 
       // (1) ALWAYS read the current stored raw string. This read is intentionally
-      // NOT memoized: external wipes/rewrites that bypass this service (restore
-      // clearAllData() removing voi_wallet_metadata directly, migrateLegacyValue
-      // rewriting it) must be observed on every call so signing never sees a
-      // stale wallet.
+      // NOT memoized: external wipes/rewrites that bypass this service (a reset
+      // removing voi_wallet_metadata directly, migrateLegacyValue rewriting it)
+      // must be observed on every call so signing never sees a stale wallet.
       const walletData = await this.getStoredValue(this.WALLET_KEY);
 
       if (!walletData) {
@@ -1423,10 +1422,6 @@ export class MultiAccountWalletService {
     }, readEpoch);
   }
 
-  static async getPrivateKey(accountId: string): Promise<Uint8Array> {
-    return await AccountSecureStorage.getPrivateKey(accountId);
-  }
-
   /**
    * TASK-424: `expected` is what the caller checked before confirming. It is
    * re-validated here, against this read, and (for a keyless deletion) inside
@@ -1493,9 +1488,8 @@ export class MultiAccountWalletService {
     // in flight.
     invalidateAccountSubscribePasses();
 
-    // TASK-212: this is the canonical wallet-metadata wipe — restore
-    // (backup/restorers.ts clearAllData) and LockScreen.performReset() both
-    // funnel through it. Bump the reset epoch and bust the memo SYNCHRONOUSLY,
+    // TASK-212: this is the canonical wallet-metadata wipe; reset paths such as
+    // LockScreen.performReset() funnel through it. Bump the reset epoch and bust the memo SYNCHRONOUSLY,
     // before any await, so an in-flight read-repair write that captured an older
     // epoch is skipped and no cached clone survives the reset.
     walletResetEpoch++;
@@ -1868,7 +1862,7 @@ export class MultiAccountWalletService {
    * (readWalletForMutation), which throws instead of reading as "no wallet".
    * It never enqueues on the write chain. null = no wallet.
    */
-  private static async readWalletStrict(): Promise<Wallet | null> {
+  static async readWalletStrict(): Promise<Wallet | null> {
     const raw = await this.readWalletForMutation();
     if (raw == null) {
       return null;
@@ -2206,6 +2200,98 @@ export class MultiAccountWalletService {
     creationGen?: number
   ): Promise<void> {
     await this.storeWallet(wallet, undefined, creationGen);
+  }
+
+  /**
+   * TASK-504: "this device is fresh", decided INSIDE a wallet-queue task on the
+   * wallet blob re-read there, so no other wallet write can commit between the
+   * blob read and this answer (DOC-507 section 1 rule 2). Fresh means the blob
+   * holds zero accounts (absent counts) AND the key side reads empty
+   * (AccountSecureStorage.isKeyStateEmptyStrict). The key-side reads take no
+   * lock, so nothing here nests the key mutex inside the queue. Any read error,
+   * a corrupt blob, or an un-migrated legacy blob THROWS; it is never "fresh".
+   */
+  static async isDeviceFreshStrict(): Promise<boolean> {
+    return this.enqueueWalletWrite(async () => {
+      const raw = await this.readWalletForMutation();
+      if (raw != null) {
+        const current = JSON.parse(raw) as Wallet | null;
+        if (!current || !Array.isArray(current.accounts)) {
+          throw new Error('Corrupt wallet blob: accounts is not an array');
+        }
+        if (current.accounts.length > 0) return false;
+      }
+      return AccountSecureStorage.isKeyStateEmptyStrict();
+    });
+  }
+
+  /**
+   * Add-only restore commit (TASK-504). Runs on the serialized write chain and
+   * merges `accounts` into the LATEST wallet blob, re-read inside the task, so
+   * nothing is written back from a snapshot taken earlier. An account whose id
+   * or address is on the wallet by then is not added and is returned in
+   * `skipped`; nothing already on the wallet is changed, and the active account
+   * and wallet id stay. With no wallet (or no accounts) the wallet is created
+   * from `shell` with the first added account active. `creationGen` aborts the
+   * commit (ResetRacedError) if a reset raced the restore.
+   */
+  static async mergeRestoredAccounts(
+    accounts: AccountMetadata[],
+    creationGen: number,
+    shell: Omit<Wallet, 'accounts' | 'activeAccountId'>
+  ): Promise<{
+    added: string[];
+    skipped: { id: string; reason: 'id' | 'address' }[];
+    /** The blob re-read inside the task already held accounts (not a fresh
+     *  device at the moment of the commit). */
+    hadAccounts: boolean;
+  }> {
+    if (accounts.length === 0) {
+      return { added: [], skipped: [], hadAccounts: false };
+    }
+    const readEpoch = walletResetEpoch;
+    let added: string[] = [];
+    let skipped: { id: string; reason: 'id' | 'address' }[] = [];
+    let hadAccounts = false;
+    await this.storeWallet(
+      (current) => {
+        added = [];
+        skipped = [];
+        const base: Wallet = current ?? {
+          ...shell,
+          accounts: [],
+          activeAccountId: '',
+        };
+        const taken = base.accounts.slice();
+        for (const account of accounts) {
+          if (taken.some((existing) => existing.id === account.id)) {
+            skipped.push({ id: account.id, reason: 'id' });
+          } else if (
+            taken.some((existing) => existing.address === account.address)
+          ) {
+            skipped.push({ id: account.id, reason: 'address' });
+          } else {
+            taken.push(account);
+            added.push(account.id);
+          }
+        }
+        hadAccounts = base.accounts.length > 0;
+        const activeStillListed = base.accounts.some(
+          (existing) => existing.id === base.activeAccountId
+        );
+        return {
+          ...base,
+          accounts: taken,
+          activeAccountId:
+            hadAccounts && activeStillListed
+              ? base.activeAccountId
+              : (added[0] ?? base.activeAccountId),
+        };
+      },
+      readEpoch,
+      creationGen
+    );
+    return { added, skipped, hadAccounts };
   }
 
   private static getDefaultWalletSettings(): WalletSettings {

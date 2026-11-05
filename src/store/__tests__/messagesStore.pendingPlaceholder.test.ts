@@ -98,7 +98,7 @@ describe('messagesStore pending placeholders (TASK-454)', () => {
     mockFetchMessages.mockReset().mockResolvedValue([]);
     mockFetchAllConversations.mockReset().mockResolvedValue({
       conversations: new Map(),
-      complete: true,
+      stop: 'complete',
       maxId: null,
     });
     now = jest.spyOn(Date, 'now').mockReturnValue(T0 + 1000);

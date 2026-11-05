@@ -1,24 +1,37 @@
 import { computeSyncCursor } from '../syncCursor';
 
 describe('computeSyncCursor', () => {
-  describe('advance only on a complete drain from an ingestion-ordered source', () => {
-    it('leaves the cursor untouched when a drain is truncated', () => {
-      // The core message-loss guard: a capped/partial drain must NOT advance
-      // the durable cursor past ingestion ids it never fetched.
+  describe('advance only on a complete or page-capped drain from an ingestion-ordered source', () => {
+    it('leaves the cursor untouched when the drain stalled (cursor stopped advancing)', () => {
+      // A broken source: contiguity is not guaranteed, so nothing past the
+      // current cursor may be claimed as fetched.
       expect(
-        computeSyncCursor({ previous: 1000, complete: false, maxId: 5000 })
+        computeSyncCursor({
+          previous: 1000,
+          stop: 'stalled-cursor',
+          maxId: 5000,
+        })
       ).toBe(1000);
+    });
+
+    it('advances to the greatest id fetched when the drain stopped at the page cap', () => {
+      // The drain is oldest-first on a unique ascending id, so a cap stop has
+      // fetched every row up to maxId (a contiguous prefix). Not advancing
+      // here wedges the sync: every poll would refetch the same prefix.
+      expect(
+        computeSyncCursor({ previous: 1000, stop: 'page-cap', maxId: 5000 })
+      ).toBe(5000);
     });
 
     it('leaves the cursor untouched for a source with no ingestion id (indexer fallback)', () => {
       expect(
-        computeSyncCursor({ previous: 1000, complete: true, maxId: null })
+        computeSyncCursor({ previous: 1000, stop: 'complete', maxId: null })
       ).toBe(1000);
     });
 
     it('keeps a null cursor when nothing advanceable is available', () => {
       expect(
-        computeSyncCursor({ previous: null, complete: true, maxId: null })
+        computeSyncCursor({ previous: null, stop: 'complete', maxId: null })
       ).toBe(null);
     });
   });
@@ -26,26 +39,26 @@ describe('computeSyncCursor', () => {
   describe('complete drain from MIMIR', () => {
     it('advances to the greatest ingestion id fetched', () => {
       expect(
-        computeSyncCursor({ previous: 1000, complete: true, maxId: 1300 })
+        computeSyncCursor({ previous: 1000, stop: 'complete', maxId: 1300 })
       ).toBe(1300);
     });
 
     it('sets the first cursor when none existed', () => {
       expect(
-        computeSyncCursor({ previous: null, complete: true, maxId: 1300 })
+        computeSyncCursor({ previous: null, stop: 'complete', maxId: 1300 })
       ).toBe(1300);
     });
 
     it('never moves backwards', () => {
       expect(
-        computeSyncCursor({ previous: 1300, complete: true, maxId: 1200 })
+        computeSyncCursor({ previous: 1300, stop: 'complete', maxId: 1200 })
       ).toBe(1300);
     });
 
     it('holds steady when a steady-state poll fetched nothing newer', () => {
       // maxId falls back to the caller's cursor when no rows were drained.
       expect(
-        computeSyncCursor({ previous: 1300, complete: true, maxId: 1300 })
+        computeSyncCursor({ previous: 1300, stop: 'complete', maxId: 1300 })
       ).toBe(1300);
     });
   });
@@ -56,7 +69,7 @@ describe('computeSyncCursor', () => {
       // earlier round (150) but a higher id (3000); the next drain fetches it
       // and the cursor advances past it.
       expect(
-        computeSyncCursor({ previous: 2000, complete: true, maxId: 3000 })
+        computeSyncCursor({ previous: 2000, stop: 'complete', maxId: 3000 })
       ).toBe(3000);
     });
   });

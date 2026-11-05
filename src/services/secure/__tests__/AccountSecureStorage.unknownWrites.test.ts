@@ -61,6 +61,7 @@ jest.mock('@/platform', () => ({
   deviceId: {},
 }));
 import { AccountSecureStorage } from '../AccountSecureStorage';
+import { WipeIncompleteError } from '../../../types/wallet';
 import {
   WriteOutcomeUnknownError,
   WriteUnresolvedError,
@@ -86,6 +87,17 @@ const payload = {
 };
 const key = 'voi_account_secret_one';
 const nonce = () => JSON.parse(mockSecureValues.get(key)!).writeNonce as string;
+// TASK-469: clearAll now reports a wipe incomplete while an earlier write can
+// still land. Several tests here deliberately hang a native write; let it land
+// after each test so a leftover unsettled record cannot leak into the next one.
+afterEach(async () => {
+  mockHeldWrite?.land();
+  mockHeldWrite = undefined;
+  mockLandJournal?.();
+  mockLandJournal = undefined;
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+});
+
 beforeEach(() => {
   mockSecureValues.clear();
   mockPlainValues.clear();
@@ -424,7 +436,10 @@ test('clearAll tombstones a timed-out secret write that lands after the wipe', a
     );
     await jest.advanceTimersByTimeAsync(5001);
     await assertion;
-    await AccountSecureStorage.clearAll();
+    // TASK-469: the set is still unsettled, so the wipe says it is incomplete.
+    await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+      WipeIncompleteError
+    );
     // The set is still tracked in memory: its durable entry is retained through the
     // wipe (a JS reload now would lose the in-memory tombstone).
     expect(
@@ -506,7 +521,11 @@ test('clearAll keeps an inherited same-process SET entry as a delete entry (ruli
       },
     })
   );
-  await AccountSecureStorage.clearAll();
+  // TASK-469: a surviving same-session entry means the wipe is incomplete (the
+  // entry is still converted and kept, ruling A).
+  await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+    WipeIncompleteError
+  );
   const left = await AccountSecureStorage.readUnknownWritesStrict();
   expect(Object.keys(left)).toEqual([key]);
   expect(left[key].op).toBe('delete');
@@ -538,7 +557,11 @@ test('clearAll keeps the delete entry its own account deletion created, and pre-
       },
     })
   );
-  await AccountSecureStorage.clearAll();
+  // TASK-469: surviving same-session entries make the wipe incomplete; they are
+  // still kept (ruling A).
+  await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+    WipeIncompleteError
+  );
   const left = await AccountSecureStorage.readUnknownWritesStrict();
   expect(left[key]?.op).toBe('delete'); // converted by the account deletion, kept by the wipe
   expect(left.voi_pending_account_creates?.op).toBe('delete'); // pre-existing, kept
@@ -559,10 +582,20 @@ test('clearAll leaves the journal untouched on a transient (non-corrupt) read fa
   const spy = jest
     .spyOn(AccountSecureStorage, 'readUnknownWritesStrict')
     .mockRejectedValue(new Error('unknown-write journal read timed out'));
-  await AccountSecureStorage.clearAll();
+  // TASK-469: with the journal unreadable the wipe cannot verify completeness,
+  // so it reports incomplete naming the journal key; the journal stays untouched.
+  let strictReads = 0;
+  try {
+    await expect(AccountSecureStorage.clearAll()).rejects.toMatchObject({
+      name: 'WipeIncompleteError',
+      keys: [UNKNOWN_WRITES_STORAGE_KEY],
+    });
+    strictReads = spy.mock.calls.length;
+  } finally {
+    spy.mockRestore();
+  }
   // The wipe rewrite really took the strict-read path (desired state was unset).
-  expect(spy.mock.calls.length).toBeGreaterThan(0);
-  spy.mockRestore();
+  expect(strictReads).toBeGreaterThan(0);
   expect(JSON.parse(mockPlainValues.get(UNKNOWN_WRITES_STORAGE_KEY)!)).toEqual(
     entries
   );
@@ -616,5 +649,9 @@ test('deleteAccount and clearAll are not refused by an unresolved same-process e
     AccountSecureStorage.deleteAccount('one')
   ).resolves.toBeUndefined();
   expect(JSON.parse(mockPlainValues.get('voi_account_list')!)).toEqual(['two']);
-  await expect(AccountSecureStorage.clearAll()).resolves.toBeUndefined();
+  // TASK-469: not refused (it runs to the end), but a surviving same-session
+  // entry makes the wipe report incomplete.
+  await expect(AccountSecureStorage.clearAll()).rejects.toBeInstanceOf(
+    WipeIncompleteError
+  );
 });

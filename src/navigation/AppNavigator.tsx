@@ -68,6 +68,7 @@ import {
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import AuthGuard from '@/components/AuthGuard';
+import FreshAuthHost from '@/components/FreshAuthHost';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { useNetworkStore } from '@/store/networkStore';
 import { NetworkId } from '@/types/network';
@@ -1474,6 +1475,7 @@ export default function AppNavigator() {
           >
             <NavigationActivityWrapper />
           </NavigationContainer>
+          <FreshAuthHost />
         </BottomSheetModalProvider>
       </AuthProvider>
     </GestureHandlerRootView>

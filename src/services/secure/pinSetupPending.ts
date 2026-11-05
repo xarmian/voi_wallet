@@ -132,6 +132,16 @@ export async function clearPinSetupPending(): Promise<boolean> {
 }
 
 /**
+ * STRICT read of the breadcrumb, for a decision that must stop when it cannot
+ * be made (TASK-504 "fresh"): a read error THROWS, and any stored value counts
+ * as present. isPinSetupPending() reads an error as "absent", which is the safe
+ * direction for the boot route and the unsafe one here.
+ */
+export async function readPinSetupPendingStrict(): Promise<boolean> {
+  return (await storage.getItem(PIN_SETUP_PENDING_KEY)) !== null;
+}
+
+/**
  * Read the breadcrumb. FAIL-CLOSED on a read error: a breadcrumb that cannot be
  * read is treated as ABSENT, so the key-bearing guard routes to RECOVERY (never
  * SecuritySetup). Never throws.

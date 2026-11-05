@@ -8,12 +8,14 @@ import {
   Alert,
   ScrollView,
   Share,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { SecureKeyManager } from '@/services/secure/keyManager';
+import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
 import { AccountType } from '@/types/wallet';
 import { useAccounts, useActiveAccount } from '@/store/walletStore';
 import { useFreshRekeyCheck } from '@/store/useFreshRekeyCheck';
@@ -75,6 +77,10 @@ export default function ShowRecoveryPhraseScreen() {
   const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const clipboardClearRef = useRef<ClipboardClearHandle | null>(null);
   const mountedRef = useRef(true);
+  const loadGenerationRef = useRef(0);
+  // Aborted on unmount and on background: closes an open fresh-auth prompt and
+  // stops a pending reveal from reading the phrase for a gone screen.
+  const loadAbortRef = useRef<AbortController | null>(null);
   // Monotonic per-copy token: only the latest tap's continuation may install/keep
   // a clear handle, so a superseded copy can't leak a timer or wipe newer content.
   const copyGenRef = useRef(0);
@@ -83,6 +89,10 @@ export default function ShowRecoveryPhraseScreen() {
   const clipboardOpLock = useRef<Promise<void>>(Promise.resolve());
 
   const loadMnemonic = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
+    loadAbortRef.current?.abort();
+    const abort = new AbortController();
+    loadAbortRef.current = abort;
     if (!targetAddress) {
       Alert.alert('Error', 'No account selected');
       navigation.goBack();
@@ -91,16 +101,34 @@ export default function ShowRecoveryPhraseScreen() {
 
     setIsLoading(true);
     try {
-      const recoveredMnemonic =
-        await SecureKeyManager.getMnemonic(targetAddress);
+      const recoveredMnemonic = await withFreshAuth(
+        'reveal_recovery_phrase',
+        (cap) => SecureKeyManager.revealMnemonic(targetAddress, cap),
+        { signal: abort.signal }
+      );
+      if (generation !== loadGenerationRef.current) return;
       setMnemonic(recoveredMnemonic);
     } catch (error) {
-      console.error('Failed to load mnemonic:', error);
+      if (generation !== loadGenerationRef.current) return;
+      setMnemonic('');
+      if (error instanceof FreshAuthError) {
+        // A cancel shows nothing; other auth failures say so without detail.
+        if (['unavailable', 'failed', 'timeout', 'busy'].includes(error.code)) {
+          Alert.alert(
+            'Authentication Error',
+            'Could not authenticate to show the recovery phrase.'
+          );
+        }
+        navigation.goBack();
+        return;
+      }
 
+      // Non-auth failure (e.g. the account has no recovery phrase). Log a fixed
+      // string only: the error object can echo key-store internals.
+      console.error('Failed to load mnemonic');
       let errorMessage =
         'Failed to retrieve recovery phrase. Please try again.';
       const errorStr = error instanceof Error ? error.message : String(error);
-
       if (
         errorStr.includes('not found') ||
         errorStr.includes('Account not found')
@@ -112,12 +140,11 @@ export default function ShowRecoveryPhraseScreen() {
       } else if (errorStr.includes('not have a recovery phrase')) {
         errorMessage = 'This account type does not have a recovery phrase.';
       }
-
       Alert.alert('Error', errorMessage, [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) setIsLoading(false);
     }
   }, [targetAddress, navigation]);
 
@@ -125,6 +152,23 @@ export default function ShowRecoveryPhraseScreen() {
   useEffect(() => {
     loadMnemonic();
   }, [loadMnemonic]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      // 'background' only (dev lead ruling): on iOS the Face ID sheet that the
+      // fresh-auth prompt opens moves the app to 'inactive', which must not
+      // abort the load it is authorising.
+      if (state === 'background') {
+        loadGenerationRef.current += 1;
+        loadAbortRef.current?.abort();
+        setMnemonic('');
+        setIsBlurred(true);
+        setIsLoading(false);
+        navigation.goBack();
+      }
+    });
+    return () => subscription?.remove?.();
+  }, [navigation]);
 
   const handleCopy = useCallback(async () => {
     if (!mnemonic) return;
@@ -223,6 +267,10 @@ export default function ShowRecoveryPhraseScreen() {
       // Mark unmounted so an in-flight handleCopy wipes the clipboard itself
       // instead of scheduling a timer that would outlive this component.
       mountedRef.current = false;
+      // Invalidate and cancel any load still waiting on the prompt, so a late
+      // authentication cannot read the phrase into a screen that is gone.
+      loadGenerationRef.current += 1;
+      loadAbortRef.current?.abort();
 
       // Clear sensitive data when component unmounts
       setMnemonic('');

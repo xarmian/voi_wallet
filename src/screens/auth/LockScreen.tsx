@@ -18,8 +18,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AccountSecureStorage } from '@/services/secure';
 import type { PinThrottleState } from '@/services/secure';
 import type { SecretSource } from '@/services/secure/SessionKeyVault';
-import { MultiAccountWalletService } from '@/services/wallet';
+import { wipeWalletData } from '@/services/wipe';
+import {
+  showWipeCompleteNotice,
+  showWipeIncompleteNotice,
+} from '@/services/wipe/notices';
 import { hapticNotify } from '@/utils/haptics';
+import { redactError } from '@/utils/logRedaction';
 import { SECURITY_CONFIG, SECURITY_MESSAGES } from '@/config/security';
 
 // Cross-platform alert helper
@@ -62,8 +67,13 @@ export default function LockScreen() {
   const navigation = useNavigation();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const { authState, unlock, unlockWithBiometrics, recheckAuthState } =
-    useAuth();
+  const {
+    authState,
+    unlock,
+    unlockWithBiometrics,
+    recheckAuthState,
+    consumeUnlockRefusal,
+  } = useAuth();
   const [pin, setPin] = useState('');
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
@@ -210,6 +220,12 @@ export default function LockScreen() {
         return;
       }
 
+      // TASK-469: unlock refused because a wipe is pending. The PIN was never
+      // checked and the attempt counter was not touched, so this is NOT an
+      // incorrect PIN: say nothing here and leave the throttle as it is. The
+      // auth check the refusal ran shows the right screen or notice itself.
+      if (consumeUnlockRefusal() === 'wipe_pending') return;
+
       hapticNotify('error');
       // getPinThrottleState() returns lockedUntil=null once a lockout has
       // elapsed, so a non-null value here means "currently locked".
@@ -282,36 +298,33 @@ export default function LockScreen() {
   };
 
   const performReset = async () => {
+    // TASK-469: one bounded, verified wipe. It resolves ONLY when everything is
+    // erased; on any failure the user stays on this screen with a plain message
+    // and the wipe request stays recorded, so the next launch finishes it.
     try {
-      // Clear all secure storage
-      await AccountSecureStorage.clearAll();
-
-      // Clear wallet data
-      await MultiAccountWalletService.clearAllWallets();
-
-      // Reset local state (clearAll() also wipes the persisted PIN throttle).
-      setPin('');
-      setThrottle({
-        lockedUntil: null,
-        attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
-      });
-
-      // Force the AuthContext to re-check the initial state
-      await recheckAuthState();
-
-      showAlert(
-        'Reset Complete',
-        'All application data has been cleared. You can now set up a new wallet.',
-        [
-          {
-            text: 'OK',
-          },
-        ]
-      );
+      await wipeWalletData();
     } catch (error) {
-      console.error('Reset error:', error);
-      showAlert('Error', 'Failed to reset application. Please try again.');
+      console.error('Reset error:', redactError(error));
+      showWipeIncompleteNotice();
+      return;
     }
+
+    // Reset local state (the wipe also erased the persisted PIN throttle).
+    setPin('');
+    setThrottle({
+      lockedUntil: null,
+      attemptsRemaining: SECURITY_CONFIG.PIN_ATTEMPT_LIMIT,
+    });
+
+    // Force the AuthContext to re-check the initial state
+    try {
+      await recheckAuthState();
+    } catch (error) {
+      console.error('Reset recheck error:', redactError(error));
+    }
+
+    // Shown only here: after the wipe reported complete.
+    showWipeCompleteNotice();
   };
 
   const renderPinDots = () => {

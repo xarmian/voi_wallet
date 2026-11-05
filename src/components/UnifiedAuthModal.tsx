@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Alert,
   Modal,
@@ -89,6 +89,10 @@ export default function UnifiedAuthModal({
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [biometricAttempted, setBiometricAttempted] = useState(false);
   const [biometricAuthenticated, setBiometricAuthenticated] = useState(false);
+  // Bumped every time the modal closes. A biometric result that resolves after
+  // the modal was closed (an aborted prompt, then a new one) is stale and must
+  // not mark the NEW prompt as biometrically authenticated.
+  const biometricRunRef = useRef(0);
 
   const MAX_ATTEMPTS = 5;
   const LOCKOUT_TIME = 30000; // 30 seconds
@@ -110,6 +114,10 @@ export default function UnifiedAuthModal({
 
   // Reset state when modal opens
   useEffect(() => {
+    // Bump on CLOSE only. The auto-prompt effect above runs before this one on
+    // open and has already captured the token, so bumping on open would mark the
+    // genuine result of the new prompt as stale.
+    if (!visible) biometricRunRef.current += 1;
     if (visible) {
       setPin('');
       setAttempts(0);
@@ -197,6 +205,7 @@ export default function UnifiedAuthModal({
   };
 
   const promptBiometric = async () => {
+    const run = biometricRunRef.current;
     setBiometricAttempted(true);
     setIsAuthenticating(true);
 
@@ -230,6 +239,7 @@ export default function UnifiedAuthModal({
         requireConfirmation: true,
       });
 
+      if (run !== biometricRunRef.current) return; // stale: the modal was reset
       if (result.success) {
         setIsAuthenticating(false);
         setBiometricAuthenticated(true);

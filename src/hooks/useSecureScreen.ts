@@ -24,6 +24,10 @@ import {
  *   iOS versions this is a no-op. (iOS cannot hard-block a screenshot the way
  *   Android can; the OS blanks the captured secret content instead.)
  *
+ * iOS app switcher (TASK-493): the call also keeps the screen out of the
+ * app-switcher snapshot for as long as it is mounted (see
+ * useAppSwitcherProtection). Android's FLAG_SECURE already blanks that preview.
+ *
  * Cross-target: expo-screen-capture is a native module. On the web / browser-
  * extension target (`Platform.OS === 'web'`, react-native-web) there is no
  * equivalent capability and calling the native hook throws an
@@ -48,11 +52,41 @@ export function useSecureScreen(): void {
   // idempotent.
   const key = useId();
   usePreventCapture(key);
+  // TASK-493: screen-capture prevention does not cover the iOS app-switcher
+  // snapshot. Taking the blur here, from the same call, means a secret screen
+  // cannot have one protection and miss the other. A no-op off iOS.
+  useAppSwitcherProtection();
 }
 
 // iOS app-switcher blur is one global switch, so it is ref-counted: a second
 // guarded screen pushed over the first must not lift the blur when it leaves.
 let appSwitcherProtectionUsers = 0;
+// Whether the native blur is believed to be on. A rejected enable clears it, so
+// the next guard to mount retries instead of trusting a blur that never took.
+let appSwitcherProtectionEnabled = false;
+
+// Identifies the latest enable request. A rejection only acts if its request is
+// still the latest, so a stale request (one that was superseded by a newer
+// mount, or released by the last unmount) can neither clobber the newer
+// request's state nor start a retry.
+let appSwitcherEnableGeneration = 0;
+
+// Requests the native blur. A rejection of the LATEST request clears the flag so
+// the next guard to mount retries; and if screens are still mounted when it
+// rejects (a later guard saw the pending request and skipped its own), it
+// retries once here so those screens are not left unprotected. One retry only:
+// a persistently failing native call must not become a loop.
+function enableAppSwitcherBlur(retryOnFailure: boolean): void {
+  appSwitcherProtectionEnabled = true;
+  const generation = ++appSwitcherEnableGeneration;
+  enableAppSwitcherProtectionAsync(1).catch(() => {
+    if (generation !== appSwitcherEnableGeneration) return;
+    appSwitcherProtectionEnabled = false;
+    if (retryOnFailure && appSwitcherProtectionUsers > 0) {
+      enableAppSwitcherBlur(false);
+    }
+  });
+}
 
 /**
  * useAppSwitcherProtection (TASK-437)
@@ -68,12 +102,11 @@ export function useAppSwitcherProtection(): void {
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
     appSwitcherProtectionUsers++;
-    if (appSwitcherProtectionUsers === 1) {
-      enableAppSwitcherProtectionAsync(1).catch(() => {});
-    }
+    if (!appSwitcherProtectionEnabled) enableAppSwitcherBlur(true);
     return () => {
       appSwitcherProtectionUsers--;
       if (appSwitcherProtectionUsers === 0) {
+        appSwitcherProtectionEnabled = false;
         disableAppSwitcherProtectionAsync().catch(() => {});
       }
     };

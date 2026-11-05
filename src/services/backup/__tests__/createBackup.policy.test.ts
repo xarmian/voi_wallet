@@ -43,7 +43,11 @@ jest.mock('expo-constants', () => ({
 // Mock the heavy collectors/restorers so their native dependency graph never
 // loads. createBackup calls collectAccounts FIRST (after the policy gate).
 jest.mock('../collectors', () => ({
-  collectAccounts: jest.fn(async () => []),
+  collectAccounts: jest.fn(async () => ({
+    accounts: [],
+    leftOut: [],
+    total: 0,
+  })),
   collectSettings: jest.fn(async () => ({
     theme: {
       mode: 'system',
@@ -73,10 +77,17 @@ jest.mock('../restorers', () => ({ performFullRestore: jest.fn() }));
 
 import { BackupService } from '../index';
 import * as collectors from '../collectors';
+import type { FreshAuthCapability } from '@/services/secure/freshAuth';
+
+const testCapability = {
+  __brand: 'FreshAuthCapability',
+} as FreshAuthCapability;
 
 describe('BackupService.createBackup passphrase policy (TASK-30 P2-1)', () => {
   it('rejects a short password before collecting any account data', async () => {
-    await expect(BackupService.createBackup('short')).rejects.toMatchObject({
+    await expect(
+      BackupService.createBackup('short', testCapability)
+    ).rejects.toMatchObject({
       code: 'WEAK_PASSWORD',
     });
     // Gate runs first: no mnemonic collection happened.
@@ -85,14 +96,15 @@ describe('BackupService.createBackup passphrase policy (TASK-30 P2-1)', () => {
 
   it('rejects a common/predictable password of sufficient length', async () => {
     await expect(
-      BackupService.createBackup('password1234')
+      BackupService.createBackup('password1234', testCapability)
     ).rejects.toMatchObject({ code: 'WEAK_PASSWORD' });
     expect(collectors.collectAccounts).not.toHaveBeenCalled();
   });
 
   it('proceeds past the gate and produces a backup for a strong passphrase', async () => {
     const result = await BackupService.createBackup(
-      'correct horse battery staple'
+      'correct horse battery staple',
+      testCapability
     );
     expect(collectors.collectAccounts).toHaveBeenCalled();
     expect(result.filename).toMatch(/\.voibackup$/);
@@ -101,15 +113,18 @@ describe('BackupService.createBackup passphrase policy (TASK-30 P2-1)', () => {
 });
 
 it('counts only REKEYED records with an included mnemonic for the restore warning', async () => {
-  jest
-    .mocked(collectors.collectAccounts)
-    .mockResolvedValueOnce([
+  jest.mocked(collectors.collectAccounts).mockResolvedValueOnce({
+    accounts: [
       { type: 'rekeyed', mnemonic: 'included' },
       { type: 'rekeyed' },
       { type: 'standard', mnemonic: 'included' },
-    ] as Awaited<ReturnType<typeof collectors.collectAccounts>>);
+    ],
+    leftOut: [],
+    total: 3,
+  } as unknown as Awaited<ReturnType<typeof collectors.collectAccounts>>);
   const result = await BackupService.createBackup(
-    'correct horse battery staple'
+    'correct horse battery staple',
+    testCapability
   );
   expect(result.rekeyedKeyCount).toBe(1);
 });

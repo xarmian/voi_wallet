@@ -26,6 +26,46 @@ export interface VoiBackupFile {
   friends: Friend[];
   /** Experimental feature flags */
   experimental: BackupExperimentalFlags;
+  /**
+   * Present only on an INCOMPLETE backup (TASK-504): the accounts whose keys
+   * the file does not hold. Address, label and reason only, never key material.
+   * Its presence and the v3 envelope must agree; a new app refuses a file where
+   * they do not.
+   */
+  incomplete?: BackupIncomplete;
+}
+
+/** Why an account's key is not in an incomplete backup. */
+export type BackupLeftOutReason =
+  /** The wallet holds no key for this account (a clean absence). */
+  | 'no-key-on-device'
+  /** The wallet expects a key it could not read (decrypt, integrity, mismatch,
+   *  a standard account with no key). A possible key problem. */
+  | 'key-unreadable'
+  /**
+   * Two records at one address: one exported its key (its phrase derived to the
+   * address at export) and the other's slot positively holds a DIFFERENT key
+   * (dev lead 89d3f459, product db99d45f). The account's own key is in the file;
+   * a key the file does not hold is on this phone. There is no flagged record
+   * for this entry: it is named so the file never reads as complete.
+   */
+  | 'other-key-on-device';
+
+/** Every reason a list entry may carry; a file with any other is refused. */
+export const BACKUP_LEFT_OUT_REASONS: readonly BackupLeftOutReason[] = [
+  'no-key-on-device',
+  'key-unreadable',
+  'other-key-on-device',
+];
+
+export interface BackupLeftOutAccount {
+  address: string;
+  label?: string;
+  reason: BackupLeftOutReason;
+}
+
+export interface BackupIncomplete {
+  leftOut: BackupLeftOutAccount[];
 }
 
 /**
@@ -56,6 +96,14 @@ export interface BackupAccountData {
   // Standard account fields (type === 'standard')
   /** 25-word recovery phrase - SENSITIVE */
   mnemonic?: string;
+  /**
+   * TASK-504: set when this record is in the file WITHOUT its key (a standard
+   * or rekeyed account whose key the wallet could not export). It lives inside
+   * the encrypted payload, carries no secret, and must agree with the
+   * incomplete list both ways; a flagged record that carries a phrase is
+   * refused. Restore adds such a record without a key.
+   */
+  withoutKey?: boolean;
   /** HD derivation path if applicable */
   derivationPath?: string;
   /**
@@ -303,11 +351,29 @@ export interface EncryptedBackupFileV2 {
 }
 
 /**
+ * v3 encrypted backup envelope: the v2 construction (scrypt + AES-256-CTR +
+ * encrypt-then-MAC) under version 3. It is written only for an INCOMPLETE
+ * backup (TASK-504), so an app that predates it refuses the file at the
+ * envelope (VERSION_MISMATCH, before any decrypt) and never restores it with a
+ * wipe that would destroy a key the file leaves out. The version is inside the
+ * MAC's authenticated parameters, so editing it to 2 fails the integrity check
+ * on every build. The envelope carries the version only: no address, label or
+ * count lives outside the encryption.
+ */
+export interface EncryptedBackupFileV3 extends Omit<
+  EncryptedBackupFileV2,
+  'version'
+> {
+  version: 3;
+}
+
+/**
  * Encrypted backup file structure (written to .voibackup file).
  *
  * Discriminated union on `version`: v1 = legacy PBKDF2, v2 = scrypt.
  */
-export type EncryptedBackupFile = EncryptedBackupFileV1 | EncryptedBackupFileV2;
+export type EncryptedBackupFile =
+  EncryptedBackupFileV1 | EncryptedBackupFileV2 | EncryptedBackupFileV3;
 
 /**
  * Result of creating a backup
@@ -326,12 +392,101 @@ export interface BackupResult {
   accountCount: number;
   /** Backup creation timestamp */
   createdAt: string;
+  /** Total accounts in the wallet when the backup was taken */
+  totalAccountCount: number;
+  /** Set when any key was left out: the file is incomplete (TASK-504) */
+  incomplete?: BackupIncomplete;
+}
+
+/**
+ * What restore did with one record of the file (TASK-504). Every record gets
+ * exactly one result; anything other than `added` or `added-in-place` means the
+ * device was left as it was for that record.
+ */
+export type RestoreRecordOutcome =
+  /** Added under the id the file gave it. */
+  | 'added'
+  /** Added under a fresh id because the file's id names an occupied key slot. */
+  | 'added-new-id'
+  /** Added against a key already on this device that derives to the same address. */
+  | 'added-in-place'
+  /** Same id and same address already on this device. */
+  | 'already-present'
+  /** The address is already on this device under another id or type. */
+  | 'kept-device-record'
+  /**
+   * The address is on this device with a key slot proven empty, and the file
+   * holds the key (report input only: it decides no write).
+   */
+  | 'device-key-unreadable'
+  /**
+   * The address is on this device and its stored key is not readable here, or
+   * reads as another account's, or the read failed. The file holds the key.
+   */
+  | 'device-key-problem'
+  /**
+   * The address is on this device as a record that holds no key (Watch Only,
+   * Ledger or Airgap). `deviceType` names which. The file's key was not added.
+   */
+  | 'device-keyless'
+  /** The id is on this device with a different address. */
+  | 'rejected-id-conflict'
+  /** The id's key slot holds a different key that derives to another address. */
+  | 'rejected-slot-occupied'
+  /** A key for this record could not be placed safely. */
+  | 'rejected-no-safe-slot'
+  /** The record lacks fields restore needs (for example a signer device). */
+  | 'rejected-invalid';
+
+/**
+ * Options for a restore that runs on the old-PIN screen (TASK-504, DOC-507 4.1
+ * item 9). `epoch` is the session vault's epoch recorded when the old PIN was
+ * verified IN THIS restore. A key-less rekeyed record may keep its id over a
+ * surviving key only while the vault still holds exactly what that verify put in
+ * it; an epoch that moved stops the restore at the next record boundary.
+ */
+export interface RestoreOptions {
+  oldPinSession?: { epoch: number };
+  /**
+   * The forgotten-PIN step (DOC-507 section 5): remove the old PIN credential
+   * first (step B), then restore add-only. Never together with `oldPinSession`.
+   */
+  removeOldPin?: boolean;
+}
+
+export interface RestoreRecordResult {
+  id: string;
+  address: string;
+  label?: string;
+  outcome: RestoreRecordOutcome;
+  /** The id the record was stored under, when it differs from the file's. */
+  storedId?: string;
+  /**
+   * Set when a record the file carries WITHOUT its key was added without one
+   * (TASK-504): `watch-only` for a flagged standard record (stored as a Watch
+   * Only account), `rekeyed` for a flagged rekeyed record (stored key-less, with
+   * its rekey fields). Absent when the record took a surviving key on the
+   * old-PIN screen (item 9) or was not added.
+   */
+  withoutKey?: 'watch-only' | 'rekeyed';
+  /** The type of the key-less device record, for `device-keyless` only. */
+  deviceType?:
+    AccountType.WATCH | AccountType.LEDGER | AccountType.REMOTE_SIGNER;
+  /**
+   * How many device records share the address, for `device-keyless` and
+   * `device-key-unreadable` only. The advice to remove the account and restore
+   * again is true only when this is 1: with duplicates (TASK-423) removing one
+   * entry leaves the row in place.
+   */
+  deviceEntries?: number;
 }
 
 /**
  * Result of restoring a backup
  */
 export interface RestoreResult {
+  /** One result per record of the file (TASK-504) */
+  records: RestoreRecordResult[];
   /** Number of accounts restored */
   accountCount: number;
   /** Number of Ledger accounts (metadata only) */
@@ -352,6 +507,10 @@ export interface RestoreResult {
   friendsCount: number;
   /** Whether remote signer settings were restored */
   remoteSignerSettingsRestored: boolean;
+  /** Airgap signer pairings the file held, none of which are restored */
+  pairedSignersNotRestored: number;
+  /** An incomplete file's left-out accounts, so the report can name them */
+  leftOut?: BackupLeftOutAccount[];
 }
 
 /**
@@ -378,6 +537,15 @@ export interface BackupInfo {
   friendsCount: number;
   /** Whether backup contains remote signer settings */
   hasRemoteSignerSettings: boolean;
+  /** Set when the file is incomplete: the accounts whose keys it lacks */
+  incomplete?: BackupIncomplete;
+  /** What a restore would add, for the forgotten-PIN consent screen */
+  restorePlan: {
+    total: number;
+    addable: number;
+    addableWithKey: number;
+    notAdded: { label?: string; address: string }[];
+  };
 }
 
 /**
@@ -397,7 +565,7 @@ export interface BackupProgress {
  */
 export interface RestoreProgress {
   /** Current step */
-  step: 'reading' | 'decrypting' | 'validating' | 'clearing' | 'restoring';
+  step: 'reading' | 'decrypting' | 'validating' | 'restoring';
   /** Progress percentage (0-100) */
   progress: number;
   /** Current step description */
