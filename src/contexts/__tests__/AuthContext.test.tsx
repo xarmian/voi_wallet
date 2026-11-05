@@ -98,6 +98,8 @@ jest.mock('@/services/secure/pinSetupPending', () => ({
 jest.mock('@/services/secure/SessionKeyVault', () => ({
   SessionKeyVault: {
     set: jest.fn(),
+    clear: jest.fn(),
+    currentEpoch: jest.fn(() => 7),
     getSecret: jest.fn(() => null),
     getSecretSource: jest.fn(() => 'pin'),
   },
@@ -1021,6 +1023,84 @@ describe('AuthContext — PIN unlock', () => {
     expect(ok).toBe(false);
     expect(result.current.authState.isLocked).toBe(true);
     expect(mockVaultSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthContext — old-PIN verify for a restore (TASK-504)', () => {
+  it('a valid PIN fills the vault and reports its epoch, with no sweep and no session change', async () => {
+    const { result } = await mountAuth();
+    const before = result.current.authState;
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.unlockForRestore(TEST_PIN);
+    });
+
+    expect(outcome).toEqual({ status: 'verified', epoch: 7 });
+    expect(mockVaultSet).toHaveBeenCalledWith(TEST_PIN, 'pin');
+    expect(AccountSecureStorage.migrateAllAccountsToV2).not.toHaveBeenCalled();
+    // The app is not unlocked by this verify (boot already signalled locked).
+    expect(mockSetUnlocked).not.toHaveBeenCalledWith(true);
+    expect(result.current.authState.isLocked).toBe(before.isLocked);
+    expect(result.current.authState.isAuthenticated).toBe(
+      before.isAuthenticated
+    );
+    expect(result.current.authState.sessionId).toBe(before.sessionId);
+  });
+
+  it('a wrong PIN fills nothing', async () => {
+    mockVerifyPin.mockResolvedValue(false);
+    const { result } = await mountAuth();
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.unlockForRestore(TEST_PIN);
+    });
+    expect(outcome).toEqual({ status: 'invalid' });
+    expect(mockVaultSet).not.toHaveBeenCalled();
+  });
+
+  it('an empty secret never reaches verifyPin', async () => {
+    const { result } = await mountAuth();
+    await act(async () => {
+      await result.current.unlockForRestore('');
+    });
+    expect(mockVerifyPin).not.toHaveBeenCalled();
+  });
+
+  it('a pending wipe refuses before the PIN is checked', async () => {
+    const { result } = await mountAuth();
+    mockReadWipeIntent.mockResolvedValue(true);
+    mockWipeWalletData.mockRejectedValueOnce(new WipeIncompleteError(['k']));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.unlockForRestore(TEST_PIN);
+    });
+    await flush();
+    mockReadWipeIntent.mockResolvedValue(false);
+    expect(outcome).toEqual({ status: 'wipe_pending' });
+    expect(mockVerifyPin).not.toHaveBeenCalled();
+    expect(mockVaultSet).not.toHaveBeenCalled();
+  });
+
+  it('a failed credential-kind read after a valid PIN fills nothing', async () => {
+    (
+      AccountSecureStorage.getCredentialSource as jest.Mock
+    ).mockRejectedValueOnce(new Error('keychain unavailable'));
+    const { result } = await mountAuth();
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.unlockForRestore(TEST_PIN);
+    });
+    expect(outcome).toEqual({ status: 'invalid' });
+    expect(mockVaultSet).not.toHaveBeenCalled();
+  });
+
+  it('clearRestoreVault empties the vault', async () => {
+    const { result } = await mountAuth();
+    await act(async () => {
+      result.current.clearRestoreVault();
+    });
+    expect(SessionKeyVault.clear).toHaveBeenCalledTimes(1);
   });
 });
 
