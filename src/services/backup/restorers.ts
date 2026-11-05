@@ -394,7 +394,7 @@ function fileHoldsKey(account: BackupAccountData): boolean {
  * blob re-read inside the write queue. Rollback touches only what this attempt
  * wrote: journaled key slots, and metadata it added for key-less records.
  */
-export async function restoreAccounts(
+async function restoreAccountsNow(
   backupAccounts: BackupAccountData[],
   options: RestoreOptions = {}
 ): Promise<{
@@ -920,6 +920,27 @@ export async function restoreAccounts(
       'RESTORE_FAILED'
     );
   }
+}
+
+/**
+ * Restores never overlap. Two runs on the same file (a double tap on Confirm)
+ * would each read a slot the other is about to write, and the one that loses the
+ * wallet-blob merge would undo what the winner committed (its slot or its
+ * account-list entry). The second run starts when the first has ended, so it
+ * reads the device as the first left it and reports those records as already
+ * present.
+ */
+let restoreChain: Promise<unknown> = Promise.resolve();
+
+export function restoreAccounts(
+  backupAccounts: BackupAccountData[],
+  options: RestoreOptions = {}
+): ReturnType<typeof restoreAccountsNow> {
+  const run = restoreChain.then(() =>
+    restoreAccountsNow(backupAccounts, options)
+  );
+  restoreChain = run.catch(() => undefined);
+  return run;
 }
 
 /**

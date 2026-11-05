@@ -81,6 +81,7 @@ export default function RestoreWalletScreen() {
   >(isOnboarding ? 'checking' : 'none');
   const [showForgottenConsent, setShowForgottenConsent] = useState(false);
   const oldPinEpoch = useRef<number | null>(null);
+  const restoreInFlight = useRef(false);
   // Bumped whenever the screen is left or the app leaves the foreground. A PIN
   // check that started before the bump must not fill the vault when it ends.
   const oldPinGeneration = useRef(0);
@@ -247,6 +248,9 @@ export default function RestoreWalletScreen() {
 
   const handleConfirmRestore = useCallback(async () => {
     if (!selectedFile || !password) return;
+    // A second tap before the first restore ends starts nothing.
+    if (restoreInFlight.current) return;
+    restoreInFlight.current = true;
 
     setShowConfirmationModal(false);
     setShowForgottenConsent(false);
@@ -318,6 +322,7 @@ export default function RestoreWalletScreen() {
           .catch(() => {});
       }
     } finally {
+      restoreInFlight.current = false;
       setPassword('');
     }
   }, [

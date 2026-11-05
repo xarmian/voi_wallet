@@ -4732,7 +4732,11 @@ export class AccountSecureStorage {
    * (otherwise there is nothing to remove) and the account list is EMPTY (the
    * step is for a device with no accounts; with accounts the wallet's own Change
    * PIN is the route). A read that fails throws and nothing is deleted.
-   * Re-running after a kill deletes what is left, in the same order.
+   * Re-running after a kill finishes the deletes only while a PIN credential
+   * copy is left; once both copies are gone it throws "There is no PIN to
+   * remove" and the step is not offered. A salt or throttle record left by a kill
+   * after the credential is gone is harmless: the salt is overwritten by the next
+   * setupPin, and setupPin clears the throttle when it finds no credential.
    */
   static async removeCredentialForForgottenPin(): Promise<void> {
     return this.runKeyMutationExclusive(async () => {

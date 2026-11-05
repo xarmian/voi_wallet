@@ -31,6 +31,7 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ reloadTheme: async () => {} }),
 }));
+let mockConfirmRestore: () => void = () => {};
 const mockUnlockForRestore = jest.fn();
 const mockClearRestoreVault = jest.fn();
 jest.mock('@/contexts/AuthContext', () => ({
@@ -91,6 +92,7 @@ jest.mock('@/components/backup/RestoreConfirmationModal', () => {
     visible: boolean;
     onConfirm: () => void;
   }) {
+    mockConfirmRestore = onConfirm;
     return visible ? (
       <Button title="Confirm restore" onPress={onConfirm} />
     ) : null;
@@ -282,6 +284,42 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       await view.findByText('That PIN is not right. Try again.')
     ).toBeTruthy();
     expect(view.queryByText('Select Backup File')).toBeNull();
+  });
+
+  it('a second tap on Confirm while the restore runs starts no second restore', async () => {
+    mockUnlockForRestore.mockResolvedValue({ status: 'verified', epoch: 42 });
+    jest
+      .mocked(BackupService.validateBackupFile)
+      .mockResolvedValue({ accountCount: 1 } as never);
+    let finish: (value: unknown) => void = () => {};
+    jest.mocked(BackupService.restoreBackup).mockClear();
+    jest.mocked(BackupService.restoreBackup).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }) as never
+    );
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const view = await openOnboardingWithPin();
+    await view.findByText(NORMAL);
+    await fireEvent.changeText(view.getByLabelText('Old PIN'), '123456');
+    await fireEvent.press(view.getByText('Continue'));
+    await fireEvent.press(await view.findByText('Select Backup File'));
+    await fireEvent.press(await view.findByText('Confirm password'));
+    await view.findByText('Confirm restore');
+    // Two taps in the same tick, inside one act (a press that awaits a pending
+    // restore must not overlap another act).
+    const onPress = mockConfirmRestore;
+    await act(async () => {
+      onPress();
+      onPress();
+    });
+    expect(BackupService.restoreBackup).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish(restoreResult(false));
+    });
+    expect(BackupService.restoreBackup).toHaveBeenCalledTimes(1);
+    await view.unmount();
   });
 
   it('a verified PIN opens the chooser, the restore carries the epoch, and finishing clears the vault and re-reads auth (never SecuritySetup)', async () => {
