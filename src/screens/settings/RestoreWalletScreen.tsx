@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Alert,
   ScrollView,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -24,6 +25,8 @@ import { GlassCard } from '@/components/common/GlassCard';
 import PasswordInputModal from '@/components/backup/PasswordInputModal';
 import BackupProgressModal from '@/components/backup/BackupProgressModal';
 import RestoreConfirmationModal from '@/components/backup/RestoreConfirmationModal';
+import OldPinStep from '@/components/backup/OldPinStep';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import {
   BackupService,
   RestoreProgress,
@@ -37,12 +40,15 @@ import {
   SETTINGS_STAY_TEXT,
 } from '@/services/backup/restoreReport';
 
+// How long a verified old PIN keeps the session vault filled on this screen.
+const OLD_PIN_SESSION_MS = 5 * 60 * 1000;
+
 export default function RestoreWalletScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
     ?.isOnboarding;
-  const { recheckAuthState } = useAuth();
+  const { recheckAuthState, unlockForRestore, clearRestoreVault } = useAuth();
   // One selector, one primitive (a derived object would loop the store).
   const deviceAccountCount = useWalletStore(
     (state) => state.wallet?.accounts.length ?? 0
@@ -64,6 +70,83 @@ export default function RestoreWalletScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [isValidating, setIsValidating] = useState(false);
+  // The old-PIN step (DOC-507 section 3): on an onboarding restore where the
+  // device still holds a PIN credential, the PIN is verified BEFORE a file is
+  // chosen. 'needed' blocks the file chooser; 'verified' carries the vault epoch
+  // the verify produced.
+  const [oldPin, setOldPin] = useState<
+    'checking' | 'none' | 'needed' | 'verified'
+  >(isOnboarding ? 'checking' : 'none');
+  const oldPinEpoch = useRef<number | null>(null);
+  const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const endOldPinSession = useCallback(
+    (backTo: 'needed' | null) => {
+      if (sessionTimer.current) clearTimeout(sessionTimer.current);
+      sessionTimer.current = null;
+      // Only a verified session has anything to end. A background event on a
+      // screen with no session (Settings, or before the PIN) changes nothing.
+      if (oldPinEpoch.current === null) return;
+      oldPinEpoch.current = null;
+      clearRestoreVault();
+      if (backTo) {
+        setSelectedFile(null);
+        setBackupInfo(null);
+        setPassword('');
+        setShowPasswordModal(false);
+        setShowConfirmationModal(false);
+        setOldPin(backTo);
+      }
+    },
+    [clearRestoreVault]
+  );
+
+  useEffect(() => {
+    if (!isOnboarding) return;
+    let cancelled = false;
+    AccountSecureStorage.hasPinStrict()
+      .then((hasPin) => {
+        if (!cancelled) setOldPin(hasPin ? 'needed' : 'none');
+      })
+      .catch(() => {
+        // A credential that cannot be read is not shown as absent: the restore
+        // itself reads strictly and stops.
+        if (!cancelled) setOldPin('none');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOnboarding]);
+
+  // The vault is cleared when the user leaves, the app goes to the background,
+  // or the session times out; the step returns.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') endOldPinSession('needed');
+    });
+    return () => {
+      sub.remove();
+      endOldPinSession(null);
+    };
+  }, [endOldPinSession]);
+
+  const handleOldPinVerified = useCallback(
+    (epoch: number) => {
+      oldPinEpoch.current = epoch;
+      setOldPin('verified');
+      if (sessionTimer.current) clearTimeout(sessionTimer.current);
+      sessionTimer.current = setTimeout(
+        () => endOldPinSession('needed'),
+        OLD_PIN_SESSION_MS
+      );
+    },
+    [endOldPinSession]
+  );
+
+  const readLockedUntil = useCallback(
+    async () => (await AccountSecureStorage.getPinThrottleState()).lockedUntil,
+    []
+  );
 
   // Set up progress callback
   useEffect(() => {
@@ -159,7 +242,10 @@ export default function RestoreWalletScreen() {
     try {
       const result = await BackupService.restoreBackup(
         selectedFile.uri,
-        password
+        password,
+        oldPinEpoch.current !== null
+          ? { oldPinSession: { epoch: oldPinEpoch.current } }
+          : {}
       );
       setShowProgressModal(false);
 
@@ -193,6 +279,9 @@ export default function RestoreWalletScreen() {
                 })
               );
             } else if (isOnboarding) {
+              // The old-PIN vault is cleared first: the normal unlock fills it
+              // again (and runs the sweep that upgrades the restored keys).
+              endOldPinSession(null);
               void recheckAuthState();
             } else {
               navigation.goBack();
@@ -217,6 +306,7 @@ export default function RestoreWalletScreen() {
     reloadTheme,
     isOnboarding,
     recheckAuthState,
+    endOldPinSession,
   ]);
 
   const handleCancelPassword = useCallback(() => {
@@ -238,7 +328,10 @@ export default function RestoreWalletScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            endOldPinSession(null);
+            navigation.goBack();
+          }}
         >
           <Ionicons name="arrow-back" size={24} color={colors.primary} />
         </TouchableOpacity>
@@ -335,14 +428,24 @@ export default function RestoreWalletScreen() {
           </View>
         </GlassCard>
 
+        {oldPin === 'needed' && (
+          <OldPinStep
+            unlock={unlockForRestore}
+            readLockedUntil={readLockedUntil}
+            onVerified={handleOldPinVerified}
+          />
+        )}
+
         {/* Select File Button */}
-        <TouchableOpacity
-          style={styles.selectButton}
-          onPress={handleSelectFile}
-        >
-          <Ionicons name="folder-open" size={20} color={colors.buttonText} />
-          <Text style={styles.selectButtonText}>Select Backup File</Text>
-        </TouchableOpacity>
+        {(oldPin === 'none' || oldPin === 'verified') && (
+          <TouchableOpacity
+            style={styles.selectButton}
+            onPress={handleSelectFile}
+          >
+            <Ionicons name="folder-open" size={20} color={colors.buttonText} />
+            <Text style={styles.selectButtonText}>Select Backup File</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
       {/* Password Modal */}

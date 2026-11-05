@@ -4,9 +4,9 @@
 // PIN it has and ends with the accounts-only line.
 
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import algosdk from 'algosdk';
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import RestoreWalletScreen from '../RestoreWalletScreen';
 import { BackupService } from '@/services/backup';
 import {
@@ -31,8 +31,25 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ reloadTheme: async () => {} }),
 }));
+const mockUnlockForRestore = jest.fn();
+const mockClearRestoreVault = jest.fn();
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ recheckAuthState: mockRecheck }),
+  useAuth: () => ({
+    recheckAuthState: mockRecheck,
+    unlockForRestore: mockUnlockForRestore,
+    clearRestoreVault: mockClearRestoreVault,
+  }),
+}));
+let mockHasPin = false;
+let mockLockedUntil: number | null = null;
+jest.mock('@/services/secure/AccountSecureStorage', () => ({
+  AccountSecureStorage: {
+    hasPinStrict: async () => mockHasPin,
+    getPinThrottleState: async () => ({
+      lockedUntil: mockLockedUntil,
+      attemptsRemaining: 5,
+    }),
+  },
 }));
 jest.mock('@/store/walletStore', () => ({
   useWalletStore: (
@@ -135,7 +152,7 @@ async function restoreThroughScreen(result: object) {
   jest.mocked(BackupService.restoreBackup).mockResolvedValue(result as never);
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const view = await render(<RestoreWalletScreen />);
-  await fireEvent.press(view.getByText('Select Backup File'));
+  await fireEvent.press(await view.findByText('Select Backup File'));
   await fireEvent.press(await view.findByText('Confirm password'));
   await fireEvent.press(await view.findByText('Confirm restore'));
   await view.findByText('Select Backup File');
@@ -154,6 +171,10 @@ beforeEach(() => {
   mockRecheck.mockClear();
   mockParams = undefined;
   mockAccountCount = 0;
+  mockHasPin = false;
+  mockLockedUntil = null;
+  mockUnlockForRestore.mockReset();
+  mockClearRestoreVault.mockClear();
   jest.restoreAllMocks();
 });
 
@@ -230,5 +251,147 @@ describe('restore screen words', () => {
       full.getByText(`${RESTORE_ADDS_TEXT} ${SETTINGS_STAY_TEXT}`)
     ).toBeTruthy();
     expect(full.queryByText(/replace ALL/i)).toBeNull();
+  });
+});
+
+// DOC-507 section 3: the old-PIN step.
+describe('restore screen: the old-PIN step (onboarding, the device still has a PIN)', () => {
+  const NORMAL =
+    'This phone still has a PIN from before. Enter it to restore your backup.';
+
+  async function openOnboardingWithPin() {
+    mockParams = { isOnboarding: true };
+    mockHasPin = true;
+    return render(<RestoreWalletScreen />);
+  }
+
+  it('shows product copy and keeps the file chooser away until the PIN is verified', async () => {
+    const view = await openOnboardingWithPin();
+    expect(await view.findByText(NORMAL)).toBeTruthy();
+    expect(view.queryByText('Select Backup File')).toBeNull();
+    expect(mockUnlockForRestore).not.toHaveBeenCalled();
+  });
+
+  it('a wrong PIN keeps the chooser away and fills nothing', async () => {
+    mockUnlockForRestore.mockResolvedValue({ status: 'invalid' });
+    const view = await openOnboardingWithPin();
+    await view.findByText(NORMAL);
+    await fireEvent.changeText(view.getByLabelText('Old PIN'), '000000');
+    await fireEvent.press(view.getByText('Continue'));
+    expect(
+      await view.findByText('That PIN is not right. Try again.')
+    ).toBeTruthy();
+    expect(view.queryByText('Select Backup File')).toBeNull();
+  });
+
+  it('a verified PIN opens the chooser, the restore carries the epoch, and finishing clears the vault and re-reads auth (never SecuritySetup)', async () => {
+    mockUnlockForRestore.mockResolvedValue({ status: 'verified', epoch: 42 });
+    jest
+      .mocked(BackupService.validateBackupFile)
+      .mockResolvedValue({ accountCount: 1 } as never);
+    jest
+      .mocked(BackupService.restoreBackup)
+      .mockResolvedValue(restoreResult(false) as never);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const view = await openOnboardingWithPin();
+    await view.findByText(NORMAL);
+    await fireEvent.changeText(view.getByLabelText('Old PIN'), '123456');
+    await fireEvent.press(view.getByText('Continue'));
+    await fireEvent.press(await view.findByText('Select Backup File'));
+    await fireEvent.press(await view.findByText('Confirm password'));
+    await fireEvent.press(await view.findByText('Confirm restore'));
+    await view.findByText('Select Backup File');
+
+    expect(BackupService.restoreBackup).toHaveBeenCalledWith(
+      'file:///b.voibackup',
+      'pw',
+      { oldPinSession: { epoch: 42 } }
+    );
+    const buttons = alert.mock.calls[0][2] as { onPress: () => void }[];
+    buttons[0].onPress();
+    expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+    expect(mockRecheck).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it('locked: the stored end time shows as time left, no PIN field is offered, and nothing is verified', async () => {
+    mockLockedUntil = Date.now() + 2 * 60 * 60 * 1000 + 5 * 60 * 1000 - 1000;
+    const view = await openOnboardingWithPin();
+    expect(
+      await view.findByText(
+        'Too many wrong tries, so PIN entry is paused. Try again in 2 hr 5 min. Nothing on this phone has changed.'
+      )
+    ).toBeTruthy();
+    expect(view.queryByLabelText('Old PIN')).toBeNull();
+    expect(view.queryByText('Select Backup File')).toBeNull();
+    expect(view.queryByText(/Reset/i)).toBeNull();
+    expect(mockUnlockForRestore).not.toHaveBeenCalled();
+  });
+
+  it('from Settings the step never appears and the PIN is not even asked about', async () => {
+    mockParams = undefined;
+    mockHasPin = true;
+    mockAccountCount = 2;
+    const view = await render(<RestoreWalletScreen />);
+    expect(await view.findByText('Select Backup File')).toBeTruthy();
+    expect(view.queryByText(NORMAL)).toBeNull();
+  });
+
+  describe('the vault does not outlive the session', () => {
+    let handler: (state: string) => void;
+    beforeEach(() => {
+      jest
+        .spyOn(AppState, 'addEventListener')
+        .mockImplementation((_type, fn) => {
+          handler = fn as (state: string) => void;
+          return { remove: jest.fn() } as never;
+        });
+    });
+
+    async function verified() {
+      mockUnlockForRestore.mockResolvedValue({ status: 'verified', epoch: 1 });
+      const view = await openOnboardingWithPin();
+      await view.findByText(NORMAL);
+      await fireEvent.changeText(view.getByLabelText('Old PIN'), '123456');
+      await fireEvent.press(view.getByText('Continue'));
+      await view.findByText('Select Backup File');
+      return view;
+    }
+
+    it('going to the background clears the vault and brings the step back', async () => {
+      const view = await verified();
+      handler('background');
+      expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+      expect(await view.findByText(NORMAL)).toBeTruthy();
+      expect(view.queryByText('Select Backup File')).toBeNull();
+    });
+
+    it('leaving the screen clears the vault', async () => {
+      const view = await verified();
+      await view.unmount();
+      expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+    });
+
+    it('a background event before any PIN is verified clears nothing and changes nothing', async () => {
+      const view = await openOnboardingWithPin();
+      await view.findByText(NORMAL);
+      handler('background');
+      expect(mockClearRestoreVault).not.toHaveBeenCalled();
+      expect(view.getByText(NORMAL)).toBeTruthy();
+    });
+
+    it('the session times out: the vault is cleared and the step returns', async () => {
+      jest.useFakeTimers();
+      try {
+        const view = await verified();
+        await act(async () => {
+          jest.advanceTimersByTime(5 * 60 * 1000 + 1);
+        });
+        expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
+        expect(view.queryByText('Select Backup File')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 });
