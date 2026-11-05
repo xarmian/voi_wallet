@@ -966,7 +966,11 @@ export async function performFullRestore(
     friendsCount,
     remoteSignerSettingsRestored,
     // Pairings are never taken from a file (a pairing is trust). The count lets
-    // the report say so when the file held any.
-    pairedSignersNotRestored: settings.remoteSigner?.pairedSigners?.length ?? 0,
+    // a FRESH restore's report say so when the file held any. On a restore that
+    // is not fresh nothing of the file's signer settings is taken or claimed, so
+    // the count is 0 and the line would be false.
+    pairedSignersNotRestored: fresh
+      ? (settings.remoteSigner?.pairedSigners?.length ?? 0)
+      : 0,
   };
 }

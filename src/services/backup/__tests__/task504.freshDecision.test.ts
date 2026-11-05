@@ -318,14 +318,14 @@ describe('TASK-504 step 2b: fresh is decided from strict reads', () => {
     expect(blobAfter.accounts).toHaveLength(2);
   });
 
-  it('a file that holds pairings reports how many were not restored, fresh or not', async () => {
+  it('pairings left out are counted on a fresh restore only: a restore that is not fresh takes and claims nothing of the file signer settings', async () => {
     const fresh = await restoreFile(keyed('f-7'), fileSettings(2));
     expect(fresh.settingsRestored).toBe(true);
     expect(fresh.pairedSignersNotRestored).toBe(2);
 
     const notFresh = await restoreFile(keyed('f-8'), fileSettings(3));
     expect(notFresh.settingsRestored).toBe(false);
-    expect(notFresh.pairedSignersNotRestored).toBe(3);
+    expect(notFresh.pairedSignersNotRestored).toBe(0);
 
     const none = await restoreFile(keyed('f-9'), fileSettings(0));
     expect(none.pairedSignersNotRestored).toBe(0);
