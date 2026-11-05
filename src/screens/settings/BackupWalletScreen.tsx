@@ -26,7 +26,13 @@ import {
   BackupError,
 } from '@/services/backup';
 import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
-import { buildBackupReport } from '@/services/backup/backupReport';
+import KeysNotInBackupModal, {
+  BackupReportBlocks,
+} from '@/components/backup/KeysNotInBackupModal';
+import {
+  androidSavedAlertText,
+  buildBackupReport,
+} from '@/services/backup/backupReport';
 
 export default function BackupWalletScreen() {
   const navigation = useNavigation();
@@ -42,6 +48,13 @@ export default function BackupWalletScreen() {
   const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
   const [backupSaved, setBackupSaved] = useState(false);
   const [error, setError] = useState<string | undefined>();
+
+  const [acknowledged, setAcknowledged] = useState(false);
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+  const needsAcknowledgement =
+    !!backupResult &&
+    buildBackupReport(backupResult).incomplete &&
+    !acknowledged;
 
   // Account counts
   const standardAccounts = accounts.filter(
@@ -109,6 +122,8 @@ export default function BackupWalletScreen() {
           { maxReads: accounts.length, signal: abort.signal }
         );
         setShowProgressModal(false);
+        setAcknowledged(false);
+        setBackupSaved(false);
         if (result.rekeyedKeyCount) {
           Alert.alert(
             'Update required when restoring',
@@ -143,7 +158,7 @@ export default function BackupWalletScreen() {
   }, []);
 
   const handleSaveLocal = useCallback(async () => {
-    if (!backupResult) return;
+    if (!backupResult || needsAcknowledgement) return;
 
     if (Platform.OS === 'android') {
       try {
@@ -168,7 +183,11 @@ export default function BackupWalletScreen() {
           backupResult.fileContent
         );
         setBackupSaved(true);
-        Alert.alert('Saved', 'Backup saved to your selected folder.');
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        Alert.alert(
+          'Saved',
+          androidSavedAlertText(buildBackupReport(backupResult))
+        );
       } catch (err) {
         console.error('Save error:', err);
         const message = (err as Error).message || '';
@@ -185,6 +204,7 @@ export default function BackupWalletScreen() {
       try {
         await BackupService.shareBackup(backupResult.fileUri);
         setBackupSaved(true);
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
       } catch {
         Alert.alert(
           'Save Failed',
@@ -192,20 +212,21 @@ export default function BackupWalletScreen() {
         );
       }
     }
-  }, [backupResult]);
+  }, [backupResult, needsAcknowledgement]);
 
   const handleShare = useCallback(async () => {
-    if (!backupResult) return;
+    if (!backupResult || needsAcknowledgement) return;
     try {
       await BackupService.shareBackup(backupResult.fileUri);
       setBackupSaved(true);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
     } catch {
       Alert.alert(
         'Share Failed',
         'Could not share the backup file. Please try again.'
       );
     }
-  }, [backupResult]);
+  }, [backupResult, needsAcknowledgement]);
 
   const handleDone = useCallback(async () => {
     if (!backupSaved && backupResult) {
@@ -244,6 +265,7 @@ export default function BackupWalletScreen() {
         </View>
 
         <ScrollView
+          ref={scrollRef}
           style={styles.scrollView}
           contentContainerStyle={styles.content}
         >
@@ -286,27 +308,14 @@ export default function BackupWalletScreen() {
                   ? 'Backup Saved!'
                   : 'Backup Created'}
             </Text>
-            <Text style={styles.infoText}>
-              {report.incomplete
-                ? report.summary
-                : backupSaved
+            {report.incomplete ? (
+              <BackupReportBlocks report={report} />
+            ) : (
+              <Text style={styles.infoText}>
+                {backupSaved
                   ? 'Your backup has been saved. Store it in a safe place.'
                   : 'Your encrypted backup is ready. Save it to your device or share it to cloud storage.'}
-            </Text>
-            {report.incomplete &&
-              report.rows.map((row, i) => (
-                <View
-                  key={`${row.shortAddress}-${i}`}
-                  style={styles.leftOutRow}
-                >
-                  <Text style={styles.leftOutLabel}>
-                    {row.label} ({row.shortAddress})
-                  </Text>
-                  <Text style={styles.infoText}>{row.reason}</Text>
-                </View>
-              ))}
-            {report.incomplete && report.advice && (
-              <Text style={styles.infoText}>{report.advice}</Text>
+              </Text>
             )}
           </GlassCard>
 
@@ -357,6 +366,7 @@ export default function BackupWalletScreen() {
               <TouchableOpacity
                 style={styles.createButton}
                 onPress={handleSaveLocal}
+                disabled={needsAcknowledgement}
               >
                 <Ionicons name="folder" size={20} color={colors.buttonText} />
                 <Text style={styles.createButtonText}>
@@ -367,6 +377,7 @@ export default function BackupWalletScreen() {
               <TouchableOpacity
                 style={[styles.secondaryButton, { marginTop: 12 }]}
                 onPress={handleShare}
+                disabled={needsAcknowledgement}
               >
                 <View style={styles.secondaryButtonContent}>
                   <Ionicons
@@ -385,6 +396,7 @@ export default function BackupWalletScreen() {
               <TouchableOpacity
                 style={styles.createButton}
                 onPress={handleSaveLocal}
+                disabled={needsAcknowledgement}
               >
                 <Ionicons
                   name="share-outline"
@@ -416,6 +428,11 @@ export default function BackupWalletScreen() {
             </Text>
           </TouchableOpacity>
         </ScrollView>
+        <KeysNotInBackupModal
+          visible={needsAcknowledgement}
+          report={report}
+          onAcknowledge={() => setAcknowledged(true)}
+        />
       </SafeAreaView>
     );
   }

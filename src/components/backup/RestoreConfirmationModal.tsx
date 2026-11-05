@@ -1,4 +1,5 @@
 import React from 'react';
+import { restoreConfirmationKeysLine } from '@/services/backup/backupReport';
 import {
   Modal,
   View,
@@ -48,6 +49,7 @@ export default function RestoreConfirmationModal({
     });
   };
 
+  const keysLine = restoreConfirmationKeysLine(backupInfo.incomplete);
   const hasLedgerAccounts = backupInfo.accountTypes.ledger > 0;
 
   return (
@@ -144,6 +146,8 @@ export default function RestoreConfirmationModal({
                 {deviceHasAccounts ? ` ${SETTINGS_STAY_TEXT}` : ''}
               </Text>
             </View>
+
+            {keysLine && <Text style={styles.warningText}>{keysLine}</Text>}
 
             {hasLedgerAccounts && (
               <View style={styles.ledgerWarningContainer}>

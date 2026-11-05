@@ -73,9 +73,12 @@ export default function ForgottenPinConsent({
             {warning.text}
           </Text>
           {warning.rows.map((row, i) => (
-            <Text key={`w-${i}`} style={styles.row}>
-              {row.label} ({row.shortAddress})
-            </Text>
+            <View key={`w-${i}`}>
+              <Text style={styles.row}>
+                {row.label} ({row.shortAddress})
+              </Text>
+              {row.text && <Text style={styles.row}>{row.text}</Text>}
+            </View>
           ))}
           <TextInput
             style={styles.input}

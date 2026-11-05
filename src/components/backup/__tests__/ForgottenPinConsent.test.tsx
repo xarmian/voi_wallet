@@ -148,3 +148,25 @@ describe('step unavailable', () => {
     expect(view.queryByText('Remove old PIN and restore')).toBeNull();
   });
 });
+
+it('renders the reason beneath an other-key warning row', async () => {
+  const {
+    forgottenPinIncompleteWarning,
+  } = require('@/services/backup/forgottenPinCopy');
+  const backupInfo = info({
+    incomplete: {
+      leftOut: [
+        { address: addr(), label: 'Other key', reason: 'other-key-on-device' },
+      ],
+    },
+  });
+  const warning = forgottenPinIncompleteWarning(backupInfo);
+  const view = await render(
+    <ForgottenPinConsent
+      info={backupInfo}
+      onConfirm={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  expect(view.getByText(warning.rows[0].text)).toBeTruthy();
+});

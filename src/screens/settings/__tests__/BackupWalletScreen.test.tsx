@@ -1,9 +1,39 @@
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import {
+  buildBackupReport,
+  androidSavedAlertText,
+} from '@/services/backup/backupReport';
+import type { BackupLeftOutReason } from '@/services/backup/types';
 import BackupWalletScreen from '../BackupWalletScreen';
 import { BackupService, BackupResult } from '@/services/backup';
 
+const mockScrollTo = jest.fn();
+const mockExportButtons: { disabled: boolean; onPress: () => Promise<void> }[] =
+  [];
+jest.mock('react-native', () => {
+  const actual = jest.requireActual('react-native');
+  const React = require('react');
+  return Object.defineProperties(Object.create(actual), {
+    ScrollView: {
+      value: function MockScrollView({
+        ref,
+        ...props
+      }: React.ComponentProps<typeof actual.ScrollView>) {
+        React.useImperativeHandle(ref, () => ({ scrollTo: mockScrollTo }));
+        return <actual.ScrollView {...props} />;
+      },
+    },
+    TouchableOpacity: {
+      value: (props: React.ComponentProps<typeof actual.TouchableOpacity>) => {
+        if (props.disabled !== undefined) mockExportButtons.push(props);
+        return <actual.TouchableOpacity {...props} />;
+      },
+    },
+  });
+});
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: jest.fn() }),
 }));
@@ -92,7 +122,7 @@ it('asks for fresh authentication sized to the account count, before creating th
   } as BackupResult);
   const view = await render(<BackupWalletScreen />);
   await fireEvent.press(view.getByText('Create Backup'));
-  await fireEvent.press(view.getByText('Confirm password'));
+  await fireEvent.press(view.getByText(/confirm password/i));
   expect(mockAuthCalls).toEqual([
     {
       reason: 'export_backup',
@@ -105,7 +135,7 @@ it('asks for fresh authentication sized to the account count, before creating th
 it('cancels the pending prompt when the screen unmounts', async () => {
   const view = await render(<BackupWalletScreen />);
   await fireEvent.press(view.getByText('Create Backup'));
-  await fireEvent.press(view.getByText('Confirm password'));
+  await fireEvent.press(view.getByText(/confirm password/i));
   const signal = mockAuthCalls[0].opts?.signal;
   expect(signal?.aborted).toBe(false);
   await view.unmount();
@@ -117,7 +147,7 @@ it('a cancelled prompt creates no backup and shows no error', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const view = await render(<BackupWalletScreen />);
   await fireEvent.press(view.getByText('Create Backup'));
-  await fireEvent.press(view.getByText('Confirm password'));
+  await fireEvent.press(view.getByText(/confirm password/i));
   expect(BackupService.createBackup).not.toHaveBeenCalled();
   expect(alert).not.toHaveBeenCalled();
   expect(view.queryByText('Backup Created')).toBeNull();
@@ -131,7 +161,7 @@ it.each(['unavailable', 'failed', 'timeout', 'busy'])(
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     const view = await render(<BackupWalletScreen />);
     await fireEvent.press(view.getByText('Create Backup'));
-    await fireEvent.press(view.getByText('Confirm password'));
+    await fireEvent.press(view.getByText(/confirm password/i));
     expect(BackupService.createBackup).not.toHaveBeenCalled();
     expect(alert).toHaveBeenCalledWith(
       'Backup Failed',
@@ -154,7 +184,7 @@ it.each([0, 1, 2])(
     } as BackupResult);
     const view = await render(<BackupWalletScreen />);
     await fireEvent.press(view.getByText('Create Backup'));
-    await fireEvent.press(view.getByText('Confirm password'));
+    await fireEvent.press(view.getByText(/confirm password/i));
     if (count) {
       expect(alert).toHaveBeenCalledWith(
         'Update required when restoring',
@@ -169,58 +199,6 @@ it.each([0, 1, 2])(
   }
 );
 
-// TASK-504: an incomplete backup is never a success state and names every
-// account it left out, with its address.
-it('an incomplete backup reads "Backup incomplete", never created or saved, and lists each left-out account', async () => {
-  jest.mocked(BackupService.createBackup).mockResolvedValue({
-    filename: 'voi-wallet-2026-11-05-incomplete.voibackup',
-    fileUri: 'file:///x',
-    fileContent: '{}',
-    size: 100,
-    accountCount: 3,
-    totalAccountCount: 4,
-    incomplete: {
-      leftOut: [
-        {
-          address: 'A'.repeat(58),
-          label: 'Imported Account 10/9/2025',
-          reason: 'key-unreadable',
-        },
-      ],
-    },
-  } as unknown as BackupResult);
-  const view = await render(<BackupWalletScreen />);
-  await fireEvent.press(view.getByText('Create Backup'));
-  await fireEvent.press(view.getByText('Confirm password'));
-
-  expect(view.getAllByText('Backup incomplete').length).toBeGreaterThan(0);
-  expect(
-    view.getByText("Saved 3 of 4 accounts. These weren't included:")
-  ).toBeTruthy();
-  expect(view.getByText(/Imported Account 10\/9\/2025 \(/)).toBeTruthy();
-  expect(view.getByText("Couldn't read this key")).toBeTruthy();
-  expect(view.getByText(/Keep this wallet installed/)).toBeTruthy();
-  expect(view.queryByText('Backup Created')).toBeNull();
-  expect(view.queryByText('Backup Saved!')).toBeNull();
-  expect(view.queryByText('Backup Ready')).toBeNull();
-});
-
-it("a complete backup keeps today's wording", async () => {
-  jest.mocked(BackupService.createBackup).mockResolvedValue({
-    filename: 'voi-wallet-2026-11-05.voibackup',
-    fileUri: 'file:///x',
-    fileContent: '{}',
-    size: 100,
-    accountCount: 1,
-    totalAccountCount: 1,
-  } as unknown as BackupResult);
-  const view = await render(<BackupWalletScreen />);
-  await fireEvent.press(view.getByText('Create Backup'));
-  await fireEvent.press(view.getByText('Confirm password'));
-  expect(view.getByText('Backup Created')).toBeTruthy();
-  expect(view.queryByText('Backup incomplete')).toBeNull();
-});
-
 it("What's Included counts airgap accounts, so the rows add up to the wallet", async () => {
   mockAccounts = [
     { type: 'standard' },
@@ -234,25 +212,144 @@ it("What's Included counts airgap accounts, so the rows add up to the wallet", a
   ).toBeTruthy();
 });
 
-it('an incomplete backup stays "Backup incomplete" after it is saved: saving never turns it into a success', async () => {
-  jest.mocked(BackupService.createBackup).mockResolvedValue({
-    filename: 'voi-wallet-2026-11-05-incomplete.voibackup',
+jest.mock('expo-file-system/legacy', () => ({
+  StorageAccessFramework: {
+    requestDirectoryPermissionsAsync: jest.fn(async () => ({
+      granted: true,
+      directoryUri: 'folder',
+    })),
+    createFileAsync: jest.fn(async () => 'file:///saved'),
+  },
+  writeAsStringAsync: jest.fn(async () => {}),
+}));
+
+it.each([
+  [],
+  ['key-unreadable'],
+  ['key-unreadable', 'no-key-on-device'],
+  ['other-key-on-device'],
+  ['key-unreadable', 'other-key-on-device'],
+] as BackupLeftOutReason[][])(
+  'gates exports, preserves report and scrolls after saving %j',
+  async (...reasons) => {
+    const originalOS = Platform.OS;
+    Platform.OS = 'android';
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    jest.clearAllMocks();
+    const result = {
+      filename: 'backup.voibackup',
+      fileUri: 'file:///x',
+      fileContent: '{}',
+      size: 100,
+      accountCount: 2,
+      incomplete: {
+        leftOut: reasons.map((reason, i) => ({
+          reason,
+          address: String(i).repeat(58),
+          label: `Account ${i}`,
+        })),
+      },
+    } as BackupResult;
+    const report = buildBackupReport(result);
+    jest.mocked(BackupService.createBackup).mockResolvedValue(result);
+    const view = await render(<BackupWalletScreen />);
+    await fireEvent.press(view.getByText('Create Backup'));
+    mockExportButtons.length = 0;
+    await fireEvent.press(view.getByText(/confirm password/i));
+    if (report.incomplete) {
+      expect(
+        view.getByRole('button', { name: report.acknowledgeText })
+      ).toBeTruthy();
+      expect(mockExportButtons.length).toBeGreaterThanOrEqual(2);
+      for (const button of mockExportButtons.slice(-2)) {
+        expect(button.disabled).toBe(true);
+        await fireEvent.press(view.getByText('Save to Device'));
+        await fireEvent.press(view.getByText('Share to Cloud or Other Apps'));
+        // Invoke the actual handler as well: disabled alone is insufficient.
+        await act(async () => {
+          await button.onPress();
+        });
+        expect(BackupService.shareBackup).not.toHaveBeenCalled();
+        expect(
+          FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync
+        ).not.toHaveBeenCalled();
+      }
+      expect(BackupService.shareBackup).not.toHaveBeenCalled();
+      expect(
+        FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync
+      ).not.toHaveBeenCalled();
+      await fireEvent.press(
+        view.getByRole('button', { name: report.acknowledgeText })
+      );
+      expect(view.getAllByText(report.title!)).toHaveLength(2);
+      for (const block of [report.withoutKey, report.otherKey]) {
+        if (!block) continue;
+        expect(view.getByText(block.text)).toBeTruthy();
+        if (block.advice) expect(view.getByText(block.advice)).toBeTruthy();
+        for (const row of block.rows)
+          expect(
+            view.getByText(`${row.label} (${row.shortAddress})`)
+          ).toBeTruthy();
+      }
+    } else {
+      expect(view.getByText('Backup Ready')).toBeTruthy();
+      expect(view.getByText('Backup Created')).toBeTruthy();
+    }
+    await fireEvent.press(view.getByText('Save to Device'));
+    expect(FileSystem.writeAsStringAsync).toHaveBeenCalledWith(
+      'file:///saved',
+      '{}'
+    );
+    expect(alert).toHaveBeenCalledWith('Saved', androidSavedAlertText(report));
+    expect(mockScrollTo).toHaveBeenCalledWith({ y: 0, animated: true });
+    mockScrollTo.mockClear();
+    await fireEvent.press(view.getByText('Share to Cloud or Other Apps'));
+    expect(BackupService.shareBackup).toHaveBeenCalledWith(result.fileUri);
+    expect(mockScrollTo).toHaveBeenCalledWith({ y: 0, animated: true });
+    if (report.incomplete) {
+      for (const title of ['Backup Ready', 'Backup Created', 'Backup Saved!'])
+        expect(view.queryByText(title)).toBeNull();
+      expect(view.queryByText(/Saved \d+ of \d+/)).toBeNull();
+    } else expect(view.getByText('Backup Saved!')).toBeTruthy();
+    Platform.OS = originalOS;
+    alert.mockRestore();
+  }
+);
+
+it('shows the acknowledgement after the update-required alert, and gates iOS export', async () => {
+  const originalOS = Platform.OS;
+  Platform.OS = 'ios';
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const result = {
+    filename: 'backup.voibackup',
     fileUri: 'file:///x',
     fileContent: '{}',
     size: 100,
     accountCount: 1,
-    totalAccountCount: 2,
+    rekeyedKeyCount: 1,
     incomplete: {
-      leftOut: [
-        { address: 'B'.repeat(58), label: 'X', reason: 'no-key-on-device' },
-      ],
+      leftOut: [{ address: 'A'.repeat(58), reason: 'key-unreadable' as const }],
     },
-  } as unknown as BackupResult);
+  } as BackupResult;
+  const report = buildBackupReport(result);
+  jest.mocked(BackupService.createBackup).mockResolvedValue(result);
   const view = await render(<BackupWalletScreen />);
   await fireEvent.press(view.getByText('Create Backup'));
-  await fireEvent.press(view.getByText('Confirm password'));
-  await fireEvent.press(view.getByText(/Export Backup|Save to Device/));
-  expect(BackupService.shareBackup).toHaveBeenCalled();
-  expect(view.getAllByText('Backup incomplete').length).toBeGreaterThan(0);
-  expect(view.queryByText('Backup Saved!')).toBeNull();
+  await fireEvent.press(view.getByText(/confirm password/i));
+  expect(alert.mock.calls[0][0]).toBe('Update required when restoring');
+  expect(view.queryByText(report.acknowledgeText)).toBeNull();
+  await act(async () => alert.mock.calls[0][2]?.[1].onPress?.());
+  await fireEvent.press(view.getByText('Export Backup'));
+  await act(async () => {
+    await mockExportButtons[mockExportButtons.length - 1].onPress();
+  });
+  expect(BackupService.shareBackup).not.toHaveBeenCalled();
+  await fireEvent.press(
+    view.getByRole('button', { name: report.acknowledgeText })
+  );
+  await fireEvent.press(view.getByText('Export Backup'));
+  expect(BackupService.shareBackup).toHaveBeenCalledWith(result.fileUri);
+  expect(mockScrollTo).toHaveBeenCalledWith({ y: 0, animated: true });
+  Platform.OS = originalOS;
+  alert.mockRestore();
 });

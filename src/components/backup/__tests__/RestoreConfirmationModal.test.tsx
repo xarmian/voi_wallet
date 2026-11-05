@@ -56,3 +56,33 @@ describe('RestoreConfirmationModal', () => {
     expect(view.queryByText('Friends')).toBeNull();
   });
 });
+
+it.each([1, 3, 0])(
+  'shows the missing-own-key line for %s accounts',
+  async (count) => {
+    const {
+      restoreConfirmationKeysLine,
+    } = require('@/services/backup/backupReport');
+    const incomplete = {
+      leftOut: [
+        ...Array.from({ length: count }, (_, i) => ({
+          address: String(i).repeat(58),
+          reason: 'no-key-on-device' as const,
+        })),
+        { address: 'Z'.repeat(58), reason: 'other-key-on-device' as const },
+      ],
+    };
+    const view = await render(
+      <RestoreConfirmationModal
+        visible
+        backupInfo={{ ...info, incomplete }}
+        deviceHasAccounts={false}
+        onCancel={jest.fn()}
+        onConfirm={jest.fn()}
+      />
+    );
+    const line = restoreConfirmationKeysLine(incomplete);
+    if (line) expect(view.getByText(line)).toBeTruthy();
+    else expect(view.queryByText(/This backup doesn't have/)).toBeNull();
+  }
+);
