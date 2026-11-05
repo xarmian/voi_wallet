@@ -1645,9 +1645,16 @@ export class AccountSecureStorage {
    *    account (`written`, with the ownership token);
    *  - holds the key for this address: nothing is written and nothing is
    *    journaled, only the account metadata is added (`in-place`);
-   *  - holds another key, or something no reader accepts: the record is stored
-   *    under a fresh id whose own slot reads empty first (`written`,
-   *    `reassigned`), and the occupied slot is not touched.
+   *  - holds a DIFFERENT key that reads and derives to another address: nothing
+   *    is written and the record is not added (`occupied-other`). The caller
+   *    reports it. An id in a file proves nothing about what this device's slot
+   *    for that id is; a key that positively belongs to another account is not
+   *    ours to route around (DOC-507 4.1 item 1);
+   *  - holds something no reader opens (a PIN-wrapped key with the vault empty,
+   *    a payload no reader accepts, a surviving legacy blob): the record is
+   *    stored under a fresh id whose own slot reads empty first (`written`,
+   *    `reassigned`), and the occupied slot is not touched. This is the only
+   *    state that takes the new-id route.
    * A slot read that cannot complete throws and writes nothing.
    */
   static async storeAccountForRestore(
@@ -1658,6 +1665,7 @@ export class AccountSecureStorage {
   ): Promise<
     | { kind: 'written'; id: string; token: string; reassigned: boolean }
     | { kind: 'in-place'; id: string }
+    | { kind: 'occupied-other'; id: string }
   > {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
@@ -1688,6 +1696,10 @@ export class AccountSecureStorage {
         );
         return { kind: 'in-place' as const, id: account.id };
       }
+      if (own.state === 'key-other') {
+        return { kind: 'occupied-other' as const, id: account.id };
+      }
+      // Only 'occupied-unreadable' is left: the new-id route.
       const id = await this.freshAccountId();
       const fresh = await this.inspectSecretSlot(id, account.address);
       if (fresh.state !== 'empty') {
@@ -2045,6 +2057,13 @@ export class AccountSecureStorage {
     if (!vaultUnlocked && (await this.hasPinStrict())) {
       return { state: 'occupied-unreadable', vault };
     }
+    // The device id is a keychain read, and both decrypts below need it. Their
+    // catch turns every failure into "something is there that does not open", so
+    // a failed or timed-out read of the id would be taken as "occupied" (and
+    // the record routed to a fresh id) when it is a failed read. Read it here,
+    // outside the try, so that failure propagates like every other read above.
+    // The adapter keeps what it loaded, so the decrypts' own calls are cheap.
+    await this.getStableDeviceId();
     let key: Uint8Array | undefined;
     try {
       if (

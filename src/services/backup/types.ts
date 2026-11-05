@@ -346,6 +346,8 @@ export type RestoreRecordOutcome =
   | 'kept-device-record'
   /** The id is on this device with a different address. */
   | 'rejected-id-conflict'
+  /** The id's key slot holds a different key that derives to another address. */
+  | 'rejected-slot-occupied'
   /** A key for this record could not be placed safely. */
   | 'rejected-no-safe-slot'
   /** The record lacks fields restore needs (for example a signer device). */

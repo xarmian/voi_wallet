@@ -6,12 +6,15 @@ jest.mock('@/platform', () => {
   const nodeCrypto = require('crypto');
   const secure = new Map<string, string>();
   const kv = new Map<string, string>();
+  const flags = { deviceIdFailuresLeft: 0 };
   return {
     __secure: secure,
     __kv: kv,
+    __flags: flags,
     __reset: () => {
       secure.clear();
       kv.clear();
+      flags.deviceIdFailuresLeft = 0;
     },
     crypto: {
       getRandomBytes: async (n: number): Promise<Uint8Array> =>
@@ -44,7 +47,15 @@ jest.mock('@/platform', () => {
       isAvailable: async () => false,
       isEnrolled: async () => false,
     },
-    deviceId: { getDeviceId: async () => 'task504-device-idfv' },
+    deviceId: {
+      getDeviceId: async () => {
+        if (flags.deviceIdFailuresLeft > 0) {
+          flags.deviceIdFailuresLeft -= 1;
+          throw new Error('keychain read failed');
+        }
+        return 'task504-device-idfv';
+      },
+    },
   };
 });
 
@@ -78,6 +89,7 @@ const SECRET = 'voi_account_secret_';
 const mockPlatform = platform as unknown as {
   __secure: Map<string, string>;
   __kv: Map<string, string>;
+  __flags: { deviceIdFailuresLeft: number };
   __reset: () => void;
 };
 
@@ -200,29 +212,76 @@ describe('TASK-504: add-only restore, per-record results', () => {
     expect(mockPlatform.__secure.has(`${SECRET}file-1`)).toBe(false);
   });
 
-  it('a keyed record whose id names an occupied slot holding another key is added under a new id and the occupied slot is untouched', async () => {
+  it('4.1 item 1: a slot that positively holds a DIFFERENT readable key is not re-id-ed: the record is rejected, reported, and nothing is written', async () => {
     // An unlisted slot that holds a different key (as after a reinstall).
     const orphan = keyed('orphan-1');
     await restoreAccounts([orphan.record]);
     // Forget the account but keep the slot, as a reinstalled app would.
     mockPlatform.__kv.clear();
-    const slotBefore = mockPlatform.__secure.get(`${SECRET}orphan-1`);
-    expect(slotBefore).toBeDefined();
+    const secretsBefore = snapshotSecrets();
+    const kvBefore = new Map(mockPlatform.__kv);
+    expect(secretsBefore[`${SECRET}orphan-1`]).toBeDefined();
 
     const incoming = keyed('orphan-1'); // same id, a different key
     const result = await restoreAccounts([incoming.record]);
 
+    expect(result.records).toEqual([
+      expect.objectContaining({
+        id: 'orphan-1',
+        outcome: 'rejected-slot-occupied',
+      }),
+    ]);
+    expect(result.records[0].storedId).toBeUndefined();
+    expect(result.total).toBe(0);
+    expect(snapshotSecrets()).toEqual(secretsBefore);
+    expect(await AccountSecureStorage.readPendingCreatesStrict()).toEqual({});
+    expect(await accountIds()).toEqual([]);
+    // No account list, metadata or wallet blob was written for it either.
+    expect(new Map(mockPlatform.__kv)).toEqual(kvBefore);
+  });
+
+  it('4.1 item 1: a slot read that fails is never read as occupied: restore stops, nothing is written', async () => {
+    // A slot holding the file's own key as a device-key copy (no PIN).
+    const orphan = keyed('orphan-4');
+    await restoreAccounts([orphan.record]);
+    mockPlatform.__kv.clear();
+    const secretsBefore = snapshotSecrets();
+    const kvBefore = new Map(mockPlatform.__kv);
+
+    // The device-id keychain read fails once. A device-key copy cannot be
+    // opened without it, so the check cannot tell what the slot holds. That is
+    // a failed read, not "something is there that does not open".
+    mockPlatform.__flags.deviceIdFailuresLeft = 1;
+    await expect(restoreAccounts([orphan.record])).rejects.toThrow(
+      'keychain read failed'
+    );
+    expect(mockPlatform.__flags.deviceIdFailuresLeft).toBe(0);
+
+    expect(snapshotSecrets()).toEqual(secretsBefore);
+    expect(new Map(mockPlatform.__kv)).toEqual(kvBefore);
+    expect(await accountIds()).toEqual([]);
+  });
+
+  it('4.1 item 1: a slot positively shown occupied and unreadable (PIN-wrapped, vault empty) takes the new-id route and the occupied slot is untouched', async () => {
+    // A PIN-wrapped orphan: the PIN credential survives, the vault is empty.
+    const orphan = keyed('orphan-3');
+    await restoreAccounts([orphan.record]);
+    await AccountSecureStorage.setupPin(PIN, 'pin');
+    SessionKeyVault.clear();
+    mockPlatform.__kv.clear(); // app storage gone, keychain kept
+    const slotBefore = mockPlatform.__secure.get(`${SECRET}orphan-3`);
+    expect(slotBefore).toBeDefined();
+    expect(await AccountSecureStorage.hasPinStrict()).toBe(true);
+
+    const incoming = keyed('orphan-3'); // same id, a different key
+    const result = await restoreAccounts([incoming.record]);
+
     expect(result.records[0].outcome).toBe('added-new-id');
     const storedId = result.records[0].storedId!;
-    expect(storedId).not.toBe('orphan-1');
-    expect(mockPlatform.__secure.get(`${SECRET}orphan-1`)).toBe(slotBefore);
+    expect(storedId).not.toBe('orphan-3');
+    expect(mockPlatform.__secure.get(`${SECRET}orphan-3`)).toBe(slotBefore);
     expect(mockPlatform.__secure.has(`${SECRET}${storedId}`)).toBe(true);
     expect(await accountIds()).toEqual([storedId]);
-    // The new key is readable through the new id, and is the file's key.
-    const key = await AccountSecureStorage.getPrivateKey(storedId);
-    expect(Buffer.from(key.slice(32)).toString('hex')).toBe(
-      incoming.record.publicKey
-    );
   });
 
   it('a keyed record whose id names a slot already holding its key is added in place: nothing is written, nothing is journaled', async () => {

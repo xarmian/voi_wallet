@@ -379,6 +379,13 @@ export async function restoreAccounts(
               algoAccount.sk,
               creationGen
             );
+            if (written.kind === 'occupied-other') {
+              // A different key is stored under this id: not ours to re-id,
+              // reported, nothing written.
+              record.outcome = 'rejected-slot-occupied';
+              counts.records.push(record);
+              continue;
+            }
             stored = {
               id: written.id,
               reassigned: written.kind === 'written' && written.reassigned,
@@ -455,6 +462,11 @@ export async function restoreAccounts(
                 derived.sk,
                 creationGen
               );
+              if (written.kind === 'occupied-other') {
+                record.outcome = 'rejected-slot-occupied';
+                counts.records.push(record);
+                continue;
+              }
               stored = {
                 id: written.id,
                 reassigned: written.kind === 'written' && written.reassigned,
