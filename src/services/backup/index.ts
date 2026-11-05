@@ -62,7 +62,7 @@ function generateBackupFilename(): string {
 }
 
 const INVALID_FILE =
-  'This backup file is damaged or was altered, so it was not used.';
+  'This backup file was not used. It may be damaged, altered or from a different version of the app. If you still have the wallet it came from, make a new backup there.';
 
 /**
  * TASK-504: the without-key flag and the incomplete list must agree, both ways.

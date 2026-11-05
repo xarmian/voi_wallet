@@ -67,7 +67,10 @@ const entry = (
 
 const REFUSED = {
   code: 'INVALID_FILE_FORMAT',
-  message: expect.stringContaining('damaged or was altered'),
+  // Product's text, verbatim (TASK-504 ruling): true for a damaged file, an
+  // altered one, and one from a different version of the app.
+  message:
+    'This backup file was not used. It may be damaged, altered or from a different version of the app. If you still have the wallet it came from, make a new backup there.',
 };
 
 describe('TASK-504: the without-key flag and the incomplete list agree', () => {
