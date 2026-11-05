@@ -115,7 +115,7 @@
     "@typescript-eslint/parser": "8.72.0",
     "babel-plugin-react-compiler": "1.0.0",
     "babel-plugin-transform-remove-console": "6.9.4",
-    "babel-preset-expo": "58.0.18",
+    "babel-preset-expo": "58.0.23",
     "eslint": "9.39.5",
     "eslint-config-expo": "58.0.4",
     "eslint-config-prettier": "10.1.8",
