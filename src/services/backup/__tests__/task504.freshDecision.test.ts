@@ -250,6 +250,19 @@ describe('TASK-504 step 2b: fresh is decided from strict reads', () => {
     expect(multiSet).not.toHaveBeenCalled();
   });
 
+  it('a wallet blob with an account is not fresh even when the file adds nothing (only the early check can see it: the commit never runs)', async () => {
+    const dev = keyed('dev-1');
+    await restoreAccounts([dev]);
+    mockPlatform.__kv.delete('voi_account_list');
+    multiSet.mockClear();
+
+    const result = await restoreFile({ ...dev });
+
+    expect(result.records[0].outcome).toBe('already-present');
+    expect(result.settingsRestored).toBe(false);
+    expect(multiSet).not.toHaveBeenCalled();
+  });
+
   it('an account another writer lands before the commit makes the device not fresh: settings are not taken', async () => {
     const original = MultiAccountWalletService.mergeRestoredAccounts.bind(
       MultiAccountWalletService
