@@ -282,6 +282,14 @@ describe('TASK-504: add-only restore, per-record results', () => {
     expect(mockPlatform.__secure.get(`${SECRET}orphan-3`)).toBe(slotBefore);
     expect(mockPlatform.__secure.has(`${SECRET}${storedId}`)).toBe(true);
     expect(await accountIds()).toEqual([storedId]);
+    // The new key reads through the new id (vault filled, as after an unlock)
+    // and is the file's key.
+    SessionKeyVault.set(PIN, 'pin');
+    AccountSecureStorage.clearPrivateKeyCache();
+    const key = await AccountSecureStorage.getPrivateKey(storedId);
+    expect(Buffer.from(key.slice(32)).toString('hex')).toBe(
+      incoming.record.publicKey
+    );
   });
 
   it('a keyed record whose id names a slot already holding its key is added in place: nothing is written, nothing is journaled', async () => {
