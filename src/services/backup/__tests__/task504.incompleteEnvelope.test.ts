@@ -1,5 +1,5 @@
-// TASK-504: an incomplete backup takes envelope v3, is named
-// -incomplete.voibackup, never reads as complete, and a new app refuses a file
+// TASK-504: an incomplete backup takes envelope v3, has the same file name as a
+// complete one, never reads as complete, and a new app refuses a file
 // where the envelope and the encrypted payload disagree. Real encryption; the
 // collectors, restorers and file system are faked.
 
@@ -94,12 +94,28 @@ beforeEach(() => {
   mockCalls.length = 0;
 });
 
+// One flagged record per list entry, as collectAccounts writes them.
+function flaggedFor(leftOut: typeof LEFT_OUT) {
+  return leftOut.map((e) => ({
+    id: e.address,
+    address: e.address,
+    type: 'standard',
+    label: e.label,
+    publicKey: '00',
+    createdAt: 'now',
+    isHidden: false,
+    withoutKey: true,
+  }));
+}
+
 function payload(extra: object = {}): VoiBackupFile {
+  const incomplete = (extra as { incomplete?: { leftOut: typeof LEFT_OUT } })
+    .incomplete;
   return {
     version: 1,
     createdAt: 'now',
     appVersion: '9.9.9',
-    accounts: [],
+    accounts: incomplete ? flaggedFor(incomplete.leftOut) : [],
     settings: {},
     friends: [],
     experimental: {},
@@ -205,9 +221,9 @@ describe('TASK-504: envelope and payload must agree', () => {
 });
 
 describe('TASK-504: createBackup and restoreBackup', () => {
-  it('an incomplete backup: -incomplete name, v3 file, no success wording, the list inside, nothing outside', async () => {
+  it('an incomplete backup: the same name as a complete one, v3 file, no success wording, the list inside, nothing outside', async () => {
     mockCollect.mockResolvedValue({
-      accounts: [],
+      accounts: flaggedFor(LEFT_OUT),
       leftOut: LEFT_OUT,
       total: 2,
     });
@@ -216,8 +232,9 @@ describe('TASK-504: createBackup and restoreBackup', () => {
 
     const result = await BackupService.createBackup(PASSWORD, CAP);
 
+    // The name never says whether the file lacks keys (product e7912207).
     expect(result.filename).toMatch(
-      /^voi-wallet-\d{4}-\d{2}-\d{2}-incomplete\.voibackup$/
+      /^voi-wallet-\d{4}-\d{2}-\d{2}\.voibackup$/
     );
     expect(result.filename).not.toContain('ADDR1');
     expect(result.incomplete).toEqual({ leftOut: LEFT_OUT });
@@ -247,6 +264,30 @@ describe('TASK-504: createBackup and restoreBackup', () => {
     expect(inner).not.toHaveProperty('incomplete');
   });
 
+  it('the app never writes a file its own import refuses: a flagged record carrying a phrase, or a list entry with no flagged record, stops the backup', async () => {
+    const withPhrase = flaggedFor(LEFT_OUT).map((r) => ({
+      ...r,
+      mnemonic: 'word '.repeat(25).trim(),
+    }));
+    mockCollect.mockResolvedValue({
+      accounts: withPhrase,
+      leftOut: LEFT_OUT,
+      total: 1,
+    });
+    await expect(
+      BackupService.createBackup(PASSWORD, CAP)
+    ).rejects.toMatchObject({ code: 'INVALID_FILE_FORMAT' });
+    mockCollect.mockResolvedValue({
+      accounts: [],
+      leftOut: LEFT_OUT,
+      total: 1,
+    });
+    await expect(
+      BackupService.createBackup(PASSWORD, CAP)
+    ).rejects.toMatchObject({ code: 'INVALID_FILE_FORMAT' });
+    expect(mockFiles.size).toBe(0);
+  });
+
   it('a locked vault stops the backup: no file is written', async () => {
     const { BackupError } = jest.requireActual('../types');
     mockCollect.mockRejectedValue(
@@ -260,7 +301,7 @@ describe('TASK-504: createBackup and restoreBackup', () => {
 
   it('restoring an incomplete file hands its left-out list to the result', async () => {
     mockCollect.mockResolvedValue({
-      accounts: [],
+      accounts: flaggedFor(LEFT_OUT),
       leftOut: LEFT_OUT,
       total: 2,
     });
@@ -299,7 +340,7 @@ describe('TASK-504: createBackup and restoreBackup', () => {
 
   it('validateBackupFile reports the left-out list of an incomplete file', async () => {
     mockCollect.mockResolvedValue({
-      accounts: [],
+      accounts: flaggedFor(LEFT_OUT),
       leftOut: LEFT_OUT,
       total: 2,
     });

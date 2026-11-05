@@ -51,6 +51,13 @@ export type BackupLeftOutReason =
    */
   | 'other-key-on-device';
 
+/** Every reason a list entry may carry; a file with any other is refused. */
+export const BACKUP_LEFT_OUT_REASONS: readonly BackupLeftOutReason[] = [
+  'no-key-on-device',
+  'key-unreadable',
+  'other-key-on-device',
+];
+
 export interface BackupLeftOutAccount {
   address: string;
   label?: string;
