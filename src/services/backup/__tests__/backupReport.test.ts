@@ -41,6 +41,8 @@ describe('TASK-504: backup report copy', () => {
     expect(LEFT_OUT_REASON_TEXT).toEqual({
       'no-key-on-device': 'No key on this device',
       'key-unreadable': "Couldn't read this key",
+      'other-key-on-device':
+        "Its own key is in this backup. A different key stored with it isn't.",
     });
     expect(report.advice).toBe(
       'Keep this wallet installed until these accounts are safe. Open each one and try to view its recovery phrase. If it opens, write it down.'

@@ -13,6 +13,8 @@ export const INCOMPLETE_TITLE = 'Backup incomplete';
 export const LEFT_OUT_REASON_TEXT: Record<BackupLeftOutReason, string> = {
   'no-key-on-device': 'No key on this device',
   'key-unreadable': "Couldn't read this key",
+  'other-key-on-device':
+    "Its own key is in this backup. A different key stored with it isn't.",
 };
 
 export const KEY_UNREADABLE_ADVICE =

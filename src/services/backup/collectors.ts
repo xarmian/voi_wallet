@@ -4,6 +4,7 @@
  * Functions to collect all wallet data for backup.
  */
 
+import algosdk from 'algosdk';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MultiAccountWalletService } from '@/services/wallet';
 import { SecureKeyManager } from '@/services/secure/keyManager';
@@ -86,7 +87,26 @@ const UNLOCK_MESSAGE = 'Unlock the wallet to create a backup';
 
 type KeyOutcome =
   | { kind: 'exported'; mnemonic: string }
-  | { kind: 'left-out'; reason: BackupLeftOutReason };
+  | {
+      kind: 'left-out';
+      reason: BackupLeftOutReason;
+      /** The slot positively reads a key that derives to ANOTHER address. */
+      keyOther?: boolean;
+    };
+
+/** True only if this phrase derives to `address` (the derived key is wiped). */
+function mnemonicDerivesTo(mnemonic: string, address: string): boolean {
+  try {
+    const derived = algosdk.mnemonicToSecretKey(mnemonic);
+    try {
+      return derived.addr.toString() === address;
+    } finally {
+      derived.sk.fill(0);
+    }
+  } catch {
+    return false;
+  }
+}
 
 /**
  * TASK-504: what the wallet holds under ONE record's own id, and so whether its
@@ -127,7 +147,12 @@ async function collectKeyForRecord(
       : { kind: 'none' };
   }
   if (slot.state !== 'key-matches') {
-    return { kind: 'left-out', reason: 'key-unreadable' };
+    return {
+      kind: 'left-out',
+      reason: 'key-unreadable',
+      // Positively another key, as opposed to one that cannot be read.
+      ...(slot.state === 'key-other' ? { keyOther: true } : {}),
+    };
   }
   try {
     const mnemonic = await SecureKeyManager.revealMnemonicForRecord(
@@ -186,8 +211,16 @@ export async function collectAccounts(
       await stopIfLocked();
     }
 
-    const backupAccounts: BackupAccountData[] = [];
-    const leftOut: BackupLeftOutAccount[] = [];
+    // Slots in wallet order. A plain slot is final; a deferred slot is a
+    // standard or rekeyed record whose key was read and is decided below, once
+    // every record's outcome is known (a second record at one address changes
+    // what the first one means, dev lead 89d3f459).
+    type DeferredSlot = {
+      account: { id: string; address: string; label?: string };
+      outcome: KeyOutcome;
+      make: (mnemonic: string | undefined) => BackupAccountData;
+    };
+    const slots: (BackupAccountData | DeferredSlot)[] = [];
 
     for (const account of wallet.accounts) {
       const baseData: BackupAccountData = {
@@ -206,32 +239,34 @@ export async function collectAccounts(
       switch (account.type) {
         case AccountType.STANDARD: {
           const standardAccount = account as StandardAccountMetadata;
-          const outcome = await collectKeyForRecord(account, true, cap);
-          if (outcome.kind === 'exported') {
-            backupAccounts.push({
+          const found = await collectKeyForRecord(account, true, cap);
+          if (found.kind === 'none') break; // not reachable: a standard record expects a key
+          // A standard account IS its key: a missing one is a possible key
+          // problem, never the quiet "no key on this device" a rekeyed record
+          // can have by design.
+          const outcome: KeyOutcome =
+            found.kind === 'left-out'
+              ? { ...found, reason: 'key-unreadable' }
+              : found;
+          slots.push({
+            account,
+            outcome,
+            make: (mnemonic) => ({
               ...baseData,
-              mnemonic: outcome.mnemonic,
+              ...(mnemonic ? { mnemonic } : {}),
               derivationPath: standardAccount.derivationPath,
               hasBackup: standardAccount.hasBackup,
               // TASK-45/DR-11: `backupVerified` is intentionally NOT collected.
               // It describes what the user of THIS device proved, so it must not
               // travel inside a portable encrypted backup.
-            });
-          } else if (outcome.kind === 'left-out') {
-            // A standard account the wallet expects a key for: no record that
-            // could restore as an account able to sign goes in the file.
-            leftOut.push({
-              address: account.address,
-              label: account.label,
-              reason: 'key-unreadable',
-            });
-          }
+            }),
+          });
           break;
         }
 
         case AccountType.WATCH: {
           const watchAccount = account as WatchAccountMetadata;
-          backupAccounts.push({
+          slots.push({
             ...baseData,
             source: watchAccount.source,
             notes: watchAccount.notes,
@@ -241,37 +276,11 @@ export async function collectAccounts(
 
         case AccountType.REKEYED: {
           const rekeyedAccount = account as RekeyedAccountMetadata;
-          // originalOwner says a key is EXPECTED here; whether one is held is
-          // read from the secret under this record's id.
-          const outcome = await collectKeyForRecord(
-            account,
-            rekeyedAccount.originalOwner === true,
-            cap
-          );
-          if (
-            outcome.kind === 'left-out' &&
-            outcome.reason === 'key-unreadable'
-          ) {
-            leftOut.push({
-              address: account.address,
-              label: account.label,
-              reason: 'key-unreadable',
-            });
-            break;
-          }
-          if (outcome.kind === 'left-out') {
-            // A clean absence on an account that should hold its key: the
-            // metadata still goes in the file (as in 0.1.x), without a key.
-            leftOut.push({
-              address: account.address,
-              label: account.label,
-              reason: 'no-key-on-device',
-            });
-          }
-          backupAccounts.push({
+          const makeRekeyed = (
+            mnemonic: string | undefined
+          ): BackupAccountData => ({
             ...baseData,
-            mnemonic:
-              outcome.kind === 'exported' ? outcome.mnemonic : undefined,
+            mnemonic,
             hasBackup: rekeyedAccount.hasBackup,
             authAddress: rekeyedAccount.authAddress,
             rekeyedAt: rekeyedAccount.rekeyedAt,
@@ -279,13 +288,26 @@ export async function collectAccounts(
             canSign: rekeyedAccount.canSign,
             rekeyedFrom: rekeyedAccount.rekeyedFrom,
           });
+          // originalOwner says a key is EXPECTED here; whether one is held is
+          // read from the secret under this record's id.
+          const outcome = await collectKeyForRecord(
+            account,
+            rekeyedAccount.originalOwner === true,
+            cap
+          );
+          if (outcome.kind === 'none') {
+            // No key by design: an ordinary record, neither flagged nor listed.
+            slots.push(makeRekeyed(undefined));
+          } else {
+            slots.push({ account, outcome, make: makeRekeyed });
+          }
           break;
         }
 
         case AccountType.LEDGER: {
           const ledgerAccount = account as LedgerAccountMetadata;
           // Only metadata for Ledger accounts - no secrets
-          backupAccounts.push({
+          slots.push({
             ...baseData,
             deviceId: ledgerAccount.deviceId,
             derivationIndex: ledgerAccount.derivationIndex,
@@ -298,7 +320,7 @@ export async function collectAccounts(
         case AccountType.REMOTE_SIGNER: {
           const remoteSignerAccount = account as RemoteSignerAccountMetadata;
           // Metadata only for remote signer accounts - keys are on signer device
-          backupAccounts.push({
+          slots.push({
             ...baseData,
             signerDeviceId: remoteSignerAccount.signerDeviceId,
             signerDeviceName: remoteSignerAccount.signerDeviceName,
@@ -317,9 +339,67 @@ export async function collectAccounts(
           console.warn(
             `Unknown account type during backup: ${unknownAccount.type}`
           );
-          backupAccounts.push(baseData);
+          slots.push(baseData);
         }
       }
+    }
+
+    // Decide each deferred record.
+    //  - An exported phrase counts only if it derives to the record's address
+    //    (checked again here, not trusted from the reader).
+    //  - An address whose key was exported at one record is one account: another
+    //    record there whose slot is empty or cannot be read is not listed and
+    //    not written. If that other slot POSITIVELY reads a different key, the
+    //    phone holds a key the file does not, so it is named (and only named:
+    //    its account's record is the exported one).
+    //  - Every other record whose key the file lacks goes in WITHOUT its key,
+    //    flagged, and is listed with its reason.
+    const exportedAddresses = new Set<string>();
+    const resolved = slots.map((slot) => {
+      if (!('make' in slot)) return slot;
+      if (
+        slot.outcome.kind === 'exported' &&
+        mnemonicDerivesTo(slot.outcome.mnemonic, slot.account.address)
+      ) {
+        exportedAddresses.add(slot.account.address);
+        return { slot, exported: slot.outcome.mnemonic };
+      }
+      const outcome: KeyOutcome =
+        slot.outcome.kind === 'left-out'
+          ? slot.outcome
+          : { kind: 'left-out', reason: 'key-unreadable' };
+      return { slot, outcome, exported: undefined };
+    });
+
+    const backupAccounts: BackupAccountData[] = [];
+    const leftOut: BackupLeftOutAccount[] = [];
+    for (const item of resolved) {
+      if (!('slot' in item)) {
+        backupAccounts.push(item);
+        continue;
+      }
+      const { slot } = item;
+      if (item.exported !== undefined) {
+        backupAccounts.push(slot.make(item.exported));
+        continue;
+      }
+      const left = item.outcome as Extract<KeyOutcome, { kind: 'left-out' }>;
+      if (exportedAddresses.has(slot.account.address)) {
+        if (left.keyOther) {
+          leftOut.push({
+            address: slot.account.address,
+            label: slot.account.label,
+            reason: 'other-key-on-device',
+          });
+        }
+        continue;
+      }
+      backupAccounts.push({ ...slot.make(undefined), withoutKey: true });
+      leftOut.push({
+        address: slot.account.address,
+        label: slot.account.label,
+        reason: left.reason,
+      });
     }
 
     return { accounts: backupAccounts, leftOut, total: wallet.accounts.length };

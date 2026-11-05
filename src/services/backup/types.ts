@@ -41,7 +41,15 @@ export type BackupLeftOutReason =
   | 'no-key-on-device'
   /** The wallet expects a key it could not read (decrypt, integrity, mismatch,
    *  a standard account with no key). A possible key problem. */
-  | 'key-unreadable';
+  | 'key-unreadable'
+  /**
+   * Two records at one address: one exported its key (its phrase derived to the
+   * address at export) and the other's slot positively holds a DIFFERENT key
+   * (dev lead 89d3f459, product db99d45f). The account's own key is in the file;
+   * a key the file does not hold is on this phone. There is no flagged record
+   * for this entry: it is named so the file never reads as complete.
+   */
+  | 'other-key-on-device';
 
 export interface BackupLeftOutAccount {
   address: string;
@@ -81,6 +89,14 @@ export interface BackupAccountData {
   // Standard account fields (type === 'standard')
   /** 25-word recovery phrase - SENSITIVE */
   mnemonic?: string;
+  /**
+   * TASK-504: set when this record is in the file WITHOUT its key (a standard
+   * or rekeyed account whose key the wallet could not export). It lives inside
+   * the encrypted payload, carries no secret, and must agree with the
+   * incomplete list both ways; a flagged record that carries a phrase is
+   * refused. Restore adds such a record without a key.
+   */
+  withoutKey?: boolean;
   /** HD derivation path if applicable */
   derivationPath?: string;
   /**

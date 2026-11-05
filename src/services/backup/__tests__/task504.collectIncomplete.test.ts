@@ -238,7 +238,23 @@ describe('TASK-504: collectAccounts saves what it can and names what it leaves o
 
     // Only the record whose slot proved readable is ever revealed.
     expect(reveal).toHaveBeenCalledTimes(1);
-    expect(collected.accounts.map((x) => x.id)).toEqual(['ok']);
+    // Every account is in the file; the three without a key carry the flag and
+    // no phrase (TASK-504, product e7912207).
+    expect(collected.accounts.map((x) => x.id)).toEqual([
+      'ok',
+      'corrupt',
+      'other',
+      'empty',
+    ]);
+    expect(collected.accounts.map((x) => !!x.withoutKey)).toEqual([
+      false,
+      true,
+      true,
+      true,
+    ]);
+    expect(
+      collected.accounts.filter((x) => x.withoutKey).every((x) => !x.mnemonic)
+    ).toBe(true);
     expect(collected.leftOut.map((x) => [x.label, x.reason])).toEqual([
       ['corrupt', 'key-unreadable'],
       ['other', 'key-unreadable'],
@@ -267,7 +283,9 @@ describe('TASK-504: collectAccounts saves what it can and names what it leaves o
       'export_backup'
     );
     expect(collected.accounts.map((x) => x.id)).toEqual(['dup-a']);
-    expect(collected.leftOut.map((x) => x.label)).toEqual(['dup-b']);
+    // dup-a exported its key at this address, so dup-b's empty slot is not a
+    // second account: not listed, not written (dev lead 89d3f459).
+    expect(collected.leftOut).toEqual([]);
   });
 
   it('a locked vault on a PIN device stops the backup: no key is read and no file would be written', async () => {
@@ -325,7 +343,13 @@ describe('TASK-504: collectAccounts saves what it can and names what it leaves o
 
     const collected = await collectAccounts(CAP);
 
-    expect(collected.accounts).toEqual([]);
+    // Both are in the file, without keys; nothing was exported.
+    expect(
+      collected.accounts.map((x) => [x.id, !!x.withoutKey, !!x.mnemonic])
+    ).toEqual([
+      ['r-1', true, false],
+      ['r-2', true, false],
+    ]);
     expect(collected.leftOut.map((x) => [x.label, x.reason])).toEqual([
       ['r-1', 'key-unreadable'],
       ['r-2', 'key-unreadable'],

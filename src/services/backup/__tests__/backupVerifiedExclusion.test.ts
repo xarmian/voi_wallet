@@ -457,7 +457,14 @@ it('a slot that cannot be read leaves the key out and names the account, it neve
   const collected = await collectAccounts({
     __brand: 'FreshAuthCapability',
   } as never);
-  expect(collected.accounts).toEqual([]);
+  // The account is still in the file, without its key and flagged (product
+  // e7912207); no phrase leaves the wallet.
+  expect(collected.accounts).toHaveLength(1);
+  expect(collected.accounts[0]).toMatchObject({
+    address: record.address,
+    withoutKey: true,
+  });
+  expect(collected.accounts[0].mnemonic).toBeUndefined();
   expect(collected.leftOut).toEqual([
     expect.objectContaining({
       address: record.address,
@@ -473,7 +480,14 @@ it('a key read that fails for an expected key leaves it out as unreadable', asyn
   const collected = await collectAccounts({
     __brand: 'FreshAuthCapability',
   } as never);
-  expect(collected.accounts).toEqual([]);
+  // The account is still in the file, without its key and flagged (product
+  // e7912207); no phrase leaves the wallet.
+  expect(collected.accounts).toHaveLength(1);
+  expect(collected.accounts[0]).toMatchObject({
+    address: record.address,
+    withoutKey: true,
+  });
+  expect(collected.accounts[0].mnemonic).toBeUndefined();
   expect(collected.leftOut).toEqual([
     expect.objectContaining({
       address: record.address,
