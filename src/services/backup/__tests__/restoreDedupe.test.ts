@@ -53,7 +53,10 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
     getResetGeneration: () => 0,
     clearAll: jest.fn(),
     probeSecretPresenceStrict: jest.fn(async () => false),
-    storeAccountMetadataForCreation: jest.fn(),
+    storeKeylessAccountForRestore: jest.fn(async (account: { id: string }) => ({
+      id: account.id,
+      reassigned: false,
+    })),
     storeAccountForCreation: jest.fn(async () => 'token'),
     commitPendingCreate: jest.fn(async () => {}),
     deleteAccountIfAttemptMatches: jest.fn(async () => {}),
@@ -148,7 +151,7 @@ describe('restore dedupes records that share an address (TASK-423)', () => {
     expect(storeKey).toHaveBeenCalledTimes(1);
     expect(storeKey.mock.calls[0][0]).toMatchObject({ id: 'standard-second' });
     expect(
-      AccountSecureStorage.storeAccountMetadataForCreation
+      AccountSecureStorage.storeKeylessAccountForRestore
     ).not.toHaveBeenCalled();
   });
 

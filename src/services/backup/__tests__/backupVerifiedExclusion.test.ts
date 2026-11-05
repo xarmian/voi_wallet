@@ -69,7 +69,10 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
     getResetGeneration: () => 0,
     clearAll: jest.fn(),
     probeSecretPresenceStrict: jest.fn(async () => false),
-    storeAccountMetadataForCreation: jest.fn(),
+    storeKeylessAccountForRestore: jest.fn(async (account: { id: string }) => ({
+      id: account.id,
+      reassigned: false,
+    })),
     storeAccountForCreation: jest.fn(async () => 'token'),
     commitPendingCreate: jest.fn(async () => {}),
     deleteAccountIfAttemptMatches: jest.fn(async () => {}),
@@ -374,7 +377,7 @@ it.each([false, true])(
     await restoreAccounts([record]);
     expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
     // No key is restored, so no originalOwner claims one (TASK-425 U4).
-    expect(secure.storeAccountMetadataForCreation).toHaveBeenCalledWith(
+    expect(secure.storeKeylessAccountForRestore).toHaveBeenCalledWith(
       expect.objectContaining({ backupVerified: false, originalOwner: false }),
       0
     );
@@ -533,7 +536,7 @@ it('a direct restoreAccounts call also rejects duplicate ids before storing', as
     restoreAccounts([keyed, { ...metadataOnly, id: keyed.id }])
   ).rejects.toThrow('duplicate account ids');
   expect(secure.storeAccountForCreation).not.toHaveBeenCalled();
-  expect(secure.storeAccountMetadataForCreation).not.toHaveBeenCalled();
+  expect(secure.storeKeylessAccountForRestore).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(

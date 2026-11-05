@@ -398,10 +398,12 @@ export async function restoreAccounts(
             notes: backupAccount.notes,
           };
 
-          await AccountSecureStorage.storeAccountMetadataForCreation(
-            watchAccount,
-            creationGen
-          );
+          const storedWatchAccount =
+            await AccountSecureStorage.storeKeylessAccountForRestore(
+              watchAccount,
+              creationGen
+            );
+          watchAccount.id = storedWatchAccount.id;
           restoredAccounts.push(watchAccount);
           counts.watch++;
           counts.total++;
@@ -446,10 +448,12 @@ export async function restoreAccounts(
               derived.sk.fill(0);
             }
           } else {
-            await AccountSecureStorage.storeAccountMetadataForCreation(
-              rekeyedAccount,
-              creationGen
-            );
+            const storedRekeyedAccount =
+              await AccountSecureStorage.storeKeylessAccountForRestore(
+                rekeyedAccount,
+                creationGen
+              );
+            rekeyedAccount.id = storedRekeyedAccount.id;
           }
           restoredAccounts.push(rekeyedAccount);
           counts.rekeyed++;
@@ -477,10 +481,12 @@ export async function restoreAccounts(
             deviceName: backupAccount.deviceName,
           };
 
-          await AccountSecureStorage.storeAccountMetadataForCreation(
-            ledgerAccount,
-            creationGen
-          );
+          const storedLedgerAccount =
+            await AccountSecureStorage.storeKeylessAccountForRestore(
+              ledgerAccount,
+              creationGen
+            );
+          ledgerAccount.id = storedLedgerAccount.id;
           restoredAccounts.push(ledgerAccount);
           counts.ledger++;
           counts.total++;
@@ -524,10 +530,12 @@ export async function restoreAccounts(
             authLevel: withDefaultAuthLevel(backupAccount.authLevel),
           };
 
-          await AccountSecureStorage.storeAccountMetadataForCreation(
-            remoteSignerAccount,
-            creationGen
-          );
+          const storedRemoteSignerAccount =
+            await AccountSecureStorage.storeKeylessAccountForRestore(
+              remoteSignerAccount,
+              creationGen
+            );
+          remoteSignerAccount.id = storedRemoteSignerAccount.id;
           restoredAccounts.push(remoteSignerAccount);
           counts.remoteSigner++;
           counts.total++;

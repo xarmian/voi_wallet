@@ -1669,13 +1669,75 @@ export class AccountSecureStorage {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      await this.storeAccountLocked(account, undefined, undefined, context);
+      await this.storeAccountLocked(
+        account,
+        undefined,
+        undefined,
+        context,
+        true
+      );
     }).catch((error: unknown) => {
       if (error instanceof WriteOutcomeUnknownError) {
         throw new WriteOutcomeUnknownError(error.journaled, context);
       }
       throw error;
     });
+  }
+
+  /**
+   * Restore of a record that carries no phrase (watch, Ledger, remote signer,
+   * key-less rekeyed). An id in a file proves nothing about what the secret slot
+   * of that id holds on this device, so the record keeps its file id only when
+   * the slot reads EMPTY at this write; otherwise it is stored under a fresh id
+   * whose own slot reads empty first. Nothing here writes or deletes a secret
+   * slot: the slot read and the metadata write share one mutex task, and the
+   * writer is metadata-only (TASK-504). Returns the id the record was stored
+   * under. A slot read that cannot complete throws and writes nothing.
+   */
+  static async storeKeylessAccountForRestore(
+    account: AccountMetadata,
+    creationGen: number,
+    context: WriteContext = 'restore'
+  ): Promise<{ id: string; reassigned: boolean }> {
+    return this.runKeyMutationExclusive(async () => {
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      let id = account.id;
+      let reassigned = false;
+      const own = await this.inspectSecretSlot(id, account.address);
+      if (own.state !== 'empty') {
+        id = await this.freshAccountId();
+        const fresh = await this.inspectSecretSlot(id, account.address);
+        if (fresh.state !== 'empty') {
+          throw new AccountStorageError(
+            'Could not find an empty secret slot for a key-less record'
+          );
+        }
+        reassigned = true;
+      }
+      await this.storeAccountLocked(
+        reassigned ? ({ ...account, id } as AccountMetadata) : account,
+        undefined,
+        undefined,
+        context,
+        true
+      );
+      return { id, reassigned };
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
+    });
+  }
+
+  private static async freshAccountId(): Promise<string> {
+    const bytes = await platformCrypto.getRandomBytes(9);
+    const suffix = Array.from(bytes, (b) =>
+      b.toString(16).padStart(2, '0')
+    ).join('');
+    return `account_${Date.now()}_${suffix}`;
   }
 
   /**
@@ -2087,8 +2149,14 @@ export class AccountSecureStorage {
     account: AccountMetadata,
     privateKey?: Uint8Array,
     progress?: { secretWritten: boolean },
-    context: WriteContext = 'other'
+    context: WriteContext = 'other',
+    metadataOnly: boolean = false
   ): Promise<void> {
+    if (metadataOnly && privateKey) {
+      throw new AccountStorageError(
+        'A metadata-only store cannot carry a private key'
+      );
+    }
     try {
       // TASK-449: bounded and strict. A timeout or read error fails the store,
       // so a stuck or failing keychain is never stored as "no PIN".
@@ -2157,7 +2225,7 @@ export class AccountSecureStorage {
         if (progress) {
           progress.secretWritten = true;
         }
-      } else {
+      } else if (!metadataOnly) {
         await this.saveSecret(account.id, null, context);
       }
 
