@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,27 +6,55 @@ import {
   TouchableOpacity,
   Alert,
   ScrollView,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import {
+  useNavigation,
+  useRoute,
+  CommonActions,
+} from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useWalletStore } from '@/store/walletStore';
 import { useThemedStyles, useThemeColors } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
 import { GlassCard } from '@/components/common/GlassCard';
 import PasswordInputModal from '@/components/backup/PasswordInputModal';
 import BackupProgressModal from '@/components/backup/BackupProgressModal';
 import RestoreConfirmationModal from '@/components/backup/RestoreConfirmationModal';
+import OldPinStep from '@/components/backup/OldPinStep';
+import ForgottenPinConsent from '@/components/backup/ForgottenPinConsent';
+import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
+import { ENTER_PIN_INSTEAD_TEXT } from '@/services/backup/forgottenPinCopy';
 import {
   BackupService,
   RestoreProgress,
   BackupInfo,
   BackupError,
 } from '@/services/backup';
+import {
+  buildRestoreReport,
+  formatRestoreReport,
+  RESTORE_ADDS_TEXT,
+  SETTINGS_STAY_TEXT,
+} from '@/services/backup/restoreReport';
+
+// How long a verified old PIN keeps the session vault filled on this screen.
+const OLD_PIN_SESSION_MS = 5 * 60 * 1000;
 
 export default function RestoreWalletScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const isOnboarding = (route.params as { isOnboarding?: boolean } | undefined)
+    ?.isOnboarding;
+  const { recheckAuthState, unlockForRestore, clearRestoreVault } = useAuth();
+  // One selector, one primitive (a derived object would loop the store).
+  const deviceAccountCount = useWalletStore(
+    (state) => state.wallet?.accounts.length ?? 0
+  );
   const { reloadTheme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
@@ -44,6 +72,92 @@ export default function RestoreWalletScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [isValidating, setIsValidating] = useState(false);
+  // The old-PIN step (DOC-507 section 3): on an onboarding restore where the
+  // device still holds a PIN credential, the PIN is verified BEFORE a file is
+  // chosen. 'needed' blocks the file chooser; 'verified' carries the vault epoch
+  // the verify produced.
+  const [oldPin, setOldPin] = useState<
+    'checking' | 'none' | 'needed' | 'verified' | 'forgotten'
+  >(isOnboarding ? 'checking' : 'none');
+  const [showForgottenConsent, setShowForgottenConsent] = useState(false);
+  const oldPinEpoch = useRef<number | null>(null);
+  const restoreInFlight = useRef(false);
+  // Bumped whenever the screen is left or the app leaves the foreground. A PIN
+  // check that started before the bump must not fill the vault when it ends.
+  const oldPinGeneration = useRef(0);
+  const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const endOldPinSession = useCallback(
+    (backTo: 'needed' | null) => {
+      // Every way out of the step (background, leaving, the forgotten link,
+      // cancel, finishing, the timer) invalidates a PIN check that is still
+      // running, so it cannot fill the vault or arm a session when it ends.
+      oldPinGeneration.current += 1;
+      if (sessionTimer.current) clearTimeout(sessionTimer.current);
+      sessionTimer.current = null;
+      // Only a verified session has anything to end. A background event on a
+      // screen with no session (Settings, or before the PIN) changes nothing.
+      if (oldPinEpoch.current === null) return;
+      oldPinEpoch.current = null;
+      clearRestoreVault();
+      if (backTo) {
+        setSelectedFile(null);
+        setBackupInfo(null);
+        setPassword('');
+        setShowPasswordModal(false);
+        setShowConfirmationModal(false);
+        setOldPin(backTo);
+      }
+    },
+    [clearRestoreVault]
+  );
+
+  useEffect(() => {
+    if (!isOnboarding) return;
+    let cancelled = false;
+    AccountSecureStorage.hasPinStrict()
+      .then((hasPin) => {
+        if (!cancelled) setOldPin(hasPin ? 'needed' : 'none');
+      })
+      .catch(() => {
+        // A credential that cannot be read is not shown as absent: the restore
+        // itself reads strictly and stops.
+        if (!cancelled) setOldPin('none');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOnboarding]);
+
+  // The vault is cleared when the user leaves, the app goes to the background,
+  // or the session times out; the step returns.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') endOldPinSession('needed');
+    });
+    return () => {
+      sub.remove();
+      endOldPinSession(null);
+    };
+  }, [endOldPinSession]);
+
+  const handleOldPinVerified = useCallback(
+    (epoch: number) => {
+      oldPinEpoch.current = epoch;
+      setOldPin('verified');
+      if (sessionTimer.current) clearTimeout(sessionTimer.current);
+      sessionTimer.current = setTimeout(
+        () => endOldPinSession('needed'),
+        OLD_PIN_SESSION_MS
+      );
+    },
+    [endOldPinSession]
+  );
+
+  const readLockedUntil = useCallback(
+    async () => (await AccountSecureStorage.getPinThrottleState()).lockedUntil,
+    []
+  );
 
   // Set up progress callback
   useEffect(() => {
@@ -112,7 +226,9 @@ export default function RestoreWalletScreen() {
 
         setBackupInfo(info);
         setShowPasswordModal(false);
-        setShowConfirmationModal(true);
+        // The forgotten-PIN step has its own consent screen (DOC-507 5.3).
+        if (oldPin === 'forgotten') setShowForgottenConsent(true);
+        else setShowConfirmationModal(true);
       } catch (err) {
         if (err instanceof BackupError) {
           if (err.code === 'INTEGRITY_CHECK_FAILED') {
@@ -127,49 +243,49 @@ export default function RestoreWalletScreen() {
         setIsValidating(false);
       }
     },
-    [selectedFile]
+    [selectedFile, oldPin]
   );
 
   const handleConfirmRestore = useCallback(async () => {
     if (!selectedFile || !password) return;
+    // A second tap before the first restore ends starts nothing.
+    if (restoreInFlight.current) return;
+    restoreInFlight.current = true;
 
     setShowConfirmationModal(false);
+    setShowForgottenConsent(false);
     setShowProgressModal(true);
 
     try {
       const result = await BackupService.restoreBackup(
         selectedFile.uri,
-        password
+        password,
+        oldPin === 'forgotten'
+          ? { removeOldPin: true }
+          : oldPinEpoch.current !== null
+            ? { oldPinSession: { epoch: oldPinEpoch.current } }
+            : {}
       );
       setShowProgressModal(false);
 
       // Reload theme to reflect restored settings
       await reloadTheme();
 
-      // Show success message
-      const ledgerNote =
-        result.ledgerAccountCount > 0
-          ? `\n\nNote: ${result.ledgerAccountCount} Ledger account(s) will need to be re-paired with your device.`
-          : '';
-      const duplicateNote =
-        result.duplicateAccountsDropped > 0
-          ? `\n\n${result.duplicateAccountsDropped} duplicate account record(s) in the backup were merged.`
-          : '';
+      // Report what happened to each record. The words are product's and are
+      // built (and tested) in restoreReport.
+      const report = buildRestoreReport(result);
 
-      Alert.alert(
-        'Restore Complete',
-        `Successfully restored:\n\n` +
-          `• ${result.standardAccountCount} Standard account(s)\n` +
-          `• ${result.watchAccountCount} Watch account(s)\n` +
-          `• ${result.rekeyedAccountCount} Rekeyed account(s)\n` +
-          `• ${result.ledgerAccountCount} Ledger account(s)\n` +
-          `• ${result.friendsCount} Friend(s)${ledgerNote}${duplicateNote}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              // Always go to security setup to set PIN after restore
-              // (restore clears existing PIN, so user must set a new one)
+      Alert.alert(report.title, formatRestoreReport(report), [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Restore is add-only and never clears a PIN, so SecuritySetup is
+            // right ONLY for a fresh device (no PIN, no accounts before it),
+            // where the restored keys still have no PIN. Anything else keeps
+            // the PIN it has: from Settings the session simply carries on, and
+            // from onboarding the auth state is re-read, which now finds a
+            // wallet and a PIN and lands on the normal unlock (DOC-507 3.6).
+            if (result.settingsRestored) {
               navigation.dispatch(
                 CommonActions.reset({
                   index: 0,
@@ -181,10 +297,17 @@ export default function RestoreWalletScreen() {
                   ],
                 })
               );
-            },
+            } else if (isOnboarding) {
+              // The old-PIN vault is cleared first: the normal unlock fills it
+              // again (and runs the sweep that upgrades the restored keys).
+              endOldPinSession(null);
+              void recheckAuthState();
+            } else {
+              navigation.goBack();
+            }
           },
-        ]
-      );
+        },
+      ]);
     } catch (err) {
       setShowProgressModal(false);
       const message =
@@ -192,10 +315,26 @@ export default function RestoreWalletScreen() {
           ? err.message
           : 'Failed to restore backup. Please try again.';
       Alert.alert('Restore Failed', message, [{ text: 'OK' }]);
+      if (oldPin === 'forgotten') {
+        // The step may have removed the PIN before it failed: show what is true.
+        AccountSecureStorage.hasPinStrict()
+          .then((hasPin) => setOldPin(hasPin ? 'forgotten' : 'none'))
+          .catch(() => {});
+      }
     } finally {
+      restoreInFlight.current = false;
       setPassword('');
     }
-  }, [selectedFile, password, navigation, reloadTheme]);
+  }, [
+    selectedFile,
+    password,
+    navigation,
+    reloadTheme,
+    isOnboarding,
+    recheckAuthState,
+    endOldPinSession,
+    oldPin,
+  ]);
 
   const handleCancelPassword = useCallback(() => {
     setShowPasswordModal(false);
@@ -204,8 +343,15 @@ export default function RestoreWalletScreen() {
     setPassword('');
   }, []);
 
+  const handleForgotten = useCallback(() => {
+    // The vault must not carry a verified PIN into the step (DOC-507 5.4).
+    endOldPinSession(null);
+    setOldPin('forgotten');
+  }, [endOldPinSession]);
+
   const handleCancelConfirmation = useCallback(() => {
     setShowConfirmationModal(false);
+    setShowForgottenConsent(false);
     setBackupInfo(null);
     setPassword('');
   }, []);
@@ -216,7 +362,10 @@ export default function RestoreWalletScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            endOldPinSession(null);
+            navigation.goBack();
+          }}
         >
           <Ionicons name="arrow-back" size={24} color={colors.primary} />
         </TouchableOpacity>
@@ -235,19 +384,22 @@ export default function RestoreWalletScreen() {
           </View>
           <Text style={styles.infoTitle}>Restore Your Wallet</Text>
           <Text style={styles.infoText}>
-            Select a Voi Wallet backup file (.voibackup) to restore your
-            accounts, settings, and preferences. You will need the password you
-            used when creating the backup.
+            Select a Voi Wallet backup file (.voibackup) to add its accounts to
+            this wallet. You will need the password you used when creating the
+            backup.
           </Text>
         </GlassCard>
 
-        {/* Warning */}
+        {/* What restore does: it only adds */}
         <View style={styles.warningContainer}>
-          <Ionicons name="alert-circle" size={20} color={colors.error} />
+          <Ionicons
+            name="information-circle"
+            size={20}
+            color={colors.primary}
+          />
           <Text style={styles.warningText}>
-            Restoring from a backup will replace ALL existing accounts and
-            settings. Make sure you have backed up your current wallet if
-            needed.
+            {RESTORE_ADDS_TEXT}
+            {deviceAccountCount > 0 ? ` ${SETTINGS_STAY_TEXT}` : ''}
           </Text>
         </View>
 
@@ -305,19 +457,55 @@ export default function RestoreWalletScreen() {
               <Text style={styles.stepNumberText}>4</Text>
             </View>
             <Text style={styles.stepText}>
-              Set up a new PIN for your restored wallet
+              Set up a PIN if this phone doesn&apos;t have one yet
             </Text>
           </View>
         </GlassCard>
 
+        {oldPin === 'needed' && (
+          <OldPinStep
+            unlock={(secret) => {
+              const generation = oldPinGeneration.current;
+              return unlockForRestore(
+                secret,
+                () => oldPinGeneration.current === generation
+              );
+            }}
+            readLockedUntil={readLockedUntil}
+            onVerified={handleOldPinVerified}
+            onForgotten={handleForgotten}
+          />
+        )}
+
+        {oldPin === 'forgotten' && showForgottenConsent && backupInfo && (
+          <ForgottenPinConsent
+            info={backupInfo}
+            onConfirm={handleConfirmRestore}
+            onCancel={handleCancelConfirmation}
+          />
+        )}
+
+        {oldPin === 'forgotten' && !showForgottenConsent && (
+          <TouchableOpacity
+            onPress={() => setOldPin('needed')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.stepText}>{ENTER_PIN_INSTEAD_TEXT}</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Select File Button */}
-        <TouchableOpacity
-          style={styles.selectButton}
-          onPress={handleSelectFile}
-        >
-          <Ionicons name="folder-open" size={20} color={colors.buttonText} />
-          <Text style={styles.selectButtonText}>Select Backup File</Text>
-        </TouchableOpacity>
+        {(oldPin === 'none' ||
+          oldPin === 'verified' ||
+          (oldPin === 'forgotten' && !showForgottenConsent)) && (
+          <TouchableOpacity
+            style={styles.selectButton}
+            onPress={handleSelectFile}
+          >
+            <Ionicons name="folder-open" size={20} color={colors.buttonText} />
+            <Text style={styles.selectButtonText}>Select Backup File</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
       {/* Password Modal */}
@@ -336,6 +524,7 @@ export default function RestoreWalletScreen() {
       <RestoreConfirmationModal
         visible={showConfirmationModal}
         backupInfo={backupInfo}
+        deviceHasAccounts={deviceAccountCount > 0}
         onCancel={handleCancelConfirmation}
         onConfirm={handleConfirmRestore}
       />

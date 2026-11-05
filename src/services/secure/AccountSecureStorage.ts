@@ -49,7 +49,10 @@ import {
 } from './envelopeV2';
 import { SessionKeyVault, VaultLockedError } from './SessionKeyVault';
 import type { SecretSource } from './SessionKeyVault';
-import { clearPinSetupPending } from './pinSetupPending';
+import {
+  clearPinSetupPending,
+  readPinSetupPendingStrict,
+} from './pinSetupPending';
 import { SECURITY_CONFIG } from '../../config/security';
 import { invalidateAccountSubscribePasses } from '@/services/notifications/subscribePass';
 import { pbkdf2Hex } from './pbkdf2Kdf';
@@ -113,6 +116,26 @@ export type ConfirmedAbsentActionSignal = {
 // ─────────────────────────────────────────────────────────────────────────────
 const { PIN_ATTEMPT_LIMIT, PIN_LOCKOUT_DURATION } = SECURITY_CONFIG;
 const THROTTLE_BACKOFF_CAP_MS = 24 * 60 * 60 * 1000; // hard cap: 24h
+
+/** TASK-504: what an account id's secret slot holds, and the vault state the
+ *  answer was taken under. See AccountSecureStorage.inspectSecretSlot. */
+export interface SecretSlotInspection {
+  state: 'empty' | 'key-matches' | 'key-other' | 'occupied-unreadable';
+  vault: 'locked' | 'unlocked';
+}
+
+/**
+ * TASK-504: the session vault was locked, unlocked or replaced while a restore's
+ * slot check was reading. A result taken across that change was not taken under
+ * ONE vault state (a healthy PIN-wrapped key reads occupied-unreadable once the
+ * vault empties), so it must never decide a write. The restore stops.
+ */
+export class VaultChangedDuringReadError extends Error {
+  constructor() {
+    super('The session vault changed while a stored key was being checked');
+    this.name = 'VaultChangedDuringReadError';
+  }
+}
 
 /**
  * Persisted PIN-throttle record. Lives in SecureStore under
@@ -1577,36 +1600,142 @@ export class AccountSecureStorage {
     creationGen: number,
     context: WriteContext = 'create'
   ): Promise<string> {
+    return this.runKeyMutationExclusive(() =>
+      this.storeAccountForCreationLocked(
+        account,
+        privateKey,
+        creationGen,
+        context
+      )
+    ).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
+    });
+  }
+
+  /** The body of storeAccountForCreation, assuming the key-mutation mutex is
+   *  HELD. */
+  private static async storeAccountForCreationLocked(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    context: WriteContext
+  ): Promise<string> {
+    if (this.secureResetGeneration !== creationGen) {
+      throw new ResetRacedError();
+    }
+    const journal = await this.readPendingCreateJournal();
+    if (journal[account.id] !== undefined) {
+      throw new DuplicatePendingCreateError();
+    }
+    const token = this.nextPendingCreateToken();
+    journal[account.id] = token;
+    await this.writePendingCreateJournal(journal);
+    const progress = { secretWritten: false };
+    try {
+      await this.storeAccountLocked(account, privateKey, progress, context);
+    } catch (error) {
+      if (
+        error instanceof WriteOutcomeUnknownError ||
+        error instanceof WriteUnresolvedError
+      )
+        throw error;
+      // TASK-449: the caller never receives the token on a throw, so it cannot
+      // roll back; do it here, in the same mutex task.
+      await this.rollBackFailedCreateLocked(
+        account.id,
+        token,
+        progress.secretWritten
+      );
+      throw error;
+    }
+    return token;
+  }
+
+  /**
+   * Add-only restore of a record that carries a key (TASK-504). One key-mutation
+   * mutex task reads the id's secret slot and acts on what that read shows:
+   *  - empty: the key is written under the file id, journaled, as for any new
+   *    account (`written`, with the ownership token);
+   *  - holds the key for this address: nothing is written and nothing is
+   *    journaled, only the account metadata is added (`in-place`);
+   *  - holds a DIFFERENT key that reads and derives to another address: nothing
+   *    is written and the record is not added (`occupied-other`). The caller
+   *    reports it. An id in a file proves nothing about what this device's slot
+   *    for that id is; a key that positively belongs to another account is not
+   *    ours to route around (DOC-507 4.1 item 1);
+   *  - holds something no reader opens (a PIN-wrapped key with the vault empty,
+   *    a payload no reader accepts, a surviving legacy blob): the record is
+   *    stored under a fresh id whose own slot reads empty first (`written`,
+   *    `reassigned`), and the occupied slot is not touched. This is the only
+   *    state that takes the new-id route.
+   * A slot read that cannot complete throws and writes nothing.
+   */
+  static async storeAccountForRestore(
+    account: AccountMetadata,
+    privateKey: Uint8Array,
+    creationGen: number,
+    context: WriteContext = 'restore'
+  ): Promise<
+    | { kind: 'written'; id: string; token: string; reassigned: boolean }
+    | { kind: 'in-place'; id: string }
+    | { kind: 'occupied-other'; id: string }
+  > {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      const journal = await this.readPendingCreateJournal();
-      if (journal[account.id] !== undefined) {
-        throw new DuplicatePendingCreateError();
-      }
-      const token = this.nextPendingCreateToken();
-      journal[account.id] = token;
-      await this.writePendingCreateJournal(journal);
-      const progress = { secretWritten: false };
-      try {
-        await this.storeAccountLocked(account, privateKey, progress, context);
-      } catch (error) {
-        if (
-          error instanceof WriteOutcomeUnknownError ||
-          error instanceof WriteUnresolvedError
-        )
-          throw error;
-        // TASK-449: the caller never receives the token on a throw, so it cannot
-        // roll back; do it here, in the same mutex task.
-        await this.rollBackFailedCreateLocked(
-          account.id,
-          token,
-          progress.secretWritten
+      const own = await this.inspectSlotUnderOneVaultState(
+        account.id,
+        account.address
+      );
+      if (own.state === 'empty') {
+        const token = await this.storeAccountForCreationLocked(
+          account,
+          privateKey,
+          creationGen,
+          context
         );
-        throw error;
+        return {
+          kind: 'written' as const,
+          id: account.id,
+          token,
+          reassigned: false,
+        };
       }
-      return token;
+      if (own.state === 'key-matches') {
+        await this.storeAccountLocked(
+          account,
+          undefined,
+          undefined,
+          context,
+          true
+        );
+        return { kind: 'in-place' as const, id: account.id };
+      }
+      if (own.state === 'key-other') {
+        return { kind: 'occupied-other' as const, id: account.id };
+      }
+      // Only 'occupied-unreadable' is left: the new-id route.
+      const id = await this.freshAccountId();
+      const fresh = await this.inspectSlotUnderOneVaultState(
+        id,
+        account.address
+      );
+      if (fresh.state !== 'empty') {
+        throw new AccountStorageError(
+          'Could not find an empty secret slot for a restored key'
+        );
+      }
+      const token = await this.storeAccountForCreationLocked(
+        { ...account, id } as AccountMetadata,
+        privateKey,
+        creationGen,
+        context
+      );
+      return { kind: 'written' as const, id, token, reassigned: true };
     }).catch((error: unknown) => {
       if (error instanceof WriteOutcomeUnknownError) {
         throw new WriteOutcomeUnknownError(error.journaled, context);
@@ -1662,13 +1791,117 @@ export class AccountSecureStorage {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
-      await this.storeAccountLocked(account, undefined, undefined, context);
+      await this.storeAccountLocked(
+        account,
+        undefined,
+        undefined,
+        context,
+        true
+      );
     }).catch((error: unknown) => {
       if (error instanceof WriteOutcomeUnknownError) {
         throw new WriteOutcomeUnknownError(error.journaled, context);
       }
       throw error;
     });
+  }
+
+  /**
+   * Restore of a record that carries no phrase (watch, Ledger, remote signer,
+   * key-less rekeyed). An id in a file proves nothing about what the secret slot
+   * of that id holds on this device, so the record keeps its file id only when
+   * the slot reads EMPTY at this write; otherwise it is stored under a fresh id
+   * whose own slot reads empty first. Nothing here writes or deletes a secret
+   * slot: the slot read and the metadata write share one mutex task, and the
+   * writer is metadata-only (TASK-504). Returns the id the record was stored
+   * under. A slot read that cannot complete throws and writes nothing.
+   */
+  static async storeKeylessAccountForRestore(
+    account: AccountMetadata,
+    creationGen: number,
+    context: WriteContext = 'restore',
+    bind?: { epoch: number },
+    unboundAs?: AccountMetadata
+  ): Promise<{ id: string; reassigned: boolean; bound?: boolean }> {
+    return this.runKeyMutationExclusive(async () => {
+      if (this.secureResetGeneration !== creationGen) {
+        throw new ResetRacedError();
+      }
+      let id = account.id;
+      let reassigned = false;
+      let bound = false;
+      const startEpoch = SessionKeyVault.currentEpoch();
+      const own = await this.inspectSlotUnderOneVaultState(id, account.address);
+      // DOC-507 4.1 item 9, the one exception to "a key-less record never binds
+      // to an occupied slot". All of it holds at THIS write, each read now:
+      // the old-PIN screen's session (the caller passes the epoch recorded at the
+      // verify), the vault still holding what that verify put in it, a credential
+      // still present, a REKEYED record (the type that retains a key), and the
+      // slot reading key-matches for the record's OWN id and OWN address. Only
+      // metadata is written; the slot is never touched.
+      if (
+        own.state === 'key-matches' &&
+        bind !== undefined &&
+        (account.type === AccountType.REKEYED ||
+          account.type === AccountType.STANDARD) &&
+        (await this.hasPinStrict()) &&
+        SessionKeyVault.isUnlocked() &&
+        SessionKeyVault.currentEpoch() === bind.epoch &&
+        startEpoch === bind.epoch
+      ) {
+        bound = true;
+      } else if (own.state !== 'empty') {
+        id = await this.freshAccountId();
+        const fresh = await this.inspectSlotUnderOneVaultState(
+          id,
+          account.address
+        );
+        if (fresh.state !== 'empty') {
+          throw new AccountStorageError(
+            'Could not find an empty secret slot for a key-less record'
+          );
+        }
+        reassigned = true;
+      }
+      // A record that did not bind is written as `unboundAs` when the caller
+      // gave one (a flagged standard record is stored as Watch Only), never as
+      // its real type: a standard record without a key is a phantom.
+      const written = bound ? account : (unboundAs ?? account);
+      await this.storeAccountLocked(
+        reassigned ? ({ ...written, id } as AccountMetadata) : written,
+        undefined,
+        undefined,
+        context,
+        true
+      );
+      return { id, reassigned, ...(bound ? { bound: true } : {}) };
+    }).catch((error: unknown) => {
+      if (error instanceof WriteOutcomeUnknownError) {
+        throw new WriteOutcomeUnknownError(error.journaled, context);
+      }
+      throw error;
+    });
+  }
+
+  /**
+   * Undo a metadata-only restore write (a key-less record, or a key added
+   * against a key already on the device): removes the account's metadata and
+   * its account-list entry and NEVER touches the secret slot, because this
+   * attempt did not write one (TASK-504).
+   */
+  static async removeAccountMetadataOnly(accountId: string): Promise<void> {
+    await this.runKeyMutationExclusive(async () => {
+      await this.boundedStorageRemove(this.metadataKey(accountId));
+      await this.removeFromAccountList(accountId);
+    });
+  }
+
+  private static async freshAccountId(): Promise<string> {
+    const bytes = await platformCrypto.getRandomBytes(9);
+    const suffix = Array.from(bytes, (b) =>
+      b.toString(16).padStart(2, '0')
+    ).join('');
+    return `account_${Date.now()}_${suffix}`;
   }
 
   /**
@@ -1791,6 +2024,195 @@ export class AccountSecureStorage {
   }
 
   /**
+   * TASK-504: READ-ONLY check of what an account id's secret slot holds, for a
+   * restore deciding per record whether to write a key, add the record only, or
+   * skip. It writes nothing, migrates nothing and takes no lock.
+   *
+   *   empty               primary secret, legacy blob and wipe tombstone each
+   *                       read SUCCESSFULLY and the slot holds nothing.
+   *   key-matches         a key reads under this id and derives to
+   *                       `expectedAddress` (seed AND public half).
+   *   key-other           a key reads under this id and derives to another
+   *                       address.
+   *   occupied-unreadable something is there that does not open: a payload no
+   *                       reader accepts, a user-secret-wrapped key with the
+   *                       vault locked, or a surviving legacy blob (counted as
+   *                       occupied whether or not a wipe tombstone is set; this
+   *                       check never decides a legacy blob is dead).
+   *
+   * Any READ failure (or timeout) THROWS. A failed read is never "empty" and
+   * never "occupied": the caller stops. probeOwnKey is deliberately not used
+   * (its tombstone branch can return false-absent), and the "Private key not
+   * available" alert text proves nothing because it has two producers.
+   */
+  static async inspectSecretSlot(
+    accountId: string,
+    expectedAddress: string,
+    timeoutMs: number = 1500
+  ): Promise<SecretSlotInspection> {
+    // The vault state this result is taken under. A caller that classifies
+    // again after an unlock must act on the NEW result, never an older one.
+    const vault: SecretSlotInspection['vault'] = SessionKeyVault.isUnlocked()
+      ? 'unlocked'
+      : 'locked';
+    const primary = await this.withTimeout(
+      secureStorage.getItem(this.secretKey(accountId)),
+      timeoutMs,
+      'secret slot primary read'
+    );
+    const tombstone = await this.withTimeout(
+      storage.getItem(this.SECURE_WIPE_TOMBSTONE_KEY),
+      timeoutMs,
+      'secret slot tombstone read'
+    );
+    const legacy = await this.withTimeout(
+      secureStorage.getItem(`${this.LEGACY_STORAGE_KEY_PREFIX}${accountId}`),
+      timeoutMs,
+      'secret slot legacy read'
+    );
+
+    if (!primary) {
+      // The tombstone only decides whether the reader would resurrect a legacy
+      // blob. Here a legacy blob of any kind makes the slot occupied.
+      void tombstone;
+      return { state: legacy ? 'occupied-unreadable' : 'empty', vault };
+    }
+
+    // A payload no reader would accept is not a key, and not empty.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(primary);
+    } catch {
+      return { state: 'occupied-unreadable', vault };
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      (typeof (parsed as { encryptedPrivateKey?: unknown })
+        .encryptedPrivateKey !== 'string' &&
+        !Array.isArray((parsed as { blobs?: unknown }).blobs))
+    ) {
+      return { state: 'occupied-unreadable', vault };
+    }
+
+    // Read the key the way getPrivateKey does (same gate, same decrypt order)
+    // but WITHOUT its side effects: getPrivateKey updates the account's
+    // lastAccessed metadata, caches the key for 60 s, and with an unlocked vault
+    // fires a lazy re-wrap of a device-key account (migrateAccountToV2). A check
+    // that only looks must do none of those.
+    const payload = parsed as AccountSecretPayload;
+    // §6.4 reader gate: on a device with a PIN the vault itself must be
+    // unlocked. hasPinStrict throws on a read failure; that is read OUTSIDE the
+    // try below so a failed read propagates instead of becoming "unreadable".
+    const vaultUnlocked = vault === 'unlocked';
+    if (!vaultUnlocked && (await this.hasPinStrict())) {
+      return { state: 'occupied-unreadable', vault };
+    }
+    // The device id is a keychain read, and both decrypts below need it. Their
+    // catch turns every failure into "something is there that does not open", so
+    // a failed or timed-out read of the id would be taken as "occupied" (and
+    // the record routed to a fresh id) when it is a failed read. Read it here,
+    // outside the try, so that failure propagates like every other read above.
+    // The adapter keeps what it loaded, so the decrypts' own calls are cheap.
+    await this.getStableDeviceId();
+    let key: Uint8Array | undefined;
+    try {
+      if (
+        vaultUnlocked &&
+        Array.isArray(payload.blobs) &&
+        payload.blobs.length > 0
+      ) {
+        key = await this.tryDecryptV2Blobs(accountId, payload.blobs, undefined);
+      }
+      if (!key && typeof payload.encryptedPrivateKey === 'string') {
+        key = await this.decryptPrivateKey(payload.encryptedPrivateKey);
+      }
+    } catch {
+      // A wrong wrap secret, a corrupt blob, a vault that locked mid-read:
+      // something is there and it does not open. "Occupied", never "empty".
+      return { state: 'occupied-unreadable', vault };
+    }
+    if (!key) {
+      return { state: 'occupied-unreadable', vault };
+    }
+    try {
+      return {
+        state: keyBelongsToAddress(key, expectedAddress)
+          ? 'key-matches'
+          : 'key-other',
+        vault,
+      };
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  /**
+   * TASK-504: inspectSecretSlot for a result that DECIDES A WRITE. The vault
+   * state is recorded with the result, but a vault that locks, unlocks or is
+   * replaced WHILE the read runs leaves a result that no single state produced.
+   * Compare the vault epoch before and after; any change throws
+   * VaultChangedDuringReadError and the caller writes nothing.
+   */
+  private static async inspectSlotUnderOneVaultState(
+    accountId: string,
+    expectedAddress: string
+  ): Promise<SecretSlotInspection> {
+    // Every set, rotate and clear bumps the epoch, so the epoch alone sees a
+    // lock, an unlock and a replacement alike.
+    const epochBefore = SessionKeyVault.currentEpoch();
+    const slot = await this.inspectSecretSlot(accountId, expectedAddress);
+    if (SessionKeyVault.currentEpoch() !== epochBefore) {
+      throw new VaultChangedDuringReadError();
+    }
+    return slot;
+  }
+
+  /**
+   * TASK-504: the slot check a restore REPORT row is built from. A report input
+   * only: it writes nothing, migrates nothing, and its result decides no write.
+   * It runs as one key-mutation task, so it is taken at the record's turn and
+   * never inside a queue task.
+   *
+   * The result counts (`counts: true`) only when it was taken under a state that
+   * can be trusted: the device has no PIN, or the vault was unlocked and held the
+   * same epoch before and after the read. Under a locked vault a healthy
+   * PIN-wrapped key reads `occupied-unreadable`, which a row must never present
+   * as a problem with the stored key. A result that does not count carries no
+   * state, so no row can be built from it.
+   *
+   * A read failure THROWS, as in inspectSecretSlot; the caller decides what a
+   * failed report read means (it is never a write decision).
+   */
+  static async inspectSlotForRestoreReport(
+    accountId: string,
+    expectedAddress: string,
+    timeoutMs?: number
+  ): Promise<
+    { counts: true; state: SecretSlotInspection['state'] } | { counts: false }
+  > {
+    return this.runKeyMutationExclusive(async () => {
+      const hasPin = await this.hasPinStrict();
+      const unlockedBefore = SessionKeyVault.isUnlocked();
+      const epochBefore = SessionKeyVault.currentEpoch();
+      const slot = await this.inspectSecretSlot(
+        accountId,
+        expectedAddress,
+        timeoutMs
+      );
+      if (hasPin) {
+        const stable =
+          unlockedBefore &&
+          slot.vault === 'unlocked' &&
+          SessionKeyVault.isUnlocked() &&
+          SessionKeyVault.currentEpoch() === epochBefore;
+        if (!stable) return { counts: false as const };
+      }
+      return { counts: true as const, state: slot.state };
+    });
+  }
+
+  /**
    * STRICT read of the durable pending-creation journal (TASK-222). Unlike the
    * tolerant private readPendingCreateJournal (which degrades bad JSON to `{}` —
    * a safe default on the WRITE paths), this FAILS CLOSED for the reconcile: a
@@ -1833,6 +2255,27 @@ export class AccountSecureStorage {
       );
     }
     return parsed as Record<string, string>;
+  }
+
+  /**
+   * TASK-504: the key-side half of "this device is fresh". True only when ALL of
+   * these read successfully and hold nothing: no PIN credential (either copy),
+   * an empty account list, an empty pending-creates journal, an empty
+   * quarantine registry, and no pin-setup-pending breadcrumb. Any read error
+   * THROWS (the caller stops); a failed read is never "empty". It reads only,
+   * takes no lock (so it may run inside a wallet-queue task, DOC-507 section 1
+   * rule 2), and writes nothing. The wallet blob is the other half and is read by
+   * the wallet service inside its queue.
+   */
+  static async isKeyStateEmptyStrict(): Promise<boolean> {
+    if (await this.hasPinStrict()) return false;
+    if ((await this.readAccountListStrict()).length > 0) return false;
+    if (Object.keys(await this.readPendingCreatesStrict()).length > 0) {
+      return false;
+    }
+    if ((await this.readQuarantinedIdsStrict()).length > 0) return false;
+    if (await readPinSetupPendingStrict()) return false;
+    return true;
   }
 
   /** Strict, id-only quarantine registry used by boot reconcile and full wipes. */
@@ -1963,8 +2406,14 @@ export class AccountSecureStorage {
     account: AccountMetadata,
     privateKey?: Uint8Array,
     progress?: { secretWritten: boolean },
-    context: WriteContext = 'other'
+    context: WriteContext = 'other',
+    metadataOnly: boolean = false
   ): Promise<void> {
+    if (metadataOnly && privateKey) {
+      throw new AccountStorageError(
+        'A metadata-only store cannot carry a private key'
+      );
+    }
     try {
       // TASK-449: bounded and strict. A timeout or read error fails the store,
       // so a stuck or failing keychain is never stored as "no PIN".
@@ -2033,7 +2482,7 @@ export class AccountSecureStorage {
         if (progress) {
           progress.secretWritten = true;
         }
-      } else {
+      } else if (!metadataOnly) {
         await this.saveSecret(account.id, null, context);
       }
 
@@ -3365,24 +3814,30 @@ export class AccountSecureStorage {
   ): Promise<void> {
     try {
       this.validateSecret(newSecret, secretSource);
-      // TASK-213 (fail-OPEN closure): clear the restore-before-PIN breadcrumb —
-      // with CONFIRMED removal — BEFORE committing the PIN, not after. A PIN
-      // credential must never come to exist on disk while a live breadcrumb could
-      // still be read: otherwise a commit that partially fails (e.g. the Android
-      // presence-sentinel write fails, so a later keystore break makes the PIN read
-      // resolve absent) would let the stale breadcrumb route that wallet to
-      // SecuritySetup — a NEW PIN over a real wallet. Clearing FIRST makes every
-      // such race fail CLOSED (recovery), never open. If removal cannot be
-      // CONFIRMED (a wedged/unhealthy store), ABORT rather than commit a PIN into
-      // that ambiguous state — the caller simply retries. clearPinSetupPending is
-      // bounded + verifying + never-throwing; a no-op when no breadcrumb exists
-      // (normal onboarding) on a healthy store.
-      const breadcrumbCleared = await clearPinSetupPending();
-      if (!breadcrumbCleared) {
-        throw new Error(
-          'Could not clear the restore setup marker before establishing the PIN'
-        );
-      }
+      // TASK-213 (fail-OPEN closure) and TASK-508. The restore-before-PIN
+      // breadcrumb is cleared, with CONFIRMED removal, BEFORE the PIN credential
+      // is committed (rewrapAndCommitCredentialLocked does it, after the rewrap
+      // and its read-back, immediately before the credential write). A credential
+      // must never come to exist on disk while a live breadcrumb could still be
+      // read: otherwise a commit that partially fails (e.g. the Android
+      // presence-sentinel write fails, so a later keystore break makes the PIN
+      // read resolve absent) would let the stale breadcrumb route that wallet to
+      // SecuritySetup, a NEW PIN over a real wallet.
+      //
+      // The clear used to run FIRST, ahead of the rewrap loop (one scrypt per
+      // account, seconds). A kill anywhere in that loop then left key-bearing
+      // accounts, no PIN and no breadcrumb, which boots to the recovery screen
+      // (TASK-508). With the clear just before the credential write, a kill in
+      // the loop leaves the breadcrumb set and no PIN, which is the legitimate
+      // resume state: SecuritySetup, and setupPin is run again. What remains on
+      // recovery is the gap between the confirmed clear and the credential
+      // write (one storage remove, one secure write).
+      //
+      // If removal cannot be CONFIRMED (a wedged/unhealthy store), the commit is
+      // ABORTED and the pre-commit rollback drops this attempt's new blobs, so
+      // the accounts still read through their device-key copy and no credential
+      // exists; the caller simply retries.
+      //
       // Acquire the GLOBAL key-mutation mutex, then run the atomic rewrap+commit
       // under it (P1-3: no verify/commit races). setupPin has no current secret
       // to verify (first-secret setup).
@@ -3391,6 +3846,7 @@ export class AccountSecureStorage {
           currentSecret: undefined,
           newSecret,
           newSource: secretSource,
+          clearBreadcrumbBeforeCommit: true,
         })
       );
       this.legacyCheckRequired = false;
@@ -3670,6 +4126,13 @@ export class AccountSecureStorage {
    * device-broken condition as every other awaited secure write (see THREAT
    * MODEL) — not special-cased.
    */
+  /** The persisted throttle record removed with the removal CONFIRMED (a
+   *  failure throws), and the in-memory mirror reset with it. */
+  private static async clearThrottleConfirmed(): Promise<void> {
+    await this.boundedSecureDelete(this.PIN_THROTTLE_KEY);
+    this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+  }
+
   private static async resetThrottle(): Promise<void> {
     this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
     await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
@@ -3900,6 +4363,14 @@ export class AccountSecureStorage {
     newSecret: string;
     /** Kind of the new secret (folded into the credential + each blob). */
     newSource: SecretSource;
+    /**
+     * setupPin only (TASK-508): confirm removal of the restore-before-PIN
+     * breadcrumb after the rewrap and read-back and immediately before the
+     * credential write; abort (pre-commit rollback) if it cannot be confirmed.
+     * clearPinSetupPending takes no lock, so running it inside the key mutex
+     * nests nothing (DOC-507 section 1).
+     */
+    clearBreadcrumbBeforeCommit?: boolean;
   }): Promise<void> {
     const { currentSecret, newSecret, newSource } = opts;
 
@@ -4024,6 +4495,33 @@ export class AccountSecureStorage {
           }
         } finally {
           check?.fill(0);
+        }
+      }
+
+      // PHASE 3b (setupPin, TASK-508): the breadcrumb is gone, CONFIRMED, before
+      // the credential exists. An unconfirmed removal throws here, pre-commit, so
+      // the rollback below drops the unproven new blobs.
+      if (opts.clearBreadcrumbBeforeCommit) {
+        // TASK-504 (DOC-507 5.4, B): a kill inside the forgotten-PIN step's
+        // credential removal can leave the credential gone and a stale throttle
+        // behind. When setupPin finds NO credential it clears that throttle,
+        // confirmed, BEFORE the new credential exists; otherwise it would refuse
+        // the new PIN. It never clears a throttle while a credential exists (no
+        // path may clear a lockout while a PIN does), and a credential read that
+        // fails leaves the throttle alone too.
+        let credentialExists = true;
+        try {
+          credentialExists = await this.hasPinStrict();
+        } catch {
+          credentialExists = true;
+        }
+        if (!credentialExists) {
+          await this.clearThrottleConfirmed();
+        }
+        if (!(await clearPinSetupPending())) {
+          throw new AccountStorageError(
+            'Could not clear the restore setup marker before establishing the PIN'
+          );
         }
       }
 
@@ -4223,6 +4721,48 @@ export class AccountSecureStorage {
         }
         throw new AccountStorageError('Failed to delete PIN');
       }
+    });
+  }
+
+  /**
+   * TASK-504 (DOC-507 5.4, step B): remove the PIN credential for the
+   * forgotten-PIN step, and nothing else. Deletes credential items by name only,
+   * in the ruled order: (1) the PIN credential, both copies; (2) SALT_KEY, both
+   * copies; (3) the persisted throttle record, LAST, so a kill between them can
+   * never leave the old PIN with its lockout cleared. It never calls deletePin or
+   * clearOrphanPin (both enumerate the account list, which is empty after a
+   * reinstall, so their "no key held" checks pass only because the keys are
+   * invisible), and it touches no secret slot, no device id and no metadata.
+   *
+   * Preconditions, checked here as well as by the caller: a credential exists
+   * (otherwise there is nothing to remove) and the account list is EMPTY (the
+   * step is for a device with no accounts; with accounts the wallet's own Change
+   * PIN is the route). A read that fails throws and nothing is deleted.
+   * Re-running after a kill finishes the deletes only while a PIN credential
+   * copy is left; once both copies are gone it throws "There is no PIN to
+   * remove" and the step is not offered. A salt or throttle record left by a kill
+   * after the credential is gone is harmless: the salt is overwritten by the next
+   * setupPin, and setupPin clears the throttle when it finds no credential.
+   */
+  static async removeCredentialForForgottenPin(): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      if (!(await this.hasPinStrict())) {
+        throw new AccountStorageError('There is no PIN to remove');
+      }
+      if ((await this.readAccountListStrict()).length > 0) {
+        throw new AccountStorageError(
+          'The PIN cannot be removed while accounts are listed'
+        );
+      }
+      // (1) the PIN credential: both copies.
+      await this.boundedSecureDelete(this.PIN_KEY);
+      await this.boundedStorageRemove(this.PIN_KEY);
+      // (2) SALT_KEY: both copies.
+      await this.boundedSecureDelete(this.SALT_KEY);
+      await this.boundedStorageRemove(this.SALT_KEY);
+      // (3) the throttle record, last.
+      await this.clearThrottleConfirmed();
+      this.legacyCheckRequired = undefined;
     });
   }
 
@@ -4609,7 +5149,7 @@ export class AccountSecureStorage {
     // TASK-192: cancel any in-flight deferred notification subscribe pass, here
     // rather than only in clearAllWallets. Every reset path awaits THIS method
     // first and reaches clearAllWallets second (LockScreen.performReset,
-    // SecureStorageUnavailableScreen, backup restorers.clearAllData,
+    // SecureStorageUnavailableScreen,
     // keyManager), so invalidating downstream leaves a window the length of a
     // full secure-storage wipe in which the boot-time batch can still write
     // subscriptions for accounts being erased. Synchronous and before the mutex,

@@ -54,6 +54,19 @@ jest.mock('@/services/wallet', () => ({
     getCurrentWallet: () => mockGetCurrentWallet(),
     persistRestoredWallet: (restored: unknown) =>
       mockPersistRestoredWallet(restored),
+    readWalletStrict: async () => null,
+    mergeRestoredAccounts: async (
+      accounts: { id: string }[],
+      _gen: number,
+      shell: object
+    ) => {
+      await mockPersistRestoredWallet({
+        ...shell,
+        accounts,
+        activeAccountId: accounts[0].id,
+      });
+      return { added: accounts.map((a) => a.id), skipped: [] };
+    },
   },
 }));
 

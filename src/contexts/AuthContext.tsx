@@ -4,6 +4,7 @@ import React, {
   useState,
   useEffect,
   useRef,
+  useCallback,
 } from 'react';
 import { AppState, Platform, AppStateStatus } from 'react-native';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -106,7 +107,32 @@ export interface AuthContextType {
    * cleared. Synchronous (a ref), so it is never stale after the awaited unlock.
    */
   consumeUnlockRefusal: () => 'wipe_pending' | null;
+  /**
+   * TASK-504: verify the device's OLD PIN for a restore that runs before any
+   * account exists (the onboarding restore on a device whose credential
+   * survived). The same checks as `unlock` (wipe-pending refusal, `verifyPin`
+   * and its persistent throttle, the credential kind, the vault fill), with
+   * three differences: it does NOT start the post-unlock migration sweep (a key
+   * storage write outside restore), it does NOT change the session or lock
+   * state, and it reports the vault epoch the verify produced so the restore can
+   * prove the vault still holds what the verify put in it.
+   */
+  unlockForRestore: (
+    secret: string,
+    isCurrent?: () => boolean
+  ) => Promise<RestoreUnlockResult>;
+  /** Empty the session vault: the old-PIN restore calls it when the user leaves,
+   *  cancels, finishes, backgrounds the app or the lock timeout fires. */
+  clearRestoreVault: () => void;
 }
+
+export type RestoreUnlockResult =
+  | { status: 'verified'; epoch: number }
+  | { status: 'invalid' }
+  | { status: 'wipe_pending' }
+  /** The screen left or the app backgrounded while the PIN was being checked:
+   *  nothing was put in the vault. */
+  | { status: 'cancelled' };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -908,6 +934,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const unlockForRestore = async (
+    secret: string,
+    isCurrent: () => boolean = () => true
+  ): Promise<RestoreUnlockResult> => {
+    try {
+      unlockRefusalRef.current = null;
+      if (!secret) return { status: 'invalid' };
+      if (await refuseUnlockWhilePendingWipe()) {
+        return { status: 'wipe_pending' };
+      }
+      const isValid = await AccountSecureStorage.verifyPin(secret);
+      if (!isValid) return { status: 'invalid' };
+      const source =
+        (await AccountSecureStorage.getCredentialSource()) ?? 'pin';
+      // The verify is asynchronous. If the screen was left or the app went to
+      // the background meanwhile, its cleanup found no session to end, so the
+      // vault must not be filled now. No await sits between this check and the
+      // set.
+      if (!isCurrent()) return { status: 'cancelled' };
+      SessionKeyVault.set(secret, source);
+      return { status: 'verified', epoch: SessionKeyVault.currentEpoch() };
+    } catch (error) {
+      console.error('Failed to verify the old PIN:', redactError(error));
+      return { status: 'invalid' };
+    }
+  };
+
+  // Stable across provider renders: the restore screen puts it in the deps of
+  // an effect whose cleanup ends the old-PIN session, so a new identity on every
+  // render would end a live session (and cancel a PIN check) at each re-render.
+  const clearRestoreVault = useCallback(() => {
+    SessionKeyVault.clear();
+  }, []);
+
   const unlockWithBiometrics = async (
     isCurrent = () => true
   ): Promise<boolean> => {
@@ -1124,6 +1184,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     recheckAuthState,
     updateTimeoutSetting,
     consumeUnlockRefusal,
+    unlockForRestore,
+    clearRestoreVault,
   };
 
   return (

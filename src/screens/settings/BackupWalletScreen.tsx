@@ -26,6 +26,22 @@ import {
   BackupError,
 } from '@/services/backup';
 import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
+import KeysNotInBackupModal, {
+  BackupReportBlocks,
+} from '@/components/backup/KeysNotInBackupModal';
+import {
+  androidSavedAlertText,
+  buildBackupReport,
+} from '@/services/backup/backupReport';
+
+/**
+ * How long the result screen shows before the keys-not-in-backup modal opens.
+ * The progress modal is torn down in the same commit that sets the result; on iOS
+ * a Modal presented while another is still dismissing can be dropped silently,
+ * which would leave the user with disabled Save and Share and nothing to press
+ * (hunter r4). Save and Share stay disabled throughout.
+ */
+const MODAL_PRESENT_DELAY_MS = 500;
 
 export default function BackupWalletScreen() {
   const navigation = useNavigation();
@@ -42,6 +58,23 @@ export default function BackupWalletScreen() {
   const [backupSaved, setBackupSaved] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [modalReady, setModalReady] = useState(false);
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+  const needsAcknowledgement =
+    !!backupResult &&
+    buildBackupReport(backupResult).incomplete &&
+    !acknowledged;
+  useEffect(() => {
+    if (!needsAcknowledgement) return;
+    const timer = setTimeout(() => setModalReady(true), MODAL_PRESENT_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+      // Not ready again until the next result has waited its own delay.
+      setModalReady(false);
+    };
+  }, [needsAcknowledgement]);
+
   // Account counts
   const standardAccounts = accounts.filter(
     (a) => a.type === AccountType.STANDARD
@@ -51,6 +84,9 @@ export default function BackupWalletScreen() {
     (a) => a.type === AccountType.REKEYED
   );
   const ledgerAccounts = accounts.filter((a) => a.type === AccountType.LEDGER);
+  const airgapAccounts = accounts.filter(
+    (a) => a.type === AccountType.REMOTE_SIGNER
+  );
 
   // Set up progress callback
   useEffect(() => {
@@ -105,6 +141,8 @@ export default function BackupWalletScreen() {
           { maxReads: accounts.length, signal: abort.signal }
         );
         setShowProgressModal(false);
+        setAcknowledged(false);
+        setBackupSaved(false);
         if (result.rekeyedKeyCount) {
           Alert.alert(
             'Update required when restoring',
@@ -139,7 +177,7 @@ export default function BackupWalletScreen() {
   }, []);
 
   const handleSaveLocal = useCallback(async () => {
-    if (!backupResult) return;
+    if (!backupResult || needsAcknowledgement) return;
 
     if (Platform.OS === 'android') {
       try {
@@ -164,7 +202,11 @@ export default function BackupWalletScreen() {
           backupResult.fileContent
         );
         setBackupSaved(true);
-        Alert.alert('Saved', 'Backup saved to your selected folder.');
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        Alert.alert(
+          'Saved',
+          androidSavedAlertText(buildBackupReport(backupResult))
+        );
       } catch (err) {
         console.error('Save error:', err);
         const message = (err as Error).message || '';
@@ -181,6 +223,7 @@ export default function BackupWalletScreen() {
       try {
         await BackupService.shareBackup(backupResult.fileUri);
         setBackupSaved(true);
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
       } catch {
         Alert.alert(
           'Save Failed',
@@ -188,20 +231,21 @@ export default function BackupWalletScreen() {
         );
       }
     }
-  }, [backupResult]);
+  }, [backupResult, needsAcknowledgement]);
 
   const handleShare = useCallback(async () => {
-    if (!backupResult) return;
+    if (!backupResult || needsAcknowledgement) return;
     try {
       await BackupService.shareBackup(backupResult.fileUri);
       setBackupSaved(true);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
     } catch {
       Alert.alert(
         'Share Failed',
         'Could not share the backup file. Please try again.'
       );
     }
-  }, [backupResult]);
+  }, [backupResult, needsAcknowledgement]);
 
   const handleDone = useCallback(async () => {
     if (!backupSaved && backupResult) {
@@ -226,17 +270,21 @@ export default function BackupWalletScreen() {
     }
   }, [backupSaved, backupResult, navigation]);
 
-  // Success state - backup is ready to save
+  // Backup is ready to save. An incomplete one is never a success state.
   if (backupResult) {
+    const report = buildBackupReport(backupResult);
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
           <View style={styles.placeholder} />
-          <Text style={styles.headerTitle}>Backup Ready</Text>
+          <Text style={styles.headerTitle}>
+            {report.incomplete ? report.title : 'Backup Ready'}
+          </Text>
           <View style={styles.placeholder} />
         </View>
 
         <ScrollView
+          ref={scrollRef}
           style={styles.scrollView}
           contentContainerStyle={styles.content}
         >
@@ -246,26 +294,48 @@ export default function BackupWalletScreen() {
               style={[
                 styles.infoIconContainer,
                 {
-                  backgroundColor: backupSaved
-                    ? `${colors.success}15`
-                    : `${colors.primary}15`,
+                  backgroundColor: report.incomplete
+                    ? `${colors.warning}15`
+                    : backupSaved
+                      ? `${colors.success}15`
+                      : `${colors.primary}15`,
                 },
               ]}
             >
               <Ionicons
-                name={backupSaved ? 'checkmark-circle' : 'document'}
+                name={
+                  report.incomplete
+                    ? 'warning'
+                    : backupSaved
+                      ? 'checkmark-circle'
+                      : 'document'
+                }
                 size={32}
-                color={backupSaved ? colors.success : colors.primary}
+                color={
+                  report.incomplete
+                    ? colors.warning
+                    : backupSaved
+                      ? colors.success
+                      : colors.primary
+                }
               />
             </View>
             <Text style={styles.infoTitle}>
-              {backupSaved ? 'Backup Saved!' : 'Backup Created'}
+              {report.incomplete
+                ? report.title
+                : backupSaved
+                  ? 'Backup Saved!'
+                  : 'Backup Created'}
             </Text>
-            <Text style={styles.infoText}>
-              {backupSaved
-                ? 'Your backup has been saved. Store it in a safe place.'
-                : 'Your encrypted backup is ready. Save it to your device or share it to cloud storage.'}
-            </Text>
+            {report.incomplete ? (
+              <BackupReportBlocks report={report} />
+            ) : (
+              <Text style={styles.infoText}>
+                {backupSaved
+                  ? 'Your backup has been saved. Store it in a safe place.'
+                  : 'Your encrypted backup is ready. Save it to your device or share it to cloud storage.'}
+              </Text>
+            )}
           </GlassCard>
 
           {/* Backup Details */}
@@ -315,6 +385,7 @@ export default function BackupWalletScreen() {
               <TouchableOpacity
                 style={styles.createButton}
                 onPress={handleSaveLocal}
+                disabled={needsAcknowledgement}
               >
                 <Ionicons name="folder" size={20} color={colors.buttonText} />
                 <Text style={styles.createButtonText}>
@@ -325,6 +396,7 @@ export default function BackupWalletScreen() {
               <TouchableOpacity
                 style={[styles.secondaryButton, { marginTop: 12 }]}
                 onPress={handleShare}
+                disabled={needsAcknowledgement}
               >
                 <View style={styles.secondaryButtonContent}>
                   <Ionicons
@@ -343,6 +415,7 @@ export default function BackupWalletScreen() {
               <TouchableOpacity
                 style={styles.createButton}
                 onPress={handleSaveLocal}
+                disabled={needsAcknowledgement}
               >
                 <Ionicons
                   name="share-outline"
@@ -374,6 +447,11 @@ export default function BackupWalletScreen() {
             </Text>
           </TouchableOpacity>
         </ScrollView>
+        <KeysNotInBackupModal
+          visible={needsAcknowledgement && modalReady}
+          report={report}
+          onAcknowledge={() => setAcknowledged(true)}
+        />
       </SafeAreaView>
     );
   }
@@ -449,6 +527,19 @@ export default function BackupWalletScreen() {
           {ledgerAccounts.length > 0 && (
             <Text style={styles.includeNote}>
               Metadata only - device re-pairing required on restore
+            </Text>
+          )}
+
+          <View style={styles.divider} />
+
+          <View style={styles.includeRow}>
+            <Ionicons name="qr-code" size={20} color={colors.primary} />
+            <Text style={styles.includeLabel}>Airgap Accounts</Text>
+            <Text style={styles.includeValue}>{airgapAccounts.length}</Text>
+          </View>
+          {airgapAccounts.length > 0 && (
+            <Text style={styles.includeNote}>
+              Metadata only - the keys stay on the signer device
             </Text>
           )}
 
@@ -604,6 +695,14 @@ const createStyles = (theme: Theme) =>
       fontSize: 15,
       fontWeight: '600',
       color: theme.colors.primary,
+    },
+    leftOutRow: {
+      marginTop: theme.spacing.sm,
+    },
+    leftOutLabel: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.text,
     },
     includeNote: {
       fontSize: 12,

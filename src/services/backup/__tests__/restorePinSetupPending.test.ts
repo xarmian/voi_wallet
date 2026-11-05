@@ -1,11 +1,12 @@
-// TASK-213 restore-before-PIN: performFullRestore must SET the pin_setup_pending
-// breadcrumb AFTER wiping old data and BEFORE persisting any key-bearing (STANDARD)
-// account — so a cold-kill in the restore window (accounts on disk, no PIN yet)
+// TASK-213 restore-before-PIN: with no PIN, performFullRestore must SET the
+// pin_setup_pending breadcrumb BEFORE persisting any key-bearing (STANDARD)
+// account, so a cold-kill in the restore window (accounts on disk, no PIN yet)
 // boots to SecuritySetup(resume), not the recovery screen whose Reset would wipe
-// the just-restored wallet. This asserts that ordering invariant.
+// the just-restored wallet. TASK-504: restore is add-only, so it never clears
+// anything, from either entry point.
 //
-// SECURITY NOTE: no real key material — algosdk + secure storage are mocked sinks;
-// the breadcrumb holds only the marker 'true', never a secret.
+// SECURITY NOTE: no real key material. algosdk + secure storage are mocked
+// sinks; the breadcrumb holds only the marker 'true', never a secret.
 
 const order: string[] = [];
 
@@ -20,33 +21,39 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
     clearAll: jest.fn(async () => {
       order.push('clearAll');
     }),
-    // TASK-220: STANDARD restore now writes the key via the guarded atomic
-    // storeAccountForCreation (returns an ownership token); non-secret types
-    // still use storeAccount. The breadcrumb-ordering invariant (mark BEFORE any
-    // key-bearing write) is unchanged.
     getResetGeneration: jest.fn(() => 0),
-    storeAccountForCreation: jest.fn(async () => {
+    hasPinStrict: jest.fn(async () => false),
+    storeAccountForRestore: jest.fn(async (account: { id: string }) => {
       order.push('storeAccount');
-      return 'token-1';
+      return {
+        kind: 'written' as const,
+        id: account.id,
+        token: 'token-1',
+        reassigned: false,
+      };
     }),
+    storeAccountForCreation: jest.fn(async () => 'token-1'),
     commitPendingCreate: jest.fn(async () => {}),
     deleteAccountIfAttemptMatches: jest.fn(async () => {}),
-    storeAccount: jest.fn(async () => {
-      order.push('storeAccount');
-    }),
+    removeAccountMetadataOnly: jest.fn(async () => {}),
     setBiometricEnabled: jest.fn(async () => {}),
   },
 }));
 
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
-    // TASK-212: clearAllData() now funnels the wallet-metadata wipe through the
-    // service instead of removing the key directly.
     clearAllWallets: jest.fn(async () => {
       order.push('clearWallet');
     }),
-    persistRestoredWallet: jest.fn(async () => {
+    readWalletStrict: jest.fn(async () => null),
+    isDeviceFreshStrict: jest.fn(async () => true),
+    mergeRestoredAccounts: jest.fn(async (accounts: { id: string }[]) => {
       order.push('persistList');
+      return {
+        added: accounts.map((a) => a.id),
+        skipped: [],
+        hadAccounts: false,
+      };
     }),
   },
 }));
@@ -66,12 +73,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     multiSet: jest.fn(async () => {}),
     setItem: jest.fn(async () => {}),
   },
-}));
-
-const mockRemovePersistedBalanceCaches = jest.fn(async (_keys: string[]) => {});
-jest.mock('@/store/walletStore', () => ({
-  removePersistedBalanceCaches: (keys: string[]) =>
-    mockRemovePersistedBalanceCaches(keys),
 }));
 
 jest.mock('algosdk', () => ({
@@ -96,111 +97,83 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
-describe('performFullRestore — pin_setup_pending breadcrumb ordering (TASK-213)', () => {
-  it('sets the breadcrumb AFTER clearAllData and BEFORE the STANDARD account is persisted', async () => {
-    const standardAccount = {
-      id: 'restored-standard-1',
-      type: AccountType.STANDARD,
-      address: 'RESTORED_ADDR',
-      // Non-empty so the STANDARD branch does not skip; algosdk is mocked so the
-      // content is irrelevant (never a real phrase).
-      mnemonic: 'placeholder mnemonic not a real phrase',
-      label: 'Restored',
-      createdAt: new Date().toISOString(),
-    } as unknown as BackupAccountData;
+const standardRecord = () =>
+  ({
+    id: 'restored-standard-1',
+    type: AccountType.STANDARD,
+    address: 'RESTORED_ADDR',
+    // Non-empty so the STANDARD branch does not skip; algosdk is mocked so the
+    // content is irrelevant (never a real phrase).
+    mnemonic: 'placeholder mnemonic not a real phrase',
+    label: 'Restored',
+    createdAt: new Date().toISOString(),
+  }) as unknown as BackupAccountData;
 
-    // Minimal settings/experimental: the later restorers may reject on these, but
-    // the mark/clearAll/storeAccount ordering is already committed by then. Guard
-    // so a later rejection can't fail this ordering assertion.
+async function restoreOnce() {
+  return performFullRestore(
+    [standardRecord()],
+    {} as unknown as BackupSettings,
+    [],
+    {} as unknown as Parameters<typeof performFullRestore>[3]
+  );
+}
+
+describe('performFullRestore — pin_setup_pending breadcrumb ordering (TASK-213)', () => {
+  it('sets the breadcrumb BEFORE the STANDARD account is persisted when there is no PIN', async () => {
     try {
-      await performFullRestore(
-        [standardAccount],
-        {} as unknown as BackupSettings,
-        [],
-        {} as unknown as Parameters<typeof performFullRestore>[3]
-      );
+      await restoreOnce();
     } catch {
-      // ignore — ordering already captured above
+      // later restorers may reject on the minimal fixtures; the ordering is
+      // already committed by then
     }
 
     expect(mockMark).toHaveBeenCalledTimes(1);
-    // Breadcrumb set after the wipe...
-    expect(order.indexOf('clearAll')).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf('clearAll')).toBeLessThan(order.indexOf('mark'));
-    // ...and BEFORE any key-bearing account is written to disk.
     expect(order.indexOf('storeAccount')).toBeGreaterThanOrEqual(0);
     expect(order.indexOf('mark')).toBeLessThan(order.indexOf('storeAccount'));
   });
+
+  it('does not set the breadcrumb when a PIN exists', async () => {
+    const {
+      AccountSecureStorage,
+    } = require('@/services/secure/AccountSecureStorage');
+    AccountSecureStorage.hasPinStrict.mockResolvedValueOnce(true);
+    try {
+      await restoreOnce();
+    } catch {
+      // minimal fixtures
+    }
+    expect(mockMark).not.toHaveBeenCalled();
+  });
 });
 
-it('a failed secure wipe aborts restore before wallet metadata or settings are cleared', async () => {
-  const {
-    AccountSecureStorage,
-  } = require('@/services/secure/AccountSecureStorage');
-  const { MultiAccountWalletService } = require('@/services/wallet');
-  AccountSecureStorage.clearAll.mockRejectedValueOnce(
-    new Error('disk I/O failure')
+describe('performFullRestore — add-only (TASK-504)', () => {
+  it.each([false, true])(
+    'never clears secrets or the wallet blob (PIN present: %s)',
+    async (hasPin) => {
+      const {
+        AccountSecureStorage,
+      } = require('@/services/secure/AccountSecureStorage');
+      const { MultiAccountWalletService } = require('@/services/wallet');
+      AccountSecureStorage.hasPinStrict.mockResolvedValue(hasPin);
+      try {
+        await restoreOnce();
+      } catch {
+        // minimal fixtures
+      }
+      expect(AccountSecureStorage.clearAll).not.toHaveBeenCalled();
+      expect(MultiAccountWalletService.clearAllWallets).not.toHaveBeenCalled();
+    }
   );
-  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-  await expect(
-    performFullRestore(
-      [],
-      {} as BackupSettings,
-      [],
-      {} as Parameters<typeof performFullRestore>[3]
-    )
-  ).rejects.toThrow();
-  expect(MultiAccountWalletService.clearAllWallets).not.toHaveBeenCalled();
-  expect(mockMark).not.toHaveBeenCalled();
-  expect(order).not.toContain('storeAccount');
-  errorSpy.mockRestore();
-});
 
-it('removes balance-cache keys through the store chain and other caches directly (TASK-398)', async () => {
-  const AsyncStorage = jest.requireMock(
-    '@react-native-async-storage/async-storage'
-  ).default;
-  AsyncStorage.getAllKeys.mockResolvedValueOnce([
-    '@voi_wallet_balance_cache_v2',
-    '@voi_wallet_multi_network_balance_cache',
-    'claimable_cache_x',
-    'messages_cache_y',
-    'unrelated',
-  ]);
-  try {
-    await performFullRestore(
-      [],
-      {} as BackupSettings,
-      [],
-      {} as Parameters<typeof performFullRestore>[3]
+  it('a failed device read stops the restore before anything is written', async () => {
+    const { MultiAccountWalletService } = require('@/services/wallet');
+    MultiAccountWalletService.isDeviceFreshStrict.mockRejectedValueOnce(
+      new Error('disk I/O failure')
     );
-  } catch {
-    // later restorers may reject on the minimal fixtures; the clear ran first
-  }
-  expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([
-    '@voi_wallet_balance_cache_v2',
-    '@voi_wallet_multi_network_balance_cache',
-  ]);
-  expect(AsyncStorage.multiRemove).toHaveBeenCalledWith([
-    'claimable_cache_x',
-    'messages_cache_y',
-  ]);
-  for (const [keys] of AsyncStorage.multiRemove.mock.calls)
-    expect(keys.some((k: string) => k.includes('balance_cache'))).toBe(false);
-});
-
-it('runs the balance-cache barrier even when no balance key exists yet (TASK-398)', async () => {
-  try {
-    await performFullRestore(
-      [],
-      {} as BackupSettings,
-      [],
-      {} as Parameters<typeof performFullRestore>[3]
-    );
-  } catch {
-    // later restorers may reject on the minimal fixtures; the clear ran first
-  }
-  expect(mockRemovePersistedBalanceCaches).toHaveBeenCalledWith([]);
+    await expect(restoreOnce()).rejects.toThrow('disk I/O failure');
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(order).not.toContain('storeAccount');
+  });
 });
 
 it.each([undefined, '', 'invalid phrase'])(

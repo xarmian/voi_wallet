@@ -43,7 +43,11 @@ jest.mock('expo-constants', () => ({
 // Mock the heavy collectors/restorers so their native dependency graph never
 // loads. createBackup calls collectAccounts FIRST (after the policy gate).
 jest.mock('../collectors', () => ({
-  collectAccounts: jest.fn(async () => []),
+  collectAccounts: jest.fn(async () => ({
+    accounts: [],
+    leftOut: [],
+    total: 0,
+  })),
   collectSettings: jest.fn(async () => ({
     theme: {
       mode: 'system',
@@ -109,13 +113,15 @@ describe('BackupService.createBackup passphrase policy (TASK-30 P2-1)', () => {
 });
 
 it('counts only REKEYED records with an included mnemonic for the restore warning', async () => {
-  jest
-    .mocked(collectors.collectAccounts)
-    .mockResolvedValueOnce([
+  jest.mocked(collectors.collectAccounts).mockResolvedValueOnce({
+    accounts: [
       { type: 'rekeyed', mnemonic: 'included' },
       { type: 'rekeyed' },
       { type: 'standard', mnemonic: 'included' },
-    ] as Awaited<ReturnType<typeof collectors.collectAccounts>>);
+    ],
+    leftOut: [],
+    total: 3,
+  } as unknown as Awaited<ReturnType<typeof collectors.collectAccounts>>);
   const result = await BackupService.createBackup(
     'correct horse battery staple',
     testCapability

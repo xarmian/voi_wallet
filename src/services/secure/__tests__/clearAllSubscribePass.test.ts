@@ -3,12 +3,11 @@
 // The clearAllWallets() guard was still too late. EVERY reset path awaits
 // AccountSecureStorage.clearAll() FIRST and reaches clearAllWallets second:
 // LockScreen.performReset (:284), SecureStorageUnavailableScreen (:165),
-// backup restorers.clearAllData (:92), and keyManager (:667). That left the
-// deferred notification subscribe pass a window the length of a full
+// and keyManager (:667). That left the deferred notification subscribe pass a window the length of a full
 // secure-storage wipe in which to complete and batch-write subscriptions for
 // accounts the user was erasing.
 //
-// Guarding at this chokepoint closes it for all four callers at once, and a
+// Guarding at this chokepoint closes it for every caller at once, and a
 // fifth reset path added later inherits it rather than reintroducing the bug.
 //
 // SECURITY NOTE: no static or committed secret material in this file.

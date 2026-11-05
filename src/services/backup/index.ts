@@ -15,7 +15,10 @@ import {
   BackupInfo,
   BackupProgress,
   RestoreProgress,
+  BackupIncomplete,
+  RestoreOptions,
   BackupError,
+  BACKUP_LEFT_OUT_REASONS,
 } from './types';
 import {
   encryptBackup,
@@ -30,7 +33,13 @@ import {
   collectExperimental,
 } from './collectors';
 import type { FreshAuthCapability } from '@/services/secure/freshAuth';
-import { performFullRestore, validateRetainedKeys } from './restorers';
+import { AccountType } from '@/types/wallet';
+import {
+  performFullRestore,
+  planRestore,
+  removeOldPinForRestore,
+  validateRetainedKeys,
+} from './restorers';
 
 /**
  * Format date for filename
@@ -43,11 +52,100 @@ function formatDateForFilename(date: Date): string {
 }
 
 /**
- * Generate backup filename
+ * Generate backup filename. The name is the same for a complete and an
+ * incomplete backup: whether the file lacks keys is read from inside it, never
+ * from its name (product e7912207). No address or label goes in the name.
  */
 function generateBackupFilename(): string {
   const dateStr = formatDateForFilename(new Date());
   return `voi-wallet-${dateStr}.voibackup`;
+}
+
+const INVALID_FILE =
+  'This backup file was not used. It may be damaged, altered or from a different version of the app. If you still have the wallet it came from, make a new backup there.';
+
+/**
+ * TASK-504: the without-key flag and the incomplete list must agree, both ways.
+ * Both sit inside the encrypted payload, so a mismatch means the file was built
+ * by hand or altered. Checked on export as well, so this app can never write a
+ * file its own import refuses.
+ *
+ *  - `withoutKey` is only ever `true`, only on a standard or rekeyed record, and
+ *    a flagged record carries no phrase;
+ *  - every flagged record has exactly one list entry at its address, and every
+ *    entry has one flagged record, except `other-key-on-device`, whose account's
+ *    own key IS in the file: that entry needs a keyed (unflagged, phrase-
+ *    carrying) record at its address and no flagged record;
+ *  - every reason is one of the known ones.
+ */
+export function assertFlagsMatchList(backup: VoiBackupFile): void {
+  const refuse = (): never => {
+    throw new BackupError(INVALID_FILE, 'INVALID_FILE_FORMAT');
+  };
+  const flaggedByAddress = new Map<string, number>();
+  const keyedAddresses = new Set<string>();
+  for (const account of backup.accounts) {
+    const flag = (account as { withoutKey?: unknown }).withoutKey;
+    if (flag === undefined) {
+      if (typeof account.mnemonic === 'string' && account.mnemonic.length > 0) {
+        keyedAddresses.add(account.address);
+      }
+      continue;
+    }
+    if (
+      flag !== true ||
+      (account.type !== AccountType.STANDARD &&
+        account.type !== AccountType.REKEYED) ||
+      account.mnemonic !== undefined
+    ) {
+      refuse();
+    }
+    flaggedByAddress.set(
+      account.address,
+      (flaggedByAddress.get(account.address) ?? 0) + 1
+    );
+  }
+  const entriesByAddress = new Map<string, number>();
+  for (const entry of backup.incomplete?.leftOut ?? []) {
+    if (!BACKUP_LEFT_OUT_REASONS.includes(entry.reason)) refuse();
+    if (entry.reason === 'other-key-on-device') {
+      if (!keyedAddresses.has(entry.address)) refuse();
+      continue;
+    }
+    entriesByAddress.set(
+      entry.address,
+      (entriesByAddress.get(entry.address) ?? 0) + 1
+    );
+  }
+  if (flaggedByAddress.size !== entriesByAddress.size) refuse();
+  for (const [address, count] of flaggedByAddress) {
+    if (entriesByAddress.get(address) !== count) refuse();
+  }
+}
+
+/**
+ * The envelope and the encrypted payload must agree on whether the file is
+ * incomplete (TASK-504). The envelope version is authenticated and the list sits
+ * inside the encryption; a file where they differ was altered or built by hand,
+ * and is refused before anything is read from it.
+ */
+export function assertEnvelopeMatchesPayload(
+  encrypted: EncryptedBackupFile,
+  backup: VoiBackupFile
+): void {
+  const envelopeIncomplete = encrypted.version === 3;
+  const payload = backup.incomplete;
+  const payloadIncomplete =
+    payload !== undefined &&
+    Array.isArray(payload.leftOut) &&
+    payload.leftOut.length > 0;
+  if (payload !== undefined && !payloadIncomplete) {
+    throw new BackupError('Invalid backup structure', 'INVALID_FILE_FORMAT');
+  }
+  if (envelopeIncomplete !== payloadIncomplete) {
+    throw new BackupError(INVALID_FILE, 'INVALID_FILE_FORMAT');
+  }
+  assertFlagsMatchList(backup);
 }
 
 /**
@@ -130,7 +228,12 @@ export class BackupService {
         message: 'Collecting account data...',
       });
 
-      const accounts = await collectAccounts(cap);
+      const collected = await collectAccounts(cap);
+      const accounts = collected.accounts;
+      const incomplete: BackupIncomplete | undefined =
+        collected.leftOut.length > 0
+          ? { leftOut: collected.leftOut }
+          : undefined;
 
       this.reportProgress({
         step: 'collecting',
@@ -168,7 +271,11 @@ export class BackupService {
         settings,
         friends,
         experimental,
+        ...(incomplete ? { incomplete } : {}),
       };
+
+      // The file must satisfy the same agreement the importer checks (TASK-504).
+      assertFlagsMatchList(backup);
 
       this.reportProgress({
         step: 'encrypting',
@@ -177,7 +284,9 @@ export class BackupService {
       });
 
       // Step 6: Encrypt backup
-      const encrypted = await encryptBackup(JSON.stringify(backup), password);
+      const encrypted = await encryptBackup(JSON.stringify(backup), password, {
+        incomplete: incomplete !== undefined,
+      });
 
       this.reportProgress({
         step: 'saving',
@@ -196,7 +305,8 @@ export class BackupService {
       this.reportProgress({
         step: 'saving',
         progress: 100,
-        message: 'Backup complete!',
+        // An incomplete backup is never announced as complete (TASK-504).
+        message: incomplete ? 'Backup saved' : 'Backup complete!',
       });
 
       return {
@@ -210,6 +320,8 @@ export class BackupService {
             account.type === 'rekeyed' && account.mnemonic !== undefined
         ).length,
         createdAt: backup.createdAt,
+        totalAccountCount: collected.total,
+        ...(incomplete ? { incomplete } : {}),
       };
     } catch (error) {
       if (error instanceof BackupError) {
@@ -231,7 +343,8 @@ export class BackupService {
    */
   static async restoreBackup(
     fileUri: string,
-    password: string
+    password: string,
+    options: RestoreOptions = {}
   ): Promise<RestoreResult> {
     try {
       // Step 1: Read file
@@ -289,16 +402,27 @@ export class BackupService {
         );
       }
 
+      assertEnvelopeMatchesPayload(encrypted, backup);
       validateRetainedKeys(backup.accounts);
 
-      // Step 5: Clear existing data
-      this.reportProgress({
-        step: 'clearing',
-        progress: 50,
-        message: 'Clearing existing data...',
-      });
+      // The forgotten-PIN step (DOC-507 5.4): B first. performFullRestore then
+      // decides "fresh", sets the breadcrumb, and writes keys, in that order.
+      if (options.removeOldPin) {
+        if (options.oldPinSession) {
+          throw new BackupError(
+            'The PIN cannot be both entered and removed',
+            'RESTORE_FAILED'
+          );
+        }
+        this.reportProgress({
+          step: 'validating',
+          progress: 50,
+          message: 'Removing the old PIN...',
+        });
+        await removeOldPinForRestore(backup.accounts);
+      }
 
-      // Step 6: Restore all data
+      // Step 5: Add the file's data to this device (nothing is cleared)
       this.reportProgress({
         step: 'restoring',
         progress: 60,
@@ -309,7 +433,8 @@ export class BackupService {
         backup.accounts,
         backup.settings,
         backup.friends,
-        backup.experimental
+        backup.experimental,
+        options
       );
 
       this.reportProgress({
@@ -318,7 +443,9 @@ export class BackupService {
         message: 'Restore complete!',
       });
 
-      return result;
+      return backup.incomplete
+        ? { ...result, leftOut: backup.incomplete.leftOut }
+        : result;
     } catch (error) {
       if (error instanceof BackupError) {
         throw error;
@@ -371,6 +498,8 @@ export class BackupService {
         throw new BackupError('Backup data is corrupted', 'DECRYPTION_FAILED');
       }
 
+      assertEnvelopeMatchesPayload(encrypted, backup);
+
       // Count account types
       const accountTypes = {
         standard: 0,
@@ -383,7 +512,9 @@ export class BackupService {
       for (const account of backup.accounts) {
         switch (account.type) {
           case 'standard':
-            accountTypes.standard++;
+            // A record the file carries without its key is added as Watch Only.
+            if (account.withoutKey === true) accountTypes.watch++;
+            else accountTypes.standard++;
             break;
           case 'watch':
             accountTypes.watch++;
@@ -408,6 +539,8 @@ export class BackupService {
         hasFriends: backup.friends && backup.friends.length > 0,
         friendsCount: backup.friends?.length || 0,
         hasRemoteSignerSettings: !!backup.settings?.remoteSigner,
+        ...(backup.incomplete ? { incomplete: backup.incomplete } : {}),
+        restorePlan: planRestore(backup.accounts),
       };
     } catch (error) {
       if (error instanceof BackupError) {
