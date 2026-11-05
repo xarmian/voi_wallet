@@ -16,10 +16,11 @@
 const mockGetCurrentWallet = jest.fn();
 const mockHasWalletWithAccountsStrict = jest.fn();
 
+const mockGetAccountBalance = jest.fn(async () => ({}));
 jest.mock('@/services/network', () => ({
   NetworkService: {
     getInstance: () => ({
-      getAccountBalance: jest.fn(async () => ({})),
+      getAccountBalance: () => mockGetAccountBalance(),
       getCurrentNetworkId: () => 'voi-mainnet',
     }),
   },
@@ -101,6 +102,7 @@ beforeEach(() => {
     isLoading: false,
     lastError: null,
     walletLoadFailed: false,
+    walletLoadFailures: 0,
   } as never);
 });
 
@@ -195,10 +197,65 @@ describe('TASK-514: a failed read is not an empty wallet', () => {
     expect(store().wallet?.accounts).toHaveLength(1);
   });
 
+  it('a failed load followed by a genuine-empty load clears the failure (Get Started is allowed again)', async () => {
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockHasWalletWithAccountsStrict.mockResolvedValue(true);
+    await store().initialize();
+    expect(store().walletLoadFailed).toBe(true);
+
+    mockHasWalletWithAccountsStrict.mockResolvedValue(false);
+    await store().refresh();
+    expect(store().walletLoadFailed).toBe(false);
+    expect(store().wallet).toBeNull();
+  });
+
   it('a load that finds a wallet never probes (no extra read on the normal cold start)', async () => {
     mockGetCurrentWallet.mockResolvedValue(walletWith(['a']));
     await store().initialize();
     expect(mockHasWalletWithAccountsStrict).not.toHaveBeenCalled();
     expect(store().walletLoadFailed).toBe(false);
+  });
+});
+
+describe('TASK-514: the failure counter and what does NOT count as a failed wallet read', () => {
+  it('every failed load adds one to walletLoadFailures; a successful load leaves it alone and clears walletLoadFailed', async () => {
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockHasWalletWithAccountsStrict.mockResolvedValue(true);
+    await store().initialize();
+    expect(store().walletLoadFailures).toBe(1);
+    await store().refresh();
+    expect(store().walletLoadFailures).toBe(2);
+    expect(store().walletLoadFailed).toBe(true);
+
+    mockGetCurrentWallet.mockResolvedValue(walletWith(['a']));
+    await store().refresh();
+    expect(store().walletLoadFailed).toBe(false);
+    expect(store().walletLoadFailures).toBe(2);
+
+    // The next failure is a NEW failure: the count moves on again.
+    mockGetCurrentWallet.mockRejectedValue(new Error('again'));
+    await store().refresh();
+    expect(store().walletLoadFailures).toBe(3);
+  });
+
+  it('a failed load over an older wallet keeps that wallet in the store (and flags the failure)', async () => {
+    mockGetCurrentWallet.mockResolvedValue(walletWith(['a']));
+    await store().initialize();
+    mockGetCurrentWallet.mockResolvedValue(null);
+    mockHasWalletWithAccountsStrict.mockResolvedValue(true);
+    await store().refresh();
+    expect(store().wallet?.accounts.map((x) => x.id)).toEqual(['a']);
+    expect(store().walletLoadFailed).toBe(true);
+  });
+
+  it('a balance or network failure is never a failed wallet read', async () => {
+    mockGetCurrentWallet.mockResolvedValue(walletWith(['a']));
+    await store().initialize();
+    mockGetAccountBalance.mockRejectedValue(new Error('network down'));
+
+    await store().loadAccountBalance('a', true);
+
+    expect(store().walletLoadFailed).toBe(false);
+    expect(store().walletLoadFailures).toBe(0);
   });
 });

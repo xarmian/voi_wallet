@@ -1,4 +1,5 @@
 import HomeEmptyState from '@/components/wallet/HomeEmptyState';
+import WalletLoadFailedBanner from '@/components/wallet/WalletLoadFailedBanner';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -382,6 +383,9 @@ export default function HomeScreen() {
 
   const initialize = useWalletStore((state) => state.initialize);
   const walletLoadFailed = useWalletStore((state) => state.walletLoadFailed);
+  const walletLoadFailures = useWalletStore(
+    (state) => state.walletLoadFailures
+  );
   // Wallet-store hydration flag (F-48, TASK-182). This is the SAME signal the
   // splash readiness owner (AppStack) gates on, so the "Loading wallet..."
   // placeholder and the splash hide stay in lockstep. Once the store is
@@ -1721,6 +1725,15 @@ export default function HomeScreen() {
               )}
 
               <ControlledByNotice />
+
+              {/* A failed wallet read while accounts are on screen (TASK-514) */}
+              <WalletLoadFailedBanner
+                walletLoadFailed={walletLoadFailed}
+                failureCount={walletLoadFailures}
+                onTryAgain={() => {
+                  void useWalletStore.getState().refresh();
+                }}
+              />
 
               {/* Claimable Tokens Banner */}
               {visibleClaimableCount > 0 && (
