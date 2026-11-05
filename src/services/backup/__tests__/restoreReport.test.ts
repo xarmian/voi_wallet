@@ -182,3 +182,42 @@ describe('restore report closing lines', () => {
     );
   });
 });
+
+describe('TASK-504: an incomplete file adds "Not in this backup"', () => {
+  const leftOut = [
+    { address: address(), label: 'Gone', reason: 'key-unreadable' as const },
+    { address: address(), reason: 'no-key-on-device' as const },
+  ];
+
+  it('names each left-out account with its address and reason', () => {
+    const report = buildRestoreReport(
+      result([rec('added')], { leftOut, settingsRestored: false })
+    );
+    expect(report.notInBackup?.title).toBe('Not in this backup');
+    expect(report.notInBackup?.rows.map((r) => [r.label, r.text])).toEqual([
+      ['Gone', "Couldn't read this key"],
+      ['Account', 'No key on this device'],
+    ]);
+    expect(
+      report.notInBackup?.rows.every((r) => r.shortAddress.length > 0)
+    ).toBe(true);
+  });
+
+  it('the section comes before the closing line, which stays last', () => {
+    const report = buildRestoreReport(
+      result([rec('added')], { leftOut, settingsRestored: false })
+    );
+    const text = formatRestoreReport(report);
+    expect(text).toContain('Not in this backup');
+    expect(text.indexOf('Not in this backup')).toBeLessThan(
+      text.indexOf(NOT_FRESH_LINE)
+    );
+    expect(text.endsWith(NOT_FRESH_LINE)).toBe(true);
+  });
+
+  it('a complete file has no such section', () => {
+    const report = buildRestoreReport(result([rec('added')]));
+    expect(report.notInBackup).toBeUndefined();
+    expect(formatRestoreReport(report)).not.toContain('Not in this backup');
+  });
+});

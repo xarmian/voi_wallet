@@ -9,6 +9,7 @@
  */
 import { formatAddress } from '@/utils/address';
 import { AccountType } from '@/types/wallet';
+import { LEFT_OUT_REASON_TEXT } from './backupReport';
 import type {
   RestoreRecordOutcome,
   RestoreRecordResult,
@@ -100,11 +101,15 @@ export interface RestoreReportRow {
   text: string;
 }
 
+export const NOT_IN_BACKUP_TITLE = 'Not in this backup';
+
 export interface RestoreReport {
   title: string;
   summary: string;
   /** Every record that was not simply added, so an exception is never hidden */
   rows: RestoreReportRow[];
+  /** An incomplete file's left-out accounts; absent for a complete file */
+  notInBackup?: { title: string; rows: RestoreReportRow[] };
   /** Lines under the rows; the accounts-only line, when it applies, is last */
   notes: string[];
 }
@@ -164,7 +169,26 @@ export function buildRestoreReport(result: RestoreResult): RestoreReport {
     notes.push(NOT_FRESH_LINE);
   }
 
-  return { title, summary, rows, notes };
+  const leftOut = result.leftOut ?? [];
+  const notInBackup =
+    leftOut.length > 0
+      ? {
+          title: NOT_IN_BACKUP_TITLE,
+          rows: leftOut.map((a) => ({
+            label: a.label || 'Account',
+            shortAddress: formatAddress(a.address),
+            text: LEFT_OUT_REASON_TEXT[a.reason],
+          })),
+        }
+      : undefined;
+
+  return {
+    title,
+    summary,
+    rows,
+    ...(notInBackup ? { notInBackup } : {}),
+    notes,
+  };
 }
 
 /** The report as one block of text, for an alert. */
@@ -175,6 +199,14 @@ export function formatRestoreReport(report: RestoreReport): string {
       report.rows
         .map((r) => `• ${r.label} (${r.shortAddress}): ${r.text}`)
         .join('\n')
+    );
+  }
+  if (report.notInBackup) {
+    parts.push(
+      `${report.notInBackup.title}\n` +
+        report.notInBackup.rows
+          .map((r) => `• ${r.label} (${r.shortAddress}): ${r.text}`)
+          .join('\n')
     );
   }
   if (report.notes.length > 0) {

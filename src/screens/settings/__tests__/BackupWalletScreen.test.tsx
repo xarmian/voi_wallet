@@ -40,6 +40,7 @@ jest.mock('@/components/backup/PasswordInputModal', () => {
 jest.mock('@/services/backup', () => ({
   BackupService: {
     createBackup: jest.fn(),
+    shareBackup: jest.fn(async () => {}),
     setProgressCallback: jest.fn(),
     clearProgressCallback: jest.fn(),
   },
@@ -231,4 +232,27 @@ it("What's Included counts airgap accounts, so the rows add up to the wallet", a
   expect(
     view.getByText('Metadata only - the keys stay on the signer device')
   ).toBeTruthy();
+});
+
+it('an incomplete backup stays "Backup incomplete" after it is saved: saving never turns it into a success', async () => {
+  jest.mocked(BackupService.createBackup).mockResolvedValue({
+    filename: 'voi-wallet-2026-11-05-incomplete.voibackup',
+    fileUri: 'file:///x',
+    fileContent: '{}',
+    size: 100,
+    accountCount: 1,
+    totalAccountCount: 2,
+    incomplete: {
+      leftOut: [
+        { address: 'B'.repeat(58), label: 'X', reason: 'no-key-on-device' },
+      ],
+    },
+  } as unknown as BackupResult);
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  await fireEvent.press(view.getByText(/Export Backup|Save to Device/));
+  expect(BackupService.shareBackup).toHaveBeenCalled();
+  expect(view.getAllByText('Backup incomplete').length).toBeGreaterThan(0);
+  expect(view.queryByText('Backup Saved!')).toBeNull();
 });
