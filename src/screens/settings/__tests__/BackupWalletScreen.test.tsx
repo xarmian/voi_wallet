@@ -7,8 +7,9 @@ import { BackupService, BackupResult } from '@/services/backup';
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: jest.fn() }),
 }));
+let mockAccounts: { type: string }[] = [{ type: 'rekeyed' }];
 jest.mock('@/store/walletStore', () => ({
-  useAccounts: () => [{ type: 'rekeyed' }],
+  useAccounts: () => mockAccounts,
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({
   useThemedStyles: () => ({}),
@@ -73,6 +74,7 @@ jest.mock('@/services/secure/freshAuth', () => {
 });
 
 beforeEach(() => {
+  mockAccounts = [{ type: 'rekeyed' }];
   mockAuthFailure = null;
   mockAuthCalls.length = 0;
   jest.mocked(BackupService.createBackup).mockClear();
@@ -165,3 +167,68 @@ it.each([0, 1, 2])(
     alert.mockRestore();
   }
 );
+
+// TASK-504: an incomplete backup is never a success state and names every
+// account it left out, with its address.
+it('an incomplete backup reads "Backup incomplete", never created or saved, and lists each left-out account', async () => {
+  jest.mocked(BackupService.createBackup).mockResolvedValue({
+    filename: 'voi-wallet-2026-11-05-incomplete.voibackup',
+    fileUri: 'file:///x',
+    fileContent: '{}',
+    size: 100,
+    accountCount: 3,
+    totalAccountCount: 4,
+    incomplete: {
+      leftOut: [
+        {
+          address: 'A'.repeat(58),
+          label: 'Imported Account 10/9/2025',
+          reason: 'key-unreadable',
+        },
+      ],
+    },
+  } as unknown as BackupResult);
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText('Confirm password'));
+
+  expect(view.getAllByText('Backup incomplete').length).toBeGreaterThan(0);
+  expect(
+    view.getByText("Saved 3 of 4 accounts. These weren't included:")
+  ).toBeTruthy();
+  expect(view.getByText(/Imported Account 10\/9\/2025 \(/)).toBeTruthy();
+  expect(view.getByText("Couldn't read this key")).toBeTruthy();
+  expect(view.getByText(/Keep this wallet installed/)).toBeTruthy();
+  expect(view.queryByText('Backup Created')).toBeNull();
+  expect(view.queryByText('Backup Saved!')).toBeNull();
+  expect(view.queryByText('Backup Ready')).toBeNull();
+});
+
+it("a complete backup keeps today's wording", async () => {
+  jest.mocked(BackupService.createBackup).mockResolvedValue({
+    filename: 'voi-wallet-2026-11-05.voibackup',
+    fileUri: 'file:///x',
+    fileContent: '{}',
+    size: 100,
+    accountCount: 1,
+    totalAccountCount: 1,
+  } as unknown as BackupResult);
+  const view = await render(<BackupWalletScreen />);
+  await fireEvent.press(view.getByText('Create Backup'));
+  await fireEvent.press(view.getByText('Confirm password'));
+  expect(view.getByText('Backup Created')).toBeTruthy();
+  expect(view.queryByText('Backup incomplete')).toBeNull();
+});
+
+it("What's Included counts airgap accounts, so the rows add up to the wallet", async () => {
+  mockAccounts = [
+    { type: 'standard' },
+    { type: 'remote_signer' },
+    { type: 'remote_signer' },
+  ];
+  const view = await render(<BackupWalletScreen />);
+  expect(view.getByText('Airgap Accounts')).toBeTruthy();
+  expect(
+    view.getByText('Metadata only - the keys stay on the signer device')
+  ).toBeTruthy();
+});

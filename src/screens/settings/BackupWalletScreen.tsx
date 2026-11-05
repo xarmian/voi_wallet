@@ -26,6 +26,7 @@ import {
   BackupError,
 } from '@/services/backup';
 import { FreshAuthError, withFreshAuth } from '@/services/secure/freshAuth';
+import { buildBackupReport } from '@/services/backup/backupReport';
 
 export default function BackupWalletScreen() {
   const navigation = useNavigation();
@@ -51,6 +52,9 @@ export default function BackupWalletScreen() {
     (a) => a.type === AccountType.REKEYED
   );
   const ledgerAccounts = accounts.filter((a) => a.type === AccountType.LEDGER);
+  const airgapAccounts = accounts.filter(
+    (a) => a.type === AccountType.REMOTE_SIGNER
+  );
 
   // Set up progress callback
   useEffect(() => {
@@ -226,13 +230,16 @@ export default function BackupWalletScreen() {
     }
   }, [backupSaved, backupResult, navigation]);
 
-  // Success state - backup is ready to save
+  // Backup is ready to save. An incomplete one is never a success state.
   if (backupResult) {
+    const report = buildBackupReport(backupResult);
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.header}>
           <View style={styles.placeholder} />
-          <Text style={styles.headerTitle}>Backup Ready</Text>
+          <Text style={styles.headerTitle}>
+            {report.incomplete ? report.title : 'Backup Ready'}
+          </Text>
           <View style={styles.placeholder} />
         </View>
 
@@ -246,26 +253,61 @@ export default function BackupWalletScreen() {
               style={[
                 styles.infoIconContainer,
                 {
-                  backgroundColor: backupSaved
-                    ? `${colors.success}15`
-                    : `${colors.primary}15`,
+                  backgroundColor: report.incomplete
+                    ? `${colors.warning}15`
+                    : backupSaved
+                      ? `${colors.success}15`
+                      : `${colors.primary}15`,
                 },
               ]}
             >
               <Ionicons
-                name={backupSaved ? 'checkmark-circle' : 'document'}
+                name={
+                  report.incomplete
+                    ? 'warning'
+                    : backupSaved
+                      ? 'checkmark-circle'
+                      : 'document'
+                }
                 size={32}
-                color={backupSaved ? colors.success : colors.primary}
+                color={
+                  report.incomplete
+                    ? colors.warning
+                    : backupSaved
+                      ? colors.success
+                      : colors.primary
+                }
               />
             </View>
             <Text style={styles.infoTitle}>
-              {backupSaved ? 'Backup Saved!' : 'Backup Created'}
+              {report.incomplete
+                ? report.title
+                : backupSaved
+                  ? 'Backup Saved!'
+                  : 'Backup Created'}
             </Text>
             <Text style={styles.infoText}>
-              {backupSaved
-                ? 'Your backup has been saved. Store it in a safe place.'
-                : 'Your encrypted backup is ready. Save it to your device or share it to cloud storage.'}
+              {report.incomplete
+                ? report.summary
+                : backupSaved
+                  ? 'Your backup has been saved. Store it in a safe place.'
+                  : 'Your encrypted backup is ready. Save it to your device or share it to cloud storage.'}
             </Text>
+            {report.incomplete &&
+              report.rows.map((row, i) => (
+                <View
+                  key={`${row.shortAddress}-${i}`}
+                  style={styles.leftOutRow}
+                >
+                  <Text style={styles.leftOutLabel}>
+                    {row.label} ({row.shortAddress})
+                  </Text>
+                  <Text style={styles.infoText}>{row.reason}</Text>
+                </View>
+              ))}
+            {report.incomplete && report.advice && (
+              <Text style={styles.infoText}>{report.advice}</Text>
+            )}
           </GlassCard>
 
           {/* Backup Details */}
@@ -455,6 +497,19 @@ export default function BackupWalletScreen() {
           <View style={styles.divider} />
 
           <View style={styles.includeRow}>
+            <Ionicons name="qr-code" size={20} color={colors.primary} />
+            <Text style={styles.includeLabel}>Airgap Accounts</Text>
+            <Text style={styles.includeValue}>{airgapAccounts.length}</Text>
+          </View>
+          {airgapAccounts.length > 0 && (
+            <Text style={styles.includeNote}>
+              Metadata only - the keys stay on the signer device
+            </Text>
+          )}
+
+          <View style={styles.divider} />
+
+          <View style={styles.includeRow}>
             <Ionicons name="settings" size={20} color={colors.primary} />
             <Text style={styles.includeLabel}>Settings & Preferences</Text>
             <Ionicons
@@ -604,6 +659,14 @@ const createStyles = (theme: Theme) =>
       fontSize: 15,
       fontWeight: '600',
       color: theme.colors.primary,
+    },
+    leftOutRow: {
+      marginTop: theme.spacing.sm,
+    },
+    leftOutLabel: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: theme.colors.text,
     },
     includeNote: {
       fontSize: 12,
