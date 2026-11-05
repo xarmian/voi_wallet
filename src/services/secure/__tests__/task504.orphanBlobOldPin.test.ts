@@ -175,4 +175,31 @@ describe('TASK-504 section 5: orphan blob and the old PIN', () => {
     // The check wrote nothing.
     expect(mockPlatform.__secure.get(slot)).toBe(before);
   });
+  it('the full wipe (the recovery screen Reset path) leaves unlisted slots in place', async () => {
+    const A = makeAccount('acct-listed');
+    const O = makeAccount('acct-unlisted');
+    for (const x of [A, O]) {
+      await AccountSecureStorage.storeAccountForCreation(
+        x.meta,
+        x.sk,
+        AccountSecureStorage.getResetGeneration()
+      );
+    }
+    await AccountSecureStorage.setupPin(OLD_PIN, 'pin');
+    const unlistedSlot = 'voi_account_secret_acct-unlisted';
+    const before = mockPlatform.__secure.get(unlistedSlot);
+    expect(before).toBeDefined();
+    // Make the second account unlisted and unjournaled, as after an iOS
+    // reinstall (app storage, including the pending-create journal, is gone),
+    // while the first stays listed.
+    mockPlatform.__kv.clear();
+    mockPlatform.__kv.set('voi_account_list', JSON.stringify(['acct-listed']));
+
+    await AccountSecureStorage.clearAll();
+
+    expect(mockPlatform.__secure.has('voi_account_secret_acct-listed')).toBe(
+      false
+    );
+    expect(mockPlatform.__secure.get(unlistedSlot)).toBe(before);
+  });
 });
