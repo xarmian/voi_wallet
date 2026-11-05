@@ -7,6 +7,7 @@ const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
 const withImageColorsJvmTarget = require('./plugins/withImageColorsJvmTarget');
+const withExpoUpdatesEmbeddedAssetWins = require('./plugins/withExpoUpdatesEmbeddedAssetWins');
 
 // One source of truth for the marketing version (PLAN-375): package.json.
 // runtimeVersion uses the appVersion policy, so changing package.json's
@@ -302,6 +303,10 @@ export default {
       // line, remove it — the Nitro module still autolinks without the plugin.
       "react-native-quick-crypto",
       withImageColorsJvmTarget,
+      // TASK-503: an embedded android_res asset wins over a stale expo-updates
+      // DB row (blank icons after an in-place update from a build whose
+      // node_modules layout differed). Throws if expo-updates changes.
+      withExpoUpdatesEmbeddedAssetWins,
     ]
   }
 };
