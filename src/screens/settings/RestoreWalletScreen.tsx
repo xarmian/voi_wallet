@@ -81,6 +81,9 @@ export default function RestoreWalletScreen() {
   >(isOnboarding ? 'checking' : 'none');
   const [showForgottenConsent, setShowForgottenConsent] = useState(false);
   const oldPinEpoch = useRef<number | null>(null);
+  // Bumped whenever the screen is left or the app leaves the foreground. A PIN
+  // check that started before the bump must not fill the vault when it ends.
+  const oldPinGeneration = useRef(0);
   const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const endOldPinSession = useCallback(
@@ -125,10 +128,14 @@ export default function RestoreWalletScreen() {
   // or the session times out; the step returns.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') endOldPinSession('needed');
+      if (state !== 'active') {
+        oldPinGeneration.current += 1;
+        endOldPinSession('needed');
+      }
     });
     return () => {
       sub.remove();
+      oldPinGeneration.current += 1;
       endOldPinSession(null);
     };
   }, [endOldPinSession]);
@@ -452,7 +459,13 @@ export default function RestoreWalletScreen() {
 
         {oldPin === 'needed' && (
           <OldPinStep
-            unlock={unlockForRestore}
+            unlock={(secret) => {
+              const generation = oldPinGeneration.current;
+              return unlockForRestore(
+                secret,
+                () => oldPinGeneration.current === generation
+              );
+            }}
             readLockedUntil={readLockedUntil}
             onVerified={handleOldPinVerified}
             onForgotten={handleForgotten}

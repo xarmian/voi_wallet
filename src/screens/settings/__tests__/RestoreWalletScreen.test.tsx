@@ -372,6 +372,42 @@ describe('restore screen: the old-PIN step (onboarding, the device still has a P
       expect(mockClearRestoreVault).toHaveBeenCalledTimes(1);
     });
 
+    describe('a PIN check still running when the screen is left', () => {
+      async function pending() {
+        let isCurrent: () => boolean = () => false;
+        mockUnlockForRestore.mockImplementation(
+          (_secret: string, current: () => boolean) => {
+            isCurrent = current;
+            return new Promise(() => {});
+          }
+        );
+        const view = await openOnboardingWithPin();
+        await view.findByText(NORMAL);
+        await fireEvent.changeText(view.getByLabelText('Old PIN'), '123456');
+        // The press handler awaits the check, which never settles here.
+        void fireEvent.press(view.getByText('Continue'));
+        await waitFor(() => expect(mockUnlockForRestore).toHaveBeenCalled());
+        return { view, current: () => isCurrent() };
+      }
+
+      it('is still current while the screen stays in the foreground', async () => {
+        const { current } = await pending();
+        expect(current()).toBe(true);
+      });
+
+      it('is no longer current after the app goes to the background', async () => {
+        const { current } = await pending();
+        handler('background');
+        expect(current()).toBe(false);
+      });
+
+      it('is no longer current after the screen is left', async () => {
+        const { view, current } = await pending();
+        await view.unmount();
+        expect(current()).toBe(false);
+      });
+    });
+
     it('a background event before any PIN is verified clears nothing and changes nothing', async () => {
       const view = await openOnboardingWithPin();
       await view.findByText(NORMAL);

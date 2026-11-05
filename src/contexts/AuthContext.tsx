@@ -116,7 +116,10 @@ export interface AuthContextType {
    * state, and it reports the vault epoch the verify produced so the restore can
    * prove the vault still holds what the verify put in it.
    */
-  unlockForRestore: (secret: string) => Promise<RestoreUnlockResult>;
+  unlockForRestore: (
+    secret: string,
+    isCurrent?: () => boolean
+  ) => Promise<RestoreUnlockResult>;
   /** Empty the session vault: the old-PIN restore calls it when the user leaves,
    *  cancels, finishes, backgrounds the app or the lock timeout fires. */
   clearRestoreVault: () => void;
@@ -125,7 +128,10 @@ export interface AuthContextType {
 export type RestoreUnlockResult =
   | { status: 'verified'; epoch: number }
   | { status: 'invalid' }
-  | { status: 'wipe_pending' };
+  | { status: 'wipe_pending' }
+  /** The screen left or the app backgrounded while the PIN was being checked:
+   *  nothing was put in the vault. */
+  | { status: 'cancelled' };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -928,7 +934,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const unlockForRestore = async (
-    secret: string
+    secret: string,
+    isCurrent: () => boolean = () => true
   ): Promise<RestoreUnlockResult> => {
     try {
       unlockRefusalRef.current = null;
@@ -940,6 +947,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!isValid) return { status: 'invalid' };
       const source =
         (await AccountSecureStorage.getCredentialSource()) ?? 'pin';
+      // The verify is asynchronous. If the screen was left or the app went to
+      // the background meanwhile, its cleanup found no session to end, so the
+      // vault must not be filled now. No await sits between this check and the
+      // set.
+      if (!isCurrent()) return { status: 'cancelled' };
       SessionKeyVault.set(secret, source);
       return { status: 'verified', epoch: SessionKeyVault.currentEpoch() };
     } catch (error) {

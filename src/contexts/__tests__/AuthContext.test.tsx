@@ -1048,6 +1048,22 @@ describe('AuthContext — old-PIN verify for a restore (TASK-504)', () => {
     expect(result.current.authState.sessionId).toBe(before.sessionId);
   });
 
+  it('a check that ends after the screen was left fills nothing and says cancelled', async () => {
+    const { result } = await mountAuth();
+    let current = true;
+    let outcome: unknown;
+    mockVerifyPin.mockImplementationOnce(async () => {
+      // The screen is left while the PIN is being checked.
+      current = false;
+      return true;
+    });
+    await act(async () => {
+      outcome = await result.current.unlockForRestore(TEST_PIN, () => current);
+    });
+    expect(outcome).toEqual({ status: 'cancelled' });
+    expect(mockVaultSet).not.toHaveBeenCalled();
+  });
+
   it('a wrong PIN fills nothing', async () => {
     mockVerifyPin.mockResolvedValue(false);
     const { result } = await mountAuth();
