@@ -147,6 +147,15 @@ function journalIds(): string[] {
   return raw ? Object.keys(JSON.parse(raw) as Record<string, string>) : [];
 }
 
+/** Everything outside the secret slots that names the id, in either store:
+ *  its metadata record and its account-list entry. */
+function leftovers(id: string): string[] {
+  return [...mockPlatform.__kv.entries(), ...mockPlatform.__secure.entries()]
+    .filter(([k]) => !k.startsWith(SLOT_PREFIX))
+    .filter(([k, v]) => k.includes(id) || v.includes(id))
+    .map(([k]) => k);
+}
+
 async function ids(): Promise<string[]> {
   const wallet = await MultiAccountWalletService.getCurrentWallet();
   return (wallet?.accounts ?? []).map((a) => a.id);
@@ -196,6 +205,7 @@ describe('TASK-504 5.4 Decision: a typed stop between records leaves nothing of 
     expect(mockPlatform.__secure.has(`${SLOT_PREFIX}new-2`)).toBe(false);
     expect(journalIds()).toEqual([]);
     expect(await ids()).toEqual([]);
+    expect(leftovers(ORPHAN_ID)).toEqual([]);
   });
 
   it('stop after a key-matches add: new slots deleted, journal empty, the matched slot and the old slots byte-identical', async () => {
@@ -224,6 +234,7 @@ describe('TASK-504 5.4 Decision: a typed stop between records leaves nothing of 
     expect(mockPlatform.__secure.has(`${SLOT_PREFIX}new-2`)).toBe(false);
     expect(journalIds()).toEqual([]);
     expect(await ids()).toEqual([]);
+    expect(leftovers(ORPHAN_ID)).toEqual([]);
   });
 
   it('the stop is typed: the same restore with the vault unchanged completes and lists every record', async () => {
