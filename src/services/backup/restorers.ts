@@ -509,6 +509,14 @@ export async function restoreAccounts(
           );
           record.outcome = report.outcome;
           if (report.deviceType) record.deviceType = report.deviceType;
+          if (
+            report.outcome === 'device-keyless' ||
+            report.outcome === 'device-key-unreadable'
+          ) {
+            record.deviceEntries = deviceAccounts.filter(
+              (a) => a.address === address
+            ).length;
+          }
         }
         counts.records.push(record);
         continue;

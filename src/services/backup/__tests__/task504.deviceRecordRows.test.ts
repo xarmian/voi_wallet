@@ -86,7 +86,7 @@ import {
   KEY_PROBLEM_TEXT,
   KEY_UNREADABLE_TEXT,
   OUTCOME_TEXT,
-  REMOVE_ADVICE_SHOWN,
+  REMOVE_ADVICE,
   buildRestoreReport,
   keylessDeviceText,
 } from '../restoreReport';
@@ -202,11 +202,8 @@ describe('TASK-504: rows for a record the device already has, the file holds its
     const row = await restoreOne(file);
 
     expect(row.outcome).toBe('device-key-unreadable');
-    expect(OUTCOME_TEXT['device-key-unreadable']).toBe(
-      REMOVE_ADVICE_SHOWN
-        ? `${KEY_UNREADABLE_TEXT} To use it, remove this account from the wallet, then restore this backup again.`
-        : KEY_UNREADABLE_TEXT
-    );
+    expect(row.deviceEntries).toBe(1);
+    expect(OUTCOME_TEXT['device-key-unreadable']).toBe(KEY_UNREADABLE_TEXT);
   });
 
   it('the same id as the device record reads the same way', async () => {
@@ -304,10 +301,12 @@ describe('TASK-504: rows for a record the device already has, the file holds its
       expect(row.deviceType).toBe(type);
       expect(slotRead).not.toHaveBeenCalled();
       expect(secretRead).not.toHaveBeenCalled();
-      expect(keylessDeviceText(type)).toBe(
-        REMOVE_ADVICE_SHOWN
-          ? `On this device as ${name}. The key in this backup wasn't added. To use it, remove this account from the wallet, then restore this backup again.`
-          : `On this device as ${name}. The key in this backup wasn't added.`
+      expect(row.deviceEntries).toBe(1);
+      expect(keylessDeviceText(type, 1)).toBe(
+        `On this device as ${name}. The key in this backup wasn't added. To use it, remove this account from the wallet, then restore this backup again.`
+      );
+      expect(keylessDeviceText(type, 2)).toBe(
+        `On this device as ${name}. The key in this backup wasn't added.`
       );
     }
   );
@@ -354,7 +353,9 @@ describe('TASK-504: rows for a record the device already has, the file holds its
 
     it('every entry empty: the empty row', async () => {
       const file = await twoEntries('empty');
-      expect((await restoreOne(file)).outcome).toBe('device-key-unreadable');
+      const row = await restoreOne(file);
+      expect(row.outcome).toBe('device-key-unreadable');
+      expect(row.deviceEntries).toBe(2);
     });
   });
 });
@@ -471,16 +472,46 @@ describe('TASK-504: the report text', () => {
     ]);
   });
 
-  it('the remove advice is off until the removal checks are shown', () => {
-    expect(REMOVE_ADVICE_SHOWN).toBe(false);
-    expect(OUTCOME_TEXT['device-key-unreadable']).toBe(
-      "On this device, but its key can't be read here. This backup has the key."
+  it('the remove advice is plain code: shown only when the device holds exactly one record at the address', () => {
+    const rowText = (
+      outcome:
+        'device-key-unreadable' | 'device-keyless' | 'device-key-problem',
+      deviceEntries?: number
+    ) =>
+      buildRestoreReport(
+        result([
+          {
+            id: 'a',
+            address: algosdk.generateAccount().addr.toString(),
+            outcome,
+            ...(outcome === 'device-keyless'
+              ? { deviceType: AccountType.WATCH }
+              : {}),
+            ...(deviceEntries !== undefined ? { deviceEntries } : {}),
+          },
+        ])
+      ).rows[0].text;
+
+    expect(rowText('device-key-unreadable', 1)).toBe(
+      `${KEY_UNREADABLE_TEXT} ${REMOVE_ADVICE}`
     );
+    expect(rowText('device-keyless', 1)).toBe(
+      `${keylessDeviceText(AccountType.WATCH)} ${REMOVE_ADVICE}`
+    );
+    // Duplicates, or a count that is not known: the row ends at its first
+    // sentences.
+    for (const entries of [2, 3, undefined]) {
+      expect(rowText('device-key-unreadable', entries)).toBe(
+        KEY_UNREADABLE_TEXT
+      );
+      expect(rowText('device-keyless', entries)).toBe(
+        keylessDeviceText(AccountType.WATCH)
+      );
+    }
+    // The problem row never carries it.
+    expect(rowText('device-key-problem', 1)).toBe(KEY_PROBLEM_TEXT);
     expect(OUTCOME_TEXT['device-key-problem']).toBe(
       "On this device, but its key can't be read here. There may be a problem with the stored key. This backup has the key."
-    );
-    expect(keylessDeviceText(AccountType.WATCH)).toBe(
-      "On this device as Watch Only. The key in this backup wasn't added."
     );
   });
 });

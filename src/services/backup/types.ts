@@ -441,6 +441,13 @@ export interface RestoreRecordResult {
   /** The type of the key-less device record, for `device-keyless` only. */
   deviceType?:
     AccountType.WATCH | AccountType.LEDGER | AccountType.REMOTE_SIGNER;
+  /**
+   * How many device records share the address, for `device-keyless` and
+   * `device-key-unreadable` only. The advice to remove the account and restore
+   * again is true only when this is 1: with duplicates (TASK-423) removing one
+   * entry leaves the row in place.
+   */
+  deviceEntries?: number;
 }
 
 /**

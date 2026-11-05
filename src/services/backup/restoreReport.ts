@@ -28,18 +28,18 @@ export const PAIRINGS_LINE =
   "Airgap signer pairings in this backup weren't restored. To sign with one, pair it again.";
 
 /**
- * The advice to remove an account and restore again. OFF until the dev lead's
- * removal checks are shown (cb78f6f1 item 2: removal by id with duplicates, the
- * classifyKeyHolding loop, and last-account removal not reaching a reset, with
- * the key coming back through the old-PIN screen). With it off, the two rows
- * that carry it end at their first sentences; the rows stay either way.
+ * The advice to remove an account and restore again. True only when the device
+ * holds exactly one record at the address: removing it by id and restoring again
+ * gets the key back (shown in task504.removeAdvice.test.ts, including the last
+ * account, a retained-key REKEYED record and the key-less types). With duplicates
+ * at one address (TASK-423) removing one entry leaves the row in place, so the
+ * row ends at its first sentences.
  */
-export const REMOVE_ADVICE_SHOWN = false;
 export const REMOVE_ADVICE =
   'To use it, remove this account from the wallet, then restore this backup again.';
 
-function withAdvice(text: string): string {
-  return REMOVE_ADVICE_SHOWN ? `${text} ${REMOVE_ADVICE}` : text;
+function withAdvice(text: string, deviceEntries: number | undefined): string {
+  return deviceEntries === 1 ? `${text} ${REMOVE_ADVICE}` : text;
 }
 
 export const KEY_UNREADABLE_TEXT =
@@ -54,21 +54,22 @@ const KEYLESS_TYPE_NAME = {
 } as const;
 
 export function keylessDeviceText(
-  deviceType: keyof typeof KEYLESS_TYPE_NAME
+  deviceType: keyof typeof KEYLESS_TYPE_NAME,
+  deviceEntries?: number
 ): string {
   return withAdvice(
-    `On this device as ${KEYLESS_TYPE_NAME[deviceType]}. The key in this backup wasn't added.`
+    `On this device as ${KEYLESS_TYPE_NAME[deviceType]}. The key in this backup wasn't added.`,
+    deviceEntries
   );
 }
 
 export const OUTCOME_TEXT: Record<RestoreRecordOutcome, string> = {
-  'device-key-unreadable': withAdvice(KEY_UNREADABLE_TEXT),
+  'device-key-unreadable': KEY_UNREADABLE_TEXT,
   'device-key-problem': KEY_PROBLEM_TEXT,
   // The text depends on the device record's type: see keylessDeviceText. This
   // entry is the type-less fallback and is not shown when a type is known.
-  'device-keyless': withAdvice(
-    "On this device without a key. The key in this backup wasn't added."
-  ),
+  'device-keyless':
+    "On this device without a key. The key in this backup wasn't added.",
   added: 'Added',
   'added-in-place': 'Added. Its key was already on this phone.',
   'added-new-id':
@@ -115,13 +116,20 @@ export interface RestoreReport {
 }
 
 function rowFor(record: RestoreRecordResult): RestoreReportRow {
+  let text: string;
+  if (record.outcome === 'device-keyless') {
+    text = record.deviceType
+      ? keylessDeviceText(record.deviceType, record.deviceEntries)
+      : withAdvice(OUTCOME_TEXT[record.outcome], record.deviceEntries);
+  } else if (record.outcome === 'device-key-unreadable') {
+    text = withAdvice(OUTCOME_TEXT[record.outcome], record.deviceEntries);
+  } else {
+    text = OUTCOME_TEXT[record.outcome];
+  }
   return {
     label: record.label || 'Account',
     shortAddress: formatAddress(record.address),
-    text:
-      record.outcome === 'device-keyless' && record.deviceType
-        ? keylessDeviceText(record.deviceType)
-        : OUTCOME_TEXT[record.outcome],
+    text,
   };
 }
 
