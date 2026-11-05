@@ -271,6 +271,8 @@ describe('TASK-504 4.1 items 8 and 9 on a flagged record', () => {
 
     expect(result.records[0].outcome).toBe('added-new-id');
     expect(result.records[0].withoutKey).toBe('watch-only');
+    // Stored as Watch Only under a fresh id, and counted as Watch Only.
+    expect([result.standard, result.watch]).toEqual([0, 1]);
     const accounts = await deviceAccounts();
     expect(accounts.map((a) => a.id)).not.toContain('orphan-1');
     expect(accounts[0].type).toBe(AccountType.WATCH);
@@ -309,6 +311,8 @@ describe('TASK-504 4.1 items 8 and 9 on a flagged record', () => {
     const [stored] = await deviceAccounts();
     expect(stored.id).toBe('orphan-1');
     expect(stored.type).toBe(AccountType.STANDARD);
+    // It came back as the working standard account it was, and is counted so.
+    expect([result.standard, result.watch]).toEqual([1, 0]);
     expect(storedType('orphan-1')).toBe('standard');
     expect(mockPlatform.__secure.get(ORPHAN_SLOT)).toBe(slotBefore);
     const key = await AccountSecureStorage.getPrivateKey('orphan-1');
