@@ -277,6 +277,12 @@ interface WalletState {
    * with Try again when this is set, and Get Started only when it is not.
    */
   walletLoadFailed: boolean;
+  /**
+   * TASK-514: how many loads have failed in this session. Each failed load adds
+   * one, so a notice the user dismissed can tell a NEW failure from the one they
+   * already saw. A successful load clears walletLoadFailed but not the count.
+   */
+  walletLoadFailures: number;
 
   // Account-specific UI states
   accountStates: Record<string, AccountUIState>;
@@ -722,6 +728,7 @@ export const useWalletStore = create<WalletState>()(
     isLoading: false,
     lastError: null,
     walletLoadFailed: false,
+    walletLoadFailures: 0,
     accountStates: {},
     tokenMetadataCache: {},
     pendingTokenRequests: new Set(),
@@ -888,7 +895,13 @@ export const useWalletStore = create<WalletState>()(
           } catch {
             loadFailed = true;
           }
-          set({ isInitialized: true, walletLoadFailed: loadFailed });
+          set({
+            isInitialized: true,
+            walletLoadFailed: loadFailed,
+            ...(loadFailed
+              ? { walletLoadFailures: get().walletLoadFailures + 1 }
+              : {}),
+          });
         }
       } catch (error) {
         set({
@@ -899,6 +912,7 @@ export const useWalletStore = create<WalletState>()(
           isInitialized: true,
           // An exception during a load is not "no wallet" either.
           walletLoadFailed: true,
+          walletLoadFailures: get().walletLoadFailures + 1,
         });
       } finally {
         set({ isLoading: false });
