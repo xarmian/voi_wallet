@@ -45,12 +45,23 @@ it('keeps secret reveal APIs and direct key reads within the reviewed population
   const expectedMnemonic = [
     'screens/settings/ShowRecoveryPhraseScreen.tsx',
     'screens/wallet/VerifyBackupScreen.tsx',
-    'services/backup/collectors.ts',
     'services/secure/keyManager.ts',
   ].sort();
   const revealMnemonic = hits(/\brevealMnemonic\s*\(/g);
   if (JSON.stringify(revealMnemonic) !== JSON.stringify(expectedMnemonic))
     problems.push(`revealMnemonic found in: ${revealMnemonic.join(', ')}`);
+  // TASK-504: the backup reads each record's key by the record's own id. The
+  // by-id reveal is as sensitive as revealMnemonic, so its callers are a
+  // reviewed population too: the backup collector, and the key manager itself.
+  const expectedByRecord = [
+    'services/backup/collectors.ts',
+    'services/secure/keyManager.ts',
+  ].sort();
+  const revealByRecord = hits(/\brevealMnemonicForRecord\s*\(/g);
+  if (JSON.stringify(revealByRecord) !== JSON.stringify(expectedByRecord))
+    problems.push(
+      `revealMnemonicForRecord found in: ${revealByRecord.join(', ')}`
+    );
   const expectedPrivate = [
     'components/remoteSigner/TransferToAirgapFlow.tsx',
     'services/secure/keyManager.ts',
