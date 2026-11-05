@@ -4120,6 +4120,13 @@ export class AccountSecureStorage {
    * device-broken condition as every other awaited secure write (see THREAT
    * MODEL) — not special-cased.
    */
+  /** The persisted throttle record removed with the removal CONFIRMED (a
+   *  failure throws), and the in-memory mirror reset with it. */
+  private static async clearThrottleConfirmed(): Promise<void> {
+    await this.boundedSecureDelete(this.PIN_THROTTLE_KEY);
+    this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
+  }
+
   private static async resetThrottle(): Promise<void> {
     this.throttleMirror = { failCount: 0, lockoutUntil: null, lastFailAt: 0 };
     await secureStorage.deleteItem(this.PIN_THROTTLE_KEY).catch(() => {});
@@ -4489,6 +4496,22 @@ export class AccountSecureStorage {
       // the credential exists. An unconfirmed removal throws here, pre-commit, so
       // the rollback below drops the unproven new blobs.
       if (opts.clearBreadcrumbBeforeCommit) {
+        // TASK-504 (DOC-507 5.4, B): a kill inside the forgotten-PIN step's
+        // credential removal can leave the credential gone and a stale throttle
+        // behind. When setupPin finds NO credential it clears that throttle,
+        // confirmed, BEFORE the new credential exists; otherwise it would refuse
+        // the new PIN. It never clears a throttle while a credential exists (no
+        // path may clear a lockout while a PIN does), and a credential read that
+        // fails leaves the throttle alone too.
+        let credentialExists = true;
+        try {
+          credentialExists = await this.hasPinStrict();
+        } catch {
+          credentialExists = true;
+        }
+        if (!credentialExists) {
+          await this.clearThrottleConfirmed();
+        }
         if (!(await clearPinSetupPending())) {
           throw new AccountStorageError(
             'Could not clear the restore setup marker before establishing the PIN'
@@ -4692,6 +4715,44 @@ export class AccountSecureStorage {
         }
         throw new AccountStorageError('Failed to delete PIN');
       }
+    });
+  }
+
+  /**
+   * TASK-504 (DOC-507 5.4, step B): remove the PIN credential for the
+   * forgotten-PIN step, and nothing else. Deletes credential items by name only,
+   * in the ruled order: (1) the PIN credential, both copies; (2) SALT_KEY, both
+   * copies; (3) the persisted throttle record, LAST, so a kill between them can
+   * never leave the old PIN with its lockout cleared. It never calls deletePin or
+   * clearOrphanPin (both enumerate the account list, which is empty after a
+   * reinstall, so their "no key held" checks pass only because the keys are
+   * invisible), and it touches no secret slot, no device id and no metadata.
+   *
+   * Preconditions, checked here as well as by the caller: a credential exists
+   * (otherwise there is nothing to remove) and the account list is EMPTY (the
+   * step is for a device with no accounts; with accounts the wallet's own Change
+   * PIN is the route). A read that fails throws and nothing is deleted.
+   * Re-running after a kill deletes what is left, in the same order.
+   */
+  static async removeCredentialForForgottenPin(): Promise<void> {
+    return this.runKeyMutationExclusive(async () => {
+      if (!(await this.hasPinStrict())) {
+        throw new AccountStorageError('There is no PIN to remove');
+      }
+      if ((await this.readAccountListStrict()).length > 0) {
+        throw new AccountStorageError(
+          'The PIN cannot be removed while accounts are listed'
+        );
+      }
+      // (1) the PIN credential: both copies.
+      await this.boundedSecureDelete(this.PIN_KEY);
+      await this.boundedStorageRemove(this.PIN_KEY);
+      // (2) SALT_KEY: both copies.
+      await this.boundedSecureDelete(this.SALT_KEY);
+      await this.boundedStorageRemove(this.SALT_KEY);
+      // (3) the throttle record, last.
+      await this.clearThrottleConfirmed();
+      this.legacyCheckRequired = undefined;
     });
   }
 
