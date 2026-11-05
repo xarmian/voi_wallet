@@ -16,6 +16,7 @@ import {
   BackupProgress,
   RestoreProgress,
   BackupIncomplete,
+  RestoreOptions,
   BackupError,
 } from './types';
 import {
@@ -272,7 +273,8 @@ export class BackupService {
    */
   static async restoreBackup(
     fileUri: string,
-    password: string
+    password: string,
+    options: RestoreOptions = {}
   ): Promise<RestoreResult> {
     try {
       // Step 1: Read file
@@ -344,7 +346,8 @@ export class BackupService {
         backup.accounts,
         backup.settings,
         backup.friends,
-        backup.experimental
+        backup.experimental,
+        options
       );
 
       this.reportProgress({

@@ -34,6 +34,7 @@ import {
   BackupRemoteSignerSettings,
   BackupError,
   RestoreResult,
+  RestoreOptions,
   RestoreRecordOutcome,
   RestoreRecordResult,
 } from './types';
@@ -308,7 +309,8 @@ function fileHoldsKey(account: BackupAccountData): boolean {
  * wrote: journaled key slots, and metadata it added for key-less records.
  */
 export async function restoreAccounts(
-  backupAccounts: BackupAccountData[]
+  backupAccounts: BackupAccountData[],
+  options: RestoreOptions = {}
 ): Promise<{
   total: number;
   standard: number;
@@ -385,6 +387,16 @@ export async function restoreAccounts(
     const tokenByStoredId = new Map<string, string>();
 
     for (const backupAccount of accounts) {
+      // On the old-PIN screen the session's vault must still be the one the PIN
+      // verify filled. If it moved (background, timeout, another unlock), stop
+      // at this record boundary: nothing is decided on a different vault state,
+      // and the existing rollback removes this attempt's own writes.
+      if (
+        options.oldPinSession !== undefined &&
+        SessionKeyVault.currentEpoch() !== options.oldPinSession.epoch
+      ) {
+        throw new VaultChangedDuringReadError();
+      }
       const address = restoredAddress(backupAccount) ?? backupAccount.address;
       const record: RestoreRecordResult = {
         id: backupAccount.id,
@@ -585,10 +597,16 @@ export async function restoreAccounts(
               derived.sk.fill(0);
             }
           } else {
-            stored = await AccountSecureStorage.storeKeylessAccountForRestore(
-              rekeyedAccount,
-              creationGen
-            );
+            const keyless =
+              await AccountSecureStorage.storeKeylessAccountForRestore(
+                rekeyedAccount,
+                creationGen,
+                'restore',
+                options.oldPinSession
+              );
+            // A bound record is listed under its own id over a key already on
+            // the device: reported like any key already in place.
+            stored = { ...keyless, inPlace: keyless.bound === true };
             metadataOnly.add(stored.id);
           }
           account = rekeyedAccount;
@@ -1007,7 +1025,8 @@ export async function performFullRestore(
   accounts: BackupAccountData[],
   settings: BackupSettings,
   friends: Friend[],
-  experimental: BackupExperimentalFlags
+  experimental: BackupExperimentalFlags,
+  options: RestoreOptions = {}
 ): Promise<RestoreResult> {
   // Stage a private copy so callers cannot change validated phrases while
   // the storage operations below are awaiting completion.
@@ -1042,7 +1061,7 @@ export async function performFullRestore(
     await markPinSetupPending();
   }
 
-  const accountCounts = await restoreAccounts(stagedAccounts);
+  const accountCounts = await restoreAccounts(stagedAccounts, options);
 
   // The device was fresh when this restore began; if another writer put an
   // account on the wallet before our commit, it is not fresh now, and the file

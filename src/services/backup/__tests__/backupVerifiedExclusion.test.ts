@@ -432,7 +432,9 @@ it.each([false, true])(
     // No key is restored, so no originalOwner claims one (TASK-425 U4).
     expect(secure.storeKeylessAccountForRestore).toHaveBeenCalledWith(
       expect.objectContaining({ backupVerified: false, originalOwner: false }),
-      0
+      0,
+      'restore',
+      undefined
     );
   }
 );

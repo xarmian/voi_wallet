@@ -415,6 +415,17 @@ export type RestoreRecordOutcome =
   /** The record lacks fields restore needs (for example a signer device). */
   | 'rejected-invalid';
 
+/**
+ * Options for a restore that runs on the old-PIN screen (TASK-504, DOC-507 4.1
+ * item 9). `epoch` is the session vault's epoch recorded when the old PIN was
+ * verified IN THIS restore. A key-less rekeyed record may keep its id over a
+ * surviving key only while the vault still holds exactly what that verify put in
+ * it; an epoch that moved stops the restore at the next record boundary.
+ */
+export interface RestoreOptions {
+  oldPinSession?: { epoch: number };
+}
+
 export interface RestoreRecordResult {
   id: string;
   address: string;

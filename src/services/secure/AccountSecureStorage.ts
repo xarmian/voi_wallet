@@ -1819,16 +1819,36 @@ export class AccountSecureStorage {
   static async storeKeylessAccountForRestore(
     account: AccountMetadata,
     creationGen: number,
-    context: WriteContext = 'restore'
-  ): Promise<{ id: string; reassigned: boolean }> {
+    context: WriteContext = 'restore',
+    bind?: { epoch: number }
+  ): Promise<{ id: string; reassigned: boolean; bound?: boolean }> {
     return this.runKeyMutationExclusive(async () => {
       if (this.secureResetGeneration !== creationGen) {
         throw new ResetRacedError();
       }
       let id = account.id;
       let reassigned = false;
+      let bound = false;
+      const startEpoch = SessionKeyVault.currentEpoch();
       const own = await this.inspectSlotUnderOneVaultState(id, account.address);
-      if (own.state !== 'empty') {
+      // DOC-507 4.1 item 9, the one exception to "a key-less record never binds
+      // to an occupied slot". All of it holds at THIS write, each read now:
+      // the old-PIN screen's session (the caller passes the epoch recorded at the
+      // verify), the vault still holding what that verify put in it, a credential
+      // still present, a REKEYED record (the type that retains a key), and the
+      // slot reading key-matches for the record's OWN id and OWN address. Only
+      // metadata is written; the slot is never touched.
+      if (
+        own.state === 'key-matches' &&
+        bind !== undefined &&
+        account.type === AccountType.REKEYED &&
+        (await this.hasPinStrict()) &&
+        SessionKeyVault.isUnlocked() &&
+        SessionKeyVault.currentEpoch() === bind.epoch &&
+        startEpoch === bind.epoch
+      ) {
+        bound = true;
+      } else if (own.state !== 'empty') {
         id = await this.freshAccountId();
         const fresh = await this.inspectSlotUnderOneVaultState(
           id,
@@ -1848,7 +1868,7 @@ export class AccountSecureStorage {
         context,
         true
       );
-      return { id, reassigned };
+      return { id, reassigned, ...(bound ? { bound: true } : {}) };
     }).catch((error: unknown) => {
       if (error instanceof WriteOutcomeUnknownError) {
         throw new WriteOutcomeUnknownError(error.journaled, context);
