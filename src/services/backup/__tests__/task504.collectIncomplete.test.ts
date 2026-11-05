@@ -232,9 +232,12 @@ describe('TASK-504: collectAccounts saves what it can and names what it leaves o
       mockPlatform.__secure.get(`${SECRET}ok`)!
     );
     mockPlatform.__secure.delete(`${SECRET}empty`);
+    const reveal = jest.spyOn(SecureKeyManager, 'revealMnemonicForRecord');
 
     const collected = await collectAccounts(CAP);
 
+    // Only the record whose slot proved readable is ever revealed.
+    expect(reveal).toHaveBeenCalledTimes(1);
     expect(collected.accounts.map((x) => x.id)).toEqual(['ok']);
     expect(collected.leftOut.map((x) => [x.label, x.reason])).toEqual([
       ['corrupt', 'key-unreadable'],
@@ -296,6 +299,37 @@ describe('TASK-504: collectAccounts saves what it can and names what it leaves o
     await expect(collectAccounts(CAP)).rejects.toMatchObject({
       code: 'AUTHENTICATION_REQUIRED',
     });
+  });
+
+  it('a key read that fails because the vault locked stops the backup, even when it is the only record', async () => {
+    await restoreAccounts([standard('p-1')]);
+    await AccountSecureStorage.setupPin(PIN, 'pin');
+    SessionKeyVault.set(PIN, 'pin');
+    jest
+      .spyOn(SecureKeyManager, 'revealMnemonicForRecord')
+      .mockImplementationOnce(async () => {
+        SessionKeyVault.clear();
+        throw new Error('vault locked');
+      });
+
+    await expect(collectAccounts(CAP)).rejects.toMatchObject({
+      code: 'AUTHENTICATION_REQUIRED',
+    });
+  });
+
+  it('a slot read that throws is a key the wallet cannot read: left out and named, for an expected key and an unexpected one alike', async () => {
+    await restoreAccounts([standard('r-1'), rekeyed('r-2', false, false)]);
+    jest
+      .spyOn(AccountSecureStorage, 'inspectSecretSlot')
+      .mockRejectedValue(new Error('keychain read failed'));
+
+    const collected = await collectAccounts(CAP);
+
+    expect(collected.accounts).toEqual([]);
+    expect(collected.leftOut.map((x) => [x.label, x.reason])).toEqual([
+      ['r-1', 'key-unreadable'],
+      ['r-2', 'key-unreadable'],
+    ]);
   });
 
   it('an unusable fresh-auth capability stops the backup; it is not a key problem', async () => {
