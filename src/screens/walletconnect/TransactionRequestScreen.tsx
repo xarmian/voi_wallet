@@ -346,8 +346,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           version: req.version,
         });
       });
-      // Queue empty: this request leaves the sitting. That ends it unless a
-      // request pushed under this one is still on screen in it.
+      // A normal unlock mints one permission per request waiting at that moment.
+      // A gate unlock covers only its own request; later requests join no sitting.
+      // Leaving this request ends only its own permission.
       if (!taken.request) reviewGrant.leave(requestKey);
     } catch (error) {
       reviewGrant.revoke();

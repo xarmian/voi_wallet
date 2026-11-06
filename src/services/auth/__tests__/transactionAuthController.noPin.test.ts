@@ -316,15 +316,14 @@ it.each(['bytes', 'chain', 'signers', 'same'] as const)(
     expect(await controller.authenticateWithReviewGrant('A')).toBe(false);
   }
 );
-it('releaseOnlyBeforeKeyAccess: a validity failure releases', async () => {
+// DEFECT: a pre-signer refusal settles the permission just as modal dismissal does.
+it('preKeyValidityFailureSettles', async () => {
   const req = request('A');
   bind(req);
   const controller = new TransactionAuthController();
   await controller.initializeSigningFlow(req);
   pinPresence.mockResolvedValue(false);
-  const release = jest.spyOn(reviewGrant, 'release');
   await controller.authenticateWithReviewGrant('A');
-  expect(release).toHaveBeenCalledWith('A');
   expect(signer).not.toHaveBeenCalled();
   expect(keyRead).not.toHaveBeenCalled();
   const d = reviewBindingDigest({
@@ -332,9 +331,10 @@ it('releaseOnlyBeforeKeyAccess: a validity failure releases', async () => {
     txnBytesBase64: ['AA=='],
     signerAddresses: ['ADDR'],
   });
-  expect(reviewGrant.consume('A', d)).toBe(true);
+  expect(reviewGrant.consume('A', d)).toBe(false);
+  expect(req.reviewGrantKey).toBeUndefined();
 });
-it('releaseOnlyBeforeKeyAccess: signing failure leaves permission used', async () => {
+it('signingFailureEndsPermission', async () => {
   const req = request('A');
   bind(req);
   signer.mockImplementationOnce(async (_req, callbacks) => {
@@ -346,10 +346,8 @@ it('releaseOnlyBeforeKeyAccess: signing failure leaves permission used', async (
   });
   const controller = new TransactionAuthController();
   await controller.initializeSigningFlow(req);
-  const release = jest.spyOn(reviewGrant, 'release');
   await controller.authenticateWithReviewGrant('A');
   expect(keyRead).toHaveBeenCalledTimes(1);
-  expect(release).not.toHaveBeenCalled();
   expect(await controller.authenticateWithReviewGrant('A')).toBe(false);
   expect(signer).toHaveBeenCalledTimes(1);
 });

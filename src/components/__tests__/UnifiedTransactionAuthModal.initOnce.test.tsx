@@ -359,7 +359,7 @@ it('skipsReviewGrantWhenRemoteInitializationDropsKey', async () => {
   expect(controller.authenticateWithReviewGrant).not.toHaveBeenCalled();
 });
 
-// DEFECT: device confirmation must retain a way to cancel the signing flow.
+// REGRESSION: batch device confirmation retains a way to cancel the signing flow.
 it.each(['button', 'system close'])(
   'ledgerSigningExposesCancel:%s',
   async (action) => {
@@ -375,7 +375,7 @@ it.each(['button', 'system close'])(
       <UnifiedTransactionAuthModal
         visible
         controller={asController(controller)}
-        request={{} as never}
+        request={{ type: 'batch_transaction' } as never}
         onComplete={jest.fn()}
         onCancel={onCancel}
       />

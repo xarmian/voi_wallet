@@ -7,7 +7,8 @@ import { AppLockSignal } from '@/services/secure/appLockState';
 import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 
-// One authentication grants one signing permission per waiting request.
+// A normal unlock mints one permission per request waiting at that moment.
+// A gate unlock covers only its own request; later requests join no sitting.
 export const REVIEW_IDLE_MS = 60_000;
 let grant: {
   keys: Set<string>;
@@ -21,7 +22,7 @@ let grant: {
 } | null = null;
 export type ReviewEndReason =
   'idle' | 'lock' | 'background' | 'rotation' | 'left';
-let lastEndReason: ReviewEndReason | null = null;
+const endReasons = new Map<string, ReviewEndReason>();
 let generation = 0;
 let appStateSubscription:
   ReturnType<typeof AppState.addEventListener> | undefined;
@@ -31,7 +32,7 @@ const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
 
 function createCapability(keys: string[], lockedSitting: boolean): void {
-  lastEndReason = null;
+  endReasons.clear();
   grant = {
     keys: new Set(keys),
     epoch: SessionKeyVault.currentEpoch(),
@@ -55,13 +56,13 @@ function armIdle(key: string): void {
   grant.expiresAt.set(key, Date.now() + REVIEW_IDLE_MS);
   grant.timers.set(
     key,
-    setTimeout(() => endKey(key, 'idle'), REVIEW_IDLE_MS)
+    setTimeout(() => sweep(), REVIEW_IDLE_MS)
   );
 }
 
 function endKey(key: string, reason: ReviewEndReason): void {
   if (!grant?.keys.has(key)) return;
-  lastEndReason = reason;
+  endReasons.set(key, reason);
   clearTimeout(grant.timers.get(key));
   grant.timers.delete(key);
   grant.expiresAt.delete(key);
@@ -73,6 +74,39 @@ function endKey(key: string, reason: ReviewEndReason): void {
   else emit();
 }
 
+function liveVault(): boolean {
+  return (
+    grant !== null &&
+    grant.epoch === SessionKeyVault.currentEpoch() &&
+    SessionKeyVault.isUnlocked() &&
+    AppState.currentState !== 'background'
+  );
+}
+function liveKey(key: string): boolean {
+  return (
+    !!grant?.keys.has(key) &&
+    (grant.paused.has(key) || Date.now() < grant.expiresAt.get(key)!)
+  );
+}
+/** Reconcile outside snapshot reads; lock and rotation also reconcile synchronously. */
+function sweep(): void {
+  if (!grant) return;
+  if (
+    grant.epoch !== SessionKeyVault.currentEpoch() ||
+    !SessionKeyVault.isUnlocked()
+  ) {
+    reviewGrant.revoke(false, 'rotation');
+    return;
+  }
+  if (AppState.currentState === 'background') {
+    reviewGrant.revoke(true, 'background');
+    return;
+  }
+  for (const key of [...grant.keys]) {
+    if (!liveKey(key)) endKey(key, 'idle');
+  }
+}
+
 export const reviewGrant = {
   subscribe(listener: () => void): () => void {
     listeners.add(listener);
@@ -80,38 +114,21 @@ export const reviewGrant = {
       listeners.delete(listener);
     };
   },
-  /** A capability requires the original unlocked vault and a live deadline. */
+  /** Snapshot reads never reconcile expiry or emit during render. */
   isLive(): boolean {
-    if (!grant) return false;
-    if (
-      grant.epoch !== SessionKeyVault.currentEpoch() ||
-      !SessionKeyVault.isUnlocked()
-    ) {
-      this.revoke(false, 'rotation');
-      return false;
-    }
-    if (AppState.currentState === 'background') {
-      this.revoke(true, 'background');
-      return false;
-    }
-    for (const key of [...grant.keys]) {
-      if (
-        grant &&
-        !grant.paused.has(key) &&
-        Date.now() >= grant.expiresAt.get(key)!
-      )
-        endKey(key, 'idle');
-    }
-    return grant !== null;
+    return liveVault() && [...grant!.keys].some((key) => liveKey(key));
   },
   isValid(key: string): boolean {
-    return this.isLive() && grant!.keys.has(key);
+    return liveVault() && liveKey(key);
   },
   isUnspent(key: string): boolean {
     return this.isValid(key) && !grant!.used.has(key);
   },
-  endReason(): ReviewEndReason | null {
-    return lastEndReason;
+  isLockedSitting(key: string): boolean {
+    return this.isValid(key) && grant!.lockedSitting;
+  },
+  endReason(key: string): ReviewEndReason | null {
+    return endReasons.get(key) ?? null;
   },
   mintForWaiting(keys: string[]): void {
     this.revoke(false);
@@ -125,10 +142,12 @@ export const reviewGrant = {
     createCapability(keys, false);
   },
   touch(key: string): void {
+    sweep();
     if (!this.isValid(key) || grant!.paused.has(key)) return;
     armIdle(key);
   },
   pauseIdle(key: string): boolean {
+    sweep();
     if (!this.isValid(key) || !grant!.used.has(key)) return false;
     grant!.paused.add(key);
     clearTimeout(grant!.timers.get(key));
@@ -136,6 +155,7 @@ export const reviewGrant = {
     return true;
   },
   resumeIdle(key: string): void {
+    sweep();
     if (!this.isValid(key)) return;
     grant!.paused.delete(key);
     armIdle(key);
@@ -143,7 +163,7 @@ export const reviewGrant = {
   revoke(clearKeys = true, reason: ReviewEndReason = 'left'): void {
     generation++;
     const owned = grant !== null || authenticating;
-    if (owned) lastEndReason = reason;
+    grant?.keys.forEach((key) => endReasons.set(key, reason));
     grant?.timers.forEach((timer) => clearTimeout(timer));
     grant = null;
     appStateSubscription?.remove();
@@ -203,6 +223,7 @@ export const reviewGrant = {
     }
   },
   bind(key: string, digest: string): boolean {
+    sweep();
     if (!this.isValid(key)) return false;
     const previous = grant!.bindings.get(key);
     if (previous !== undefined && previous !== digest) {
@@ -213,6 +234,7 @@ export const reviewGrant = {
     return true;
   },
   consume(key: string, digest: string): boolean {
+    sweep();
     if (
       !this.isValid(key) ||
       grant!.used.has(key) ||
@@ -233,12 +255,18 @@ export const reviewGrant = {
       grant!.bindings.get(key) === digest
     );
   },
-  /** Release only after a validity failure before entering the signer. */
-  release(key: string): void {
+  /** Keep a locked sitting alive only while its screen publishes the outcome. */
+  settle(key: string): void {
+    sweep();
     if (!this.isValid(key)) return;
-    grant!.used.delete(key);
-    this.resumeIdle(key);
-    emit();
+    if (!grant!.lockedSitting) {
+      this.leave(key);
+      return;
+    }
+    // Settlement never returns a spent permission to the unspent pool.
+    grant!.used.add(key);
+    grant!.paused.delete(key);
+    armIdle(key);
   },
   /**
    * A request's screen left. Ends the sitting only when it was the last

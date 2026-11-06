@@ -1,5 +1,7 @@
+import { ReviewEndedError } from '@/services/auth/ReviewEndedError';
 import React, {
   useState,
+  useRef,
   useEffect,
   useMemo,
   useCallback,
@@ -368,6 +370,7 @@ export default function UniversalTransactionSigningScreen({
       .catch(() => {});
   }, []);
 
+  const handlingOutcome = useRef(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
@@ -401,12 +404,20 @@ export default function UniversalTransactionSigningScreen({
         if (
           walletConnect &&
           !reviewGrant.isValid(requestKey) &&
+          !handlingOutcome.current &&
+          authController.getState().state !== 'signing' &&
+          authController.getState().state !== 'processing' &&
           (!AppLockSignal.isUnlocked() ||
-            (showAuthModal &&
-              currentRequest?.reviewGrantKey &&
-              authController.getState().state !== 'signing' &&
-              authController.getState().state !== 'processing'))
+            (showAuthModal && currentRequest?.reviewGrantKey))
         ) {
+          if (showAuthModal) {
+            const error = new ReviewEndedError(
+              reviewGrant.endReason(requestKey) === 'idle'
+                ? 'Your approval timed out before signing finished. Start the request again.'
+                : 'Your approval ended before signing finished. Start the request again.'
+            );
+            Alert.alert('Request ended', error.message);
+          }
           authController.cancel();
           setShowAuthModal(false);
           setCurrentRequest(null);
@@ -924,19 +935,30 @@ export default function UniversalTransactionSigningScreen({
   };
 
   const handleAuthComplete = async (success: boolean, result?: any) => {
-    setShowAuthModal(false);
-    setCurrentRequest(null);
-
-    if (success && onSuccess) {
-      await onSuccess(result);
-    } else if (!success) {
-      // The modal reports failure as { error } (TASK-453): map that error, so
-      // a real failure isn't shown as the generic fallback.
-      const { title, message } = toErrorAlert(result?.error, {
-        fallbackMessage: 'Failed to sign transactions.',
-        fallbackTitle: 'Error',
-      });
-      Alert.alert(title, message);
+    if (handlingOutcome.current) return;
+    handlingOutcome.current = true;
+    try {
+      if (success && onSuccess) {
+        await onSuccess(result);
+      } else if (!success) {
+        const error = result?.error;
+        if (error instanceof ReviewEndedError) {
+          Alert.alert('Request ended', error.message);
+        } else {
+          const { title, message } = toErrorAlert(error, {
+            fallbackMessage: 'Failed to sign transactions.',
+            fallbackTitle: 'Error',
+          });
+          Alert.alert(title, message);
+        }
+      }
+    } finally {
+      // The flow ends when handleAuthComplete returns, the user leaves the screen,
+      // Cancel, or the 60 s idle window restarted at the signer's end, whichever is first.
+      reviewGrant.leave(requestKey);
+      setShowAuthModal(false);
+      setCurrentRequest(null);
+      handlingOutcome.current = false;
     }
   };
 
@@ -1273,25 +1295,24 @@ export default function UniversalTransactionSigningScreen({
               </Text>
             </TouchableOpacity>
           </View>
-
-          <UnifiedTransactionAuthModal
-            visible={showAuthModal}
-            controller={authController}
-            request={currentRequest}
-            onComplete={handleAuthComplete}
-            onCancel={() => {
-              reviewGrant.leave(requestKey);
-              setShowAuthModal(false);
-              setCurrentRequest(null);
-            }}
-            title="Sign Transaction"
-            message={summary}
-            biometricOnOpen={
-              !requiresReviewUnlock && !usesLedger && authState.biometricEnabled
-            }
-          />
         </>
       )}
+      <UnifiedTransactionAuthModal
+        visible={showAuthModal}
+        controller={authController}
+        request={currentRequest}
+        onComplete={handleAuthComplete}
+        onCancel={() => {
+          reviewGrant.leave(requestKey);
+          setShowAuthModal(false);
+          setCurrentRequest(null);
+        }}
+        title="Sign Transaction"
+        message={canReview ? summary : ''}
+        biometricOnOpen={
+          !requiresReviewUnlock && !usesLedger && authState.biometricEnabled
+        }
+      />
     </SafeAreaView>
   );
 }

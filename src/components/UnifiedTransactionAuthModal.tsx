@@ -115,7 +115,6 @@ export default function UnifiedTransactionAuthModal({
       // it is cleared on the next genuine open, above.
       controller.resetAfterDismiss();
       initializedRef.current = false;
-      hasCalledOnComplete.current = false;
     }
     wasVisibleRef.current = visible;
   }, [visible, controller]);
@@ -367,7 +366,9 @@ export default function UnifiedTransactionAuthModal({
 
   useEffect(() => {
     if (
-      authState.state === 'error' &&
+      (authState.state === 'error' ||
+        (authState.state === 'authenticating' &&
+          controller.hasEndedReviewFlow?.())) &&
       !isUserRejectedError &&
       (authState.error || authState.ledgerError) &&
       !hasCalledOnComplete.current
@@ -949,7 +950,8 @@ export default function UnifiedTransactionAuthModal({
     if (authState.state === 'processing' || authState.state === 'signing') {
       if (
         authState.isLedgerFlow &&
-        (authState.state === 'signing' ||
+        ((authState.state === 'signing' &&
+          request?.type === 'batch_transaction') ||
           authState.ledgerStatus === 'error' ||
           authState.ledgerStatus === 'app_required')
       ) {
@@ -1036,7 +1038,11 @@ export default function UnifiedTransactionAuthModal({
         // Only allow closing if not processing
         if (
           authState.state !== 'processing' &&
-          (authState.state !== 'signing' || authState.isLedgerFlow)
+          (authState.state !== 'signing' ||
+            (authState.isLedgerFlow &&
+              (request?.type === 'batch_transaction' ||
+                authState.ledgerStatus === 'error' ||
+                authState.ledgerStatus === 'app_required')))
         ) {
           userCancelledRef.current = true; // Mark as cancelled even if closed via system
           handleCancel();

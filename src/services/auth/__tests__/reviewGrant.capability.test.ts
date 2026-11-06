@@ -162,7 +162,7 @@ it('resumeStartsAFreshWindow', () => {
   jest.advanceTimersByTime(1_001);
   expect(reviewGrant.isValid('A')).toBe(false);
   expect(reviewGrant.isUnspent('A')).toBe(false);
-  expect(reviewGrant.endReason()).toBe('idle');
+  expect(reviewGrant.endReason('A')).toBe('idle');
   expect(reviewGrant.pauseIdle('A')).toBe(false);
   reviewGrant.resumeIdle('A');
   expect(reviewGrant.isLive()).toBe(false);
@@ -214,3 +214,36 @@ it.each(['leave', 'revoke', 'epoch', 'background', 'lock'] as const)(
     expect(reviewGrant.isValid('A')).toBe(false);
   }
 );
+
+// DEFECT
+it('snapshotReadsAreSideEffectFree', async () => {
+  AppLockSignal.setUnlocked(false);
+  await reviewGrant.unlock('A', { pin: '123456' });
+  const listener = jest.fn();
+  const unsubscribe = reviewGrant.subscribe(listener);
+  const clear = jest.spyOn(SessionKeyVault, 'clear');
+  jest.setSystemTime(Date.now() + REVIEW_IDLE_MS + 1);
+  expect(reviewGrant.isValid('A')).toBe(false);
+  expect(reviewGrant.isLive()).toBe(false);
+  expect(reviewGrant.isUnspent('A')).toBe(false);
+  expect(listener).not.toHaveBeenCalled();
+  expect(clear).not.toHaveBeenCalled();
+  expect(SessionKeyVault.isUnlocked()).toBe(true);
+  expect(reviewGrant.endReason('A')).toBeNull();
+  reviewGrant.touch('A');
+  expect(listener).toHaveBeenCalled();
+  expect(clear).toHaveBeenCalled();
+  expect(reviewGrant.endReason('A')).toBe('idle');
+  unsubscribe();
+});
+// DEFECT
+it('perKeyEndReason', () => {
+  mint(['K1', 'K2']);
+  reviewGrant.bind('K1', digest());
+  reviewGrant.consume('K1', digest());
+  reviewGrant.pauseIdle('K1');
+  jest.advanceTimersByTime(REVIEW_IDLE_MS + 1);
+  AppLockSignal.setUnlocked(false);
+  expect(reviewGrant.endReason('K2')).toBe('idle');
+  expect(reviewGrant.endReason('K1')).toBe('lock');
+});

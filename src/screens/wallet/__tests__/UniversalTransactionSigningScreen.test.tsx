@@ -144,6 +144,7 @@ jest.mock('@/services/secure/keyManager', () => ({
 jest.mock('@/services/auth/transactionAuthController', () => ({
   useTransactionAuthController: () =>
     mockRealController ?? {
+      getState: () => ({ state: 'idle' }),
       cleanup: jest.fn(),
       cancel: jest.fn(),
     },

@@ -209,36 +209,42 @@ export default function LockScreen() {
     };
   }, [authState.biometricEnabled, unlockWithBiometrics]);
 
-  const promptBiometric = useCallback(async () => {
-    if (
-      !biometricAuth.current.enabled ||
-      !navigation.isFocused() ||
-      AppState.currentState !== 'active' ||
-      biometricAttempted.current
-    )
-      return;
-    pendingActive.current?.remove();
-    pendingActive.current = undefined;
-    biometricAttempted.current = true;
-    if (!authentication.tryBegin()) return;
-    const generation = focusGeneration.current;
-    const isCurrent = () =>
-      generation === focusGeneration.current &&
-      navigation.isFocused() &&
-      AppState.currentState !== 'background';
-    try {
-      const success = await biometricAuth.current.unlock(isCurrent);
-      if (success && isCurrent()) hapticNotify('success');
-    } catch (error) {
-      console.error('Biometric authentication error:', redactError(error));
-    } finally {
-      authentication.end();
-    }
-  }, [navigation, authentication]);
+  const promptBiometric = useCallback(
+    async (manual = false) => {
+      if (
+        !biometricAuth.current.enabled ||
+        !navigation.isFocused() ||
+        AppState.currentState !== 'active' ||
+        (!manual && biometricAttempted.current)
+      )
+        return;
+      if (!authentication.tryBegin()) return;
+      pendingActive.current?.remove();
+      pendingActive.current = undefined;
+      biometricAttempted.current = true;
+      const generation = focusGeneration.current;
+      const isCurrent = () =>
+        generation === focusGeneration.current &&
+        navigation.isFocused() &&
+        AppState.currentState !== 'background';
+      try {
+        const success = await biometricAuth.current.unlock(isCurrent);
+        if (success && isCurrent()) hapticNotify('success');
+      } catch (error) {
+        console.error('Biometric authentication error:', redactError(error));
+      } finally {
+        authentication.end();
+      }
+    },
+    [navigation, authentication]
+  );
 
   useEffect(() => {
     const onFocus = () => {
-      if (focused.current) return;
+      if (focused.current) {
+        if (!biometricAttempted.current) void promptBiometric();
+        return;
+      }
       focused.current = true;
       focusGeneration.current++;
       biometricAttempted.current = false;
@@ -539,7 +545,7 @@ export default function LockScreen() {
         {authState.biometricEnabled && !isLocked && (
           <TouchableOpacity
             style={styles.biometricButton}
-            onPress={promptBiometric}
+            onPress={() => promptBiometric(true)}
           >
             <Ionicons
               name="finger-print"

@@ -243,3 +243,35 @@ it('blockedPinAttemptClearsDigits', async () => {
   expect(dots.filter((node) => node.props.style[1] !== null)).toHaveLength(0);
   expect(mockUnlock).not.toHaveBeenCalled();
 });
+
+// DEFECT
+it('useBiometricButtonReprompts', async () => {
+  const view = await render(<LockScreen />);
+  await focus(true);
+  expect(mockBiometric).toHaveBeenCalledTimes(1);
+  await fireEvent.press(view.getByText('Use Biometric'));
+  expect(mockBiometric).toHaveBeenCalledTimes(2);
+  await fireEvent.press(view.getByText('Use Biometric'));
+  expect(mockBiometric).toHaveBeenCalledTimes(3);
+});
+// DEFECT
+it('autoAttemptNotConsumedWhenBlocked', async () => {
+  let endPin!: (ok: boolean) => void;
+  mockUnlock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        endPin = resolve;
+      })
+  );
+  const view = await render(<LockScreen />);
+  for (const digit of ['1', '2', '3', '4', '5', '6'])
+    await fireEvent.press(view.getByText(digit));
+  await focus(true);
+  expect(mockBiometric).not.toHaveBeenCalled();
+  await act(async () => {
+    endPin(false);
+  });
+  // A later focus event can retry the automatic attempt blocked by the PIN check.
+  await focus(true);
+  expect(mockBiometric).toHaveBeenCalledTimes(1);
+});

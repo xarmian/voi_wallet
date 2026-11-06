@@ -182,18 +182,21 @@ it('aborts a request’s own in-flight unlock when its screen leaves', async () 
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
 
-it('releases a consumed permission after a pre-key validity failure only while live', async () => {
+// DEFECT: settlement spends a locked permission until the screen handles its outcome.
+it('settledPermissionCannotBeConsumedAgain', async () => {
   await reviewGrant.unlock('a:1', { pin: '123456' });
   reviewGrant.bind('a:1', 'digest');
   expect(reviewGrant.consume('a:1', 'digest')).toBe(true);
+  reviewGrant.pauseIdle('a:1');
+  reviewGrant.settle('a:1');
+  expect(reviewGrant.isLockedSitting('a:1')).toBe(true);
+  expect(reviewGrant.isValid('a:1')).toBe(true);
+  expect(reviewGrant.isUnspent('a:1')).toBe(false);
   expect(reviewGrant.consume('a:1', 'digest')).toBe(false);
-
-  reviewGrant.release('a:1');
-  expect(reviewGrant.consume('a:1', 'digest')).toBe(true);
-
-  reviewGrant.revoke();
-  reviewGrant.release('a:1');
-  expect(reviewGrant.consume('a:1', 'digest')).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(true);
+  jest.advanceTimersByTime(60_001);
+  expect(reviewGrant.isValid('a:1')).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
 
 // REGRESSION R7

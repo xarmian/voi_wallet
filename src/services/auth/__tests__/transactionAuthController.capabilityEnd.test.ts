@@ -337,7 +337,7 @@ it.each(lapseReasons)(
       signedThenLapsedBatchMessage
     );
     expect(controller.getState().result).toBeNull();
-    expect(reviewGrant.endReason()).toBe(reason);
+    expect(reviewGrant.endReason(key)).toBe(reason);
     await assertEnded(controller, 'error');
     await cancelThenFreshPinSigns(controller, req);
   }
@@ -360,7 +360,7 @@ it.each(lapseReasons)(
     expect(message).not.toBe(signedThenLapsedBatchMessage);
     expect(message?.toLowerCase()).not.toContain('start the request again');
     expect(controller.getState().result).toBeNull();
-    expect(reviewGrant.endReason()).toBe(reason);
+    expect(reviewGrant.endReason(key)).toBe(reason);
     await assertEnded(controller, 'error');
     await cancelThenFreshPinSigns(controller, req);
   }
@@ -418,7 +418,7 @@ it.each(['idle', 'lock', 'background', 'rotation'] as const)(
           ? 'Your approval timed out before signing finished. Start the request again.'
           : lapseMessage
       );
-      expect(reviewGrant.endReason()).toBe(reason);
+      expect(reviewGrant.endReason(key)).toBe(reason);
       expect(controller.getState().result).toBeNull();
       await assertEnded(controller, 'error');
       await cancelThenFreshPinSigns(controller, req);
@@ -503,7 +503,7 @@ it.each([false, 'unreadable'])(
   }
 );
 // DEFECT E6
-it('ledgerFailureEndsCapabilityAndReadyRetrySignsThenCancelThenFreshPinSigns', async () => {
+it('spentLedgerFailureRequiresFreshAuthenticationBeforeReadyRetry', async () => {
   const req = request(key);
   bind(req);
   const controller = new TransactionAuthController();
@@ -523,7 +523,7 @@ it('ledgerFailureEndsCapabilityAndReadyRetrySignsThenCancelThenFreshPinSigns', a
   });
   await assertEnded(controller, 'authenticating');
   expect(controller.getState().ledgerStatus).toBe('error');
-  // Discovery and the ready retry use their ordinary path after the permission ends.
+  // Device recovery cannot authorize another signature after this permission ends.
   jest
     .spyOn(
       controller as unknown as { initializeLedgerFlow(): Promise<void> },
@@ -534,6 +534,8 @@ it('ledgerFailureEndsCapabilityAndReadyRetrySignsThenCancelThenFreshPinSigns', a
       await internals(controller).maybeStartSigningIfReady();
     });
   await controller.retryLedgerConnection();
+  expect(signer).toHaveBeenCalledTimes(1);
+  await controller.authenticateWithPin('123456');
   expect(signer).toHaveBeenCalledTimes(2);
   expect(controller.getState().state).toBe('completed');
   await cancelThenFreshPinSigns(controller, req);
@@ -682,7 +684,7 @@ it.each(['Lock', 'Background', 'Rotation'] as const)(
     if (event === 'Rotation') SessionKeyVault.set('rotated fixture', 'pin');
     // No timer advance between the event and the validity check.
     expect(reviewGrant.isValid(key)).toBe(false);
-    expect(reviewGrant.endReason()).toBe(event.toLowerCase());
+    expect(reviewGrant.endReason(key)).toBe(event.toLowerCase());
     jest.advanceTimersByTime(61_000 + 5 * 60_000);
     callbacks.onComplete!(completeResult);
     await finish();

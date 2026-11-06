@@ -1,3 +1,4 @@
+import { ReviewEndedError } from './ReviewEndedError';
 import { useState } from 'react';
 import algosdk from 'algosdk';
 import {
@@ -44,7 +45,9 @@ const SIGNED_THEN_LAPSED_BATCH_MESSAGE =
 const SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE =
   "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.";
 
-class WalletSecuritySettingsError extends Error {}
+export { ReviewEndedError } from './ReviewEndedError';
+
+class WalletSecuritySettingsError extends ReviewEndedError {}
 
 /**
  * Authentication states for transaction signing
@@ -319,6 +322,7 @@ export class TransactionAuthController {
   private scheduleLedgerAutoRecovery(
     status: 'app_required' | 'device_locked'
   ): void {
+    if (this.reviewFlowEnded) return;
     if (this.ledgerCancelRequested || this.userExplicitlyRejected) {
       return;
     }
@@ -348,6 +352,7 @@ export class TransactionAuthController {
   }
 
   private async runLedgerAutoRecovery(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     this.ledgerRecoveryTimer = null;
     const reason = this.ledgerRecoveryReason;
 
@@ -475,7 +480,14 @@ export class TransactionAuthController {
   ): Promise<void> {
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
     this.signingAbortController?.abort();
-    this.endReviewCapability();
+    if (
+      this.currentRequest?.reviewGrantKey !== request.reviewGrantKey ||
+      !request.reviewGrantKey
+    )
+      this.endReviewCapability();
+    this.reviewFlowEnded = false;
+    this.reviewAuthorized = false;
+    this.reviewSigningStarted = false;
     this.currentRequest = request;
     this.remoteBatchPlan = null;
     this.activeFlowGeneration = this.cancelledFlowGeneration;
@@ -526,6 +538,19 @@ export class TransactionAuthController {
       // Remote signers authorize on their own device; end local review permission
       // before creating the QR flow.
       if (this.currentState.isRemoteSignerFlow) {
+        if (
+          request.reviewGrantKey &&
+          reviewGrant.isLockedSitting(request.reviewGrantKey)
+        ) {
+          this.settleReviewCapability();
+          this.updateState({
+            state: 'error',
+            error: new ReviewEndedError(
+              'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.'
+            ),
+          });
+          return;
+        }
         this.endReviewCapability();
         await this.initializeRemoteSignerFlow();
       }
@@ -533,7 +558,7 @@ export class TransactionAuthController {
       if (generation !== this.cancelledFlowGeneration) return;
       const errorObj =
         error instanceof Error ? error : new Error(String(error));
-      this.endReviewCapability();
+      this.settleReviewCapability();
       this.updateState({
         state: 'error',
         error: errorObj,
@@ -702,6 +727,7 @@ export class TransactionAuthController {
    * Initialize Ledger flow
    */
   private async initializeLedgerFlow(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     if (!this.ledgerSigningInfo) return;
 
     // Always start with searching - don't assume device is ready
@@ -1080,6 +1106,7 @@ export class TransactionAuthController {
     if (this.ledgerListenersSetup) return;
     this.ledgerListenersSetup = true;
     const onConnected = async (device: LedgerDeviceInfo) => {
+      if (this.reviewFlowEnded) return;
       if (
         device.id !== this.ledgerSigningInfo?.deviceId ||
         this.activeFlowGeneration !== this.cancelledFlowGeneration ||
@@ -1174,6 +1201,7 @@ export class TransactionAuthController {
     };
 
     const onDeviceDiscovered = async (info: LedgerDeviceInfo) => {
+      if (this.reviewFlowEnded) return;
       if (
         !this.currentState.isLedgerFlow ||
         this.userExplicitlyRejected ||
@@ -1263,6 +1291,7 @@ export class TransactionAuthController {
     ledgerTransportService.on('deviceDiscovered', onDeviceDiscovered);
     // React to device updates (e.g., after unlocking or opening app)
     ledgerTransportService.on('deviceUpdated', async (info) => {
+      if (this.reviewFlowEnded) return;
       if (
         !this.currentState.isLedgerFlow ||
         this.userExplicitlyRejected ||
@@ -1354,6 +1383,7 @@ export class TransactionAuthController {
       const isValid = await AccountSecureStorage.verifyPin(pin);
 
       if (isValid) {
+        this.reviewFlowEnded = false;
         // Reset attempts and proceed with signing
         // If ledger flow, wait until device is ready to start signing
         if (
@@ -1431,6 +1461,7 @@ export class TransactionAuthController {
         if (!result.success) {
           return false;
         }
+        this.reviewFlowEnded = false;
 
         if (this.currentState.ledgerStatus !== 'ready') {
           this.pendingStartAfterReady = true;
@@ -1459,6 +1490,7 @@ export class TransactionAuthController {
       }
 
       if (outcome.status === 'unlocked') {
+        this.reviewFlowEnded = false;
         this.updateState({ state: 'signing' });
         try {
           await this.startSigning();
@@ -1500,6 +1532,7 @@ export class TransactionAuthController {
   /**
    * Start the actual signing process
    */
+  private reviewFlowEnded = false;
   private reviewAuthorized = false;
   private reviewSigningStarted = false;
 
@@ -1509,22 +1542,42 @@ export class TransactionAuthController {
     this.reviewAuthorized = false;
     this.reviewSigningStarted = false;
     if (key) {
+      this.reviewFlowEnded = true;
       this.hasStartedSigning = false;
       reviewGrant.leave(key);
+    }
+  }
+
+  public hasEndedReviewFlow(): boolean {
+    return this.reviewFlowEnded;
+  }
+
+  private settleReviewCapability(): void {
+    const key = this.currentRequest?.reviewGrantKey;
+    if (this.currentRequest) this.currentRequest.reviewGrantKey = undefined;
+    this.reviewAuthorized = false;
+    this.reviewSigningStarted = false;
+    if (key) {
+      this.reviewFlowEnded = true;
+      this.hasStartedSigning = false;
+      this.cancelLedgerAutoRecovery();
+      reviewGrant.settle(key);
     }
   }
 
   public async authenticateWithReviewGrant(key: string): Promise<boolean> {
     if (
       this.currentState.state !== 'authenticating' ||
+      this.reviewAuthorized ||
       this.currentRequest?.reviewGrantKey !== key
     )
       return false;
     const digest = this.getReviewDigest();
     if (digest === null || !reviewGrant.consume(key, digest)) {
+      this.settleReviewCapability();
       this.updateState({
         state: 'error',
-        error: new Error('Unlock to review this request again.'),
+        error: new ReviewEndedError('Unlock to review this request again.'),
       });
       return false;
     }
@@ -1549,6 +1602,7 @@ export class TransactionAuthController {
     const flowGeneration = this.cancelledFlowGeneration;
     const request = this.currentRequest;
     const reviewKey = request.reviewGrantKey;
+    const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
 
     if (reviewKey && this.reviewSigningStarted) return;
     if (
@@ -1560,10 +1614,7 @@ export class TransactionAuthController {
       } catch (error) {
         if (flowGeneration !== this.cancelledFlowGeneration) return;
         // PIN-presence validation failed before entering the signer or reading keys.
-        if (reviewKey) {
-          reviewGrant.release(reviewKey);
-          this.reviewAuthorized = false;
-        }
+        this.settleReviewCapability();
         this.updateState({ state: 'error', error: error as Error });
         return;
       }
@@ -1576,9 +1627,10 @@ export class TransactionAuthController {
         digest === null ||
         !reviewGrant.isConsumedFor(reviewKey, digest))
     ) {
+      this.settleReviewCapability();
       this.updateState({
         state: 'error',
-        error: new Error('Unlock to review this request again.'),
+        error: new ReviewEndedError('Unlock to review this request again.'),
       });
       return;
     }
@@ -1733,11 +1785,31 @@ export class TransactionAuthController {
           if (reviewKey) {
             reviewLapseOnError = reviewGrant.isValid(reviewKey)
               ? null
-              : reviewGrant.endReason();
+              : reviewGrant.endReason(reviewKey);
             reviewEndedOnError = true;
-            this.endReviewCapability();
+            this.settleReviewCapability();
           }
           this.isSigningInProgress = false;
+          if (reviewLapseOnError !== null) {
+            this.updateState({
+              state: 'error',
+              result: null,
+              error: new ReviewEndedError(
+                this.hasSubmittedToNetwork
+                  ? request.type === 'batch_transaction'
+                    ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                    : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
+                  : reviewLapseOnError === 'idle'
+                    ? 'Your approval timed out before signing finished. Start the request again.'
+                    : 'Your approval ended before signing finished. Start the request again.'
+              ),
+            });
+            return;
+          }
+          if (lockedReview) {
+            this.updateState({ state: 'error', result: null, error });
+            return;
+          }
           const message = this.sanitizeLedgerError(error);
           const lower = message.toLowerCase();
           if (__DEV__) {
@@ -1850,9 +1922,9 @@ export class TransactionAuthController {
           ) {
             const reason = reviewEndedOnError
               ? reviewLapseOnError
-              : reviewGrant.endReason();
+              : reviewGrant.endReason(reviewKey);
             this.isSigningInProgress = false;
-            this.endReviewCapability();
+            this.settleReviewCapability();
             // E3e: signed, then lapsed.
             // The row "submitted, then lapsed" is NOT APPLICABLE: a capability
             // only reaches a WalletConnect algo_signTxn request (the screen sets
@@ -1866,7 +1938,7 @@ export class TransactionAuthController {
               state: 'error',
               result: null,
               signingProgress: null,
-              error: new Error(
+              error: new ReviewEndedError(
                 this.hasSubmittedToNetwork
                   ? request.type === 'batch_transaction'
                     ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
@@ -1887,7 +1959,16 @@ export class TransactionAuthController {
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
             // A failed signer cannot deliver an answer under this permission.
-            this.endReviewCapability();
+            this.settleReviewCapability();
+            if (lockedReview) {
+              this.updateState({
+                state: 'error',
+                result: null,
+                error:
+                  result.error ?? new Error('Signing failed before submission'),
+              });
+              return;
+            }
             if (!this.currentState.isLedgerFlow) {
               // SOFTWARE flow: onError already routed to PIN entry; keep it
               // PIN-shaped and NEVER Ledger-shape it here (PR6.1) — the signer
@@ -1915,7 +1996,7 @@ export class TransactionAuthController {
             });
             return;
           }
-          this.endReviewCapability();
+          this.settleReviewCapability();
           this.updateState({
             result,
             state: result.success ? 'completed' : 'error',
@@ -1932,10 +2013,10 @@ export class TransactionAuthController {
       if (reviewKey) {
         if (!reviewGrant.pauseIdle(reviewKey)) {
           this.isSigningInProgress = false;
-          this.endReviewCapability();
+          this.settleReviewCapability();
           this.updateState({
             state: 'error',
-            error: new Error('Unlock to review this request again.'),
+            error: new ReviewEndedError('Unlock to review this request again.'),
           });
           return;
         }
@@ -1945,7 +2026,34 @@ export class TransactionAuthController {
     } catch (error) {
       if (flowGeneration !== this.cancelledFlowGeneration) return;
       this.isSigningInProgress = false;
-      this.endReviewCapability();
+      const reviewLapsed =
+        !!request.reviewGrantKey &&
+        !!reviewKey &&
+        !reviewGrant.isValid(reviewKey);
+      this.settleReviewCapability();
+      if (reviewLapsed) {
+        this.updateState({
+          state: 'error',
+          result: null,
+          error: new ReviewEndedError(
+            this.hasSubmittedToNetwork
+              ? request.type === 'batch_transaction'
+                ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
+              : reviewGrant.endReason(reviewKey!) === 'idle'
+                ? 'Your approval timed out before signing finished. Start the request again.'
+                : 'Your approval ended before signing finished. Start the request again.'
+          ),
+        });
+        return;
+      }
+      if (lockedReview) {
+        this.updateState({
+          state: 'error',
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return;
+      }
       const message = this.sanitizeLedgerError(error);
       const lower = message.toLowerCase();
 
@@ -2099,6 +2207,7 @@ export class TransactionAuthController {
    * If Ledger is ready and we have a pending start (or this is a Ledger flow without PIN requirement), start signing once.
    */
   private async maybeStartSigningIfReady(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     if (!this.currentState.isLedgerFlow) return;
     if (this.currentRequest?.reviewGrantKey && !this.reviewAuthorized) return;
     if (this.currentState.ledgerStatus !== 'ready') return;
@@ -2127,6 +2236,7 @@ export class TransactionAuthController {
    * Ensure the current Ledger device (if any) is ready. Safe against null device.
    */
   private async ensureLedgerDeviceReady(): Promise<void> {
+    if (this.reviewFlowEnded) return;
     const device = this.currentState.ledgerDevice;
     if (
       !device ||
