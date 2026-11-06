@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { shouldCover, type CoverInput } from '../lockCoverCondition';
 
 // Independent state table: checked, locked, authenticated, PIN, resume, recovery.
@@ -127,4 +129,39 @@ it('DEFECT reachable states never cover without a PIN except S2 away from Securi
       }
     });
   }
+});
+
+// PIN on the premise behind the host's accepted residual (a grant that survives
+// a lock): the cover and the AppLockSignal that revokes grants both come from
+// AuthContext's isAuthenticated and isLocked. If someone separates those two
+// signals, one of these two tests fails.
+it('DEFECT every covering combination has the lock signal not unlocked', () => {
+  const unlockedSignal = (input: CoverInput) =>
+    input.isAuthenticated && !input.isLocked;
+  let covering = 0;
+  for (const input of combinations) {
+    for (const route of routes) {
+      if (!shouldCover(input, route)) continue;
+      covering++;
+      expect({ input, route, unlocked: unlockedSignal(input) }).toEqual({
+        input,
+        route,
+        unlocked: false,
+      });
+    }
+  }
+  expect(covering).toBeGreaterThan(0);
+});
+it('DEFECT AuthContext feeds the lock signal from the same two fields the cover reads', () => {
+  const source = readFileSync(
+    resolve(__dirname, '../../contexts/AuthContext.tsx'),
+    'utf8'
+  );
+  expect(source).toContain(
+    'const isUnlocked = authState.isAuthenticated && !authState.isLocked;'
+  );
+  expect(source).toContain('AppLockSignal.setUnlocked(isUnlocked);');
+  expect(source).toContain(
+    '}, [authState.isAuthenticated, authState.isLocked]);'
+  );
 });

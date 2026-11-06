@@ -392,27 +392,9 @@ it('DEFECT proposal real lock (AppLockSignal) revokes a valid grant and hides th
   expect(JSON.stringify(view.toJSON())).not.toContain(account.address);
 });
 
-// RESIDUAL (dev lead to rule): the review bodies' canReview permits a still-valid
-// grant while locked. Production cannot reach it under the cover (a real lock
-// revokes via AppLockSignal; a gate sitting needs LockedRequestGate, which the
-// cover precludes), so this state is built by minting a grant while the lock
-// signal stays unlocked. It documents that the tree DOES show detail there.
-it.failing(
-  'RESIDUAL proposal body with a grant that survived the lock hides seeded account from text and labels',
-  async () => {
-    const requestKey = walletConnectProposalKey(
-      proposal.pairingTopic,
-      proposal.id
-    );
-    reviewGrant.mintForWaiting([requestKey]);
-    const view = await render(<WalletConnectHost />);
-    await waitFor(() => expect(view.getByText(account.address)).toBeTruthy());
-    mockLocked = true;
-    await view.rerender(<WalletConnectHost />);
-    expect(reviewGrant.isValid(requestKey)).toBe(true);
-    expect(JSON.stringify(view.toJSON())).not.toContain(account.address);
-  }
-);
+// Dropped by the dev lead as unreachable: a grant that survives the lock. A real
+// lock revokes it (the real-lock test above), and the cover and the lock signal
+// come from the same AuthContext state; lockCoverCondition.test.ts pins both.
 
 it('DEFECT proposal before signer survives active lock/unlock then reaches the real coordinator decide path', async () => {
   const view = await render(<WalletConnectHost />);

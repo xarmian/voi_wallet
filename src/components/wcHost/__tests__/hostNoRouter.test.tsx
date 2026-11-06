@@ -353,12 +353,9 @@ it(
   'DEFECT request real lock (AppLockSignal) revokes a valid grant and hides every seeded detail',
   lockedDetailCases(true, true)
 );
-// RESIDUAL (dev lead to rule): see the proposal twin. A grant that survives the
-// lock is not reachable in production under the cover; the tree shows detail.
-it.failing(
-  'RESIDUAL request body with a grant that survived the lock hides every seeded detail',
-  lockedDetailCases(true, false)
-);
+// Dropped by the dev lead as unreachable: a grant that survives the lock. A real
+// lock revokes it (the real-lock test above), and the cover and the lock signal
+// come from the same AuthContext state; lockCoverCondition.test.ts pins both.
 it('DEFECT request before signer survives active lock/unlock, then real controller reject settles once', async () => {
   const view = await render(<WalletConnectHost />);
   await waitDetails(view);
