@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { redactError } from '@/utils/logRedaction';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
+import { isCovered } from '@/utils/lockCover';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -44,6 +47,15 @@ export default function QRAccountImportScreen({ navigation, route }: Props) {
 
   const existingAccounts = useAccounts();
 
+  const covered = useCoverPaused();
+  const wasCovered = useRef(covered);
+  useEffect(() => {
+    if (wasCovered.current && !covered) {
+      setScanned(false);
+    }
+    wasCovered.current = covered;
+  }, [covered]);
+
   useFocusEffect(useCallback(() => setScanned(false), []));
 
   useEffect(() => {
@@ -63,6 +75,7 @@ export default function QRAccountImportScreen({ navigation, route }: Props) {
   };
 
   const handleBarCodeScanned = async ({ data }: { data: string }) => {
+    if (isCovered()) return;
     if (scanned || processing) return;
 
     setScanned(true);
@@ -140,7 +153,7 @@ export default function QRAccountImportScreen({ navigation, route }: Props) {
         isOnboarding: route.params?.isOnboarding,
       });
     } catch (error) {
-      console.error('QR Account Import error:', error);
+      console.error('QR Account Import error:', redactError(error));
       Alert.alert(
         'Scan Error',
         'Failed to process the QR code. Please try again.',
@@ -274,14 +287,16 @@ export default function QRAccountImportScreen({ navigation, route }: Props) {
 
       {/* Camera View */}
       <View style={styles.cameraContainer}>
-        <CameraView
-          style={StyleSheet.absoluteFill}
-          facing={facing}
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          barcodeScannerSettings={{
-            barcodeTypes: ['qr'],
-          }}
-        />
+        {!covered && (
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            facing={facing}
+            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ['qr'],
+            }}
+          />
+        )}
         {/* Overlay - rendered outside CameraView for iOS barcode detection compatibility */}
         <View style={[StyleSheet.absoluteFill, styles.overlay]}>
           {/* Top overlay */}

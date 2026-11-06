@@ -41,6 +41,11 @@ jest.mock('@/services/wipe/notices', () => ({
   showWipeIncompleteNotice: jest.fn(),
 }));
 jest.mock('@react-navigation/native', () => ({
+  NavigationContext: require('react').createContext({
+    isFocused: () => mockNavigation.isFocused(),
+    addListener: (event: string, listener: () => void) =>
+      mockNavigation.addListener(event, listener),
+  }),
   useNavigation: () => mockNavigation,
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({

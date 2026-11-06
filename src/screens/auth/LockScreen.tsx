@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useLockFocus } from '@/contexts/LockFocusContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Theme } from '@/constants/themes';
@@ -87,7 +87,7 @@ const formatCountdown = (ms: number): string => {
 };
 
 export default function LockScreen() {
-  const navigation = useNavigation();
+  const focus = useLockFocus();
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
   const {
@@ -132,7 +132,7 @@ export default function LockScreen() {
       const state = await AccountSecureStorage.getPinThrottleState();
       setThrottle(state);
     } catch (error) {
-      console.error('Failed to read PIN throttle state:', error);
+      console.error('Failed to read PIN throttle state:', redactError(error));
     } finally {
       // Hydrated regardless of success — on a read error the service still
       // fails closed, and we don't want to strand input disabled forever.
@@ -213,7 +213,7 @@ export default function LockScreen() {
     async (manual = false) => {
       if (
         !biometricAuth.current.enabled ||
-        !navigation.isFocused() ||
+        !focus.isFocused() ||
         AppState.currentState !== 'active' ||
         (!manual && biometricAttempted.current)
       )
@@ -225,7 +225,7 @@ export default function LockScreen() {
       const generation = focusGeneration.current;
       const isCurrent = () =>
         generation === focusGeneration.current &&
-        navigation.isFocused() &&
+        focus.isFocused() &&
         AppState.currentState !== 'background';
       try {
         const success = await biometricAuth.current.unlock(isCurrent);
@@ -236,7 +236,7 @@ export default function LockScreen() {
         authentication.end();
       }
     },
-    [navigation, authentication]
+    [focus, authentication]
   );
 
   useEffect(() => {
@@ -271,15 +271,15 @@ export default function LockScreen() {
       pendingActive.current?.remove();
       pendingActive.current = undefined;
     };
-    const removeFocus = navigation.addListener('focus', onFocus);
-    const removeBlur = navigation.addListener('blur', onBlur);
-    if (navigation.isFocused()) onFocus();
+    const removeFocus = focus.addListener('focus', onFocus);
+    const removeBlur = focus.addListener('blur', onBlur);
+    if (focus.isFocused()) onFocus();
     return () => {
       onBlur();
       removeFocus();
       removeBlur();
     };
-  }, [navigation, promptBiometric]);
+  }, [focus, promptBiometric]);
 
   const handleNumberPress = (number: string) => {
     if (inputDisabled || pin.length >= 6) return;
@@ -306,8 +306,8 @@ export default function LockScreen() {
       // unlock() -> AccountSecureStorage.verifyPin() applies the persistent
       // throttle internally (and returns a plain boolean). We read the resulting
       // lockout/remaining-attempts back via the separate throttle-state query.
-      const success = await unlock(enteredPin, () => navigation.isFocused());
-      if (!navigation.isFocused()) return;
+      const success = await unlock(enteredPin, () => focus.isFocused());
+      if (!focus.isFocused()) return;
       setPin('');
 
       if (success) {
@@ -347,7 +347,7 @@ export default function LockScreen() {
         );
       }
     } catch (error) {
-      console.error('Secret verification error:', error);
+      console.error('Secret verification error:', redactError(error));
       hapticNotify('error');
       showAlert('Error', `Failed to verify ${secretNoun}`);
     } finally {

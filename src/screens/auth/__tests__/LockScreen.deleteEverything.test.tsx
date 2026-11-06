@@ -51,6 +51,10 @@ jest.mock('@/services/secure', () => ({
   },
 }));
 jest.mock('@react-navigation/native', () => ({
+  NavigationContext: require('react').createContext({
+    isFocused: () => true,
+    addListener: () => () => {},
+  }),
   useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }),
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({
