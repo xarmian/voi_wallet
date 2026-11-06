@@ -58,7 +58,19 @@ export interface SigningReviewParams {
   };
 }
 
-export type TakeNextResult = 'advanced' | 'empty' | 'target-gone';
+/** Thrown by a surface's takeNext when the place the next request would be shown is gone. */
+export class NavigationTargetGoneError extends Error {
+  constructor() {
+    super('navigation target gone');
+  }
+}
+
+export interface TakenRequest {
+  /** The request now shown, or null when none was waiting. */
+  request: unknown | null;
+  /** Requests still queued after it. */
+  remaining: number;
+}
 
 export interface SignRequestSurface {
   /** Show the signing review for this request. */
@@ -67,8 +79,15 @@ export interface SignRequestSurface {
   presentError(message: string): void;
   /** Adopt the callback's live navigation, falling back when undefined. */
   adoptNavigation(nav: CallbackNavigation | undefined): void;
-  /** Take and present the next request through the surface's queue. */
-  takeNext(toast: (queueSize: number) => void): Promise<TakeNextResult>;
+  /**
+   * Take and present the next waiting request through the surface's queue.
+   * Throws NavigationTargetGoneError when it cannot be shown because its place
+   * is gone (the request then stays queued). It never touches reviewGrant: the
+   * controller decides whether a signing permission survives.
+   */
+  takeNext(): Promise<TakenRequest>;
+  /** Number of requests queued, for the toast after a failed take. */
+  queueSize(): Promise<number>;
   /** Leave the finished request when no successor is waiting. */
   leave(): void;
 }
@@ -477,6 +496,35 @@ export class SignRequestController {
     await this.advanceAfterEnd(reason);
   };
 
+  /**
+   * Take the next queued request through the surface and decide what happens
+   * to this request's signing permission. A normal unlock mints one permission
+   * per request waiting at that moment; a gate unlock covers only its own
+   * request. Leaving this request ends only its own permission. A failed take
+   * revokes, because the sitting can no longer be trusted to match the queue.
+   *
+   * `toast` gets the number of pending requests, counting the one just shown.
+   * It runs even if the take throws (the request then stays queued and is
+   * counted), except when the target is gone; the error still propagates.
+   */
+  private takeNextRequest = async (
+    toast: (queueSize: number) => void
+  ): Promise<'advanced' | 'empty' | 'target-gone'> => {
+    const { surface, requestKey } = this;
+    let taken: TakenRequest;
+    try {
+      taken = await surface.takeNext();
+      if (!taken.request) reviewGrant.leave(requestKey);
+    } catch (error) {
+      reviewGrant.revoke();
+      if (error instanceof NavigationTargetGoneError) return 'target-gone';
+      toast(await surface.queueSize());
+      throw error;
+    }
+    toast(taken.remaining + (taken.request ? 1 : 0));
+    return taken.request ? 'advanced' : 'empty';
+  };
+
   private advanceAfterEnd = async (
     reason?: ExitReason,
     toast?: (queueSize: number) => void
@@ -484,7 +532,7 @@ export class SignRequestController {
     const { surface } = this;
     if (this.advanced) return;
     this.advanced = true;
-    const nextRequest = await surface.takeNext(
+    const nextRequest = await this.takeNextRequest(
       toast ??
         ((queueSize) => {
           if (reason !== 'declined') return;
@@ -505,6 +553,7 @@ export class SignRequestController {
           });
         })
     );
+    if (nextRequest === 'target-gone') return;
     if (nextRequest === 'empty') {
       surface.leave();
     }

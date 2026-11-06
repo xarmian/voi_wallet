@@ -24,8 +24,8 @@ import { AccountType } from '@/types/wallet';
 import { NetworkId } from '@/types/network';
 import {
   SignRequestController,
+  NavigationTargetGoneError,
   type SignRequestSurface,
-  type TakeNextResult,
 } from '../signRequestController';
 
 const mockRespond = jest.fn();
@@ -121,7 +121,8 @@ const answers: { recorded: boolean; reason: string; version: number }[] = [];
 let durableAtPublish: boolean[];
 let ref: RequestRef;
 
-function fakeSurface(result: TakeNextResult = 'empty') {
+type TakeOutcome = 'empty' | 'advanced' | 'target-gone';
+function fakeSurface(result: TakeOutcome = 'empty') {
   const calls: unknown[][] = [];
   const surface = {
     presentReview: jest.fn((params) => {
@@ -133,13 +134,14 @@ function fakeSurface(result: TakeNextResult = 'empty') {
     adoptNavigation: jest.fn((nav) => {
       calls.push(['adopt', nav]);
     }),
-    takeNext: jest.fn(
-      async (toast: (size: number) => void): Promise<TakeNextResult> => {
-        calls.push(['takeNext']);
-        toast(result === 'advanced' ? 2 : 0);
-        return result;
-      }
-    ),
+    takeNext: jest.fn(async () => {
+      calls.push(['takeNext']);
+      if (result === 'target-gone') throw new NavigationTargetGoneError();
+      return result === 'advanced'
+        ? { request: { id: 'next' }, remaining: 1 }
+        : { request: null, remaining: 0 };
+    }),
+    queueSize: jest.fn(async () => 3),
     leave: jest.fn(() => {
       calls.push(['leave']);
     }),
@@ -149,7 +151,7 @@ function fakeSurface(result: TakeNextResult = 'empty') {
 async function setup(
   requestEvent: unknown = event(),
   version?: number,
-  result?: TakeNextResult
+  result?: TakeOutcome
 ) {
   const recording = fakeSurface(result);
   ref = requestRefFor(
@@ -342,7 +344,8 @@ it('REGRESSION response sent but advance fails keeps mark and sends no error', a
   expect(h.surface.presentError.mock.calls).toEqual([['replace failed']]);
   expect(store.isHandled(ref)).toBe(true);
   expect(coordinator.sendError).not.toHaveBeenCalled();
-  expect(reviewGrant.revoke).toHaveBeenCalledTimes(1);
+  // One revoke from the failed take, one from the failed answer path.
+  expect(reviewGrant.revoke).toHaveBeenCalledTimes(2);
 });
 it('DEFECT terminal sign-failed answers once and advances once', async () => {
   const h = await handOff();
@@ -598,6 +601,64 @@ it.each(['empty', 'advanced', 'target-gone'] as const)(
     expect(h.surface.takeNext).toHaveBeenCalledTimes(1);
   }
 );
+describe('the controller owns the signing permission after a take', () => {
+  const key = '["fixture","42"]';
+  it('DEFECT nothing waiting: leaves this request permission, no revoke', async () => {
+    const h = await setup(undefined, undefined, 'empty');
+    await h.controller.reject();
+    expect(reviewGrant.leave).toHaveBeenCalledWith(key);
+    expect(reviewGrant.revoke).not.toHaveBeenCalled();
+  });
+  it('DEFECT a successor was shown: permission untouched', async () => {
+    const h = await setup(undefined, undefined, 'advanced');
+    await h.controller.reject();
+    expect(reviewGrant.leave).not.toHaveBeenCalled();
+    expect(reviewGrant.revoke).not.toHaveBeenCalled();
+  });
+  it('DEFECT target gone: revokes, no queue-size toast, no throw, no leave of the surface', async () => {
+    const h = await setup(undefined, undefined, 'target-gone');
+    await h.controller.reject();
+    expect(reviewGrant.revoke).toHaveBeenCalledTimes(1);
+    expect(h.surface.queueSize).not.toHaveBeenCalled();
+    expect(h.surface.leave).not.toHaveBeenCalled();
+    expect(Toast.show).not.toHaveBeenCalled();
+  });
+  it('DEFECT any other take failure: revokes, toasts the queued count, rethrows', async () => {
+    const h = await setup();
+    const failure = new Error('persist failed');
+    h.surface.takeNext.mockRejectedValue(failure);
+    await expect(h.controller.reject()).rejects.toBe(failure);
+    expect(reviewGrant.revoke).toHaveBeenCalledTimes(1);
+    expect(h.surface.queueSize).toHaveBeenCalledTimes(1);
+    expect(Toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'walletConnectRejected',
+        props: { queueSize: 3 },
+      })
+    );
+  });
+  it('DEFECT the success toast counts the shown request plus those remaining', async () => {
+    const h = await handOff();
+    h.surface.takeNext.mockResolvedValue({
+      request: { id: 'next' },
+      remaining: 2,
+    });
+    await mockCallbacks.onSuccess(signed);
+    expect(Toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'walletConnectSuccess',
+        props: { queueSize: 3 },
+      })
+    );
+  });
+  it('REGRESSION the surface contract has no reviewGrant: the screen adapter never touches it inside takeNext', () => {
+    const source = readFileSync(
+      'src/screens/walletconnect/TransactionRequestScreen.tsx',
+      'utf8'
+    );
+    expect(source).not.toMatch(/reviewGrant\./);
+  });
+});
 it('REGRESSION takeNext throw propagates unchanged from reject', async () => {
   const h = await setup();
   const failure = new Error('surface failed');

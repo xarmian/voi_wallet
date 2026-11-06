@@ -11,10 +11,6 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '@/navigation/AppNavigator';
 import UniversalHeader from '@/components/common/UniversalHeader';
-import {
-  reviewGrant,
-  walletConnectRequestKey,
-} from '@/services/auth/reviewGrant';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useThemedStyles } from '@/hooks/useThemedStyles';
 import { Theme } from '@/constants/themes';
@@ -22,6 +18,7 @@ import { TransactionRequestQueue } from '@/services/walletconnect/TransactionReq
 import type { CallbackNavigation } from '@/services/navigation/callbackRegistry';
 import { scopedNavigation } from '@/services/navigation/scopedNavigation';
 import {
+  NavigationTargetGoneError,
   SignRequestController,
   type SignRequestSurface,
 } from '@/services/walletconnect/signRequestController';
@@ -51,10 +48,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     if (controllerRef.current === null) {
       const { requestEvent } = route.params;
       const version = (route.params as any)?.version as number | undefined;
-      const requestKey = walletConnectRequestKey(
-        (requestEvent as any)?.topic ?? '',
-        (requestEvent as any)?.id ?? ''
-      );
       const surface: SignRequestSurface = {
         presentReview: (params) => {
           navRef.current.replace('UniversalTransactionSigning', params);
@@ -65,35 +58,19 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         adoptNavigation: (nav) => {
           navRef.current = nav ?? scopedNavigation(navigation, route.key);
         },
-        takeNext: async (toast) => {
-          let taken: Awaited<
-            ReturnType<typeof TransactionRequestQueue.takeNext>
-          >;
-          try {
-            taken = await TransactionRequestQueue.takeNext((req) => {
-              if (
-                !navRef.current.replace('WalletConnectTransactionRequest', {
-                  requestEvent: req,
-                  version: req.version,
-                })
-              )
-                throw new Error('navigation target gone');
-            });
-            // Leaving this request ends only its own permission.
-            if (!taken.request) reviewGrant.leave(requestKey);
-          } catch (error) {
-            reviewGrant.revoke();
+        takeNext: async () => {
+          const taken = await TransactionRequestQueue.takeNext((req) => {
             if (
-              error instanceof Error &&
-              error.message === 'navigation target gone'
+              !navRef.current.replace('WalletConnectTransactionRequest', {
+                requestEvent: req,
+                version: req.version,
+              })
             )
-              return 'target-gone';
-            toast(await TransactionRequestQueue.size());
-            throw error;
-          }
-          toast(taken.remaining + (taken.request ? 1 : 0));
-          return taken.request ? 'advanced' : 'empty';
+              throw new NavigationTargetGoneError();
+          });
+          return { request: taken.request, remaining: taken.remaining };
         },
+        queueSize: () => TransactionRequestQueue.size(),
         leave: () => {
           if (navRef.current.canGoBack()) {
             navRef.current.goBack();
