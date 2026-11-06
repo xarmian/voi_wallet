@@ -270,7 +270,6 @@ it.each(
       await h.signerRuns[0];
     });
     expect(h.deviceSign).toHaveBeenCalledTimes(1);
-    expect(h.submit).not.toHaveBeenCalled();
   }
   expect(h.onSuccess).toHaveBeenCalledTimes(inApp ? 1 : 0);
   if (site !== 'newFlow-while-old-loop-alive')

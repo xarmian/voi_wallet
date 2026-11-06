@@ -410,13 +410,13 @@ export default function UniversalTransactionSigningScreen({
           walletConnect &&
           !reviewGrant.isValid(requestKey) &&
           !handlingOutcome.current &&
-          !authController.wasUserCancelled &&
           authController.getState().state !== 'signing' &&
           authController.getState().state !== 'processing' &&
           (!AppLockSignal.isUnlocked() ||
             (showAuthModal && currentRequest?.reviewGrantKey))
         ) {
-          if (showAuthModal) {
+          const byUser = authController.wasUserCancelled;
+          if (showAuthModal && !byUser) {
             const error = new ReviewEndedError(
               reviewGrant.endReason(requestKey) === 'idle'
                 ? 'Your approval timed out before signing finished. Start the request again.'
@@ -424,8 +424,9 @@ export default function UniversalTransactionSigningScreen({
             );
             Alert.alert(error.title, error.message);
           }
-          authController.cancel();
+          if (!byUser) authController.cancel();
           endSittingState();
+          authController.clearUserCancellation();
         }
       }),
     [
@@ -973,6 +974,7 @@ export default function UniversalTransactionSigningScreen({
       // Cancel, or the 60 s idle window restarted at the signer's end, whichever is first.
       reviewGrant.leave(requestKey);
       endSittingState();
+      authController.clearUserCancellation();
       handlingOutcome.current = false;
     }
   };
@@ -1321,6 +1323,7 @@ export default function UniversalTransactionSigningScreen({
         onCancel={() => {
           reviewGrant.leave(requestKey);
           endSittingState();
+          authController.clearUserCancellation();
         }}
         title="Sign Transaction"
         message={canReview ? summary : ''}

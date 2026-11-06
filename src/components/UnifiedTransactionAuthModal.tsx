@@ -226,7 +226,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handleCancel = useCallback(() => {
-    controller.cancel();
+    controller.cancel({ byUser: true });
     controller.resetAfterDismiss();
     setPin('');
     initializedRef.current = false;

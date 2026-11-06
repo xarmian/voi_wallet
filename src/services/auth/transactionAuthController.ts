@@ -1559,6 +1559,10 @@ export class TransactionAuthController {
     return this.userCancelled;
   }
 
+  public clearUserCancellation(): void {
+    this.userCancelled = false;
+  }
+
   public hasEndedReviewFlow(): boolean {
     return this.reviewFlowEnded;
   }
@@ -2341,8 +2345,8 @@ export class TransactionAuthController {
   /**
    * Cancel the current signing process
    */
-  public cancel(): void {
-    this.userCancelled = true;
+  public cancel(options: { byUser?: boolean } = {}): void {
+    this.userCancelled = options.byUser === true;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = true;
     this.isSigningInProgress = false;
@@ -2392,7 +2396,7 @@ export class TransactionAuthController {
    * Ensures subsequent transactions can start fresh even after an error.
    */
   public resetAfterDismiss(): void {
-    this.userCancelled = true;
+    this.userCancelled = false;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = false;
     this.userExplicitlyRejected = false;
@@ -2893,6 +2897,7 @@ export class TransactionAuthController {
    * Clean up resources
    */
   public cleanup(): void {
+    this.userCancelled = false;
     this.cancelledFlowGeneration += 1;
     this.clearLedgerConnectionTimeout();
 

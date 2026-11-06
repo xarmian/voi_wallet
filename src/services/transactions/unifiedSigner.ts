@@ -481,13 +481,12 @@ export class UnifiedTransactionSigner {
     callbacks?: UnifiedSigningCallbacks,
     signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
-    if (!request.walletConnectParams) {
-      throw new Error('WalletConnect parameters required for batch signing');
-    }
-
-    const params = request.walletConnectParams;
-
     try {
+      if (!request.walletConnectParams) {
+        throw new Error('WalletConnect parameters required for batch signing');
+      }
+
+      const params = request.walletConnectParams;
       const total = params.transactions.length;
       const plans = await this.planBatch(request);
       const boundNetworkId =
@@ -510,7 +509,9 @@ export class UnifiedTransactionSigner {
       if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
-          // The prompt already on the device cannot be recalled; send no further entry.
+          // After Cancel, start no entry after the one whose prompt the phone
+          // has already shown. That entry may still reach the device, including
+          // in the gap before the device send; its signature is discarded.
           if (signal?.aborted) {
             return { success: false, error: new Error('Signing cancelled') };
           }
@@ -618,6 +619,10 @@ export class UnifiedTransactionSigner {
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
       throw error;
+    } finally {
+      const { AccountSecureStorage } =
+        await import('@/services/secure/AccountSecureStorage');
+      AccountSecureStorage.clearPrivateKeyCache();
     }
   }
 

@@ -81,6 +81,24 @@ jest.mock('@/services/network', () => ({
       getCachedAssetParams: (assetId: number) =>
         mockGetCachedAssetParams(networkId, assetId),
       getAssetInfo: (assetId: number) => mockGetAssetInfo(networkId, assetId),
+      getSuggestedParams: async () => ({
+        fee: 1000,
+        firstValid: 1,
+        lastValid: 1001,
+        flatFee: true,
+        minFee: 1000,
+        genesisID: require('@/services/network/config').NETWORK_CONFIGURATIONS[
+          require('@/types/network').NetworkId.VOI_MAINNET
+        ].genesisId,
+        genesisHash: new Uint8Array(
+          require('buffer').Buffer.from(
+            require('@/services/network/config').NETWORK_CONFIGURATIONS[
+              require('@/types/network').NetworkId.VOI_MAINNET
+            ].genesisHash,
+            'base64'
+          )
+        ),
+      }),
       submitTransaction: (...args: unknown[]) => mockSubmit(...args),
     }),
   },
@@ -89,7 +107,7 @@ jest.mock('@/services/network', () => ({
 jest.mock('@/services/wallet', () => ({
   MultiAccountWalletService: {
     getAllAccounts: async () => mockAccounts,
-    getCurrentWallet: jest.fn(),
+    getCurrentWallet: jest.fn(async () => ({ accounts: mockAccounts })),
   },
 }));
 
@@ -255,7 +273,9 @@ jest.mock('@/services/walletconnect', () => ({
     }),
   },
 }));
-jest.mock('@/services/transactions', () => ({ TransactionService: {} }));
+jest.mock('@/services/transactions', () =>
+  jest.requireActual('@/services/transactions')
+);
 jest.mock('@/components/remoteSigner', () => ({
   AnimatedQRCode: () => null,
   AnimatedQRScanner: () => null,
@@ -324,6 +344,7 @@ export function setupOutcomeHarness() {
     mockGetAssetInfo.mockResolvedValue(null);
     mockSign.mockReset();
     mockSubmit.mockReset();
+    mockSubmit.mockResolvedValue({ txId: 'fixture-txid', confirmed: true });
     (AccountSecureStorage.hasPin as jest.Mock).mockResolvedValue(true);
     Object.defineProperty(AppState, 'currentState', {
       value: 'active',
@@ -460,10 +481,14 @@ export async function openOutcome(
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {
     shownWithVault.push(SessionKeyVault.isUnlocked());
   });
+  let leaveScreen = () => {};
   const navigation = {
     canGoBack: () => false,
     navigate: jest.fn(),
-    addListener: () => () => {},
+    addListener: (_event: string, cb: () => void) => {
+      leaveScreen = cb;
+      return () => {};
+    },
   };
   const view = await render(
     <UniversalTransactionSigningScreen
@@ -516,6 +541,7 @@ export async function openOutcome(
   await act(async () => {});
   return {
     view,
+    leave: async () => act(async () => leaveScreen()),
     controller,
     modal,
     onSuccess,
@@ -578,3 +604,104 @@ export {
   render,
   waitFor,
 };
+
+// Non-batch requests are owned by their caller screens, not the universal batch
+// review screen. Mount the shared real modal and controller on that boundary.
+export async function openNonBatchOutcome(
+  type: 'voi_transfer' | 'rekey' | 'keyreg' | 'appl',
+  ledger: boolean,
+  start = true
+) {
+  const base = await openOutcome({
+    locked: false,
+    ledger,
+    sign: false,
+    inApp: true,
+    realSigner: true,
+  });
+  await base.view.unmount();
+  const account = mockAccounts[0];
+  if (type === 'rekey')
+    mockAccounts.push({
+      ...account,
+      id: 'target',
+      address: makeAccount('cancel-target').addr,
+      type: AccountType.LEDGER,
+    });
+  const controller = new TransactionAuthController();
+  const request: UnifiedTransactionRequest = {
+    type,
+    account: account as UnifiedTransactionRequest['account'],
+    networkId: VOI,
+    transferParams: {
+      from: account.address,
+      to: account.address,
+      amount: 1,
+      networkId: VOI,
+    },
+    rekeyParams: {
+      fromAddress: account.address,
+      rekeyToAddress: mockAccounts.at(-1)!.address,
+      networkId: VOI,
+    },
+    keyregParams: { address: account.address, goOffline: true, networkId: VOI },
+    applParams: { senderAddress: account.address, appId: 1, networkId: VOI },
+  };
+  const onSuccess = jest.fn();
+  const onCancel = jest.fn();
+  function Host() {
+    const [visible, setVisible] = React.useState(true);
+    const Modal = require('@/components/UnifiedTransactionAuthModal').default;
+    return (
+      <Modal
+        visible={visible}
+        controller={controller}
+        request={request}
+        onComplete={(success: boolean, value: unknown) => {
+          onSuccess(success, value);
+          setVisible(false);
+        }}
+        onCancel={() => {
+          onCancel();
+          setVisible(false);
+        }}
+      />
+    );
+  }
+  const view = await render(<Host />);
+  await act(async () => {});
+  const ready = async () =>
+    act(async () => {
+      inside(controller).updateState({ ledgerStatus: 'ready' });
+      void inside(controller).maybeStartSigningIfReady();
+    });
+  const begin = async () => {
+    if (ledger) await ready();
+    else
+      for (const digit of '123456')
+        await fireEvent.press(view.getByText(digit));
+  };
+  if (start) await begin();
+  return {
+    ...base,
+    view,
+    controller,
+    request,
+    ready,
+    begin,
+    onSuccess,
+    onCancel,
+    systemBack: async () => {
+      const visit = (node: any): any => {
+        if (node.props?.onRequestClose) return node;
+        for (const child of node.children ?? []) {
+          if (typeof child === 'object') {
+            const found = visit(child);
+            if (found) return found;
+          }
+        }
+      };
+      await act(async () => visit(view.container).props.onRequestClose());
+    },
+  };
+}

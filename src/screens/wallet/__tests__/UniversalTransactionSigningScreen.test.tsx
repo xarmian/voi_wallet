@@ -147,6 +147,7 @@ jest.mock('@/services/auth/transactionAuthController', () => ({
       getState: () => ({ state: 'idle' }),
       cleanup: jest.fn(),
       cancel: jest.fn(),
+      clearUserCancellation: jest.fn(),
     },
 }));
 

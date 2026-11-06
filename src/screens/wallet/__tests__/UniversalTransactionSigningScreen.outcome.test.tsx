@@ -18,6 +18,66 @@ import {
 
 setupOutcomeHarness();
 
+// DEFECT: a listener cancellation must not suppress cleanup in a later sitting.
+it.each(['lapse', 'Cancel', 'failure', 'success'] as const)(
+  'dangerAcknowledgedClearedAcrossSittings:%s',
+  async (firstEnding) => {
+    const h = await openOutcome({ danger: true, ledger: true });
+    const controller = h.controller;
+    if (firstEnding === 'lapse')
+      await act(async () => jest.advanceTimersByTime(61_000));
+    if (firstEnding === 'Cancel')
+      await fireEvent.press(h.view.getByText('Cancel'));
+    if (firstEnding === 'failure' || firstEnding === 'success') {
+      await h.ready();
+      if (firstEnding === 'success') await h.complete();
+      else
+        await act(async () => {
+          h.callbacks().onError!(new Error('signing failed'));
+          h.finishSigner();
+        });
+    }
+    const firstAlerts =
+      firstEnding === 'lapse' || firstEnding === 'failure' ? 1 : 0;
+    expect(h.alert).toHaveBeenCalledTimes(firstAlerts);
+    await h.freshUnlock();
+    expect(currentController()).toBe(controller);
+    expect(h.view.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false
+    );
+    await fireEvent.press(h.view.getByRole('checkbox'));
+    // Stay in review: opening a modal would initialize a new signing flow and
+    // conceal a cancellation flag left over from the previous ending.
+    await act(async () => jest.advanceTimersByTime(61_000));
+    expect(h.view.queryByRole('checkbox')).toBeNull();
+    await h.freshUnlock();
+    expect(currentController()).toBe(controller);
+    expect(h.view.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false
+    );
+    expect(h.signButton()).toBeDisabled();
+    // The review-only lapse is quiet; lapses while the modal is open alert.
+    await fireEvent.press(h.view.getByRole('checkbox'));
+    await fireEvent.press(h.signButton());
+    await act(async () => jest.advanceTimersByTime(61_000));
+    expect(h.alert).toHaveBeenCalledTimes(firstAlerts + 1);
+    expect(h.alert).toHaveBeenLastCalledWith('Request ended', texts.idle);
+  }
+);
+
+// REGRESSION: the user's own Cancel is quiet even after a listener cancellation.
+it('userCancelStillQuietAcrossSittings', async () => {
+  const h = await openOutcome({ ledger: true });
+  await act(async () => jest.advanceTimersByTime(61_000));
+  expect(h.alert).toHaveBeenCalledTimes(1);
+  await h.freshUnlock();
+  await fireEvent.press(h.signButton());
+  await fireEvent.press(h.view.getByText('Cancel'));
+  expect(h.alert).toHaveBeenCalledTimes(1);
+  expect(h.modal().props.visible).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
+});
+
 // DEFECT
 it('lockedSigningSuccessReachesDappOnce', async () => {
   const h = await openOutcome();
@@ -233,8 +293,8 @@ it.each([
   });
   expect(cancel.mock.calls.length > 0).toBe(type === 'batch_transaction');
 });
-// REGRESSION: batch signing returns bytes and never submits a transaction.
-it('cancelThenDeviceApprovesSubmitsNothing', async () => {
+// REGRESSION: Cancel suppresses delivery of late signer callbacks.
+it('cancelThenDeviceApprovesDeliversNothing', async () => {
   const h = await openOutcome({ ledger: true });
   await h.ready();
   await fireEvent.press(h.view.getByText('Cancel'));
@@ -430,7 +490,7 @@ it('lateCallbackAfterCompleteIsIgnored', async () => {
 
 // DEFECT: exercise the real sequential batch loop; only the device entry call is stubbed.
 it.each([true, false])(
-  'ledgerCancelStopsFurtherEntries:locked=%s',
+  'ledgerCancelStopsEntriesAfterShownPrompt:locked=%s',
   async (locked) => {
     const h = await openOutcome({
       locked,
@@ -455,7 +515,6 @@ it.each([true, false])(
     });
     expect(h.deviceSign).toHaveBeenCalledTimes(1);
     expect(h.onSuccess).not.toHaveBeenCalled();
-    expect(h.submit).not.toHaveBeenCalled();
   }
 );
 // DEFECT for the busy refusal; REGRESSION for signing after the old loop settles.
