@@ -106,10 +106,23 @@ jest.mock('@/services/network', () => ({
   },
 }));
 let mockApprovedAccounts: string[] = [];
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+// The dApp transports the production WalletConnect outcome handler answers through.
+const mockWcRespond = { v1: jest.fn(), v2: jest.fn() };
 jest.mock('@/services/walletconnect', () => ({
   WalletConnectService: {
     getInstance: () => ({
       getApprovedAccountsForChain: () => mockApprovedAccounts,
+      respondToRequest: (...args: unknown[]) => mockWcRespond.v2(...args),
+    }),
+  },
+}));
+jest.mock('@/services/walletconnect/v1', () => ({
+  WalletConnectV1Client: {
+    getInstance: () => ({
+      approveRequest: (...args: unknown[]) => mockWcRespond.v1(...args),
     }),
   },
 }));
@@ -474,8 +487,8 @@ describe('remote batch submission ownership (TASK-418)', () => {
     txId: 'batch-tx',
     confirmed: true,
   }));
-  const respondV1 = jest.fn();
-  const respondV2 = jest.fn();
+  const respondV1 = mockWcRespond.v1;
+  const respondV2 = mockWcRespond.v2;
   const net = {
     getSuggestedParams: jest.fn(),
     getCurrentNetworkId: () => netId,
@@ -594,26 +607,41 @@ describe('remote batch submission ownership (TASK-418)', () => {
       routeParams: null,
       inputToken: null,
       settledRef: { current: false },
-      requestEvent: { id: 418, topic: 'dapp' },
-      WalletConnectService: {
-        getInstance: () => ({ respondToRequest: respondV2 }),
-      },
-      WalletConnectV1Client: {
-        getInstance: () => ({ approveRequest: respondV1 }),
-      },
-      takeNextRequest: async () => null,
       forgetUnanswered: noop,
-      // The request coordinator the screen records its decision with.
-      coordinator: {
-        decide: jest.fn(async () => true),
-        sendError: jest.fn(async () => {}),
-        settle: jest.fn(async () => 'settled'),
-      },
-      ref: { version: 2, kind: 'request', topic: 'dapp', id: 418 },
-      rejectingRef: { current: false },
-      advanceAfterEnd: jest.fn(async () => {}),
       setShowAuthModal: noop,
       setCurrentRequest: noop,
+    };
+  }
+
+  // The production WalletConnect outcome handler (the controller the request
+  // screen delegates to), with fakes only for the surface and the coordinator.
+  function walletConnectOutcome(version: number) {
+    const {
+      SignRequestController,
+    } = require('@/services/walletconnect/signRequestController');
+    const surface = {
+      presentReview: jest.fn(),
+      presentError: jest.fn(),
+      adoptNavigation: jest.fn(),
+      takeNext: jest.fn(async () => 'empty'),
+      leave: jest.fn(),
+    };
+    const coordinator = {
+      decide: jest.fn(async () => true),
+      sendError: jest.fn(async () => {}),
+      settle: jest.fn(async () => 'settled'),
+    };
+    const controller = new SignRequestController({
+      requestEvent: { id: 418, topic: 'dapp' },
+      version,
+      surface,
+      coordinator,
+    });
+    return {
+      surface,
+      coordinator,
+      handle: (result: unknown) =>
+        (controller as any).handleWalletConnectSuccess(result),
     };
   }
 
@@ -664,12 +692,8 @@ describe('remote batch submission ownership (TASK-418)', () => {
     async (version) => {
       const { controller, response } = await flow('batch_transaction', true);
       await controller.processRemoteSignerResponse(response);
-      const env = { ...scope(), version };
-      await screenHandler(
-        'walletconnect/TransactionRequestScreen',
-        'handleWalletConnectSuccess',
-        env
-      )(controller.getState().result);
+      const outcome = walletConnectOutcome(version);
+      await outcome.handle(controller.getState().result);
       if (version === 1) {
         expect(respondV1).toHaveBeenCalledWith(418, [signed, null]);
         expect(respondV2).not.toHaveBeenCalled();
@@ -678,20 +702,19 @@ describe('remote batch submission ownership (TASK-418)', () => {
         expect(respondV1).not.toHaveBeenCalled();
       }
       expect(submit).not.toHaveBeenCalled();
-      expect(env.navigation.navigate).not.toHaveBeenCalled();
+      expect(outcome.coordinator.decide).toHaveBeenCalledWith(
+        expect.anything(),
+        'approved'
+      );
+      expect(outcome.surface.presentError).not.toHaveBeenCalled();
     }
   );
 
   it('legacy walletconnect_batch returns base64/null through the response callback without broadcasting', async () => {
     const { controller, response } = await flow('walletconnect_batch', true);
     await controller.processRemoteSignerResponse(response);
-    const env = { ...scope(), version: 2 };
-    const handler = screenHandler(
-      'walletconnect/TransactionRequestScreen',
-      'handleWalletConnectSuccess',
-      env
-    );
-    await handler(controller.getState().result);
+    const outcome = walletConnectOutcome(2);
+    await outcome.handle(controller.getState().result);
     expect(respondV2).toHaveBeenCalledWith('dapp', 418, [signed, null]);
     expect(respondV1).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
