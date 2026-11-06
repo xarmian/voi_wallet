@@ -115,9 +115,6 @@ export const reviewGrant = {
     };
   },
   /** Snapshot reads never reconcile expiry or emit during render. */
-  isLive(): boolean {
-    return liveVault() && [...grant!.keys].some((key) => liveKey(key));
-  },
   isValid(key: string): boolean {
     return liveVault() && liveKey(key);
   },
@@ -153,12 +150,6 @@ export const reviewGrant = {
     clearTimeout(grant!.timers.get(key));
     grant!.timers.delete(key);
     return true;
-  },
-  resumeIdle(key: string): void {
-    sweep();
-    if (!this.isValid(key)) return;
-    grant!.paused.delete(key);
-    armIdle(key);
   },
   revoke(clearKeys = true, reason: ReviewEndReason = 'left'): void {
     generation++;

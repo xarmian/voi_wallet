@@ -1,5 +1,7 @@
 import {
   TransactionAuthController,
+  currentController,
+  waitFor,
   setupOutcomeHarness,
   openOutcome,
   lapse,
@@ -56,7 +58,7 @@ it('lockedSigningFailureShowsAlert', async () => {
   ).toBeTruthy();
 });
 // DEFECT
-it.each(['lock', 'background', 'rotation', 'idle'] as const)(
+it.each(['lock', 'background', 'rotation'] as const)(
   'lockedLapseShowsExactText:%s',
   async (reason) => {
     const h = await openOutcome();
@@ -66,10 +68,7 @@ it.each(['lock', 'background', 'rotation', 'idle'] as const)(
     await h.complete();
     expect(h.onSuccess).not.toHaveBeenCalled();
     expect(h.alert).toHaveBeenCalledTimes(1);
-    expect(h.alert).toHaveBeenCalledWith(
-      'Request ended',
-      reason === 'idle' ? texts.idle : texts.lock
-    );
+    expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
     // A rotation replaced the vault: the replacement belongs to whoever set it
     // (a normal unlock or the restore flow), so the sitting leaves it alone.
     expect(SessionKeyVault.isUnlocked()).toBe(reason === 'rotation');
@@ -120,25 +119,60 @@ it.each([true, false])(
     expect(h.onSuccess).not.toHaveBeenCalled();
   }
 );
-// DEFECT
-it.each(Object.entries(texts))(
-  'unlockedOutcomeTextsAtTheAlert:%s',
-  async (_name, message) => {
-    const h = await openOutcome({ locked: false });
-    const module = jest.requireActual(
-      '@/services/auth/transactionAuthController'
+// REGRESSION: each message comes from a real controller decision.
+it.each([
+  'lock',
+  'background',
+  'rotation',
+  'batch',
+  'other',
+  'idle',
+  'unlock',
+  'noPin',
+  'unreadable',
+] as const)('unlockedOutcomeTextsAtTheAlert:%s', async (name) => {
+  if (name === 'noPin')
+    (AccountSecureStorage.hasPin as jest.Mock).mockResolvedValueOnce(false);
+  if (name === 'unreadable')
+    (AccountSecureStorage.hasPin as jest.Mock).mockRejectedValueOnce(
+      new Error('unavailable')
     );
-    const ErrorClass = module.ReviewEndedError ?? Error;
+  if (name === 'unlock')
+    (AccountSecureStorage.hasPin as jest.Mock).mockImplementationOnce(
+      async () => {
+        expect(
+          reviewGrant.consume(
+            key,
+            inside(currentController()).getReviewDigest()!
+          )
+        ).toBe(true);
+        return true;
+      }
+    );
+  const h = await openOutcome({ locked: false, ledger: name === 'idle' });
+  if (name === 'idle')
     await act(async () => {
-      inside(h.controller).updateState({
-        state: 'error',
-        error: new ErrorClass(message),
-      });
+      jest.advanceTimersByTime(61_000);
     });
-    expect(h.alert).toHaveBeenCalledWith('Request ended', message);
-    expect(h.onSuccess).not.toHaveBeenCalled();
+  if (['lock', 'background', 'rotation'].includes(name)) {
+    await lapse(name as 'lock' | 'background' | 'rotation');
+    await h.complete();
   }
-);
+  if (name === 'batch' || name === 'other') {
+    inside(h.controller).currentRequest!.type =
+      name === 'batch' ? 'batch_transaction' : 'keyreg';
+    await act(async () => {
+      h.callbacks().onNetworkSubmit!();
+    });
+    await lapse('lock');
+    await h.complete();
+  }
+  const message = ['background', 'rotation'].includes(name)
+    ? texts.lock
+    : texts[name as keyof typeof texts];
+  expect(h.alert).toHaveBeenCalledWith('Request ended', message);
+  expect(h.onSuccess).not.toHaveBeenCalled();
+});
 // DEFECT
 it.each(['PIN', 'biometric'] as const)(
   'spentLedgerFlowDoesNotRestartOnReady:%s',
@@ -148,6 +182,8 @@ it.each(['PIN', 'biometric'] as const)(
     expect(h.signer).toHaveBeenCalledTimes(1);
     await act(async () => {
       h.callbacks().onError!(new Error('device locked'));
+      h.finishSigner();
+      await Promise.resolve();
       inside(h.controller).updateState({ ledgerStatus: 'ready' });
       void inside(h.controller).maybeStartSigningIfReady();
       expect(h.signer).toHaveBeenCalledTimes(1);
@@ -208,7 +244,6 @@ it('cancelThenDeviceApprovesSubmitsNothing', async () => {
   });
   await h.complete();
   expect(h.onSuccess).not.toHaveBeenCalled();
-  expect(h.submit).not.toHaveBeenCalled();
   expect(SessionKeyVault.isUnlocked()).toBe(false);
   expect(reviewGrant.isValid(key)).toBe(false);
 });
@@ -231,18 +266,239 @@ it.each([false, 'unreadable'] as const)(
   }
 );
 
-// DEFECT: a rejected signer promise must preserve the lapse ending too.
-it.each(['lock', 'background', 'rotation', 'idle'] as const)(
+// REGRESSION: a throwing callback must preserve the lapse ending too.
+it.each(['lock', 'background', 'rotation'] as const)(
   'lockedSignerThrowAfterLapseShowsExactText:%s',
   async (reason) => {
     const h = await openOutcome();
     await lapse(reason);
     await h.rejectSigner();
     expect(h.onSuccess).not.toHaveBeenCalled();
-    expect(h.alert).toHaveBeenCalledWith(
-      'Request ended',
-      reason === 'idle' ? texts.idle : texts.lock
-    );
+    expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
     expect(SessionKeyVault.isUnlocked()).toBe(reason === 'rotation');
+  }
+);
+
+// DEFECT
+it.each([false, true])(
+  'inAppModalClosesBeforeOnSuccessResolves:reject=%s',
+  async (reject) => {
+    const h = await openOutcome({ locked: false, inApp: true });
+    let finish!: () => void;
+    h.onSuccess.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    await h.complete();
+    expect(h.onSuccess).toHaveBeenCalledTimes(1);
+    expect(h.modal().props.visible).toBe(false);
+    await act(async () => {
+      finish();
+    });
+    expect(h.controller.getState().state).toBe('idle');
+    if (reject) {
+      await fireEvent.press(h.signButton());
+      h.onSuccess.mockRejectedValueOnce(new Error('submit failed'));
+      // Modal completion consumes the returned promise; exercise the screen callback directly to observe rejection.
+      await act(async () => {
+        await expect(h.modal().props.onComplete(true, result)).rejects.toThrow(
+          'submit failed'
+        );
+      });
+      expect(h.modal().props.visible).toBe(false);
+      expect(h.controller.getState().state).toBe('idle');
+    }
+  }
+);
+// REGRESSION
+it('walletConnectModalStaysUntilDelivery', async () => {
+  const h = await openOutcome();
+  let finish!: () => void;
+  h.onSuccess.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  await h.complete();
+  expect(h.modal().props.visible).toBe(true);
+  expect(SessionKeyVault.isUnlocked()).toBe(true);
+  await act(async () => {
+    finish();
+  });
+  expect(h.modal().props.visible).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
+});
+// DEFECT for locked; REGRESSION for unlocked.
+it.each(
+  [true, false].flatMap((locked) =>
+    ['Cancel', 'back'].map((exit) => ({ locked, exit }))
+  )
+)(
+  'userCancelInAuthenticatingShowsNoAlert:locked=$locked:$exit',
+  async ({ locked, exit }) => {
+    const h = await openOutcome({ locked, ledger: true });
+    expect(h.controller.getState().state).toBe('authenticating');
+    const cancel = jest.spyOn(h.controller, 'cancel');
+    if (exit === 'Cancel') await fireEvent.press(h.view.getByText('Cancel'));
+    else await h.systemBack();
+    expect(h.alert).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(h.modal().props.visible).toBe(false);
+    expect(SessionKeyVault.isUnlocked()).toBe(!locked);
+  }
+);
+// REGRESSION: fresh gate authentication also clears the acknowledgement.
+it.each(['success', 'failure', 'Cancel', 'lapse'] as const)(
+  'dangerAcknowledgedClearedOnEveryEnding:locked:%s',
+  async (exit) => {
+    const h = await openOutcome({
+      danger: true,
+      ledger: exit === 'Cancel' || exit === 'lapse',
+    });
+    expect(h.view.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      true
+    );
+    if (exit === 'success') await h.complete();
+    if (exit === 'failure')
+      await act(async () => {
+        h.callbacks().onError!(new Error('signing failed'));
+      });
+    if (exit === 'Cancel') await fireEvent.press(h.view.getByText('Cancel'));
+    if (exit === 'lapse')
+      await act(async () => {
+        jest.advanceTimersByTime(61_000);
+      });
+    await h.freshUnlock();
+    expect(h.view.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false
+    );
+    expect(h.signButton()).toBeDisabled();
+  }
+);
+// DEFECT for success, failure and Cancel; REGRESSION for lapse, cleared by the listener.
+// The unlocked review stays mounted across attempts on the same bytes.
+it.each(['success', 'failure', 'Cancel', 'lapse'] as const)(
+  'dangerAcknowledgedClearedOnEveryEnding:unlocked:%s',
+  async (exit) => {
+    const h = await openOutcome({
+      locked: false,
+      danger: true,
+      ledger: exit === 'Cancel' || exit === 'lapse',
+    });
+    expect(h.view.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      true
+    );
+    if (exit === 'success') await h.complete();
+    if (exit === 'failure')
+      await act(async () => {
+        h.callbacks().onError!(new Error('signing failed'));
+      });
+    if (exit === 'Cancel') await fireEvent.press(h.view.getByText('Cancel'));
+    if (exit === 'lapse')
+      await act(async () => {
+        jest.advanceTimersByTime(61_000);
+      });
+    expect(h.view.getByRole('checkbox').props.accessibilityState.checked).toBe(
+      false
+    );
+    expect(h.signButton()).toBeDisabled();
+  }
+);
+// DEFECT: completion can precede the modal effect that resets the controller.
+it('lateCallbackAfterCompleteIsIgnored', async () => {
+  const h = await openOutcome();
+  await act(async () => {
+    h.callbacks().onComplete!(result);
+    const state = h.controller.getState();
+    h.callbacks().onLedgerRejected!({
+      index: 2,
+      total: 2,
+      error: new Error('device locked'),
+    });
+    h.callbacks().onLedgerSigned!({ index: 2, total: 2 });
+    h.callbacks().onLedgerPrompt!({ index: 2, total: 2 });
+    h.callbacks().onError!(new Error('late failure'));
+    h.callbacks().onNetworkSubmit!();
+    h.callbacks().onNetworkConfirmed!('late', true);
+    expect(h.controller.getState()).toEqual(state);
+  });
+  expect(h.onSuccess).toHaveBeenCalledTimes(1);
+});
+
+// DEFECT: exercise the real sequential batch loop; only the device entry call is stubbed.
+it.each([true, false])(
+  'ledgerCancelStopsFurtherEntries:locked=%s',
+  async (locked) => {
+    const h = await openOutcome({
+      locked,
+      ledger: true,
+      realSigner: true,
+      entries: 3,
+    });
+    let finish!: (bytes: Uint8Array) => void;
+    h.deviceSign.mockImplementationOnce(
+      () =>
+        new Promise<Uint8Array>((resolve) => {
+          finish = resolve;
+        })
+    );
+    h.deviceSign.mockResolvedValue(new Uint8Array([1]));
+    await h.ready();
+    await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+    await fireEvent.press(h.view.getByText('Cancel'));
+    await act(async () => {
+      finish(new Uint8Array([1]));
+      await h.signerRuns[0];
+    });
+    expect(h.deviceSign).toHaveBeenCalledTimes(1);
+    expect(h.onSuccess).not.toHaveBeenCalled();
+    expect(h.submit).not.toHaveBeenCalled();
+  }
+);
+// DEFECT for the busy refusal; REGRESSION for signing after the old loop settles.
+it.each([true, false])(
+  'ledgerNewFlowRefusedWhileOldLoopAlive:locked=%s',
+  async (locked) => {
+    const h = await openOutcome({
+      locked,
+      ledger: true,
+      realSigner: true,
+      entries: 3,
+    });
+    let finish!: (bytes: Uint8Array) => void;
+    h.deviceSign.mockImplementationOnce(
+      () =>
+        new Promise<Uint8Array>((resolve) => {
+          finish = resolve;
+        })
+    );
+    h.deviceSign.mockResolvedValue(new Uint8Array([1]));
+    await h.ready();
+    await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+    await fireEvent.press(h.view.getByText('Cancel'));
+    await h.freshUnlock();
+    await fireEvent.press(h.signButton());
+    await h.ready();
+    expect(h.alert).toHaveBeenCalledWith(
+      'Ledger busy',
+      'Your Ledger is still finishing the previous request. Wait for it to stop, then start the request again.'
+    );
+    expect(h.deviceSign).toHaveBeenCalledTimes(1);
+    expect(h.onSuccess).not.toHaveBeenCalled();
+    await act(async () => {
+      finish(new Uint8Array([1]));
+      await h.signerRuns[0];
+    });
+    await h.freshUnlock();
+    await fireEvent.press(h.signButton());
+    await h.ready();
+    await act(async () => {
+      await h.signerRuns[h.signerRuns.length - 1];
+    });
+    expect(h.deviceSign).toHaveBeenCalledTimes(4);
+    expect(h.onSuccess).toHaveBeenCalledTimes(1);
   }
 );

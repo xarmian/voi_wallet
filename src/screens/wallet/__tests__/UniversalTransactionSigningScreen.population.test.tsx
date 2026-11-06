@@ -11,6 +11,8 @@ import {
   SessionKeyVault,
   AccountSecureStorage,
   act,
+  fireEvent,
+  waitFor,
 } from './helpers/reviewOutcomeHarness';
 
 setupOutcomeHarness();
@@ -203,5 +205,78 @@ it.each(
     );
   expect(reviewGrant.isValid(key)).toBe(false);
   expect(reviewGrant.isUnspent(key)).toBe(false);
+  expect(reviewGrant.pauseIdle(key)).toBe(false);
+});
+
+// DEFECT for explicit cancellation and in-app ordering; REGRESSION for delivery after the old run settles.
+it.each(
+  [false, true].flatMap((locked) =>
+    [
+      'userCancel-authenticating',
+      'ledgerCancel-signing-loop',
+      'inApp-completeThenSubmit',
+      'newFlow-while-old-loop-alive',
+    ]
+      .filter((site) => !locked || site !== 'inApp-completeThenSubmit')
+      .map((site) => ({ locked, site }))
+  )
+)('population:$site:locked=$locked', async ({ locked, site }) => {
+  const inApp = site === 'inApp-completeThenSubmit';
+  const h = await openOutcome({
+    locked,
+    ledger: !inApp,
+    inApp,
+    realSigner: !inApp,
+    entries: 3,
+  });
+  if (inApp) {
+    let finish!: () => void;
+    h.onSuccess.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    await h.complete();
+    expect(h.modal().props.visible).toBe(false);
+    expect(h.onSuccess).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish();
+    });
+  } else if (site === 'userCancel-authenticating') {
+    await fireEvent.press(h.view.getByText('Cancel'));
+  } else {
+    let finish!: (bytes: Uint8Array) => void;
+    h.deviceSign.mockImplementationOnce(
+      () =>
+        new Promise<Uint8Array>((resolve) => {
+          finish = resolve;
+        })
+    );
+    h.deviceSign.mockResolvedValue(new Uint8Array([1]));
+    await h.ready();
+    await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+    await fireEvent.press(h.view.getByText('Cancel'));
+    if (site === 'newFlow-while-old-loop-alive') {
+      await h.freshUnlock();
+      await fireEvent.press(h.signButton());
+      await h.ready();
+      expect(h.alert).toHaveBeenCalledWith(
+        'Ledger busy',
+        'Your Ledger is still finishing the previous request. Wait for it to stop, then start the request again.'
+      );
+    }
+    await act(async () => {
+      finish(new Uint8Array([1]));
+      await h.signerRuns[0];
+    });
+    expect(h.deviceSign).toHaveBeenCalledTimes(1);
+    expect(h.submit).not.toHaveBeenCalled();
+  }
+  expect(h.onSuccess).toHaveBeenCalledTimes(inApp ? 1 : 0);
+  if (site !== 'newFlow-while-old-loop-alive')
+    expect(h.alert).not.toHaveBeenCalled();
+  expect(h.modal().props.visible).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(!locked);
+  expect(reviewGrant.isValid(key)).toBe(false);
   expect(reviewGrant.pauseIdle(key)).toBe(false);
 });

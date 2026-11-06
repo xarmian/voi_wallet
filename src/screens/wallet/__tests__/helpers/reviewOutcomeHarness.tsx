@@ -106,6 +106,7 @@ jest.mock('expo-screen-capture', () => ({
 
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
+    signTransaction: (...args: unknown[]) => mockDeviceSign(...args),
     getSigningInfo: jest.fn(async (address: string) => ({
       signingAddress: address,
       canSign: true,
@@ -181,12 +182,25 @@ jest.mock('@/components/UnifiedTransactionAuthModal', () => {
 });
 let mockLedger = false;
 const mockSign = jest.fn();
+const mockDeviceSign = jest.fn();
+let mockRealSigner = false;
+const mockSignerRuns: Promise<unknown>[] = [];
 const mockSubmit = jest.fn();
 const mockDeviceListeners = new Map<string, Set<(...args: any[]) => void>>();
 jest.mock('@/services/transactions/unifiedSigner', () => ({
   UnifiedTransactionSigner: {
     getInstance: () => ({
-      signTransaction: mockSign,
+      signTransaction: (...args: unknown[]) =>
+        mockRealSigner
+          ? (() => {
+              const run = jest
+                .requireActual('@/services/transactions/unifiedSigner')
+                .UnifiedTransactionSigner.getInstance()
+                .signTransaction(...args);
+              mockSignerRuns.push(run);
+              return run;
+            })()
+          : mockSign(...args),
       planBatch: async (request: UnifiedTransactionRequest) =>
         request.walletConnectParams!.transactions.map((entry) => ({
           action: 'sign',
@@ -224,6 +238,21 @@ jest.mock('@/services/remoteSigner', () => ({
   RemoteSignerService: {
     createSigningRequest: jest.fn(async () => ({ id: 'request' })),
     encodePayload: jest.fn(() => ''),
+  },
+}));
+jest.mock('@/services/walletconnect', () => ({
+  WalletConnectService: {
+    getInstance: () => ({
+      getApprovedAccountsForChain: () =>
+        mockAccounts.map(
+          (a) =>
+            require('@/services/network/config').NETWORK_CONFIGURATIONS[
+              require('@/types/network').NetworkId.VOI_MAINNET
+            ].chainId +
+            ':' +
+            a.address
+        ),
+    }),
   },
 }));
 jest.mock('@/services/transactions', () => ({ TransactionService: {} }));
@@ -281,6 +310,9 @@ export function setupOutcomeHarness() {
     jest.useFakeTimers();
     mockLocked = true;
     mockLedger = false;
+    mockRealSigner = false;
+    mockSignerRuns.length = 0;
+    mockDeviceSign.mockReset();
     mockRegistry = {};
     mockAccounts = [];
     mockRoutes = {};
@@ -317,9 +349,7 @@ export function setupOutcomeHarness() {
     jest.useRealTimers();
   });
 }
-export async function lapse(
-  reason: 'lock' | 'background' | 'rotation' | 'idle'
-) {
+export async function lapse(reason: 'lock' | 'background' | 'rotation') {
   await act(async () => {
     if (reason === 'lock') AppLockSignal.setUnlocked(false);
     if (reason === 'background') {
@@ -327,11 +357,6 @@ export async function lapse(
       [...appListeners].forEach((cb) => cb('background'));
     }
     if (reason === 'rotation') SessionKeyVault.set('rotated fixture', 'pin');
-    if (reason === 'idle') {
-      // Completion can be delayed after the signer's pause has resumed.
-      reviewGrant.resumeIdle(key);
-      jest.advanceTimersByTime(61_000);
-    }
   });
 }
 export async function openOutcome(
@@ -341,6 +366,11 @@ export async function openOutcome(
     remote?: boolean;
     sign?: boolean;
     signerThrows?: boolean;
+    inApp?: boolean;
+    realSigner?: boolean;
+    entries?: number;
+    danger?: boolean;
+    beforeSign?: () => void;
   } = {}
 ) {
   const {
@@ -351,11 +381,12 @@ export async function openOutcome(
   } = options;
   mockLocked = locked;
   mockLedger = ledger;
+  mockRealSigner = options.realSigner ?? false;
   AppLockSignal.setUnlocked(!locked);
   if (locked) await reviewGrant.unlock(key, { pin: '123456' });
   else {
     SessionKeyVault.set('fixture', 'pin');
-    reviewGrant.mintForWaiting([key]);
+    if (!options.inApp) reviewGrant.mintForWaiting([key]);
   }
   const address = makeAccount('review-outcome').addr;
   const account = {
@@ -377,6 +408,7 @@ export async function openOutcome(
     sender: address,
     receiver: address,
     amount: 1,
+    ...(options.danger ? { rekeyTo: makeAccount('rekey-target').addr } : {}),
     suggestedParams: {
       fee: 1000,
       firstValid: 1,
@@ -392,16 +424,34 @@ export async function openOutcome(
   );
   let callbacks!: UnifiedSigningCallbacks;
   let finish!: () => void;
-  let rejectSigner!: (error: Error) => void;
+  let throwCallback!: () => void;
   mockSign.mockImplementation((_request, cb) => {
     callbacks = cb;
     return new Promise<void>((resolve, reject) => {
       finish = resolve;
-      rejectSigner = reject;
+      throwCallback = () => {
+        try {
+          cb.onLedgerPrompt!({
+            get index(): number {
+              throw new Error('transport failed');
+            },
+            total: 1,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      };
     });
   });
   if (options.signerThrows)
-    mockSign.mockRejectedValueOnce(new Error('signing failed'));
+    mockSign.mockImplementationOnce(async (_request, cb) => {
+      cb.onLedgerPrompt!({
+        get index(): number {
+          throw new Error('signing failed');
+        },
+        total: 1,
+      });
+    });
   const onSuccess = jest.fn(async () => {
     expect(SessionKeyVault.isUnlocked()).toBe(true);
   });
@@ -421,29 +471,43 @@ export async function openOutcome(
       route={
         {
           params: {
-            transactions: [bytes],
+            transactions: Array(options.entries ?? 1).fill(bytes),
             account,
             networkId: VOI,
             chainId: config.chainId,
             onSuccess,
             onReject,
-            walletConnect: {
-              requestKey: key,
-              transactions: [{ txn: bytes }],
-              binding: {
-                topic: 'topic',
-                chainId: config.chainId,
-                networkId: VOI,
-                approvedAccounts: [config.chainId + ':' + address],
-              },
-            },
+            walletConnect: options.inApp
+              ? undefined
+              : {
+                  requestKey: key,
+                  transactions: Array.from(
+                    { length: options.entries ?? 1 },
+                    () => ({ txn: bytes })
+                  ),
+                  binding: {
+                    topic: 'topic',
+                    chainId: config.chainId,
+                    networkId: VOI,
+                    approvedAccounts: [config.chainId + ':' + address],
+                  },
+                },
           },
         } as never
       }
     />
   );
-  await waitFor(() => expect(view.getByText('Sign')).toBeEnabled());
-  if (sign) await fireEvent.press(view.getByText('Sign'));
+  const signButton = () => view.getByText(/^Sign(?: with .+)?$/);
+  await waitFor(() => expect(signButton()).toBeTruthy());
+  if (options.danger) await fireEvent.press(view.getByRole('checkbox'));
+  options.beforeSign?.();
+  if (sign) {
+    await fireEvent.press(signButton());
+    if (options.inApp && !ledger && !remote) {
+      for (const digit of '123456')
+        await fireEvent.press(view.getByText(digit));
+    }
+  }
   const modal = () => {
     expect(mockModalMounted).toBe(true);
     return { props: mockObservedModalProps };
@@ -460,10 +524,33 @@ export async function openOutcome(
     shownWithVault,
     signer: mockSign,
     submit: mockSubmit,
+    deviceSign: mockDeviceSign,
+    signerRuns: mockSignerRuns,
+    signButton,
+    systemBack: async () => {
+      const visit = (node: any): any => {
+        if (node.props?.onRequestClose) return node;
+        for (const child of node.children ?? []) {
+          if (typeof child === 'object') {
+            const found = visit(child);
+            if (found) return found;
+          }
+        }
+      };
+      await act(async () => {
+        visit(view.container).props.onRequestClose();
+      });
+    },
+    freshUnlock: async () => {
+      await act(async () => {
+        await reviewGrant.unlock(key, { pin: '123456' });
+      });
+    },
+    finishSigner: () => finish(),
     callbacks: () => callbacks,
     rejectSigner: async () => {
       await act(async () => {
-        rejectSigner(new Error('transport failed'));
+        throwCallback();
       });
     },
     complete: async (value = result) => {

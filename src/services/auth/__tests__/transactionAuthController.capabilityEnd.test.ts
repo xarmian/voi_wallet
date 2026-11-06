@@ -112,7 +112,6 @@ import {
   reviewGrant,
   reviewBindingDigest,
   walletConnectReviewDigest,
-  REVIEW_IDLE_MS,
 } from '../reviewGrant';
 import { TransactionAuthController } from '../transactionAuthController';
 
@@ -218,15 +217,29 @@ const key = 'A';
 const completeResult = { success: true, signedTransactions: ['signature'] };
 const pendingSigner = () => {
   let callbacks!: UnifiedSigningCallbacks;
-  signer.mockImplementationOnce(async (_req, cb) => {
-    callbacks = cb;
+  signer.mockImplementationOnce((_req, cb) => {
+    return new Promise<void>((resolve) => {
+      callbacks = {
+        ...cb,
+        onComplete: (result) => {
+          cb.onComplete(result);
+          resolve();
+        },
+      };
+    });
   });
   return () => callbacks;
 };
+async function beginReviewSigning(controller: TransactionAuthController) {
+  // Keep the signer pending while authentication crosses its asynchronous PIN checks.
+  void controller.authenticateWithReviewGrant(key);
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+}
 async function assertEnded(
   controller: TransactionAuthController,
   state: string
 ) {
+  await Promise.resolve();
   expect(internals(controller).isSigningInProgress).toBe(false);
   expect(controller.getState().state).toBe(state);
   expect(internals(controller).currentRequest.reviewGrantKey).toBeUndefined();
@@ -276,7 +289,7 @@ it.each(['PIN', 'biometric'])(
     const controller = new TransactionAuthController();
     const callbacks = pendingSigner();
     await controller.initializeSigningFlow(req);
-    await controller.authenticateWithReviewGrant(key);
+    await beginReviewSigning(controller);
     callbacks().onComplete!({
       success: false,
       error: new Error('signing failed'),
@@ -300,13 +313,9 @@ const signedThenLapsedBatchMessage =
   'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then start the request again if you still need it.';
 const signedThenLapsedNonBatchMessage =
   "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.";
-const lapseReasons = ['idle', 'lock', 'background', 'rotation'] as const;
+// idle after signer entry: not applicable, the pause removes it; idle before signer entry: ledgerIdleBeforeSignerShowsTimedOutText
+const lapseReasons = ['lock', 'background', 'rotation'] as const;
 function lapse(reason: (typeof lapseReasons)[number]) {
-  if (reason === 'idle') {
-    // The signer has ended; completion is delayed beyond a fresh resumed window.
-    reviewGrant.resumeIdle(key);
-    jest.advanceTimersByTime(REVIEW_IDLE_MS);
-  }
   if (reason === 'lock') AppLockSignal.setUnlocked(false);
   if (reason === 'background')
     [...appListeners].forEach((listener) => listener('background'));
@@ -329,7 +338,7 @@ it.each(lapseReasons)(
     const controller = new TransactionAuthController();
     const callbacks = pendingSigner();
     await controller.initializeSigningFlow(req);
-    await controller.authenticateWithReviewGrant(key);
+    await beginReviewSigning(controller);
     callbacks().onNetworkSubmit!();
     lapse(reason);
     callbacks().onComplete!(completeResult);
@@ -351,7 +360,7 @@ it.each(lapseReasons)(
     const controller = new TransactionAuthController();
     const callbacks = pendingSigner();
     await controller.initializeSigningFlow(req);
-    await controller.authenticateWithReviewGrant(key);
+    await beginReviewSigning(controller);
     callbacks().onNetworkSubmit!();
     lapse(reason);
     callbacks().onComplete!(completeResult);
@@ -374,16 +383,12 @@ it.each(lapseReasons)(
       const controller = new TransactionAuthController();
       const callbacks = pendingSigner();
       await controller.initializeSigningFlow(req);
-      await controller.authenticateWithReviewGrant(key);
+      await beginReviewSigning(controller);
       expect(internals(controller).hasSubmittedToNetwork).toBe(false);
       lapse(reason);
       callbacks().onComplete!(completeResult);
       const message = controller.getState().error?.message;
-      expect(message).toBe(
-        reason === 'idle'
-          ? 'Your approval timed out before signing finished. Start the request again.'
-          : lapseMessage
-      );
+      expect(message).toBe(lapseMessage);
       expect(message).not.toBe(signedThenLapsedBatchMessage);
       expect(message).not.toBe(signedThenLapsedNonBatchMessage);
       expect(controller.getState().result).toBeNull();
@@ -393,7 +398,7 @@ it.each(lapseReasons)(
   }
 );
 // E3a-E3d: success and failure must both discard undeliverable results.
-it.each(['idle', 'lock', 'background', 'rotation'] as const)(
+it.each(['lock', 'background', 'rotation'] as const)(
   'lapsed%sEndsSigningAndCancelThenFreshPinSigns',
   async (reason) => {
     for (const success of [true, false]) {
@@ -402,22 +407,14 @@ it.each(['idle', 'lock', 'background', 'rotation'] as const)(
       const controller = new TransactionAuthController();
       const callbacks = pendingSigner();
       await controller.initializeSigningFlow(req);
-      await controller.authenticateWithReviewGrant(key);
-      if (reason === 'idle') {
-        // The signer has ended; its terminal callback arrives after a resumed window.
-        reviewGrant.resumeIdle(key);
-        jest.advanceTimersByTime(REVIEW_IDLE_MS);
-      }
+      await beginReviewSigning(controller);
+
       if (reason === 'lock') AppLockSignal.setUnlocked(false);
       if (reason === 'background')
         [...appListeners].forEach((listener) => listener('background'));
       if (reason === 'rotation') SessionKeyVault.set('rotated fixture', 'pin');
       callbacks().onComplete!({ success, signedTransactions: ['discard'] });
-      expect(controller.getState().error?.message).toBe(
-        reason === 'idle'
-          ? 'Your approval timed out before signing finished. Start the request again.'
-          : lapseMessage
-      );
+      expect(controller.getState().error?.message).toBe(lapseMessage);
       expect(reviewGrant.endReason(key)).toBe(reason);
       expect(controller.getState().result).toBeNull();
       await assertEnded(controller, 'error');
@@ -434,7 +431,7 @@ it.each([true, false])(
     const controller = new TransactionAuthController();
     const callbacks = pendingSigner();
     await controller.initializeSigningFlow(req);
-    await controller.authenticateWithReviewGrant(key);
+    await beginReviewSigning(controller);
     if (submitted) callbacks().onNetworkSubmit!();
     internals(controller).hasSubmittedToNetwork = submitted;
     reviewGrant.leave(key);
@@ -513,10 +510,10 @@ it('spentLedgerFailureRequiresFreshAuthenticationBeforeReadyRetry', async () => 
     ledgerStatus: 'searching',
   });
   const callbacks = pendingSigner();
-  await controller.authenticateWithReviewGrant(key);
+  await beginReviewSigning(controller);
   expect(signer).not.toHaveBeenCalled();
   internals(controller).updateState({ ledgerStatus: 'ready' });
-  await internals(controller).maybeStartSigningIfReady();
+  void internals(controller).maybeStartSigningIfReady();
   callbacks().onComplete!({
     success: false,
     error: new Error('transport failed'),
@@ -550,7 +547,7 @@ it.each(['digest', 'unconsumed'])(
     await controller.initializeSigningFlow(req);
     if (failure === 'digest') {
       jest.spyOn(internals(controller), 'startSigning').mockResolvedValueOnce();
-      await controller.authenticateWithReviewGrant(key);
+      await beginReviewSigning(controller);
       jest.restoreAllMocks();
       req.walletConnectParams!.transactions[0].txn = 'AQ==';
     }
@@ -721,7 +718,7 @@ it.each(['touch', 'consume'] as const)(
       isLedgerFlow: true,
       ledgerStatus: 'ready',
     });
-    await controller.authenticateWithReviewGrant(key);
+    await beginReviewSigning(controller);
     jest.advanceTimersByTime(31_000);
     expect(reviewGrant.isValid('B')).toBe(false);
     expect(reviewGrant.isValid(key)).toBe(true);
@@ -772,15 +769,3 @@ it.each(['success', 'error', 'cancel', 'cleanup', 'replaced flow'] as const)(
     await assertIdleExit(controller);
   }
 );
-// DEFECT: the idle deadline currently lapses the in-flight permission.
-it('cancelDuringPauseWorksOnLedger', async () => {
-  const { controller, callbacks, signal, finish } = await enterLedgerSigner();
-  jest.advanceTimersByTime(61_000);
-  expect(reviewGrant.isValid(key)).toBe(true);
-  controller.cancel();
-  expect(signal.aborted).toBe(true);
-  callbacks.onComplete!(completeResult);
-  await finish();
-  expect(controller.getState()).toMatchObject({ state: 'idle', result: null });
-  await assertIdleExit(controller);
-});

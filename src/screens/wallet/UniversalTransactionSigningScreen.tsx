@@ -375,6 +375,11 @@ export default function UniversalTransactionSigningScreen({
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
+  const endSittingState = useCallback(() => {
+    setDangerAcknowledged(false);
+    setShowAuthModal(false);
+    setCurrentRequest(null);
+  }, []);
   /** Resolved ASA params keyed by asset id; `null` = looked up, unavailable. */
   const [assetParams, setAssetParams] = useState<
     Record<string, AssetParams | null>
@@ -405,6 +410,7 @@ export default function UniversalTransactionSigningScreen({
           walletConnect &&
           !reviewGrant.isValid(requestKey) &&
           !handlingOutcome.current &&
+          !authController.wasUserCancelled &&
           authController.getState().state !== 'signing' &&
           authController.getState().state !== 'processing' &&
           (!AppLockSignal.isUnlocked() ||
@@ -416,19 +422,25 @@ export default function UniversalTransactionSigningScreen({
                 ? 'Your approval timed out before signing finished. Start the request again.'
                 : 'Your approval ended before signing finished. Start the request again.'
             );
-            Alert.alert('Request ended', error.message);
+            Alert.alert(error.title, error.message);
           }
           authController.cancel();
-          setShowAuthModal(false);
-          setCurrentRequest(null);
-          setDangerAcknowledged(false);
+          endSittingState();
         }
       }),
-    [walletConnect, requestKey, authController, showAuthModal, currentRequest]
+    [
+      walletConnect,
+      requestKey,
+      authController,
+      showAuthModal,
+      currentRequest,
+      endSittingState,
+    ]
   );
 
   useEffect(() => {
     return () => {
+      endSittingState();
       reviewGrant.leave(requestKey);
       authController.cleanup();
       // Clean up callback registry when unmounting
@@ -937,13 +949,17 @@ export default function UniversalTransactionSigningScreen({
   const handleAuthComplete = async (success: boolean, result?: any) => {
     if (handlingOutcome.current) return;
     handlingOutcome.current = true;
+    if (!walletConnect) {
+      setShowAuthModal(false);
+      setCurrentRequest(null);
+    }
     try {
       if (success && onSuccess) {
         await onSuccess(result);
       } else if (!success) {
         const error = result?.error;
         if (error instanceof ReviewEndedError) {
-          Alert.alert('Request ended', error.message);
+          Alert.alert(error.title, error.message);
         } else {
           const { title, message } = toErrorAlert(error, {
             fallbackMessage: 'Failed to sign transactions.',
@@ -956,13 +972,13 @@ export default function UniversalTransactionSigningScreen({
       // The flow ends when handleAuthComplete returns, the user leaves the screen,
       // Cancel, or the 60 s idle window restarted at the signer's end, whichever is first.
       reviewGrant.leave(requestKey);
-      setShowAuthModal(false);
-      setCurrentRequest(null);
+      endSittingState();
       handlingOutcome.current = false;
     }
   };
 
   const handleReject = async () => {
+    endSittingState();
     if (requiresReviewUnlock && !grantValid) reviewGrant.leave(requestKey);
     if (onReject) {
       await onReject();
@@ -1304,8 +1320,7 @@ export default function UniversalTransactionSigningScreen({
         onComplete={handleAuthComplete}
         onCancel={() => {
           reviewGrant.leave(requestKey);
-          setShowAuthModal(false);
-          setCurrentRequest(null);
+          endSittingState();
         }}
         title="Sign Transaction"
         message={canReview ? summary : ''}

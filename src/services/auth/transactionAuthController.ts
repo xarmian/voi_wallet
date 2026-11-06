@@ -158,6 +158,8 @@ export class TransactionAuthController {
   private isSigningInProgress: boolean = false;
   private userExplicitlyRejected: boolean = false;
   private signingAbortController: AbortController | null = null;
+  private signerRunToken: symbol | null = null;
+  private userCancelled = false;
   private deviceVerificationInProgress: boolean = false;
   private ledgerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private ledgerRecoveryReason: 'app_required' | 'device_locked' | null = null;
@@ -486,6 +488,7 @@ export class TransactionAuthController {
     )
       this.endReviewCapability();
     this.reviewFlowEnded = false;
+    this.userCancelled = false;
     this.reviewAuthorized = false;
     this.reviewSigningStarted = false;
     this.currentRequest = request;
@@ -647,8 +650,12 @@ export class TransactionAuthController {
         // Ledger info not available, continue with regular flow
       }
 
-      // WalletConnect-reviewed software signing through this controller requires
-      // completed PIN setup, including when a review capability is present.
+      // Every software-signing flow through this controller (WalletConnect review,
+      // in-app send, swap, claim) requires PIN setup; Ledger and remote signers are exempt.
+      // AuthContext's boot routing sends hasKeyBearingAccount && !hasPin to PIN-setup
+      // resume or recovery, locked and unauthenticated, never Main. Add-account and
+      // import go through SecuritySetup before storing a key; restore marks PIN setup
+      // pending first. This refusal defends against a state a normal run cannot reach.
       const hasPin = isLedgerFlow
         ? await AccountSecureStorage.hasPin()
         : await this.requireSoftwarePin();
@@ -1548,6 +1555,10 @@ export class TransactionAuthController {
     }
   }
 
+  public get wasUserCancelled(): boolean {
+    return this.userCancelled;
+  }
+
   public hasEndedReviewFlow(): boolean {
     return this.reviewFlowEnded;
   }
@@ -1594,6 +1605,20 @@ export class TransactionAuthController {
     return true;
   }
 
+  private refuseWhileSignerAlive(): boolean {
+    if (!this.signerRunToken) return false;
+    this.settleReviewCapability();
+    this.updateState({
+      state: 'error',
+      result: null,
+      error: new ReviewEndedError(
+        'Your Ledger is still finishing the previous request. Wait for it to stop, then start the request again.',
+        'Ledger busy'
+      ),
+    });
+    return true;
+  }
+
   private async startSigning(pin?: string): Promise<void> {
     if (!this.currentRequest) {
       throw new Error('No transaction request to sign');
@@ -1605,6 +1630,7 @@ export class TransactionAuthController {
     const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
 
     if (reviewKey && this.reviewSigningStarted) return;
+    if (this.refuseWhileSignerAlive()) return;
     if (
       !this.currentState.isLedgerFlow &&
       !this.currentState.isRemoteSignerFlow
@@ -1636,11 +1662,15 @@ export class TransactionAuthController {
     }
     if (reviewKey && this.reviewSigningStarted) return;
 
+    if (this.refuseWhileSignerAlive()) return;
+
     // Update request with PIN if provided
     if (pin) {
       this.currentRequest.pin = pin;
     }
 
+    let signerFinished = false;
+    const runToken = Symbol('signer run');
     try {
       this.isSigningInProgress = true;
       this.signingAbortController = new AbortController(); // Create abort controller for this signing session
@@ -1653,13 +1683,15 @@ export class TransactionAuthController {
       let reviewLapseOnError: ReturnType<typeof reviewGrant.endReason> = null;
       const callbacks: UnifiedSigningCallbacks = {
         onSigningStart: () => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           this.isSigningInProgress = true;
           this.updateState({ state: 'signing' });
         },
 
         onLedgerPrompt: (ctx) => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           // Throttle progress updates to reduce re-renders
           if (this.shouldUpdateProgress(ctx.index, ctx.total)) {
             // If we're getting a prompt callback, the device is ready for confirmation
@@ -1676,7 +1708,8 @@ export class TransactionAuthController {
         },
 
         onLedgerSigned: (ctx) => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           // Throttle progress updates to reduce re-renders
           if (this.shouldUpdateProgress(ctx.index, ctx.total)) {
             this.updateState({
@@ -1691,7 +1724,8 @@ export class TransactionAuthController {
         },
 
         onLedgerRejected: (ctx) => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           const errorMessage = ctx.error?.message || 'Unknown error';
           const lower = errorMessage.toLowerCase();
 
@@ -1755,7 +1789,8 @@ export class TransactionAuthController {
         },
 
         onNetworkSubmit: () => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           this.hasSubmittedToNetwork = true;
           this.updateState({
             state: 'processing',
@@ -1764,7 +1799,8 @@ export class TransactionAuthController {
         },
 
         onNetworkConfirmed: (txId, confirmed) => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           this.isSigningInProgress = false;
           this.updateState({
             state: 'completed',
@@ -1781,7 +1817,8 @@ export class TransactionAuthController {
         },
 
         onError: (error) => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
           if (reviewKey) {
             reviewLapseOnError = reviewGrant.isValid(reviewKey)
               ? null
@@ -1799,9 +1836,7 @@ export class TransactionAuthController {
                   ? request.type === 'batch_transaction'
                     ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-                  : reviewLapseOnError === 'idle'
-                    ? 'Your approval timed out before signing finished. Start the request again.'
-                    : 'Your approval ended before signing finished. Start the request again.'
+                  : 'Your approval ended before signing finished. Start the request again.'
               ),
             });
             return;
@@ -1913,16 +1948,15 @@ export class TransactionAuthController {
         },
 
         onComplete: (result) => {
-          if (flowGeneration !== this.cancelledFlowGeneration) return;
+          if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
+            return;
+          signerFinished = true;
           if (
             reviewKey &&
             (reviewEndedOnError
               ? reviewLapseOnError !== null
               : !reviewGrant.isValid(reviewKey))
           ) {
-            const reason = reviewEndedOnError
-              ? reviewLapseOnError
-              : reviewGrant.endReason(reviewKey);
             this.isSigningInProgress = false;
             this.settleReviewCapability();
             // E3e: signed, then lapsed.
@@ -1943,9 +1977,7 @@ export class TransactionAuthController {
                   ? request.type === 'batch_transaction'
                     ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-                  : reason === 'idle'
-                    ? 'Your approval timed out before signing finished. Start the request again.'
-                    : 'Your approval ended before signing finished. Start the request again.'
+                  : 'Your approval ended before signing finished. Start the request again.'
               ),
             });
             return;
@@ -2022,8 +2054,17 @@ export class TransactionAuthController {
         }
         this.reviewSigningStarted = true;
       }
-      await this.unifiedSigner.signTransaction(request, callbacks);
+      this.signerRunToken = runToken;
+      try {
+        await this.unifiedSigner.signTransaction(request, callbacks, {
+          signal: this.signingAbortController.signal,
+        });
+      } finally {
+        signerFinished = true;
+        if (this.signerRunToken === runToken) this.signerRunToken = null;
+      }
     } catch (error) {
+      // Reachable only through a throwing callback; the signer resolves its own failures.
       if (flowGeneration !== this.cancelledFlowGeneration) return;
       this.isSigningInProgress = false;
       const reviewLapsed =
@@ -2040,9 +2081,7 @@ export class TransactionAuthController {
               ? request.type === 'batch_transaction'
                 ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
                 : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-              : reviewGrant.endReason(reviewKey!) === 'idle'
-                ? 'Your approval timed out before signing finished. Start the request again.'
-                : 'Your approval ended before signing finished. Start the request again.'
+              : 'Your approval ended before signing finished. Start the request again.'
           ),
         });
         return;
@@ -2303,6 +2342,7 @@ export class TransactionAuthController {
    * Cancel the current signing process
    */
   public cancel(): void {
+    this.userCancelled = true;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = true;
     this.isSigningInProgress = false;
@@ -2352,6 +2392,7 @@ export class TransactionAuthController {
    * Ensures subsequent transactions can start fresh even after an error.
    */
   public resetAfterDismiss(): void {
+    this.userCancelled = true;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = false;
     this.userExplicitlyRejected = false;

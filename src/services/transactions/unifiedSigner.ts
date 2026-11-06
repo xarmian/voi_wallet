@@ -302,7 +302,8 @@ export class UnifiedTransactionSigner {
    */
   async signTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    options?: { signal?: AbortSignal }
   ): Promise<UnifiedSigningResult> {
     try {
       callbacks?.onAuthStart?.();
@@ -331,7 +332,11 @@ export class UnifiedTransactionSigner {
 
         case 'batch_transaction':
         case 'walletconnect_batch':
-          result = await this.signWalletConnectBatch(request, callbacks);
+          result = await this.signWalletConnectBatch(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'keyreg':
@@ -473,7 +478,8 @@ export class UnifiedTransactionSigner {
    */
   private async signWalletConnectBatch(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
     if (!request.walletConnectParams) {
       throw new Error('WalletConnect parameters required for batch signing');
@@ -504,6 +510,10 @@ export class UnifiedTransactionSigner {
       if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
+          // The prompt already on the device cannot be recalled; send no further entry.
+          if (signal?.aborted) {
+            return { success: false, error: new Error('Signing cancelled') };
+          }
           callbacks?.onLedgerPrompt?.({ index: i + 1, total });
 
           const plan = plans[i];
@@ -589,6 +599,10 @@ export class UnifiedTransactionSigner {
       const { AccountSecureStorage } =
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
+
+      if (signal?.aborted) {
+        return { success: false, error: new Error('Signing cancelled') };
+      }
 
       // For WalletConnect this means all signatures are ready, not broadcast.
       // The signed bytes are returned to the dApp; this wallet sends no batch.

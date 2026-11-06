@@ -55,7 +55,7 @@ it('unlockMintsOnlyWaitingRequestCapabilities', () => {
   expect(reviewGrant.isValid('B')).toBe(true);
   expect(reviewGrant.isValid('C')).toBe(false);
   reviewGrant.mintForWaiting([]);
-  expect(reviewGrant.isLive()).toBe(false);
+  expect(reviewGrant.isValid('A')).toBe(false);
 });
 // REGRESSION R7
 it('lateArrivalNeedsFreshAuth', async () => {
@@ -139,24 +139,24 @@ it('touchOnlyRenewsAnIncludedLiveRequest', () => {
   jest.setSystemTime(Date.now() + REVIEW_IDLE_MS - 1);
   reviewGrant.touch('C');
   jest.setSystemTime(Date.now() + 1);
-  expect(reviewGrant.isLive()).toBe(false);
+  expect(reviewGrant.isValid('A')).toBe(false);
   mint();
   jest.advanceTimersByTime(REVIEW_IDLE_MS - 1);
   reviewGrant.touch('A');
   jest.advanceTimersByTime(1);
-  expect(reviewGrant.isLive()).toBe(true);
+  expect(reviewGrant.isValid('A')).toBe(true);
 });
 
 // DEFECT
-it('resumeStartsAFreshWindow', () => {
-  mint();
+it('settleStartsAFreshWindow', async () => {
+  await reviewGrant.unlock('A', { pin: '123456' });
   reviewGrant.bind('A', digest());
   expect(reviewGrant.pauseIdle('A')).toBe(false);
   expect(reviewGrant.consume('A', digest())).toBe(true);
   expect(reviewGrant.pauseIdle('A')).toBe(true);
   jest.advanceTimersByTime(5 * REVIEW_IDLE_MS);
   expect(reviewGrant.isConsumedFor('A', digest())).toBe(true);
-  reviewGrant.resumeIdle('A');
+  reviewGrant.settle('A');
   jest.advanceTimersByTime(59_000);
   expect(reviewGrant.isValid('A')).toBe(true);
   jest.advanceTimersByTime(1_001);
@@ -164,8 +164,8 @@ it('resumeStartsAFreshWindow', () => {
   expect(reviewGrant.isUnspent('A')).toBe(false);
   expect(reviewGrant.endReason('A')).toBe('idle');
   expect(reviewGrant.pauseIdle('A')).toBe(false);
-  reviewGrant.resumeIdle('A');
-  expect(reviewGrant.isLive()).toBe(false);
+  reviewGrant.settle('A');
+  expect(reviewGrant.isValid('A')).toBe(false);
 });
 // REGRESSION: pause must not change the wallet's lock state or auto-lock wiring.
 it('pauseDoesNotTouchAutoLock', () => {
@@ -190,7 +190,7 @@ it('touchAndConsumeRenewOnlyTheirOwnRequest', () => {
     expect(reviewGrant.isValid('B')).toBe(false);
     expect(reviewGrant.isValid('A')).toBe(true);
     reviewGrant.leave('A');
-    expect(reviewGrant.isLive()).toBe(false);
+    expect(reviewGrant.isValid('A')).toBe(false);
   }
 });
 // DEFECT: every removal must discard the pause as well as the permission.
@@ -209,7 +209,7 @@ it.each(['leave', 'revoke', 'epoch', 'background', 'lock'] as const)(
     expect(reviewGrant.isValid('A')).toBe(false);
     expect(reviewGrant.isUnspent('A')).toBe(false);
     expect(reviewGrant.pauseIdle('A')).toBe(false);
-    reviewGrant.resumeIdle('A');
+    reviewGrant.settle('A');
     jest.advanceTimersByTime(REVIEW_IDLE_MS);
     expect(reviewGrant.isValid('A')).toBe(false);
   }
@@ -224,7 +224,7 @@ it('snapshotReadsAreSideEffectFree', async () => {
   const clear = jest.spyOn(SessionKeyVault, 'clear');
   jest.setSystemTime(Date.now() + REVIEW_IDLE_MS + 1);
   expect(reviewGrant.isValid('A')).toBe(false);
-  expect(reviewGrant.isLive()).toBe(false);
+  expect(reviewGrant.isValid('A')).toBe(false);
   expect(reviewGrant.isUnspent('A')).toBe(false);
   expect(listener).not.toHaveBeenCalled();
   expect(clear).not.toHaveBeenCalled();
