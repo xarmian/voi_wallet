@@ -24,7 +24,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 jest.mock('@react-navigation/native', () => ({
-  StackActions: { replace: jest.fn() },
+  StackActions: jest.requireActual('@react-navigation/native').StackActions,
 }));
 jest.mock('@/services/walletconnect', () => ({
   WalletConnectService: { getInstance: () => ({ pair: jest.fn() }) },
@@ -126,6 +126,30 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     service.cleanup();
     await TransactionRequestQueue.clear();
     jest.restoreAllMocks();
+  });
+
+  it('U7 v1 proposal delivery pushes a second Connect instead of overwriting it', async () => {
+    const client = new FakeV1Client('fixture');
+    const connect = jest.fn(async () => {});
+    Object.assign(client, { connect });
+    const { WalletConnectV1Client } = require('@/services/walletconnect/v1');
+    WalletConnectV1Client.getInstance.mockReturnValue(client);
+    const pair = service as unknown as {
+      handleWalletConnectV1Uri(url: string): Promise<boolean>;
+    };
+    await pair.handleWalletConnectV1Uri(
+      'wc:fixture@1?bridge=https%3A%2F%2Fbridge.example&key=' + 'ab'.repeat(32)
+    );
+    client.emit('session_request', { id: 7103 });
+    await flush();
+    expect(nav.dispatch).toHaveBeenCalledWith({
+      type: 'PUSH',
+      payload: {
+        name: 'WalletConnectSessionProposal',
+        params: { version: 1, sessionRequest: { id: 7103 } },
+      },
+    });
+    expect(nav.navigate).not.toHaveBeenCalled();
   });
 
   it('re-pairing (restore, then a new pairing) keeps ONE listener: a request navigates once', async () => {

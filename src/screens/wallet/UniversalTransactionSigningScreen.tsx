@@ -354,8 +354,8 @@ export default function UniversalTransactionSigningScreen({
   const onReject = registryCallbacks?.onReject || directOnReject;
   const onEnd = registryCallbacks?.onEnd;
   const callbackNavigation = useMemo(
-    () => scopedNavigation(navigation),
-    [navigation]
+    () => scopedNavigation(navigation, route.key),
+    [navigation, route.key]
   );
   const endedRef = useRef(false);
 

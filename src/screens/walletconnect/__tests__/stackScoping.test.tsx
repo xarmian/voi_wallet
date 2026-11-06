@@ -13,6 +13,7 @@ import {
   createNavigatorFactory,
   NavigationContainer,
   StackRouter,
+  StackActions,
   useNavigationBuilder,
   type ParamListBase,
   type RouteProp,
@@ -149,7 +150,19 @@ import { VOI_CHAIN_DATA } from '@/services/walletconnect/config';
 import SessionProposalScreen from '../SessionProposalScreen';
 import TransactionRequestScreen from '../TransactionRequestScreen';
 import WalletConnectErrorScreen from '../WalletConnectErrorScreen';
+import QRScannerScreen from '../QRScannerScreen';
 
+let mockScannerProps: {
+  onClose: () => void;
+  onSuccess: (uri: string) => Promise<void>;
+};
+jest.mock('@/components/walletconnect/QRScanner', () => ({
+  __esModule: true,
+  default: (props: typeof mockScannerProps) => {
+    mockScannerProps = props;
+    return null;
+  },
+}));
 const mockAccounts = jest.fn();
 const mockApproveProposal = jest.fn();
 const mockRespond = jest.fn();
@@ -306,26 +319,38 @@ function Signing({
     });
     const stopEnd = coordinator.subscribe(ref, ({ reason }) => {
       if (!busy.current)
-        void callbacks?.onEnd?.(reason, scopedNavigation(navigation));
+        void callbacks?.onEnd?.(
+          reason,
+          scopedNavigation(navigation, route.key)
+        );
     });
     return () => {
       stopRemove();
       stopEnd();
     };
-  }, [callbacks, ref, navigation]);
+  }, [callbacks, ref, navigation, route.key]);
   return (
     <Pressable
       onPress={async () => {
         busy.current = true;
         await callbacks?.onSuccess?.(
           missingSignatures ? {} : { signedTransactions: [signOffline()] },
-          scopedNavigation(navigation)
+          scopedNavigation(navigation, route.key)
         );
       }}
     >
       <Text>{`Sign ${ref.id}`}</Text>
     </Pressable>
   );
+}
+let scannerNavigation: React.ComponentProps<
+  typeof QRScannerScreen
+>['navigation'];
+function Scanner(props: React.ComponentProps<typeof QRScannerScreen>) {
+  useEffect(() => {
+    scannerNavigation = props.navigation;
+  }, [props.navigation]);
+  return <QRScannerScreen {...props} />;
 }
 async function mountReal(connect = false, root = false) {
   const ref = createNavigationContainerRef<RootStackParamList>();
@@ -335,6 +360,7 @@ async function mountReal(connect = false, root = false) {
         initialRouteName={root ? 'WalletConnectSessionProposal' : 'Main'}
       >
         <Stack.Screen name="Main" component={() => <View />} />
+        <Stack.Screen name="QRScanner" component={Scanner} />
         <Stack.Screen
           name="WalletConnectSessionProposal"
           component={SessionProposalScreen}
@@ -560,3 +586,83 @@ it.each(['approval record', 'respond', 'missing signatures'] as const)(
     );
   }
 );
+
+it('U7 real proposal push preserves focused Connect A params while stacking B', async () => {
+  const h = await mountReal(true);
+  const original = h.ref.getRootState()!.routes[1];
+  await act(async () =>
+    h.ref.dispatch(
+      StackActions.push('WalletConnectSessionProposal', {
+        proposal: { ...proposal, id: 11 },
+      })
+    )
+  );
+  const routes = h.ref.getRootState()!.routes;
+  expect(routes.map((r) => r.name)).toEqual([
+    'Main',
+    'WalletConnectSessionProposal',
+    'WalletConnectSessionProposal',
+  ]);
+  expect(routes[1]).toEqual(original);
+  expect(routes[2].params).toEqual({ proposal: { ...proposal, id: 11 } });
+});
+it('U7 real removed scoped source refuses replace without dispatching', async () => {
+  const h = await mountReal();
+  await loadRequest(h.ref, 1);
+  const nav = navsById.get(1)!;
+  const key = h.ref.getRootState()!.routes[1].key;
+  const scoped = scopedNavigation(nav, key);
+  await act(async () => nav.goBack());
+  let changed: boolean | undefined;
+  await act(async () => {
+    changed = scoped.replace('WalletConnectTransactionRequest', {
+      requestEvent: event(3),
+    });
+  });
+  expect(changed).toBe(false);
+  expect(h.names()).toEqual(['Main']);
+});
+it('U7 real Reject leaves C queued when user removes A during relay publish', async () => {
+  const h = await mountReal();
+  await loadRequest(h.ref, 1);
+  await TransactionRequestQueue.enqueue(event(3));
+  let resolve!: () => void;
+  mockReject.mockImplementationOnce(
+    () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      })
+  );
+  let ending!: Promise<void>;
+  const nav = navsById.get(1)!;
+  const key = h.ref.getRootState()!.routes[1].key;
+  await act(async () => {
+    ending = callbacksById.get(1)!.onReject!(scopedNavigation(nav, key));
+  });
+  await waitFor(() => expect(resolve).toBeDefined());
+  await act(async () => nav.goBack());
+  await act(async () => {
+    resolve();
+    await ending;
+  });
+  expect(h.names()).toEqual(['Main']);
+  expect((await TransactionRequestQueue.getAll()).map((r) => r.id)).toEqual([
+    3,
+  ]);
+  expect(TransactionRequestQueue.markDisplayed(3, 'fixture')).toBe(true);
+});
+it('U7 real scanner close removes only scanner under a pushed request and is idempotent', async () => {
+  const h = await mountReal();
+  await act(async () => h.ref.navigate('QRScanner'));
+  const close = mockScannerProps.onClose;
+  const canGoBack = jest.spyOn(scannerNavigation, 'canGoBack');
+  await act(async () => mockScannerProps.onSuccess('unrecognized-scan'));
+  await loadRequest(h.ref, 2);
+  await act(async () => close());
+  expect(h.names()).toEqual(['Main', 'UniversalTransactionSigning:2']);
+  await act(async () => close());
+  await act(async () => new Promise((done) => setTimeout(done, 120)));
+  expect(h.names()).toEqual(['Main', 'UniversalTransactionSigning:2']);
+  expect(beforeRemoveB).not.toHaveBeenCalled();
+  expect(canGoBack).toHaveBeenCalledTimes(1);
+});

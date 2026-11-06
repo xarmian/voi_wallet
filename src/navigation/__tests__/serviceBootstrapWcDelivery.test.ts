@@ -81,6 +81,7 @@ const mockNav = {
   canGoBack: jest.fn(() => false),
   goBack: jest.fn(),
   navigate: jest.fn(),
+  dispatch: jest.fn(),
   getCurrentRoute: jest.fn((): { name: string } | undefined => undefined),
 };
 /** Current route name; drives getCurrentRoute. */
@@ -196,6 +197,7 @@ beforeEach(async () => {
   mockReadyCallbacks.clear();
   mockRoute = undefined;
   mockNav.navigate.mockReset();
+  mockNav.dispatch.mockReset();
   mockNav.isReady.mockReset().mockImplementation(() => mockReady);
   mockNav.getCurrentRoute.mockImplementation(() =>
     mockRoute ? { name: mockRoute } : undefined
@@ -241,11 +243,11 @@ describe('WalletConnect events before navigation is ready (TASK-382)', () => {
     becomeReady();
     await flush();
 
-    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
-    expect(mockNav.navigate).toHaveBeenCalledWith(
-      'WalletConnectSessionProposal',
-      { proposal }
-    );
+    expect(mockNav.dispatch).toHaveBeenCalledTimes(1);
+    expect(mockNav.dispatch).toHaveBeenCalledWith({
+      type: 'PUSH',
+      payload: { name: 'WalletConnectSessionProposal', params: { proposal } },
+    });
   });
 
   it('a signing request that arrives early is shown once navigation is ready', async () => {
@@ -675,11 +677,11 @@ describe('coordinator ingest (U2)', () => {
     }
     expect(second.firstSeenMs).toBe(first.firstSeenMs);
     expect(coordinator.isOpen(ref)).toBe(true);
-    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
-    expect(mockNav.navigate).toHaveBeenCalledWith(
-      'WalletConnectSessionProposal',
-      { proposal }
-    );
+    expect(mockNav.dispatch).toHaveBeenCalledTimes(1);
+    expect(mockNav.dispatch).toHaveBeenCalledWith({
+      type: 'PUSH',
+      payload: { name: 'WalletConnectSessionProposal', params: { proposal } },
+    });
     Object.values(mockTransport).forEach((fn) =>
       expect(fn).not.toHaveBeenCalled()
     );
@@ -689,7 +691,7 @@ describe('coordinator ingest (U2)', () => {
     ['Home', 0],
     ['QRScanner', 1],
   ] as const)(
-    'DEFECT a proposal on %s pops only the scanner then navigates',
+    'DEFECT a proposal on %s pops only the scanner then pushes',
     async (route, pops) => {
       mockReady = true;
       mockRoute = route;
@@ -698,13 +700,13 @@ describe('coordinator ingest (U2)', () => {
       const proposal = { id: 5204, pairingTopic: 'pairing' };
       await emit('session_proposal', proposal);
       expect(mockNav.goBack).toHaveBeenCalledTimes(pops);
-      expect(mockNav.navigate).toHaveBeenCalledWith(
-        'WalletConnectSessionProposal',
-        { proposal }
-      );
+      expect(mockNav.dispatch).toHaveBeenCalledWith({
+        type: 'PUSH',
+        payload: { name: 'WalletConnectSessionProposal', params: { proposal } },
+      });
       if (pops)
         expect(mockNav.goBack.mock.invocationCallOrder[0]).toBeLessThan(
-          mockNav.navigate.mock.invocationCallOrder[0]
+          mockNav.dispatch.mock.invocationCallOrder[0]
         );
     }
   );
@@ -777,7 +779,7 @@ describe('coordinator ingest (U2)', () => {
       await boot();
       if (failure === 'not-ready') mockNav.isReady.mockReturnValueOnce(false);
       else
-        mockNav.navigate.mockImplementationOnce(() => {
+        mockNav.dispatch.mockImplementationOnce(() => {
           throw new Error('navigation unavailable');
         });
       const release = jest.spyOn(coordinator, 'release');
@@ -826,4 +828,23 @@ it('DEFECT duplicate delivery retries failed publish once and stops after succes
   await emit('session_request', event);
   await flush();
   expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(2);
+});
+
+it('U7 a second proposal over focused Connect dispatches PUSH with the proposal route name', async () => {
+  mockReady = true;
+  await boot();
+  mockRoute = 'WalletConnectSessionProposal';
+  await emit('session_proposal', { id: 7101 });
+  await emit('session_proposal', { id: 7102 });
+  expect(mockNav.dispatch).toHaveBeenCalledTimes(2);
+  expect(mockNav.dispatch).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      type: 'PUSH',
+      payload: {
+        name: 'WalletConnectSessionProposal',
+        params: { proposal: { id: 7102 } },
+      },
+    })
+  );
+  expect(mockNav.navigate).not.toHaveBeenCalled();
 });

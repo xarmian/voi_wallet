@@ -761,10 +761,13 @@ export class DeepLinkService {
             const admission = await coordinator.admit(ref);
             if (admission.action !== 'show') return;
             try {
-              const delivered = await this.navigateToRoute({
-                screen: 'WalletConnectSessionProposal',
-                params: { version: 1, sessionRequest },
-              });
+              const delivered = await this.navigateToRoute(
+                {
+                  screen: 'WalletConnectSessionProposal',
+                  params: { version: 1, sessionRequest },
+                },
+                { push: true }
+              );
               if (!delivered) coordinator.release(ref);
             } catch (error) {
               coordinator.release(ref);
@@ -1411,7 +1414,7 @@ export class DeepLinkService {
 
   private async navigateToRoute(
     route: DeepLinkRoute,
-    options?: { replace?: boolean }
+    options?: { replace?: boolean; push?: true }
   ): Promise<boolean> {
     // Log route name + param keys only; param values can carry
     // recipient addresses, amounts, notes and keyreg key material.
@@ -1449,9 +1452,17 @@ export class DeepLinkService {
       );
       // Use type assertion to handle React Navigation's complex generic types
       if (options?.replace) {
-        // Use StackActions.replace to replace current screen in stack
+        const state = this.navigationRef.getRootState();
+        const scanner = state?.routes.find(
+          (entry) => entry.name === 'QRScanner'
+        );
+        this.navigationRef.dispatch({
+          ...StackActions.replace(route.screen, route.params),
+          ...(scanner ? { source: scanner.key, target: state?.key } : {}),
+        });
+      } else if (options?.push) {
         this.navigationRef.dispatch(
-          StackActions.replace(route.screen, route.params)
+          StackActions.push(route.screen, route.params)
         );
       } else {
         (this.navigationRef as any).navigate(route.screen, route.params);

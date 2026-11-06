@@ -81,7 +81,10 @@ interface Props {
 export default function SessionProposalScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const scoped = useMemo(() => scopedNavigation(navigation), [navigation]);
+  const scoped = useMemo(
+    () => scopedNavigation(navigation, route.key),
+    [navigation, route.key]
+  );
 
   // Check for v1 or v2 proposal
   const proposal = route?.params?.proposal as SessionProposal | undefined;

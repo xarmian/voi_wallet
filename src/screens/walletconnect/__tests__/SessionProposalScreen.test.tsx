@@ -417,6 +417,25 @@ describe('locked wallet (TASK-438)', () => {
     expect(MultiAccountWalletService.getAllAccounts).not.toHaveBeenCalled();
   });
 
+  it('U7 gate lift ensures the proposal is open before loading accounts', async () => {
+    const ensure = jest.spyOn(coordinator, 'ensureOpen');
+    const props = {
+      navigation: navigationStub() as unknown as ScreenProps['navigation'],
+      route: { params: { proposal: lockedProposal } } as ScreenProps['route'],
+    };
+    const screen = await render(<SessionProposalScreen {...props} />);
+    expect(ensure).not.toHaveBeenCalled();
+    mockGrantValid = true;
+    await screen.rerender(<SessionProposalScreen {...props} />);
+    await waitFor(() =>
+      expect(ensure).toHaveBeenCalledWith(
+        proposalRefFor(lockedProposal),
+        undefined
+      )
+    );
+    await waitFor(() => expect(screen.getByText('Standard')).toBeTruthy());
+  });
+
   it('loads and shows the accounts once the review sitting covers the proposal', async () => {
     mockGrantValid = true;
     const screen = await render(

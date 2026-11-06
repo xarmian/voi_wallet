@@ -21,10 +21,10 @@
 import type { ExitReason } from '@/services/walletconnect/requestCoordinator';
 
 export interface CallbackNavigation {
-  goBack(): void;
+  goBack(): boolean;
   canGoBack(): boolean;
   navigate: (...args: any[]) => void;
-  replace: (...args: any[]) => void;
+  replace: (name: string, params?: object) => boolean;
 }
 
 export interface NavigationCallbacks {

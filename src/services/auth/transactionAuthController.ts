@@ -2630,6 +2630,7 @@ export class TransactionAuthController {
       );
 
       if (isStale()) return;
+      this.signerEnteredForRequest = true;
       this.updateState({
         remoteSignerRequest: signerRequest,
         remoteSignerStatus: 'displaying_request',

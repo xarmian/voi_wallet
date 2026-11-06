@@ -6,30 +6,41 @@ import {
 import type { CallbackNavigation } from './callbackRegistry';
 
 type NavigationLike = Pick<CallbackNavigation, 'canGoBack' | 'navigate'> & {
+  getState(): NavigationState;
   dispatch(action: (state: NavigationState) => NavigationAction): void;
 };
 
 export interface ScopedNavigation extends CallbackNavigation {
-  popOrReplace(name: string, params?: object): void;
+  popOrReplace(name: string, params?: object): boolean;
 }
 
 /** Target the calling screen's stack so StackRouter honors its source route. */
-export function scopedNavigation(navigation: NavigationLike): ScopedNavigation {
+export function scopedNavigation(
+  navigation: NavigationLike,
+  routeKey?: string
+): ScopedNavigation {
+  const isPresent = () =>
+    routeKey === undefined ||
+    navigation.getState().routes.some((route) => route.key === routeKey);
   const scoped: ScopedNavigation = {
-    goBack: () =>
+    goBack: () => {
+      if (!isPresent()) return false;
       navigation.dispatch((state) => ({
         ...StackActions.pop(1),
         target: state.key,
-      })),
-    replace: (name: string, params?: object) =>
+      }));
+      return true;
+    },
+    replace: (name: string, params?: object) => {
+      if (!isPresent()) return false;
       navigation.dispatch((state) => ({
         ...StackActions.replace(name, params),
         target: state.key,
-      })),
-    popOrReplace: (name, params) => {
-      if (navigation.canGoBack()) scoped.goBack();
-      else scoped.replace(name, params);
+      }));
+      return true;
     },
+    popOrReplace: (name, params) =>
+      navigation.canGoBack() ? scoped.goBack() : scoped.replace(name, params),
     canGoBack: () => navigation.canGoBack(),
     navigate: (...args: Parameters<CallbackNavigation['navigate']>) =>
       navigation.navigate(...args),

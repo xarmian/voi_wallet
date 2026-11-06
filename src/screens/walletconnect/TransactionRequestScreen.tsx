@@ -98,7 +98,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const settledRef = useRef(false);
   const handedOffRef = useRef(false);
   const advancedRef = useRef(false);
-  const navRef = useRef<CallbackNavigation>(scopedNavigation(navigation));
+  const navRef = useRef<CallbackNavigation>(
+    scopedNavigation(navigation, route.key)
+  );
 
   const settleExit = (reason: ExitReason) => {
     settledRef.current = true;
@@ -132,7 +134,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         }
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetIfAbandoned reads only refs and the immutable route param; re-subscribing on its identity each render is pointless.
-    [navigation]
+    [navigation, route.key]
   );
 
   const loadAccountsAndTransactions = async () => {
@@ -312,15 +314,15 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         // Register callbacks in the callback registry to avoid serialization warnings
         const callbackId = registerNavigationCallbacks({
           onSuccess: async (result, nav) => {
-            navRef.current = nav ?? scopedNavigation(navigation);
+            navRef.current = nav ?? scopedNavigation(navigation, route.key);
             await handleWalletConnectSuccess(result);
           },
           onReject: async (nav) => {
-            navRef.current = nav ?? scopedNavigation(navigation);
+            navRef.current = nav ?? scopedNavigation(navigation, route.key);
             await handleReject();
           },
           onEnd: async (reason, nav) => {
-            navRef.current = nav ?? scopedNavigation(navigation);
+            navRef.current = nav ?? scopedNavigation(navigation, route.key);
             await endAndAdvance(reason);
           },
           onDismiss: forgetIfAbandoned,
@@ -405,10 +407,13 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     let taken: Awaited<ReturnType<typeof TransactionRequestQueue.takeNext>>;
     try {
       taken = await TransactionRequestQueue.takeNext((req) => {
-        navRef.current.replace('WalletConnectTransactionRequest', {
-          requestEvent: req,
-          version: req.version,
-        });
+        if (
+          !navRef.current.replace('WalletConnectTransactionRequest', {
+            requestEvent: req,
+            version: req.version,
+          })
+        )
+          throw new Error('navigation target gone');
       });
       // A normal unlock mints one permission per request waiting at that moment.
       // A gate unlock covers only its own request; later requests join no sitting.
@@ -431,7 +436,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       try {
         won = await coordinator.decide(ref, 'approved');
       } catch {
-        await coordinator.sendError(ref, 'sign-failed');
+        await coordinator.sendError(ref, 'lapsed');
         settledRef.current = true;
         navRef.current.replace('WalletConnectError', {
           error: 'Failed to record the approval',
@@ -484,7 +489,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
       } catch (error) {
         if (!responseSent) {
-          await coordinator.sendError(ref, 'sign-failed');
+          await coordinator.sendError(ref, 'lapsed');
         }
         reviewGrant.revoke();
         console.error(
@@ -524,27 +529,34 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   ) => {
     if (advancedRef.current) return;
     advancedRef.current = true;
-    const nextRequest = await takeNextRequest(
-      toast ??
-        ((queueSize) => {
-          if (reason !== 'declined') return;
-          // Show non-blocking toast with queue info when rejection was sent
-          Toast.show({
-            type: 'walletConnectRejected',
-            text1: 'Transaction Request Rejected',
-            text2: `You declined to sign this transaction. ${
-              queueSize > 0
-                ? 'Processing next request...'
-                : 'You can return to the dApp.'
-            }`,
-            visibilityTime: 4000,
-            position: 'top',
-            props: {
-              queueSize,
-            },
-          });
-        })
-    );
+    let nextRequest: QueuedTransactionRequest | null;
+    try {
+      nextRequest = await takeNextRequest(
+        toast ??
+          ((queueSize) => {
+            if (reason !== 'declined') return;
+            // Show non-blocking toast with queue info when rejection was sent
+            Toast.show({
+              type: 'walletConnectRejected',
+              text1: 'Transaction Request Rejected',
+              text2: `You declined to sign this transaction. ${
+                queueSize > 0
+                  ? 'Processing next request...'
+                  : 'You can return to the dApp.'
+              }`,
+              visibilityTime: 4000,
+              position: 'top',
+              props: {
+                queueSize,
+              },
+            });
+          })
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === 'navigation target gone')
+        return;
+      throw error;
+    }
 
     if (!nextRequest) {
       // No pending requests, navigate back

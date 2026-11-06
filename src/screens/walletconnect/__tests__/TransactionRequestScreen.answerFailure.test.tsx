@@ -148,9 +148,9 @@ const TOPIC = 'topic-answer';
 const makeNavigation = () => {
   const beforeRemove: (() => void)[] = [];
   const navigation = {
-    replace: jest.fn(),
+    replace: jest.fn().mockReturnValue(true),
     navigate: jest.fn(),
-    goBack: jest.fn(),
+    goBack: jest.fn().mockReturnValue(true),
     canGoBack: jest.fn(() => true),
     addListener: jest.fn((event: string, listener: () => void) => {
       if (event === 'beforeRemove') beforeRemove.push(listener);
@@ -359,10 +359,14 @@ describe('approve', () => {
     // Unchanged UX: no advance on a failed response.
     expect(navigation.navigate).not.toHaveBeenCalled();
     expect(redeliverySurfaces(21)).toBe(false);
-    expectAnswer('sign-failed');
+    expectAnswer('lapsed');
+    expect(answers[0]).toMatchObject({
+      code: -32000,
+      message: 'Request ended.',
+    });
     mockCallbacks!.onDismiss();
     await act(async () => {});
-    expectAnswer('sign-failed');
+    expectAnswer('lapsed');
     // The queued one is untouched: still queued and still claimed.
     expect((await TransactionRequestQueue.getAll()).map((r) => r.id)).toEqual([
       22,
@@ -452,6 +456,10 @@ describe('every other exit without an answer settles and keeps the mark', () => 
       expect(mockRespondToRequest).not.toHaveBeenCalled();
       expect(redeliverySurfaces(34)).toBe(false);
       await waitFor(() => expectAnswer('sign-failed'));
+      expect(answers[0]).toMatchObject({
+        code: -32001,
+        message: 'Signing failed.',
+      });
       mockCallbacks!.onDismiss();
       await act(async () => {});
       expectAnswer('sign-failed');
@@ -683,7 +691,7 @@ it('DEFECT approve after expiry publishes nothing and advances once', async () =
   expect(Toast.show).not.toHaveBeenCalled();
 });
 
-it('DEFECT failed approval record sends sign-failed once despite timer Reject and second Sign', async () => {
+it('U7 failed approval record sends neutral Request ended once despite timer Reject and second Sign', async () => {
   jest.useFakeTimers();
   const { navigation, screen, ref } = await handOff(103);
   jest
@@ -693,7 +701,8 @@ it('DEFECT failed approval record sends sign-failed once despite timer Reject an
     mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] })
   );
   expect(mockRespondToRequest).not.toHaveBeenCalled();
-  expectAnswer('sign-failed', false);
+  expectAnswer('lapsed', false);
+  expect(answers[0]).toMatchObject({ code: -32000, message: 'Request ended.' });
   expect(navigation.replace).toHaveBeenCalledWith('WalletConnectError', {
     error: 'Failed to record the approval',
   });
@@ -707,7 +716,7 @@ it('DEFECT failed approval record sends sign-failed once despite timer Reject an
   );
   mockCallbacks!.onDismiss();
   await act(async () => {});
-  expectAnswer('sign-failed', false);
+  expectAnswer('lapsed', false);
   expect(mockRespondToRequest).not.toHaveBeenCalled();
 });
 

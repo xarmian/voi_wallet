@@ -11,8 +11,12 @@ it.each([
   'DEFECT scoped %s dispatches a thunk targeting its current stack',
   (operation, type, payload) => {
     const actions: NavigationAction[] = [];
-    const state = { key: 'current-stack' } as NavigationState;
+    const state = {
+      key: 'current-stack',
+      routes: [],
+    } as unknown as NavigationState;
     const navigation = {
+      getState: () => state,
       dispatch: jest.fn((thunk: (state: NavigationState) => NavigationAction) =>
         actions.push(thunk(state))
       ),
@@ -40,6 +44,7 @@ it.each([true, false])(
   (back) => {
     const actions: NavigationAction[] = [];
     const navigation = {
+      getState: () => ({ routes: [] }) as unknown as NavigationState,
       dispatch: (thunk: (state: NavigationState) => NavigationAction) =>
         actions.push(thunk({ key: 'stack' } as NavigationState)),
       canGoBack: () => back,
@@ -56,5 +61,36 @@ it.each([true, false])(
           : { name: 'Main', params: { screen: 'Home' } },
       },
     ]);
+  }
+);
+
+it.each(['back', 'replace', 'popOrReplace'] as const)(
+  'U7 scoped %s reports whether its calling route still exists',
+  (operation) => {
+    let present = true;
+    const navigation = {
+      getState: () =>
+        ({
+          key: 'stack',
+          routes: present ? [{ key: 'A' }] : [],
+        }) as unknown as NavigationState,
+      dispatch: jest.fn(),
+      canGoBack: () => true,
+      navigate: jest.fn(),
+    };
+    const scoped = scopedNavigation(navigation, 'A');
+    const call = () =>
+      operation === 'back'
+        ? scoped.goBack()
+        : operation === 'replace'
+          ? scoped.replace('TRS')
+          : scoped.popOrReplace('Main');
+    expect(call()).toBe(true);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
+    present = false;
+    expect(call()).toBe(false);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
+    const unkeyed = scopedNavigation(navigation);
+    expect(unkeyed.replace('TRS')).toBe(true);
   }
 );

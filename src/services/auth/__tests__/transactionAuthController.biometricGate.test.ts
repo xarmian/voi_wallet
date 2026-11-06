@@ -533,13 +533,13 @@ describe('remote batch submission ownership (TASK-418)', () => {
     return { controller, request, response };
   }
 
-  it('U6 census remote WalletConnect signer leaves hasEnteredSigner false even after a real signed response', async () => {
+  it('U7 remote WalletConnect signer is entered at QR handoff and after a real signed response', async () => {
     const { controller, response } = await flow();
-    expect(controller.hasEnteredSigner()).toBe(false);
+    expect(controller.hasEnteredSigner()).toBe(true);
     await controller.processRemoteSignerResponse(response);
     expect(controller.getState().state).toBe('completed');
     expect(controller.getState().result?.signedTransactions).toHaveLength(1);
-    expect(controller.hasEnteredSigner()).toBe(false);
+    expect(controller.hasEnteredSigner()).toBe(true);
   });
 
   function scope() {

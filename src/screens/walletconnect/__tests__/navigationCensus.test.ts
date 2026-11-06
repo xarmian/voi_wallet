@@ -1,3 +1,4 @@
+// This census proves call receivers, not behaviour; the router tests (stackScoping.test.tsx) prove behaviour.
 import fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
@@ -8,6 +9,21 @@ const directories = [
   'src/services/navigation',
 ];
 const signingFile = 'src/screens/wallet/UniversalTransactionSigningScreen.tsx';
+const bootstrap = 'src/navigation/serviceBootstrap.ts';
+const deeplink = 'src/services/deeplink/index.ts';
+// WalletConnect request/proposal delivery and the scan-driven replace only.
+const DELIVERY_FUNCTIONS: Record<string, string[]> = {
+  [bootstrap]: ['onProposal', 'onRequest', 'showOrQueue'],
+  [deeplink]: [
+    'onV1CallRequest',
+    'handleWalletConnectV1Uri',
+    'navigateToRoute',
+    'handleKeyregUri',
+    'handleApplUri',
+    'handleAppQueryUri',
+    'handleAssetQueryUri',
+  ],
+};
 const helperFile = 'src/services/navigation/scopedNavigation.ts';
 const methods = new Set([
   'goBack',
@@ -20,6 +36,8 @@ const methods = new Set([
   'dispatch',
   'push',
   'setParams',
+  'popOrReplace',
+  'navigateToRoute',
 ]);
 
 type Row = {
@@ -36,9 +54,15 @@ function enclosing(node: ts.Node): string {
     const declaration = parent.parent;
     if (
       ts.isVariableDeclaration(declaration) ||
-      ts.isPropertyAssignment(declaration)
+      ts.isPropertyAssignment(declaration) ||
+      ts.isPropertyDeclaration(declaration)
     )
       return declaration.name.getText();
+    if (
+      ts.isBinaryExpression(declaration) &&
+      declaration.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    )
+      return declaration.left.getText();
   }
   return '<module>';
 }
@@ -132,30 +156,107 @@ const ALLOWLIST = new Map([
   allow(
     qr,
     'handleClose',
-    'goBack',
-    'navigation',
-    'User-initiated navigation on the focused scanner.'
-  ),
-  allow(
-    qr,
-    'handleClose',
     'navigate',
     'navigation',
-    'User-initiated navigation on the focused scanner.'
+    'Scanner root fallback only when !canGoBack(); no route can be popped.'
   ),
   allow(
     qr,
     'handleSuccess',
     'navigate',
     'navigation',
-    'User-initiated scan on the focused scanner.'
+    'Payment/address scan opens the Send feature on Home.'
   ),
   allow(
-    qr,
-    'handleSuccess',
-    'goBack',
+    helperFile,
+    'navigate',
+    'navigate',
     'navigation',
-    'User-initiated scan on the focused scanner.'
+    'Raw passthrough; callers require their own allowlist reason.'
+  ),
+  allow(
+    bootstrap,
+    'onProposal',
+    'goBack',
+    'navigationRef.current',
+    'Synchronous guarded pop only when the current route is QRScanner and canGoBack().'
+  ),
+  allow(
+    bootstrap,
+    'onProposal',
+    'dispatch',
+    'navigationRef.current',
+    'Push a fresh proposal without overwriting a focused Connect.'
+  ),
+  allow(
+    bootstrap,
+    'onProposal',
+    'push',
+    'StackActions',
+    'Creates the proposal push action.'
+  ),
+  allow(
+    bootstrap,
+    'showOrQueue',
+    'navigate',
+    'nav',
+    'Delivery queues when a request route is focused; otherwise opens its review route.'
+  ),
+  allow(
+    deeplink,
+    'onV1CallRequest',
+    'navigateToRoute',
+    'this',
+    'v1 request delivery queues when the request route is focused.'
+  ),
+  allow(
+    deeplink,
+    'handleWalletConnectV1Uri',
+    'navigateToRoute',
+    'this',
+    'v1 proposal uses push; pairing errors open the error route without persisting the URI.'
+  ),
+  ...[
+    'handleKeyregUri',
+    'handleApplUri',
+    'handleAppQueryUri',
+    'handleAssetQueryUri',
+  ].map((fn) =>
+    allow(
+      deeplink,
+      fn,
+      'navigateToRoute',
+      'this',
+      'ARC-0090 scan replaces the scanner by source/target when present; otherwise retains the existing fallback.'
+    )
+  ),
+  allow(
+    deeplink,
+    'navigateToRoute',
+    'dispatch',
+    'this.navigationRef',
+    'Scan replace targets QRScanner when present; optional push stacks proposals.'
+  ),
+  allow(
+    deeplink,
+    'navigateToRoute',
+    'replace',
+    'StackActions',
+    'Creates the scan replace action; scanner source and root target are added by the dispatcher.'
+  ),
+  allow(
+    deeplink,
+    'navigateToRoute',
+    'push',
+    'StackActions',
+    'Creates the optional proposal push action.'
+  ),
+  allow(
+    deeplink,
+    'navigateToRoute',
+    'navigate',
+    '(this.navigationRef as any)',
+    'Default deep-link routing; only explicit replace/push options alter delivery.'
   ),
   allow(
     sessions,
@@ -199,6 +300,15 @@ const ALLOWLIST = new Map([
     'navRef.current',
     'Root request fallback only when !canGoBack(); nothing can be popped.'
   ),
+  ...['goBack', 'replace'].map((fn) =>
+    allow(
+      helperFile,
+      fn,
+      'dispatch',
+      'navigation',
+      'Scoped helper implementation checks route presence and adds the stack target.'
+    )
+  ),
   allow(
     helperFile,
     'goBack',
@@ -222,8 +332,10 @@ const COUNTS: Record<string, number> = {
   'src/components/walletconnect/QRScanner.tsx': 0,
   'src/components/walletconnect/RequestAgeLabel.tsx': 0,
   [signingFile]: 7,
-  [qr]: 5,
-  'src/screens/walletconnect/SessionProposalScreen.tsx': 9,
+  [qr]: 3,
+  'src/screens/walletconnect/SessionProposalScreen.tsx': 10,
+  [bootstrap]: 4,
+  [deeplink]: 12,
   [sessions]: 3,
   [request]: 8,
   [error]: 4,
@@ -233,11 +345,11 @@ const COUNTS: Record<string, number> = {
 };
 function scoped(row: Row) {
   return (
-    row.receiver === 'scoped' ||
-    row.receiver === 'navRef.current' ||
-    (row.file === helperFile && row.receiver === 'navigation')
+    ['goBack', 'replace', 'popOrReplace', 'pop'].includes(row.method) &&
+    (row.receiver === 'scoped' || row.receiver === 'navRef.current')
   );
 }
+
 function audit(rows: Row[]) {
   const unknown = rows.filter(
     (row) => !scoped(row) && !ALLOWLIST.has(key(row))
@@ -248,7 +360,7 @@ function audit(rows: Row[]) {
   expect(unknown).toEqual([]);
   expect(stale).toEqual([]);
 }
-it('U6 navigation census has no unscoped calls, stale exceptions, or population drift', () => {
+it('This census proves call receivers, not behaviour; the router tests (stackScoping.test.tsx) prove behaviour.', () => {
   const files = [
     ...directories.flatMap((directory) =>
       fs
@@ -259,9 +371,13 @@ it('U6 navigation census has no unscoped calls, stale exceptions, or population 
         .map((file) => path.posix.join(directory, file))
     ),
     signingFile,
+    ...Object.keys(DELIVERY_FUNCTIONS),
   ].sort();
   const rows = files.flatMap((file) =>
-    parse(file, fs.readFileSync(file, 'utf8'))
+    parse(file, fs.readFileSync(file, 'utf8')).filter(
+      (row) =>
+        !DELIVERY_FUNCTIONS[file] || DELIVERY_FUNCTIONS[file].includes(row.fn)
+    )
   );
   const output =
     rows
@@ -293,4 +409,12 @@ it('U6 census recognizes optional navigation access and calls', () => {
       method: 'goBack',
     },
   ]);
+});
+
+it('U7 census treats scoped.navigate as a raw passthrough requiring its own reason', () => {
+  const [row] = parse(
+    'fixture.tsx',
+    "function sample() { scoped.navigate('Main'); }"
+  );
+  expect(scoped(row)).toBe(false);
 });

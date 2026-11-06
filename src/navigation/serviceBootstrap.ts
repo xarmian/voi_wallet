@@ -1,3 +1,4 @@
+import { StackActions } from '@react-navigation/native';
 import { Platform } from 'react-native';
 
 import { detectPlatform } from '@/platform/detection';
@@ -178,9 +179,10 @@ export const initializeServices = async ({
                       ) {
                         navigationRef.current.goBack();
                       }
-                      navigationRef.current.navigate(
-                        'WalletConnectSessionProposal',
-                        { proposal }
+                      navigationRef.current.dispatch(
+                        StackActions.push('WalletConnectSessionProposal', {
+                          proposal,
+                        })
                       );
                     } else {
                       coordinator.release(ref);

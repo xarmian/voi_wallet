@@ -1010,3 +1010,45 @@ it('U6 retained route after signer entry and failed publish never claims nothing
     'Check the dApp, then try again there if you still need it.'
   );
 });
+
+it.each(['Cancel', 'failure', 'background', 'late Sign'] as const)(
+  'U7 remote QR signer exit is terminal and truthful: %s',
+  async (exit) => {
+    const h = await openOutcome({ remote: true, locked: false });
+    await waitFor(() =>
+      expect(h.controller.getRemoteSignerRequest()).toBeTruthy()
+    );
+    if (exit === 'Cancel') {
+      await fireEvent.press(h.view.getByText('Cancel'));
+      expectEnd('declined');
+    } else if (exit === 'failure') {
+      await act(async () =>
+        h.controller.processRemoteSignerResponse({
+          v: 1,
+          t: 'res',
+          id: 'mismatch',
+          ts: 1,
+          ok: false,
+        })
+      );
+      expectEnd('sign-failed');
+    } else if (exit === 'background') {
+      await lapse('background');
+      await waitFor(() => expectEnd('lapsed'));
+    } else {
+      jest.spyOn(coordinator, 'isLive').mockReturnValue(false);
+      await fireEvent.press(h.signButton());
+      expect(
+        require('react-native-toast-message').default.show
+      ).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          text2: 'Nothing was signed. Try again in the dApp.',
+        })
+      );
+      expect(h.alert).toHaveBeenCalledWith(
+        'Request ended',
+        'Check the dApp, then try again there if you still need it.'
+      );
+    }
+  }
+);

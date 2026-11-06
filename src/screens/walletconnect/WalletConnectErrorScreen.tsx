@@ -26,7 +26,10 @@ interface Props {
 export default function WalletConnectErrorScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const scoped = useMemo(() => scopedNavigation(navigation), [navigation]);
+  const scoped = useMemo(
+    () => scopedNavigation(navigation, route.key),
+    [navigation, route.key]
+  );
   const errorMessage = route.params?.error || 'Failed to connect';
 
   return (
