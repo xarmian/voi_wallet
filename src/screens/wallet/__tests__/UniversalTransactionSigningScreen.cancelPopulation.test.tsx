@@ -136,8 +136,10 @@ it.each(
     expect(SessionKeyVault.isUnlocked()).toBe(
       noSoftwareAction || route === 'rotation' || (!locked && route !== 'lock')
     );
-    // After Cancel or a lapse, no entry starts after the one the loop entered;
-    // that entry can still resolve, and its signature is discarded.
+    // Ledger rows: after Cancel or a lapse on a request holding a review
+    // capability, no entry starts after the one the loop entered; that entry can
+    // still resolve, and its signature is discarded. Software rows: all entries
+    // have already started, so nothing is held back and only delivery is withheld.
     h.deviceSign.mockResolvedValue(new Uint8Array([1]));
     await act(async () => {
       if (!(route === 'deviceReject' && ledger)) {

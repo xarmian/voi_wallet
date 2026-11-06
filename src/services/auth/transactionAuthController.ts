@@ -2070,7 +2070,9 @@ export class TransactionAuthController {
           return;
         }
         this.reviewSigningStarted = true;
-        // Cancel and a lapse abort the Ledger loop before its next entry.
+        // This block runs only for a request that holds a review capability. Cancel
+        // and a lapse abort the Ledger loop before its next entry. A request with
+        // no grant has no watch, so a lock or background does not abort it.
         // For software, the pre-parallel check sees Cancel and cleanup, not a lapse.
         // A software lapse only withholds delivery via onComplete's grant re-check;
         // the window between pauseIdle and the parallel branch is not covered.

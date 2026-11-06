@@ -515,10 +515,13 @@ export class UnifiedTransactionSigner {
       if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
-          // After Cancel or a lapse, no entry starts after the one the loop has
-          // entered. That entry can still reach the device; its signature is discarded.
-          // After Cancel, only the device keeps asking. After a lapse, the modal
-          // keeps showing the entered entry until the device resolves.
+          // After Cancel, no entry starts after the one the loop has entered. After
+          // a lapse the same holds only for a request that holds a review
+          // capability: the controller watches the grant only then, so a request
+          // with no grant is not aborted by a lock or background. The entered entry
+          // can still reach the device; its signature is discarded. After Cancel,
+          // only the device keeps asking. After a lapse, the modal keeps showing the
+          // entered entry until the device resolves.
           if (signal?.aborted) {
             return { success: false, error: new Error('Signing cancelled') };
           }

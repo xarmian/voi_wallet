@@ -371,6 +371,9 @@ export default function UniversalTransactionSigningScreen({
   }, []);
 
   const handlingOutcome = useRef(false);
+  // reviewFlowActive carries the once-per-flow behaviour: the listener acts only
+  // while a flow exists. reviewLapseHandled only blocks the re-entrant emit that
+  // the listener's own cancel() causes while it is handling a lapse.
   const reviewLapseHandled = useRef(false);
   const reviewFlowActive = useRef(false);
   const rejecting = useRef(false);

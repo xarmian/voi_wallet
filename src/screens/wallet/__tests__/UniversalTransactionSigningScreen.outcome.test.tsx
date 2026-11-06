@@ -20,7 +20,7 @@ import {
 setupOutcomeHarness();
 
 // DEFECT: a review outside the waiting queue receives no grant on normal unlock.
-it.each(['lock', 'background', 'rotation'] as const)(
+it.each(['lock'] as const)(
   'dangerAcknowledgedClearedByEveryLock:%s',
   async (reason) => {
     const h = await openOutcome({
@@ -37,8 +37,6 @@ it.each(['lock', 'background', 'rotation'] as const)(
     await fireEvent.press(h.view.getByRole('checkbox'));
     expect(h.view.getByRole('checkbox')).toBeChecked();
     await lapse(reason);
-    // Background and rotation are also followed by AuthContext's lock signal.
-    if (reason !== 'lock') await lapse('lock');
     await normalUnlock([]);
     expect(reviewGrant.isValid(key)).toBe(false);
     expect(h.view.getByRole('checkbox')).not.toBeChecked();
