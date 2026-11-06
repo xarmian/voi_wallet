@@ -284,6 +284,8 @@ function renderScreen(options: {
   chainIdOverride?: string;
   walletConnect?: boolean;
   callbackId?: string;
+  routeKey?: string;
+  navigation?: unknown;
 }) {
   const {
     networkId,
@@ -293,6 +295,8 @@ function renderScreen(options: {
     chainIdOverride,
     walletConnect = true,
     callbackId,
+    routeKey,
+    navigation = navigationStub,
   } = options;
   const chainId = chainIdOverride ?? chainIdOf(networkId);
 
@@ -320,8 +324,8 @@ function renderScreen(options: {
 
   return render(
     <UniversalTransactionSigningScreen
-      navigation={navigationStub}
-      route={{ params } as never}
+      navigation={navigation as never}
+      route={{ key: routeKey, params } as never}
     />
   );
 }
@@ -1166,4 +1170,34 @@ it('rejects an in-app review through the presenting navigation', async () => {
   expect(
     (navigationStub as unknown as { navigate: jest.Mock }).navigate
   ).toHaveBeenCalledWith('Main', { screen: 'Home' });
+});
+
+// The route screen scopes the callback navigation to its own route: once that
+// route is gone, a scoped back reports it and dispatches nothing.
+it('scopes the callback navigation to the screen route key', async () => {
+  const sender = makeAccount('scoped-key').addr.toString();
+  mockAccounts = [walletAccount('Scoped account', sender)];
+  let received: { goBack(): boolean } | undefined;
+  mockRegistry.scoped = {
+    onReject: async (nav: { goBack(): boolean }) => {
+      received = nav;
+    },
+  } as any;
+  const dispatch = jest.fn();
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000, 'Scoped')) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'Scoped account' },
+    callbackId: 'scoped',
+    routeKey: 'sign-route',
+    navigation: {
+      ...(navigationStub as object),
+      getState: () => ({ key: 'stack', routes: [] }),
+      dispatch,
+    },
+  });
+  await fireEvent.press(view.getByText('Reject'));
+  expect(received?.goBack()).toBe(false);
+  expect(dispatch).not.toHaveBeenCalled();
 });
