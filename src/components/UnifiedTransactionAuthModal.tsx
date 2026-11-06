@@ -115,7 +115,6 @@ export default function UnifiedTransactionAuthModal({
       // it is cleared on the next genuine open, above.
       controller.resetAfterDismiss();
       initializedRef.current = false;
-      hasCalledOnComplete.current = false;
     }
     wasVisibleRef.current = visible;
   }, [visible, controller]);
@@ -142,7 +141,10 @@ export default function UnifiedTransactionAuthModal({
       void (async () => {
         await controller.initializeSigningFlow(request);
         if (userCancelledRef.current || !wasVisibleRef.current) return;
-        if (request.reviewGrantKey) {
+        if (
+          request.reviewGrantKey &&
+          controller.getState().state === 'authenticating'
+        ) {
           await controller.authenticateWithReviewGrant(request.reviewGrantKey);
         } else if (
           controller.getState().state === 'authenticating' &&
@@ -224,7 +226,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handleCancel = useCallback(() => {
-    controller.cancel();
+    controller.cancel({ byUser: true });
     controller.resetAfterDismiss();
     setPin('');
     initializedRef.current = false;
@@ -364,7 +366,9 @@ export default function UnifiedTransactionAuthModal({
 
   useEffect(() => {
     if (
-      authState.state === 'error' &&
+      (authState.state === 'error' ||
+        (authState.state === 'authenticating' &&
+          controller.hasEndedReviewFlow?.())) &&
       !isUserRejectedError &&
       (authState.error || authState.ledgerError) &&
       !hasCalledOnComplete.current
@@ -946,7 +950,9 @@ export default function UnifiedTransactionAuthModal({
     if (authState.state === 'processing' || authState.state === 'signing') {
       if (
         authState.isLedgerFlow &&
-        (authState.ledgerStatus === 'error' ||
+        ((authState.state === 'signing' &&
+          request?.type === 'batch_transaction') ||
+          authState.ledgerStatus === 'error' ||
           authState.ledgerStatus === 'app_required')
       ) {
         return (
@@ -1030,7 +1036,14 @@ export default function UnifiedTransactionAuthModal({
       animationType={useBottomSheet ? 'slide' : 'fade'}
       onRequestClose={() => {
         // Only allow closing if not processing
-        if (authState.state !== 'processing' && authState.state !== 'signing') {
+        if (
+          authState.state !== 'processing' &&
+          (authState.state !== 'signing' ||
+            (authState.isLedgerFlow &&
+              (request?.type === 'batch_transaction' ||
+                authState.ledgerStatus === 'error' ||
+                authState.ledgerStatus === 'app_required')))
+        ) {
           userCancelledRef.current = true; // Mark as cancelled even if closed via system
           handleCancel();
         }

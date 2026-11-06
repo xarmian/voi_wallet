@@ -32,6 +32,14 @@ import {
  */
 export { RemoteSignerRequiredError };
 
+/** Hardware routes require a sequential batch even when the reviewed account is rekeyed. */
+export function signsSequentially(request: UnifiedTransactionRequest): boolean {
+  return (
+    request.account.type === AccountType.LEDGER ||
+    request.walletConnectParams?.sequentialSigning === true
+  );
+}
+
 /**
  * Genesis hash (lowercase hex) -> NetworkId, derived from the single source of
  * truth in `NETWORK_CONFIGURATIONS` rather than a second hand-maintained table.
@@ -186,7 +194,7 @@ export interface UnifiedTransactionRequest {
    */
   account: AccountMetadata | WalletAccount;
   pin?: string;
-  /** An authenticated, still-locked WalletConnect review sitting. */
+  /** A request-scoped, authenticated WalletConnect signing capability. */
   reviewGrantKey?: string;
 
   // For standard transfers (VOI/ASA/ARC200)
@@ -302,7 +310,8 @@ export class UnifiedTransactionSigner {
    */
   async signTransaction(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    options?: { signal?: AbortSignal }
   ): Promise<UnifiedSigningResult> {
     try {
       callbacks?.onAuthStart?.();
@@ -331,7 +340,11 @@ export class UnifiedTransactionSigner {
 
         case 'batch_transaction':
         case 'walletconnect_batch':
-          result = await this.signWalletConnectBatch(request, callbacks);
+          result = await this.signWalletConnectBatch(
+            request,
+            callbacks,
+            options?.signal
+          );
           break;
 
         case 'keyreg':
@@ -473,15 +486,15 @@ export class UnifiedTransactionSigner {
    */
   private async signWalletConnectBatch(
     request: UnifiedTransactionRequest,
-    callbacks?: UnifiedSigningCallbacks
+    callbacks?: UnifiedSigningCallbacks,
+    signal?: AbortSignal
   ): Promise<UnifiedSigningResult> {
-    if (!request.walletConnectParams) {
-      throw new Error('WalletConnect parameters required for batch signing');
-    }
-
-    const params = request.walletConnectParams;
-
     try {
+      if (!request.walletConnectParams) {
+        throw new Error('WalletConnect parameters required for batch signing');
+      }
+
+      const params = request.walletConnectParams;
       const total = params.transactions.length;
       const plans = await this.planBatch(request);
       const boundNetworkId =
@@ -495,15 +508,23 @@ export class UnifiedTransactionSigner {
       // reviewed account, so a group whose other signer is rekeyed to a Ledger
       // would otherwise be signed in parallel: the review screen, which has
       // already resolved every signer's route, sets `sequentialSigning`.
-      const signSequentially =
-        request.account.type === AccountType.LEDGER ||
-        params.sequentialSigning === true;
+      const signSequentially = signsSequentially(request);
 
       // For Ledger accounts: sign sequentially (hardware constraint)
       // For standard accounts: sign in parallel for better performance
       if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
+          // After Cancel, no entry starts after the one the loop has entered. After
+          // a lapse the same holds only for a request that holds a review
+          // capability: the controller watches the grant only then, so a request
+          // with no grant is not aborted by a lock or background. The entered entry
+          // can still reach the device; its signature is discarded. After Cancel,
+          // only the device keeps asking. After a lapse, the modal keeps showing the
+          // entered entry until the device resolves.
+          if (signal?.aborted) {
+            return { success: false, error: new Error('Signing cancelled') };
+          }
           callbacks?.onLedgerPrompt?.({ index: i + 1, total });
 
           const plan = plans[i];
@@ -543,6 +564,9 @@ export class UnifiedTransactionSigner {
           }
         }
       } else {
+        if (signal?.aborted) {
+          return { success: false, error: new Error('Signing cancelled') };
+        }
         // Parallel signing for standard accounts (much faster!)
         callbacks?.onLedgerPrompt?.({ index: 1, total });
 
@@ -585,24 +609,32 @@ export class UnifiedTransactionSigner {
       }
 
       // Clear private key cache for security (cache is inside AccountSecureStorage)
-      // Note: Cache auto-expires after 60s, but we clear immediately for security
+      // Clear immediately rather than leaving cached keys in memory.
       const { AccountSecureStorage } =
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
 
-      // All transactions signed successfully
+      if (signal?.aborted) {
+        return { success: false, error: new Error('Signing cancelled') };
+      }
+
+      // For WalletConnect this means all signatures are ready, not broadcast.
+      // The signed bytes are returned to the dApp; this wallet sends no batch.
       callbacks?.onNetworkSubmit?.();
 
       return {
         success: true,
         signedTransactions: signedTxns,
       };
-    } catch (error) {
-      // Clear private key cache on error too for security
+    } finally {
+      // Clear the private key cache on every exit of the signer.
+      // Parallel entries in flight after the first rejection are not awaited.
+      // A straggler that re-caches a key after this clear leaves it in memory until
+      // a 10%-sampled cleanup in getPrivateKey, an explicit clear, or a lock.
+      // The 60 s TTL bounds reuse of a cached key, not how long it stays in memory.
       const { AccountSecureStorage } =
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
-      throw error;
     }
   }
 

@@ -71,9 +71,11 @@ jest.mock('@/services/secure/keyManager', () => ({
   },
 }));
 
-jest.mock('@/services/secure/AccountSecureStorage', () => ({
-  AccountSecureStorage: { clearPrivateKeyCache: jest.fn() },
-}));
+jest.mock('@/services/secure/AccountSecureStorage', () => {
+  const actual = jest.requireActual('@/services/secure/AccountSecureStorage');
+  jest.spyOn(actual.AccountSecureStorage, 'clearPrivateKeyCache');
+  return actual;
+});
 
 jest.mock('@/services/network', () => ({
   NetworkService: { getInstance: jest.fn() },
@@ -2600,3 +2602,69 @@ describe('signWalletConnectBatch — multi-account signer list (TASK-259)', () =
     ).toBe(txnB.txID());
   });
 });
+
+// DEFECT: abort at the next loop head used to bypass both cache clear calls.
+it('abortClearsPrivateKeyCache', async () => {
+  const account = accountOf('abort-cache', AccountType.STANDARD);
+  const abort = new AbortController();
+  mockSignTransaction.mockImplementationOnce(async (txn, address) => {
+    const blob = realSign(txn, address);
+    abort.abort();
+    return blob;
+  });
+  const result = await signer.signTransaction(
+    {
+      type: 'batch_transaction',
+      account,
+      pin: '1234',
+      walletConnectParams: {
+        transactions: [1, 2].map((amount) => ({
+          txn: unsignedB64(
+            payOn(NetworkId.VOI_MAINNET, account.address, amount)
+          ),
+        })),
+        reviewedSigners: [account.address],
+        sequentialSigning: true,
+        sessionBinding: bindingFor(NetworkId.VOI_MAINNET, [account.address]),
+      },
+    },
+    undefined,
+    { signal: abort.signal }
+  );
+  expect(result.success).toBe(false);
+  expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+  expect(mockClearCache).toHaveBeenCalled();
+});
+
+// REGRESSION: cleanup precedes success notification and also runs on a throw.
+it.each(['success', 'throw'] as const)(
+  'batchClearsPrivateKeyCache:%s',
+  async (exit) => {
+    const account = accountOf('cache-' + exit, AccountType.STANDARD);
+    if (exit === 'throw')
+      mockSignTransaction.mockRejectedValueOnce(new Error('device failed'));
+    const result = await signer.signTransaction(
+      {
+        type: 'batch_transaction',
+        account,
+        pin: '1234',
+        walletConnectParams: {
+          transactions: [
+            {
+              txn: unsignedB64(
+                payOn(NetworkId.VOI_MAINNET, account.address, 1)
+              ),
+            },
+          ],
+          reviewedSigners: [account.address],
+          sessionBinding: bindingFor(NetworkId.VOI_MAINNET, [account.address]),
+        },
+      },
+      {
+        onNetworkSubmit: () => expect(mockClearCache).toHaveBeenCalled(),
+      }
+    );
+    expect(result.success).toBe(exit === 'success');
+    expect(mockClearCache).toHaveBeenCalled();
+  }
+);

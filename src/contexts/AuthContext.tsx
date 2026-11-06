@@ -25,6 +25,40 @@ import { redactError } from '@/utils/logRedaction';
 import { isWipeInFlight, wipeWalletData } from '@/services/wipe';
 import { showWipeCompleteNotice } from '@/services/wipe/notices';
 
+import {
+  reviewGrant,
+  walletConnectRequestKey,
+} from '@/services/auth/reviewGrant';
+import { TransactionRequestQueue } from '@/services/walletconnect/TransactionRequestQueue';
+
+// Capture the authenticated epoch before the asynchronous queue read. A lock,
+// background, or credential rotation during that read must not mint permission.
+async function mintWaitingReviewCapabilities(): Promise<void> {
+  const epoch = SessionKeyVault.currentEpoch();
+  let backgrounded = AppState.currentState === 'background';
+  const subscription = AppState.addEventListener('change', (state) => {
+    if (state === 'background') backgrounded = true;
+  });
+  try {
+    const waiting = await TransactionRequestQueue.getAll();
+    if (
+      backgrounded ||
+      AppState.currentState === 'background' ||
+      epoch !== SessionKeyVault.currentEpoch() ||
+      !AppLockSignal.isUnlocked()
+    )
+      return;
+    reviewGrant.mintForWaiting(
+      waiting.map(({ topic, id }) => walletConnectRequestKey(topic, id))
+    );
+  } catch {
+    // An unreadable queue grants no signing permission; per-request auth remains.
+    reviewGrant.revoke(false);
+  } finally {
+    subscription.remove();
+  }
+}
+
 // Helper to check if biometrics are available (web-safe)
 const checkBiometricAvailability = async (): Promise<{
   hasHardware: boolean;
@@ -909,6 +943,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // messaging poll/cache-write guard resumes immediately, not only after
         // the React effect below runs.
         AppLockSignal.setUnlocked(true);
+        // Unlock notification ends the old gate sitting before minting its replacement.
+        const waitingCapabilities = mintWaitingReviewCapabilities();
 
         const sessionId = SecurityUtils.generateSessionId();
         setAuthState((prev) => ({
@@ -924,6 +960,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // v2 wrap under the just-verified secret. Sequential + vault-fresh per
         // account; NEVER blocks the unlock, all failures swallowed internally.
         void AccountSecureStorage.migrateAllAccountsToV2();
+        await waitingCapabilities;
         return true;
       }
 
@@ -996,6 +1033,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Flip the lock signal to UNLOCKED synchronously (mirrors the PIN path
         // and lock()) so the messaging poll/cache-write guard resumes at once.
         AppLockSignal.setUnlocked(true);
+        // Unlock notification ends the old gate sitting before minting its replacement.
+        const waitingCapabilities = mintWaitingReviewCapabilities();
 
         const sessionId = SecurityUtils.generateSessionId();
         setAuthState((prev) => ({
@@ -1011,6 +1050,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // secret, so idle Format-A accounts can be upgraded to v2 under it. NEVER
         // blocks the unlock; failures swallowed internally.
         void AccountSecureStorage.migrateAllAccountsToV2();
+        await waitingCapabilities;
         return true;
       }
 

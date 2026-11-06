@@ -45,12 +45,15 @@ type AssetParamsStub = { decimals: number; name?: string; unitName?: string };
 
 let mockLocked = false;
 let mockModalProps: any;
+let mockRealController: any;
+let mockBiometricEnabled = false;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     authState: {
       isLocked: mockLocked,
       isAuthenticated: !mockLocked,
-      biometricEnabled: false,
+      biometricEnabled: mockBiometricEnabled,
+      hasPin: true,
     },
   }),
 }));
@@ -62,9 +65,11 @@ jest.mock('@/services/secure/sessionTeardown', () => ({
 jest.mock('@/services/secure/AccountSecureStorage', () => ({
   AccountSecureStorage: {
     getCredentialSource: jest.fn(async () => 'pin'),
-    verifyPin: jest.fn(),
+    verifyPin: jest.fn(async () => true),
+    hasPin: jest.fn(async () => true),
     getBiometricSecret: jest.fn(),
-    isBiometricEnabled: jest.fn(),
+    isBiometricEnabled: jest.fn(async () => false),
+    clearPrivateKeyCache: jest.fn(),
   },
 }));
 
@@ -89,6 +94,8 @@ let mockRegistry: Record<
 // zustand wallet store (and therefore AsyncStorage). Only the locale lookup is
 // involved, so a minimal store stub keeps this a pure display test.
 jest.mock('expo-local-authentication', () => ({
+  hasHardwareAsync: jest.fn(async () => true),
+  isEnrolledAsync: jest.fn(async () => true),
   supportedAuthenticationTypesAsync: jest.fn(async () => []),
   authenticateAsync: jest.fn(),
   AuthenticationType: { FACIAL_RECOGNITION: 2 },
@@ -127,16 +134,21 @@ jest.mock('expo-screen-capture', () => ({
 
 jest.mock('@/services/secure/keyManager', () => ({
   SecureKeyManager: {
+    getSigningInfo: jest.fn(async () => ({ signingAddress: 'ADDR' })),
+    getLedgerSigningInfo: jest.fn(async () => null),
     resolveSigningRoute: (address: string, networkId?: string) =>
       mockResolveSigningRoute(address, networkId),
   },
 }));
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
-  useTransactionAuthController: () => ({
-    cleanup: jest.fn(),
-    cancel: jest.fn(),
-  }),
+  useTransactionAuthController: () =>
+    mockRealController ?? {
+      getState: () => ({ state: 'idle' }),
+      cleanup: jest.fn(),
+      cancel: jest.fn(),
+      clearUserCancellation: jest.fn(),
+    },
 }));
 
 jest.mock('@/services/navigation/callbackRegistry', () => ({
@@ -311,6 +323,8 @@ function renderScreen(options: {
 
 beforeEach(() => {
   mockLocked = false;
+  mockRealController = undefined;
+  mockBiometricEnabled = false;
   mockRegistry = {};
   mockBeforeRemove = [];
   mockAssetParams = {};
@@ -983,3 +997,150 @@ it.each([
   expect(String(shownMessage)).not.toMatch(/fail/i);
   alert.mockRestore();
 });
+
+// Real controller at the modal seam: review bytes come from the rendered screen.
+jest.mock('@/services/transactions/unifiedSigner', () => ({
+  signsSequentially: (request: unknown) =>
+    jest
+      .requireActual('@/services/transactions/unifiedSigner')
+      .signsSequentially(request),
+  UnifiedTransactionSigner: {
+    getInstance: () => ({
+      signTransaction: jest.fn(async (_req, callbacks) =>
+        callbacks.onComplete({
+          success: true,
+          signedTransactions: ['signature'],
+        })
+      ),
+    }),
+  },
+}));
+jest.mock('@/services/ledger/transport', () => ({
+  ledgerTransportService: {
+    stopDiscovery: jest.fn(),
+    cancelConnect: jest.fn(),
+    on: jest.fn(),
+    off: jest.fn(),
+  },
+}));
+jest.mock('@/services/ledger/algorand', () => ({
+  ledgerAlgorandService: {},
+  LedgerAlgorandService: {},
+}));
+import { reviewGrant, reviewBindingDigest } from '@/services/auth/reviewGrant';
+import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
+import { AppLockSignal } from '@/services/secure/appLockState';
+
+async function renderCapabilityScreen(mint: boolean) {
+  AppLockSignal.setUnlocked(true);
+  SessionKeyVault.set('fixture', 'pin');
+  if (mint) reviewGrant.mintForWaiting(['topic-under-test:437']);
+  const a = makeAccount('capability-screen').addr;
+  mockAccounts = [walletAccount('Alpha', a)];
+  mockRoutes[a] = { kind: 'software', signingAddress: a };
+  return renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, a, 1)) }],
+    approved: [a],
+    reviewedAccount: { address: a, label: 'Alpha' },
+  });
+}
+afterEach(() => {
+  reviewGrant.revoke(false);
+  SessionKeyVault.clear();
+  AppLockSignal.setUnlocked(false);
+});
+// DEFECT R1
+it.each([false, true])(
+  'approveLabelReflectsUnspentCapabilityWithBiometric%s',
+  async (biometric) => {
+    mockBiometricEnabled = biometric;
+    const view = await renderCapabilityScreen(true);
+    await waitFor(() => expect(mockResolveSigningRoute).toHaveBeenCalled());
+    expect(view.getByText('Sign')).toBeTruthy();
+    await act(async () => {
+      reviewGrant.leave('topic-under-test:437');
+    });
+    expect(
+      view.getByText(biometric ? 'Sign with Touch ID' : 'Sign with PIN')
+    ).toBeTruthy();
+  }
+);
+// DEFECT E8: a consumed but still live grant must not be attached again.
+it('spentCapabilityNextApproveUsesFreshAuthentication', async () => {
+  const view = await renderCapabilityScreen(true);
+  await waitFor(() => expect(mockModalProps).toBeTruthy());
+  await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+  const req = mockModalProps.request;
+  const digest = reviewBindingDigest({
+    networkId: req.networkId,
+    txnBytesBase64: req.walletConnectParams.transactions.map(
+      (t: { txn: string }) => t.txn
+    ),
+    signerAddresses: req.walletConnectParams.reviewedSigners,
+  });
+  expect(digest).not.toBeNull();
+  await act(async () => {
+    expect(reviewGrant.consume('topic-under-test:437', digest!)).toBe(true);
+  });
+  await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+  expect(mockModalProps.request.reviewGrantKey).toBeUndefined();
+});
+// REGRESSION R3 screen side with a non-null matching session binding.
+it.each([true, false])(
+  'screenBindToConsumeWithMintedCapability%s',
+  async (mint) => {
+    const { TransactionAuthController } = jest.requireActual(
+      '@/services/auth/transactionAuthController'
+    );
+    mockRealController = new TransactionAuthController();
+    const view = await renderCapabilityScreen(mint);
+    await waitFor(() => expect(mockResolveSigningRoute).toHaveBeenCalled());
+    await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+    const req = mockModalProps.request;
+    expect(req.walletConnectParams.sessionBinding).not.toBeNull();
+    await mockRealController.initializeSigningFlow(req);
+    if (mint) {
+      const digest = reviewBindingDigest({
+        networkId: req.networkId,
+        txnBytesBase64: req.walletConnectParams.transactions.map(
+          (t: { txn: string }) => t.txn
+        ),
+        signerAddresses: req.walletConnectParams.reviewedSigners,
+      });
+      expect(digest).toBe(mockRealController.getReviewDigest());
+      expect(
+        await mockModalProps.controller.authenticateWithReviewGrant(
+          req.reviewGrantKey
+        )
+      ).toBe(true);
+    } else {
+      expect(req.reviewGrantKey).toBeUndefined();
+      expect(mockRealController.getState().requiresPin).toBe(true);
+      expect(await mockRealController.authenticateWithPin('123456')).toBe(true);
+    }
+    expect(mockRealController.getState().state).toBe('completed');
+  }
+);
+// DEFECT for authenticating; REGRESSION for signing and processing.
+// Unlocked lapsed review closes its modal unless the signer is in flight.
+it.each(['authenticating', 'signing', 'processing'])(
+  'unlockedLapseRescuesModalWhile%s',
+  async (state) => {
+    const { TransactionAuthController } = jest.requireActual(
+      '@/services/auth/transactionAuthController'
+    );
+    mockRealController = new TransactionAuthController();
+    const cancel = jest.spyOn(mockRealController, 'cancel');
+    const view = await renderCapabilityScreen(true);
+    await waitFor(() => expect(mockResolveSigningRoute).toHaveBeenCalled());
+    await fireEvent.press(view.getByText(/^Sign(?: with .+)?$/));
+    await mockRealController.initializeSigningFlow(mockModalProps.request);
+    mockRealController.updateState({ state });
+    await act(async () => {
+      reviewGrant.leave('topic-under-test:437');
+    });
+    expect(cancel).toHaveBeenCalledTimes(state === 'authenticating' ? 1 : 0);
+    expect(mockModalProps.visible).toBe(state !== 'authenticating');
+  }
+);

@@ -31,16 +31,17 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-it('authenticates once for queued requests across dApps, requires a fresh Sign for each, then clears keys', async () => {
+// REGRESSION R7
+it('requires fresh authentication when advancing to a request outside the capability', async () => {
   expect(await reviewGrant.unlock('one:1', { pin: '123456' })).toBe(true);
   expect(AppLockSignal.isUnlocked()).toBe(false);
-  expect(reviewGrant.consume('one:1')).toBe(true);
-  expect(reviewGrant.consume('one:1')).toBe(false);
-  reviewGrant.continueTo('two:2');
-  reviewGrant.leave('one:1');
-  expect(reviewGrant.isValid('two:2')).toBe(true);
-  expect(reviewGrant.consume('two:2')).toBe(true);
-  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
+  reviewGrant.bind('one:1', 'digest');
+  expect(reviewGrant.consume('one:1', 'digest')).toBe(true);
+  expect(reviewGrant.consume('one:1', 'digest')).toBe(false);
+  expect(reviewGrant.isValid('two:2')).toBe(false);
+  expect(await reviewGrant.unlock('two:2', { pin: '123456' })).toBe(true);
+  expect(reviewGrant.isValid('one:1')).toBe(false);
+  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(2);
   reviewGrant.leave('two:2');
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
@@ -90,7 +91,7 @@ it('revokes on background and discards late biometric completions', async () => 
 it('does not revive an expired sitting when a delayed touch arrives', async () => {
   await reviewGrant.unlock('one:1', { pin: '123456' });
   jest.setSystemTime(Date.now() + REVIEW_IDLE_MS + 1);
-  reviewGrant.touch();
+  reviewGrant.touch('one:1');
   expect(reviewGrant.isValid('one:1')).toBe(false);
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
@@ -120,45 +121,18 @@ it('ends review immediately on an explicit re-lock, even before vault teardown',
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
 
-it('does not extend the idle deadline when the queue advances automatically', async () => {
-  await reviewGrant.unlock('one:1', { pin: '123456' });
-  jest.advanceTimersByTime(REVIEW_IDLE_MS - 1);
-  reviewGrant.continueTo('two:2');
-  jest.advanceTimersByTime(1);
-  expect(reviewGrant.isValid('two:2')).toBe(false);
-  expect(SessionKeyVault.isUnlocked()).toBe(false);
-});
-
-// TASK-437 review P2: a request that arrives while one is under review is
-// pushed over it (not queued). Unlocking it re-authenticated, which bumped the
-// vault epoch, revoked the sitting and failed that first attempt.
-it('lets a request pushed over a live review join the sitting with no second auth', async () => {
+it('replaces the previous permission after authenticating a late request', async () => {
   expect(await reviewGrant.unlock('a:1', { pin: '123456' })).toBe(true);
-
   expect(await reviewGrant.unlock('b:2', { pin: '123456' })).toBe(true);
-
-  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
-  expect(reviewGrant.isValid('a:1')).toBe(true);
-  expect(reviewGrant.isValid('b:2')).toBe(true);
-  // Each request still needs its own Sign tap.
-  expect(reviewGrant.consume('b:2')).toBe(true);
-  expect(reviewGrant.consume('b:2')).toBe(false);
-  expect(reviewGrant.consume('a:1')).toBe(true);
-});
-
-it('joins only a live sitting', async () => {
-  expect(reviewGrant.join('a:1')).toBe(false);
+  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(2);
   expect(reviewGrant.isValid('a:1')).toBe(false);
-
-  await reviewGrant.unlock('a:1', { pin: '123456' });
-  jest.advanceTimersByTime(REVIEW_IDLE_MS);
-  expect(reviewGrant.join('b:2')).toBe(false);
-  expect(reviewGrant.isValid('b:2')).toBe(false);
+  expect(reviewGrant.isValid('b:2')).toBe(true);
 });
 
-it('ends the sitting only when its last request leaves', async () => {
-  await reviewGrant.unlock('a:1', { pin: '123456' });
-  reviewGrant.join('b:2');
+it('ends the capability only when its last waiting request leaves', () => {
+  SessionKeyVault.set('fixture', 'pin');
+  AppLockSignal.setUnlocked(true);
+  reviewGrant.mintForWaiting(['a:1', 'b:2']);
 
   reviewGrant.leave('b:2');
   expect(reviewGrant.isValid('a:1')).toBe(true);
@@ -166,7 +140,7 @@ it('ends the sitting only when its last request leaves', async () => {
 
   reviewGrant.leave('a:1');
   expect(reviewGrant.isValid('a:1')).toBe(false);
-  expect(SessionKeyVault.isUnlocked()).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(true);
 });
 
 it('ignores a leave from a screen with no part in the sitting', async () => {
@@ -208,31 +182,31 @@ it('aborts a request’s own in-flight unlock when its screen leaves', async () 
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
 
-it('gives a request its Sign back after a failed attempt, only while the sitting is live', async () => {
+// DEFECT: settlement spends a locked permission until the screen handles its outcome.
+it('settledPermissionCannotBeConsumedAgain', async () => {
   await reviewGrant.unlock('a:1', { pin: '123456' });
-  expect(reviewGrant.consume('a:1')).toBe(true);
-  expect(reviewGrant.consume('a:1')).toBe(false);
-
-  reviewGrant.release('a:1');
-  expect(reviewGrant.consume('a:1')).toBe(true);
-
-  reviewGrant.revoke();
-  reviewGrant.release('a:1');
-  expect(reviewGrant.consume('a:1')).toBe(false);
+  reviewGrant.bind('a:1', 'digest');
+  expect(reviewGrant.consume('a:1', 'digest')).toBe(true);
+  reviewGrant.pauseIdle('a:1');
+  reviewGrant.settle('a:1');
+  expect(reviewGrant.isLockedSitting('a:1')).toBe(true);
+  expect(reviewGrant.isValid('a:1')).toBe(true);
+  expect(reviewGrant.isUnspent('a:1')).toBe(false);
+  expect(reviewGrant.consume('a:1', 'digest')).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(true);
+  jest.advanceTimersByTime(60_001);
+  expect(reviewGrant.isValid('a:1')).toBe(false);
+  expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
 
-// TASK-438 (Luna P2 on #241): a session proposal that arrives during a signing
-// review joins the sitting before the signing screen is popped, so the
-// sitting survives that screen leaving and the proposal needs no second auth.
-it('keeps the sitting for a proposal that joins before the signing review leaves', async () => {
+// REGRESSION R7
+it('requires fresh authentication for a proposal arriving after a signing review', async () => {
   const { walletConnectProposalKey } = require('../reviewGrant');
   const proposalKey = walletConnectProposalKey('pairing-1', 9);
   expect(await reviewGrant.unlock('sign:1', { pin: '123456' })).toBe(true);
-
-  expect(reviewGrant.join(proposalKey)).toBe(true);
+  expect(reviewGrant.isValid(proposalKey)).toBe(false);
   reviewGrant.leave('sign:1');
-
-  expect(reviewGrant.isValid(proposalKey)).toBe(true);
+  expect(reviewGrant.isValid(proposalKey)).toBe(false);
   expect(await reviewGrant.unlock(proposalKey, { pin: '123456' })).toBe(true);
-  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(1);
+  expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(2);
 });

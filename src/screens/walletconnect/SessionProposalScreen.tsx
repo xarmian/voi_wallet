@@ -83,8 +83,8 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   // TASK-438: while the wallet is locked the connect screen shows only the
   // gate (dApp name and icon, URL host, requested networks; Unlock to review /
   // Reject). Accounts are not loaded, probed or mounted until the review
-  // sitting covers this proposal. The sitting is TASK-437's: one unlock covers
-  // everything in it, and it ends on background, idle, re-lock or queue end.
+  // capability covers this proposal. A late proposal requires fresh authentication;
+  // background, idle timeout and re-lock end its review access.
   useSecureScreen();
   useAppSwitcherProtection();
   const { authState } = useAuth();
@@ -107,17 +107,10 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke();
+      if (state === 'background') reviewGrant.revoke(true, 'background');
     });
     return () => subscription.remove();
   }, []);
-
-  // A proposal shown while a review sitting is live joins it: one unlock covers
-  // everything in the sitting (Connect still needs its own tap). The router
-  // usually joins first (serviceBootstrap); this covers any other way in.
-  useEffect(() => {
-    reviewGrant.join(requestKey);
-  }, [requestKey]);
 
   // However the screen is left, this proposal leaves the sitting.
   useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
@@ -554,7 +547,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView
-      onTouchStart={() => reviewGrant.touch()}
+      onTouchStart={() => reviewGrant.touch(requestKey)}
       style={styles.container}
       edges={['top', 'bottom']}
     >

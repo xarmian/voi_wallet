@@ -112,7 +112,11 @@ jest.mock('@/services/secure/sessionTeardown', () => ({
   enterLockedState: jest.fn(),
 }));
 jest.mock('@/services/secure/appLockState', () => ({
-  AppLockSignal: { setUnlocked: jest.fn() },
+  AppLockSignal: {
+    setUnlocked: jest.fn(),
+    isUnlocked: jest.fn(() => true),
+    subscribe: jest.fn(() => () => {}),
+  },
 }));
 jest.mock('@/utils/security', () => ({
   SecurityUtils: { generateSessionId: jest.fn(() => 'test-session-id') },

@@ -269,12 +269,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
 
         handedOffRef.current = true;
-        // A request pushed over one already under review (it isn't queued,
-        // because the current route is the signing screen) joins the live
-        // sitting: one unlock covers every request in it (TASK-437). No-op
-        // when no sitting is live.
-        reviewGrant.join(requestKey);
-
         navigation.replace('UniversalTransactionSigning', {
           // Display bytes. `walletConnect.transactions` below is the authority
           // for both review and signing; this stays index-aligned with it.
@@ -347,14 +341,14 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     let taken: Awaited<ReturnType<typeof TransactionRequestQueue.takeNext>>;
     try {
       taken = await TransactionRequestQueue.takeNext((req) => {
-        reviewGrant.continueTo(walletConnectRequestKey(req.topic, req.id));
         navigation.replace('WalletConnectTransactionRequest', {
           requestEvent: req,
           version: req.version,
         });
       });
-      // Queue empty: this request leaves the sitting. That ends it unless a
-      // request pushed under this one is still on screen in it.
+      // A normal unlock mints one permission per request waiting at that moment.
+      // A gate unlock covers only its own request; later requests join no sitting.
+      // Leaving this request ends only its own permission.
       if (!taken.request) reviewGrant.leave(requestKey);
     } catch (error) {
       reviewGrant.revoke();

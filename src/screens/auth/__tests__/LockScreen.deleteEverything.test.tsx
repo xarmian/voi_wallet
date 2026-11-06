@@ -51,7 +51,7 @@ jest.mock('@/services/secure', () => ({
   },
 }));
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ isFocused: () => true }),
+  useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }),
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({
   useThemedStyles: () => new Proxy({}, { get: () => ({}) }),

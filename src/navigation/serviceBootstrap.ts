@@ -23,10 +23,6 @@ import {
   TransactionRequestQueue,
 } from '@/services/walletconnect/TransactionRequestQueue';
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
-import {
-  reviewGrant,
-  walletConnectProposalKey,
-} from '@/services/auth/reviewGrant';
 
 /**
  * Whole-app service boot, extracted verbatim from AppNavigator's mount effect
@@ -146,19 +142,6 @@ export const initializeServices = async ({
               () => {
                 try {
                   if (navigationRef.current?.isReady?.()) {
-                    // TASK-438: join the proposal to a live review sitting
-                    // BEFORE going back. If a WalletConnect signing review is
-                    // on top, popping it leaves its own key; the sitting then
-                    // continues for this proposal instead of ending, so it
-                    // needs no second unlock. No-op when no sitting is live.
-                    if (proposal?.pairingTopic != null) {
-                      reviewGrant.join(
-                        walletConnectProposalKey(
-                          proposal.pairingTopic,
-                          proposal.id
-                        )
-                      );
-                    }
                     // Close any open QR scanner first when possible
                     if (navigationRef.current.canGoBack?.()) {
                       navigationRef.current.goBack();

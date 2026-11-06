@@ -1,5 +1,7 @@
+import { ReviewEndedError } from '@/services/auth/ReviewEndedError';
 import React, {
   useState,
+  useRef,
   useEffect,
   useMemo,
   useCallback,
@@ -22,7 +24,10 @@ import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuth } from '@/contexts/AuthContext';
-import { reviewGrant } from '@/services/auth/reviewGrant';
+import {
+  reviewGrant,
+  walletConnectReviewDigest,
+} from '@/services/auth/reviewGrant';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import LockedRequestGate, {
   dappHost,
@@ -340,6 +345,9 @@ export default function UniversalTransactionSigningScreen({
   const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
     reviewGrant.isValid(requestKey)
   );
+  const grantUnspent = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isUnspent(requestKey)
+  );
   const [foreground, setForeground] = useState(
     AppState.currentState !== 'background' &&
       AppState.currentState !== 'inactive'
@@ -362,10 +370,24 @@ export default function UniversalTransactionSigningScreen({
       .catch(() => {});
   }, []);
 
+  const handlingOutcome = useRef(false);
+  // reviewFlowActive carries the once-per-flow behaviour: the listener acts only
+  // while a flow exists. reviewLapseHandled only blocks the re-entrant emit that
+  // the listener's own cancel() causes while it is handling a lapse.
+  const reviewLapseHandled = useRef(false);
+  const reviewFlowActive = useRef(false);
+  const rejecting = useRef(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
+  const endSittingState = useCallback(() => {
+    reviewFlowActive.current = false;
+    reviewLapseHandled.current = false;
+    setDangerAcknowledged(false);
+    setShowAuthModal(false);
+    setCurrentRequest(null);
+  }, []);
   /** Resolved ASA params keyed by asset id; `null` = looked up, unavailable. */
   const [assetParams, setAssetParams] = useState<
     Record<string, AssetParams | null>
@@ -384,30 +406,67 @@ export default function UniversalTransactionSigningScreen({
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke();
+      if (state === 'background') reviewGrant.revoke(true, 'background');
     });
     return () => subscription.remove();
   }, []);
 
+  useEffect(() => {
+    reviewLapseHandled.current = false;
+  }, [requestKey]);
+
   useEffect(
     () =>
       reviewGrant.subscribe(() => {
+        if (reviewGrant.isValid(requestKey)) {
+          reviewLapseHandled.current = false;
+          return;
+        }
+        if (!AppLockSignal.isUnlocked()) setDangerAcknowledged(false);
+        if (!reviewFlowActive.current) {
+          reviewLapseHandled.current = false;
+          return;
+        }
+        const state = authController.getState().state;
         if (
           walletConnect &&
-          !AppLockSignal.isUnlocked() &&
-          !reviewGrant.isValid(requestKey)
+          !handlingOutcome.current &&
+          !reviewLapseHandled.current &&
+          state !== 'completed' &&
+          state !== 'error' &&
+          state !== 'signing' &&
+          state !== 'processing' &&
+          (!AppLockSignal.isUnlocked() ||
+            (showAuthModal && currentRequest?.reviewGrantKey))
         ) {
-          authController.cancel();
-          setShowAuthModal(false);
-          setCurrentRequest(null);
-          setDangerAcknowledged(false);
+          reviewLapseHandled.current = true;
+          const byUser = authController.wasUserCancelled;
+          if (showAuthModal && !byUser) {
+            const error = new ReviewEndedError(
+              reviewGrant.endReason(requestKey) === 'idle'
+                ? 'Your approval timed out before signing finished. Start the request again.'
+                : 'Your approval ended before signing finished. Start the request again.'
+            );
+            Alert.alert(error.title, error.message);
+          }
+          if (!byUser) authController.cancel();
+          endSittingState();
+          authController.clearUserCancellation();
         }
       }),
-    [walletConnect, requestKey, authController]
+    [
+      walletConnect,
+      requestKey,
+      authController,
+      showAuthModal,
+      currentRequest,
+      endSittingState,
+    ]
   );
 
   useEffect(() => {
     return () => {
+      endSittingState();
       reviewGrant.leave(requestKey);
       authController.cleanup();
       // Clean up callback registry when unmounting
@@ -804,6 +863,51 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
+  const walletConnectParams = useMemo(
+    () => ({
+      transactions: walletTransactions,
+      reviewedSigners,
+      sequentialSigning,
+      decodedTransactions,
+      sessionBinding: walletConnect?.binding ?? null,
+    }),
+    [
+      walletTransactions,
+      reviewedSigners,
+      sequentialSigning,
+      decodedTransactions,
+      walletConnect?.binding,
+    ]
+  );
+
+  // Bind the same network and parameters that the controller will receive.
+  useEffect(() => {
+    if (
+      walletConnect &&
+      grantValid &&
+      canReview &&
+      signersResolved &&
+      reviewedSigners.length > 0
+    ) {
+      const digest = walletConnectReviewDigest({
+        requestNetworkId: boundNetworkId,
+        sessionBindingNetworkId: walletConnectParams.sessionBinding?.networkId,
+        transactions: walletConnectParams.transactions,
+        reviewedSigners: walletConnectParams.reviewedSigners,
+      });
+      if (digest !== null) reviewGrant.bind(requestKey, digest);
+    }
+  }, [
+    walletConnect,
+    grantValid,
+    canReview,
+    signersResolved,
+    boundNetworkId,
+    reviewedSigners,
+    requestKey,
+    walletConnectParams,
+  ]);
+
   // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
   // each with its transaction index (not the first target of each kind).
   // Asset-authority items are narrowed against the asset's current holders on
@@ -823,6 +927,7 @@ export default function UniversalTransactionSigningScreen({
   const hasDanger = dangerList.length > 0;
 
   const handleApprove = () => {
+    if (rejecting.current) return;
     if (
       !canReview ||
       (requiresReviewUnlock && !reviewGrant.isValid(requestKey))
@@ -854,45 +959,57 @@ export default function UniversalTransactionSigningScreen({
     // this one" — before the signer ever saw them.
     const request: UnifiedTransactionRequest = {
       type: 'batch_transaction',
-      reviewGrantKey: requiresReviewUnlock ? requestKey : undefined,
+      reviewGrantKey:
+        walletConnect &&
+        (requiresReviewUnlock || reviewGrant.isUnspent(requestKey))
+          ? requestKey
+          : undefined,
       account: signingAccount,
       networkId: boundNetworkId,
-      walletConnectParams: {
-        transactions: walletTransactions,
-        // Exactly the accounts the signer list displayed. The signer re-runs
-        // `evaluateBatchEntryEligibility` against this list, so an entry that
-        // was not shown as signing cannot be signed.
-        reviewedSigners,
-        sequentialSigning,
-        decodedTransactions,
-        // DR-15: bind a dApp request to its session + chain; `null` declares an
-        // in-app batch the wallet built itself.
-        sessionBinding: walletConnect?.binding ?? null,
-      },
+      walletConnectParams,
     };
 
+    reviewLapseHandled.current = false;
+    reviewFlowActive.current = true;
     setCurrentRequest(request);
     setShowAuthModal(true);
   };
 
   const handleAuthComplete = async (success: boolean, result?: any) => {
-    setShowAuthModal(false);
-    setCurrentRequest(null);
-
-    if (success && onSuccess) {
-      await onSuccess(result);
-    } else if (!success) {
-      // The modal reports failure as { error } (TASK-453): map that error, so
-      // a real failure isn't shown as the generic fallback.
-      const { title, message } = toErrorAlert(result?.error, {
-        fallbackMessage: 'Failed to sign transactions.',
-        fallbackTitle: 'Error',
-      });
-      Alert.alert(title, message);
+    if (handlingOutcome.current) return;
+    handlingOutcome.current = true;
+    if (!walletConnect) {
+      setShowAuthModal(false);
+      setCurrentRequest(null);
+    }
+    try {
+      if (success && onSuccess) {
+        await onSuccess(result);
+      } else if (!success) {
+        const error = result?.error;
+        if (error instanceof ReviewEndedError) {
+          Alert.alert(error.title, error.message);
+        } else {
+          const { title, message } = toErrorAlert(error, {
+            fallbackMessage: 'Failed to sign transactions.',
+            fallbackTitle: 'Error',
+          });
+          Alert.alert(title, message);
+        }
+      }
+    } finally {
+      // The flow ends when handleAuthComplete returns, the user leaves the screen,
+      // Cancel, or the 60 s idle window restarted at the signer's end, whichever is first.
+      reviewGrant.leave(requestKey);
+      endSittingState();
+      authController.clearUserCancellation();
+      handlingOutcome.current = false;
     }
   };
 
   const handleReject = async () => {
+    rejecting.current = true;
+    endSittingState();
     if (requiresReviewUnlock && !grantValid) reviewGrant.leave(requestKey);
     if (onReject) {
       await onReject();
@@ -1119,7 +1236,7 @@ export default function UniversalTransactionSigningScreen({
 
   return (
     <SafeAreaView
-      onTouchStart={() => reviewGrant.touch()}
+      onTouchStart={() => reviewGrant.touch(requestKey)}
       style={styles.container}
       edges={['top', 'bottom']}
     >
@@ -1217,7 +1334,7 @@ export default function UniversalTransactionSigningScreen({
               disabled={!canSign}
             >
               <Text style={styles.approveButtonText}>
-                {requiresReviewUnlock
+                {requiresReviewUnlock || (grantValid && grantUnspent)
                   ? 'Sign'
                   : authState.hasPin === false && !usesLedger
                     ? 'Sign'
@@ -1225,25 +1342,24 @@ export default function UniversalTransactionSigningScreen({
               </Text>
             </TouchableOpacity>
           </View>
-
-          <UnifiedTransactionAuthModal
-            visible={showAuthModal}
-            controller={authController}
-            request={currentRequest}
-            onComplete={handleAuthComplete}
-            onCancel={() => {
-              reviewGrant.leave(requestKey);
-              setShowAuthModal(false);
-              setCurrentRequest(null);
-            }}
-            title="Sign Transaction"
-            message={summary}
-            biometricOnOpen={
-              !requiresReviewUnlock && !usesLedger && authState.biometricEnabled
-            }
-          />
         </>
       )}
+      <UnifiedTransactionAuthModal
+        visible={showAuthModal}
+        controller={authController}
+        request={currentRequest}
+        onComplete={handleAuthComplete}
+        onCancel={() => {
+          reviewGrant.leave(requestKey);
+          endSittingState();
+          authController.clearUserCancellation();
+        }}
+        title="Sign Transaction"
+        message={canReview ? summary : ''}
+        biometricOnOpen={
+          !requiresReviewUnlock && !usesLedger && authState.biometricEnabled
+        }
+      />
     </SafeAreaView>
   );
 }

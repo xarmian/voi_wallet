@@ -1,6 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from 'react';
 import {
   Alert,
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -54,6 +61,22 @@ const showAlert = (
     Alert.alert(title, message, buttons);
   }
 };
+
+// One authentication (PIN, passphrase or biometric) at a time. Kept behind a
+// hook so the flag is only read from event handlers and effects, never during
+// render, and the compiler does not treat it as render-reachable.
+function useAuthenticationGuard() {
+  const active = useRef(false);
+  const tryBegin = useCallback(() => {
+    if (active.current) return false;
+    active.current = true;
+    return true;
+  }, []);
+  const end = useCallback(() => {
+    active.current = false;
+  }, []);
+  return useMemo(() => ({ tryBegin, end }), [tryBegin, end]);
+}
 
 // Format a remaining-lockout duration as M:SS for the live countdown.
 const formatCountdown = (ms: number): string => {
@@ -166,25 +189,97 @@ export default function LockScreen() {
     return () => clearInterval(interval);
   }, [throttle.lockedUntil, refreshThrottle]);
 
+  const authentication = useAuthenticationGuard();
+  const focusGeneration = useRef(0);
+  const focused = useRef(false);
+  const biometricAttempted = useRef(false);
+  const pendingActive = useRef<
+    ReturnType<typeof AppState.addEventListener> | undefined
+  >(undefined);
+  const biometricAuth = useRef({
+    enabled: authState.biometricEnabled,
+    unlock: unlockWithBiometrics,
+  });
+  // Keep the latest values for the focus handler. Declared before the focus
+  // effect, so both run in the same commit and the handler never reads stale ones.
   useEffect(() => {
-    if (authState.biometricEnabled && navigation.isFocused()) {
-      promptBiometric();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric prompt when biometrics become enabled, keyed on authState.biometricEnabled; promptBiometric is read at that commit and must not re-fire on its own identity.
-  }, [authState.biometricEnabled, navigation]);
+    biometricAuth.current = {
+      enabled: authState.biometricEnabled,
+      unlock: unlockWithBiometrics,
+    };
+  }, [authState.biometricEnabled, unlockWithBiometrics]);
 
-  const promptBiometric = async () => {
-    try {
-      const success = await unlockWithBiometrics(() => navigation.isFocused());
-      if (success) {
-        hapticNotify('success');
+  const promptBiometric = useCallback(
+    async (manual = false) => {
+      if (
+        !biometricAuth.current.enabled ||
+        !navigation.isFocused() ||
+        AppState.currentState !== 'active' ||
+        (!manual && biometricAttempted.current)
+      )
+        return;
+      if (!authentication.tryBegin()) return;
+      pendingActive.current?.remove();
+      pendingActive.current = undefined;
+      biometricAttempted.current = true;
+      const generation = focusGeneration.current;
+      const isCurrent = () =>
+        generation === focusGeneration.current &&
+        navigation.isFocused() &&
+        AppState.currentState !== 'background';
+      try {
+        const success = await biometricAuth.current.unlock(isCurrent);
+        if (success && isCurrent()) hapticNotify('success');
+      } catch (error) {
+        console.error('Biometric authentication error:', redactError(error));
+      } finally {
+        authentication.end();
       }
-      // On !success the user cancelled or biometrics failed; no error haptic —
-      // a cancel is a normal path to the PIN pad and shouldn't buzz.
-    } catch (error) {
-      console.error('Biometric authentication error:', error);
-    }
-  };
+    },
+    [navigation, authentication]
+  );
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (focused.current) {
+        if (!biometricAttempted.current) void promptBiometric();
+        return;
+      }
+      focused.current = true;
+      focusGeneration.current++;
+      biometricAttempted.current = false;
+      const generation = focusGeneration.current;
+      if (AppState.currentState === 'active') {
+        void promptBiometric();
+      } else {
+        pendingActive.current = AppState.addEventListener('change', (state) => {
+          if (
+            state !== 'active' ||
+            generation !== focusGeneration.current ||
+            biometricAttempted.current
+          )
+            return;
+          pendingActive.current?.remove();
+          pendingActive.current = undefined;
+          void promptBiometric();
+        });
+      }
+    };
+    const onBlur = () => {
+      focused.current = false;
+      focusGeneration.current++;
+      pendingActive.current?.remove();
+      pendingActive.current = undefined;
+    };
+    const removeFocus = navigation.addListener('focus', onFocus);
+    const removeBlur = navigation.addListener('blur', onBlur);
+    if (navigation.isFocused()) onFocus();
+    return () => {
+      onBlur();
+      removeFocus();
+      removeBlur();
+    };
+  }, [navigation, promptBiometric]);
 
   const handleNumberPress = (number: string) => {
     if (inputDisabled || pin.length >= 6) return;
@@ -203,6 +298,10 @@ export default function LockScreen() {
   };
 
   const verifyPin = async (enteredPin: string) => {
+    if (!authentication.tryBegin()) {
+      setPin('');
+      return;
+    }
     try {
       // unlock() -> AccountSecureStorage.verifyPin() applies the persistent
       // throttle internally (and returns a plain boolean). We read the resulting
@@ -251,6 +350,8 @@ export default function LockScreen() {
       console.error('Secret verification error:', error);
       hapticNotify('error');
       showAlert('Error', `Failed to verify ${secretNoun}`);
+    } finally {
+      authentication.end();
     }
   };
 
@@ -444,7 +545,7 @@ export default function LockScreen() {
         {authState.biometricEnabled && !isLocked && (
           <TouchableOpacity
             style={styles.biometricButton}
-            onPress={promptBiometric}
+            onPress={() => promptBiometric(true)}
           >
             <Ionicons
               name="finger-print"
