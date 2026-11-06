@@ -295,7 +295,7 @@ it.each(['PIN', 'biometric'])(
   }
 );
 const lapseMessage =
-  'Your session ended before signing finished. Start the request again.';
+  'Your approval ended before signing finished. Start the request again.';
 const signedThenLapsedBatchMessage =
   'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then start the request again if you still need it.';
 const signedThenLapsedNonBatchMessage =

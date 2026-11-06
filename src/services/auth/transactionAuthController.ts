@@ -1873,7 +1873,7 @@ export class TransactionAuthController {
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
                   : reason === 'idle'
                     ? 'Your approval timed out before signing finished. Start the request again.'
-                    : 'Your session ended before signing finished. Start the request again.'
+                    : 'Your approval ended before signing finished. Start the request again.'
               ),
             });
             return;
