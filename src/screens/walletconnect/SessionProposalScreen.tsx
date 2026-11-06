@@ -226,12 +226,11 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         await wcService.approveSession(proposal!, selectedAccounts);
       }
 
-      Alert.alert('Success', 'Successfully connected to dApp', [
-        {
-          text: 'OK',
-          onPress: () => navigation.navigate('Main'),
-        },
-      ]);
+      // TASK-518: leave the Connect route before the alert. navigate('Main')
+      // pushes a second Main, which left the approved Connect page under Home.
+      // popTo pops to the Main below, or replaces Connect with Main if none.
+      navigation.popTo('Main');
+      Alert.alert('Success', 'Successfully connected to dApp');
     } catch (error) {
       console.error('Failed to approve session:', error);
       Alert.alert(

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Alert } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SecureKeyManager as Keys } from '@/services/secure/keyManager';
 import { MultiAccountWalletService } from '@/services/wallet';
@@ -95,6 +96,7 @@ const navigationStub = () =>
     addListener: () => () => {},
     navigate: jest.fn(),
     goBack: jest.fn(),
+    popTo: jest.fn(),
   }) as any;
 
 import SessionProposalScreen from '../SessionProposalScreen';
@@ -181,6 +183,49 @@ it('disables approval while probing, shows partial eligibility and errors, and r
   expect(Keys.getSigningInfo).toHaveBeenCalledTimes(8);
   expect(screen.queryByText('Only on Voi Network')).toBeNull();
   expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+});
+
+// TASK-518: navigate('Main') pushes a second Main, so Back from Home exposed
+// the already-approved Connect page. Success leaves Connect with popTo('Main')
+// BEFORE the alert, and the alert is information only.
+it('leaves the Connect route with popTo before the success alert (TASK-518)', async () => {
+  jest
+    .mocked(MultiAccountWalletService.getAllAccounts)
+    .mockResolvedValue([standard]);
+  jest.mocked(Keys.getSigningInfo).mockResolvedValue({
+    canSign: true,
+    signingAddress: 'STD',
+    isRekeyed: false,
+  } as never);
+  mockApprove.mockResolvedValue(undefined);
+  const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const navigation = navigationStub();
+  const order: string[] = [];
+  navigation.popTo.mockImplementation(() => order.push('popTo'));
+  alertSpy.mockImplementation(() => {
+    order.push('alert');
+  });
+  const screen = await render(
+    <SessionProposalScreen
+      navigation={navigation}
+      route={{ params: { proposal } } as any}
+    />
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled()
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+
+  expect(navigation.popTo).toHaveBeenCalledWith('Main');
+  expect(navigation.navigate).not.toHaveBeenCalledWith('Main');
+  expect(order).toEqual(['popTo', 'alert']);
+  // The alert carries no navigation: nothing runs when it is acknowledged.
+  const buttons = alertSpy.mock.calls[0][2];
+  buttons?.forEach((button) => button.onPress?.());
+  expect(navigation.navigate).not.toHaveBeenCalled();
+  expect(navigation.popTo).toHaveBeenCalledTimes(1);
+  alertSpy.mockRestore();
 });
 
 const view = (params: object) => (
