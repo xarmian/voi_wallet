@@ -1,5 +1,6 @@
 import React, {
   useState,
+  useMemo,
   useEffect,
   useRef,
   useSyncExternalStore,
@@ -15,6 +16,14 @@ import {
   AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
+import Toast from 'react-native-toast-message';
+import { redactError } from '@/utils/logRedaction';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import {
+  proposalRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
+import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -78,7 +87,24 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   const v1SessionRequest = route?.params?.sessionRequest;
 
   // Determine which version we're handling
-  const isV1 = version === 1 || v1SessionRequest;
+  const isV1 = version === 1 || !!v1SessionRequest;
+
+  const coordinator = RequestCoordinator.getInstance();
+  const proposalId = proposal?.id;
+  const pairingTopic = proposal?.pairingTopic;
+  const hasV1Request = !!v1SessionRequest;
+  const v1ProposalId = v1SessionRequest?.id;
+  // Equivalent route params must not replay the abandonment cleanup.
+  const ref = useMemo(
+    () =>
+      isV1 && hasV1Request
+        ? v1ProposalRefFor({ id: v1ProposalId })
+        : proposalId !== undefined && pairingTopic !== undefined
+          ? proposalRefFor({ id: proposalId, pairingTopic })
+          : null,
+    [isV1, hasV1Request, v1ProposalId, proposalId, pairingTopic]
+  );
+  const decidedRef = useRef(false);
 
   // TASK-438: while the wallet is locked the connect screen shows only the
   // gate (dApp name and icon, URL host, requested networks; Unlock to review /
@@ -107,20 +133,63 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke(true, 'background');
+      if (state === 'background') {
+        reviewGrant.revoke(true, 'background');
+        if (!decidedRef.current && ref) {
+          decidedRef.current = true;
+          void coordinator.settle(ref, 'background');
+          navigation.goBack();
+          Toast.show({
+            type: 'info',
+            text1: 'Request closed',
+            text2: 'Try again in the dApp.',
+          });
+        }
+      }
     });
     return () => subscription.remove();
-  }, []);
+  }, [coordinator, ref, navigation]);
 
   // However the screen is left, this proposal leaves the sitting.
+  // Leaving without choosing is reported by `beforeRemove` below (a navigation
+  // event), not by this cleanup: an effect replay must never decline a request.
   useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
   useEffect(
     () =>
-      navigation.addListener('beforeRemove', () =>
-        reviewGrant.leave(requestKey)
-      ),
-    [navigation, requestKey]
+      navigation.addListener('beforeRemove', () => {
+        reviewGrant.leave(requestKey);
+        if (!decidedRef.current && ref) {
+          decidedRef.current = true;
+          void coordinator.settle(ref, 'abandoned');
+        }
+      }),
+    [coordinator, ref, navigation, requestKey]
   );
+
+  useEffect(() => {
+    if (!ref) return;
+    return coordinator.subscribe(ref, ({ reason }) => {
+      if (decidedRef.current) return;
+      decidedRef.current = true;
+      if (reason === 'expired' || reason === 'session-ended') {
+        Alert.alert(
+          'Request ended',
+          reason === 'expired'
+            ? 'Request expired. Try again in the dApp.'
+            : 'Connection ended. Reconnect in the dApp.'
+        );
+        navigation.goBack();
+      }
+    });
+  }, [coordinator, ref, navigation]);
+
+  const handleBack = () => {
+    if (!decidedRef.current && ref) {
+      decidedRef.current = true;
+      void coordinator.settle(ref, 'abandoned');
+    }
+    navigation.goBack();
+  };
 
   const [probing, setProbing] = useState(true);
   const [eligibility, setEligibility] = useState<
@@ -178,8 +247,13 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       setSelectedAccountIds(initialSelection);
     } catch (error) {
       if (current !== generation.current) return;
-      console.error('Failed to load accounts:', error);
+      console.error('Failed to load accounts:', redactError(error));
       Alert.alert('Error', 'Failed to load accounts');
+      if (!decidedRef.current && ref) {
+        decidedRef.current = true;
+        void coordinator.settle(ref, 'load-failed');
+        navigation.goBack();
+      }
     } finally {
       if (current === generation.current) {
         inFlight.current = false;
@@ -207,6 +281,22 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         selectedAccountIds.has(account.id)
       );
 
+      if (!ref) return;
+      let won: boolean;
+      try {
+        won = await coordinator.decide(ref, 'approved');
+      } catch {
+        Alert.alert('Error', 'Could not record your approval. Try again.');
+        return;
+      }
+      if (!won) {
+        decidedRef.current = true;
+        Alert.alert('Request ended', 'Request expired. Try again in the dApp.');
+        navigation.goBack();
+        return;
+      }
+      decidedRef.current = true;
+
       if (isV1) {
         // Handle v1 session approval
         const v1Client = WalletConnectV1Client.getInstance();
@@ -225,11 +315,19 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       navigation.popTo('Main');
       Alert.alert('Success', 'Successfully connected to dApp');
     } catch (error) {
-      console.error('Failed to approve session:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to connect to dApp'
-      );
+      console.error('Failed to approve session:', redactError(error));
+      const message =
+        error instanceof Error ? error.message : 'Failed to connect to dApp';
+      if (ref && !message.includes('requires a network')) {
+        await coordinator.sendError(
+          ref,
+          message.includes('No signable accounts')
+            ? 'unsupported-accounts'
+            : 'load-failed'
+        );
+      }
+      Alert.alert('Error', message);
+      navigation.goBack();
     } finally {
       setIsLoading(false);
     }
@@ -238,21 +336,12 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   const handleReject = async () => {
     setIsLoading(true);
     try {
-      if (isV1) {
-        // Handle v1 session rejection
-        const v1Client = WalletConnectV1Client.getInstance();
-        await v1Client.rejectSession();
-      } else {
-        // Handle v2 session rejection
-        const wcService = WalletConnectService.getInstance();
-        await wcService.rejectSession(proposal!);
+      if (ref) {
+        decidedRef.current = true;
+        await coordinator.settle(ref, 'declined');
       }
-
-      navigation.goBack();
-    } catch (error) {
-      console.error('Failed to reject session:', error);
-      // If rejection fails (e.g., proposal no longer exists), just navigate back
-      // This can happen if the dApp closed the connection before we rejected
+      // If rejection fails (e.g., proposal no longer exists), just navigate back.
+      // The coordinator swallows publish failures, including a closed connection.
       navigation.goBack();
     } finally {
       setIsLoading(false);
@@ -313,7 +402,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
 
     // v2 permissions - collect all chains and methods across namespaces
     const allChains = new Set<string>();
-    const allRequestedChains = new Set<string>(); // For debug logging
     const allMethods = new Set<string>();
     const supportedChainIds = [
       VOI_CHAIN_DATA.chainId,
@@ -325,7 +413,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       Object.values(proposal!.requiredNamespaces).forEach((namespace) => {
         if (namespace.chains) {
           namespace.chains.forEach((chain: string) => {
-            allRequestedChains.add(chain); // Track all requested chains
             // Only add supported chains
             if (supportedChainIds.includes(chain)) {
               allChains.add(chain);
@@ -343,7 +430,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       Object.values(proposal!.optionalNamespaces).forEach((namespace) => {
         if (namespace.chains) {
           namespace.chains.forEach((chain: string) => {
-            allRequestedChains.add(chain); // Track all requested chains
             // Only add supported chains
             if (supportedChainIds.includes(chain)) {
               allChains.add(chain);
@@ -355,21 +441,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         }
       });
     }
-
-    // Debug output
-    console.log(
-      '[WalletConnect] dApp requested chains:',
-      Array.from(allRequestedChains)
-    );
-    console.log('[WalletConnect] Supported chains:', Array.from(allChains));
-    console.log(
-      '[WalletConnect] Required namespaces:',
-      proposal!.requiredNamespaces
-    );
-    console.log(
-      '[WalletConnect] Optional namespaces:',
-      proposal!.optionalNamespaces
-    );
 
     // Convert chain IDs to readable names (all chains in the set are already supported)
     const chainNames = Array.from(allChains).map((chainId) =>
@@ -554,7 +625,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       <UniversalHeader
         title="Connect to dApp"
         showBackButton
-        onBackPress={() => navigation.goBack()}
+        onBackPress={handleBack}
       />
 
       {!canReview ? (
@@ -580,6 +651,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
             showsVerticalScrollIndicator={false}
           >
             {renderDAppInfo()}
+            {ref && <RequestAgeLabel requestRef={ref} />}
             {renderPermissions()}
             {renderAccounts()}
 

@@ -1,3 +1,4 @@
+import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
 import {
   RequestCoordinator,
   type ExitReason,
@@ -1349,6 +1350,9 @@ export default function UniversalTransactionSigningScreen({
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
+            {walletConnect?.ref && (
+              <RequestAgeLabel requestRef={walletConnect.ref} />
+            )}
             {networkInfo.known ? (
               <View style={styles.networkContainer}>
                 <View style={styles.networkHeader}>
