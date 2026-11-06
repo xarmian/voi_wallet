@@ -68,6 +68,7 @@ import {
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
 import RootLockBoundary from '@/components/RootLockBoundary';
+import WalletConnectHost from '@/components/wcHost/WalletConnectHost';
 import FreshAuthHost from '@/components/FreshAuthHost';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { useNetworkStore } from '@/store/networkStore';
@@ -1471,6 +1472,7 @@ export default function AppNavigator() {
           >
             <RootLockBoundary navigationRef={navigationRef}>
               <NavigationActivityWrapper />
+              <WalletConnectHost />
             </RootLockBoundary>
           </NavigationContainer>
           <FreshAuthHost />

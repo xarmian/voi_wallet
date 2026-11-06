@@ -5,7 +5,9 @@ import ts from 'typescript';
 const queueModule = 'src/services/walletconnect/requestQueue.ts';
 const screen = 'src/screens/walletconnect/TransactionRequestScreen.tsx';
 // Repository scan before extraction: no production value importers exist yet.
-const queueImporters: string[] = [];
+const queueImporters = ['src/components/wcHost/WalletConnectHost.tsx'];
+const hostImporter = 'src/navigation/AppNavigator.tsx';
+const hostController = 'src/components/wcHost/headSession.ts';
 
 function inspect(text: string) {
   const source = ts.createSourceFile(
@@ -18,6 +20,9 @@ function inspect(text: string) {
   const instances = new Set<string>();
   let importsQueue = false;
   let importsController = false;
+  let importsHost = false;
+  const hostNames = new Set<string>();
+  const hostMountAttributes: number[] = [];
   for (const statement of source.statements) {
     if (
       !ts.isImportDeclaration(statement) ||
@@ -25,6 +30,15 @@ function inspect(text: string) {
     )
       continue;
     const module = statement.moduleSpecifier.text;
+    if (/(^|\/)WalletConnectHost$/.test(module)) {
+      importsHost = true;
+      const clause = statement.importClause;
+      if (clause?.name) hostNames.add(clause.name.text);
+      const named = clause?.namedBindings;
+      if (named && ts.isNamedImports(named)) {
+        for (const binding of named.elements) hostNames.add(binding.name.text);
+      }
+    }
     if (/(^|\/)signRequestController$/.test(module)) importsController = true;
     if (
       !/(^|\/)requestQueue$/.test(module) ||
@@ -68,6 +82,13 @@ function inspect(text: string) {
   let pushes = 0;
   const visit = (node: ts.Node) => {
     if (
+      (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) &&
+      (hostNames.has(node.tagName.getText(source)) ||
+        node.tagName.getText(source) === 'WalletConnectHost')
+    ) {
+      hostMountAttributes.push(node.attributes.properties.length);
+    }
+    if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === 'push' &&
@@ -78,7 +99,13 @@ function inspect(text: string) {
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return { pushes, importsQueue, importsController };
+  return {
+    pushes,
+    importsQueue,
+    importsController,
+    importsHost,
+    hostMountAttributes,
+  };
 }
 
 function walk(directory: string): string[] {
@@ -147,5 +174,52 @@ it('DEFECT single owner: no production queue feed, fixed value importers, one co
   expect({
     message: `${controllers.length} controller importer files`,
     files: controllers,
-  }).toEqual({ message: '1 controller importer files', files: [screen] });
+  }).toEqual({
+    message: '2 controller importer files',
+    files: [hostController, screen].sort(),
+  });
+});
+
+it('DEFECT only AppNavigator imports the host and mounts it once with zero JSX attributes', () => {
+  const files = walk('src');
+  const rows = files.map((file) => ({
+    file,
+    ...inspect(fs.readFileSync(file, 'utf8')),
+  }));
+  const importers = rows
+    .filter((row) => row.importsHost)
+    .map((row) => row.file);
+  expect({
+    message: `${importers.length} host importer files`,
+    files: importers,
+  }).toEqual({ message: '1 host importer files', files: [hostImporter] });
+  const mounts = rows.filter((row) => row.hostMountAttributes.length);
+  expect({
+    message: `${mounts.length} host mounting files`,
+    files: mounts.map((row) => row.file),
+  }).toEqual({ message: '1 host mounting files', files: [hostImporter] });
+  expect(
+    rows.find((row) => row.file === hostImporter)?.hostMountAttributes
+  ).toEqual([0]);
+});
+it('REGRESSION host matcher counts actual JSX attributes including spread and aliases', () => {
+  expect(
+    inspect("import Host from './WalletConnectHost'; const v = <Host />;")
+      .hostMountAttributes
+  ).toEqual([0]);
+  expect(
+    inspect(
+      "import Host from './WalletConnectHost'; const v = <Host live={data} />;"
+    ).hostMountAttributes
+  ).toEqual([1]);
+  expect(
+    inspect('const v = <WalletConnectHost {...data}></WalletConnectHost>;')
+      .hostMountAttributes
+  ).toEqual([1]);
+  expect(
+    inspect('// <WalletConnectHost live={data} />').hostMountAttributes
+  ).toEqual([]);
+  expect(inspect("import Host from './WalletConnectHost';").importsHost).toBe(
+    true
+  );
 });
