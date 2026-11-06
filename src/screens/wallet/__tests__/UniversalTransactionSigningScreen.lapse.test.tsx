@@ -103,7 +103,10 @@ beforeEach(async () => {
 afterEach(() => coordinator.__resetForTests());
 const expectEnd = (reason: Exclude<ExitReason, 'session-ended'>) => {
   expect(onEnd).toHaveBeenCalledTimes(1);
-  expect(onEnd).toHaveBeenCalledWith(reason);
+  expect(onEnd).toHaveBeenCalledWith(
+    reason,
+    expect.objectContaining({ navigate: expect.any(Function) })
+  );
   expect(wireAnswers).toEqual([{ ...EXIT_ANSWERS[reason], recorded: true }]);
 };
 const texts = {

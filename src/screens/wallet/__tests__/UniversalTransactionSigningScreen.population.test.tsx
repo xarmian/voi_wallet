@@ -195,7 +195,11 @@ it.each(
     message = 'mapped';
   }
   expect(h.onSuccess).toHaveBeenCalledTimes(delivery ? 1 : 0);
-  if (delivery) expect(h.onSuccess).toHaveBeenCalledWith(result);
+  if (delivery)
+    expect(h.onSuccess).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({ navigate: expect.any(Function) })
+    );
   if (message && !['mapped', 'overspend'].includes(message))
     expect(h.alert).toHaveBeenCalledWith(
       message === texts.unlock || message === texts.remote

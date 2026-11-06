@@ -115,6 +115,9 @@ export const initializeServices = async ({
         void RequestCoordinator.getInstance().onSessionEnded(event.topic);
       }
     };
+    const onSessionDisconnected = (topic: string) => {
+      if (topic) void RequestCoordinator.getInstance().onSessionEnded(topic);
+    };
     // The v1 disconnect path is not wired to the coordinator in this unit.
 
     // Whether the deferred (off-critical-path) per-account subscribe should
@@ -216,6 +219,9 @@ export const initializeServices = async ({
                 requestEvent?.topic
               )
             ) {
+              void RequestCoordinator.getInstance().retryUnpublished(
+                requestRefFor(requestEvent, 2)
+              );
               console.log(
                 '[AppNavigator] Duplicate transaction request ignored'
               );
@@ -227,7 +233,13 @@ export const initializeServices = async ({
               ref,
               requestExpiryOf(requestEvent)
             );
-            if (admission.action !== 'show') return;
+            if (admission.action !== 'show') {
+              TransactionRequestQueue.releaseClaim(
+                requestEvent.id,
+                requestEvent.topic
+              );
+              return;
+            }
             // Not shown and not queued: let a redelivery of it through.
             const release = () => {
               TransactionRequestQueue.releaseClaim(
@@ -315,6 +327,7 @@ export const initializeServices = async ({
           wcService.on('session_request', onRequest);
           wcService.on('session_deleted', onSessionGone);
           wcService.on('session_expired', onSessionGone);
+          wcService.on('session_disconnected', onSessionDisconnected);
 
           console.log('WalletConnect service initialized');
         } catch (error) {
@@ -546,6 +559,7 @@ export const initializeServices = async ({
           wcService.off?.('session_request', onRequest);
           wcService.off?.('session_deleted', onSessionGone);
           wcService.off?.('session_expired', onSessionGone);
+          wcService.off?.('session_disconnected', onSessionDisconnected);
         }
         if (!isSignerMode) {
           extensionDeepLinkHandler.cleanup();

@@ -302,14 +302,14 @@ it('REGRESSION the next initializeSigningFlow resets hasEnteredSigner', async ()
   expect(controller.hasEnteredSigner()).toBe(false);
 });
 
-it('REGRESSION an in-app signer without a review grant never sets hasEnteredSigner', async () => {
+it('DEFECT a signer run without a review grant sets hasEnteredSigner (the screen reads it only for WalletConnect)', async () => {
   const controller = new TransactionAuthController();
   signer.mockImplementationOnce(
     async (
       _req: UnifiedTransactionRequest,
       callbacks: UnifiedSigningCallbacks
     ) => {
-      expect(controller.hasEnteredSigner()).toBe(false);
+      expect(controller.hasEnteredSigner()).toBe(true);
       callbacks.onComplete?.({ success: true });
     }
   );
@@ -317,7 +317,7 @@ it('REGRESSION an in-app signer without a review grant never sets hasEnteredSign
   expect(controller.hasEnteredSigner()).toBe(false);
   expect(await controller.authenticateWithPin('123456')).toBe(true);
   expect(signer).toHaveBeenCalledTimes(1);
-  expect(controller.hasEnteredSigner()).toBe(false);
+  expect(controller.hasEnteredSigner()).toBe(true);
 });
 
 function expectApprovalEnded(controller: TransactionAuthController) {

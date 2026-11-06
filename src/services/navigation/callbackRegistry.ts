@@ -20,11 +20,24 @@
 
 import type { ExitReason } from '@/services/walletconnect/requestCoordinator';
 
+export interface CallbackNavigation {
+  goBack(): void;
+  canGoBack(): boolean;
+  navigate: (...args: any[]) => void;
+  replace: (...args: any[]) => void;
+}
+
 export interface NavigationCallbacks {
   /** The target screen ended the request for reason; the caller settles it and moves on. */
-  onEnd?: (reason: ExitReason) => Promise<void>;
-  onSuccess?: (result: any) => Promise<void>;
-  onReject?: () => Promise<void>;
+  onEnd?: (
+    reason: ExitReason,
+    navigation?: CallbackNavigation
+  ) => Promise<void>;
+  onSuccess?: (
+    result: unknown,
+    navigation?: CallbackNavigation
+  ) => Promise<void>;
+  onReject?: (navigation?: CallbackNavigation) => Promise<void>;
   /**
    * Called when the target screen is removed from the navigation stack,
    * however it was left (including the OS back button or a swipe-back). The

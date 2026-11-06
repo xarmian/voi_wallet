@@ -805,3 +805,18 @@ it('REGRESSION any coordinator closure owns subsequent removal', async () => {
   expect(Alert.alert).not.toHaveBeenCalled();
   expect(navigation.goBack).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  'DEFECT popTo failure after successful approval sends no failure or back (v1: %s)',
+  async (v1) => {
+    const { navigation, screen } = await mountProposal(v1);
+    navigation.popTo.mockImplementationOnce(() => {
+      throw new Error('navigation failed');
+    });
+    await pressApprove(screen);
+    expect(v1 ? mockV1Approve : mockApprove).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).toHaveBeenCalledWith('Error', 'navigation failed');
+    expect(answers).toEqual([]);
+    expect(navigation.goBack).not.toHaveBeenCalled();
+  }
+);

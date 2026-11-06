@@ -1,6 +1,8 @@
 /** REGRESSION: every exit records its decision before answering through the real coordinator. */
 
 import React from 'react';
+import { Alert } from 'react-native';
+import { SIGNED_THEN_LAPSED_BATCH_MESSAGE } from '@/services/auth/transactionAuthController';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -89,6 +91,9 @@ jest.mock('@/services/auth/reviewGrant', () => ({
 
 jest.mock('@/services/auth/transactionAuthController', () => ({
   useTransactionAuthController: () => ({ cleanup: jest.fn() }),
+  SIGNED_THEN_LAPSED_BATCH_MESSAGE: jest.requireActual(
+    '@/services/auth/transactionAuthController'
+  ).SIGNED_THEN_LAPSED_BATCH_MESSAGE,
 }));
 
 jest.mock('@/services/navigation/callbackRegistry', () => ({
@@ -242,12 +247,14 @@ beforeEach(async () => {
   // Parked: the loader never reaches an exit unless a test says so.
   mockGetAllAccounts.mockImplementation(() => new Promise(() => {}));
   (Toast.show as jest.Mock).mockClear();
+  jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   jest.spyOn(console, 'log').mockImplementation(() => {});
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
   coordinator.__resetForTests();
+  jest.useRealTimers();
   jest.restoreAllMocks();
 });
 
@@ -655,10 +662,16 @@ it('DEFECT approve after expiry publishes nothing and advances once', async () =
   await mockCallbacks!.onEnd('expired');
   expect(navigation.goBack).toHaveBeenCalledTimes(1);
   expectAnswer('expired');
+  expect(Alert.alert).toHaveBeenCalledWith(
+    'Request ended',
+    SIGNED_THEN_LAPSED_BATCH_MESSAGE
+  );
+  expect(Toast.show).not.toHaveBeenCalled();
 });
 
-it('DEFECT failed approval record sends sign-failed without publishing', async () => {
-  const { navigation } = await handOff(103);
+it('DEFECT failed approval record sends sign-failed once despite timer Reject and second Sign', async () => {
+  jest.useFakeTimers();
+  const { navigation, screen, ref } = await handOff(103);
   jest
     .spyOn(store, 'markHandled')
     .mockRejectedValueOnce(new Error('storage unavailable'));
@@ -670,9 +683,18 @@ it('DEFECT failed approval record sends sign-failed without publishing', async (
   expect(navigation.navigate).toHaveBeenCalledWith('WalletConnectError', {
     error: 'Failed to record the approval',
   });
+  expect(coordinator.isOpen(ref)).toBe(false);
+  await act(async () => {
+    jest.advanceTimersByTime(300_000);
+  });
+  await fireEvent.press(screen.getByText('Reject'));
+  await act(async () =>
+    mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] })
+  );
   mockCallbacks!.onDismiss();
   await act(async () => {});
   expectAnswer('sign-failed', false);
+  expect(mockRespondToRequest).not.toHaveBeenCalled();
 });
 
 it('DEFECT terminal signing end answers sign-failed once and advances once', async () => {
@@ -685,6 +707,107 @@ it('DEFECT terminal signing end answers sign-failed once and advances once', asy
   expect(navigation.goBack).toHaveBeenCalledTimes(1);
   expect(Toast.show).not.toHaveBeenCalled();
 });
+
+it.each(['expired', 'sign-failed', 'declined', 'success'] as const)(
+  'DEFECT handed-off %s uses live navigation and advances only once',
+  async (ending) => {
+    const { navigation: stale } = await handOff(201);
+    const live = makeNavigation();
+    if (ending === 'success')
+      await act(async () =>
+        mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] }, live)
+      );
+    else if (ending === 'declined')
+      await act(async () => mockCallbacks!.onReject(live));
+    else await act(async () => mockCallbacks!.onEnd(ending, live));
+    await act(async () => mockCallbacks!.onEnd('declined', live));
+    expect(live.goBack).toHaveBeenCalledTimes(1);
+    expect(stale.goBack).not.toHaveBeenCalled();
+    expect(stale.replace).not.toHaveBeenCalled();
+    expect(stale.navigate).not.toHaveBeenCalled();
+  }
+);
+it('DEFECT queued successor replaces through live navigation exactly once', async () => {
+  const { navigation: stale } = await handOff(202);
+  const live = makeNavigation();
+  await enqueueNext(203);
+  await enqueueNext(204);
+  await act(async () =>
+    mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] }, live)
+  );
+  await act(async () => mockCallbacks!.onEnd('declined', live));
+  expect(live.replace).toHaveBeenCalledTimes(1);
+  expect(live.replace.mock.calls[0][1].requestEvent.id).toBe(203);
+  expect((await TransactionRequestQueue.getAll()).map((r) => r.id)).toEqual([
+    204,
+  ]);
+  expect(stale.replace).not.toHaveBeenCalled();
+  expect(stale.goBack).not.toHaveBeenCalled();
+});
+it('DEFECT approval write failure routes error through live navigation', async () => {
+  const { navigation: stale } = await handOff(205);
+  const live = makeNavigation();
+  jest
+    .spyOn(store, 'markHandled')
+    .mockRejectedValueOnce(new Error('write failed'));
+  await act(async () =>
+    mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] }, live)
+  );
+  expect(live.navigate).toHaveBeenCalledWith(
+    'WalletConnectError',
+    expect.anything()
+  );
+  expect(stale.navigate).not.toHaveBeenCalled();
+});
+it('DEFECT restored handled request closes before reading accounts', async () => {
+  const ensure = jest.spyOn(coordinator, 'admit');
+  await store.markHandled(requestRefFor({ id: 206, topic: TOPIC }), 'approved');
+  const { navigation } = await mountOn(206);
+  await waitFor(() => expect(navigation.goBack).toHaveBeenCalledTimes(1));
+  expect(mockGetAllAccounts).not.toHaveBeenCalled();
+  expect(Toast.show).toHaveBeenCalledWith({
+    type: 'info',
+    text1: 'Request already handled',
+    text2: 'Check the dApp before you try again.',
+  });
+  expect(ensure).toHaveBeenCalled();
+});
+
+it.each(['expired', 'handled', 'unavailable', 'duplicate'] as const)(
+  'DEFECT queued admission %s uses exact product copy and skips duplicate toast',
+  async (ending) => {
+    if (ending === 'duplicate') {
+      jest
+        .spyOn(coordinator, 'admit')
+        .mockResolvedValue({ action: 'suppressed', reason: 'duplicate' });
+      // Force the mount-time ensureOpen through admission instead of its live fast path.
+      jest.spyOn(coordinator, 'ensureOpen').mockImplementation(async (ref) => {
+        coordinator.release(ref);
+        return RequestCoordinator.prototype.ensureOpen.call(coordinator, ref);
+      });
+    } else jest.spyOn(coordinator, 'ensureOpen').mockResolvedValue(ending);
+    const { navigation } = await mountOn(207);
+    await act(async () => {});
+    if (ending === 'duplicate') {
+      expect(navigation.goBack).not.toHaveBeenCalled();
+      expect(mockGetAllAccounts).toHaveBeenCalledTimes(1);
+    } else {
+      await waitFor(() => expect(navigation.goBack).toHaveBeenCalledTimes(1));
+      expect(mockGetAllAccounts).not.toHaveBeenCalled();
+    }
+    if (ending === 'expired' || ending === 'handled')
+      expect(Toast.show).toHaveBeenCalledWith({
+        type: 'info',
+        text1:
+          ending === 'expired' ? 'Request expired' : 'Request already handled',
+        text2:
+          ending === 'expired'
+            ? 'Try again in the dApp.'
+            : 'Check the dApp before you try again.',
+      });
+    else expect(Toast.show).not.toHaveBeenCalled();
+  }
+);
 
 // Kept LAST in this file: the two taps are two overlapping act() scopes (a
 // real double tap is not serialized the way awaited fireEvent calls are),

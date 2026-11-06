@@ -709,18 +709,29 @@ describe('coordinator ingest (U2)', () => {
     }
   );
 
-  it.each(['session_deleted', 'session_expired'])(
+  it.each(['session_deleted', 'session_expired', 'session_disconnected'])(
     'DEFECT %s settles the open topic as session-ended without transport',
     async (eventName) => {
       mockReady = true;
       await boot();
-      const event = request(eventName === 'session_deleted' ? 5205 : 5207);
+      const event = request(
+        eventName === 'session_deleted'
+          ? 5205
+          : eventName === 'session_expired'
+            ? 5207
+            : 5210
+      );
       const ref = requestRefFor(event);
       await emit('session_request', event);
       expect(coordinator.isOpen(ref)).toBe(true);
       const listener = jest.fn();
       coordinator.subscribe(ref, listener);
-      await emit(eventName, { topic: event.topic });
+      await emit(
+        eventName,
+        eventName === 'session_disconnected'
+          ? event.topic
+          : { topic: event.topic }
+      );
       expect(coordinator.isOpen(ref)).toBe(false);
       expect(store.isHandled(ref)).toBe(true);
       expect(listener).toHaveBeenCalledWith({ reason: 'session-ended' });
@@ -730,7 +741,7 @@ describe('coordinator ingest (U2)', () => {
     }
   );
 
-  it('REGRESSION teardown removes both session end listeners', async () => {
+  it('REGRESSION teardown removes all session end listeners', async () => {
     const cleanupRef: { current: (() => void) | undefined } = {
       current: undefined,
     };
@@ -739,11 +750,19 @@ describe('coordinator ingest (U2)', () => {
       initializeNetwork: async () => {},
       cleanupRef,
     });
-    for (const event of ['session_deleted', 'session_expired']) {
+    for (const event of [
+      'session_deleted',
+      'session_expired',
+      'session_disconnected',
+    ]) {
       expect(mockWcListeners[event]).toHaveLength(1);
     }
     cleanupRef.current?.();
-    for (const event of ['session_deleted', 'session_expired']) {
+    for (const event of [
+      'session_deleted',
+      'session_expired',
+      'session_disconnected',
+    ]) {
       expect(mockWcService.off).toHaveBeenCalledWith(
         event,
         mockWcListeners[event][0]
@@ -770,4 +789,41 @@ describe('coordinator ingest (U2)', () => {
       );
     }
   );
+});
+
+it('DEFECT expired admissions release every queue claim', async () => {
+  mockReady = true;
+  await boot();
+  for (let id = 5300; id < 5310; id++) {
+    const event = request(id);
+    await emit('session_request', {
+      ...event,
+      params: {
+        ...event.params,
+        request: {
+          ...event.params.request,
+          expiryTimestamp: Date.now() - 1000,
+        },
+      },
+    });
+    expect(TransactionRequestQueue.claim(id, event.topic)).toBe(true);
+    TransactionRequestQueue.releaseClaim(id, event.topic);
+  }
+  expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(10);
+});
+it('DEFECT duplicate delivery retries failed publish once and stops after success', async () => {
+  mockReady = true;
+  await boot();
+  const event = request(5311);
+  await emit('session_request', event);
+  mockTransport.rejectRequestV2.mockRejectedValueOnce(
+    new Error('publish failed')
+  );
+  await coordinator.settle(requestRefFor(event), 'expired');
+  await emit('session_request', event);
+  await flush();
+  expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(2);
+  await emit('session_request', event);
+  await flush();
+  expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(2);
 });

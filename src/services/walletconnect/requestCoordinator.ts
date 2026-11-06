@@ -90,7 +90,7 @@ export type Admission =
       deadlineMs: number;
       source: DeadlineSource;
     }
-  | { action: 'suppressed' }
+  | { action: 'suppressed'; reason: 'duplicate' | 'handled' }
   | { action: 'expired' }
   | { action: 'unavailable' };
 
@@ -134,7 +134,14 @@ export class RequestCoordinator {
   private open = new Map<string, OpenRequest>();
   private closed = new Set<string>();
   private admitting = new Set<string>();
-  private deciding = new Set<string>();
+  private deciding = new Map<string, Promise<boolean>>();
+  private answered = new Set<string>();
+  private released = new Map<string, OpenRequest>();
+  private unpublished = new Map<
+    string,
+    { ref: RequestRef; error: AnswerError }
+  >();
+  private retrying = new Map<string, Promise<boolean>>();
 
   constructor(
     deps: {
@@ -163,26 +170,40 @@ export class RequestCoordinator {
 
   async admit(ref: RequestRef, expiryTimestamp?: unknown): Promise<Admission> {
     const key = keyOf(ref);
+    if (this.closed.has(key)) {
+      await this.retryUnpublished(ref);
+      return { action: 'suppressed', reason: 'handled' };
+    }
     if (this.open.has(key) || this.admitting.has(key)) {
-      return { action: 'suppressed' };
+      return { action: 'suppressed', reason: 'duplicate' };
     }
     this.admitting.add(key);
     try {
       await this.store.load();
       if (this.store.isHandled(ref)) {
-        await this.answer(ref, {
-          code: -32000,
-          message: 'Request already handled.',
-        });
-        return { action: 'suppressed' };
+        this.closed.add(key);
+        if (!this.answered.has(key)) {
+          this.answered.add(key);
+          await this.answer(ref, {
+            code: -32000,
+            message: 'Request already handled.',
+          });
+        }
+        return { action: 'suppressed', reason: 'handled' };
       }
       const firstSeenMs = await this.store.noteSeen(ref);
       // A settle/decide may have closed this ref while storage was awaited.
-      if (this.closed.has(key)) return { action: 'suppressed' };
-      const { deadlineMs, source } = resolveDeadline({
-        expiryTimestamp,
-        firstSeenMs,
-      });
+      if (this.closed.has(key))
+        return { action: 'suppressed', reason: 'handled' };
+      const released = this.released.get(key);
+      const { deadlineMs, source } =
+        released ??
+        resolveDeadline({
+          expiryTimestamp,
+          firstSeenMs,
+        });
+      this.clearEntry(released);
+      this.released.delete(key);
       if (isPastDeadline(deadlineMs, this.now())) {
         await this.settle(ref, 'expired');
         return { action: 'expired' };
@@ -208,9 +229,10 @@ export class RequestCoordinator {
   release(ref: RequestRef): void {
     const key = keyOf(ref);
     const entry = this.open.get(key);
+    if (!entry) return;
     this.open.delete(key);
-    this.clearEntry(entry);
-    entry?.listeners.clear();
+    entry.listeners.clear();
+    this.released.set(key, entry);
   }
 
   isOpen(ref: RequestRef): boolean {
@@ -236,39 +258,49 @@ export class RequestCoordinator {
     return entry !== undefined && !isPastDeadline(entry.deadlineMs, this.now());
   }
 
+  async ensureOpen(
+    ref: RequestRef,
+    expiryTimestamp?: unknown
+  ): Promise<'open' | 'expired' | 'handled' | 'unavailable'> {
+    const entry = this.open.get(keyOf(ref));
+    if (entry) {
+      if (!isPastDeadline(entry.deadlineMs, this.now())) return 'open';
+      await this.settle(ref, 'expired');
+      return 'expired';
+    }
+    const admission = await this.admit(ref, expiryTimestamp);
+    if (admission.action === 'show') return 'open';
+    if (admission.action === 'suppressed')
+      return admission.reason === 'duplicate' ? 'open' : 'handled';
+    return admission.action;
+  }
+
   async settle(
     ref: RequestRef,
     reason: ExitReason
   ): Promise<'settled' | 'already-settled'> {
     const key = keyOf(ref);
-    if (this.closed.has(key)) return 'already-settled';
-    this.closed.add(key);
-    const entry = this.open.get(key);
-    this.open.delete(key);
-    try {
-      let recorded = true;
+    const decision = this.deciding.get(key);
+    if (decision) {
       try {
-        recorded = await this.store.markHandled(ref, OUTCOMES[reason]);
+        await decision;
       } catch {
-        // The decision could not be made durable, but the dApp must still be
-        // answered; a redelivery after a restart can show the request once more.
-        warn('Request decision could not be recorded');
+        // A failed decision write leaves settlement available.
       }
-      if (recorded && reason !== 'session-ended') {
-        await this.sendError(ref, reason);
-      }
-      return 'settled';
-    } finally {
-      this.clearEntry(entry);
-      for (const listener of entry?.listeners ?? []) {
-        try {
-          listener({ reason });
-        } catch {
-          warn('Request close listener failed');
-        }
-      }
-      entry?.listeners.clear();
     }
+    if (this.closed.has(key)) return 'already-settled';
+    this.close(ref, reason);
+    let recorded = true;
+    try {
+      recorded = await this.store.markHandled(ref, OUTCOMES[reason]);
+    } catch {
+      // Still answer when durability is unavailable.
+      warn('Request decision could not be recorded');
+    }
+    if (recorded && reason !== 'session-ended') {
+      await this.sendError(ref, reason);
+    }
+    return 'settled';
   }
 
   async decide(
@@ -276,17 +308,24 @@ export class RequestCoordinator {
     outcome: 'approved' | 'failed'
   ): Promise<boolean> {
     const key = keyOf(ref);
-    if (this.closed.has(key) || this.deciding.has(key)) return false;
-    this.deciding.add(key);
-    try {
+    const entry = this.open.get(key);
+    if (!entry || this.closed.has(key) || this.deciding.has(key)) return false;
+    if (isPastDeadline(entry.deadlineMs, this.now())) {
+      await this.settle(ref, 'expired');
+      return false;
+    }
+    const decision = (async () => {
       // A failed write leaves the request open, so the caller can retry.
       const recorded = await this.store.markHandled(ref, outcome);
       this.closed.add(key);
-      const entry = this.open.get(key);
       this.open.delete(key);
       this.clearEntry(entry);
-      entry?.listeners.clear();
+      entry.listeners.clear();
       return recorded;
+    })();
+    this.deciding.set(key, decision);
+    try {
+      return await decision;
     } finally {
       this.deciding.delete(key);
     }
@@ -296,10 +335,47 @@ export class RequestCoordinator {
     ref: RequestRef,
     reason: Exclude<ExitReason, 'session-ended'>
   ): Promise<void> {
+    const key = keyOf(ref);
+    if (this.answered.has(key)) return;
+    this.answered.add(key);
+    this.close(ref, reason);
     await this.answer(ref, EXIT_ANSWERS[reason]);
   }
 
-  private async answer(ref: RequestRef, error: AnswerError): Promise<void> {
+  private close(ref: RequestRef, reason: ExitReason): void {
+    const key = keyOf(ref);
+    this.closed.add(key);
+    const entry = this.open.get(key) ?? this.released.get(key);
+    this.open.delete(key);
+    this.released.delete(key);
+    this.clearEntry(entry);
+    for (const listener of entry?.listeners ?? []) {
+      try {
+        listener({ reason });
+      } catch {
+        warn('Request close listener failed');
+      }
+    }
+    entry?.listeners.clear();
+  }
+
+  async retryUnpublished(ref: RequestRef): Promise<boolean> {
+    const key = keyOf(ref);
+    const pending = this.retrying.get(key);
+    if (pending) return pending;
+    const unpublished = this.unpublished.get(key);
+    if (!unpublished) return false;
+    const retry = this.answer(unpublished.ref, unpublished.error);
+    this.retrying.set(key, retry);
+    try {
+      return await retry;
+    } finally {
+      this.retrying.delete(key);
+    }
+  }
+
+  private async answer(ref: RequestRef, error: AnswerError): Promise<boolean> {
+    const key = keyOf(ref);
     try {
       if (ref.kind === 'request') {
         if (ref.version === 2) {
@@ -312,8 +388,12 @@ export class RequestCoordinator {
       } else {
         await this.transport.rejectProposalV1();
       }
+      this.unpublished.delete(key);
+      return true;
     } catch {
+      this.unpublished.set(key, { ref: { ...ref }, error });
       warn('WalletConnect answer could not be published');
+      return false;
     }
   }
 
@@ -325,7 +405,7 @@ export class RequestCoordinator {
 
   async onSessionEnded(topic: string): Promise<void> {
     await Promise.all(
-      [...this.open.values()]
+      [...this.open.values(), ...this.released.values()]
         .filter((entry) => entry.ref.topic === topic)
         .map((entry) => this.settle(entry.ref, 'session-ended'))
     );
@@ -335,7 +415,9 @@ export class RequestCoordinator {
     const delay = Math.max(0, entry.deadlineMs - this.now());
     entry.timer = this.setTimer(
       () => {
-        if (this.open.get(keyOf(entry.ref)) !== entry) return;
+        const key = keyOf(entry.ref);
+        if (this.open.get(key) !== entry && this.released.get(key) !== entry)
+          return;
         // Recheck both clamped waits and wall-clock changes before expiring.
         if (!isPastDeadline(entry.deadlineMs, this.now())) {
           this.armTimer(entry);
@@ -357,7 +439,7 @@ export class RequestCoordinator {
   }
 
   __resetForTests(): void {
-    for (const entry of this.open.values()) {
+    for (const entry of [...this.open.values(), ...this.released.values()]) {
       this.clearEntry(entry);
       entry.listeners.clear();
     }
@@ -365,5 +447,9 @@ export class RequestCoordinator {
     this.closed.clear();
     this.admitting.clear();
     this.deciding.clear();
+    this.answered.clear();
+    this.released.clear();
+    this.unpublished.clear();
+    this.retrying.clear();
   }
 }

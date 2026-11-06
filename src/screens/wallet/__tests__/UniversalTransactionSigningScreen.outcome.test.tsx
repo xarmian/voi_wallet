@@ -107,17 +107,17 @@ beforeEach(async () => {
 afterEach(() => coordinator.__resetForTests());
 const expectEnd = (reason: Exclude<ExitReason, 'session-ended'>) => {
   expect(onEnd).toHaveBeenCalledTimes(1);
-  expect(onEnd).toHaveBeenCalledWith(reason);
+  expect(onEnd).toHaveBeenCalledWith(
+    reason,
+    expect.objectContaining({ navigate: expect.any(Function) })
+  );
   expect(wireAnswers).toEqual([{ ...EXIT_ANSWERS[reason], recorded: true }]);
 };
 const texts = {
   ...legacyTexts,
   lock: 'Your approval ended before signing finished. Try again in the dApp.',
   idle: 'Your approval timed out. Unlock to review this request again.',
-  batch: legacyTexts.batch.replace(
-    'start the request again',
-    'try again in the dApp'
-  ),
+  batch: legacyTexts.batch,
 };
 
 // DEFECT: a review outside the waiting queue receives no grant on normal unlock.
@@ -221,7 +221,10 @@ it('lockedSigningSuccessReachesDappOnce', async () => {
   const h = await openOutcome();
   await h.complete();
   expect(h.onSuccess).toHaveBeenCalledTimes(1);
-  expect(h.onSuccess).toHaveBeenCalledWith(result);
+  expect(h.onSuccess).toHaveBeenCalledWith(
+    result,
+    expect.objectContaining({ navigate: expect.any(Function) })
+  );
   expect(h.alert).not.toHaveBeenCalled();
   expect(SessionKeyVault.isUnlocked()).toBe(false);
   expect(
@@ -840,7 +843,10 @@ it.each(['expired', 'session-ended'] as const)(
         : 'Connection ended. Reconnect in the dApp.'
     );
     expect(onEnd).toHaveBeenCalledTimes(1);
-    expect(onEnd).toHaveBeenCalledWith(reason);
+    expect(onEnd).toHaveBeenCalledWith(
+      reason,
+      expect.objectContaining({ navigate: expect.any(Function) })
+    );
     await act(async () => coordinator.settle(mockRequestRef, reason));
     expect(onEnd).toHaveBeenCalledTimes(1);
     expect(wireAnswers).toEqual(
@@ -900,3 +906,84 @@ it('DEFECT signer entered timed out lapse is terminal with post-signer timeout c
   );
   expectEnd('lapsed');
 });
+
+it.each(['background', 'failure'] as const)(
+  'DEFECT WalletConnect signer without review grant ends as %s',
+  async (ending) => {
+    const h = await openOutcome({ locked: false, waitingKeys: [] });
+    expect(inside(h.controller).currentRequest?.reviewGrantKey).toBeUndefined();
+    await act(async () => {
+      void h.controller.authenticateWithPin('123456');
+    });
+    await waitFor(() => expect(h.signer).toHaveBeenCalledTimes(1));
+    expect(h.signer).toHaveBeenCalledTimes(1);
+    if (ending === 'background') await lapse('background');
+    else
+      await act(async () =>
+        h.callbacks().onError!(new Error('signing failed'))
+      );
+    expectEnd(ending === 'background' ? 'lapsed' : 'sign-failed');
+  }
+);
+it('DEFECT Android back during grant response publish cannot decline or advance', async () => {
+  const h = await openOutcome();
+  let finish!: () => void;
+  h.onSuccess.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  await h.complete();
+  await act(async () => h.modal().props.onCancel());
+  expect(onEnd).not.toHaveBeenCalled();
+  expect(wireAnswers).toEqual([]);
+  expect(h.modal().props.visible).toBe(true);
+  await act(async () => finish());
+});
+
+jest.mock('react-native-toast-message', () => ({
+  __esModule: true,
+  default: { show: jest.fn() },
+}));
+import Toast from 'react-native-toast-message';
+
+it('DEFECT late Sign refuses before auth initialization or signer with nothing-signed toast', async () => {
+  const h = await openOutcome({ sign: false });
+  const initialize = jest.spyOn(h.controller, 'initializeSigningFlow');
+  // Move wall time alone: the expiry timer has not fired yet.
+  jest.setSystemTime(Date.now() + 300_000);
+  await fireEvent.press(h.signButton());
+  expect(h.modal().props.visible).toBe(false);
+  expect(initialize).not.toHaveBeenCalled();
+  expect(h.signer).not.toHaveBeenCalled();
+  expect(Toast.show).toHaveBeenCalledWith({
+    type: 'info',
+    text1: 'Request expired',
+    text2: 'Nothing was signed. Try again in the dApp.',
+  });
+  expectEnd('expired');
+});
+
+it.each(['success', 'reject', 'end'] as const)(
+  'DEFECT UTS %s callback receives targeted scoped navigation',
+  async (ending) => {
+    const callback = jest.fn(async (_result?: unknown, _nav?: unknown) => {});
+    jest.mocked(callbackRegistry.getNavigationCallbacks).mockReturnValue({
+      onSuccess: callback,
+      onReject: callback,
+      onEnd: callback,
+    });
+    const h = await openOutcome({ sign: ending === 'success' });
+    if (ending === 'success') await h.complete();
+    else if (ending === 'reject')
+      await fireEvent.press(h.view.getByText('Reject'));
+    else await act(async () => coordinator.settle(mockRequestRef, 'expired'));
+    expect(callback).toHaveBeenCalledTimes(1);
+    const args = callback.mock.calls[0];
+    const nav = args[ending === 'reject' ? 0 : 1] as { goBack(): void };
+    nav.goBack();
+    expect(h.dispatch).toHaveBeenCalledWith(expect.any(Function));
+    expect(h.goBack).not.toHaveBeenCalled();
+  }
+);

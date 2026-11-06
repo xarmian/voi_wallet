@@ -314,7 +314,7 @@ it.each(['PIN', 'biometric'])(
 const lapseMessage =
   'Your approval ended before signing finished. Start the request again.';
 const signedThenLapsedBatchMessage =
-  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then start the request again if you still need it.';
+  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then try again there if you still need it.';
 const signedThenLapsedNonBatchMessage =
   "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.";
 // idle after signer entry: not applicable, the pause removes it; idle before signer entry: ledgerIdleBeforeSignerShowsTimedOutText

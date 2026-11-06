@@ -303,11 +303,9 @@ describe('answerDroppedRequests (the boot-installed handler)', () => {
     expect(store.isHandled(requestRefFor(v1Entry, 1))).toBe(true);
     expect(await coordinator.admit(requestRefFor(v1Entry, 1))).toEqual({
       action: 'suppressed',
+      reason: 'handled',
     });
-    expect(mockV1Reject).toHaveBeenLastCalledWith(
-      50,
-      'Request already handled.'
-    );
+    expect(mockV1Reject).toHaveBeenLastCalledWith(50, 'Request expired.');
   });
 
   it('REGRESSION a rejected settlement is redacted and cannot stop other entries', async () => {

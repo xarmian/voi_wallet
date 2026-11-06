@@ -84,7 +84,10 @@ it.each(['request', 'proposal'] as const)(
     await store.markHandled(replay, 'approved');
     store = new HandledStore({ now: () => now });
     coordinator = new RequestCoordinator({ store, transport, now: () => now });
-    expect(await coordinator.admit(replay)).toEqual({ action: 'suppressed' });
+    expect(await coordinator.admit(replay)).toEqual({
+      action: 'suppressed',
+      reason: 'handled',
+    });
     const error = { code: -32000, message: 'Request already handled.' };
     if (kind === 'request')
       expect(transport.rejectRequestV2).toHaveBeenCalledWith(
@@ -104,6 +107,7 @@ it.each(['request', 'proposal'] as const)(
     transport.rejectProposalV2.mockRejectedValue(new Error('publish failed'));
     await expect(coordinator.admit(replay)).resolves.toEqual({
       action: 'suppressed',
+      reason: 'handled',
     });
     expect(AsyncStorage.setItem).toHaveBeenCalledTimes(writes);
   }
@@ -243,6 +247,7 @@ it('DEFECT failed transport is swallowed, stays handled, notifies and suppresses
   expect(listener).toHaveBeenCalledWith({ reason: 'load-failed' });
   await expect(coordinator.admit(ref)).resolves.toEqual({
     action: 'suppressed',
+    reason: 'handled',
   });
 });
 
@@ -342,8 +347,12 @@ it('DEFECT duplicate OPEN admits, including concurrent delivery, suppress withou
     coordinator.admit(ref),
     coordinator.admit({ ...ref }),
   ]);
-  expect(results.map((r) => r.action)).toEqual(['show', 'suppressed']);
-  expect(await coordinator.admit(ref)).toEqual({ action: 'suppressed' });
+  expect(results[0].action).toBe('show');
+  expect(results[1]).toEqual({ action: 'suppressed', reason: 'duplicate' });
+  expect(await coordinator.admit(ref)).toEqual({
+    action: 'suppressed',
+    reason: 'duplicate',
+  });
   expect(calls()).toBe(0);
   expect(jest.getTimerCount()).toBe(1);
 });
@@ -395,7 +404,7 @@ it('REGRESSION already recorded settlement sends nothing and decide loses', asyn
   expect(await coordinator.settle(ref, 'declined')).toBe('settled');
   expect(calls()).toBe(0);
   expect(await coordinator.decide({ ...ref, id: 'another' }, 'approved')).toBe(
-    true
+    false
   );
   const recorded = { ...ref, id: 'recorded' };
   await store.markHandled(recorded, 'approved');
@@ -431,7 +440,7 @@ it('REGRESSION default transport is replaceable and rejects safely until install
   await expect(coordinator.sendError(ref, 'busy')).resolves.toBeUndefined();
   expect(console.warn).toHaveBeenCalled();
   coordinator.setTransport(transport);
-  await coordinator.sendError(ref, 'busy');
+  expect(await coordinator.retryUnpublished(ref)).toBe(true);
   expect(calls()).toBe(1);
 });
 it('REGRESSION coordinator has no service index, v1 client or navigation imports', () => {
@@ -558,21 +567,210 @@ it('REGRESSION release of an unknown ref is a no-op', () => {
   expect(jest.getTimerCount()).toBe(0);
 });
 
-it('DEFECT release clears the admission timer', async () => {
+it('DEFECT release keeps an expiry timer armed', async () => {
   await coordinator.admit(ref);
   expect(jest.getTimerCount()).toBe(1);
   coordinator.release(ref);
-  expect(jest.getTimerCount()).toBe(0);
+  expect(jest.getTimerCount()).toBe(1);
 });
 
 it('DEFECT a released ref still expires at its original deadline', async () => {
   await coordinator.admit(ref);
   coordinator.release(ref);
   now += 300_000;
-  expect(await coordinator.admit(ref)).toEqual({ action: 'expired' });
+  jest.advanceTimersByTime(300_000);
+  await flush();
+  expect(calls()).toBe(1);
   expect(transport.rejectRequestV2).toHaveBeenCalledWith(
     ref.topic,
     ref.id,
     EXIT_ANSWERS.expired
   );
+});
+
+it.each([true, false])(
+  'DEFECT settle waits for an in-flight decide: write succeeds=%s',
+  async (succeeds) => {
+    await coordinator.admit(ref);
+    let resolve!: (recorded: boolean) => void;
+    let reject!: (error: Error) => void;
+    jest.spyOn(store, 'markHandled').mockImplementationOnce(
+      () =>
+        new Promise<boolean>((yes, no) => {
+          resolve = yes;
+          reject = no;
+        })
+    );
+    const decision = coordinator.decide(ref, 'approved');
+    const observed = decision.catch(() => false);
+    const settlement = coordinator.settle(ref, 'expired');
+    await flush();
+    expect(calls()).toBe(0);
+    expect(coordinator.isOpen(ref)).toBe(true);
+    if (succeeds) resolve(true);
+    else reject(new Error('write failed'));
+    expect(await observed).toBe(succeeds);
+    expect(await settlement).toBe(succeeds ? 'already-settled' : 'settled');
+    expect(calls()).toBe(succeeds ? 0 : 1);
+    if (!succeeds)
+      expect(transport.rejectRequestV2).toHaveBeenCalledWith(
+        ref.topic,
+        ref.id,
+        EXIT_ANSWERS.expired
+      );
+  }
+);
+
+it('DEFECT decide past deadline expires instead of approving', async () => {
+  await coordinator.admit(ref, now + 1000);
+  now += 1000;
+  expect(await coordinator.decide(ref, 'approved')).toBe(false);
+  expect(coordinator.isOpen(ref)).toBe(false);
+  expect(transport.rejectRequestV2).toHaveBeenCalledWith(
+    ref.topic,
+    ref.id,
+    EXIT_ANSWERS.expired
+  );
+  expect(calls()).toBe(1);
+});
+
+it('DEFECT decide never admitted or closed touches no store', async () => {
+  const mark = jest.spyOn(store, 'markHandled');
+  expect(await coordinator.decide(ref, 'approved')).toBe(false);
+  expect(mark).not.toHaveBeenCalled();
+  await coordinator.admit(ref);
+  await coordinator.settle(ref, 'declined');
+  mark.mockClear();
+  expect(await coordinator.decide(ref, 'approved')).toBe(false);
+  expect(mark).not.toHaveBeenCalled();
+});
+
+it('DEFECT sendError after failed approval closes clears timer and forbids another answer or signature', async () => {
+  await coordinator.admit(ref);
+  const listener = jest.fn();
+  coordinator.subscribe(ref, listener);
+  jest
+    .spyOn(store, 'markHandled')
+    .mockRejectedValueOnce(new Error('write failed'));
+  await expect(coordinator.decide(ref, 'approved')).rejects.toThrow(
+    'write failed'
+  );
+  await coordinator.sendError(ref, 'sign-failed');
+  expect(coordinator.isOpen(ref)).toBe(false);
+  expect(jest.getTimerCount()).toBe(0);
+  expect(listener).toHaveBeenCalledWith({ reason: 'sign-failed' });
+  expect(await coordinator.decide(ref, 'approved')).toBe(false);
+  await coordinator.settle(ref, 'declined');
+  now += 300_000;
+  jest.advanceTimersByTime(300_000);
+  await flush();
+  expect(calls()).toBe(1);
+});
+
+it('DEFECT sendError and settle share the answered guard', async () => {
+  await coordinator.admit(ref);
+  await coordinator.sendError(ref, 'sign-failed');
+  await coordinator.sendError(ref, 'declined');
+  await coordinator.settle(ref, 'expired');
+  expect(calls()).toBe(1);
+  const other = { ...ref, id: 'settled-first' };
+  await coordinator.admit(other);
+  await coordinator.settle(other, 'declined');
+  await coordinator.sendError(other, 'sign-failed');
+  expect(calls()).toBe(2);
+});
+
+it('DEFECT listeners run before a publish that never resolves', async () => {
+  await coordinator.admit(ref);
+  const listener = jest.fn();
+  coordinator.subscribe(ref, listener);
+  transport.rejectRequestV2.mockImplementationOnce(() => new Promise(() => {}));
+  void coordinator.settle(ref, 'expired');
+  await flush();
+  expect(transport.rejectRequestV2).toHaveBeenCalledTimes(1);
+  expect(listener).toHaveBeenCalledWith({ reason: 'expired' });
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('DEFECT readmission cancels the released timer and preserves the deadline', async () => {
+  const admission = await coordinator.admit(ref);
+  coordinator.release(ref);
+  now += 1000;
+  expect(await coordinator.admit(ref)).toEqual(admission);
+  jest.advanceTimersByTime(1000);
+  await flush();
+  expect(calls()).toBe(0);
+  expect(jest.getTimerCount()).toBe(1);
+});
+
+it('DEFECT failed publish retries on redelivery until success and never afterwards', async () => {
+  await coordinator.admit(ref);
+  transport.rejectRequestV2.mockRejectedValueOnce(new Error('publish failed'));
+  await coordinator.settle(ref, 'expired');
+  transport.rejectRequestV2.mockRejectedValueOnce(new Error('still down'));
+  expect(await coordinator.retryUnpublished(ref)).toBe(false);
+  expect(await coordinator.retryUnpublished(ref)).toBe(true);
+  expect(await coordinator.retryUnpublished(ref)).toBe(false);
+  await coordinator.sendError(ref, 'declined');
+  await coordinator.settle(ref, 'declined');
+  expect(calls()).toBe(3);
+});
+
+it('DEFECT ensureOpen admits a never-admitted request', async () => {
+  expect(await coordinator.ensureOpen(ref)).toBe('open');
+  expect(coordinator.isLive(ref)).toBe(true);
+});
+it('DEFECT ensureOpen preserves a live admission', async () => {
+  const admission = await coordinator.admit(ref);
+  expect(await coordinator.ensureOpen(ref, now + 900_000)).toBe('open');
+  expect(coordinator.describe(ref)).toEqual(
+    expect.objectContaining(
+      admission.action === 'show' ? { deadlineMs: admission.deadlineMs } : {}
+    )
+  );
+  expect(calls()).toBe(0);
+});
+it('DEFECT ensureOpen settles an open past-deadline request', async () => {
+  await coordinator.admit(ref);
+  now += 300_000;
+  expect(await coordinator.ensureOpen(ref)).toBe('expired');
+  expect(coordinator.isOpen(ref)).toBe(false);
+  expect(calls()).toBe(1);
+});
+it.each(['handled', 'expired', 'unavailable'] as const)(
+  'DEFECT ensureOpen closes a %s admission',
+  async (state) => {
+    if (state === 'handled') await store.markHandled(ref, 'approved');
+    if (state === 'unavailable')
+      jest.spyOn(store, 'load').mockRejectedValueOnce(new Error('unavailable'));
+    expect(
+      await coordinator.ensureOpen(
+        ref,
+        state === 'expired' ? now - 1 : undefined
+      )
+    ).toBe(state);
+    expect(calls()).toBe(1);
+  }
+);
+
+it('DEFECT ensureOpen treats a concurrent duplicate admission as open without answering', async () => {
+  await store.load();
+  let finish!: () => void;
+  jest.spyOn(store, 'load').mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  const admission = coordinator.admit(ref);
+  expect(await coordinator.ensureOpen(ref)).toBe('open');
+  expect(calls()).toBe(0);
+  finish();
+  expect((await admission).action).toBe('show');
+});
+it('DEFECT ensureOpen identifies an already closed request as handled', async () => {
+  await coordinator.admit(ref);
+  await coordinator.settle(ref, 'declined');
+  expect(await coordinator.ensureOpen(ref)).toBe('handled');
+  expect(calls()).toBe(1);
 });

@@ -41,8 +41,8 @@ import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation
 import { getRekeyStateStrict } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
 
-const SIGNED_THEN_LAPSED_BATCH_MESSAGE =
-  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then start the request again if you still need it.';
+export const SIGNED_THEN_LAPSED_BATCH_MESSAGE =
+  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then try again there if you still need it.';
 const SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE =
   "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.";
 
@@ -1655,12 +1655,7 @@ export class TransactionAuthController {
     const reviewKey = request.reviewGrantKey;
     const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
     const isWalletConnect = !!request.walletConnectParams?.sessionBinding;
-    const signedThenLapsedBatchMessage = isWalletConnect
-      ? SIGNED_THEN_LAPSED_BATCH_MESSAGE.replace(
-          'start the request again',
-          'try again in the dApp'
-        )
-      : SIGNED_THEN_LAPSED_BATCH_MESSAGE;
+    const signedThenLapsedBatchMessage = SIGNED_THEN_LAPSED_BATCH_MESSAGE;
 
     if (reviewKey && this.reviewSigningStarted) return;
     if (this.refuseWhileSignerAlive()) return;
@@ -2103,7 +2098,6 @@ export class TransactionAuthController {
           return;
         }
         this.reviewSigningStarted = true;
-        this.signerEnteredForRequest = true;
         // This block runs only for a request that holds a review capability. Cancel
         // and a lapse abort the Ledger loop before its next entry. A request with
         // no grant has no watch, so a lock or background does not abort it.
@@ -2125,6 +2119,7 @@ export class TransactionAuthController {
       }
       this.signerRunToken = runToken;
       try {
+        this.signerEnteredForRequest = true;
         await this.unifiedSigner.signTransaction(request, callbacks, {
           signal: this.signingAbortController.signal,
         });

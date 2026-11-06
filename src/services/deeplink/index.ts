@@ -288,6 +288,9 @@ export class DeepLinkService {
         transformedRequest.topic
       )
     ) {
+      void RequestCoordinator.getInstance().retryUnpublished(
+        requestRefFor(transformedRequest, 1)
+      );
       console.log('[DeepLinkService] Duplicate V1 request ignored');
       return;
     }
@@ -296,7 +299,13 @@ export class DeepLinkService {
     const ref = requestRefFor(transformedRequest, 1);
     void (async () => {
       const admission = await coordinator.admit(ref);
-      if (admission.action !== 'show') return;
+      if (admission.action !== 'show') {
+        TransactionRequestQueue.releaseClaim(
+          transformedRequest.id,
+          transformedRequest.topic
+        );
+        return;
+      }
       await this.deliverSigningRequest(async () => {
         let delivered = false;
         try {

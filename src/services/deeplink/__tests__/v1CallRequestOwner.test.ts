@@ -367,4 +367,59 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     );
     Object.values(transport).forEach((fn) => expect(fn).not.toHaveBeenCalled());
   });
+  it('DEFECT v1 expired admissions release every queue claim', async () => {
+    const client = new FakeV1Client('handshake-expired');
+    service.attachV1CallRequests(
+      client as unknown as Parameters<
+        DeepLinkService['attachV1CallRequests']
+      >[0],
+      'pair-topic'
+    );
+    const clock = jest.spyOn(Date, 'now');
+    const started = Date.now();
+    coordinator.__resetForTests();
+    store = new HandledStore({ now: () => Date.now() });
+    coordinator = new RequestCoordinator({
+      store,
+      transport,
+      now: () => Date.now(),
+    });
+    jest.spyOn(RequestCoordinator, 'getInstance').mockReturnValue(coordinator);
+    for (let id = 5300; id < 5310; id++) {
+      clock.mockReturnValue(started);
+      await store.noteSeen(
+        requestRefFor({ id, topic: 'handshake-expired' }, 1)
+      );
+      clock.mockReturnValue(started + 300_000);
+      client.emit('call_request', callRequest(id));
+      await flush();
+      expect(TransactionRequestQueue.claim(id, 'handshake-expired')).toBe(true);
+      TransactionRequestQueue.releaseClaim(id, 'handshake-expired');
+    }
+    expect(transport.rejectRequestV1).toHaveBeenCalledTimes(10);
+  });
+  it('DEFECT duplicate v1 delivery retries failed publish once', async () => {
+    const client = new FakeV1Client('handshake-retry');
+    service.attachV1CallRequests(
+      client as unknown as Parameters<
+        DeepLinkService['attachV1CallRequests']
+      >[0],
+      'pair-topic'
+    );
+    client.emit('call_request', callRequest(5311));
+    await flush();
+    transport.rejectRequestV1.mockRejectedValueOnce(
+      new Error('publish failed')
+    );
+    await coordinator.settle(
+      requestRefFor({ id: 5311, topic: 'handshake-retry' }, 1),
+      'expired'
+    );
+    client.emit('call_request', callRequest(5311));
+    await flush();
+    expect(transport.rejectRequestV1).toHaveBeenCalledTimes(2);
+    client.emit('call_request', callRequest(5311));
+    await flush();
+    expect(transport.rejectRequestV1).toHaveBeenCalledTimes(2);
+  });
 });

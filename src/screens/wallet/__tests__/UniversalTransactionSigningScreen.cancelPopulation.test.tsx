@@ -168,10 +168,7 @@ it.each(
         'Request ended',
         ledger
           ? 'Your approval ended before signing finished. Try again in the dApp.'
-          : texts.batch.replace(
-              'start the request again',
-              'try again in the dApp'
-            )
+          : texts.batch
       );
     else expect(h.alert).not.toHaveBeenCalled();
     expect(SessionKeyVault.isUnlocked()).toBe(

@@ -276,6 +276,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     }
 
     setIsLoading(true);
+    let approved = false;
     try {
       const selectedAccounts = accounts.filter((account) =>
         selectedAccountIds.has(account.id)
@@ -309,6 +310,8 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         await wcService.approveSession(proposal!, selectedAccounts);
       }
 
+      approved = true;
+
       // TASK-518: leave the Connect route before the alert. navigate('Main')
       // pushes a second Main, which left the approved Connect page under Home.
       // popTo pops to the Main below, or replaces Connect with Main if none.
@@ -318,7 +321,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       console.error('Failed to approve session:', redactError(error));
       const message =
         error instanceof Error ? error.message : 'Failed to connect to dApp';
-      if (ref && !message.includes('requires a network')) {
+      if (!approved && ref && !message.includes('requires a network')) {
         await coordinator.sendError(
           ref,
           message.includes('No signable accounts')
@@ -327,7 +330,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         );
       }
       Alert.alert('Error', message);
-      navigation.goBack();
+      if (!approved) navigation.goBack();
     } finally {
       setIsLoading(false);
     }
