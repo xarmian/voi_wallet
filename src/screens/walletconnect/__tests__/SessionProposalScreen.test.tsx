@@ -972,3 +972,19 @@ it.each(['background', 'second tap'] as const)(
     expect(mockApprove).toHaveBeenCalledTimes(1);
   }
 );
+
+// The route screen scopes its navigation to its own route: once that route is
+// gone, leaving through the header dispatches nothing.
+it('scopes its navigation to the screen route key', async () => {
+  jest.mocked(MultiAccountWalletService.getAllAccounts).mockResolvedValue([]);
+  const navigation = navigationStub();
+  navigation.getState = () => ({ routes: [] });
+  const screen = await render(
+    <SessionProposalScreen
+      navigation={navigation as unknown as ScreenProps['navigation']}
+      route={{ key: 'proposal-route', params: { proposal } } as any}
+    />
+  );
+  await fireEvent.press(screen.getByText('Header back'));
+  expect(navigation.dispatch).not.toHaveBeenCalled();
+});
