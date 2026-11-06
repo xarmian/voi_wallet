@@ -30,7 +30,7 @@ const { withDangerousMod } = require('expo/config-plugins');
 //  - it throws unless both anchor snippets are found exactly once.
 // It is idempotent (a marker) so repeated prebuilds don't stack edits.
 
-const EXPECTED_VERSION = '58.0.17';
+const EXPECTED_VERSION = '58.0.20';
 const MARKER = 'TASK-503: embedded android_res asset wins';
 
 const KEYS_ANCHOR =
