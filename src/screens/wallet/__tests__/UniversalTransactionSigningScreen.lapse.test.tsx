@@ -2,7 +2,7 @@ import {
   setupOutcomeHarness,
   openOutcome,
   lapse,
-  texts,
+  texts as legacyTexts,
   key,
   inside,
   reviewGrant,
@@ -14,6 +14,107 @@ import {
 import { SecureKeyManager } from '@/services/secure/keyManager';
 
 setupOutcomeHarness();
+
+// DEFECT harness: real coordinator and durable store; only the wire transport is fake.
+import type React from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+const callbackRegistry: typeof import('@/services/navigation/callbackRegistry') = require('@/services/navigation/callbackRegistry');
+import {
+  RequestCoordinator,
+  EXIT_ANSWERS,
+  type ExitReason,
+  type RequestRef,
+} from '@/services/walletconnect/requestCoordinator';
+import { HandledStore } from '@/services/walletconnect/handledStore';
+
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+const mockRequestRef: RequestRef = {
+  version: 2,
+  kind: 'request',
+  topic: 'outcome-topic',
+  id: 'fixture-request',
+};
+jest.mock('@/screens/wallet/UniversalTransactionSigningScreen', () => {
+  const Actual = jest.requireActual(
+    '@/screens/wallet/UniversalTransactionSigningScreen'
+  ).default;
+  return {
+    __esModule: true,
+    default: (
+      props: React.ComponentProps<
+        typeof import('../UniversalTransactionSigningScreen').default
+      >
+    ) => {
+      const params = props.route.params;
+      return require('react').createElement(Actual, {
+        ...props,
+        route: {
+          ...props.route,
+          params: {
+            ...params,
+            ...(params.walletConnect
+              ? {
+                  callbackId: 'coordinator-outcome',
+                  walletConnect: {
+                    ...params.walletConnect,
+                    ref: mockRequestRef,
+                  },
+                }
+              : {}),
+          },
+        },
+      });
+    },
+  };
+});
+let coordinator: RequestCoordinator;
+let onEnd: jest.Mock<Promise<void>, [ExitReason]>;
+const wireAnswers: { recorded: boolean; code: number; message: string }[] = [];
+beforeEach(async () => {
+  await AsyncStorage.clear();
+  wireAnswers.length = 0;
+  coordinator = new RequestCoordinator({
+    store: new HandledStore(),
+    transport: {
+      rejectRequestV2: async (_topic, _id, error) => {
+        const persisted = new HandledStore();
+        await persisted.load();
+        wireAnswers.push({
+          ...error,
+          recorded: persisted.isHandled(mockRequestRef),
+        });
+      },
+      rejectRequestV1: async () => {},
+      rejectProposalV1: async () => {},
+      rejectProposalV2: async () => {},
+    },
+  });
+  jest.spyOn(RequestCoordinator, 'getInstance').mockReturnValue(coordinator);
+  await coordinator.admit(mockRequestRef);
+  onEnd = jest.fn(async (reason: ExitReason) => {
+    await coordinator.settle(mockRequestRef, reason);
+  });
+  jest
+    .spyOn(callbackRegistry, 'getNavigationCallbacks')
+    .mockReturnValue({ onEnd });
+});
+afterEach(() => coordinator.__resetForTests());
+const expectEnd = (reason: Exclude<ExitReason, 'session-ended'>) => {
+  expect(onEnd).toHaveBeenCalledTimes(1);
+  expect(onEnd).toHaveBeenCalledWith(reason);
+  expect(wireAnswers).toEqual([{ ...EXIT_ANSWERS[reason], recorded: true }]);
+};
+const texts = {
+  ...legacyTexts,
+  lock: 'Your approval ended before signing finished. Try again in the dApp.',
+  idle: 'Your approval timed out. Unlock to review this request again.',
+  batch: legacyTexts.batch.replace(
+    'start the request again',
+    'try again in the dApp'
+  ),
+};
 
 // DEFECT: a swallowed Ledger lookup failure must not leave the sequential loop unwatched.
 it('lapseAbortsLoopWhenLedgerLookupFailed', async () => {
@@ -42,7 +143,7 @@ it('lapseAbortsLoopWhenLedgerLookupFailed', async () => {
   expect(
     inside(h.controller).currentRequest!.walletConnectParams!.sequentialSigning
   ).toBe(true);
-  await lapse('background');
+  await lapse('lock');
   expect(h.alert).not.toHaveBeenCalled();
   await act(async () => {
     finish(new Uint8Array([1]));
@@ -118,11 +219,15 @@ it.each(
       'abort'
     );
     await lapse(reason);
-    // More notifications must neither restart the flow nor abort it twice.
+    // The background end also calls cancel(); later notifications must not
+    // repeat that cancellation or start another device entry.
+    const abortsAtLapse = abort.mock.calls.length;
+    expect(abortsAtLapse).toBeGreaterThan(0);
     await act(async () => reviewGrant.revoke(false));
-    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledTimes(abortsAtLapse);
     expect(h.alert).not.toHaveBeenCalled();
-    expect(h.modal().props.visible).toBe(true);
+    expect(h.modal().props.visible).toBe(reason !== 'background');
+    if (reason === 'background') expectEnd('lapsed');
     expect(reviewGrant.isValid(key)).toBe(false);
     expect(SessionKeyVault.isUnlocked()).toBe(
       reason === 'rotation' || (!locked && reason !== 'lock')
@@ -130,8 +235,13 @@ it.each(
     await h.finish();
     expect(h.deviceSign).toHaveBeenCalledTimes(1);
     expect(h.onSuccess).not.toHaveBeenCalled();
-    expect(h.alert).toHaveBeenCalledTimes(1);
-    expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
+    if (reason === 'background') {
+      expect(h.alert).not.toHaveBeenCalled();
+      expectEnd('lapsed');
+    } else {
+      expect(h.alert).toHaveBeenCalledTimes(1);
+      expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
+    }
     expect(h.modal().props.visible).toBe(false);
     expect(reviewGrant.isValid(key)).toBe(false);
     expect(reviewGrant.isUnspent(key)).toBe(false);
@@ -147,7 +257,7 @@ it('lapseDoesNotBumpGeneration', async () => {
   await h.ready();
   await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
   const generation = signingState(h.controller).cancelledFlowGeneration;
-  await lapse('background');
+  await lapse('lock');
   expect(signingState(h.controller).cancelledFlowGeneration).toBe(generation);
   await h.finish();
   expect(h.onSuccess).not.toHaveBeenCalled();
@@ -294,7 +404,7 @@ it('lapseSubscriptionEndsOnEveryExit:pause failed', async () => {
   expect(h.deviceSign).not.toHaveBeenCalled();
   expect(countsAtFailure).toEqual([before]);
   expect(listeners.size).toBe(before);
-  expect(h.alert).toHaveBeenCalledWith('Request ended', texts.unlock);
+  expect(h.alert).toHaveBeenCalledWith('Approval ended', texts.unlock);
   await h.freshUnlock();
   h.deviceSign.mockReset().mockImplementation(async () => {
     expect(listeners.size).toBe(before + 1);
@@ -358,8 +468,14 @@ it.each(
     await lapse(reason);
     // Later emits belong to the same ended flow.
     await act(async () => reviewGrant.revoke(false));
-    expect(h.alert).toHaveBeenCalledTimes(1);
-    expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
+    if (reason === 'background') {
+      expect(h.alert).not.toHaveBeenCalled();
+      expectEnd('background');
+    } else {
+      expect(h.alert).toHaveBeenCalledTimes(1);
+      expect(h.alert).toHaveBeenCalledWith('Approval ended', texts.unlock);
+      expect(onEnd).not.toHaveBeenCalled();
+    }
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(h.modal().props.visible).toBe(false);
     expect(h.deviceSign).not.toHaveBeenCalled();
@@ -384,7 +500,7 @@ it('deviceRejectionStaysOnDThroughLaterEmit', async () => {
     expect(h.modal().props.visible).toBe(true);
   };
   assertD();
-  await lapse('background');
+  await lapse('lock');
   await act(async () => reviewGrant.revoke(false));
   expect(h.alert).not.toHaveBeenCalled();
   expect(h.onSuccess).not.toHaveBeenCalled();
@@ -398,7 +514,7 @@ it('lapseThenDeviceRejectionShowsD', async () => {
   const h = await pendingLedger(true);
   await h.ready();
   await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
-  await lapse('background');
+  await lapse('lock');
   await h.rejectDevice();
   expect(h.view.getByText('Transaction Cancelled')).toBeTruthy();
   expect(
@@ -456,7 +572,7 @@ it.each([3, 1])('lapseDuringLastEntryShowsE:entries=%s', async (entries) => {
   });
   await h.ready();
   await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(entries));
-  await lapse('background');
+  await lapse('lock');
   await act(async () => {
     finish(new Uint8Array([1]));
     await Promise.all(h.signerRuns);
@@ -497,4 +613,18 @@ it('abortBeforeParallelStartSignsNothing', async () => {
   } finally {
     planning.mockRestore();
   }
+});
+
+// DEFECT: the real modal excludes user rejection from onComplete(false); Close owns declined.
+it('DEFECT entered Ledger rejection then Close answers declined once', async () => {
+  const h = await pendingLedger(true);
+  await h.ready();
+  await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+  await h.rejectDevice();
+  expect(h.view.getByText('Transaction Cancelled')).toBeTruthy();
+  expect(onEnd).not.toHaveBeenCalled();
+  await fireEvent.press(h.view.getByText('Close'));
+  expectEnd('declined');
+  await act(async () => h.modal().props.onCancel());
+  expectEnd('declined');
 });

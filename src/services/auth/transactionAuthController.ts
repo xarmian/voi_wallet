@@ -494,6 +494,7 @@ export class TransactionAuthController {
     this.userCancelled = false;
     this.reviewAuthorized = false;
     this.reviewSigningStarted = false;
+    this.signerEnteredForRequest = false;
     this.currentRequest = request;
     this.remoteBatchPlan = null;
     this.activeFlowGeneration = this.cancelledFlowGeneration;
@@ -552,7 +553,8 @@ export class TransactionAuthController {
           this.updateState({
             state: 'error',
             error: new ReviewEndedError(
-              'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.'
+              'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.',
+              'Approval ended'
             ),
           });
           return;
@@ -1548,6 +1550,11 @@ export class TransactionAuthController {
   private reviewFlowEnded = false;
   private reviewAuthorized = false;
   private reviewSigningStarted = false;
+  private signerEnteredForRequest = false;
+
+  public hasEnteredSigner(): boolean {
+    return this.signerEnteredForRequest;
+  }
 
   private endReviewCapability(): void {
     const key = this.currentRequest?.reviewGrantKey;
@@ -1598,7 +1605,10 @@ export class TransactionAuthController {
       this.settleReviewCapability();
       this.updateState({
         state: 'error',
-        error: new ReviewEndedError('Unlock to review this request again.'),
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
       });
       return false;
     }
@@ -1644,6 +1654,13 @@ export class TransactionAuthController {
     const request = this.currentRequest;
     const reviewKey = request.reviewGrantKey;
     const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
+    const isWalletConnect = !!request.walletConnectParams?.sessionBinding;
+    const signedThenLapsedBatchMessage = isWalletConnect
+      ? SIGNED_THEN_LAPSED_BATCH_MESSAGE.replace(
+          'start the request again',
+          'try again in the dApp'
+        )
+      : SIGNED_THEN_LAPSED_BATCH_MESSAGE;
 
     if (reviewKey && this.reviewSigningStarted) return;
     if (this.refuseWhileSignerAlive()) return;
@@ -1672,7 +1689,10 @@ export class TransactionAuthController {
       this.settleReviewCapability();
       this.updateState({
         state: 'error',
-        error: new ReviewEndedError('Unlock to review this request again.'),
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
       });
       return;
     }
@@ -1850,9 +1870,14 @@ export class TransactionAuthController {
               error: new ReviewEndedError(
                 this.hasSubmittedToNetwork
                   ? request.type === 'batch_transaction'
-                    ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                    ? signedThenLapsedBatchMessage
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-                  : 'Your approval ended before signing finished. Start the request again.'
+                  : this.hasEnteredSigner()
+                    ? isWalletConnect
+                      ? 'Your approval ended before signing finished. Try again in the dApp.'
+                      : 'Your approval ended before signing finished. Start the request again.'
+                    : 'Unlock to review this request again.',
+                this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
               ),
             });
             return;
@@ -1991,9 +2016,14 @@ export class TransactionAuthController {
               error: new ReviewEndedError(
                 this.hasSubmittedToNetwork
                   ? request.type === 'batch_transaction'
-                    ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                    ? signedThenLapsedBatchMessage
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-                  : 'Your approval ended before signing finished. Start the request again.'
+                  : this.hasEnteredSigner()
+                    ? isWalletConnect
+                      ? 'Your approval ended before signing finished. Try again in the dApp.'
+                      : 'Your approval ended before signing finished. Start the request again.'
+                    : 'Unlock to review this request again.',
+                this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
               ),
             });
             return;
@@ -2065,11 +2095,15 @@ export class TransactionAuthController {
           this.settleReviewCapability();
           this.updateState({
             state: 'error',
-            error: new ReviewEndedError('Unlock to review this request again.'),
+            error: new ReviewEndedError(
+              'Unlock to review this request again.',
+              'Approval ended'
+            ),
           });
           return;
         }
         this.reviewSigningStarted = true;
+        this.signerEnteredForRequest = true;
         // This block runs only for a request that holds a review capability. Cancel
         // and a lapse abort the Ledger loop before its next entry. A request with
         // no grant has no watch, so a lock or background does not abort it.
@@ -2117,9 +2151,14 @@ export class TransactionAuthController {
           error: new ReviewEndedError(
             this.hasSubmittedToNetwork
               ? request.type === 'batch_transaction'
-                ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                ? signedThenLapsedBatchMessage
                 : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-              : 'Your approval ended before signing finished. Start the request again.'
+              : this.hasEnteredSigner()
+                ? isWalletConnect
+                  ? 'Your approval ended before signing finished. Try again in the dApp.'
+                  : 'Your approval ended before signing finished. Start the request again.'
+                : 'Unlock to review this request again.',
+            this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
           ),
         });
         return;

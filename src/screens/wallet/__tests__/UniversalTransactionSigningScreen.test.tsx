@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 /**
  * TASK-259 — what the signing-review screen SHOWS must equal what gets signed.
  *
@@ -148,6 +152,7 @@ jest.mock('@/services/auth/transactionAuthController', () => ({
       cleanup: jest.fn(),
       cancel: jest.fn(),
       clearUserCancellation: jest.fn(),
+      hasEnteredSigner: jest.fn(() => false),
     },
 }));
 

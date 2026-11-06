@@ -18,7 +18,11 @@
  *    clearNavigationCallbacks(callbackId);
  */
 
+import type { ExitReason } from '@/services/walletconnect/requestCoordinator';
+
 export interface NavigationCallbacks {
+  /** The target screen ended the request for reason; the caller settles it and moves on. */
+  onEnd?: (reason: ExitReason) => Promise<void>;
   onSuccess?: (result: any) => Promise<void>;
   onReject?: () => Promise<void>;
   /**

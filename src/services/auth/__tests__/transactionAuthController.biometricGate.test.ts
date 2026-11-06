@@ -578,6 +578,15 @@ describe('remote batch submission ownership (TASK-418)', () => {
       },
       takeNextRequest: async () => null,
       forgetUnanswered: noop,
+      // The request coordinator the screen records its decision with.
+      coordinator: {
+        decide: jest.fn(async () => true),
+        sendError: jest.fn(async () => {}),
+        settle: jest.fn(async () => 'settled'),
+      },
+      ref: { version: 2, kind: 'request', topic: 'dapp', id: 418 },
+      rejectingRef: { current: false },
+      advanceAfterEnd: jest.fn(async () => {}),
       setShowAuthModal: noop,
       setCurrentRequest: noop,
     };

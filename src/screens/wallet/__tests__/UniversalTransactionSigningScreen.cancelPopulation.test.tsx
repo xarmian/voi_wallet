@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 import {
   setupOutcomeHarness,
   openOutcome,
@@ -123,7 +127,8 @@ it.each(
     expect(h.onSuccess).not.toHaveBeenCalled();
     if (['listenerLapse', 'lock', 'background', 'rotation'].includes(route)) {
       expect(h.alert).not.toHaveBeenCalled();
-      expect(h.modal().props.visible).toBe(true);
+      // Background ends the request, which closes the review modal.
+      expect(h.modal().props.visible).toBe(route !== 'background');
     }
     if (ledger && ['modalCancel', 'systemClose'].includes(route))
       expect(h.modal().props.visible).toBe(false);
@@ -157,10 +162,16 @@ it.each(
     );
     // A Ledger loop is aborted before it signals completion; a software batch has
     // already signed every entry in parallel, so its text is unchanged.
-    if (lapsed)
+    // Background ends the request outright (answered, no alert).
+    if (lapsed && route !== 'background')
       expect(h.alert).toHaveBeenCalledWith(
         'Request ended',
-        ledger ? texts.lock : texts.batch
+        ledger
+          ? 'Your approval ended before signing finished. Try again in the dApp.'
+          : texts.batch.replace(
+              'start the request again',
+              'try again in the dApp'
+            )
       );
     else expect(h.alert).not.toHaveBeenCalled();
     expect(SessionKeyVault.isUnlocked()).toBe(
@@ -204,11 +215,15 @@ it.each(
     else if (route === 'listenerLapse')
       await act(async () => reviewGrant.leave(key));
     else await lapse(route);
-    expect(h.alert).toHaveBeenCalledTimes(1);
-    expect(h.alert).toHaveBeenCalledWith(
-      'Request ended',
-      route === 'idle' ? texts.idle : texts.lock
-    );
+    // Background declines the request outright, so it shows no alert.
+    expect(h.alert).toHaveBeenCalledTimes(route === 'background' ? 0 : 1);
+    if (route !== 'background')
+      expect(h.alert).toHaveBeenCalledWith(
+        'Approval ended',
+        route === 'idle'
+          ? 'Your approval timed out. Unlock to review this request again.'
+          : texts.unlock
+      );
     expect(h.modal().props.visible).toBe(false);
     expect(h.deviceSign).not.toHaveBeenCalled();
     expect(h.onSuccess).not.toHaveBeenCalled();
