@@ -655,9 +655,12 @@ export class TransactionAuthController {
       // Every software-signing flow through this controller (WalletConnect review,
       // in-app send, swap, claim) requires PIN setup; Ledger and remote signers are exempt.
       // AuthContext's boot routing sends hasKeyBearingAccount && !hasPin to PIN-setup
-      // resume or recovery, locked and unauthenticated, never Main. Add-account and
-      // import go through SecuritySetup before storing a key; restore marks PIN setup
-      // pending first. This refusal defends against a state a normal run cannot reach.
+      // resume or recovery, locked and unauthenticated, never Main, so a key that
+      // exists at boot does not reach this check without a PIN. A software key can
+      // still be added in a running session while no PIN exists (a backup holding
+      // only keyless accounts restored and the app closed before PIN setup, then an
+      // account added from Settings, which does not route through SecuritySetup);
+      // the refusal fails safe there and the user is not told how to finish setup.
       const hasPin = isLedgerFlow
         ? await AccountSecureStorage.hasPin()
         : await this.requireSoftwarePin();
