@@ -321,7 +321,7 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     );
   });
 
-  it('DEFECT delivery failure releases the coordinator ref', async () => {
+  it('DEFECT a v1 request not ready for navigation is released and redelivered once', async () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
     const client = new FakeV1Client('handshake-release');
     service.attachV1CallRequests(
@@ -330,14 +330,18 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
       >[0],
       'pair-topic'
     );
-    nav.navigate.mockImplementationOnce(() => {
-      throw new Error('navigation unavailable');
-    });
+    // The queue observes readiness, then the callback observes it being lost.
+    // All other checks use the real route queue and request-claim lifecycle.
+    nav.isReady
+      .mockReturnValueOnce(true) // deliver accepts the route
+      .mockReturnValueOnce(true) // drain starts the callback
+      .mockReturnValueOnce(false); // navigation is no longer ready
     const ref = requestRefFor({ id: 51802, topic: 'handshake-release' }, 1);
     const release = jest.spyOn(coordinator, 'release');
     const admit = jest.spyOn(coordinator, 'admit');
     client.emit('call_request', callRequest(51802));
     await flush();
+    expect(nav.navigate).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledWith(ref);
     expect(coordinator.isOpen(ref)).toBe(false);
     client.emit('call_request', callRequest(51802));
@@ -349,6 +353,18 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
       expect.objectContaining({ action: 'show' }),
       expect.objectContaining({ action: 'show' }),
     ]);
-    expect(nav.navigate).toHaveBeenCalledTimes(2);
+    const first = await admit.mock.results[0].value;
+    const second = await admit.mock.results[1].value;
+    if (first.action !== 'show' || second.action !== 'show') {
+      throw new Error('Expected both deliveries to be admitted');
+    }
+    expect(second.firstSeenMs).toBe(first.firstSeenMs);
+    expect(coordinator.isOpen(ref)).toBe(true);
+    expect(nav.navigate).toHaveBeenCalledTimes(1);
+    expect(nav.navigate).toHaveBeenCalledWith(
+      'WalletConnectTransactionRequest',
+      expect.objectContaining({ version: 1 })
+    );
+    Object.values(transport).forEach((fn) => expect(fn).not.toHaveBeenCalled());
   });
 });

@@ -196,6 +196,7 @@ beforeEach(async () => {
   mockReadyCallbacks.clear();
   mockRoute = undefined;
   mockNav.navigate.mockReset();
+  mockNav.isReady.mockReset().mockImplementation(() => mockReady);
   mockNav.getCurrentRoute.mockImplementation(() =>
     mockRoute ? { name: mockRoute } : undefined
   );
@@ -209,6 +210,7 @@ beforeEach(async () => {
   mockNav.goBack.mockClear();
   mockWcService.off.mockClear();
   mockRouteQueue = createPendingRouteQueue({
+    now: () => Date.now(),
     isReady: () => mockReady,
     onReady: (cb: () => void) => {
       mockReadyCallbacks.add(cb);
@@ -608,23 +610,79 @@ describe('coordinator ingest (U2)', () => {
     );
   });
 
-  it('DEFECT navigation not ready releases admission so redelivery is shown twice by admit', async () => {
+  it('DEFECT a v2 request not ready for navigation is released and redelivered once', async () => {
     await boot();
     const admit = jest.spyOn(coordinator, 'admit');
+    const releaseClaim = jest.spyOn(TransactionRequestQueue, 'releaseClaim');
     const event = request(5203);
+    const ref = requestRefFor(event);
+    // The route queue accepts delivery, then the navigator loses readiness.
     mockReady = true;
-    mockNav.isReady.mockReturnValueOnce(false);
+    mockNav.isReady.mockReturnValue(false);
     await emit('session_request', event);
-    expect(coordinator.isOpen(requestRefFor(event))).toBe(false);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(releaseClaim).toHaveBeenCalledWith(event.id, event.topic);
+    expect(coordinator.isOpen(ref)).toBe(false);
+    const first = await admit.mock.results[0].value;
+    expect(first.action).toBe('show');
+
+    mockNav.isReady.mockReturnValue(true);
     await emit('session_request', event);
     expect(admit).toHaveBeenCalledTimes(2);
-    expect(
-      await Promise.all(admit.mock.results.map((result) => result.value))
-    ).toEqual([
-      expect.objectContaining({ action: 'show' }),
-      expect.objectContaining({ action: 'show' }),
-    ]);
-    expect(navigatedIds()).toEqual([5203]);
+    const second = await admit.mock.results[1].value;
+    expect(second.action).toBe('show');
+    if (first.action !== 'show' || second.action !== 'show') {
+      throw new Error('Expected both deliveries to be admitted');
+    }
+    expect(second.firstSeenMs).toBe(first.firstSeenMs);
+    expect(coordinator.isOpen(ref)).toBe(true);
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockNav.navigate).toHaveBeenCalledWith(
+      'WalletConnectTransactionRequest',
+      { requestEvent: event }
+    );
+    Object.values(mockTransport).forEach((fn) =>
+      expect(fn).not.toHaveBeenCalled()
+    );
+    expect(answerDroppedRequests).not.toHaveBeenCalled();
+  });
+
+  it('DEFECT a v2 proposal not ready for navigation is released and redelivered once', async () => {
+    await boot();
+    const admit = jest.spyOn(coordinator, 'admit');
+    const proposal = { id: 5208, pairingTopic: 'pairing' };
+    const ref = proposalRefFor(proposal);
+    const now = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+    mockReady = true;
+    mockNav.isReady.mockReturnValue(false);
+    await emit('session_proposal', proposal);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(coordinator.isOpen(ref)).toBe(false);
+    const first = await admit.mock.results[0].value;
+    expect(first.action).toBe('show');
+
+    // Proposals share a route key. Redeliver after the route queue's 5s
+    // completed-key window, while the coordinator deadline is still live.
+    clock.mockReturnValue(now + 5001);
+    mockNav.isReady.mockReturnValue(true);
+    await emit('session_proposal', proposal);
+    expect(admit).toHaveBeenCalledTimes(2);
+    const second = await admit.mock.results[1].value;
+    expect(second.action).toBe('show');
+    if (first.action !== 'show' || second.action !== 'show') {
+      throw new Error('Expected both deliveries to be admitted');
+    }
+    expect(second.firstSeenMs).toBe(first.firstSeenMs);
+    expect(coordinator.isOpen(ref)).toBe(true);
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockNav.navigate).toHaveBeenCalledWith(
+      'WalletConnectSessionProposal',
+      { proposal }
+    );
+    Object.values(mockTransport).forEach((fn) =>
+      expect(fn).not.toHaveBeenCalled()
+    );
   });
 
   it.each([
