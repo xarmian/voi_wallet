@@ -133,6 +133,10 @@ export class RequestQueue {
     return true;
   }
 
+  closeHead(ref: RequestRef, reason: ExitReason): boolean {
+    return this.finish(ref, this.describeClose(reason));
+  }
+
   advance(): boolean {
     if (!this.snapshot.result || this.snapshot.waiting.length === 0)
       return false;

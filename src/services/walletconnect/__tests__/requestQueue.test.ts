@@ -290,6 +290,34 @@ it('finishes a closed head with the supplied close description', () => {
   expect(queue.getSnapshot().head).toBeNull();
 });
 
+it('DEFECT closeHead delegates to finish with the queue close description', () => {
+  const description = { title: 'Request ended', message: 'Connect' };
+  const describeClose = jest.fn(() => description);
+  queue = new RequestQueue({ coordinator, describeClose });
+  const head = refFor(1);
+  const waiting = refFor(2);
+  push(head);
+  push(waiting);
+  const finish = jest.spyOn(queue, 'finish');
+  const before = queue.getSnapshot();
+  expect(queue.closeHead(waiting, 'expired')).toBe(false);
+  expect(queue.getSnapshot()).toBe(before);
+  expect(queue.closeHead(head, 'abandoned')).toBe(true);
+  expect(describeClose.mock.calls).toEqual([['expired'], ['abandoned']]);
+  expect(finish.mock.calls).toEqual([
+    [waiting, description],
+    [head, description],
+  ]);
+  expect(queue.getSnapshot()).toMatchObject({
+    head: null,
+    result: { ref: head, ...description },
+    waiting: [expect.objectContaining({ ref: waiting })],
+  });
+  const finished = queue.getSnapshot();
+  expect(queue.closeHead(head, 'declined')).toBe(false);
+  expect(queue.getSnapshot()).toBe(finished);
+});
+
 it('uses Request ended by default and the first finish wins over late callbacks', () => {
   push(refFor(1));
   const close = coordinator.recorded.get(keyOf(refFor(1)))!;
