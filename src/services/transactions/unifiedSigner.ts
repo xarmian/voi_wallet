@@ -32,6 +32,14 @@ import {
  */
 export { RemoteSignerRequiredError };
 
+/** Hardware routes require a sequential batch even when the reviewed account is rekeyed. */
+export function signsSequentially(request: UnifiedTransactionRequest): boolean {
+  return (
+    request.account.type === AccountType.LEDGER ||
+    request.walletConnectParams?.sequentialSigning === true
+  );
+}
+
 /**
  * Genesis hash (lowercase hex) -> NetworkId, derived from the single source of
  * truth in `NETWORK_CONFIGURATIONS` rather than a second hand-maintained table.
@@ -500,9 +508,7 @@ export class UnifiedTransactionSigner {
       // reviewed account, so a group whose other signer is rekeyed to a Ledger
       // would otherwise be signed in parallel: the review screen, which has
       // already resolved every signer's route, sets `sequentialSigning`.
-      const signSequentially =
-        request.account.type === AccountType.LEDGER ||
-        params.sequentialSigning === true;
+      const signSequentially = signsSequentially(request);
 
       // For Ledger accounts: sign sequentially (hardware constraint)
       // For standard accounts: sign in parallel for better performance
@@ -511,7 +517,8 @@ export class UnifiedTransactionSigner {
         for (let i = 0; i < plans.length; i++) {
           // After Cancel or a lapse, no entry starts after the one the loop has
           // entered. That entry can still reach the device; its signature is discarded.
-          // The modal keeps asking about the entered entry until the device resolves.
+          // After Cancel, only the device keeps asking. After a lapse, the modal
+          // keeps showing the entered entry until the device resolves.
           if (signal?.aborted) {
             return { success: false, error: new Error('Signing cancelled') };
           }
@@ -599,7 +606,7 @@ export class UnifiedTransactionSigner {
       }
 
       // Clear private key cache for security (cache is inside AccountSecureStorage)
-      // Note: Cache auto-expires after 60s, but we clear immediately for security
+      // Clear immediately rather than leaving cached keys in memory.
       const { AccountSecureStorage } =
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
@@ -618,7 +625,10 @@ export class UnifiedTransactionSigner {
       };
     } finally {
       // Clear the private key cache on every exit of the signer.
-      // Parallel entries in flight after the first rejection are not awaited; later key reads are bounded by the 60 s cache TTL.
+      // Parallel entries in flight after the first rejection are not awaited.
+      // A straggler that re-caches a key after this clear leaves it in memory until
+      // a 10%-sampled cleanup in getPrivateKey, an explicit clear, or a lock.
+      // The 60 s TTL bounds reuse of a cached key, not how long it stays in memory.
       const { AccountSecureStorage } =
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();

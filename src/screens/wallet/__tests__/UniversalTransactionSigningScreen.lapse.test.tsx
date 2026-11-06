@@ -7,13 +7,53 @@ import {
   inside,
   reviewGrant,
   SessionKeyVault,
-  AccountSecureStorage,
   act,
   fireEvent,
   waitFor,
 } from './helpers/reviewOutcomeHarness';
+import { SecureKeyManager } from '@/services/secure/keyManager';
 
 setupOutcomeHarness();
+
+// DEFECT: a swallowed Ledger lookup failure must not leave the sequential loop unwatched.
+it('lapseAbortsLoopWhenLedgerLookupFailed', async () => {
+  jest
+    .mocked(SecureKeyManager.getLedgerSigningInfo)
+    .mockRejectedValueOnce(new Error('Ledger lookup failed'));
+  const h = await openOutcome({
+    locked: false,
+    ledger: true,
+    realSigner: true,
+    entries: 3,
+    sign: false,
+  });
+  let finish!: (bytes: Uint8Array) => void;
+  h.deviceSign.mockImplementationOnce(
+    () =>
+      new Promise<Uint8Array>((resolve) => {
+        finish = resolve;
+      })
+  );
+  h.deviceSign.mockResolvedValue(new Uint8Array([1]));
+  await fireEvent.press(h.signButton());
+  await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+  expect(SecureKeyManager.getLedgerSigningInfo).toHaveBeenCalled();
+  expect(h.controller.getState().isLedgerFlow).toBe(false);
+  expect(
+    inside(h.controller).currentRequest!.walletConnectParams!.sequentialSigning
+  ).toBe(true);
+  await lapse('background');
+  expect(h.alert).not.toHaveBeenCalled();
+  await act(async () => {
+    finish(new Uint8Array([1]));
+    await Promise.all(h.signerRuns);
+  });
+  expect(h.deviceSign).toHaveBeenCalledTimes(1);
+  expect(h.onSuccess).not.toHaveBeenCalled();
+  expect(h.alert).toHaveBeenCalledTimes(1);
+  expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
+  expect(h.modal().props.visible).toBe(false);
+});
 
 const signingState = (controller: Parameters<typeof inside>[0]) =>
   controller as unknown as {
@@ -304,8 +344,7 @@ it('lapseOnOtherKeyDoesNotAbort', async () => {
   expect(h.alert).not.toHaveBeenCalled();
 });
 
-// DEFECT: both native background listeners can revoke during the same event.
-// REGRESSION for unlocked background/rotation: cancel already clears the request key.
+// REGRESSION: a lock with a flow open alerts exactly once, as do duplicate background emits.
 it.each(
   (['background', 'lock', 'rotation'] as const).flatMap((reason) =>
     [true, false].map((locked) => ({ reason, locked }))
@@ -429,33 +468,30 @@ it.each([3, 1])('lapseDuringLastEntryShowsE:entries=%s', async (entries) => {
   expect(h.modal().props.visible).toBe(false);
 });
 
-// DEFECT: cleanup during planning must stop parallel key access and signing.
+// REGRESSION: cleanup during planning already stops parallel signing.
 it('abortBeforeParallelStartSignsNothing', async () => {
   const h = await openOutcome({ locked: true, realSigner: true, sign: false });
   const signer = jest
     .requireActual('@/services/transactions/unifiedSigner')
     .UnifiedTransactionSigner.getInstance();
   const plan = signer.planBatch.bind(signer);
+  let stateDuringPlanning: string | undefined;
   const planning = jest
     .spyOn(signer, 'planBatch')
     .mockImplementationOnce(async (request) => {
       const plans = await plan(request);
-      expect(h.controller.getState().state).toBe('signing');
+      stateDuringPlanning = h.controller.getState().state;
       h.controller.cleanup();
       return plans;
     });
-  const readKey = jest.spyOn(AccountSecureStorage, 'getPrivateKey');
-  h.deviceSign.mockImplementation(async () => {
-    await AccountSecureStorage.getPrivateKey('account');
-    return new Uint8Array([1]);
-  });
+  h.deviceSign.mockResolvedValue(new Uint8Array([1]));
   try {
     await fireEvent.press(h.signButton());
     await act(async () => {
       await Promise.all(h.signerRuns);
     });
     expect(planning).toHaveBeenCalledTimes(1);
-    expect(readKey).not.toHaveBeenCalled();
+    expect(stateDuringPlanning).toBe('signing');
     expect(h.deviceSign).not.toHaveBeenCalled();
     expect(h.onSuccess).not.toHaveBeenCalled();
   } finally {

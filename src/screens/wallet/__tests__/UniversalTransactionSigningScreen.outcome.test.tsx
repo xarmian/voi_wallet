@@ -4,6 +4,7 @@ import {
   waitFor,
   setupOutcomeHarness,
   openOutcome,
+  normalUnlock,
   lapse,
   texts,
   key,
@@ -17,6 +18,35 @@ import {
 } from './helpers/reviewOutcomeHarness';
 
 setupOutcomeHarness();
+
+// DEFECT: a review outside the waiting queue receives no grant on normal unlock.
+it.each(['lock', 'background', 'rotation'] as const)(
+  'dangerAcknowledgedClearedByEveryLock:%s',
+  async (reason) => {
+    const h = await openOutcome({
+      locked: false,
+      danger: true,
+      sign: false,
+      waitingKeys: [],
+    });
+    await lapse('lock');
+    // The queue snapshot is empty: this request has already been taken.
+    await normalUnlock([]);
+    expect(reviewGrant.isValid(key)).toBe(false);
+    expect(h.view.getByRole('checkbox')).not.toBeChecked();
+    await fireEvent.press(h.view.getByRole('checkbox'));
+    expect(h.view.getByRole('checkbox')).toBeChecked();
+    await lapse(reason);
+    // Background and rotation are also followed by AuthContext's lock signal.
+    if (reason !== 'lock') await lapse('lock');
+    await normalUnlock([]);
+    expect(reviewGrant.isValid(key)).toBe(false);
+    expect(h.view.getByRole('checkbox')).not.toBeChecked();
+    expect(h.signButton()).toBeDisabled();
+    expect(h.modal().props.visible).toBe(false);
+    expect(h.alert).not.toHaveBeenCalled();
+  }
+);
 
 // DEFECT: a listener cancellation must not suppress cleanup in a later sitting.
 it.each(['lapse', 'Cancel', 'failure', 'success'] as const)(

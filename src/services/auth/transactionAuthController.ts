@@ -6,6 +6,7 @@ import {
   UnifiedTransactionRequest,
   UnifiedSigningCallbacks,
   UnifiedSigningResult,
+  signsSequentially,
 } from '@/services/transactions/unifiedSigner';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
@@ -2069,10 +2070,11 @@ export class TransactionAuthController {
           return;
         }
         this.reviewSigningStarted = true;
-        // Cancel and a lapse start no entry after the one the sequential loop entered.
-        // For software, once the parallel branch starts, every entry has started;
-        // a lapse then only withholds delivery of the signed result.
-        if (this.currentState.isLedgerFlow) {
+        // Cancel and a lapse abort the Ledger loop before its next entry.
+        // For software, the pre-parallel check sees Cancel and cleanup, not a lapse.
+        // A software lapse only withholds delivery via onComplete's grant re-check;
+        // the window between pauseIdle and the parallel branch is not covered.
+        if (signsSequentially(request)) {
           this.reviewLapseUnsubscribe = reviewGrant.subscribe(() => {
             // Keep the outcome callback live so it publishes the lapse's own text.
             if (

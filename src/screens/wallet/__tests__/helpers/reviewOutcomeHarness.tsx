@@ -207,6 +207,10 @@ const mockSignerRuns: Promise<unknown>[] = [];
 const mockSubmit = jest.fn();
 const mockDeviceListeners = new Map<string, Set<(...args: any[]) => void>>();
 jest.mock('@/services/transactions/unifiedSigner', () => ({
+  signsSequentially: (request: UnifiedTransactionRequest) =>
+    jest
+      .requireActual('@/services/transactions/unifiedSigner')
+      .signsSequentially(request),
   UnifiedTransactionSigner: {
     getInstance: () => ({
       signTransaction: (...args: unknown[]) =>
@@ -379,6 +383,16 @@ export async function lapse(reason: 'lock' | 'background' | 'rotation') {
       [...appListeners].forEach((cb) => cb('background'));
     }
     if (reason === 'rotation') SessionKeyVault.set('rotated fixture', 'pin');
+  });
+}
+export async function normalUnlock(waitingKeys: string[]) {
+  await act(async () => {
+    mockLocked = false;
+    AppState.currentState = 'active';
+    [...appListeners].forEach((cb) => cb('active'));
+    SessionKeyVault.set('normal unlock fixture', 'pin');
+    AppLockSignal.setUnlocked(true);
+    reviewGrant.mintForWaiting(waitingKeys);
   });
 }
 export async function openOutcome(

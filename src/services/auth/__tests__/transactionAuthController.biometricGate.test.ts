@@ -51,6 +51,10 @@ jest.mock('@/services/secure/keyManager', () => ({
 jest.mock('@/services/transactions/unifiedSigner', () => {
   const signTransaction = jest.fn();
   return {
+    signsSequentially: (request: unknown) =>
+      jest
+        .requireActual('@/services/transactions/unifiedSigner')
+        .signsSequentially(request),
     UnifiedTransactionSigner: {
       getInstance: () => ({
         signTransaction,

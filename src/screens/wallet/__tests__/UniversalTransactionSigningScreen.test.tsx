@@ -1000,6 +1000,10 @@ it.each([
 
 // Real controller at the modal seam: review bytes come from the rendered screen.
 jest.mock('@/services/transactions/unifiedSigner', () => ({
+  signsSequentially: (request: unknown) =>
+    jest
+      .requireActual('@/services/transactions/unifiedSigner')
+      .signsSequentially(request),
   UnifiedTransactionSigner: {
     getInstance: () => ({
       signTransaction: jest.fn(async (_req, callbacks) =>

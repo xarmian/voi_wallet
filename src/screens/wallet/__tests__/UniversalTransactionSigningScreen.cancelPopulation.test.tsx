@@ -16,7 +16,10 @@ setupOutcomeHarness();
 
 // Only requests holding a review capability are in this population.
 // L = locked review sitting; U = unlocked wallet WITH A MINTED GRANT.
-// Cancel or a lapse starts no entry after the one the loop has entered.
+// Cancel and a lapse abort the Ledger loop before its next entry.
+// For software, the pre-parallel check sees Cancel and cleanup, not a lapse.
+// A software lapse only withholds delivery via onComplete's grant re-check;
+// the window between pauseIdle and the parallel branch is not covered.
 const routes = [
   'modalCancel',
   'systemClose',
@@ -35,11 +38,19 @@ const routes = [
 it.each(
   routes.flatMap((route) =>
     (route === 'deviceReject' ? [true] : [true, false]).flatMap((ledger) =>
-      [true, false].map((locked) => ({ route, ledger, locked }))
+      [true, false].map((locked) => ({
+        route,
+        ledger,
+        locked,
+        caseName:
+          !ledger && ['modalCancel', 'systemClose'].includes(route)
+            ? `softwareNoCancelInSigningDeliversNormally:${route}`
+            : `cancelPopulation:${route}`,
+      }))
     )
   )
 )(
-  'cancelPopulation:$route:batch:ledger=$ledger:locked=$locked',
+  '$caseName:batch:ledger=$ledger:locked=$locked',
   async ({ route, ledger, locked }) => {
     const h = await openOutcome({
       locked,

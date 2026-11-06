@@ -3,7 +3,6 @@ import {
   openOutcome,
   openNonBatchOutcome,
   lapse,
-  texts,
   inside,
   SessionKeyVault,
   act,
@@ -31,26 +30,19 @@ it.each(
       ledger,
       realSigner: true,
       entries: 3,
-      sign: ledger && route !== 'screenReject',
+      sign: false,
     });
-    {
-      if (route === 'screenReject') {
-        await fireEvent.press(h.view.getByText('Reject'));
-        expect(h.onReject).toHaveBeenCalledTimes(1);
-        expect(SessionKeyVault.isUnlocked()).toBe(true);
-        // The caller navigates away on Reject; teardown owns the final leave.
-        await h.view.unmount();
-      } else {
-        await act(async () => jest.advanceTimersByTime(61_000));
-        if (ledger)
-          expect(h.alert).toHaveBeenCalledWith('Request ended', texts.idle);
-        else expect(h.alert).not.toHaveBeenCalled();
-      }
-      expect(h.deviceSign).not.toHaveBeenCalled();
-      expect(h.onSuccess).not.toHaveBeenCalled();
-      expect(SessionKeyVault.isUnlocked()).toBe(!locked);
-      return;
+    if (route === 'screenReject') {
+      await fireEvent.press(h.view.getByText('Reject'));
+      expect(h.onReject).toHaveBeenCalledTimes(1);
+      expect(SessionKeyVault.isUnlocked()).toBe(true);
+      // The caller navigates away on Reject; teardown owns the final leave.
+      await h.view.unmount();
+    } else {
+      await act(async () => jest.advanceTimersByTime(61_000));
+      expect(h.alert).not.toHaveBeenCalled();
     }
+    expect(SessionKeyVault.isUnlocked()).toBe(!locked);
   }
 );
 

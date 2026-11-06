@@ -372,12 +372,15 @@ export default function UniversalTransactionSigningScreen({
 
   const handlingOutcome = useRef(false);
   const reviewLapseHandled = useRef(false);
+  const reviewFlowActive = useRef(false);
   const rejecting = useRef(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
   const [dangerAcknowledged, setDangerAcknowledged] = useState(false);
   const endSittingState = useCallback(() => {
+    reviewFlowActive.current = false;
+    reviewLapseHandled.current = false;
     setDangerAcknowledged(false);
     setShowAuthModal(false);
     setCurrentRequest(null);
@@ -416,16 +419,20 @@ export default function UniversalTransactionSigningScreen({
           reviewLapseHandled.current = false;
           return;
         }
+        if (!AppLockSignal.isUnlocked()) setDangerAcknowledged(false);
+        if (!reviewFlowActive.current) {
+          reviewLapseHandled.current = false;
+          return;
+        }
         const state = authController.getState().state;
         if (
           walletConnect &&
-          !reviewGrant.isValid(requestKey) &&
           !handlingOutcome.current &&
           !reviewLapseHandled.current &&
           state !== 'completed' &&
           state !== 'error' &&
-          authController.getState().state !== 'signing' &&
-          authController.getState().state !== 'processing' &&
+          state !== 'signing' &&
+          state !== 'processing' &&
           (!AppLockSignal.isUnlocked() ||
             (showAuthModal && currentRequest?.reviewGrantKey))
         ) {
@@ -960,6 +967,7 @@ export default function UniversalTransactionSigningScreen({
     };
 
     reviewLapseHandled.current = false;
+    reviewFlowActive.current = true;
     setCurrentRequest(request);
     setShowAuthModal(true);
   };
