@@ -509,9 +509,9 @@ export class UnifiedTransactionSigner {
       if (signSequentially) {
         // Sequential signing for Ledger
         for (let i = 0; i < plans.length; i++) {
-          // After Cancel, start no entry after the one whose prompt the phone
-          // has already shown. That entry may still reach the device, including
-          // in the gap before the device send; its signature is discarded.
+          // After Cancel or a lapse, no entry starts after the one the loop has
+          // entered. That entry can still reach the device; its signature is discarded.
+          // The modal keeps asking about the entered entry until the device resolves.
           if (signal?.aborted) {
             return { success: false, error: new Error('Signing cancelled') };
           }
@@ -554,6 +554,9 @@ export class UnifiedTransactionSigner {
           }
         }
       } else {
+        if (signal?.aborted) {
+          return { success: false, error: new Error('Signing cancelled') };
+        }
         // Parallel signing for standard accounts (much faster!)
         callbacks?.onLedgerPrompt?.({ index: 1, total });
 
@@ -613,13 +616,9 @@ export class UnifiedTransactionSigner {
         success: true,
         signedTransactions: signedTxns,
       };
-    } catch (error) {
-      // Clear private key cache on error too for security
-      const { AccountSecureStorage } =
-        await import('@/services/secure/AccountSecureStorage');
-      AccountSecureStorage.clearPrivateKeyCache();
-      throw error;
     } finally {
+      // Clear the private key cache on every exit of the signer.
+      // Parallel entries in flight after the first rejection are not awaited; later key reads are bounded by the 60 s cache TTL.
       const { AccountSecureStorage } =
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();

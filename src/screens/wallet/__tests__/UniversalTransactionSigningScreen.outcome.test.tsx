@@ -490,7 +490,7 @@ it('lateCallbackAfterCompleteIsIgnored', async () => {
 
 // DEFECT: exercise the real sequential batch loop; only the device entry call is stubbed.
 it.each([true, false])(
-  'ledgerCancelStopsEntriesAfterShownPrompt:locked=%s',
+  'ledgerCancelStartsNoEntryAfterTheEnteredOne:locked=%s',
   async (locked) => {
     const h = await openOutcome({
       locked,

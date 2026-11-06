@@ -40,6 +40,7 @@ jest.mock('@/services/secure/AccountSecureStorage', () => ({
     getBiometricSecret: jest.fn(),
     isBiometricEnabled: jest.fn(async () => false),
     clearPrivateKeyCache: jest.fn(),
+    getPrivateKey: jest.fn(),
   },
 }));
 

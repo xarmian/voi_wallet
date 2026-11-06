@@ -7,6 +7,7 @@ import {
   inside,
   reviewGrant,
   SessionKeyVault,
+  AccountSecureStorage,
   act,
   fireEvent,
   waitFor,
@@ -42,6 +43,12 @@ async function pendingLedger(locked = false) {
     finish: async () => {
       await act(async () => {
         finish(new Uint8Array([1]));
+        await Promise.allSettled(h.signerRuns);
+      });
+    },
+    rejectDevice: async () => {
+      await act(async () => {
+        reject(new Error('Transaction rejected by user'));
         await Promise.allSettled(h.signerRuns);
       });
     },
@@ -181,13 +188,13 @@ it.each([
     );
   }
   let stopThrowing = () => {};
+  let callbackThrew = false;
   if (exit === 'signing catch') {
     // A controller state subscriber throws from the signer error callback,
     // exercising the controller catch with the real signer.
-    let thrown = false;
     stopThrowing = h.controller.subscribe((state) => {
-      if (state.ledgerStatus === 'error' && !thrown) {
-        thrown = true;
+      if (state.ledgerStatus === 'error' && !callbackThrew) {
+        callbackThrew = true;
         throw new Error('callback failed');
       }
     });
@@ -195,6 +202,7 @@ it.each([
   if (exit === 'signer error' || exit === 'signing catch') await h.fail();
   else await h.finish();
   stopThrowing();
+  if (exit === 'signing catch') expect(callbackThrew).toBe(true);
   expect(listeners.size).toBe(before);
   expect(listeners.has(firstSubscription)).toBe(false);
   await act(async () => finishDelivery());
@@ -294,4 +302,163 @@ it('lapseOnOtherKeyDoesNotAbort', async () => {
   expect(h.deviceSign).toHaveBeenCalledTimes(3);
   expect(h.onSuccess).toHaveBeenCalledTimes(1);
   expect(h.alert).not.toHaveBeenCalled();
+});
+
+// DEFECT: both native background listeners can revoke during the same event.
+// REGRESSION for unlocked background/rotation: cancel already clears the request key.
+it.each(
+  (['background', 'lock', 'rotation'] as const).flatMap((reason) =>
+    [true, false].map((locked) => ({ reason, locked }))
+  )
+)(
+  'backgroundBeforeSignerAlertsOnce:$reason:locked=$locked',
+  async ({ reason, locked }) => {
+    const h = await openOutcome({ locked, ledger: true, realSigner: true });
+    expect(h.controller.getState().state).toBe('authenticating');
+    const cancel = jest.spyOn(h.controller, 'cancel');
+    await lapse(reason);
+    // Later emits belong to the same ended flow.
+    await act(async () => reviewGrant.revoke(false));
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(h.modal().props.visible).toBe(false);
+    expect(h.deviceSign).not.toHaveBeenCalled();
+    expect(SessionKeyVault.isUnlocked()).toBe(
+      reason === 'rotation' || (!locked && reason !== 'lock')
+    );
+  }
+);
+
+// DEFECT: a published device rejection must survive later grant notifications.
+it('deviceRejectionStaysOnDThroughLaterEmit', async () => {
+  const h = await pendingLedger(true);
+  await h.ready();
+  await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+  // Drive the real device rejection callback through the real signer.
+  await h.rejectDevice();
+  const assertD = () => {
+    expect(h.view.getByText('Transaction Cancelled')).toBeTruthy();
+    expect(
+      h.view.getByText('You rejected this transaction on your Ledger device.')
+    ).toBeTruthy();
+    expect(h.modal().props.visible).toBe(true);
+  };
+  assertD();
+  await lapse('background');
+  await act(async () => reviewGrant.revoke(false));
+  expect(h.alert).not.toHaveBeenCalled();
+  expect(h.onSuccess).not.toHaveBeenCalled();
+  assertD();
+  await fireEvent.press(h.view.getByText('Close'));
+  expect(h.modal().props.visible).toBe(false);
+});
+
+// REGRESSION: rejecting the entered entry truthfully shows D even after a lapse.
+it('lapseThenDeviceRejectionShowsD', async () => {
+  const h = await pendingLedger(true);
+  await h.ready();
+  await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
+  await lapse('background');
+  await h.rejectDevice();
+  expect(h.view.getByText('Transaction Cancelled')).toBeTruthy();
+  expect(
+    h.view.getByText('You rejected this transaction on your Ledger device.')
+  ).toBeTruthy();
+  expect(h.modal().props.visible).toBe(true);
+  expect(h.alert).not.toHaveBeenCalled();
+  expect(h.onSuccess).not.toHaveBeenCalled();
+  expect(h.deviceSign).toHaveBeenCalledTimes(1);
+});
+
+// DEFECT: a pending caller rejection must block every later Sign tap.
+it.each([true, false])('rejectBlocksLaterSign:locked=%s', async (locked) => {
+  const h = await openOutcome({ locked, sign: false });
+  let finishReject!: () => void;
+  h.onReject.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishReject = resolve;
+      })
+  );
+  const initialize = jest.spyOn(h.controller, 'initializeSigningFlow');
+  expect(reviewGrant.isUnspent(key)).toBe(true);
+  let rejection!: Promise<void>;
+  // Native presses do not await an async onPress handler before the next tap.
+  await act(async () => {
+    rejection = fireEvent.press(h.view.getByText('Reject'));
+  });
+  expect(h.onReject).toHaveBeenCalledTimes(1);
+  await fireEvent.press(h.signButton());
+  expect(initialize).not.toHaveBeenCalled();
+  expect(h.modal().props.visible).toBe(false);
+  expect(h.signer).not.toHaveBeenCalled();
+  await act(async () => {
+    finishReject();
+    await rejection;
+  });
+});
+
+// REGRESSION: the post-loop abort check already distinguishes E from B.
+it.each([3, 1])('lapseDuringLastEntryShowsE:entries=%s', async (entries) => {
+  const h = await openOutcome({
+    locked: true,
+    ledger: true,
+    realSigner: true,
+    entries,
+  });
+  let finish!: (bytes: Uint8Array) => void;
+  h.deviceSign.mockImplementation(async () => {
+    if (h.deviceSign.mock.calls.length === entries)
+      return new Promise<Uint8Array>((resolve) => {
+        finish = resolve;
+      });
+    return new Uint8Array([1]);
+  });
+  await h.ready();
+  await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(entries));
+  await lapse('background');
+  await act(async () => {
+    finish(new Uint8Array([1]));
+    await Promise.all(h.signerRuns);
+  });
+  expect(h.alert).toHaveBeenCalledTimes(1);
+  expect(h.alert).toHaveBeenCalledWith('Request ended', texts.lock);
+  expect(h.alert).not.toHaveBeenCalledWith('Request ended', texts.batch);
+  expect(h.onSuccess).not.toHaveBeenCalled();
+  expect(h.modal().props.visible).toBe(false);
+});
+
+// DEFECT: cleanup during planning must stop parallel key access and signing.
+it('abortBeforeParallelStartSignsNothing', async () => {
+  const h = await openOutcome({ locked: true, realSigner: true, sign: false });
+  const signer = jest
+    .requireActual('@/services/transactions/unifiedSigner')
+    .UnifiedTransactionSigner.getInstance();
+  const plan = signer.planBatch.bind(signer);
+  const planning = jest
+    .spyOn(signer, 'planBatch')
+    .mockImplementationOnce(async (request) => {
+      const plans = await plan(request);
+      expect(h.controller.getState().state).toBe('signing');
+      h.controller.cleanup();
+      return plans;
+    });
+  const readKey = jest.spyOn(AccountSecureStorage, 'getPrivateKey');
+  h.deviceSign.mockImplementation(async () => {
+    await AccountSecureStorage.getPrivateKey('account');
+    return new Uint8Array([1]);
+  });
+  try {
+    await fireEvent.press(h.signButton());
+    await act(async () => {
+      await Promise.all(h.signerRuns);
+    });
+    expect(planning).toHaveBeenCalledTimes(1);
+    expect(readKey).not.toHaveBeenCalled();
+    expect(h.deviceSign).not.toHaveBeenCalled();
+    expect(h.onSuccess).not.toHaveBeenCalled();
+  } finally {
+    planning.mockRestore();
+  }
 });

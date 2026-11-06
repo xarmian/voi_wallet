@@ -371,6 +371,8 @@ export default function UniversalTransactionSigningScreen({
   }, []);
 
   const handlingOutcome = useRef(false);
+  const reviewLapseHandled = useRef(false);
+  const rejecting = useRef(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [currentRequest, setCurrentRequest] =
     useState<UnifiedTransactionRequest | null>(null);
@@ -403,18 +405,31 @@ export default function UniversalTransactionSigningScreen({
     return () => subscription.remove();
   }, []);
 
+  useEffect(() => {
+    reviewLapseHandled.current = false;
+  }, [requestKey]);
+
   useEffect(
     () =>
       reviewGrant.subscribe(() => {
+        if (reviewGrant.isValid(requestKey)) {
+          reviewLapseHandled.current = false;
+          return;
+        }
+        const state = authController.getState().state;
         if (
           walletConnect &&
           !reviewGrant.isValid(requestKey) &&
           !handlingOutcome.current &&
+          !reviewLapseHandled.current &&
+          state !== 'completed' &&
+          state !== 'error' &&
           authController.getState().state !== 'signing' &&
           authController.getState().state !== 'processing' &&
           (!AppLockSignal.isUnlocked() ||
             (showAuthModal && currentRequest?.reviewGrantKey))
         ) {
+          reviewLapseHandled.current = true;
           const byUser = authController.wasUserCancelled;
           if (showAuthModal && !byUser) {
             const error = new ReviewEndedError(
@@ -902,6 +917,7 @@ export default function UniversalTransactionSigningScreen({
   const hasDanger = dangerList.length > 0;
 
   const handleApprove = () => {
+    if (rejecting.current) return;
     if (
       !canReview ||
       (requiresReviewUnlock && !reviewGrant.isValid(requestKey))
@@ -943,6 +959,7 @@ export default function UniversalTransactionSigningScreen({
       walletConnectParams,
     };
 
+    reviewLapseHandled.current = false;
     setCurrentRequest(request);
     setShowAuthModal(true);
   };
@@ -980,6 +997,7 @@ export default function UniversalTransactionSigningScreen({
   };
 
   const handleReject = async () => {
+    rejecting.current = true;
     endSittingState();
     if (requiresReviewUnlock && !grantValid) reviewGrant.leave(requestKey);
     if (onReject) {

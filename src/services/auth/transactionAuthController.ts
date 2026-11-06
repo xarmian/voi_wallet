@@ -2069,10 +2069,9 @@ export class TransactionAuthController {
           return;
         }
         this.reviewSigningStarted = true;
-        this.unsubscribeReviewLapse();
-        // Only the sequential Ledger loop has entries left to hold back. A software
-        // batch signs all entries in parallel, and they have already started, so an
-        // abort there would only change the lapse text of a signed result.
+        // Cancel and a lapse start no entry after the one the sequential loop entered.
+        // For software, once the parallel branch starts, every entry has started;
+        // a lapse then only withholds delivery of the signed result.
         if (this.currentState.isLedgerFlow) {
           this.reviewLapseUnsubscribe = reviewGrant.subscribe(() => {
             // Keep the outcome callback live so it publishes the lapse's own text.
@@ -2101,7 +2100,6 @@ export class TransactionAuthController {
     } catch (error) {
       // Reachable only through a throwing callback; the signer resolves its own failures.
       if (flowGeneration !== this.cancelledFlowGeneration) return;
-      this.unsubscribeReviewLapse();
       this.isSigningInProgress = false;
       const reviewLapsed =
         !!request.reviewGrantKey &&
