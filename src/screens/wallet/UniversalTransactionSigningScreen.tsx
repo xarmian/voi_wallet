@@ -22,7 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuth } from '@/contexts/AuthContext';
-import { reviewGrant } from '@/services/auth/reviewGrant';
+import { reviewGrant, reviewBindingDigest } from '@/services/auth/reviewGrant';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import LockedRequestGate, {
   dappHost,
@@ -804,6 +804,37 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
+  // Bind only after the reviewed bytes, network and signer set are available.
+  // A changed review invalidates this key instead of silently authorizing it.
+  useEffect(() => {
+    if (
+      walletConnect &&
+      grantValid &&
+      canReview &&
+      signersResolved &&
+      boundNetworkId &&
+      reviewedSigners.length > 0
+    ) {
+      reviewGrant.bind(
+        requestKey,
+        reviewBindingDigest({
+          networkId: boundNetworkId,
+          txnBytesBase64: transactionBytes,
+          signerAddresses: reviewedSigners,
+        })
+      );
+    }
+  }, [
+    walletConnect,
+    grantValid,
+    canReview,
+    signersResolved,
+    boundNetworkId,
+    reviewedSigners,
+    requestKey,
+    transactionBytes,
+  ]);
+
   // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
   // each with its transaction index (not the first target of each kind).
   // Asset-authority items are narrowed against the asset's current holders on
@@ -854,7 +885,11 @@ export default function UniversalTransactionSigningScreen({
     // this one" — before the signer ever saw them.
     const request: UnifiedTransactionRequest = {
       type: 'batch_transaction',
-      reviewGrantKey: requiresReviewUnlock ? requestKey : undefined,
+      reviewGrantKey:
+        walletConnect &&
+        (requiresReviewUnlock || reviewGrant.isValid(requestKey))
+          ? requestKey
+          : undefined,
       account: signingAccount,
       networkId: boundNetworkId,
       walletConnectParams: {
@@ -1119,7 +1154,7 @@ export default function UniversalTransactionSigningScreen({
 
   return (
     <SafeAreaView
-      onTouchStart={() => reviewGrant.touch()}
+      onTouchStart={() => reviewGrant.touch(requestKey)}
       style={styles.container}
       edges={['top', 'bottom']}
     >

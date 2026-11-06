@@ -9,7 +9,7 @@ import {
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SecureKeyManager } from '@/services/secure/keyManager';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
-import { reviewGrant } from '@/services/auth/reviewGrant';
+import { reviewGrant, reviewBindingDigest } from '@/services/auth/reviewGrant';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { isSoftwareAuthError } from '@/services/secure/authErrors';
@@ -35,6 +35,8 @@ import { NetworkService } from '@/services/network';
 import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation';
 import { getRekeyStateStrict } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
+
+class WalletSecuritySettingsError extends Error {}
 
 /**
  * Authentication states for transaction signing
@@ -462,6 +464,7 @@ export class TransactionAuthController {
     request: UnifiedTransactionRequest
   ): Promise<void> {
     this.reviewAuthorized = false;
+    this.reviewSigningStarted = false;
     this.currentRequest = request;
     this.remoteBatchPlan = null;
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
@@ -504,20 +507,6 @@ export class TransactionAuthController {
       this.updateState({
         state: 'authenticating',
       });
-
-      // If no PIN required and no biometric required (and not ledger/remote signer flow),
-      // auto-proceed to signing since user has already confirmed the transaction
-      if (
-        !request.reviewGrantKey &&
-        !this.currentState.requiresPin &&
-        !this.currentState.requiresBiometric &&
-        !this.currentState.isLedgerFlow &&
-        !this.currentState.isRemoteSignerFlow
-      ) {
-        this.updateState({ state: 'signing' });
-        await this.startSigning();
-        return;
-      }
 
       // Setup Ledger flow if needed
       if (this.currentState.isLedgerFlow) {
@@ -619,8 +608,10 @@ export class TransactionAuthController {
         // Ledger info not available, continue with regular flow
       }
 
-      // Check if user has a PIN set - only require PIN if one exists
-      const hasPin = await AccountSecureStorage.hasPin();
+      // Software keys require completed PIN setup, even with a review capability.
+      const hasPin = isLedgerFlow
+        ? await AccountSecureStorage.hasPin()
+        : await this.requireSoftwarePin();
 
       // Biometric-to-sign for a SOFTWARE key is only viable when the IN-APP
       // biometric-unlock feature is enabled — that feature stores the convenience
@@ -655,10 +646,46 @@ export class TransactionAuthController {
         ledgerStatus: isLedgerFlow ? 'idle' : 'idle', // Start as idle, will be set to searching when signing starts
       });
     } catch (error) {
+      if (error instanceof WalletSecuritySettingsError) throw error;
       throw new Error(
         `Failed to determine auth requirements: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  private async requireSoftwarePin(): Promise<true> {
+    let hasPin: boolean;
+    try {
+      hasPin = await AccountSecureStorage.hasPin();
+    } catch {
+      throw new WalletSecuritySettingsError(
+        "Couldn't read your wallet security settings. Try again."
+      );
+    }
+    if (hasPin !== true) {
+      throw new WalletSecuritySettingsError(
+        'Wallet setup is not finished. Finish setup, then try the request again.'
+      );
+    }
+    return true;
+  }
+
+  /** No ambient-network fallback is allowed for a scoped signing permission. */
+  private getReviewDigest(): string | null {
+    const request = this.currentRequest;
+    const params = request?.walletConnectParams;
+    const networkId = params?.sessionBinding?.networkId ?? request?.networkId;
+    if (
+      !params ||
+      !networkId ||
+      (request?.networkId && request.networkId !== networkId)
+    )
+      return null;
+    return reviewBindingDigest({
+      networkId,
+      txnBytesBase64: params.transactions.map((transaction) => transaction.txn),
+      signerAddresses: params.reviewedSigners,
+    });
   }
 
   /**
@@ -1464,12 +1491,15 @@ export class TransactionAuthController {
    * Start the actual signing process
    */
   private reviewAuthorized = false;
+  private reviewSigningStarted = false;
 
   public async authenticateWithReviewGrant(key: string): Promise<boolean> {
+    const digest = this.getReviewDigest();
     if (
       this.currentState.state !== 'authenticating' ||
       this.currentRequest?.reviewGrantKey !== key ||
-      !reviewGrant.consume(key)
+      digest === null ||
+      !reviewGrant.consume(key, digest)
     ) {
       this.updateState({
         state: 'error',
@@ -1496,10 +1526,35 @@ export class TransactionAuthController {
       throw new Error('No transaction request to sign');
     }
 
+    const flowGeneration = this.cancelledFlowGeneration;
+    const request = this.currentRequest;
+    const reviewKey = request.reviewGrantKey;
+
+    if (reviewKey && this.reviewSigningStarted) return;
     if (
-      this.currentRequest.reviewGrantKey &&
+      !this.currentState.isLedgerFlow &&
+      !this.currentState.isRemoteSignerFlow
+    ) {
+      try {
+        await this.requireSoftwarePin();
+      } catch (error) {
+        if (flowGeneration !== this.cancelledFlowGeneration) return;
+        // PIN-presence validation failed before entering the signer or reading keys.
+        if (reviewKey) {
+          reviewGrant.release(reviewKey);
+          this.reviewAuthorized = false;
+        }
+        this.updateState({ state: 'error', error: error as Error });
+        return;
+      }
+    }
+    if (flowGeneration !== this.cancelledFlowGeneration) return;
+    const digest = reviewKey ? this.getReviewDigest() : null;
+    if (
+      reviewKey &&
       (!this.reviewAuthorized ||
-        !reviewGrant.isValid(this.currentRequest.reviewGrantKey))
+        digest === null ||
+        !reviewGrant.isConsumedFor(reviewKey, digest))
     ) {
       this.updateState({
         state: 'error',
@@ -1507,9 +1562,7 @@ export class TransactionAuthController {
       });
       return;
     }
-
-    const flowGeneration = this.cancelledFlowGeneration;
-    const reviewKey = this.currentRequest.reviewGrantKey;
+    if (reviewKey && this.reviewSigningStarted) return;
 
     // Update request with PIN if provided
     if (pin) {
@@ -1755,13 +1808,9 @@ export class TransactionAuthController {
             });
           }
           if (!result.success && !this.hasSubmittedToNetwork) {
-            // TASK-437 (Luna P3): a failed Sign inside a review sitting is
-            // retryable. Hand the request its one Sign back, and require the
-            // next tap to claim it again.
-            if (reviewKey) {
-              reviewGrant.release(reviewKey);
-              this.reviewAuthorized = false;
-            }
+            // The signer has begun: keys may have been read or signatures produced.
+            // Keep the permission consumed even when nothing reached the network.
+            if (reviewKey) this.reviewAuthorized = false;
             if (!this.currentState.isLedgerFlow) {
               // SOFTWARE flow: onError already routed to PIN entry; keep it
               // PIN-shaped and NEVER Ledger-shape it here (PR6.1) — the signer
@@ -1801,8 +1850,9 @@ export class TransactionAuthController {
         },
       };
 
-      // Execute the signing
-      await this.unifiedSigner.signTransaction(this.currentRequest, callbacks);
+      // Crossing into the signer permanently spends this attempt's permission.
+      if (reviewKey) this.reviewSigningStarted = true;
+      await this.unifiedSigner.signTransaction(request, callbacks);
     } catch (error) {
       this.isSigningInProgress = false;
       const message = this.sanitizeLedgerError(error);

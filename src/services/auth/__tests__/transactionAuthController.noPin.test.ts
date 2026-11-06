@@ -230,6 +230,11 @@ it('ledgerFlowIgnoresPinRefusal', async () => {
     deviceId: 'device',
     derivationPath: [1],
   });
+  // The Ledger flow looks the known device up in the transport's device list.
+  (
+    require('@/services/ledger/transport').ledgerTransportService
+      .getDevices as jest.Mock
+  ).mockReturnValue([]);
   const controller = new TransactionAuthController();
   await controller.initializeSigningFlow(request());
   expect(controller.getState()).toMatchObject({

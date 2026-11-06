@@ -1,6 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from 'react';
 import {
   Alert,
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -54,6 +61,22 @@ const showAlert = (
     Alert.alert(title, message, buttons);
   }
 };
+
+// One authentication (PIN, passphrase or biometric) at a time. Kept behind a
+// hook so the flag is only read from event handlers and effects, never during
+// render, and the compiler does not treat it as render-reachable.
+function useAuthenticationGuard() {
+  const active = useRef(false);
+  const tryBegin = useCallback(() => {
+    if (active.current) return false;
+    active.current = true;
+    return true;
+  }, []);
+  const end = useCallback(() => {
+    active.current = false;
+  }, []);
+  return useMemo(() => ({ tryBegin, end }), [tryBegin, end]);
+}
 
 // Format a remaining-lockout duration as M:SS for the live countdown.
 const formatCountdown = (ms: number): string => {
@@ -166,25 +189,66 @@ export default function LockScreen() {
     return () => clearInterval(interval);
   }, [throttle.lockedUntil, refreshThrottle]);
 
+  const authentication = useAuthenticationGuard();
+  const focusGeneration = useRef(0);
+  const focused = useRef(false);
+  const biometricAuth = useRef({
+    enabled: authState.biometricEnabled,
+    unlock: unlockWithBiometrics,
+  });
+  // Keep the latest values for the focus handler. Declared before the focus
+  // effect, so both run in the same commit and the handler never reads stale ones.
   useEffect(() => {
-    if (authState.biometricEnabled && navigation.isFocused()) {
-      promptBiometric();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric prompt when biometrics become enabled, keyed on authState.biometricEnabled; promptBiometric is read at that commit and must not re-fire on its own identity.
-  }, [authState.biometricEnabled, navigation]);
+    biometricAuth.current = {
+      enabled: authState.biometricEnabled,
+      unlock: unlockWithBiometrics,
+    };
+  }, [authState.biometricEnabled, unlockWithBiometrics]);
 
-  const promptBiometric = async () => {
+  const promptBiometric = useCallback(async () => {
+    if (
+      !biometricAuth.current.enabled ||
+      !navigation.isFocused() ||
+      AppState.currentState !== 'active' ||
+      !authentication.tryBegin()
+    )
+      return;
+    const generation = focusGeneration.current;
+    const isCurrent = () =>
+      generation === focusGeneration.current &&
+      navigation.isFocused() &&
+      AppState.currentState === 'active';
     try {
-      const success = await unlockWithBiometrics(() => navigation.isFocused());
-      if (success) {
-        hapticNotify('success');
-      }
-      // On !success the user cancelled or biometrics failed; no error haptic —
-      // a cancel is a normal path to the PIN pad and shouldn't buzz.
+      const success = await biometricAuth.current.unlock(isCurrent);
+      if (success && isCurrent()) hapticNotify('success');
     } catch (error) {
-      console.error('Biometric authentication error:', error);
+      console.error('Biometric authentication error:', redactError(error));
+    } finally {
+      authentication.end();
     }
-  };
+  }, [navigation, authentication]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (focused.current) return;
+      focused.current = true;
+      focusGeneration.current++;
+      // One attempt per focus, including a cancelled, failed or blocked attempt.
+      void promptBiometric();
+    };
+    const onBlur = () => {
+      focused.current = false;
+      focusGeneration.current++;
+    };
+    const removeFocus = navigation.addListener('focus', onFocus);
+    const removeBlur = navigation.addListener('blur', onBlur);
+    if (navigation.isFocused()) onFocus();
+    return () => {
+      onBlur();
+      removeFocus();
+      removeBlur();
+    };
+  }, [navigation, promptBiometric]);
 
   const handleNumberPress = (number: string) => {
     if (inputDisabled || pin.length >= 6) return;
@@ -203,6 +267,7 @@ export default function LockScreen() {
   };
 
   const verifyPin = async (enteredPin: string) => {
+    if (!authentication.tryBegin()) return;
     try {
       // unlock() -> AccountSecureStorage.verifyPin() applies the persistent
       // throttle internally (and returns a plain boolean). We read the resulting
@@ -251,6 +316,8 @@ export default function LockScreen() {
       console.error('Secret verification error:', error);
       hapticNotify('error');
       showAlert('Error', `Failed to verify ${secretNoun}`);
+    } finally {
+      authentication.end();
     }
   };
 

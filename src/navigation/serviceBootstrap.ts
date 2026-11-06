@@ -146,11 +146,8 @@ export const initializeServices = async ({
               () => {
                 try {
                   if (navigationRef.current?.isReady?.()) {
-                    // TASK-438: join the proposal to a live review sitting
-                    // BEFORE going back. If a WalletConnect signing review is
-                    // on top, popping it leaves its own key; the sitting then
-                    // continues for this proposal instead of ending, so it
-                    // needs no second unlock. No-op when no sitting is live.
+                    // Check whether authentication already covered this proposal.
+                    // Navigation cannot add a late proposal to the capability.
                     if (proposal?.pairingTopic != null) {
                       reviewGrant.join(
                         walletConnectProposalKey(

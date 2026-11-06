@@ -33,7 +33,7 @@ jest.mock('@/services/wipe/notices', () => ({
   showWipeIncompleteNotice: jest.fn(),
 }));
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ isFocused: () => true }),
+  useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }),
 }));
 jest.mock('@/hooks/useThemedStyles', () => ({
   useThemedStyles: () => new Proxy({}, { get: () => ({}) }),

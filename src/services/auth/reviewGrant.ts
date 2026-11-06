@@ -1,17 +1,22 @@
 import { AppState } from 'react-native';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import { AccountSecureStorage } from '@/services/secure/AccountSecureStorage';
 import { SessionKeyVault } from '@/services/secure/SessionKeyVault';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import { clearSessionSecurity } from '@/services/secure/sessionTeardown';
 import { unlockVaultWithBiometrics } from '@/services/secure/biometricUnlock';
 
-// One sitting spans queued dApps, but never unlocks AuthContext / Main.
-// `keys` holds every request shown in the sitting: a request that arrives
-// while a sitting is live is pushed over the one under review rather than
-// queued, and joins the sitting without a second auth (TASK-437 review P2).
+// One authentication grants one signing permission per waiting request.
 export const REVIEW_IDLE_MS = 60_000;
-let grant: { keys: Set<string>; epoch: number; used: Set<string> } | null =
-  null;
+let grant: {
+  keys: Set<string>;
+  epoch: number;
+  authenticatedAt: number;
+  lockedSitting: boolean;
+  used: Set<string>;
+  bindings: Map<string, string>;
+} | null = null;
 let generation = 0;
 let expiresAt = 0;
 let appStateSubscription:
@@ -22,6 +27,23 @@ let authenticatingKey: string | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
 
+function createCapability(keys: string[], lockedSitting: boolean): void {
+  grant = {
+    keys: new Set(keys),
+    epoch: SessionKeyVault.currentEpoch(),
+    authenticatedAt: Date.now(),
+    lockedSitting,
+    used: new Set(),
+    bindings: new Map(),
+  };
+  expiresAt = Date.now() + REVIEW_IDLE_MS;
+  appStateSubscription ??= AppState.addEventListener('change', (state) => {
+    if (state === 'background') reviewGrant.revoke();
+  });
+  reviewGrant.touch(keys[0]);
+  emit();
+}
+
 export const reviewGrant = {
   subscribe(listener: () => void): () => void {
     listeners.add(listener);
@@ -29,25 +51,37 @@ export const reviewGrant = {
       listeners.delete(listener);
     };
   },
-  /** The sitting itself is live: unexpired, still locked, same vault epoch. */
+  /** A capability requires the original unlocked vault and a live deadline. */
   isLive(): boolean {
     return (
       !!grant &&
       grant.epoch === SessionKeyVault.currentEpoch() &&
       SessionKeyVault.isUnlocked() &&
-      !AppLockSignal.isUnlocked() &&
+      AppState.currentState !== 'background' &&
       Date.now() < expiresAt
     );
   },
   isValid(key: string): boolean {
     return this.isLive() && grant!.keys.has(key);
   },
-  touch(): void {
+  mintForWaiting(keys: string[]): void {
+    this.revoke(false);
+    if (
+      keys.length === 0 ||
+      !AppLockSignal.isUnlocked() ||
+      !SessionKeyVault.isUnlocked() ||
+      AppState.currentState === 'background'
+    )
+      return;
+    createCapability(keys, false);
+  },
+  touch(key: string): void {
     if (!grant) return;
     if (!this.isLive()) {
       this.revoke();
       return;
     }
+    if (!grant.keys.has(key)) return;
     expiresAt = Date.now() + REVIEW_IDLE_MS;
     clearTimeout(timer);
     timer = setTimeout(() => this.revoke(), REVIEW_IDLE_MS);
@@ -68,9 +102,12 @@ export const reviewGrant = {
     key: string,
     credential: { pin: string } | { biometric: true }
   ): Promise<boolean> {
-    // A live sitting already covers this request: no second auth.
+    // Only a request included by the previous authentication may reuse it.
     if (this.join(key)) return true;
-    if (authenticating || AppLockSignal.isUnlocked()) return false;
+    if (authenticating) return false;
+    // Fresh authentication replaces the old request set, even if it fails.
+    this.revoke();
+    const lockedSitting = !AppLockSignal.isUnlocked();
     appStateSubscription ??= AppState.addEventListener('change', (state) => {
       if (state === 'background') this.revoke();
     });
@@ -98,60 +135,61 @@ export const reviewGrant = {
         started !== generation ||
         SessionKeyVault.currentEpoch() !== epoch + 1 ||
         AppState.currentState === 'background' ||
-        AppLockSignal.isUnlocked()
+        AppLockSignal.isUnlocked() === lockedSitting
       ) {
         if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
         return false;
       }
-      grant = {
-        keys: new Set([key]),
-        epoch: SessionKeyVault.currentEpoch(),
-        used: new Set(),
-      };
-      expiresAt = Date.now() + REVIEW_IDLE_MS;
-      this.touch();
-      emit();
+      createCapability([key], lockedSitting);
       return true;
     } finally {
       authenticating = false;
       authenticatingKey = null;
     }
   },
-  /**
-   * Add a request that is about to be shown to the live sitting. Returns false
-   * (and changes nothing) when no sitting is live. Each request still needs
-   * its own Sign tap (consume).
-   */
+  /** Checking a queued request never expands the authenticated request set. */
   join(key: string): boolean {
-    if (!this.isLive()) return false;
-    if (!grant!.keys.has(key)) {
-      grant!.keys.add(key);
-      emit();
+    return this.isValid(key);
+  },
+  bind(key: string, digest: string): boolean {
+    if (!this.isValid(key)) return false;
+    const previous = grant!.bindings.get(key);
+    if (previous !== undefined && previous !== digest) {
+      this.leave(key);
+      return false;
     }
+    grant!.bindings.set(key, digest);
     return true;
   },
-  consume(key: string): boolean {
-    if (!this.isValid(key) || grant!.used.has(key)) return false;
+  consume(key: string, digest: string): boolean {
+    if (
+      !this.isValid(key) ||
+      grant!.used.has(key) ||
+      !grant!.bindings.has(key) ||
+      grant!.bindings.get(key) !== digest
+    )
+      return false;
     grant!.used.add(key);
-    this.touch();
+    this.touch(key);
     return true;
   },
-  /**
-   * A Sign attempt failed before anything was signed or answered: give the
-   * request its Sign back so the user can retry within the sitting (Luna P3).
-   * No-op when the sitting has ended or the request isn't in it.
-   */
+  isConsumedFor(key: string, digest: string): boolean {
+    return (
+      this.isValid(key) &&
+      grant!.used.has(key) &&
+      grant!.bindings.has(key) &&
+      grant!.bindings.get(key) === digest
+    );
+  },
+  /** Release only after a validity failure before entering the signer. */
   release(key: string): void {
     if (!this.isValid(key)) return;
     grant!.used.delete(key);
-    this.touch();
+    this.touch(key);
   },
-  /** Queue advance: the next request replaces the finished one's screen. */
+  /** Queue advance does not expand the capability or renew its deadline. */
   continueTo(key: string): void {
-    if (this.isLive()) {
-      grant!.keys = new Set([key]);
-      emit();
-    }
+    if (!this.isValid(key)) return;
   },
   /**
    * A request's screen left. Ends the sitting only when it was the last
@@ -165,6 +203,8 @@ export const reviewGrant = {
     }
     if (!grant || !grant.keys.has(key)) return;
     grant.keys.delete(key);
+    grant.used.delete(key);
+    grant.bindings.delete(key);
     if (grant.keys.size === 0) this.revoke();
     else emit();
   },
@@ -183,11 +223,7 @@ export function walletConnectRequestKey(
   return JSON.stringify([topic, String(id)]);
 }
 
-/**
- * The review-sitting key of a WalletConnect session proposal (TASK-438). One
- * scheme for the router and the connect screen, so a proposal the router joins
- * to a live sitting is the one the screen finds in it.
- */
+/** Shared request-key scheme for the router and proposal screen. */
 export function walletConnectProposalKey(
   pairingTopic: string,
   id: string | number
@@ -198,5 +234,28 @@ export function walletConnectProposalKey(
 // A re-lock invalidates review before the vault teardown, including a wallet
 // that was already locked while a review grant was active.
 AppLockSignal.subscribe(() => {
-  reviewGrant.revoke(!AppLockSignal.isUnlocked());
+  // AuthContext sets unlocked BEFORE minting the waiting-request capability.
+  // Its repeated unlocked notifications must only end an older gate sitting.
+  if (!AppLockSignal.isUnlocked()) reviewGrant.revoke();
+  else if (grant?.lockedSitting) reviewGrant.revoke(false);
 });
+
+/** Length-prefixed fields and list counts preserve transaction boundaries. */
+export function reviewBindingDigest(input: {
+  networkId: string;
+  txnBytesBase64: string[];
+  signerAddresses: string[];
+}): string {
+  const field = (value: string) => `${value.length}:${value}`;
+  const list = (values: string[]) =>
+    `${values.length}:${values.map(field).join('')}`;
+  return bytesToHex(
+    sha256(
+      utf8ToBytes(
+        field(input.networkId) +
+          list(input.txnBytesBase64) +
+          list([...input.signerAddresses].sort())
+      )
+    )
+  );
+}

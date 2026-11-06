@@ -1119,6 +1119,33 @@ it('clears a real biometric vault after a locked signing flow (TASK-437 negative
   expect(AppLockSignal.isUnlocked()).toBe(false);
 });
 
+// A scoped signing permission is bound to the reviewed bytes, network and
+// signers, so a claim needs a request that carries them and a matching bind.
+function bindReviewedRequest(
+  controller: TransactionAuthController,
+  key: string
+) {
+  const { reviewGrant, reviewBindingDigest } = require('../reviewGrant');
+  const req = (controller as any).currentRequest;
+  req.reviewGrantKey = key;
+  req.networkId = NetworkId.VOI_MAINNET;
+  req.walletConnectParams = {
+    transactions: [{ txn: 'AA==' }],
+    reviewedSigners: ['ADDR'],
+    sessionBinding: null,
+  };
+  expect(
+    reviewGrant.bind(
+      key,
+      reviewBindingDigest({
+        networkId: NetworkId.VOI_MAINNET,
+        txnBytesBase64: ['AA=='],
+        signerAddresses: ['ADDR'],
+      })
+    )
+  ).toBe(true);
+}
+
 it('unlocks review once, then signs via a grant without authenticating again (TASK-437)', async () => {
   const { reviewGrant } = require('../reviewGrant');
   const { AppLockSignal } = require('@/services/secure/appLockState');
@@ -1135,7 +1162,7 @@ it('unlocks review once, then signs via a grant without authenticating again (TA
   expect(await reviewGrant.unlock('topic:437', { biometric: true })).toBe(true);
   const controller = new TransactionAuthController();
   await initFlow(controller);
-  (controller as any).currentRequest.reviewGrantKey = 'topic:437';
+  bindReviewedRequest(controller, 'topic:437');
   expect(await controller.authenticateWithReviewGrant('topic:437')).toBe(true);
   expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
   expect(AccountSecureStorage.verifyPin).not.toHaveBeenCalled();
@@ -1144,7 +1171,7 @@ it('unlocks review once, then signs via a grant without authenticating again (TA
   reviewGrant.revoke();
 });
 
-it('lets a failed Sign be retried inside the review sitting (TASK-437 Luna P3)', async () => {
+it('keeps the permission spent after a Sign that entered the signer failed (TASK-518)', async () => {
   const { reviewGrant } = require('../reviewGrant');
   const { AppLockSignal } = require('@/services/secure/appLockState');
   AppLockSignal.setUnlocked(false);
@@ -1170,19 +1197,20 @@ it('lets a failed Sign be retried inside the review sitting (TASK-437 Luna P3)',
   );
   const controller = new TransactionAuthController();
   await initFlow(controller);
-  (controller as any).currentRequest.reviewGrantKey = 'topic:retry';
+  bindReviewedRequest(controller, 'topic:retry');
 
   expect(await controller.authenticateWithReviewGrant('topic:retry')).toBe(
     true
   );
   await flush();
-  // The failed attempt handed the Sign back: a fresh claim signs again,
-  // with no second auth.
+  // Keys may have been read once the signer was entered, so the failed attempt
+  // does not hand the Sign back: a second claim is refused and nothing signs
+  // again. Another attempt needs a fresh authentication.
   (controller as any).currentState.state = 'authenticating';
   expect(await controller.authenticateWithReviewGrant('topic:retry')).toBe(
-    true
+    false
   );
-  expect(mockSignTransaction).toHaveBeenCalledTimes(2);
+  expect(mockSignTransaction).toHaveBeenCalledTimes(1);
   expect(AccountSecureStorage.getBiometricSecret).toHaveBeenCalledTimes(1);
   reviewGrant.revoke();
 });

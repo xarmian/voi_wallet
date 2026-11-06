@@ -100,9 +100,17 @@ jest.mock('@/services/secure/SessionKeyVault', () => ({
     set: jest.fn(),
     clear: jest.fn(),
     currentEpoch: jest.fn(() => 7),
+    isUnlocked: jest.fn(() => true),
+    subscribe: jest.fn(() => () => {}),
     getSecret: jest.fn(() => null),
     getSecretSource: jest.fn(() => 'pin'),
   },
+}));
+
+// The unlock mints a signing capability for the requests already waiting; this
+// suite has none.
+jest.mock('@/services/walletconnect/TransactionRequestQueue', () => ({
+  TransactionRequestQueue: { getAll: jest.fn(async () => []) },
 }));
 
 jest.mock('@/services/secure/biometricUnlock', () => ({
@@ -114,7 +122,11 @@ jest.mock('@/services/secure/sessionTeardown', () => ({
 }));
 
 jest.mock('@/services/secure/appLockState', () => ({
-  AppLockSignal: { setUnlocked: jest.fn() },
+  AppLockSignal: {
+    setUnlocked: jest.fn(),
+    isUnlocked: jest.fn(() => true),
+    subscribe: jest.fn(() => () => {}),
+  },
 }));
 
 jest.mock('@/utils/security', () => ({
@@ -236,12 +248,22 @@ beforeEach(() => {
 
   appStateHandler = undefined;
   appStateRemove = jest.fn();
+  // Like AppState: every live listener hears each change, a removed one stops.
+  const liveHandlers: ((s: AppStateStatus) => void)[] = [];
   addEventListenerSpy = jest
     .spyOn(AppState, 'addEventListener')
     .mockImplementation(
       (_event: string, handler: (s: AppStateStatus) => void) => {
-        appStateHandler = handler;
-        return { remove: appStateRemove } as never;
+        liveHandlers.push(handler);
+        appStateHandler = (state) =>
+          [...liveHandlers].forEach((listener) => listener(state));
+        return {
+          remove: () => {
+            appStateRemove();
+            const index = liveHandlers.indexOf(handler);
+            if (index >= 0) liveHandlers.splice(index, 1);
+          },
+        } as never;
       }
     );
 

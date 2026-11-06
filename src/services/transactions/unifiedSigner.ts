@@ -186,7 +186,7 @@ export interface UnifiedTransactionRequest {
    */
   account: AccountMetadata | WalletAccount;
   pin?: string;
-  /** An authenticated, still-locked WalletConnect review sitting. */
+  /** A request-scoped, authenticated WalletConnect signing capability. */
   reviewGrantKey?: string;
 
   // For standard transfers (VOI/ASA/ARC200)
