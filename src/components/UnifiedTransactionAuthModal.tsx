@@ -142,7 +142,10 @@ export default function UnifiedTransactionAuthModal({
       void (async () => {
         await controller.initializeSigningFlow(request);
         if (userCancelledRef.current || !wasVisibleRef.current) return;
-        if (request.reviewGrantKey) {
+        if (
+          request.reviewGrantKey &&
+          controller.getState().state === 'authenticating'
+        ) {
           await controller.authenticateWithReviewGrant(request.reviewGrantKey);
         } else if (
           controller.getState().state === 'authenticating' &&
@@ -946,7 +949,8 @@ export default function UnifiedTransactionAuthModal({
     if (authState.state === 'processing' || authState.state === 'signing') {
       if (
         authState.isLedgerFlow &&
-        (authState.ledgerStatus === 'error' ||
+        (authState.state === 'signing' ||
+          authState.ledgerStatus === 'error' ||
           authState.ledgerStatus === 'app_required')
       ) {
         return (
@@ -1030,7 +1034,10 @@ export default function UnifiedTransactionAuthModal({
       animationType={useBottomSheet ? 'slide' : 'fade'}
       onRequestClose={() => {
         // Only allow closing if not processing
-        if (authState.state !== 'processing' && authState.state !== 'signing') {
+        if (
+          authState.state !== 'processing' &&
+          (authState.state !== 'signing' || authState.isLedgerFlow)
+        ) {
           userCancelledRef.current = true; // Mark as cancelled even if closed via system
           handleCancel();
         }

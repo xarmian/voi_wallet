@@ -31,13 +31,13 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
+// REGRESSION R7
 it('requires fresh authentication when advancing to a request outside the capability', async () => {
   expect(await reviewGrant.unlock('one:1', { pin: '123456' })).toBe(true);
   expect(AppLockSignal.isUnlocked()).toBe(false);
   reviewGrant.bind('one:1', 'digest');
   expect(reviewGrant.consume('one:1', 'digest')).toBe(true);
   expect(reviewGrant.consume('one:1', 'digest')).toBe(false);
-  reviewGrant.continueTo('two:2');
   expect(reviewGrant.isValid('two:2')).toBe(false);
   expect(await reviewGrant.unlock('two:2', { pin: '123456' })).toBe(true);
   expect(reviewGrant.isValid('one:1')).toBe(false);
@@ -121,31 +121,12 @@ it('ends review immediately on an explicit re-lock, even before vault teardown',
   expect(SessionKeyVault.isUnlocked()).toBe(false);
 });
 
-it('does not extend the idle deadline when the queue advances automatically', async () => {
-  await reviewGrant.unlock('one:1', { pin: '123456' });
-  jest.advanceTimersByTime(REVIEW_IDLE_MS - 1);
-  reviewGrant.continueTo('two:2');
-  jest.advanceTimersByTime(1);
-  expect(reviewGrant.isValid('two:2')).toBe(false);
-  expect(SessionKeyVault.isUnlocked()).toBe(false);
-});
-
 it('replaces the previous permission after authenticating a late request', async () => {
   expect(await reviewGrant.unlock('a:1', { pin: '123456' })).toBe(true);
   expect(await reviewGrant.unlock('b:2', { pin: '123456' })).toBe(true);
   expect(AccountSecureStorage.verifyPin).toHaveBeenCalledTimes(2);
   expect(reviewGrant.isValid('a:1')).toBe(false);
   expect(reviewGrant.isValid('b:2')).toBe(true);
-});
-
-it('joins only a live sitting', async () => {
-  expect(reviewGrant.join('a:1')).toBe(false);
-  expect(reviewGrant.isValid('a:1')).toBe(false);
-
-  await reviewGrant.unlock('a:1', { pin: '123456' });
-  jest.advanceTimersByTime(REVIEW_IDLE_MS);
-  expect(reviewGrant.join('b:2')).toBe(false);
-  expect(reviewGrant.isValid('b:2')).toBe(false);
 });
 
 it('ends the capability only when its last waiting request leaves', () => {
@@ -215,11 +196,12 @@ it('releases a consumed permission after a pre-key validity failure only while l
   expect(reviewGrant.consume('a:1', 'digest')).toBe(false);
 });
 
+// REGRESSION R7
 it('requires fresh authentication for a proposal arriving after a signing review', async () => {
   const { walletConnectProposalKey } = require('../reviewGrant');
   const proposalKey = walletConnectProposalKey('pairing-1', 9);
   expect(await reviewGrant.unlock('sign:1', { pin: '123456' })).toBe(true);
-  expect(reviewGrant.join(proposalKey)).toBe(false);
+  expect(reviewGrant.isValid(proposalKey)).toBe(false);
   reviewGrant.leave('sign:1');
   expect(reviewGrant.isValid(proposalKey)).toBe(false);
   expect(await reviewGrant.unlock(proposalKey, { pin: '123456' })).toBe(true);

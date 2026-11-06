@@ -22,7 +22,10 @@ import { Ionicons } from '@expo/vector-icons';
 import algosdk from 'algosdk';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuth } from '@/contexts/AuthContext';
-import { reviewGrant, reviewBindingDigest } from '@/services/auth/reviewGrant';
+import {
+  reviewGrant,
+  walletConnectReviewDigest,
+} from '@/services/auth/reviewGrant';
 import { AppLockSignal } from '@/services/secure/appLockState';
 import LockedRequestGate, {
   dappHost,
@@ -340,6 +343,9 @@ export default function UniversalTransactionSigningScreen({
   const grantValid = useSyncExternalStore(reviewGrant.subscribe, () =>
     reviewGrant.isValid(requestKey)
   );
+  const grantUnspent = useSyncExternalStore(reviewGrant.subscribe, () =>
+    reviewGrant.isUnspent(requestKey)
+  );
   const [foreground, setForeground] = useState(
     AppState.currentState !== 'background' &&
       AppState.currentState !== 'inactive'
@@ -384,7 +390,7 @@ export default function UniversalTransactionSigningScreen({
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke();
+      if (state === 'background') reviewGrant.revoke(true, 'background');
     });
     return () => subscription.remove();
   }, []);
@@ -394,8 +400,12 @@ export default function UniversalTransactionSigningScreen({
       reviewGrant.subscribe(() => {
         if (
           walletConnect &&
-          !AppLockSignal.isUnlocked() &&
-          !reviewGrant.isValid(requestKey)
+          !reviewGrant.isValid(requestKey) &&
+          (!AppLockSignal.isUnlocked() ||
+            (showAuthModal &&
+              currentRequest?.reviewGrantKey &&
+              authController.getState().state !== 'signing' &&
+              authController.getState().state !== 'processing'))
         ) {
           authController.cancel();
           setShowAuthModal(false);
@@ -403,7 +413,7 @@ export default function UniversalTransactionSigningScreen({
           setDangerAcknowledged(false);
         }
       }),
-    [walletConnect, requestKey, authController]
+    [walletConnect, requestKey, authController, showAuthModal, currentRequest]
   );
 
   useEffect(() => {
@@ -804,25 +814,39 @@ export default function UniversalTransactionSigningScreen({
 
   const signersResolved = signerRoutes !== null;
 
-  // Bind only after the reviewed bytes, network and signer set are available.
-  // A changed review invalidates this key instead of silently authorizing it.
+  const walletConnectParams = useMemo(
+    () => ({
+      transactions: walletTransactions,
+      reviewedSigners,
+      sequentialSigning,
+      decodedTransactions,
+      sessionBinding: walletConnect?.binding ?? null,
+    }),
+    [
+      walletTransactions,
+      reviewedSigners,
+      sequentialSigning,
+      decodedTransactions,
+      walletConnect?.binding,
+    ]
+  );
+
+  // Bind the same network and parameters that the controller will receive.
   useEffect(() => {
     if (
       walletConnect &&
       grantValid &&
       canReview &&
       signersResolved &&
-      boundNetworkId &&
       reviewedSigners.length > 0
     ) {
-      reviewGrant.bind(
-        requestKey,
-        reviewBindingDigest({
-          networkId: boundNetworkId,
-          txnBytesBase64: transactionBytes,
-          signerAddresses: reviewedSigners,
-        })
-      );
+      const digest = walletConnectReviewDigest({
+        requestNetworkId: boundNetworkId,
+        sessionBindingNetworkId: walletConnectParams.sessionBinding?.networkId,
+        transactions: walletConnectParams.transactions,
+        reviewedSigners: walletConnectParams.reviewedSigners,
+      });
+      if (digest !== null) reviewGrant.bind(requestKey, digest);
     }
   }, [
     walletConnect,
@@ -832,7 +856,7 @@ export default function UniversalTransactionSigningScreen({
     boundNetworkId,
     reviewedSigners,
     requestKey,
-    transactionBytes,
+    walletConnectParams,
   ]);
 
   // S-01 / TASK-440 audit #1, #2: EVERY dangerous operation across the batch,
@@ -887,23 +911,12 @@ export default function UniversalTransactionSigningScreen({
       type: 'batch_transaction',
       reviewGrantKey:
         walletConnect &&
-        (requiresReviewUnlock || reviewGrant.isValid(requestKey))
+        (requiresReviewUnlock || reviewGrant.isUnspent(requestKey))
           ? requestKey
           : undefined,
       account: signingAccount,
       networkId: boundNetworkId,
-      walletConnectParams: {
-        transactions: walletTransactions,
-        // Exactly the accounts the signer list displayed. The signer re-runs
-        // `evaluateBatchEntryEligibility` against this list, so an entry that
-        // was not shown as signing cannot be signed.
-        reviewedSigners,
-        sequentialSigning,
-        decodedTransactions,
-        // DR-15: bind a dApp request to its session + chain; `null` declares an
-        // in-app batch the wallet built itself.
-        sessionBinding: walletConnect?.binding ?? null,
-      },
+      walletConnectParams,
     };
 
     setCurrentRequest(request);
@@ -1252,7 +1265,7 @@ export default function UniversalTransactionSigningScreen({
               disabled={!canSign}
             >
               <Text style={styles.approveButtonText}>
-                {requiresReviewUnlock
+                {requiresReviewUnlock || (grantValid && grantUnspent)
                   ? 'Sign'
                   : authState.hasPin === false && !usesLedger
                     ? 'Sign'

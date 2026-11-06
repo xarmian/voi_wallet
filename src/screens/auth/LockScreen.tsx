@@ -192,6 +192,10 @@ export default function LockScreen() {
   const authentication = useAuthenticationGuard();
   const focusGeneration = useRef(0);
   const focused = useRef(false);
+  const biometricAttempted = useRef(false);
+  const pendingActive = useRef<
+    ReturnType<typeof AppState.addEventListener> | undefined
+  >(undefined);
   const biometricAuth = useRef({
     enabled: authState.biometricEnabled,
     unlock: unlockWithBiometrics,
@@ -210,14 +214,18 @@ export default function LockScreen() {
       !biometricAuth.current.enabled ||
       !navigation.isFocused() ||
       AppState.currentState !== 'active' ||
-      !authentication.tryBegin()
+      biometricAttempted.current
     )
       return;
+    pendingActive.current?.remove();
+    pendingActive.current = undefined;
+    biometricAttempted.current = true;
+    if (!authentication.tryBegin()) return;
     const generation = focusGeneration.current;
     const isCurrent = () =>
       generation === focusGeneration.current &&
       navigation.isFocused() &&
-      AppState.currentState === 'active';
+      AppState.currentState !== 'background';
     try {
       const success = await biometricAuth.current.unlock(isCurrent);
       if (success && isCurrent()) hapticNotify('success');
@@ -233,12 +241,29 @@ export default function LockScreen() {
       if (focused.current) return;
       focused.current = true;
       focusGeneration.current++;
-      // One attempt per focus, including a cancelled, failed or blocked attempt.
-      void promptBiometric();
+      biometricAttempted.current = false;
+      const generation = focusGeneration.current;
+      if (AppState.currentState === 'active') {
+        void promptBiometric();
+      } else {
+        pendingActive.current = AppState.addEventListener('change', (state) => {
+          if (
+            state !== 'active' ||
+            generation !== focusGeneration.current ||
+            biometricAttempted.current
+          )
+            return;
+          pendingActive.current?.remove();
+          pendingActive.current = undefined;
+          void promptBiometric();
+        });
+      }
     };
     const onBlur = () => {
       focused.current = false;
       focusGeneration.current++;
+      pendingActive.current?.remove();
+      pendingActive.current = undefined;
     };
     const removeFocus = navigation.addListener('focus', onFocus);
     const removeBlur = navigation.addListener('blur', onBlur);
@@ -267,7 +292,10 @@ export default function LockScreen() {
   };
 
   const verifyPin = async (enteredPin: string) => {
-    if (!authentication.tryBegin()) return;
+    if (!authentication.tryBegin()) {
+      setPin('');
+      return;
+    }
     try {
       // unlock() -> AccountSecureStorage.verifyPin() applies the persistent
       // throttle internally (and returns a plain boolean). We read the resulting

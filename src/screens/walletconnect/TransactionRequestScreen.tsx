@@ -269,10 +269,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         });
 
         handedOffRef.current = true;
-        // Check existing review access. A late request cannot enroll in the
-        // capability and must authenticate before it can use a software key.
-        reviewGrant.join(requestKey);
-
         navigation.replace('UniversalTransactionSigning', {
           // Display bytes. `walletConnect.transactions` below is the authority
           // for both review and signing; this stays index-aligned with it.
@@ -345,7 +341,6 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     let taken: Awaited<ReturnType<typeof TransactionRequestQueue.takeNext>>;
     try {
       taken = await TransactionRequestQueue.takeNext((req) => {
-        reviewGrant.continueTo(walletConnectRequestKey(req.topic, req.id));
         navigation.replace('WalletConnectTransactionRequest', {
           requestEvent: req,
           version: req.version,

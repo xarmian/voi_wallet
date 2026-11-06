@@ -67,8 +67,6 @@ jest.mock('@/services/auth/reviewGrant', () => ({
   reviewGrant: {
     leave: jest.fn(),
     revoke: jest.fn(),
-    continueTo: jest.fn(),
-    join: jest.fn(),
   },
   walletConnectRequestKey: (topic: string, id: number) =>
     JSON.stringify([topic, String(id)]),

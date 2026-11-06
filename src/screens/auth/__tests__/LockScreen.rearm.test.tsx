@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppState } from 'react-native';
+import { AppState, type AppStateStatus } from 'react-native';
 import { act, render, fireEvent } from '@testing-library/react-native';
 
 let mockFocused = false;
@@ -126,4 +126,120 @@ it('pinAuthenticationInFlightBlocksBiometricPrompt', async () => {
   expect(mockUnlock).toHaveBeenCalledTimes(1);
   await focus(true);
   expect(mockBiometric).not.toHaveBeenCalled();
+});
+
+const mockLock = jest.fn();
+let appStateListeners: Set<(state: AppStateStatus) => void>;
+async function changeAppState(state: 'active' | 'inactive' | 'background') {
+  await act(async () => {
+    AppState.currentState = state;
+    [...appStateListeners].forEach((listener) => listener(state));
+  });
+}
+async function biometricOrdering(
+  resolveState: 'active' | 'inactive' | 'background'
+) {
+  let resolve!: () => void;
+  let unlocked = false;
+  mockBiometric.mockImplementationOnce(async (isCurrent: () => boolean) => {
+    await new Promise<void>((done) => {
+      resolve = done;
+    });
+    if (!isCurrent()) {
+      mockLock();
+      return false;
+    }
+    unlocked = true;
+    return true;
+  });
+  await render(<LockScreen />);
+  await focus(true);
+  expect(mockBiometric).toHaveBeenCalledTimes(1);
+  await changeAppState(resolveState);
+  await act(async () => {
+    resolve();
+  });
+  expect(unlocked).toBe(resolveState !== 'background');
+  expect(mockLock).toHaveBeenCalledTimes(resolveState === 'background' ? 1 : 0);
+  await changeAppState('active');
+  await focus(true);
+  expect(mockBiometric).toHaveBeenCalledTimes(1);
+  if (resolveState === 'background') {
+    await focus(false);
+    await focus(true);
+    expect(mockBiometric).toHaveBeenCalledTimes(2);
+  }
+}
+beforeEach(() => {
+  mockLock.mockClear();
+  appStateListeners = new Set();
+  jest
+    .spyOn(AppState, 'addEventListener')
+    .mockImplementation((_event, listener) => {
+      appStateListeners.add(listener);
+      return { remove: () => appStateListeners.delete(listener) };
+    });
+});
+// DEFECT R4
+it('faceIdResolvesWhileInactiveStillUnlocks', async () => {
+  await biometricOrdering('inactive');
+});
+// REGRESSION R4
+it('faceIdResolvesAfterActiveStillUnlocks', async () => {
+  await biometricOrdering('active');
+});
+// REGRESSION R4
+it('faceIdResolvesInBackgroundDiscardsAndStaysLocked', async () => {
+  await biometricOrdering('background');
+});
+// DEFECT R4
+it('coldStartInactiveThenActivePromptsOnce', async () => {
+  AppState.currentState = 'inactive';
+  mockFocused = true;
+  await render(<LockScreen />);
+  expect(mockBiometric).not.toHaveBeenCalled();
+  await changeAppState('active');
+  expect(mockBiometric).toHaveBeenCalledTimes(1);
+  await changeAppState('inactive');
+  await changeAppState('active');
+  await focus(true);
+  expect(mockBiometric).toHaveBeenCalledTimes(1);
+  expect(appStateListeners.size).toBe(0);
+});
+// REGRESSION R4
+it('backgroundedThenBlurredNeverPrompts', async () => {
+  AppState.currentState = 'background';
+  mockFocused = true;
+  const view = await render(<LockScreen />);
+  await focus(false);
+  await changeAppState('active');
+  expect(mockBiometric).not.toHaveBeenCalled();
+  await view.unmount();
+  expect(appStateListeners.size).toBe(0);
+});
+// DEFECT R8: a biometric attempt owns the guard while digits are entered.
+it('blockedPinAttemptClearsDigits', async () => {
+  mockBiometric.mockImplementationOnce(() => new Promise(() => {}));
+  mockFocused = true;
+  const view = await render(<LockScreen />);
+  const enter = async () => {
+    for (const digit of ['1', '2', '3', '4', '5', '6'])
+      await fireEvent.press(view.getByText(digit));
+  };
+  await enter();
+  const dots: any[] = [];
+  const visit = (node: any) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (Array.isArray(node.props?.style) && node.props.style.length === 2)
+      dots.push(node);
+    node.children?.forEach(visit);
+  };
+  visit(view.toJSON());
+  expect(dots).toHaveLength(6);
+  expect(dots.filter((node) => node.props.style[1] !== null)).toHaveLength(0);
+  expect(mockUnlock).not.toHaveBeenCalled();
 });

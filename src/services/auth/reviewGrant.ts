@@ -12,36 +12,65 @@ export const REVIEW_IDLE_MS = 60_000;
 let grant: {
   keys: Set<string>;
   epoch: number;
-  authenticatedAt: number;
   lockedSitting: boolean;
   used: Set<string>;
   bindings: Map<string, string>;
+  expiresAt: Map<string, number>;
+  timers: Map<string, ReturnType<typeof setTimeout>>;
+  paused: Set<string>;
 } | null = null;
+export type ReviewEndReason =
+  'idle' | 'lock' | 'background' | 'rotation' | 'left';
+let lastEndReason: ReviewEndReason | null = null;
 let generation = 0;
-let expiresAt = 0;
 let appStateSubscription:
   ReturnType<typeof AppState.addEventListener> | undefined;
-let timer: ReturnType<typeof setTimeout> | undefined;
 let authenticating = false;
 let authenticatingKey: string | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((listener) => listener());
 
 function createCapability(keys: string[], lockedSitting: boolean): void {
+  lastEndReason = null;
   grant = {
     keys: new Set(keys),
     epoch: SessionKeyVault.currentEpoch(),
-    authenticatedAt: Date.now(),
     lockedSitting,
     used: new Set(),
     bindings: new Map(),
+    expiresAt: new Map(keys.map((key) => [key, Date.now() + REVIEW_IDLE_MS])),
+    timers: new Map(),
+    paused: new Set(),
   };
-  expiresAt = Date.now() + REVIEW_IDLE_MS;
   appStateSubscription ??= AppState.addEventListener('change', (state) => {
-    if (state === 'background') reviewGrant.revoke();
+    if (state === 'background') reviewGrant.revoke(true, 'background');
   });
-  reviewGrant.touch(keys[0]);
+  keys.forEach((key) => armIdle(key));
   emit();
+}
+
+function armIdle(key: string): void {
+  if (!grant) return;
+  clearTimeout(grant.timers.get(key));
+  grant.expiresAt.set(key, Date.now() + REVIEW_IDLE_MS);
+  grant.timers.set(
+    key,
+    setTimeout(() => endKey(key, 'idle'), REVIEW_IDLE_MS)
+  );
+}
+
+function endKey(key: string, reason: ReviewEndReason): void {
+  if (!grant?.keys.has(key)) return;
+  lastEndReason = reason;
+  clearTimeout(grant.timers.get(key));
+  grant.timers.delete(key);
+  grant.expiresAt.delete(key);
+  grant.paused.delete(key);
+  grant.keys.delete(key);
+  grant.used.delete(key);
+  grant.bindings.delete(key);
+  if (grant.keys.size === 0) reviewGrant.revoke(true, reason);
+  else emit();
 }
 
 export const reviewGrant = {
@@ -53,16 +82,36 @@ export const reviewGrant = {
   },
   /** A capability requires the original unlocked vault and a live deadline. */
   isLive(): boolean {
-    return (
-      !!grant &&
-      grant.epoch === SessionKeyVault.currentEpoch() &&
-      SessionKeyVault.isUnlocked() &&
-      AppState.currentState !== 'background' &&
-      Date.now() < expiresAt
-    );
+    if (!grant) return false;
+    if (
+      grant.epoch !== SessionKeyVault.currentEpoch() ||
+      !SessionKeyVault.isUnlocked()
+    ) {
+      this.revoke(false, 'rotation');
+      return false;
+    }
+    if (AppState.currentState === 'background') {
+      this.revoke(true, 'background');
+      return false;
+    }
+    for (const key of [...grant.keys]) {
+      if (
+        grant &&
+        !grant.paused.has(key) &&
+        Date.now() >= grant.expiresAt.get(key)!
+      )
+        endKey(key, 'idle');
+    }
+    return grant !== null;
   },
   isValid(key: string): boolean {
     return this.isLive() && grant!.keys.has(key);
+  },
+  isUnspent(key: string): boolean {
+    return this.isValid(key) && !grant!.used.has(key);
+  },
+  endReason(): ReviewEndReason | null {
+    return lastEndReason;
   },
   mintForWaiting(keys: string[]): void {
     this.revoke(false);
@@ -76,23 +125,29 @@ export const reviewGrant = {
     createCapability(keys, false);
   },
   touch(key: string): void {
-    if (!grant) return;
-    if (!this.isLive()) {
-      this.revoke();
-      return;
-    }
-    if (!grant.keys.has(key)) return;
-    expiresAt = Date.now() + REVIEW_IDLE_MS;
-    clearTimeout(timer);
-    timer = setTimeout(() => this.revoke(), REVIEW_IDLE_MS);
+    if (!this.isValid(key) || grant!.paused.has(key)) return;
+    armIdle(key);
   },
-  revoke(clearKeys = true): void {
+  pauseIdle(key: string): boolean {
+    if (!this.isValid(key) || !grant!.used.has(key)) return false;
+    grant!.paused.add(key);
+    clearTimeout(grant!.timers.get(key));
+    grant!.timers.delete(key);
+    return true;
+  },
+  resumeIdle(key: string): void {
+    if (!this.isValid(key)) return;
+    grant!.paused.delete(key);
+    armIdle(key);
+  },
+  revoke(clearKeys = true, reason: ReviewEndReason = 'left'): void {
     generation++;
     const owned = grant !== null || authenticating;
+    if (owned) lastEndReason = reason;
+    grant?.timers.forEach((timer) => clearTimeout(timer));
     grant = null;
     appStateSubscription?.remove();
     appStateSubscription = undefined;
-    clearTimeout(timer);
     // Never clear a session that the user has since unlocked normally.
     if (clearKeys && owned && !AppLockSignal.isUnlocked())
       clearSessionSecurity();
@@ -103,13 +158,13 @@ export const reviewGrant = {
     credential: { pin: string } | { biometric: true }
   ): Promise<boolean> {
     // Only a request included by the previous authentication may reuse it.
-    if (this.join(key)) return true;
+    if (this.isValid(key)) return true;
     if (authenticating) return false;
     // Fresh authentication replaces the old request set, even if it fails.
     this.revoke();
     const lockedSitting = !AppLockSignal.isUnlocked();
     appStateSubscription ??= AppState.addEventListener('change', (state) => {
-      if (state === 'background') this.revoke();
+      if (state === 'background') this.revoke(true, 'background');
     });
     authenticating = true;
     authenticatingKey = key;
@@ -147,10 +202,6 @@ export const reviewGrant = {
       authenticatingKey = null;
     }
   },
-  /** Checking a queued request never expands the authenticated request set. */
-  join(key: string): boolean {
-    return this.isValid(key);
-  },
   bind(key: string, digest: string): boolean {
     if (!this.isValid(key)) return false;
     const previous = grant!.bindings.get(key);
@@ -171,6 +222,7 @@ export const reviewGrant = {
       return false;
     grant!.used.add(key);
     this.touch(key);
+    emit();
     return true;
   },
   isConsumedFor(key: string, digest: string): boolean {
@@ -185,11 +237,8 @@ export const reviewGrant = {
   release(key: string): void {
     if (!this.isValid(key)) return;
     grant!.used.delete(key);
-    this.touch(key);
-  },
-  /** Queue advance does not expand the capability or renew its deadline. */
-  continueTo(key: string): void {
-    if (!this.isValid(key)) return;
+    this.resumeIdle(key);
+    emit();
   },
   /**
    * A request's screen left. Ends the sitting only when it was the last
@@ -201,19 +250,14 @@ export const reviewGrant = {
       this.revoke();
       return;
     }
-    if (!grant || !grant.keys.has(key)) return;
-    grant.keys.delete(key);
-    grant.used.delete(key);
-    grant.bindings.delete(key);
-    if (grant.keys.size === 0) this.revoke();
-    else emit();
+    endKey(key, 'left');
   },
 };
 
 // Re-locks and credential rotations invalidate a sitting synchronously.
 SessionKeyVault.subscribe(() => {
   if (grant && grant.epoch !== SessionKeyVault.currentEpoch())
-    reviewGrant.revoke(false);
+    reviewGrant.revoke(false, 'rotation');
 });
 
 export function walletConnectRequestKey(
@@ -236,11 +280,16 @@ export function walletConnectProposalKey(
 AppLockSignal.subscribe(() => {
   // AuthContext sets unlocked BEFORE minting the waiting-request capability.
   // Its repeated unlocked notifications must only end an older gate sitting.
-  if (!AppLockSignal.isUnlocked()) reviewGrant.revoke();
-  else if (grant?.lockedSitting) reviewGrant.revoke(false);
+  if (!AppLockSignal.isUnlocked()) reviewGrant.revoke(true, 'lock');
+  else if (grant?.lockedSitting) reviewGrant.revoke(false, 'lock');
 });
 
-/** Length-prefixed fields and list counts preserve transaction boundaries. */
+/**
+ * Covers the network id, each entry's txn bytes in order, and the reviewed
+ * signer addresses sorted. This checks consistency between review and signing;
+ * it is not a digest of the whole ARC-0001 entry. Length-prefixed fields and
+ * list counts preserve transaction boundaries.
+ */
 export function reviewBindingDigest(input: {
   networkId: string;
   txnBytesBase64: string[];
@@ -258,4 +307,24 @@ export function reviewBindingDigest(input: {
       )
     )
   );
+}
+
+/** No ambient-network fallback is allowed for a scoped signing permission. */
+export function walletConnectReviewDigest(args: {
+  requestNetworkId?: string | null;
+  sessionBindingNetworkId?: string | null;
+  transactions: { txn: string }[];
+  reviewedSigners: string[];
+}): string | null {
+  const networkId = args.sessionBindingNetworkId ?? args.requestNetworkId;
+  if (
+    !networkId ||
+    (args.requestNetworkId && args.requestNetworkId !== networkId)
+  )
+    return null;
+  return reviewBindingDigest({
+    networkId,
+    txnBytesBase64: args.transactions.map((transaction) => transaction.txn),
+    signerAddresses: args.reviewedSigners,
+  });
 }

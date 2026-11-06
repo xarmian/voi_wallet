@@ -590,7 +590,8 @@ export class UnifiedTransactionSigner {
         await import('@/services/secure/AccountSecureStorage');
       AccountSecureStorage.clearPrivateKeyCache();
 
-      // All transactions signed successfully
+      // For WalletConnect this means all signatures are ready, not broadcast.
+      // The signed bytes are returned to the dApp; this wallet sends no batch.
       callbacks?.onNetworkSubmit?.();
 
       return {

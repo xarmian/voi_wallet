@@ -177,17 +177,23 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-it.each([
-  'no reviewGrantKey',
-  'with reviewGrantKey',
-  'restore-before-PIN window',
-  'setupPin crash window',
-])('noPinSoftwareKeyNeverSigns: %s', async (window) => {
+// REGRESSION R5
+// Both restore-before-PIN and setupPin crash windows are hasPin() === false
+// to this controller; they differ only in what is on disk.
+it('noPinSoftwareKeyNeverSigns', async () => {
   pinPresence.mockResolvedValue(false);
-  const req = request(window === 'with reviewGrantKey' ? 'A' : undefined);
-  if (req.reviewGrantKey) bind(req);
-  // The restore and setup crash windows retain key-bearing accounts on disk.
-  expect((await MultiAccountWalletService.getAllAccounts()).length).toBe(1);
+  const controller = new TransactionAuthController();
+  await controller.initializeSigningFlow(request());
+  expect(controller.getState().state).toBe('error');
+  expect(controller.getState().error?.message).toBe(setupMessage);
+  expect(signer).not.toHaveBeenCalled();
+  expect(keyRead).not.toHaveBeenCalled();
+});
+// REGRESSION R5
+it('noPinSoftwareKeyNeverSigns: with reviewGrantKey', async () => {
+  pinPresence.mockResolvedValue(false);
+  const req = request('A');
+  bind(req);
   const controller = new TransactionAuthController();
   await controller.initializeSigningFlow(req);
   expect(controller.getState().state).toBe('error');

@@ -23,10 +23,6 @@ import {
   TransactionRequestQueue,
 } from '@/services/walletconnect/TransactionRequestQueue';
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
-import {
-  reviewGrant,
-  walletConnectProposalKey,
-} from '@/services/auth/reviewGrant';
 
 /**
  * Whole-app service boot, extracted verbatim from AppNavigator's mount effect
@@ -146,16 +142,6 @@ export const initializeServices = async ({
               () => {
                 try {
                   if (navigationRef.current?.isReady?.()) {
-                    // Check whether authentication already covered this proposal.
-                    // Navigation cannot add a late proposal to the capability.
-                    if (proposal?.pairingTopic != null) {
-                      reviewGrant.join(
-                        walletConnectProposalKey(
-                          proposal.pairingTopic,
-                          proposal.id
-                        )
-                      );
-                    }
                     // Close any open QR scanner first when possible
                     if (navigationRef.current.canGoBack?.()) {
                       navigationRef.current.goBack();

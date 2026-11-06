@@ -101,6 +101,7 @@ function makeController(initial = idleState()) {
     }),
     cancel: jest.fn(),
     resetAfterDismiss: jest.fn(() => emit(idleState())),
+    authenticateWithReviewGrant: jest.fn(async () => false),
     authenticateWithPin: jest.fn(async () => false),
     authenticateWithBiometrics: jest.fn(async () => {}),
     retryLedgerConnection: jest.fn(),
@@ -303,3 +304,85 @@ it('starts biometrics once when opened by the explicit Sign with Face ID tap (TA
   );
   expect(controller.authenticateWithBiometrics).toHaveBeenCalledTimes(1);
 });
+
+// DEFECT E4/E5: only an authenticating request may consume a capability.
+it.each(['error', 'signing'])(
+  'skipsReviewGrantWhenInitializationEndsIn%s',
+  async (state) => {
+    const controller = makeController();
+    controller.initializeSigningFlow.mockImplementation(async () => {
+      controller._emit(
+        idleState({
+          state,
+          error:
+            state === 'error'
+              ? new Error('Wallet setup is not finished.')
+              : null,
+        })
+      );
+    });
+    await render(
+      <UnifiedTransactionAuthModal
+        visible
+        controller={asController(controller)}
+        request={{ reviewGrantKey: 'A' } as never}
+        onComplete={jest.fn()}
+        onCancel={jest.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(controller.initializeSigningFlow).toHaveBeenCalledTimes(1)
+    );
+    expect(controller.authenticateWithReviewGrant).not.toHaveBeenCalled();
+  }
+);
+// REGRESSION E4
+it('skipsReviewGrantWhenRemoteInitializationDropsKey', async () => {
+  const controller = makeController();
+  const request = { reviewGrantKey: 'A' as string | undefined };
+  controller.initializeSigningFlow.mockImplementation(async () => {
+    request.reviewGrantKey = undefined;
+    controller._emit(idleState({ state: 'signing', isRemoteSignerFlow: true }));
+  });
+  await render(
+    <UnifiedTransactionAuthModal
+      visible
+      controller={asController(controller)}
+      request={request as never}
+      onComplete={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  await waitFor(() =>
+    expect(controller.initializeSigningFlow).toHaveBeenCalledTimes(1)
+  );
+  expect(controller.authenticateWithReviewGrant).not.toHaveBeenCalled();
+});
+
+// DEFECT: device confirmation must retain a way to cancel the signing flow.
+it.each(['button', 'system close'])(
+  'ledgerSigningExposesCancel:%s',
+  async (action) => {
+    const controller = makeController(
+      idleState({
+        state: 'signing',
+        isLedgerFlow: true,
+        ledgerStatus: 'waiting_confirmation',
+      })
+    );
+    const onCancel = jest.fn();
+    const view = await render(
+      <UnifiedTransactionAuthModal
+        visible
+        controller={asController(controller)}
+        request={{} as never}
+        onComplete={jest.fn()}
+        onCancel={onCancel}
+      />
+    );
+    if (action === 'button') await fireEvent.press(view.getByText('Cancel'));
+    else await fireEvent(view.getByText('Confirm on Ledger'), 'requestClose');
+    expect(controller.cancel).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  }
+);

@@ -107,16 +107,10 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke();
+      if (state === 'background') reviewGrant.revoke(true, 'background');
     });
     return () => subscription.remove();
   }, []);
-
-  // Check existing review access without enrolling a late proposal.
-  // A proposal outside the capability must pass the unlock gate.
-  useEffect(() => {
-    reviewGrant.join(requestKey);
-  }, [requestKey]);
 
   // However the screen is left, this proposal leaves the sitting.
   useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
