@@ -19,6 +19,7 @@ export type ExitReason =
   | 'timing-unknown'
   | 'busy'
   | 'lapsed'
+  | 'setup-incomplete'
   | 'session-ended';
 
 export interface AnswerError {
@@ -50,6 +51,10 @@ export const EXIT_ANSWERS: Record<
     code: -32000,
     message: 'Request ended.',
   },
+  'setup-incomplete': {
+    code: -32001,
+    message: 'Wallet setup incomplete.',
+  },
 };
 
 const OUTCOMES: Record<ExitReason, HandledOutcome> = {
@@ -64,6 +69,7 @@ const OUTCOMES: Record<ExitReason, HandledOutcome> = {
   'timing-unknown': 'failed',
   busy: 'failed',
   lapsed: 'expired',
+  'setup-incomplete': 'failed',
   'session-ended': 'session-ended',
 };
 

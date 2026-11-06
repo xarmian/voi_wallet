@@ -833,3 +833,80 @@ describe('U8 v1 proposal occupancy', () => {
     expect(coordinator.hasOpenV1Proposal()).toBe(false);
   });
 });
+
+// TASK-518 C2b: a request that arrives while wallet setup is unfinished (the
+// locked, no-PIN state) is answered and never shown. Entry points apply the
+// guard; the coordinator owns the reason, the answer and the record.
+describe('setup-incomplete refusal', () => {
+  const setupRefs: Record<string, RequestRef> = {
+    'v2 request': ref,
+    'v2 proposal': {
+      version: 2,
+      kind: 'proposal',
+      topic: 'pairing-topic',
+      id: 'proposal-1',
+    },
+  };
+
+  it('DEFECT the answer is -32001 "Wallet setup incomplete."', () => {
+    expect(EXIT_ANSWERS['setup-incomplete']).toEqual({
+      code: -32001,
+      message: 'Wallet setup incomplete.',
+    });
+  });
+
+  it.each(Object.keys(setupRefs))(
+    'DEFECT %s: settled once, answered once, recorded before the answer',
+    async (name) => {
+      const target = setupRefs[name];
+      await coordinator.admit(target);
+      const handledAtPublish: boolean[] = [];
+      const record = (...args: unknown[]) => {
+        void args;
+        handledAtPublish.push(store.isHandled(target));
+      };
+      transport.rejectRequestV2.mockImplementation(async (...args) =>
+        record(...args)
+      );
+      transport.rejectProposalV2.mockImplementation(async (...args) =>
+        record(...args)
+      );
+      expect(await coordinator.settle(target, 'setup-incomplete')).toBe(
+        'settled'
+      );
+      expect(await coordinator.settle(target, 'declined')).toBe(
+        'already-settled'
+      );
+      expect(calls()).toBe(1);
+      expect(handledAtPublish).toEqual([true]);
+      const answer =
+        target.kind === 'request'
+          ? transport.rejectRequestV2.mock.calls[0][2]
+          : transport.rejectProposalV2.mock.calls[0][2];
+      expect(answer).toEqual({
+        code: -32001,
+        message: 'Wallet setup incomplete.',
+      });
+    }
+  );
+
+  it('REGRESSION a redelivery after the refusal is suppressed as handled and never reaches a listener', async () => {
+    await coordinator.admit(ref);
+    const closed = jest.fn();
+    coordinator.subscribe(ref, closed);
+    await coordinator.settle(ref, 'setup-incomplete');
+    expect(closed).toHaveBeenCalledWith({ reason: 'setup-incomplete' });
+    expect(await coordinator.admit(ref)).toEqual({
+      action: 'suppressed',
+      reason: 'handled',
+    });
+    expect(coordinator.isOpen(ref)).toBe(false);
+  });
+
+  it('DEFECT the refusal is recorded with the failed outcome', async () => {
+    const mark = jest.spyOn(store, 'markHandled');
+    await coordinator.admit(ref);
+    await coordinator.settle(ref, 'setup-incomplete');
+    expect(mark).toHaveBeenCalledWith(ref, 'failed');
+  });
+});
