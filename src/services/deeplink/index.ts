@@ -1,4 +1,5 @@
 import { Alert, Platform, Linking } from 'react-native';
+import Toast from 'react-native-toast-message';
 import { NavigationContainerRef, StackActions } from '@react-navigation/native';
 import { WalletConnectService } from '@/services/walletconnect';
 import {
@@ -77,6 +78,13 @@ const redactNotificationData = (
 
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
 
+export const V1_PAIRING_WAIT_MS = 60_000;
+
+export const V1_BUSY_TOAST = {
+  text1: 'Connection in progress',
+  text2: 'Finish or cancel the open connection, then try again.',
+};
+
 export interface DeepLinkRoute {
   screen: string;
   params?: any;
@@ -142,6 +150,8 @@ export class DeepLinkService {
   // pairing topic it currently serves (see attachV1CallRequests).
   private v1CallRequestClient: WalletConnectV1Client | null = null;
   private v1CallRequestTopic = '';
+  private v1PairingInFlight = false;
+  private v1PairingTimer: ReturnType<typeof setTimeout> | null = null;
   private signingDeliverySeq = 0;
 
   static getInstance(): DeepLinkService {
@@ -740,12 +750,41 @@ export class DeepLinkService {
     }
   }
 
+  /**
+   * A v1 pairing blocks a second v1 link only while it can still produce a
+   * proposal: it clears on the proposal, on an error, on a failed connect, and
+   * after a bounded wait, so a dApp that never sends one cannot block v1 links
+   * until the app restarts.
+   */
+  private setV1PairingInFlight(inFlight: boolean): void {
+    if (this.v1PairingTimer) {
+      clearTimeout(this.v1PairingTimer);
+      this.v1PairingTimer = null;
+    }
+    this.v1PairingInFlight = inFlight;
+    if (inFlight) {
+      this.v1PairingTimer = setTimeout(() => {
+        this.v1PairingInFlight = false;
+        this.v1PairingTimer = null;
+      }, V1_PAIRING_WAIT_MS);
+      (this.v1PairingTimer as { unref?: () => void }).unref?.();
+    }
+  }
+
   private async handleWalletConnectV1Uri(url: string): Promise<boolean> {
     try {
       // Parse v1 URI
       const parsed = parseWalletConnectV1Uri(url);
       if (!parsed) {
         throw new Error('Invalid WalletConnect v1 URI format');
+      }
+
+      if (
+        this.v1PairingInFlight ||
+        RequestCoordinator.getInstance().hasOpenV1Proposal()
+      ) {
+        Toast.show({ type: 'info', ...V1_BUSY_TOAST });
+        return false;
       }
 
       // Initialize WalletConnect v1 client
@@ -755,6 +794,7 @@ export class DeepLinkService {
       v1Client.once(
         'session_request',
         (sessionRequest: { id?: number | string }) => {
+          this.setV1PairingInFlight(false);
           const coordinator = RequestCoordinator.getInstance();
           const ref = v1ProposalRefFor(sessionRequest);
           void (async () => {
@@ -785,6 +825,7 @@ export class DeepLinkService {
       this.attachV1CallRequests(v1Client, parsed.topic);
 
       v1Client.once('error', (error) => {
+        this.setV1PairingInFlight(false);
         console.error(
           'DeepLinkService: v1 connection error',
           redactError(error)
@@ -800,6 +841,7 @@ export class DeepLinkService {
       });
 
       // Connect to bridge
+      this.setV1PairingInFlight(true);
       await v1Client.connect({
         topic: parsed.topic,
         version: parsed.version,
@@ -809,6 +851,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
+      this.setV1PairingInFlight(false);
       console.error(
         'Failed to handle WalletConnect v1 URI:',
         redactError(error)

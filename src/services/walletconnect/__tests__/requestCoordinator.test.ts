@@ -781,3 +781,55 @@ it('U6 lapsed wire answer makes no assertion about signing', () => {
     message: 'Request ended.',
   });
 });
+
+describe('U8 v1 proposal occupancy', () => {
+  const proposal: RequestRef = {
+    version: 1,
+    kind: 'proposal',
+    topic: 'v1-proposal',
+    id: 8101,
+  };
+
+  it.each(['settle', 'decide'] as const)(
+    'U8 counts open and released v1 proposals until %s closes them',
+    async (ending) => {
+      expect(coordinator.hasOpenV1Proposal()).toBe(false);
+      await coordinator.admit(proposal);
+      expect(coordinator.hasOpenV1Proposal()).toBe(true);
+      coordinator.release(proposal);
+      expect(coordinator.hasOpenV1Proposal()).toBe(true);
+      await coordinator.admit(proposal);
+      if (ending === 'settle') await coordinator.settle(proposal, 'declined');
+      else await coordinator.decide(proposal, 'approved');
+      expect(coordinator.hasOpenV1Proposal()).toBe(false);
+    }
+  );
+
+  it('U8 counts a v1 proposal while admission awaits storage', async () => {
+    const load = store.load.bind(store);
+    let finish!: () => void;
+    jest.spyOn(store, 'load').mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = () => resolve(load());
+        })
+    );
+    const admission = coordinator.admit(proposal);
+    expect(coordinator.hasOpenV1Proposal()).toBe(true);
+    finish();
+    await admission;
+    expect(coordinator.hasOpenV1Proposal()).toBe(true);
+  });
+
+  it.each([
+    { ...proposal, version: 2 as const },
+    { ...proposal, kind: 'request' as const },
+  ])('U8 does not count other refs: $version $kind', async (other) => {
+    const admission = coordinator.admit(other);
+    expect(coordinator.hasOpenV1Proposal()).toBe(false);
+    await admission;
+    expect(coordinator.hasOpenV1Proposal()).toBe(false);
+    coordinator.release(other);
+    expect(coordinator.hasOpenV1Proposal()).toBe(false);
+  });
+});

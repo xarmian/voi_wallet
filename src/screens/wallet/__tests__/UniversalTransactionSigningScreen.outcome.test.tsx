@@ -1,3 +1,6 @@
+import algosdk from 'algosdk';
+import { Buffer } from 'buffer';
+import { makeAccount, paymentTxn } from '@/__tests__/fixtures/algorand';
 import {
   TransactionAuthController,
   currentController,
@@ -18,6 +21,8 @@ import {
 } from './helpers/reviewOutcomeHarness';
 
 setupOutcomeHarness();
+import { RemoteSignerService } from '@/services/remoteSigner';
+import { NetworkService } from '@/services/network';
 
 // DEFECT harness: real coordinator and durable store; only the wire transport is fake.
 import type React from 'react';
@@ -1052,3 +1057,81 @@ it.each(['Cancel', 'failure', 'background', 'late Sign'] as const)(
     }
   }
 );
+
+it('U8 remote signature then rekey lookup failure answers Request ended once', async () => {
+  const actual = jest.requireActual<typeof import('@/services/remoteSigner')>(
+    '@/services/remoteSigner'
+  );
+  jest
+    .mocked(RemoteSignerService.createSigningRequest)
+    .mockImplementationOnce(actual.RemoteSignerService.createSigningRequest);
+  const h = await openOutcome({ remote: true, locked: false });
+  const request = h.controller.getRemoteSignerRequest()!;
+  const txn = algosdk.decodeUnsignedTransaction(
+    Buffer.from(request.txns[0].b, 'base64')
+  );
+  const signed = txn.signTxn(makeAccount('review-outcome').sk);
+  const validate = jest.spyOn(RemoteSignerService, 'validateResponse');
+  const lookup = jest.fn(async () => {
+    throw new Error('network unavailable');
+  });
+  const networkService = {
+    getAccountRekeyInfo: lookup,
+  } as unknown as NetworkService;
+  jest.spyOn(NetworkService, 'getInstance').mockReturnValue(networkService);
+  await act(async () =>
+    h.controller.processRemoteSignerResponse(
+      RemoteSignerService.createSuccessResponse(request.id, [signed])
+    )
+  );
+  expect(validate).toHaveReturnedWith({ valid: true });
+  expect(lookup).toHaveBeenCalledTimes(1);
+  expect(h.controller.hasReceivedSignature()).toBe(true);
+  expectEnd('lapsed');
+  expect(wireAnswers).toEqual([
+    { recorded: true, code: -32000, message: 'Request ended.' },
+  ]);
+});
+
+it('U8 remote ok:false has no signature and ends sign-failed', async () => {
+  const h = await openOutcome({ remote: true, locked: false });
+  await act(async () =>
+    h.controller.processRemoteSignerResponse({
+      v: 1,
+      t: 'res',
+      id: h.controller.getRemoteSignerRequest()!.id,
+      ts: 1,
+      ok: false,
+    })
+  );
+  expectEnd('sign-failed');
+  expect(h.controller.hasReceivedSignature()).toBe(false);
+});
+
+it('U8 wrong remote QR alerts exactly once with the reason and ends sign-failed once', async () => {
+  const h = await openOutcome({ remote: true, locked: false });
+  const account = makeAccount('u8-stale-signer');
+  await act(async () =>
+    h.controller.processRemoteSignerResponse(
+      RemoteSignerService.createSuccessResponse('stale-request', [
+        paymentTxn(account.addr).signTxn(account.sk),
+      ])
+    )
+  );
+  expect(h.alert).toHaveBeenCalledTimes(1);
+  expect(h.alert).toHaveBeenCalledWith(
+    'Request ended',
+    "That QR code didn't match this request. Try again in the dApp."
+  );
+  expectEnd('sign-failed');
+  expect(h.controller.hasReceivedSignature()).toBe(false);
+  await act(async () => h.modal().props.onCancel());
+  expectEnd('sign-failed');
+});
+
+it('U8 local signature is recorded when the signer completes', async () => {
+  const h = await openOutcome();
+  expect(h.controller.hasReceivedSignature()).toBe(false);
+  await h.complete();
+  expect(h.controller.hasReceivedSignature()).toBe(true);
+});

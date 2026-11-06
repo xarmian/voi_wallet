@@ -75,7 +75,7 @@ import {
   DangerItem,
 } from '@/utils/transactionDangers';
 import { useTransactionDangers } from '@/hooks/useTransactionDangers';
-import { toErrorAlert } from '@/utils/errorMapping';
+import { isRequestMismatchError, toErrorAlert } from '@/utils/errorMapping';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -1100,7 +1100,12 @@ export default function UniversalTransactionSigningScreen({
             fallbackMessage: 'Failed to sign transactions.',
             fallbackTitle: 'Error',
           });
-          if (ended && mappedAlert.title === 'Error') {
+          if (ended && isRequestMismatchError(error)) {
+            Alert.alert(
+              'Request ended',
+              "That QR code didn't match this request. Try again in the dApp."
+            );
+          } else if (ended && mappedAlert.title === 'Error') {
             Alert.alert(
               'Signing failed',
               "Couldn't sign. Try again in the dApp."
@@ -1108,7 +1113,10 @@ export default function UniversalTransactionSigningScreen({
           } else {
             Alert.alert(mappedAlert.title, mappedAlert.message);
           }
-          if (ended) await endRequest('sign-failed');
+          if (ended)
+            await endRequest(
+              authController.hasReceivedSignature() ? 'lapsed' : 'sign-failed'
+            );
         }
       }
     } finally {

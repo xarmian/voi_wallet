@@ -259,6 +259,12 @@ jest.mock('@/services/messaging/keyDerivation', () => ({
 }));
 jest.mock('@/services/remoteSigner', () => ({
   RemoteSignerService: {
+    validateResponse: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.validateResponse,
+    extractSignedTransactions: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.extractSignedTransactions,
+    createSuccessResponse: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.createSuccessResponse,
     createSigningRequest: jest.fn(async () => ({ id: 'request' })),
     encodePayload: jest.fn(() => ''),
   },

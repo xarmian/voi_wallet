@@ -421,7 +421,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       if (!taken.request) reviewGrant.leave(requestKey);
     } catch (error) {
       reviewGrant.revoke();
-      toast(await TransactionRequestQueue.size());
+      if (!(
+        error instanceof Error && error.message === 'navigation target gone'
+      ))
+        toast(await TransactionRequestQueue.size());
       throw error;
     }
     toast(taken.remaining + (taken.request ? 1 : 0));

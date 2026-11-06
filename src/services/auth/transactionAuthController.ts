@@ -495,6 +495,7 @@ export class TransactionAuthController {
     this.reviewAuthorized = false;
     this.reviewSigningStarted = false;
     this.signerEnteredForRequest = false;
+    this.signatureReceivedForRequest = false;
     this.currentRequest = request;
     this.remoteBatchPlan = null;
     this.activeFlowGeneration = this.cancelledFlowGeneration;
@@ -1551,9 +1552,14 @@ export class TransactionAuthController {
   private reviewAuthorized = false;
   private reviewSigningStarted = false;
   private signerEnteredForRequest = false;
+  private signatureReceivedForRequest = false;
 
   public hasEnteredSigner(): boolean {
     return this.signerEnteredForRequest;
+  }
+
+  public hasReceivedSignature(): boolean {
+    return this.signatureReceivedForRequest;
   }
 
   private endReviewCapability(): void {
@@ -1986,6 +1992,8 @@ export class TransactionAuthController {
         onComplete: (result) => {
           if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
             return;
+          if (result.signedTransactions?.length)
+            this.signatureReceivedForRequest = true;
           signerFinished = true;
           if (
             reviewKey &&
@@ -2808,6 +2816,8 @@ export class TransactionAuthController {
           `Invalid signed response: ${envelope.error ?? 'envelope validation failed'}`
         );
       }
+      // Signature bytes are present; verification below still fails closed.
+      this.signatureReceivedForRequest = true;
 
       // Content-bind + network-correct signature verification (FAIL CLOSED):
       // every returned txn must byte-equal the exact txn the wallet built AND be

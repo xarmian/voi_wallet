@@ -152,6 +152,7 @@ const makeNavigation = () => {
     navigate: jest.fn(),
     goBack: jest.fn().mockReturnValue(true),
     canGoBack: jest.fn(() => true),
+    getState: jest.fn(() => ({ routes: [{ key: 'request-route' }] })),
     addListener: jest.fn((event: string, listener: () => void) => {
       if (event === 'beforeRemove') beforeRemove.push(listener);
       return () => {
@@ -203,7 +204,7 @@ const mountOn = async (
   const screen = await render(
     <TransactionRequestScreen
       navigation={navigation as any}
-      route={{ params: { requestEvent, version } } as any}
+      route={{ key: 'request-route', params: { requestEvent, version } } as any}
     />
   );
   return { navigation, screen, ref };
@@ -577,7 +578,7 @@ describe('leaving this screen without an answer', () => {
       <React.StrictMode>
         <TransactionRequestScreen
           navigation={navigation as any}
-          route={{ params: { requestEvent } } as any}
+          route={{ key: 'request-route', params: { requestEvent } } as any}
         />
       </React.StrictMode>
     );
@@ -854,6 +855,28 @@ it.each(['expired', 'handled', 'open'] as const)(
     expect(mockGetAllAccounts).not.toHaveBeenCalled();
   }
 );
+
+it('U8 missing navigation target leaves the successor queued without a processing toast', async () => {
+  let finish!: () => void;
+  mockRejectRequest.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  const { screen, navigation } = await mountOn(8101);
+  await enqueueNext(8102);
+  const rejection = fireEvent.press(screen.getByText('Reject'));
+  await waitFor(() => expect(mockRejectRequest).toHaveBeenCalledTimes(1));
+  navigation.getState.mockReturnValue({ routes: [] });
+  finish();
+  await rejection;
+  expect(navigation.replace).not.toHaveBeenCalled();
+  expect(
+    (await TransactionRequestQueue.getAll()).map((request) => request.id)
+  ).toEqual([8102]);
+  expect(Toast.show).not.toHaveBeenCalled();
+});
 
 // Kept LAST in this file: the two taps are two overlapping act() scopes (a
 // real double tap is not serialized the way awaited fireEvent calls are),

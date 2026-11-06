@@ -542,6 +542,22 @@ describe('remote batch submission ownership (TASK-418)', () => {
     expect(controller.hasEnteredSigner()).toBe(true);
   });
 
+  it('U8 received-signature flag stays sticky through cleanup and resets only on a new flow', async () => {
+    const { controller, response } = await flow();
+    expect(controller.hasReceivedSignature()).toBe(false);
+    await controller.processRemoteSignerResponse(response);
+    expect(controller.hasReceivedSignature()).toBe(true);
+    controller.resetAfterDismiss();
+    expect(controller.hasReceivedSignature()).toBe(true);
+    await controller.initializeSigningFlow({
+      type: 'batch_transaction',
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      networkId: netId,
+      walletConnectParams: { transactions: [{ txn: encoded }] },
+    } as never);
+    expect(controller.hasReceivedSignature()).toBe(false);
+  });
+
   function scope() {
     const noop = jest.fn();
     return {

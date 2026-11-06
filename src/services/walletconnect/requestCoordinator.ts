@@ -133,7 +133,7 @@ export class RequestCoordinator {
   private readonly clearTimer: typeof clearTimeout;
   private open = new Map<string, OpenRequest>();
   private closed = new Set<string>();
-  private admitting = new Set<string>();
+  private admitting = new Map<string, RequestRef>();
   private deciding = new Map<string, Promise<boolean>>();
   private answered = new Set<string>();
   private released = new Map<string, OpenRequest>();
@@ -177,7 +177,7 @@ export class RequestCoordinator {
     if (this.open.has(key) || this.admitting.has(key)) {
       return { action: 'suppressed', reason: 'duplicate' };
     }
-    this.admitting.add(key);
+    this.admitting.set(key, { ...ref });
     try {
       await this.store.load();
       if (this.store.isHandled(ref)) {
@@ -237,6 +237,15 @@ export class RequestCoordinator {
 
   isOpen(ref: RequestRef): boolean {
     return this.open.has(keyOf(ref));
+  }
+
+  hasOpenV1Proposal(): boolean {
+    return [
+      ...[...this.open.values(), ...this.released.values()].map(
+        (entry) => entry.ref
+      ),
+      ...this.admitting.values(),
+    ].some((ref) => ref.version === 1 && ref.kind === 'proposal');
   }
 
   describe(ref: RequestRef): {

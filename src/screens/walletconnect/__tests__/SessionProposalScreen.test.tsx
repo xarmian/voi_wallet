@@ -153,6 +153,7 @@ const navigationStub = () => {
     goBack: jest.fn(),
     popTo: jest.fn(),
     canGoBack: () => true,
+    getState: () => ({ routes: [{ key: 'proposal-route' }] }),
     dispatch: jest.fn((thunk: (state: NavigationState) => NavigationAction) => {
       const action = thunk({ key: 'proposal-stack' } as NavigationState);
       expect(action.target).toBe('proposal-stack');
@@ -221,7 +222,7 @@ it('disables approval while probing, shows partial eligibility and errors, and r
   const screen = await render(
     <SessionProposalScreen
       navigation={navigationStub() as unknown as ScreenProps['navigation']}
-      route={{ params: { proposal } } as any}
+      route={{ key: 'proposal-route', params: { proposal } } as any}
     />
   );
   expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
@@ -281,7 +282,7 @@ it('U6 pops its own Connect route before the success alert, B untouched', async 
   const screen = await render(
     <SessionProposalScreen
       navigation={navigation as unknown as ScreenProps['navigation']}
-      route={{ params: { proposal } } as any}
+      route={{ key: 'proposal-route', params: { proposal } } as any}
     />
   );
   await waitFor(() =>
@@ -304,7 +305,7 @@ it('U6 pops its own Connect route before the success alert, B untouched', async 
 const view = (params: object) => (
   <SessionProposalScreen
     navigation={navigationStub() as unknown as ScreenProps['navigation']}
-    route={{ params } as any}
+    route={{ key: 'proposal-route', params } as any}
   />
 );
 const signingInfo = (canSign: boolean) => ({
@@ -396,7 +397,9 @@ describe('locked wallet (TASK-438)', () => {
     const screen = await render(
       <SessionProposalScreen
         navigation={navigation as unknown as ScreenProps['navigation']}
-        route={{ params: { proposal: lockedProposal } } as any}
+        route={
+          { key: 'proposal-route', params: { proposal: lockedProposal } } as any
+        }
       />
     );
     await act(async () => {
@@ -421,7 +424,10 @@ describe('locked wallet (TASK-438)', () => {
     const ensure = jest.spyOn(coordinator, 'ensureOpen');
     const props = {
       navigation: navigationStub() as unknown as ScreenProps['navigation'],
-      route: { params: { proposal: lockedProposal } } as ScreenProps['route'],
+      route: {
+        key: 'proposal-route',
+        params: { proposal: lockedProposal },
+      } as ScreenProps['route'],
     };
     const screen = await render(<SessionProposalScreen {...props} />);
     expect(ensure).not.toHaveBeenCalled();
@@ -441,7 +447,9 @@ describe('locked wallet (TASK-438)', () => {
     const screen = await render(
       <SessionProposalScreen
         navigation={navigationStub() as unknown as ScreenProps['navigation']}
-        route={{ params: { proposal: lockedProposal } } as any}
+        route={
+          { key: 'proposal-route', params: { proposal: lockedProposal } } as any
+        }
       />
     );
 
@@ -551,6 +559,7 @@ const mountProposal = async (v1 = false, empty = false) => {
       navigation={navigation as unknown as ScreenProps['navigation']}
       route={
         {
+          key: 'proposal-route',
           params: empty
             ? {}
             : v1
@@ -781,7 +790,12 @@ it('DEFECT account load failure answers load-failed and closes', async () => {
   const screen = await render(
     <SessionProposalScreen
       navigation={navigation as unknown as ScreenProps['navigation']}
-      route={{ params: { proposal } } as unknown as ScreenProps['route']}
+      route={
+        {
+          key: 'proposal-route',
+          params: { proposal },
+        } as unknown as ScreenProps['route']
+      }
     />
   );
   await waitFor(() => expect(navigation.dispatch).toHaveBeenCalledTimes(1));
@@ -828,6 +842,7 @@ it('REGRESSION equivalent proposal route params keep the request open', async ()
       navigation={navigation as unknown as ScreenProps['navigation']}
       route={
         {
+          key: 'proposal-route',
           params: { proposal: { ...proposal } },
         } as unknown as ScreenProps['route']
       }
@@ -875,7 +890,12 @@ it.each(['expired', 'handled', 'unavailable'] as const)(
     await render(
       <SessionProposalScreen
         navigation={navigation as unknown as ScreenProps['navigation']}
-        route={{ params: { proposal } } as unknown as ScreenProps['route']}
+        route={
+          {
+            key: 'proposal-route',
+            params: { proposal },
+          } as unknown as ScreenProps['route']
+        }
       />
     );
     await waitFor(() => expect(navigation.dispatch).toHaveBeenCalledTimes(1));
@@ -905,7 +925,12 @@ it('U6 expired proposal delivered after its deadline never reads accounts', asyn
   await render(
     <SessionProposalScreen
       navigation={navigation as unknown as ScreenProps['navigation']}
-      route={{ params: { proposal: late } } as unknown as ScreenProps['route']}
+      route={
+        {
+          key: 'proposal-route',
+          params: { proposal: late },
+        } as unknown as ScreenProps['route']
+      }
     />
   );
   await waitFor(() => expect(navigation.dispatch).toHaveBeenCalledTimes(1));

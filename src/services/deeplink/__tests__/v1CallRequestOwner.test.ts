@@ -16,7 +16,10 @@ import {
   RequestCoordinator,
   CoordinatorTransport,
 } from '@/services/walletconnect/requestCoordinator';
-import { requestRefFor } from '@/services/walletconnect/requestRefs';
+import {
+  requestRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
 import { EventEmitter } from 'events';
 import type { NavigationContainerRef } from '@react-navigation/native';
 
@@ -27,6 +30,9 @@ jest.mock('@react-navigation/native', () => ({
   StackActions: jest.requireActual('@react-navigation/native').StackActions,
 }));
 jest.mock('@/services/walletconnect', () => ({
+  ...jest.requireActual('@/services/walletconnect/config'),
+  getNetworkNameByChainId: jest.requireActual('@/services/walletconnect/utils')
+    .getNetworkNameByChainId,
   WalletConnectService: { getInstance: () => ({ pair: jest.fn() }) },
 }));
 jest.mock('@/services/walletconnect/v1', () => ({
@@ -45,7 +51,74 @@ jest.mock('@/services/network/config', () => ({
   getNetworkConfig: () => ({ name: 'Voi' }),
 }));
 
-import { DeepLinkService } from '../index';
+jest.mock('react-native-toast-message', () => ({
+  __esModule: true,
+  default: { show: jest.fn() },
+}));
+jest.mock('@/services/wallet', () => ({
+  MultiAccountWalletService: {
+    getAllAccounts: async () => [
+      {
+        id: 'account',
+        address: 'fixture-address',
+        label: 'Fixture',
+        type: 'standard',
+      },
+    ],
+  },
+}));
+jest.mock('@/services/walletconnect/utils', () => ({
+  ...jest.requireActual('@/services/walletconnect/utils'),
+  resolveProposalEligibility: async (accounts: object[], chains: string[]) =>
+    accounts.map((account) => ({
+      account,
+      eligibleChains: chains,
+      errorChains: [],
+    })),
+}));
+jest.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ authState: { isLocked: false, isAuthenticated: true } }),
+}));
+jest.mock('@/hooks/useSecureScreen', () => ({
+  useSecureScreen: jest.fn(),
+  useAppSwitcherProtection: jest.fn(),
+}));
+jest.mock('@/hooks/useThemedStyles', () => ({ useThemedStyles: () => ({}) }));
+jest.mock('@/contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
+}));
+jest.mock('@/components/common/UniversalHeader', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+jest.mock('@/components/walletconnect/AccountSelectionItem', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+jest.mock('@/components/walletconnect/LockedRequestGate', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: ({ children }: { children: React.ReactNode }) => children,
+}));
+jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+jest.mock('@/services/auth/reviewGrant', () => ({
+  reviewGrant: {
+    subscribe: () => () => {},
+    isValid: () => true,
+    leave: jest.fn(),
+    revoke: jest.fn(),
+  },
+  walletConnectRequestKey: () => 'proposal-review',
+}));
+
+import { DeepLinkService, V1_BUSY_TOAST } from '../index';
+import React from 'react';
+import { Alert } from 'react-native';
+import { act, render, fireEvent, waitFor } from '@testing-library/react-native';
+import Toast from 'react-native-toast-message';
+import SessionProposalScreen from '@/screens/walletconnect/SessionProposalScreen';
 import {
   QueueFullError,
   TransactionRequestQueue,
@@ -55,6 +128,8 @@ class FakeV1Client extends EventEmitter {
   constructor(private handshakeTopic: string) {
     super();
   }
+  connect = jest.fn(async (_config: unknown) => {});
+  approveSession = jest.fn(async (_accounts: string[]) => {});
   getSessionData() {
     return { handshakeTopic: this.handshakeTopic, chainId: 416101 };
   }
@@ -113,6 +188,8 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     };
     coordinator = new RequestCoordinator({ store, transport });
     jest.spyOn(RequestCoordinator, 'getInstance').mockReturnValue(coordinator);
+    jest.mocked(Toast.show).mockClear();
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     service = new DeepLinkService();
@@ -128,28 +205,146 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     jest.restoreAllMocks();
   });
 
-  it('U7 v1 proposal delivery pushes a second Connect instead of overwriting it', async () => {
+  const link = (name: string) =>
+    'wc:' +
+    name +
+    '@1?bridge=https%3A%2F%2Fbridge.example&key=' +
+    'ab'.repeat(32);
+  const installClient = () => {
     const client = new FakeV1Client('fixture');
-    const connect = jest.fn(async () => {});
-    Object.assign(client, { connect });
     const { WalletConnectV1Client } = require('@/services/walletconnect/v1');
     WalletConnectV1Client.getInstance.mockReturnValue(client);
-    const pair = service as unknown as {
-      handleWalletConnectV1Uri(url: string): Promise<boolean>;
-    };
-    await pair.handleWalletConnectV1Uri(
-      'wc:fixture@1?bridge=https%3A%2F%2Fbridge.example&key=' + 'ab'.repeat(32)
-    );
-    client.emit('session_request', { id: 7103 });
-    await flush();
-    expect(nav.dispatch).toHaveBeenCalledWith({
-      type: 'PUSH',
-      payload: {
+    return client;
+  };
+
+  it.each(['Reject', 'Connect'] as const)(
+    'U8 refuses B while A is open, then A can %s and C connects',
+    async (action) => {
+      const client = installClient();
+      expect(await service.testDeepLink(link('A'))).toBe(true);
+      const sessionRequest = { id: 8101, chainId: 416001 };
+      client.emit('session_request', sessionRequest);
+      await flush();
+      expect(nav.dispatch).toHaveBeenCalledTimes(1);
+      const delivered = nav.dispatch.mock.calls[0][0];
+      expect(delivered).toEqual({
+        type: 'PUSH',
+        payload: {
+          name: 'WalletConnectSessionProposal',
+          params: { version: 1, sessionRequest },
+        },
+      });
+      const screenNavigation = {
+        addListener: () => () => {},
+        canGoBack: () => true,
+        navigate: jest.fn(),
+        dispatch: jest.fn(),
+        getState: () => ({ routes: [{ key: 'connect-A' }] }),
+      };
+      const route = {
+        key: 'connect-A',
         name: 'WalletConnectSessionProposal',
-        params: { version: 1, sessionRequest: { id: 7103 } },
-      },
-    });
+        params: delivered.payload.params,
+      };
+      const screen = await render(
+        React.createElement(SessionProposalScreen, {
+          navigation: screenNavigation as never,
+          route: route as never,
+        })
+      );
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled()
+      );
+      const admit = jest.spyOn(coordinator, 'admit');
+      expect(await service.testDeepLink(link('B'))).toBe(false);
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      expect(Toast.show).toHaveBeenCalledWith({
+        type: 'info',
+        ...V1_BUSY_TOAST,
+      });
+      expect(V1_BUSY_TOAST).toEqual({
+        text1: 'Connection in progress',
+        text2: 'Finish or cancel the open connection, then try again.',
+      });
+      expect(nav.dispatch).toHaveBeenCalledTimes(1);
+      expect(nav.navigate).not.toHaveBeenCalled();
+      expect(screenNavigation.dispatch).not.toHaveBeenCalled();
+      expect(route.params).toEqual(delivered.payload.params);
+      expect(coordinator.isOpen(v1ProposalRefFor(sessionRequest))).toBe(true);
+      expect(admit).not.toHaveBeenCalled();
+      Object.values(transport).forEach((fn) =>
+        expect(fn).not.toHaveBeenCalled()
+      );
+      expect(client.approveSession).not.toHaveBeenCalled();
+      await fireEvent.press(screen.getByText(action));
+      if (action === 'Reject') {
+        expect(transport.rejectProposalV1).toHaveBeenCalledTimes(1);
+        expect(client.approveSession).not.toHaveBeenCalled();
+      } else {
+        expect(client.approveSession).toHaveBeenCalledTimes(1);
+        expect(client.approveSession).toHaveBeenCalledWith(['fixture-address']);
+        expect(transport.rejectProposalV1).not.toHaveBeenCalled();
+      }
+      expect(coordinator.isOpen(v1ProposalRefFor(sessionRequest))).toBe(false);
+      expect(await service.testDeepLink(link('C'))).toBe(true);
+      expect(client.connect).toHaveBeenCalledTimes(2);
+      await act(async () => screen.unmount());
+    }
+  );
+
+  it('U8 refuses B during the pairing window before A connect resolves', async () => {
+    const client = installClient();
+    let finish!: () => void;
+    client.connect.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const first = service.testDeepLink(link('A'));
+    expect(await service.testDeepLink(link('B'))).toBe(false);
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.listenerCount('session_request')).toBe(1);
+    expect(Toast.show).toHaveBeenCalledWith({ type: 'info', ...V1_BUSY_TOAST });
+    expect(nav.dispatch).not.toHaveBeenCalled();
     expect(nav.navigate).not.toHaveBeenCalled();
+    finish();
+    await first;
+  });
+
+  it.each(['error event', 'connect rejection'] as const)(
+    'U8 permits retry after pairing %s',
+    async (failure) => {
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+      const client = installClient();
+      if (failure === 'connect rejection')
+        client.connect.mockRejectedValueOnce(new Error('connection failed'));
+      await service.testDeepLink(link('A'));
+      if (failure === 'error event')
+        client.emit('error', new Error('connection failed'));
+      await flush();
+      nav.navigate.mockClear();
+      expect(await service.testDeepLink(link('C'))).toBe(true);
+      expect(client.connect).toHaveBeenCalledTimes(2);
+      expect(Toast.show).not.toHaveBeenCalled();
+    }
+  );
+
+  it('U8 a pairing that never produces a proposal stops blocking new links after the wait', async () => {
+    jest.useFakeTimers();
+    try {
+      const client = installClient();
+      await service.testDeepLink(link('A'));
+      expect(await service.testDeepLink(link('B'))).toBe(false);
+      expect(client.connect).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      expect(await service.testDeepLink(link('C'))).toBe(true);
+      expect(client.connect).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('re-pairing (restore, then a new pairing) keeps ONE listener: a request navigates once', async () => {
