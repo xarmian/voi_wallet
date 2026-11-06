@@ -2,15 +2,15 @@
   "$comment": "Committed ESLint baseline for the `npm run lint` ratchet (PLAN-229 DR-2). Regenerate with `npm run lint:baseline`; verify with `npm run lint:baseline:check`. The `lint` script's --max-warnings MUST equal totals.warnings. Lower it in the same PR that clears the warnings. It never goes up.",
   "totals": {
     "errors": 0,
-    "warnings": 150,
-    "filesLinted": 712,
-    "filesWithFindings": 60
+    "warnings": 146,
+    "filesLinted": 778,
+    "filesWithFindings": 57
   },
   "rules": {
     "react-hooks/exhaustive-deps": 1,
-    "react-hooks/immutability": 89,
+    "react-hooks/immutability": 87,
     "react-hooks/preserve-manual-memoization": 22,
-    "react-hooks/set-state-in-effect": 38
+    "react-hooks/set-state-in-effect": 36
   },
   "files": {
     "src/components/UnifiedAuthModal.tsx": {
@@ -113,13 +113,6 @@
         "react-hooks/set-state-in-effect": 1
       }
     },
-    "src/components/remoteSigner/AnimatedQRScanner.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/set-state-in-effect": 1
-      }
-    },
     "src/components/remoteSigner/SignerAuthModal.tsx": {
       "errors": 0,
       "warnings": 3,
@@ -141,14 +134,6 @@
       "warnings": 1,
       "rules": {
         "react-hooks/immutability": 1
-      }
-    },
-    "src/components/walletconnect/QRScanner.tsx": {
-      "errors": 0,
-      "warnings": 2,
-      "rules": {
-        "react-hooks/immutability": 1,
-        "react-hooks/set-state-in-effect": 1
       }
     },
     "src/contexts/AuthContext.tsx": {
@@ -433,13 +418,6 @@
       "rules": {
         "react-hooks/immutability": 1,
         "react-hooks/preserve-manual-memoization": 1
-      }
-    },
-    "src/screens/walletconnect/TransactionRequestScreen.tsx": {
-      "errors": 0,
-      "warnings": 1,
-      "rules": {
-        "react-hooks/immutability": 1
       }
     },
     "src/utils/animations.ts": {
