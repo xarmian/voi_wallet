@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 /**
  * Wiring tests for cold-start route delivery (DR-10 / TASK-381).
  *
@@ -331,3 +335,37 @@ describe('DeepLinkService cold-start delivery (TASK-381)', () => {
     });
   });
 });
+
+it.each([true, false])(
+  'U7 scan replace targets the scanner when present: %s',
+  async (scannerPresent) => {
+    const service = new DeepLinkService();
+    const nav = {
+      isReady: () => true,
+      addListener: () => () => {},
+      dispatch: jest.fn(),
+      getRootState: () => ({
+        key: 'root-stack',
+        routes: [
+          { key: 'main', name: 'Main' },
+          ...(scannerPresent ? [{ key: 'scanner', name: 'QRScanner' }] : []),
+          { key: 'request', name: 'UniversalTransactionSigning' },
+        ],
+      }),
+    };
+    service.setNavigationRef(nav as unknown as NavigationContainerRef<never>);
+    const route = service as unknown as {
+      navigateToRoute(
+        route: { screen: string },
+        options: { replace: true }
+      ): Promise<boolean>;
+    };
+    await route.navigateToRoute({ screen: 'KeyregConfirm' }, { replace: true });
+    expect(nav.dispatch).toHaveBeenCalledWith({
+      type: 'REPLACE',
+      payload: { name: 'KeyregConfirm', params: undefined },
+      ...(scannerPresent ? { source: 'scanner', target: 'root-stack' } : {}),
+    });
+    service.cleanup();
+  }
+);

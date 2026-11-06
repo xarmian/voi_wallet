@@ -1,3 +1,14 @@
+import { scopedNavigation } from '@/services/navigation/scopedNavigation';
+import { SIGNED_THEN_LAPSED_BATCH_MESSAGE } from '@/services/auth/transactionAuthController';
+import { redactError } from '@/utils/logRedaction';
+import {
+  RequestCoordinator,
+  type ExitReason,
+} from '@/services/walletconnect/requestCoordinator';
+import {
+  requestRefFor,
+  requestExpiryOf,
+} from '@/services/walletconnect/requestRefs';
 import React, { useEffect, useRef } from 'react';
 import {
   View,
@@ -5,6 +16,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -40,7 +52,10 @@ import {
   QueuedTransactionRequest,
   TransactionRequestQueue,
 } from '@/services/walletconnect/TransactionRequestQueue';
-import { registerNavigationCallbacks } from '@/services/navigation/callbackRegistry';
+import {
+  registerNavigationCallbacks,
+  type CallbackNavigation,
+} from '@/services/navigation/callbackRegistry';
 
 type TransactionRequestScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -56,9 +71,20 @@ interface Props {
   route: TransactionRequestScreenRouteProp;
 }
 
+class WalletConnectLoadError extends Error {
+  constructor(
+    message: string,
+    public reason: ExitReason
+  ) {
+    super(message);
+  }
+}
+
 export default function TransactionRequestScreen({ navigation, route }: Props) {
   const { requestEvent } = route.params;
   const version = (route.params as any)?.version as number | undefined;
+  const coordinator = RequestCoordinator.getInstance();
+  const ref = requestRefFor(requestEvent, version === 1 ? 1 : 2);
   const requestKey = walletConnectRequestKey(
     (requestEvent as any)?.topic ?? '',
     (requestEvent as any)?.id ?? ''
@@ -68,30 +94,21 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   // True while a rejection is being sent and the next request taken.
   const rejectingRef = useRef(false);
 
-  // Set once this request's outcome is decided: an answer was attempted (a
-  // failed attempt clears the mark itself) or the mark was already cleared.
+  // An outcome in flight also owns the answer, so onDismiss cannot abandon it.
   const settledRef = useRef(false);
-  // Set once the request is handed to UniversalTransactionSigning, which then
-  // answers through the registered callbacks (or reports onDismiss).
   const handedOffRef = useRef(false);
+  const advancedRef = useRef(false);
+  const navRef = useRef<CallbackNavigation>(
+    scopedNavigation(navigation, route.key)
+  );
 
-  /**
-   * Every exit that leaves this request WITHOUT an answer sent to the dApp
-   * calls this first (TASK-257): it clears the request's delivery mark so a
-   * relay redelivery surfaces again instead of being dropped as a duplicate.
-   * No rejection is sent here (that is TASK-394).
-   */
-  const forgetUnanswered = () => {
+  const settleExit = (reason: ExitReason) => {
     settledRef.current = true;
-    TransactionRequestQueue.forgetDelivery(
-      (requestEvent as any)?.id,
-      (requestEvent as any)?.topic
-    );
+    void coordinator.settle(ref, reason);
   };
 
-  /** Left the stack with no answer attempted (OS back, swipe-back): forget. */
   const forgetIfAbandoned = () => {
-    if (!settledRef.current) forgetUnanswered();
+    if (!settledRef.current) settleExit('abandoned');
   };
 
   useEffect(() => {
@@ -105,8 +122,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     };
   }, [requestKey]);
 
-  // Leaving this screen (OS back, swipe-back) with no answer attempted clears
-  // the mark. A navigation event, not an unmount cleanup, so an effect replay
+  // Leaving this screen (OS back, swipe-back) settles an unanswered request. A navigation event, not an unmount cleanup, so an effect replay
   // never reports a departure that did not happen.
   useEffect(
     () =>
@@ -118,18 +134,44 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         }
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- forgetIfAbandoned reads only refs and the immutable route param; re-subscribing on its identity each render is pointless.
-    [navigation]
+    [navigation, route.key]
   );
 
   const loadAccountsAndTransactions = async () => {
     try {
+      const state = await coordinator.ensureOpen(
+        ref,
+        requestExpiryOf(requestEvent)
+      );
+      if (settledRef.current) return;
+      if (state !== 'open') {
+        settledRef.current = true;
+        if (state === 'expired' || state === 'handled') {
+          Toast.show({
+            type: 'info',
+            text1:
+              state === 'expired'
+                ? 'Request expired'
+                : 'Request already handled',
+            text2:
+              state === 'expired'
+                ? 'Try again in the dApp.'
+                : 'Check the dApp before you try again.',
+          });
+        }
+        await advanceAfterEnd();
+        return;
+      }
       // Load accounts
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
       if (settledRef.current) return;
 
       const eventParams = (requestEvent as any).params;
       if (!eventParams) {
-        throw new Error('Malformed request: missing params');
+        throw new WalletConnectLoadError(
+          'Malformed request: missing params',
+          'load-failed'
+        );
       }
 
       const paramsWrapper = eventParams;
@@ -144,8 +186,11 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           txns = request.params.txn as WalletTransaction[];
         }
 
-        if (!txns || !Array.isArray(txns)) {
-          throw new Error('Malformed request: missing transactions array');
+        if (!txns || !Array.isArray(txns) || txns.length === 0) {
+          throw new WalletConnectLoadError(
+            'Malformed request: missing transactions array',
+            'load-failed'
+          );
         }
 
         // DR-7 / DR-11 / DR-14 — resolve the chain the REQUEST is scoped to.
@@ -160,22 +205,27 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         if (version === 1) {
           const resolved = resolveV1Chain(Number(requestChainId));
           if (!resolved) {
-            throw new Error(
+            throw new WalletConnectLoadError(
               'This WalletConnect v1 session uses a network this wallet cannot ' +
                 'identify (v1 sessions carry an ambiguous numeric chain id). ' +
-                'Please reconnect the dApp using WalletConnect v2.'
+                'Please reconnect the dApp using WalletConnect v2.',
+              'load-failed'
             );
           }
           chainId = resolved.chainId;
           chainNetworkId = resolved.networkId;
         } else {
           if (typeof requestChainId !== 'string' || !requestChainId) {
-            throw new Error('Malformed request: missing chain id');
+            throw new WalletConnectLoadError(
+              'Malformed request: missing chain id',
+              'load-failed'
+            );
           }
           const resolved = getNetworkByChainId(requestChainId);
           if (!resolved) {
-            throw new Error(
-              'This request targets a network this wallet does not support.'
+            throw new WalletConnectLoadError(
+              'This request targets a network this wallet does not support.',
+              'load-failed'
             );
           }
           chainId = requestChainId;
@@ -195,9 +245,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           : [];
 
         if (approvedAccounts.length === 0) {
-          throw new Error(
+          throw new WalletConnectLoadError(
             'This dApp session has no approved account on ' +
-              `${getNetworkNameByChainId(chainId)}. Reconnect the session and try again.`
+              `${getNetworkNameByChainId(chainId)}. Reconnect the session and try again.`,
+            'unsupported-accounts'
           );
         }
 
@@ -254,22 +305,31 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           // (e.g. every account was removed after the session was approved).
           // Surface an explicit error rather than stranding the user on an
           // empty review screen or reviewing an account that cannot sign.
-          throw new Error('No account available to sign this request');
+          throw new WalletConnectLoadError(
+            'No account available to sign this request',
+            'unsupported-accounts'
+          );
         }
 
         // Register callbacks in the callback registry to avoid serialization warnings
         const callbackId = registerNavigationCallbacks({
-          onSuccess: async (result: any) => {
+          onSuccess: async (result, nav) => {
+            navRef.current = nav ?? scopedNavigation(navigation, route.key);
             await handleWalletConnectSuccess(result);
           },
-          onReject: async () => {
+          onReject: async (nav) => {
+            navRef.current = nav ?? scopedNavigation(navigation, route.key);
             await handleReject();
+          },
+          onEnd: async (reason, nav) => {
+            navRef.current = nav ?? scopedNavigation(navigation, route.key);
+            await endAndAdvance(reason);
           },
           onDismiss: forgetIfAbandoned,
         });
 
         handedOffRef.current = true;
-        navigation.replace('UniversalTransactionSigning', {
+        const signingParams = {
           // Display bytes. `walletConnect.transactions` below is the authority
           // for both review and signing; this stays index-aligned with it.
           transactions: txns.map((wtxn) => wtxn.txn),
@@ -284,6 +344,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           // DR-15: the real ARC-0001 entries (signers / authAddr / msig) plus
           // the session + chain the signer must bind every entry to.
           walletConnect: {
+            ref,
             transactions: txns,
             binding,
             requestKey,
@@ -302,25 +363,30 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
                 : undefined;
             })(),
           },
-        });
+        };
+        navRef.current.replace('UniversalTransactionSigning', signingParams);
       } else {
         // The normal path (algo_signTxn) always navigates away to
         // UniversalTransactionSigning above; any other method has no review UI on
         // this screen, so fail explicitly instead of leaving a blank screen.
-        throw new Error(`Unsupported request method: ${request.method}`);
+        throw new WalletConnectLoadError(
+          `Unsupported request method: ${request.method}`,
+          'unsupported-method'
+        );
       }
     } catch (error) {
       reviewGrant.leave(requestKey);
-      console.error('Failed to load transaction request:', error);
+      console.error('Failed to load transaction request:', redactError(error));
       const message =
         error instanceof Error
           ? error.message
           : 'Failed to parse transaction request';
-      // Unanswered: let a redelivery of it surface again.
-      forgetUnanswered();
+      const reason =
+        error instanceof WalletConnectLoadError ? error.reason : 'load-failed';
+      settleExit(reason);
       // Route to the dedicated error screen (replace, so the user cannot return
       // to this now-empty screen) rather than showing an alert on a blank page.
-      navigation.replace('WalletConnectError', { error: message });
+      navRef.current.replace('WalletConnectError', { error: message });
     }
   };
 
@@ -341,10 +407,13 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
     let taken: Awaited<ReturnType<typeof TransactionRequestQueue.takeNext>>;
     try {
       taken = await TransactionRequestQueue.takeNext((req) => {
-        navigation.replace('WalletConnectTransactionRequest', {
-          requestEvent: req,
-          version: req.version,
-        });
+        if (
+          !navRef.current.replace('WalletConnectTransactionRequest', {
+            requestEvent: req,
+            version: req.version,
+          })
+        )
+          throw new Error('navigation target gone');
       });
       // A normal unlock mints one permission per request waiting at that moment.
       // A gate unlock covers only its own request; later requests join no sitting.
@@ -352,7 +421,10 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       if (!taken.request) reviewGrant.leave(requestKey);
     } catch (error) {
       reviewGrant.revoke();
-      toast(await TransactionRequestQueue.size());
+      if (!(
+        error instanceof Error && error.message === 'navigation target gone'
+      ))
+        toast(await TransactionRequestQueue.size());
       throw error;
     }
     toast(taken.remaining + (taken.request ? 1 : 0));
@@ -360,9 +432,29 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   };
 
   const handleWalletConnectSuccess = async (result: any) => {
-    // Answered, or cleared below: leaving after this must not forget.
+    // Reserve this outcome while recording and publishing the signed response.
     settledRef.current = true;
     if (result?.signedTransactions) {
+      let won: boolean;
+      try {
+        won = await coordinator.decide(ref, 'approved');
+      } catch {
+        await coordinator.sendError(ref, 'lapsed');
+        settledRef.current = true;
+        navRef.current.replace('WalletConnectError', {
+          error: 'Failed to record the approval',
+        });
+        return;
+      }
+      if (!won) {
+        Alert.alert('Request ended', SIGNED_THEN_LAPSED_BATCH_MESSAGE);
+        reviewGrant.revoke();
+        if (!rejectingRef.current) {
+          rejectingRef.current = true;
+          await advanceAfterEnd();
+        }
+        return;
+      }
       let responseSent = false;
       try {
         // Use v1 client for v1 requests, otherwise use v2
@@ -383,8 +475,9 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
           );
         }
         responseSent = true;
+        rejectingRef.current = true;
 
-        const nextRequest = await takeNextRequest((queueSize) => {
+        await advanceAfterEnd(undefined, (queueSize) => {
           // Show non-blocking toast with queue info
           Toast.show({
             type: 'walletConnectSuccess',
@@ -397,104 +490,83 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
             },
           });
         });
-
-        if (!nextRequest) {
-          // No pending requests, navigate back
-          if (navigation.canGoBack()) {
-            navigation.goBack();
-          } else {
-            navigation.navigate('Main', { screen: 'Home' });
-          }
-        }
       } catch (error) {
         if (!responseSent) {
-          // The dApp never got the signed response.
-          forgetUnanswered();
+          await coordinator.sendError(ref, 'lapsed');
         }
         reviewGrant.revoke();
-        console.error('Failed to respond to WalletConnect:', error);
+        console.error(
+          'Failed to respond to WalletConnect:',
+          redactError(error)
+        );
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to respond to dApp';
-        navigation.navigate('WalletConnectError', { error: errorMessage });
+        navRef.current.replace('WalletConnectError', { error: errorMessage });
       }
     } else {
       // Handle signing failure: nothing was sent to the dApp.
-      forgetUnanswered();
+      settleExit('sign-failed');
       reviewGrant.revoke();
       const errorMessage = 'Failed to sign transactions';
-      navigation.navigate('WalletConnectError', { error: errorMessage });
+      navRef.current.replace('WalletConnectError', { error: errorMessage });
     }
   };
 
-  // One rejection at a time (TASK-257): a second tap while the first is in
-  // flight would take, and so skip past, a second queued request.
   const handleReject = async () => {
+    await endAndAdvance('declined');
+  };
+
+  // Keep the guard set through removal: coordinator echoes and later ends do
+  // not take a second queued request, even after the first advance completes.
+  const endAndAdvance = async (reason: ExitReason = 'declined') => {
     if (rejectingRef.current) return;
     rejectingRef.current = true;
-    try {
-      await rejectAndAdvance();
-    } finally {
-      rejectingRef.current = false;
-    }
+    settledRef.current = true;
+    await coordinator.settle(ref, reason);
+    await advanceAfterEnd(reason);
   };
 
-  const rejectAndAdvance = async () => {
-    // A failed rejection clears the mark itself.
-    settledRef.current = true;
-    let rejectionSent = false;
+  const advanceAfterEnd = async (
+    reason?: ExitReason,
+    toast?: (queueSize: number) => void
+  ) => {
+    if (advancedRef.current) return;
+    advancedRef.current = true;
+    let nextRequest: QueuedTransactionRequest | null;
     try {
-      // Use v1 client for v1 requests, otherwise use v2
-      if (version === 1) {
-        // Handle v1 rejection
-        const v1Client = WalletConnectV1Client.getInstance();
-        await v1Client.rejectRequest(
-          (requestEvent as any).id,
-          'User rejected the request'
-        );
-      } else {
-        // Handle v2 rejection
-        const wcService = WalletConnectService.getInstance();
-        await wcService.rejectRequest(
-          (requestEvent as any).topic,
-          (requestEvent as any).id,
-          {
-            code: 5001,
-            message: 'User rejected the request',
-          }
-        );
-      }
-      rejectionSent = true;
+      nextRequest = await takeNextRequest(
+        toast ??
+          ((queueSize) => {
+            if (reason !== 'declined') return;
+            // Show non-blocking toast with queue info when rejection was sent
+            Toast.show({
+              type: 'walletConnectRejected',
+              text1: 'Transaction Request Rejected',
+              text2: `You declined to sign this transaction. ${
+                queueSize > 0
+                  ? 'Processing next request...'
+                  : 'You can return to the dApp.'
+              }`,
+              visibilityTime: 4000,
+              position: 'top',
+              props: {
+                queueSize,
+              },
+            });
+          })
+      );
     } catch (error) {
-      console.error('Failed to reject request:', error);
-      // The dApp never got the rejection.
-      forgetUnanswered();
+      if (error instanceof Error && error.message === 'navigation target gone')
+        return;
+      throw error;
     }
-
-    const nextRequest = await takeNextRequest((queueSize) => {
-      if (!rejectionSent) return;
-      // Show non-blocking toast with queue info when rejection was sent
-      Toast.show({
-        type: 'walletConnectRejected',
-        text1: 'Transaction Request Rejected',
-        text2: `You declined to sign this transaction. ${
-          queueSize > 0
-            ? 'Processing next request...'
-            : 'You can return to the dApp.'
-        }`,
-        visibilityTime: 4000,
-        position: 'top',
-        props: {
-          queueSize,
-        },
-      });
-    });
 
     if (!nextRequest) {
       // No pending requests, navigate back
-      if (navigation.canGoBack()) {
-        navigation.goBack();
+      if (navRef.current.canGoBack()) {
+        navRef.current.goBack();
       } else {
-        navigation.navigate('Main', { screen: 'Home' });
+        navRef.current.navigate('Main', { screen: 'Home' });
       }
     }
   };

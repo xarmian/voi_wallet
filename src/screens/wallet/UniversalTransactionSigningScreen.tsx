@@ -1,3 +1,11 @@
+import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
+import {
+  RequestCoordinator,
+  type ExitReason,
+  type RequestRef,
+} from '@/services/walletconnect/requestCoordinator';
+import Toast from 'react-native-toast-message';
+import { scopedNavigation } from '@/services/navigation/scopedNavigation';
 import { ReviewEndedError } from '@/services/auth/ReviewEndedError';
 import React, {
   useState,
@@ -67,7 +75,7 @@ import {
   DangerItem,
 } from '@/utils/transactionDangers';
 import { useTransactionDangers } from '@/hooks/useTransactionDangers';
-import { toErrorAlert } from '@/utils/errorMapping';
+import { isRequestMismatchError, toErrorAlert } from '@/utils/errorMapping';
 import {
   getNavigationCallbacks,
   clearNavigationCallbacks,
@@ -79,6 +87,11 @@ type UniversalTransactionSigningScreenRouteProp = RouteProp<
   RootStackParamList,
   'UniversalTransactionSigning'
 >;
+
+type SigningRouteParams = RootStackParamList['UniversalTransactionSigning'];
+type WalletConnectRouteParams = NonNullable<
+  SigningRouteParams['walletConnect']
+> & { ref?: RequestRef };
 
 interface Props {
   navigation: UniversalTransactionSigningScreenNavigationProp;
@@ -312,7 +325,9 @@ export default function UniversalTransactionSigningScreen({
     networkId,
     chainId,
     walletConnect,
-  } = route.params;
+  } = route.params as SigningRouteParams & {
+    walletConnect?: WalletConnectRouteParams;
+  };
 
   // DR-15 — the ARC-0001 entries are the single source of truth for a dApp
   // request: the wallet must review and sign exactly the bytes the dApp sent,
@@ -337,6 +352,12 @@ export default function UniversalTransactionSigningScreen({
   const registryCallbacks = getNavigationCallbacks(callbackId);
   const onSuccess = registryCallbacks?.onSuccess || directOnSuccess;
   const onReject = registryCallbacks?.onReject || directOnReject;
+  const onEnd = registryCallbacks?.onEnd;
+  const callbackNavigation = useMemo(
+    () => scopedNavigation(navigation, route.key),
+    [navigation, route.key]
+  );
+  const endedRef = useRef(false);
 
   const { authState } = useAuth();
   const requestKey = walletConnect?.requestKey ?? '';
@@ -403,13 +424,59 @@ export default function UniversalTransactionSigningScreen({
   const styles = useThemedStyles(createStyles);
   const authController = useTransactionAuthController();
 
+  const endRequest = useCallback(
+    async (reason: ExitReason) => {
+      if (endedRef.current) return;
+      endedRef.current = true;
+      authController.cancel();
+      endSittingState();
+      authController.clearUserCancellation();
+      await onEnd?.(reason, callbackNavigation);
+    },
+    [authController, onEnd, endSittingState, callbackNavigation]
+  );
+
+  useEffect(() => {
+    if (!walletConnect?.ref) return;
+    return RequestCoordinator.getInstance().subscribe(
+      walletConnect.ref,
+      ({ reason }) => {
+        if (
+          endedRef.current ||
+          (reason !== 'expired' && reason !== 'session-ended')
+        )
+          return;
+        Alert.alert(
+          'Request ended',
+          reason === 'expired'
+            ? 'Request expired. Try again in the dApp.'
+            : 'Connection ended. Reconnect in the dApp.'
+        );
+        void endRequest(reason);
+      }
+    );
+  }, [walletConnect?.ref, endRequest]);
+
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke(true, 'background');
+      if (state === 'background') {
+        const controllerState = authController.getState().state;
+        if (
+          walletConnect &&
+          !handlingOutcome.current &&
+          controllerState !== 'completed' &&
+          controllerState !== 'processing'
+        ) {
+          void endRequest(
+            authController.hasEnteredSigner() ? 'lapsed' : 'background'
+          );
+        }
+        reviewGrant.revoke(true, 'background');
+      }
     });
     return () => subscription.remove();
-  }, []);
+  }, [walletConnect, authController, endRequest]);
 
   useEffect(() => {
     reviewLapseHandled.current = false;
@@ -430,6 +497,8 @@ export default function UniversalTransactionSigningScreen({
         const state = authController.getState().state;
         if (
           walletConnect &&
+          !endedRef.current &&
+          reviewGrant.endReason(requestKey) !== 'background' &&
           !handlingOutcome.current &&
           !reviewLapseHandled.current &&
           state !== 'completed' &&
@@ -441,15 +510,25 @@ export default function UniversalTransactionSigningScreen({
         ) {
           reviewLapseHandled.current = true;
           const byUser = authController.wasUserCancelled;
+          const enteredSigner = authController.hasEnteredSigner();
           if (showAuthModal && !byUser) {
+            const timedOut = reviewGrant.endReason(requestKey) === 'idle';
             const error = new ReviewEndedError(
-              reviewGrant.endReason(requestKey) === 'idle'
-                ? 'Your approval timed out before signing finished. Start the request again.'
-                : 'Your approval ended before signing finished. Start the request again.'
+              enteredSigner
+                ? timedOut
+                  ? 'Your approval timed out before signing finished. Try again in the dApp.'
+                  : 'Your approval ended before signing finished. Try again in the dApp.'
+                : timedOut
+                  ? 'Your approval timed out. Unlock to review this request again.'
+                  : 'Unlock to review this request again.',
+              enteredSigner ? 'Request ended' : 'Approval ended'
             );
             Alert.alert(error.title, error.message);
           }
-          if (!byUser) authController.cancel();
+          if (!byUser) {
+            if (enteredSigner) void endRequest('lapsed');
+            else authController.cancel();
+          }
           endSittingState();
           authController.clearUserCancellation();
         }
@@ -461,6 +540,7 @@ export default function UniversalTransactionSigningScreen({
       showAuthModal,
       currentRequest,
       endSittingState,
+      endRequest,
     ]
   );
 
@@ -926,8 +1006,27 @@ export default function UniversalTransactionSigningScreen({
   const dangerList = useTransactionDangers(dangerEntries);
   const hasDanger = dangerList.length > 0;
 
-  const handleApprove = () => {
-    if (rejecting.current) return;
+  const handleApprove = async () => {
+    if (rejecting.current || (walletConnect && endedRef.current)) return;
+    if (
+      walletConnect?.ref &&
+      !RequestCoordinator.getInstance().isLive(walletConnect.ref)
+    ) {
+      if (!authController.hasEnteredSigner()) {
+        Toast.show({
+          type: 'info',
+          text1: 'Request expired',
+          text2: 'Nothing was signed. Try again in the dApp.',
+        });
+      } else {
+        Alert.alert(
+          'Request ended',
+          'Check the dApp, then try again there if you still need it.'
+        );
+      }
+      await endRequest('expired');
+      return;
+    }
     if (
       !canReview ||
       (requiresReviewUnlock && !reviewGrant.isValid(requestKey))
@@ -984,17 +1083,40 @@ export default function UniversalTransactionSigningScreen({
     }
     try {
       if (success && onSuccess) {
-        await onSuccess(result);
+        await onSuccess(result, callbackNavigation);
       } else if (!success) {
         const error = result?.error;
         if (error instanceof ReviewEndedError) {
           Alert.alert(error.title, error.message);
+          if (walletConnect && authController.hasEnteredSigner())
+            await endRequest('lapsed');
         } else {
-          const { title, message } = toErrorAlert(error, {
+          // Signer entry ends any WalletConnect request, including one with no
+          // review grant. An
+          // error with no specific mapping gets the product text that points
+          // there; a mapped reason (for example not enough balance) keeps its own.
+          const ended = !!walletConnect && authController.hasEnteredSigner();
+          const mappedAlert = toErrorAlert(error, {
             fallbackMessage: 'Failed to sign transactions.',
             fallbackTitle: 'Error',
           });
-          Alert.alert(title, message);
+          if (ended && isRequestMismatchError(error)) {
+            Alert.alert(
+              'Request ended',
+              "That QR code didn't match this request. Try again in the dApp."
+            );
+          } else if (ended && mappedAlert.title === 'Error') {
+            Alert.alert(
+              'Signing failed',
+              "Couldn't sign. Try again in the dApp."
+            );
+          } else {
+            Alert.alert(mappedAlert.title, mappedAlert.message);
+          }
+          if (ended)
+            await endRequest(
+              authController.hasReceivedSignature() ? 'lapsed' : 'sign-failed'
+            );
         }
       }
     } finally {
@@ -1012,7 +1134,7 @@ export default function UniversalTransactionSigningScreen({
     endSittingState();
     if (requiresReviewUnlock && !grantValid) reviewGrant.leave(requestKey);
     if (onReject) {
-      await onReject();
+      await onReject(callbackNavigation);
     } else {
       if (navigation.canGoBack()) {
         navigation.goBack();
@@ -1262,6 +1384,9 @@ export default function UniversalTransactionSigningScreen({
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
+            {walletConnect?.ref && (
+              <RequestAgeLabel requestRef={walletConnect.ref} />
+            )}
             {networkInfo.known ? (
               <View style={styles.networkContainer}>
                 <View style={styles.networkHeader}>
@@ -1350,9 +1475,12 @@ export default function UniversalTransactionSigningScreen({
         request={currentRequest}
         onComplete={handleAuthComplete}
         onCancel={() => {
+          if (handlingOutcome.current) return;
           reviewGrant.leave(requestKey);
           endSittingState();
           authController.clearUserCancellation();
+          if (walletConnect && authController.hasEnteredSigner())
+            void endRequest('declined');
         }}
         title="Sign Transaction"
         message={canReview ? summary : ''}

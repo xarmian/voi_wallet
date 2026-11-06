@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 /**
  * Message-notification taps resolve the receiver account only after wallet
  * hydration, and never open Chat under a different account (TASK-465).

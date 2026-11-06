@@ -930,6 +930,17 @@ export function toErrorAlert(
   };
 }
 
+/** Shared with the auth modal's wrong-QR explanation. */
+export function isRequestMismatchError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+  return message.toLowerCase().includes('does not match');
+}
+
 /**
  * The alert for a transaction that was, or may have been, submitted and is not
  * confirmed (transaction_pending or maybe_submitted). Undefined for anything

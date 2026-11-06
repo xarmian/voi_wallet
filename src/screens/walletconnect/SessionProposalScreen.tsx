@@ -1,5 +1,7 @@
+import { scopedNavigation } from '@/services/navigation/scopedNavigation';
 import React, {
   useState,
+  useMemo,
   useEffect,
   useRef,
   useSyncExternalStore,
@@ -15,6 +17,14 @@ import {
   AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
+import Toast from 'react-native-toast-message';
+import { redactError } from '@/utils/logRedaction';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import {
+  proposalRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
+import RequestAgeLabel from '@/components/walletconnect/RequestAgeLabel';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -71,6 +81,10 @@ interface Props {
 export default function SessionProposalScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const scoped = useMemo(
+    () => scopedNavigation(navigation, route.key),
+    [navigation, route.key]
+  );
 
   // Check for v1 or v2 proposal
   const proposal = route?.params?.proposal as SessionProposal | undefined;
@@ -78,7 +92,27 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   const v1SessionRequest = route?.params?.sessionRequest;
 
   // Determine which version we're handling
-  const isV1 = version === 1 || v1SessionRequest;
+  const isV1 = version === 1 || !!v1SessionRequest;
+
+  const coordinator = RequestCoordinator.getInstance();
+  const proposalId = proposal?.id;
+  const pairingTopic = proposal?.pairingTopic;
+  const hasV1Request = !!v1SessionRequest;
+  const v1ProposalId = v1SessionRequest?.id;
+  // Equivalent route params must not replay the abandonment cleanup.
+  const ref = useMemo(
+    () =>
+      isV1 && hasV1Request
+        ? v1ProposalRefFor({ id: v1ProposalId })
+        : proposalId !== undefined && pairingTopic !== undefined
+          ? proposalRefFor({ id: proposalId, pairingTopic })
+          : null,
+    [isV1, hasV1Request, v1ProposalId, proposalId, pairingTopic]
+  );
+  const decidedRef = useRef(false);
+  const approvingRef = useRef(false);
+  const admittingRef = useRef(false);
+  const [admitted, setAdmitted] = useState(false);
 
   // TASK-438: while the wallet is locked the connect screen shows only the
   // gate (dApp name and icon, URL host, requested networks; Unlock to review /
@@ -107,20 +141,63 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       setForeground(state === 'active');
-      if (state === 'background') reviewGrant.revoke(true, 'background');
+      if (state === 'background') {
+        reviewGrant.revoke(true, 'background');
+        if (!decidedRef.current && !approvingRef.current && ref) {
+          decidedRef.current = true;
+          void coordinator.settle(ref, 'background');
+          scoped.goBack();
+          Toast.show({
+            type: 'info',
+            text1: 'Request closed',
+            text2: 'Try again in the dApp.',
+          });
+        }
+      }
     });
     return () => subscription.remove();
-  }, []);
+  }, [coordinator, ref, scoped]);
 
   // However the screen is left, this proposal leaves the sitting.
+  // Leaving without choosing is reported by `beforeRemove` below (a navigation
+  // event), not by this cleanup: an effect replay must never decline a request.
   useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
   useEffect(
     () =>
-      navigation.addListener('beforeRemove', () =>
-        reviewGrant.leave(requestKey)
-      ),
-    [navigation, requestKey]
+      navigation.addListener('beforeRemove', () => {
+        reviewGrant.leave(requestKey);
+        if (!decidedRef.current && ref) {
+          decidedRef.current = true;
+          void coordinator.settle(ref, 'abandoned');
+        }
+      }),
+    [coordinator, ref, navigation, requestKey]
   );
+
+  useEffect(() => {
+    if (!ref) return;
+    return coordinator.subscribe(ref, ({ reason }) => {
+      if (decidedRef.current || admittingRef.current) return;
+      decidedRef.current = true;
+      if (reason === 'expired' || reason === 'session-ended') {
+        Alert.alert(
+          'Request ended',
+          reason === 'expired'
+            ? 'Request expired. Try again in the dApp.'
+            : 'Connection ended. Reconnect in the dApp.'
+        );
+        scoped.goBack();
+      }
+    });
+  }, [coordinator, ref, scoped, admitted]);
+
+  const handleBack = () => {
+    if (!decidedRef.current && ref) {
+      decidedRef.current = true;
+      void coordinator.settle(ref, 'abandoned');
+    }
+    scoped.goBack();
+  };
 
   const [probing, setProbing] = useState(true);
   const [eligibility, setEligibility] = useState<
@@ -153,6 +230,34 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
     inFlight.current = true;
     setProbing(true);
     try {
+      if (ref) {
+        admittingRef.current = true;
+        const state = await coordinator.ensureOpen(
+          ref,
+          isV1 ? undefined : proposal?.expiryTimestamp
+        );
+        admittingRef.current = false;
+        if (decidedRef.current) return;
+        if (state !== 'open') {
+          decidedRef.current = true;
+          if (state === 'expired' || state === 'handled') {
+            Toast.show({
+              type: 'info',
+              text1:
+                state === 'expired'
+                  ? 'Request expired'
+                  : 'Request already handled',
+              text2:
+                state === 'expired'
+                  ? 'Try again in the dApp.'
+                  : 'Check the dApp before you try again.',
+            });
+          }
+          scoped.goBack();
+          return;
+        }
+        setAdmitted(true);
+      }
       const allAccounts = await MultiAccountWalletService.getAllAccounts();
       const v1Chain = resolveV1Chain(v1SessionRequest?.chainId);
       const chains = isV1
@@ -178,9 +283,15 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       setSelectedAccountIds(initialSelection);
     } catch (error) {
       if (current !== generation.current) return;
-      console.error('Failed to load accounts:', error);
+      console.error('Failed to load accounts:', redactError(error));
       Alert.alert('Error', 'Failed to load accounts');
+      if (!decidedRef.current && ref) {
+        decidedRef.current = true;
+        void coordinator.settle(ref, 'load-failed');
+        scoped.goBack();
+      }
     } finally {
+      admittingRef.current = false;
       if (current === generation.current) {
         inFlight.current = false;
         setProbing(false);
@@ -189,6 +300,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   };
 
   const handleApprove = async () => {
+    if (approvingRef.current) return;
     // TASK-438: connecting shares account addresses, so it needs review access.
     if (requiresReviewUnlock && !reviewGrant.isValid(requestKey)) return;
     if (accounts.length === 0) {
@@ -201,11 +313,29 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       return;
     }
 
+    approvingRef.current = true;
     setIsLoading(true);
+    let approved = false;
     try {
       const selectedAccounts = accounts.filter((account) =>
         selectedAccountIds.has(account.id)
       );
+
+      if (!ref) return;
+      let won: boolean;
+      try {
+        won = await coordinator.decide(ref, 'approved');
+      } catch {
+        Alert.alert('Error', 'Could not record your approval. Try again.');
+        return;
+      }
+      if (!won) {
+        decidedRef.current = true;
+        Alert.alert('Request ended', 'Request expired. Try again in the dApp.');
+        scoped.goBack();
+        return;
+      }
+      decidedRef.current = true;
 
       if (isV1) {
         // Handle v1 session approval
@@ -219,18 +349,27 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         await wcService.approveSession(proposal!, selectedAccounts);
       }
 
-      // TASK-518: leave the Connect route before the alert. navigate('Main')
-      // pushes a second Main, which left the approved Connect page under Home.
-      // popTo pops to the Main below, or replaces Connect with Main if none.
-      navigation.popTo('Main');
+      approved = true;
+
+      // Leave only this Connect route before the alert; stacked requests stay.
+      scoped.popOrReplace('Main');
       Alert.alert('Success', 'Successfully connected to dApp');
     } catch (error) {
-      console.error('Failed to approve session:', error);
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to connect to dApp'
-      );
+      console.error('Failed to approve session:', redactError(error));
+      const message =
+        error instanceof Error ? error.message : 'Failed to connect to dApp';
+      if (!approved && ref && !message.includes('requires a network')) {
+        await coordinator.sendError(
+          ref,
+          message.includes('No signable accounts')
+            ? 'unsupported-accounts'
+            : 'load-failed'
+        );
+      }
+      Alert.alert('Error', message);
+      if (!approved) scoped.goBack();
     } finally {
+      approvingRef.current = false;
       setIsLoading(false);
     }
   };
@@ -238,22 +377,13 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   const handleReject = async () => {
     setIsLoading(true);
     try {
-      if (isV1) {
-        // Handle v1 session rejection
-        const v1Client = WalletConnectV1Client.getInstance();
-        await v1Client.rejectSession();
-      } else {
-        // Handle v2 session rejection
-        const wcService = WalletConnectService.getInstance();
-        await wcService.rejectSession(proposal!);
+      if (ref) {
+        decidedRef.current = true;
+        await coordinator.settle(ref, 'declined');
       }
-
-      navigation.goBack();
-    } catch (error) {
-      console.error('Failed to reject session:', error);
-      // If rejection fails (e.g., proposal no longer exists), just navigate back
-      // This can happen if the dApp closed the connection before we rejected
-      navigation.goBack();
+      // If rejection fails (e.g., proposal no longer exists), just navigate back.
+      // The coordinator swallows publish failures, including a closed connection.
+      scoped.goBack();
     } finally {
       setIsLoading(false);
     }
@@ -313,7 +443,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
 
     // v2 permissions - collect all chains and methods across namespaces
     const allChains = new Set<string>();
-    const allRequestedChains = new Set<string>(); // For debug logging
     const allMethods = new Set<string>();
     const supportedChainIds = [
       VOI_CHAIN_DATA.chainId,
@@ -325,7 +454,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       Object.values(proposal!.requiredNamespaces).forEach((namespace) => {
         if (namespace.chains) {
           namespace.chains.forEach((chain: string) => {
-            allRequestedChains.add(chain); // Track all requested chains
             // Only add supported chains
             if (supportedChainIds.includes(chain)) {
               allChains.add(chain);
@@ -343,7 +471,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       Object.values(proposal!.optionalNamespaces).forEach((namespace) => {
         if (namespace.chains) {
           namespace.chains.forEach((chain: string) => {
-            allRequestedChains.add(chain); // Track all requested chains
             // Only add supported chains
             if (supportedChainIds.includes(chain)) {
               allChains.add(chain);
@@ -355,21 +482,6 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         }
       });
     }
-
-    // Debug output
-    console.log(
-      '[WalletConnect] dApp requested chains:',
-      Array.from(allRequestedChains)
-    );
-    console.log('[WalletConnect] Supported chains:', Array.from(allChains));
-    console.log(
-      '[WalletConnect] Required namespaces:',
-      proposal!.requiredNamespaces
-    );
-    console.log(
-      '[WalletConnect] Optional namespaces:',
-      proposal!.optionalNamespaces
-    );
 
     // Convert chain IDs to readable names (all chains in the set are already supported)
     const chainNames = Array.from(allChains).map((chainId) =>
@@ -507,7 +619,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
         <UniversalHeader
           title="WalletConnect"
           showBackButton
-          onBackPress={() => navigation.goBack()}
+          onBackPress={() => scoped.goBack()}
         />
         <View style={[styles.scrollView, { justifyContent: 'center' }]}>
           <View style={{ alignItems: 'center' }}>
@@ -554,7 +666,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
       <UniversalHeader
         title="Connect to dApp"
         showBackButton
-        onBackPress={() => navigation.goBack()}
+        onBackPress={handleBack}
       />
 
       {!canReview ? (
@@ -580,6 +692,7 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
             showsVerticalScrollIndicator={false}
           >
             {renderDAppInfo()}
+            {ref && <RequestAgeLabel requestRef={ref} />}
             {renderPermissions()}
             {renderAccounts()}
 

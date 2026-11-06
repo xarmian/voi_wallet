@@ -533,6 +533,31 @@ describe('remote batch submission ownership (TASK-418)', () => {
     return { controller, request, response };
   }
 
+  it('U7 remote WalletConnect signer is entered at QR handoff and after a real signed response', async () => {
+    const { controller, response } = await flow();
+    expect(controller.hasEnteredSigner()).toBe(true);
+    await controller.processRemoteSignerResponse(response);
+    expect(controller.getState().state).toBe('completed');
+    expect(controller.getState().result?.signedTransactions).toHaveLength(1);
+    expect(controller.hasEnteredSigner()).toBe(true);
+  });
+
+  it('U8 received-signature flag stays sticky through cleanup and resets only on a new flow', async () => {
+    const { controller, response } = await flow();
+    expect(controller.hasReceivedSignature()).toBe(false);
+    await controller.processRemoteSignerResponse(response);
+    expect(controller.hasReceivedSignature()).toBe(true);
+    controller.resetAfterDismiss();
+    expect(controller.hasReceivedSignature()).toBe(true);
+    await controller.initializeSigningFlow({
+      type: 'batch_transaction',
+      account: { address: owner.addr, type: AccountType.REMOTE_SIGNER },
+      networkId: netId,
+      walletConnectParams: { transactions: [{ txn: encoded }] },
+    } as never);
+    expect(controller.hasReceivedSignature()).toBe(false);
+  });
+
   function scope() {
     const noop = jest.fn();
     return {
@@ -578,6 +603,15 @@ describe('remote batch submission ownership (TASK-418)', () => {
       },
       takeNextRequest: async () => null,
       forgetUnanswered: noop,
+      // The request coordinator the screen records its decision with.
+      coordinator: {
+        decide: jest.fn(async () => true),
+        sendError: jest.fn(async () => {}),
+        settle: jest.fn(async () => 'settled'),
+      },
+      ref: { version: 2, kind: 'request', topic: 'dapp', id: 418 },
+      rejectingRef: { current: false },
+      advanceAfterEnd: jest.fn(async () => {}),
       setShowAuthModal: noop,
       setCurrentRequest: noop,
     };

@@ -1,4 +1,5 @@
 import { Alert, Platform, Linking } from 'react-native';
+import Toast from 'react-native-toast-message';
 import { NavigationContainerRef, StackActions } from '@react-navigation/native';
 import { WalletConnectService } from '@/services/walletconnect';
 import {
@@ -11,6 +12,11 @@ import {
   parseWalletConnectV1Uri,
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import {
+  requestRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
 import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 import {
   isArc0090Uri,
@@ -71,6 +77,13 @@ const redactNotificationData = (
 });
 
 export type DeepLinkHandler = (url: string) => Promise<boolean>;
+
+export const V1_PAIRING_WAIT_MS = 60_000;
+
+export const V1_BUSY_TOAST = {
+  text1: 'Connection in progress',
+  text2: 'Finish or cancel the open connection, then try again.',
+};
 
 export interface DeepLinkRoute {
   screen: string;
@@ -137,6 +150,8 @@ export class DeepLinkService {
   // pairing topic it currently serves (see attachV1CallRequests).
   private v1CallRequestClient: WalletConnectV1Client | null = null;
   private v1CallRequestTopic = '';
+  private v1PairingInFlight = false;
+  private v1PairingTimer: ReturnType<typeof setTimeout> | null = null;
   private signingDeliverySeq = 0;
 
   static getInstance(): DeepLinkService {
@@ -283,87 +298,104 @@ export class DeepLinkService {
         transformedRequest.topic
       )
     ) {
+      void RequestCoordinator.getInstance().retryUnpublished(
+        requestRefFor(transformedRequest, 1)
+      );
       console.log('[DeepLinkService] Duplicate V1 request ignored');
       return;
     }
 
-    void this.deliverSigningRequest(async () => {
-      let delivered = false;
-      try {
-        if (!this.navigationRef?.isReady()) {
-          console.error(
-            '[DeepLinkService] V1 transaction request not shown: navigation not ready'
-          );
-          return;
-        }
-        // Check if we're already on the TransactionRequestScreen
-        if (
-          this.navigationRef.getCurrentRoute()?.name ===
-          'WalletConnectTransactionRequest'
-        ) {
-          // Enqueue the request instead of navigating immediately; that
-          // screen takes it next. The claim stays: queued.
-          console.log(
-            '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
-          );
-          try {
-            await TransactionRequestQueue.enqueue({
-              id: transformedRequest.id,
-              topic: transformedRequest.topic,
-              params: transformedRequest.params,
+    const coordinator = RequestCoordinator.getInstance();
+    const ref = requestRefFor(transformedRequest, 1);
+    void (async () => {
+      const admission = await coordinator.admit(ref);
+      if (admission.action !== 'show') {
+        TransactionRequestQueue.releaseClaim(
+          transformedRequest.id,
+          transformedRequest.topic
+        );
+        return;
+      }
+      await this.deliverSigningRequest(async () => {
+        let delivered = false;
+        try {
+          if (!this.navigationRef?.isReady()) {
+            console.error(
+              '[DeepLinkService] V1 transaction request not shown: navigation not ready'
+            );
+            return;
+          }
+          // Check if we're already on the TransactionRequestScreen
+          if (
+            this.navigationRef.getCurrentRoute()?.name ===
+            'WalletConnectTransactionRequest'
+          ) {
+            // Enqueue the request instead of navigating immediately; that
+            // screen takes it next. The claim stays: queued.
+            console.log(
+              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
+            );
+            try {
+              await TransactionRequestQueue.enqueue({
+                id: transformedRequest.id,
+                topic: transformedRequest.topic,
+                params: transformedRequest.params,
+                version: 1,
+              });
+            } catch (error) {
+              if (!(error instanceof QueueFullError)) throw error;
+              // TASK-394: answer it as dropped (marks it displayed, so a
+              // redelivery is not shown) instead of releasing the claim.
+              TransactionRequestQueue.reportDropped(
+                [
+                  {
+                    id: transformedRequest.id,
+                    topic: transformedRequest.topic,
+                    params: transformedRequest.params,
+                    timestamp: Date.now(),
+                    version: 1,
+                  },
+                ],
+                'full'
+              );
+            }
+            delivered = true;
+            return;
+          }
+
+          // Navigate to transaction request screen if not already there
+          delivered = await this.navigateToRoute({
+            screen: 'WalletConnectTransactionRequest',
+            params: {
+              requestEvent: transformedRequest,
               version: 1,
-            });
-          } catch (error) {
-            if (!(error instanceof QueueFullError)) throw error;
-            // TASK-394: answer it as dropped (marks it displayed, so a
-            // redelivery is not shown) instead of releasing the claim.
-            TransactionRequestQueue.reportDropped(
-              [
-                {
-                  id: transformedRequest.id,
-                  topic: transformedRequest.topic,
-                  params: transformedRequest.params,
-                  timestamp: Date.now(),
-                  version: 1,
-                },
-              ],
-              'full'
+            },
+          });
+          if (delivered) {
+            TransactionRequestQueue.markDisplayed(
+              transformedRequest.id,
+              transformedRequest.topic
             );
           }
-          delivered = true;
-          return;
+        } finally {
+          if (!delivered) {
+            // Not shown and not queued: let a redelivery of it through.
+            TransactionRequestQueue.releaseClaim(
+              transformedRequest.id,
+              transformedRequest.topic
+            );
+            coordinator.release(ref);
+          }
         }
-
-        // Navigate to transaction request screen if not already there
-        delivered = await this.navigateToRoute({
-          screen: 'WalletConnectTransactionRequest',
-          params: {
-            requestEvent: transformedRequest,
-            version: 1,
-          },
-        });
-        if (delivered) {
-          TransactionRequestQueue.markDisplayed(
-            transformedRequest.id,
-            transformedRequest.topic
-          );
-        }
-      } finally {
-        if (!delivered) {
-          // Not shown and not queued: let a redelivery of it through.
-          TransactionRequestQueue.releaseClaim(
-            transformedRequest.id,
-            transformedRequest.topic
-          );
-        }
-      }
-    }).catch((error) => {
+      });
+    })().catch((error) => {
       // The route queue never rejects; if it ever did, the handler above
       // never ran, so the request was not delivered.
       TransactionRequestQueue.releaseClaim(
         transformedRequest.id,
         transformedRequest.topic
       );
+      coordinator.release(ref);
       console.error(
         '[DeepLinkService] Failed to deliver V1 request:',
         redactError(error)
@@ -718,6 +750,27 @@ export class DeepLinkService {
     }
   }
 
+  /**
+   * A v1 pairing blocks a second v1 link only while it can still produce a
+   * proposal: it clears on the proposal, on an error, on a failed connect, and
+   * after a bounded wait, so a dApp that never sends one cannot block v1 links
+   * until the app restarts.
+   */
+  private setV1PairingInFlight(inFlight: boolean): void {
+    if (this.v1PairingTimer) {
+      clearTimeout(this.v1PairingTimer);
+      this.v1PairingTimer = null;
+    }
+    this.v1PairingInFlight = inFlight;
+    if (inFlight) {
+      this.v1PairingTimer = setTimeout(() => {
+        this.v1PairingInFlight = false;
+        this.v1PairingTimer = null;
+      }, V1_PAIRING_WAIT_MS);
+      (this.v1PairingTimer as { unref?: () => void }).unref?.();
+    }
+  }
+
   private async handleWalletConnectV1Uri(url: string): Promise<boolean> {
     try {
       // Parse v1 URI
@@ -726,26 +779,53 @@ export class DeepLinkService {
         throw new Error('Invalid WalletConnect v1 URI format');
       }
 
+      if (
+        this.v1PairingInFlight ||
+        RequestCoordinator.getInstance().hasOpenV1Proposal()
+      ) {
+        Toast.show({ type: 'info', ...V1_BUSY_TOAST });
+        return false;
+      }
+
       // Initialize WalletConnect v1 client
       const v1Client = WalletConnectV1Client.getInstance();
 
       // Set up event handlers
-      v1Client.once('session_request', (sessionRequest) => {
-        // Navigate to session proposal screen
-        this.navigateToRoute({
-          screen: 'WalletConnectSessionProposal',
-          params: {
-            version: 1,
-            sessionRequest,
-          },
-        });
-      });
+      v1Client.once(
+        'session_request',
+        (sessionRequest: { id?: number | string }) => {
+          this.setV1PairingInFlight(false);
+          const coordinator = RequestCoordinator.getInstance();
+          const ref = v1ProposalRefFor(sessionRequest);
+          void (async () => {
+            const admission = await coordinator.admit(ref);
+            if (admission.action !== 'show') return;
+            try {
+              const delivered = await this.navigateToRoute(
+                {
+                  screen: 'WalletConnectSessionProposal',
+                  params: { version: 1, sessionRequest },
+                },
+                { push: true }
+              );
+              if (!delivered) coordinator.release(ref);
+            } catch (error) {
+              coordinator.release(ref);
+              console.error(
+                'Failed to deliver WalletConnect v1 proposal:',
+                redactError(error)
+              );
+            }
+          })();
+        }
+      );
 
       // Transaction signing requests: one permanent listener, owned here
       // and shared with session restore (TASK-257).
       this.attachV1CallRequests(v1Client, parsed.topic);
 
       v1Client.once('error', (error) => {
+        this.setV1PairingInFlight(false);
         console.error(
           'DeepLinkService: v1 connection error',
           redactError(error)
@@ -761,6 +841,7 @@ export class DeepLinkService {
       });
 
       // Connect to bridge
+      this.setV1PairingInFlight(true);
       await v1Client.connect({
         topic: parsed.topic,
         version: parsed.version,
@@ -770,6 +851,7 @@ export class DeepLinkService {
 
       return true;
     } catch (error) {
+      this.setV1PairingInFlight(false);
       console.error(
         'Failed to handle WalletConnect v1 URI:',
         redactError(error)
@@ -1375,7 +1457,7 @@ export class DeepLinkService {
 
   private async navigateToRoute(
     route: DeepLinkRoute,
-    options?: { replace?: boolean }
+    options?: { replace?: boolean; push?: true }
   ): Promise<boolean> {
     // Log route name + param keys only; param values can carry
     // recipient addresses, amounts, notes and keyreg key material.
@@ -1413,9 +1495,17 @@ export class DeepLinkService {
       );
       // Use type assertion to handle React Navigation's complex generic types
       if (options?.replace) {
-        // Use StackActions.replace to replace current screen in stack
+        const state = this.navigationRef.getRootState();
+        const scanner = state?.routes.find(
+          (entry) => entry.name === 'QRScanner'
+        );
+        this.navigationRef.dispatch({
+          ...StackActions.replace(route.screen, route.params),
+          ...(scanner ? { source: scanner.key, target: state?.key } : {}),
+        });
+      } else if (options?.push) {
         this.navigationRef.dispatch(
-          StackActions.replace(route.screen, route.params)
+          StackActions.push(route.screen, route.params)
         );
       } else {
         (this.navigationRef as any).navigate(route.screen, route.params);

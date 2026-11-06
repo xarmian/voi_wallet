@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 import {
   currentController,
   setupOutcomeHarness,
@@ -127,7 +131,8 @@ it.each(
       await Promise.all(h.signerRuns);
     });
     expect(h.deviceSign).toHaveBeenCalledTimes(1);
-    message = texts.lock;
+    message =
+      'Your approval ended before signing finished. Try again in the dApp.';
   }
   if (site === 'signCatch-1948') message = 'mapped';
   if (site === 'pauseFailed-1935') {
@@ -190,13 +195,22 @@ it.each(
     message = 'mapped';
   }
   expect(h.onSuccess).toHaveBeenCalledTimes(delivery ? 1 : 0);
-  if (delivery) expect(h.onSuccess).toHaveBeenCalledWith(result);
+  if (delivery)
+    expect(h.onSuccess).toHaveBeenCalledWith(
+      result,
+      expect.objectContaining({ navigate: expect.any(Function) })
+    );
   if (message && !['mapped', 'overspend'].includes(message))
-    expect(h.alert).toHaveBeenCalledWith('Request ended', message);
+    expect(h.alert).toHaveBeenCalledWith(
+      message === texts.unlock || message === texts.remote
+        ? 'Approval ended'
+        : 'Request ended',
+      message
+    );
   if (message === 'mapped')
     expect(h.alert).toHaveBeenCalledWith(
-      'Error',
-      expect.stringContaining('signing failed')
+      'Signing failed',
+      "Couldn't sign. Try again in the dApp."
     );
   if (site === 'onError-1738')
     expect(h.alert).toHaveBeenCalledWith(
@@ -276,10 +290,11 @@ it.each(
       await h.freshUnlock();
       await fireEvent.press(h.signButton());
       await h.ready();
-      expect(h.alert).toHaveBeenCalledWith(
-        'Ledger busy',
-        'Your Ledger is still finishing the previous request. Wait for it to stop, then start the request again.'
-      );
+      // Cancel after the signer was entered ended the request (answered to the
+      // dApp), so this screen no longer starts a second run: the press is
+      // ignored and the one live signer is the only device call.
+      expect(h.alert).not.toHaveBeenCalled();
+      expect(h.deviceSign).toHaveBeenCalledTimes(1);
     }
     await act(async () => {
       finish(new Uint8Array([1]));
@@ -291,7 +306,13 @@ it.each(
   if (site !== 'newFlow-while-old-loop-alive')
     expect(h.alert).not.toHaveBeenCalled();
   expect(h.modal().props.visible).toBe(false);
-  expect(SessionKeyVault.isUnlocked()).toBe(!locked);
-  expect(reviewGrant.isValid(key)).toBe(false);
-  expect(reviewGrant.pauseIdle(key)).toBe(false);
+  if (site !== 'newFlow-while-old-loop-alive')
+    expect(SessionKeyVault.isUnlocked()).toBe(!locked);
+  // The fresh unlock above re-minted a permission for a request that was already
+  // ended; the press was ignored, so nothing consumed it. (The screen leaves the
+  // stack when its request ends, which ends the permission in the app.)
+  if (site !== 'newFlow-while-old-loop-alive') {
+    expect(reviewGrant.isValid(key)).toBe(false);
+    expect(reviewGrant.pauseIdle(key)).toBe(false);
+  }
 });

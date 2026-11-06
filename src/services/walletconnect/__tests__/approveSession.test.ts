@@ -319,3 +319,29 @@ it('approves only covered Voi using the real SDK namespace builder', async () =>
     (mockApprove.mock.calls as any)[0][0].namespaces.algorand.accounts
   ).toEqual([`${VOI}:RK`]);
 });
+
+it('DEFECT rejectProposal preserves the coordinator code and message', async () => {
+  const reason = { code: -32000, message: 'Request expired.' };
+  const service = WalletConnectService.getInstance();
+  const emit = jest.spyOn(service, 'emit');
+  await service.rejectProposal(518, reason);
+  expect(mockReject).toHaveBeenCalledWith({ id: 518, reason });
+  expect(emit).not.toHaveBeenCalledWith('session_rejected', expect.anything());
+  emit.mockRestore();
+});
+
+it('REGRESSION rejectProposal redacts failures and rethrows a session rejection error', async () => {
+  const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+  mockReject.mockRejectedValueOnce(new Error('relay unavailable'));
+  await expect(
+    WalletConnectService.getInstance().rejectProposal(518, {
+      code: -32000,
+      message: 'Request expired.',
+    })
+  ).rejects.toThrow('Session rejection failed: relay unavailable');
+  expect(log).toHaveBeenCalledWith(
+    'Failed to reject session:',
+    'relay unavailable'
+  );
+  log.mockRestore();
+});

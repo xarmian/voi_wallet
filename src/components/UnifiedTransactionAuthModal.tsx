@@ -30,6 +30,7 @@ import { hapticNotify } from '@/utils/haptics';
 import { redactError } from '@/utils/logRedaction';
 import {
   PENDING_TRANSACTION_ALERT,
+  isRequestMismatchError,
   toUnsettledTransactionAlert,
 } from '@/utils/errorMapping';
 
@@ -330,8 +331,8 @@ export default function UnifiedTransactionAuthModal({
     (errorMessageLower.includes('cancelled by user') ||
       errorMessageLower.includes('rejected on ledger'));
 
-  const isRequestMismatchError =
-    authState.state === 'error' && errorMessageLower.includes('does not match');
+  const requestMismatch =
+    authState.state === 'error' && isRequestMismatchError(errorMessageLower);
 
   // Submitted but not confirmed is not a failure (TASK-447).
   const unsettledAlert =
@@ -343,7 +344,7 @@ export default function UnifiedTransactionAuthModal({
 
   const getErrorTitle = () => {
     if (isUserRejectedError) return 'Transaction Cancelled';
-    if (isRequestMismatchError) return 'Wrong QR Code';
+    if (requestMismatch) return 'Wrong QR Code';
     if (unsettledAlert) return unsettledAlert.title;
     return 'Transaction Failed';
   };
@@ -352,7 +353,7 @@ export default function UnifiedTransactionAuthModal({
     if (isUserRejectedError) {
       return 'You rejected this transaction on your Ledger device.';
     }
-    if (isRequestMismatchError) {
+    if (requestMismatch) {
       return 'The signed QR code you scanned does not match the transaction you sent for signing. Please scan the correct response from your signer device.';
     }
     if (unsettledAlert) return unsettledAlert.message;

@@ -259,6 +259,12 @@ jest.mock('@/services/messaging/keyDerivation', () => ({
 }));
 jest.mock('@/services/remoteSigner', () => ({
   RemoteSignerService: {
+    validateResponse: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.validateResponse,
+    extractSignedTransactions: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.extractSignedTransactions,
+    createSuccessResponse: jest.requireActual('@/services/remoteSigner')
+      .RemoteSignerService.createSuccessResponse,
     createSigningRequest: jest.fn(async () => ({ id: 'request' })),
     encodePayload: jest.fn(() => ''),
   },
@@ -304,7 +310,7 @@ export const texts = {
   idle: 'Your approval timed out before signing finished. Start the request again.',
   lock: 'Your approval ended before signing finished. Start the request again.',
   batch:
-    'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then start the request again if you still need it.',
+    'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then try again there if you still need it.',
   other:
     "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.",
   remote:
@@ -499,7 +505,11 @@ export async function openOutcome(
     shownWithVault.push(SessionKeyVault.isUnlocked());
   });
   let leaveScreen = () => {};
+  const dispatch = jest.fn();
+  const goBack = jest.fn();
   const navigation = {
+    dispatch,
+    goBack,
     canGoBack: () => false,
     navigate: jest.fn(),
     addListener: (_event: string, cb: () => void) => {
@@ -558,6 +568,8 @@ export async function openOutcome(
   await act(async () => {});
   return {
     view,
+    dispatch,
+    goBack,
     leave: async () => act(async () => leaveScreen()),
     controller,
     modal,

@@ -41,8 +41,8 @@ import { invalidateRekeyStatus } from '@/services/wallet/rekeyStatusInvalidation
 import { getRekeyStateStrict } from '@/store/walletStore';
 import { redactError } from '@/utils/logRedaction';
 
-const SIGNED_THEN_LAPSED_BATCH_MESSAGE =
-  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then start the request again if you still need it.';
+export const SIGNED_THEN_LAPSED_BATCH_MESSAGE =
+  'Your approval ended after signing finished, so the signed result was not returned to the dApp. This wallet did not send anything. Check the dApp, then try again there if you still need it.';
 const SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE =
   "Your approval ended after signing finished, and this wallet can't tell whether the transaction was sent. Check your account or the dApp before you try again.";
 
@@ -494,6 +494,8 @@ export class TransactionAuthController {
     this.userCancelled = false;
     this.reviewAuthorized = false;
     this.reviewSigningStarted = false;
+    this.signerEnteredForRequest = false;
+    this.signatureReceivedForRequest = false;
     this.currentRequest = request;
     this.remoteBatchPlan = null;
     this.activeFlowGeneration = this.cancelledFlowGeneration;
@@ -552,7 +554,8 @@ export class TransactionAuthController {
           this.updateState({
             state: 'error',
             error: new ReviewEndedError(
-              'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.'
+              'This account signs on another device, so your wallet needs to be fully unlocked. Unlock your wallet, then start the request again.',
+              'Approval ended'
             ),
           });
           return;
@@ -1548,6 +1551,16 @@ export class TransactionAuthController {
   private reviewFlowEnded = false;
   private reviewAuthorized = false;
   private reviewSigningStarted = false;
+  private signerEnteredForRequest = false;
+  private signatureReceivedForRequest = false;
+
+  public hasEnteredSigner(): boolean {
+    return this.signerEnteredForRequest;
+  }
+
+  public hasReceivedSignature(): boolean {
+    return this.signatureReceivedForRequest;
+  }
 
   private endReviewCapability(): void {
     const key = this.currentRequest?.reviewGrantKey;
@@ -1598,7 +1611,10 @@ export class TransactionAuthController {
       this.settleReviewCapability();
       this.updateState({
         state: 'error',
-        error: new ReviewEndedError('Unlock to review this request again.'),
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
       });
       return false;
     }
@@ -1644,6 +1660,8 @@ export class TransactionAuthController {
     const request = this.currentRequest;
     const reviewKey = request.reviewGrantKey;
     const lockedReview = !!reviewKey && reviewGrant.isLockedSitting(reviewKey);
+    const isWalletConnect = !!request.walletConnectParams?.sessionBinding;
+    const signedThenLapsedBatchMessage = SIGNED_THEN_LAPSED_BATCH_MESSAGE;
 
     if (reviewKey && this.reviewSigningStarted) return;
     if (this.refuseWhileSignerAlive()) return;
@@ -1672,7 +1690,10 @@ export class TransactionAuthController {
       this.settleReviewCapability();
       this.updateState({
         state: 'error',
-        error: new ReviewEndedError('Unlock to review this request again.'),
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
       });
       return;
     }
@@ -1850,9 +1871,14 @@ export class TransactionAuthController {
               error: new ReviewEndedError(
                 this.hasSubmittedToNetwork
                   ? request.type === 'batch_transaction'
-                    ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                    ? signedThenLapsedBatchMessage
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-                  : 'Your approval ended before signing finished. Start the request again.'
+                  : this.hasEnteredSigner()
+                    ? isWalletConnect
+                      ? 'Your approval ended before signing finished. Try again in the dApp.'
+                      : 'Your approval ended before signing finished. Start the request again.'
+                    : 'Unlock to review this request again.',
+                this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
               ),
             });
             return;
@@ -1966,6 +1992,8 @@ export class TransactionAuthController {
         onComplete: (result) => {
           if (signerFinished || flowGeneration !== this.cancelledFlowGeneration)
             return;
+          if (result.signedTransactions?.length)
+            this.signatureReceivedForRequest = true;
           signerFinished = true;
           if (
             reviewKey &&
@@ -1991,9 +2019,14 @@ export class TransactionAuthController {
               error: new ReviewEndedError(
                 this.hasSubmittedToNetwork
                   ? request.type === 'batch_transaction'
-                    ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                    ? signedThenLapsedBatchMessage
                     : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-                  : 'Your approval ended before signing finished. Start the request again.'
+                  : this.hasEnteredSigner()
+                    ? isWalletConnect
+                      ? 'Your approval ended before signing finished. Try again in the dApp.'
+                      : 'Your approval ended before signing finished. Start the request again.'
+                    : 'Unlock to review this request again.',
+                this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
               ),
             });
             return;
@@ -2065,7 +2098,10 @@ export class TransactionAuthController {
           this.settleReviewCapability();
           this.updateState({
             state: 'error',
-            error: new ReviewEndedError('Unlock to review this request again.'),
+            error: new ReviewEndedError(
+              'Unlock to review this request again.',
+              'Approval ended'
+            ),
           });
           return;
         }
@@ -2091,6 +2127,7 @@ export class TransactionAuthController {
       }
       this.signerRunToken = runToken;
       try {
+        this.signerEnteredForRequest = true;
         await this.unifiedSigner.signTransaction(request, callbacks, {
           signal: this.signingAbortController.signal,
         });
@@ -2117,9 +2154,14 @@ export class TransactionAuthController {
           error: new ReviewEndedError(
             this.hasSubmittedToNetwork
               ? request.type === 'batch_transaction'
-                ? SIGNED_THEN_LAPSED_BATCH_MESSAGE
+                ? signedThenLapsedBatchMessage
                 : SIGNED_THEN_LAPSED_NON_BATCH_MESSAGE
-              : 'Your approval ended before signing finished. Start the request again.'
+              : this.hasEnteredSigner()
+                ? isWalletConnect
+                  ? 'Your approval ended before signing finished. Try again in the dApp.'
+                  : 'Your approval ended before signing finished. Start the request again.'
+                : 'Unlock to review this request again.',
+            this.hasEnteredSigner() ? 'Request ended' : 'Approval ended'
           ),
         });
         return;
@@ -2596,6 +2638,7 @@ export class TransactionAuthController {
       );
 
       if (isStale()) return;
+      this.signerEnteredForRequest = true;
       this.updateState({
         remoteSignerRequest: signerRequest,
         remoteSignerStatus: 'displaying_request',
@@ -2773,6 +2816,8 @@ export class TransactionAuthController {
           `Invalid signed response: ${envelope.error ?? 'envelope validation failed'}`
         );
       }
+      // Signature bytes are present; verification below still fails closed.
+      this.signatureReceivedForRequest = true;
 
       // Content-bind + network-correct signature verification (FAIL CLOSED):
       // every returned txn must byte-equal the exact txn the wallet built AND be
