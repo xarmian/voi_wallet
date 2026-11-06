@@ -534,3 +534,45 @@ it('REGRESSION the protocol codes equal the SDK constants', () => {
     getSdkError('UNSUPPORTED_ACCOUNTS').code
   );
 });
+
+it('DEFECT release permits readmission with the same firstSeenMs and no answer or write', async () => {
+  const admission = await coordinator.admit(ref);
+  const listener = jest.fn();
+  coordinator.subscribe(ref, listener);
+  const write = jest.spyOn(AsyncStorage, 'setItem');
+  write.mockClear();
+  coordinator.release(ref);
+  expect(coordinator.isOpen(ref)).toBe(false);
+  expect(write).not.toHaveBeenCalled();
+  now += 1000;
+  expect(await coordinator.admit(ref)).toEqual(admission);
+  expect(store.isHandled(ref)).toBe(false);
+  expect(calls()).toBe(0);
+  await coordinator.settle(ref, 'session-ended');
+  expect(listener).not.toHaveBeenCalled();
+});
+
+it('REGRESSION release of an unknown ref is a no-op', () => {
+  expect(() => coordinator.release(ref)).not.toThrow();
+  expect(calls()).toBe(0);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('DEFECT release clears the admission timer', async () => {
+  await coordinator.admit(ref);
+  expect(jest.getTimerCount()).toBe(1);
+  coordinator.release(ref);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+it('DEFECT a released ref still expires at its original deadline', async () => {
+  await coordinator.admit(ref);
+  coordinator.release(ref);
+  now += 300_000;
+  expect(await coordinator.admit(ref)).toEqual({ action: 'expired' });
+  expect(transport.rejectRequestV2).toHaveBeenCalledWith(
+    ref.topic,
+    ref.id,
+    EXIT_ANSWERS.expired
+  );
+});

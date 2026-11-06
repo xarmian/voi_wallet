@@ -10,7 +10,7 @@ import { WalletConnectService } from '@/services/walletconnect';
 import { DeepLinkService } from '@/services/deeplink';
 import { extensionDeepLinkHandler } from '@/services/deeplink/extensionHandler';
 import { isWalletConnectUri } from '@/services/walletconnect/utils';
-import { redactSensitiveForLog } from '@/utils/logRedaction';
+import { redactError, redactSensitiveForLog } from '@/utils/logRedaction';
 import { notificationService } from '@/services/notifications';
 import {
   takeAccountSubscribeToken,
@@ -23,6 +23,13 @@ import {
   TransactionRequestQueue,
 } from '@/services/walletconnect/TransactionRequestQueue';
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import { createCoordinatorTransport } from '@/services/walletconnect/coordinatorTransport';
+import {
+  requestRefFor,
+  proposalRefFor,
+  requestExpiryOf,
+} from '@/services/walletconnect/requestRefs';
 
 /**
  * Whole-app service boot, extracted verbatim from AppNavigator's mount effect
@@ -103,6 +110,13 @@ export const initializeServices = async ({
     let onProposal: ((proposal: any) => void) | null = null;
     let onRequest: ((requestEvent: any) => Promise<void>) | null = null;
 
+    const onSessionGone = (event: { topic?: string }) => {
+      if (event?.topic) {
+        void RequestCoordinator.getInstance().onSessionEnded(event.topic);
+      }
+    };
+    // The v1 disconnect path is not wired to the coordinator in this unit.
+
     // Whether the deferred (off-critical-path) per-account subscribe should
     // run. Set once the notification service is initialized and a push token
     // is registered; the actual subscribe is scheduled after startup.
@@ -120,6 +134,9 @@ export const initializeServices = async ({
       // AppNavigator navigation handlers must attach to that same initialized
       // instance, so init and .on(...) stay together in one unit.
       const initWalletConnect = async () => {
+        RequestCoordinator.getInstance().setTransport(
+          createCoordinatorTransport()
+        );
         // TASK-394: answer requests the transaction queue drops unshown (full
         // queue, stale entry) so the dApp is not left waiting. Installed
         // before v2 init so v1 requests (DeepLinkService) are covered even if
@@ -136,34 +153,54 @@ export const initializeServices = async ({
           const deepLinkService = DeepLinkService.getInstance();
 
           // Listen for WalletConnect session proposals and navigate to approval screen
-          onProposal = (proposal: any) => {
-            void deepLinkService.deliverRoute(
-              `wc:proposal:${proposal?.id}`,
-              () => {
-                try {
-                  if (navigationRef.current?.isReady?.()) {
-                    // Close any open QR scanner first when possible
-                    if (navigationRef.current.canGoBack?.()) {
-                      navigationRef.current.goBack();
+          onProposal = async (proposal: any) => {
+            const coordinator = RequestCoordinator.getInstance();
+            const ref = proposalRefFor(proposal);
+            const admission = await coordinator.admit(
+              ref,
+              proposal.expiryTimestamp
+            );
+            if (admission.action !== 'show') return;
+            try {
+              await deepLinkService.deliverRoute(
+                `wc:proposal:${proposal?.id}`,
+                () => {
+                  try {
+                    if (navigationRef.current?.isReady?.()) {
+                      // Close only the QR scanner before showing the proposal.
+                      if (
+                        navigationRef.current.getCurrentRoute?.()?.name ===
+                          'QRScanner' &&
+                        navigationRef.current.canGoBack?.()
+                      ) {
+                        navigationRef.current.goBack();
+                      }
+                      navigationRef.current.navigate(
+                        'WalletConnectSessionProposal',
+                        { proposal }
+                      );
+                    } else {
+                      coordinator.release(ref);
+                      console.error(
+                        'WalletConnect session proposal not shown: navigation not ready'
+                      );
                     }
-                    // Then navigate to session proposal
-                    navigationRef.current.navigate(
-                      'WalletConnectSessionProposal',
-                      { proposal }
-                    );
-                  } else {
+                  } catch (error) {
+                    coordinator.release(ref);
                     console.error(
-                      'WalletConnect session proposal not shown: navigation not ready'
+                      'Failed to navigate to WalletConnectSessionProposal:',
+                      redactError(error)
                     );
                   }
-                } catch (err) {
-                  console.error(
-                    'Failed to navigate to WalletConnectSessionProposal:',
-                    err
-                  );
                 }
-              }
-            );
+              );
+            } catch (error) {
+              coordinator.release(ref);
+              console.error(
+                'Failed to deliver WalletConnect session proposal:',
+                redactError(error)
+              );
+            }
           };
           wcService.on('session_proposal', onProposal);
 
@@ -184,12 +221,21 @@ export const initializeServices = async ({
               );
               return;
             }
+            const coordinator = RequestCoordinator.getInstance();
+            const ref = requestRefFor(requestEvent, 2);
+            const admission = await coordinator.admit(
+              ref,
+              requestExpiryOf(requestEvent)
+            );
+            if (admission.action !== 'show') return;
             // Not shown and not queued: let a redelivery of it through.
-            const release = () =>
+            const release = () => {
               TransactionRequestQueue.releaseClaim(
                 requestEvent.id,
                 requestEvent.topic
               );
+              coordinator.release(ref);
+            };
 
             const showOrQueue = async () => {
               let delivered = false;
@@ -247,7 +293,7 @@ export const initializeServices = async ({
               } catch (err) {
                 console.error(
                   'Failed to handle WalletConnect transaction request:',
-                  err
+                  redactError(err)
                 );
               } finally {
                 if (!delivered) release();
@@ -262,11 +308,13 @@ export const initializeServices = async ({
                 release();
                 console.error(
                   'Failed to deliver WalletConnect transaction request:',
-                  err
+                  redactError(err)
                 );
               });
           };
           wcService.on('session_request', onRequest);
+          wcService.on('session_deleted', onSessionGone);
+          wcService.on('session_expired', onSessionGone);
 
           console.log('WalletConnect service initialized');
         } catch (error) {
@@ -496,6 +544,8 @@ export const initializeServices = async ({
         }
         if (wcService && onRequest) {
           wcService.off?.('session_request', onRequest);
+          wcService.off?.('session_deleted', onSessionGone);
+          wcService.off?.('session_expired', onSessionGone);
         }
         if (!isSignerMode) {
           extensionDeepLinkHandler.cleanup();

@@ -14,6 +14,33 @@ import {
   TransactionRequestQueue,
 } from '../TransactionRequestQueue';
 import { answerDroppedRequests } from '../droppedRequestResponder';
+import { HandledStore } from '../handledStore';
+import {
+  RequestCoordinator,
+  CoordinatorTransport,
+} from '../requestCoordinator';
+import { requestRefFor } from '../requestRefs';
+
+let store: HandledStore;
+let coordinator: RequestCoordinator;
+const transport: jest.Mocked<CoordinatorTransport> = {
+  rejectRequestV2: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectRequestV2']>
+  >(async (...args) => mockV2Reject(...args)),
+  rejectRequestV1: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectRequestV1']>
+  >(async (...args) => mockV1Reject(...args)),
+  rejectProposalV2: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectProposalV2']>
+  >(async () => {}),
+  rejectProposalV1: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectProposalV1']>
+  >(async () => {}),
+};
 
 const mockV2Reject = jest.fn(async (..._args: unknown[]) => {});
 const mockV1Reject = jest.fn(async (..._args: unknown[]) => {});
@@ -47,11 +74,15 @@ const storedIds = async () =>
   );
 
 const flush = async () => {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 80; i++) await Promise.resolve();
 };
 
 beforeEach(async () => {
   await AsyncStorage.clear();
+  HandledStore.getInstance().__resetForTests();
+  store = new HandledStore();
+  coordinator = new RequestCoordinator({ store, transport });
+  jest.spyOn(RequestCoordinator, 'getInstance').mockReturnValue(coordinator);
   mockV1Reject.mockReset().mockResolvedValue(undefined);
   mockV2Reject.mockReset().mockResolvedValue(undefined);
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -59,6 +90,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  coordinator.__resetForTests();
   TransactionRequestQueue.setDroppedRequestHandler(null);
   jest.restoreAllMocks();
 });
@@ -222,62 +254,74 @@ describe('answerDroppedRequests (the boot-installed handler)', () => {
   };
   const v2Entry = { id: 51, topic: 'topic-v2', params, timestamp: 1 };
 
-  it('routes v1 and v2 with the decline-path payload (code 5001)', async () => {
-    answerDroppedRequests([v1Entry, v2Entry], 'full');
-    await flush();
+  it.each(['full', 'expired'] as const)(
+    'DEFECT routes v1 and v2 dropped %s through the coordinator with -32000',
+    async (reason) => {
+      answerDroppedRequests([v1Entry, v2Entry], reason);
+      await flush();
+      const message =
+        reason === 'full'
+          ? 'Wallet busy: too many pending requests. Please retry.'
+          : 'Request expired.';
+      expect(mockV1Reject).toHaveBeenCalledTimes(1);
+      expect(mockV1Reject).toHaveBeenCalledWith(50, message);
+      expect(mockV2Reject).toHaveBeenCalledTimes(1);
+      expect(mockV2Reject).toHaveBeenCalledWith('topic-v2', 51, {
+        code: -32000,
+        message,
+      });
+      expect(store.isHandled(requestRefFor(v1Entry, 1))).toBe(true);
+      expect(store.isHandled(requestRefFor(v2Entry))).toBe(true);
+    }
+  );
 
-    const full = 'Wallet busy: too many pending requests. Please retry.';
-    expect(mockV1Reject).toHaveBeenCalledTimes(1);
-    expect(mockV1Reject).toHaveBeenCalledWith(50, full);
-    expect(mockV2Reject).toHaveBeenCalledTimes(1);
-    expect(mockV2Reject).toHaveBeenCalledWith('topic-v2', 51, {
-      code: 5001,
-      message: full,
-    });
-
-    answerDroppedRequests([v1Entry, v2Entry], 'expired');
-    await flush();
-    const expired = 'Request expired before it could be reviewed.';
-    expect(mockV1Reject).toHaveBeenLastCalledWith(50, expired);
-    expect(mockV2Reject).toHaveBeenLastCalledWith('topic-v2', 51, {
-      code: 5001,
-      message: expired,
-    });
-  });
-
-  it('a failed send is logged, never thrown, and the other entries still go out', async () => {
+  it('REGRESSION a failed send is logged, never thrown, and other entries still go out', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     mockV1Reject.mockRejectedValueOnce(new Error('Client not connected'));
-
     expect(() =>
       answerDroppedRequests([v1Entry, v2Entry], 'expired')
     ).not.toThrow();
     await flush();
-
     expect(mockV2Reject).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to answer dropped request'),
-      'Client not connected'
+      '[RequestCoordinator]',
+      'WalletConnect answer could not be published'
     );
   });
 
-  it('a failed send forgets the delivery mark so a redelivery can surface', async () => {
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
+  it('DEFECT a failed send retains handled state and delivery mark; coordinator replay answers again', async () => {
     const forget = jest.spyOn(TransactionRequestQueue, 'forgetDelivery');
     mockV1Reject.mockRejectedValueOnce(new Error('Client not connected'));
     TransactionRequestQueue.setDroppedRequestHandler(answerDroppedRequests);
     TransactionRequestQueue.claim(50, 'handshake');
     TransactionRequestQueue.claim(51, 'topic-v2');
-
     TransactionRequestQueue.reportDropped([v1Entry, v2Entry], 'expired');
     await flush();
-
-    expect(forget).toHaveBeenCalledTimes(1);
-    expect(forget).toHaveBeenCalledWith(50, 'handshake');
-    // The failed one can surface again; the answered one stays answered.
-    expect(TransactionRequestQueue.claim(50, 'handshake')).toBe(true);
+    expect(forget).not.toHaveBeenCalled();
+    expect(TransactionRequestQueue.claim(50, 'handshake')).toBe(false);
     expect(TransactionRequestQueue.claim(51, 'topic-v2')).toBe(false);
-    forget.mockRestore();
+    expect(store.isHandled(requestRefFor(v1Entry, 1))).toBe(true);
+    expect(await coordinator.admit(requestRefFor(v1Entry, 1))).toEqual({
+      action: 'suppressed',
+    });
+    expect(mockV1Reject).toHaveBeenLastCalledWith(
+      50,
+      'Request already handled.'
+    );
+  });
+
+  it('REGRESSION a rejected settlement is redacted and cannot stop other entries', async () => {
+    const warn = jest.spyOn(console, 'warn');
+    jest
+      .spyOn(coordinator, 'settle')
+      .mockRejectedValueOnce(new Error('settlement unavailable'));
+    answerDroppedRequests([v1Entry, v2Entry], 'full');
+    await flush();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to answer dropped request'),
+      'settlement unavailable'
+    );
+    expect(mockV2Reject).toHaveBeenCalledTimes(1);
   });
 
   it('a failed send never clears a mark the UI set', async () => {

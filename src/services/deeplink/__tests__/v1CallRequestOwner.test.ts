@@ -10,6 +10,13 @@
  * the v1 client. No key material: the transactions are opaque placeholders.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { HandledStore } from '@/services/walletconnect/handledStore';
+import {
+  RequestCoordinator,
+  CoordinatorTransport,
+} from '@/services/walletconnect/requestCoordinator';
+import { requestRefFor } from '@/services/walletconnect/requestRefs';
 import { EventEmitter } from 'events';
 import type { NavigationContainerRef } from '@react-navigation/native';
 
@@ -54,7 +61,7 @@ class FakeV1Client extends EventEmitter {
 }
 
 const flush = async () => {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 80; i++) await Promise.resolve();
 };
 
 const makeNav = () => {
@@ -78,7 +85,34 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
   let service: DeepLinkService;
   let nav: ReturnType<typeof makeNav>;
 
-  beforeEach(() => {
+  let store: HandledStore;
+  let coordinator: RequestCoordinator;
+  let transport: jest.Mocked<CoordinatorTransport>;
+
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+    HandledStore.getInstance().__resetForTests();
+    store = new HandledStore();
+    transport = {
+      rejectRequestV2: jest.fn<
+        Promise<void>,
+        Parameters<CoordinatorTransport['rejectRequestV2']>
+      >(async () => {}),
+      rejectRequestV1: jest.fn<
+        Promise<void>,
+        Parameters<CoordinatorTransport['rejectRequestV1']>
+      >(async () => {}),
+      rejectProposalV2: jest.fn<
+        Promise<void>,
+        Parameters<CoordinatorTransport['rejectProposalV2']>
+      >(async () => {}),
+      rejectProposalV1: jest.fn<
+        Promise<void>,
+        Parameters<CoordinatorTransport['rejectProposalV1']>
+      >(async () => {}),
+    };
+    coordinator = new RequestCoordinator({ store, transport });
+    jest.spyOn(RequestCoordinator, 'getInstance').mockReturnValue(coordinator);
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     service = new DeepLinkService();
@@ -87,6 +121,7 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
   });
 
   afterEach(async () => {
+    coordinator.__resetForTests();
     TransactionRequestQueue.setDroppedRequestHandler(null);
     service.cleanup();
     await TransactionRequestQueue.clear();
@@ -264,5 +299,56 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
         [6001]
       );
     });
+  });
+  it('DEFECT a handled v1 request gets the v1 answer without navigation', async () => {
+    const client = new FakeV1Client('handshake-handled');
+    service.attachV1CallRequests(
+      client as unknown as Parameters<
+        DeepLinkService['attachV1CallRequests']
+      >[0],
+      'pair-topic'
+    );
+    await store.markHandled(
+      requestRefFor({ id: 51801, topic: 'handshake-handled' }, 1),
+      'approved'
+    );
+    client.emit('call_request', callRequest(51801));
+    await flush();
+    expect(nav.navigate).not.toHaveBeenCalled();
+    expect(transport.rejectRequestV1).toHaveBeenCalledWith(
+      51801,
+      'Request already handled.'
+    );
+  });
+
+  it('DEFECT delivery failure releases the coordinator ref', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const client = new FakeV1Client('handshake-release');
+    service.attachV1CallRequests(
+      client as unknown as Parameters<
+        DeepLinkService['attachV1CallRequests']
+      >[0],
+      'pair-topic'
+    );
+    nav.navigate.mockImplementationOnce(() => {
+      throw new Error('navigation unavailable');
+    });
+    const ref = requestRefFor({ id: 51802, topic: 'handshake-release' }, 1);
+    const release = jest.spyOn(coordinator, 'release');
+    const admit = jest.spyOn(coordinator, 'admit');
+    client.emit('call_request', callRequest(51802));
+    await flush();
+    expect(release).toHaveBeenCalledWith(ref);
+    expect(coordinator.isOpen(ref)).toBe(false);
+    client.emit('call_request', callRequest(51802));
+    await flush();
+    expect(admit).toHaveBeenCalledTimes(2);
+    expect(
+      await Promise.all(admit.mock.results.map((result) => result.value))
+    ).toEqual([
+      expect.objectContaining({ action: 'show' }),
+      expect.objectContaining({ action: 'show' }),
+    ]);
+    expect(nav.navigate).toHaveBeenCalledTimes(2);
   });
 });

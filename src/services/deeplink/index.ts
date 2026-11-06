@@ -11,6 +11,11 @@ import {
   parseWalletConnectV1Uri,
 } from '@/services/walletconnect/utils';
 import { WalletConnectV1Client } from '@/services/walletconnect/v1';
+import { RequestCoordinator } from '@/services/walletconnect/requestCoordinator';
+import {
+  requestRefFor,
+  v1ProposalRefFor,
+} from '@/services/walletconnect/requestRefs';
 import { redactSensitiveForLog, redactError } from '@/utils/logRedaction';
 import {
   isArc0090Uri,
@@ -287,83 +292,91 @@ export class DeepLinkService {
       return;
     }
 
-    void this.deliverSigningRequest(async () => {
-      let delivered = false;
-      try {
-        if (!this.navigationRef?.isReady()) {
-          console.error(
-            '[DeepLinkService] V1 transaction request not shown: navigation not ready'
-          );
-          return;
-        }
-        // Check if we're already on the TransactionRequestScreen
-        if (
-          this.navigationRef.getCurrentRoute()?.name ===
-          'WalletConnectTransactionRequest'
-        ) {
-          // Enqueue the request instead of navigating immediately; that
-          // screen takes it next. The claim stays: queued.
-          console.log(
-            '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
-          );
-          try {
-            await TransactionRequestQueue.enqueue({
-              id: transformedRequest.id,
-              topic: transformedRequest.topic,
-              params: transformedRequest.params,
+    const coordinator = RequestCoordinator.getInstance();
+    const ref = requestRefFor(transformedRequest, 1);
+    void (async () => {
+      const admission = await coordinator.admit(ref);
+      if (admission.action !== 'show') return;
+      await this.deliverSigningRequest(async () => {
+        let delivered = false;
+        try {
+          if (!this.navigationRef?.isReady()) {
+            console.error(
+              '[DeepLinkService] V1 transaction request not shown: navigation not ready'
+            );
+            return;
+          }
+          // Check if we're already on the TransactionRequestScreen
+          if (
+            this.navigationRef.getCurrentRoute()?.name ===
+            'WalletConnectTransactionRequest'
+          ) {
+            // Enqueue the request instead of navigating immediately; that
+            // screen takes it next. The claim stays: queued.
+            console.log(
+              '[DeepLinkService] Currently on transaction screen, enqueueing V1 request'
+            );
+            try {
+              await TransactionRequestQueue.enqueue({
+                id: transformedRequest.id,
+                topic: transformedRequest.topic,
+                params: transformedRequest.params,
+                version: 1,
+              });
+            } catch (error) {
+              if (!(error instanceof QueueFullError)) throw error;
+              // TASK-394: answer it as dropped (marks it displayed, so a
+              // redelivery is not shown) instead of releasing the claim.
+              TransactionRequestQueue.reportDropped(
+                [
+                  {
+                    id: transformedRequest.id,
+                    topic: transformedRequest.topic,
+                    params: transformedRequest.params,
+                    timestamp: Date.now(),
+                    version: 1,
+                  },
+                ],
+                'full'
+              );
+            }
+            delivered = true;
+            return;
+          }
+
+          // Navigate to transaction request screen if not already there
+          delivered = await this.navigateToRoute({
+            screen: 'WalletConnectTransactionRequest',
+            params: {
+              requestEvent: transformedRequest,
               version: 1,
-            });
-          } catch (error) {
-            if (!(error instanceof QueueFullError)) throw error;
-            // TASK-394: answer it as dropped (marks it displayed, so a
-            // redelivery is not shown) instead of releasing the claim.
-            TransactionRequestQueue.reportDropped(
-              [
-                {
-                  id: transformedRequest.id,
-                  topic: transformedRequest.topic,
-                  params: transformedRequest.params,
-                  timestamp: Date.now(),
-                  version: 1,
-                },
-              ],
-              'full'
+            },
+          });
+          if (delivered) {
+            TransactionRequestQueue.markDisplayed(
+              transformedRequest.id,
+              transformedRequest.topic
             );
           }
-          delivered = true;
-          return;
+        } finally {
+          if (!delivered) {
+            // Not shown and not queued: let a redelivery of it through.
+            TransactionRequestQueue.releaseClaim(
+              transformedRequest.id,
+              transformedRequest.topic
+            );
+            coordinator.release(ref);
+          }
         }
-
-        // Navigate to transaction request screen if not already there
-        delivered = await this.navigateToRoute({
-          screen: 'WalletConnectTransactionRequest',
-          params: {
-            requestEvent: transformedRequest,
-            version: 1,
-          },
-        });
-        if (delivered) {
-          TransactionRequestQueue.markDisplayed(
-            transformedRequest.id,
-            transformedRequest.topic
-          );
-        }
-      } finally {
-        if (!delivered) {
-          // Not shown and not queued: let a redelivery of it through.
-          TransactionRequestQueue.releaseClaim(
-            transformedRequest.id,
-            transformedRequest.topic
-          );
-        }
-      }
-    }).catch((error) => {
+      });
+    })().catch((error) => {
       // The route queue never rejects; if it ever did, the handler above
       // never ran, so the request was not delivered.
       TransactionRequestQueue.releaseClaim(
         transformedRequest.id,
         transformedRequest.topic
       );
+      coordinator.release(ref);
       console.error(
         '[DeepLinkService] Failed to deliver V1 request:',
         redactError(error)
@@ -730,16 +743,30 @@ export class DeepLinkService {
       const v1Client = WalletConnectV1Client.getInstance();
 
       // Set up event handlers
-      v1Client.once('session_request', (sessionRequest) => {
-        // Navigate to session proposal screen
-        this.navigateToRoute({
-          screen: 'WalletConnectSessionProposal',
-          params: {
-            version: 1,
-            sessionRequest,
-          },
-        });
-      });
+      v1Client.once(
+        'session_request',
+        (sessionRequest: { id?: number | string }) => {
+          const coordinator = RequestCoordinator.getInstance();
+          const ref = v1ProposalRefFor(sessionRequest);
+          void (async () => {
+            const admission = await coordinator.admit(ref);
+            if (admission.action !== 'show') return;
+            try {
+              const delivered = await this.navigateToRoute({
+                screen: 'WalletConnectSessionProposal',
+                params: { version: 1, sessionRequest },
+              });
+              if (!delivered) coordinator.release(ref);
+            } catch (error) {
+              coordinator.release(ref);
+              console.error(
+                'Failed to deliver WalletConnect v1 proposal:',
+                redactError(error)
+              );
+            }
+          })();
+        }
+      );
 
       // Transaction signing requests: one permanent listener, owned here
       // and shared with session restore (TASK-257).

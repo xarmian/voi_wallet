@@ -205,6 +205,14 @@ export class RequestCoordinator {
     }
   }
 
+  release(ref: RequestRef): void {
+    const key = keyOf(ref);
+    const entry = this.open.get(key);
+    this.open.delete(key);
+    this.clearEntry(entry);
+    entry?.listeners.clear();
+  }
+
   isOpen(ref: RequestRef): boolean {
     return this.open.has(keyOf(ref));
   }

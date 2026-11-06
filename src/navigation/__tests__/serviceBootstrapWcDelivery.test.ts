@@ -28,6 +28,40 @@ import {
 } from '@/services/walletconnect/TransactionRequestQueue';
 import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestResponder';
 
+import { HandledStore } from '@/services/walletconnect/handledStore';
+import {
+  RequestCoordinator,
+  CoordinatorTransport,
+} from '@/services/walletconnect/requestCoordinator';
+import {
+  requestRefFor,
+  proposalRefFor,
+} from '@/services/walletconnect/requestRefs';
+
+const mockTransport: jest.Mocked<CoordinatorTransport> = {
+  rejectRequestV2: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectRequestV2']>
+  >(async () => {}),
+  rejectRequestV1: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectRequestV1']>
+  >(async () => {}),
+  rejectProposalV2: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectProposalV2']>
+  >(async () => {}),
+  rejectProposalV1: jest.fn<
+    Promise<void>,
+    Parameters<CoordinatorTransport['rejectProposalV1']>
+  >(async () => {}),
+};
+jest.mock('@/services/walletconnect/coordinatorTransport', () => ({
+  createCoordinatorTransport: () => mockTransport,
+}));
+let store: HandledStore;
+let coordinator: RequestCoordinator;
+
 type Listener = (event: any) => unknown;
 
 const mockWcListeners: Record<string, Listener[]> = {};
@@ -125,7 +159,7 @@ const { createPendingRouteQueue } = jest.requireActual(
 );
 
 const flush = async () => {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 80; i++) await Promise.resolve();
 };
 
 const becomeReady = () => {
@@ -166,6 +200,14 @@ beforeEach(async () => {
     mockRoute ? { name: mockRoute } : undefined
   );
   await AsyncStorage.clear();
+  HandledStore.getInstance().__resetForTests();
+  store = new HandledStore();
+  coordinator = new RequestCoordinator({ store, transport: mockTransport });
+  jest.spyOn(RequestCoordinator, 'getInstance').mockReturnValue(coordinator);
+  Object.values(mockTransport).forEach((fn) => fn.mockClear());
+  mockNav.canGoBack.mockReturnValue(false);
+  mockNav.goBack.mockClear();
+  mockWcService.off.mockClear();
   mockRouteQueue = createPendingRouteQueue({
     isReady: () => mockReady,
     onReady: (cb: () => void) => {
@@ -180,6 +222,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  coordinator.__resetForTests();
   TransactionRequestQueue.setDroppedRequestHandler(null);
   (answerDroppedRequests as jest.Mock).mockReset();
   jest.restoreAllMocks();
@@ -519,4 +562,154 @@ it('delivers a request while locked without unlocking the wallet (TASK-437)', as
     expect.anything()
   );
   expect(AppLockSignal.isUnlocked()).toBe(false);
+});
+
+describe('coordinator ingest (U2)', () => {
+  it('DEFECT a handled replay is answered already handled without navigation', async () => {
+    mockReady = true;
+    await boot();
+    const event = request(5201);
+    await store.markHandled(requestRefFor(event), 'approved');
+    await emit('session_request', event);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledWith(
+      event.topic,
+      event.id,
+      {
+        code: -32000,
+        message: 'Request already handled.',
+      }
+    );
+  });
+
+  it('DEFECT a request past its own expiryTimestamp is answered expired without navigation', async () => {
+    mockReady = true;
+    await boot();
+    const event = request(5202);
+    const expired = {
+      ...event,
+      params: {
+        ...event.params,
+        request: {
+          ...event.params.request,
+          expiryTimestamp: Math.floor(Date.now() / 1000) - 1,
+        },
+      },
+    };
+    await emit('session_request', expired);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledWith(
+      event.topic,
+      event.id,
+      {
+        code: -32000,
+        message: 'Request expired.',
+      }
+    );
+  });
+
+  it('DEFECT navigation not ready releases admission so redelivery is shown twice by admit', async () => {
+    await boot();
+    const admit = jest.spyOn(coordinator, 'admit');
+    const event = request(5203);
+    mockReady = true;
+    mockNav.isReady.mockReturnValueOnce(false);
+    await emit('session_request', event);
+    expect(coordinator.isOpen(requestRefFor(event))).toBe(false);
+    await emit('session_request', event);
+    expect(admit).toHaveBeenCalledTimes(2);
+    expect(
+      await Promise.all(admit.mock.results.map((result) => result.value))
+    ).toEqual([
+      expect.objectContaining({ action: 'show' }),
+      expect.objectContaining({ action: 'show' }),
+    ]);
+    expect(navigatedIds()).toEqual([5203]);
+  });
+
+  it.each([
+    ['Home', 0],
+    ['QRScanner', 1],
+  ] as const)(
+    'DEFECT a proposal on %s pops only the scanner then navigates',
+    async (route, pops) => {
+      mockReady = true;
+      mockRoute = route;
+      mockNav.canGoBack.mockReturnValue(true);
+      await boot();
+      const proposal = { id: 5204, pairingTopic: 'pairing' };
+      await emit('session_proposal', proposal);
+      expect(mockNav.goBack).toHaveBeenCalledTimes(pops);
+      expect(mockNav.navigate).toHaveBeenCalledWith(
+        'WalletConnectSessionProposal',
+        { proposal }
+      );
+      if (pops)
+        expect(mockNav.goBack.mock.invocationCallOrder[0]).toBeLessThan(
+          mockNav.navigate.mock.invocationCallOrder[0]
+        );
+    }
+  );
+
+  it.each(['session_deleted', 'session_expired'])(
+    'DEFECT %s settles the open topic as session-ended without transport',
+    async (eventName) => {
+      mockReady = true;
+      await boot();
+      const event = request(eventName === 'session_deleted' ? 5205 : 5207);
+      const ref = requestRefFor(event);
+      await emit('session_request', event);
+      expect(coordinator.isOpen(ref)).toBe(true);
+      const listener = jest.fn();
+      coordinator.subscribe(ref, listener);
+      await emit(eventName, { topic: event.topic });
+      expect(coordinator.isOpen(ref)).toBe(false);
+      expect(store.isHandled(ref)).toBe(true);
+      expect(listener).toHaveBeenCalledWith({ reason: 'session-ended' });
+      Object.values(mockTransport).forEach((fn) =>
+        expect(fn).not.toHaveBeenCalled()
+      );
+    }
+  );
+
+  it('REGRESSION teardown removes both session end listeners', async () => {
+    const cleanupRef: { current: (() => void) | undefined } = {
+      current: undefined,
+    };
+    await initializeServices({
+      navigationRef: { current: mockNav },
+      initializeNetwork: async () => {},
+      cleanupRef,
+    });
+    for (const event of ['session_deleted', 'session_expired']) {
+      expect(mockWcListeners[event]).toHaveLength(1);
+    }
+    cleanupRef.current?.();
+    for (const event of ['session_deleted', 'session_expired']) {
+      expect(mockWcService.off).toHaveBeenCalledWith(
+        event,
+        mockWcListeners[event][0]
+      );
+    }
+  });
+
+  it.each(['not-ready', 'throws'])(
+    'DEFECT proposal delivery %s releases admission',
+    async (failure) => {
+      mockReady = true;
+      await boot();
+      if (failure === 'not-ready') mockNav.isReady.mockReturnValueOnce(false);
+      else
+        mockNav.navigate.mockImplementationOnce(() => {
+          throw new Error('navigation unavailable');
+        });
+      const release = jest.spyOn(coordinator, 'release');
+      const proposal = { id: 5206, pairingTopic: 'pairing' };
+      await emit('session_proposal', proposal);
+      expect(release).toHaveBeenCalledWith(proposalRefFor(proposal));
+      expect(await coordinator.admit(proposalRefFor(proposal))).toEqual(
+        expect.objectContaining({ action: 'show' })
+      );
+    }
+  );
 });

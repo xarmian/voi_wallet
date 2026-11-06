@@ -1,3 +1,7 @@
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 /**
  * Wiring tests for cold-start route delivery (DR-10 / TASK-381).
  *

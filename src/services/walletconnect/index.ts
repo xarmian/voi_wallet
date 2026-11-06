@@ -742,6 +742,22 @@ export class WalletConnectService extends EventEmitter {
     }
   }
 
+  async rejectProposal(
+    proposalId: number,
+    reason: { code: number; message: string }
+  ): Promise<void> {
+    try {
+      const provider = this.client.getProvider();
+      const signClient = provider.client;
+      await signClient.reject({ id: proposalId, reason });
+    } catch (error) {
+      console.error('Failed to reject session:', redactError(error));
+      throw new Error(
+        `Session rejection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
   async disconnectSession(topic: string): Promise<void> {
     try {
       // Check if this is a v1 session
