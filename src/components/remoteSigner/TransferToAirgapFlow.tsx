@@ -13,6 +13,7 @@
  * 7. Convert account to REMOTE_SIGNER type
  */
 
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
@@ -69,6 +70,7 @@ export function TransferToAirgapFlow({
   onCancel,
 }: TransferToAirgapFlowProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const networkId = useCurrentNetwork();
 
   // Block OS screenshots / screen recordings: this flow displays an ARC-0300 QR
@@ -88,6 +90,16 @@ export function TransferToAirgapFlow({
   // Cancels a pending fresh-auth prompt/read when the flow goes away or the app
   // goes to the background.
   const exportAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (covered) {
+      exportAbortRef.current?.abort();
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard the key-bearing QR and require fresh authentication, matching the background handler.
+      setPrivateKeyQrData(null);
+      setError(null);
+      setState('disclaimer');
+    }
+  }, [covered]);
 
   // Handle disclaimer acceptance
   const handleAcceptDisclaimer = useCallback(async () => {
@@ -826,7 +838,7 @@ export function TransferToAirgapFlow({
 
   return (
     <Modal
-      visible
+      visible={!covered}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={canClose ? onCancel : undefined}

@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Modal,
@@ -59,12 +60,18 @@ export default function UnifiedTransactionAuthModal({
   biometricOnOpen = false,
 }: UnifiedTransactionAuthModalProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const [authState, setAuthState] = useState<TransactionAuthState_Interface>(
     controller.getState()
   );
   const [pin, setPin] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A lock must discard typed digits before the Modal can reopen; this effect only follows the external cover state.
+    if (covered) setPin('');
+  }, [covered]);
 
   // --- Auth-flow latches (TASK-241) --------------------------------------
   // initialized / userCancelled are REFS, not state, so
@@ -1032,7 +1039,7 @@ export default function UnifiedTransactionAuthModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType={useBottomSheet ? 'slide' : 'fade'}
       onRequestClose={() => {
