@@ -66,7 +66,7 @@ it.each(
       .mockResolvedValueOnce(false);
   if (site === 'initCatch-536')
     (AccountSecureStorage.hasPin as jest.Mock).mockResolvedValueOnce(false);
-  const ledger = site === 'pauseFailed-1935';
+  const ledger = site === 'pauseFailed-1935' || site === 'lapse-1855';
   const remote = site === 'remote-529';
   // Observe real QR initialization; only the remote signer service is stubbed.
   const qr = remote
@@ -80,6 +80,8 @@ it.each(
     locked,
     ledger,
     remote,
+    realSigner: site === 'lapse-1855',
+    entries: site === 'lapse-1855' ? 3 : 1,
     signerThrows: site === 'signCatch-1948',
   });
   const { shownWithVault } = h;
@@ -109,8 +111,22 @@ it.each(
     message = 'mapped';
   }
   if (site === 'lapse-1855') {
+    let finish!: (bytes: Uint8Array) => void;
+    h.deviceSign.mockImplementationOnce(
+      () =>
+        new Promise<Uint8Array>((resolve) => {
+          finish = resolve;
+        })
+    );
+    h.deviceSign.mockResolvedValue(new Uint8Array([1]));
+    await h.ready();
+    await waitFor(() => expect(h.deviceSign).toHaveBeenCalledTimes(1));
     await lapse('lock');
-    await h.complete();
+    await act(async () => {
+      finish(new Uint8Array([1]));
+      await Promise.all(h.signerRuns);
+    });
+    expect(h.deviceSign).toHaveBeenCalledTimes(1);
     message = texts.lock;
   }
   if (site === 'signCatch-1948') message = 'mapped';

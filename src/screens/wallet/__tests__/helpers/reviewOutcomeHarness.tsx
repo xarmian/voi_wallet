@@ -392,6 +392,7 @@ export async function openOutcome(
     entries?: number;
     danger?: boolean;
     beforeSign?: () => void;
+    waitingKeys?: string[];
   } = {}
 ) {
   const {
@@ -407,7 +408,8 @@ export async function openOutcome(
   if (locked) await reviewGrant.unlock(key, { pin: '123456' });
   else {
     SessionKeyVault.set('fixture', 'pin');
-    if (!options.inApp) reviewGrant.mintForWaiting([key]);
+    if (!options.inApp)
+      reviewGrant.mintForWaiting(options.waitingKeys ?? [key]);
   }
   const address = makeAccount('review-outcome').addr;
   const account = {

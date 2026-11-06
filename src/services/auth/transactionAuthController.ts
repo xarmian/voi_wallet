@@ -159,6 +159,7 @@ export class TransactionAuthController {
   private userExplicitlyRejected: boolean = false;
   private signingAbortController: AbortController | null = null;
   private signerRunToken: symbol | null = null;
+  private reviewLapseUnsubscribe: (() => void) | null = null;
   private userCancelled = false;
   private deviceVerificationInProgress: boolean = false;
   private ledgerRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -480,6 +481,7 @@ export class TransactionAuthController {
   public async initializeSigningFlow(
     request: UnifiedTransactionRequest
   ): Promise<void> {
+    this.unsubscribeReviewLapse();
     this.cancelledFlowGeneration += 1; // invalidate any previous async callbacks
     this.signingAbortController?.abort();
     if (
@@ -1609,6 +1611,12 @@ export class TransactionAuthController {
     return true;
   }
 
+  private unsubscribeReviewLapse(): void {
+    const unsubscribe = this.reviewLapseUnsubscribe;
+    this.reviewLapseUnsubscribe = null;
+    unsubscribe?.();
+  }
+
   private refuseWhileSignerAlive(): boolean {
     if (!this.signerRunToken) return false;
     this.settleReviewCapability();
@@ -2048,6 +2056,7 @@ export class TransactionAuthController {
       // Crossing into the signer permanently spends this attempt's permission.
       if (reviewKey) {
         if (!reviewGrant.pauseIdle(reviewKey)) {
+          this.unsubscribeReviewLapse();
           this.isSigningInProgress = false;
           this.settleReviewCapability();
           this.updateState({
@@ -2057,6 +2066,22 @@ export class TransactionAuthController {
           return;
         }
         this.reviewSigningStarted = true;
+        this.unsubscribeReviewLapse();
+        // Only the sequential Ledger loop has entries left to hold back. A software
+        // batch signs all entries in parallel, and they have already started, so an
+        // abort there would only change the lapse text of a signed result.
+        if (this.currentState.isLedgerFlow) {
+          this.reviewLapseUnsubscribe = reviewGrant.subscribe(() => {
+            // Keep the outcome callback live so it publishes the lapse's own text.
+            if (
+              !reviewGrant.isValid(reviewKey) &&
+              this.signingAbortController &&
+              !this.signingAbortController.signal.aborted
+            ) {
+              this.signingAbortController.abort();
+            }
+          });
+        }
       }
       this.signerRunToken = runToken;
       try {
@@ -2065,11 +2090,15 @@ export class TransactionAuthController {
         });
       } finally {
         signerFinished = true;
-        if (this.signerRunToken === runToken) this.signerRunToken = null;
+        if (this.signerRunToken === runToken) {
+          this.unsubscribeReviewLapse();
+          this.signerRunToken = null;
+        }
       }
     } catch (error) {
       // Reachable only through a throwing callback; the signer resolves its own failures.
       if (flowGeneration !== this.cancelledFlowGeneration) return;
+      this.unsubscribeReviewLapse();
       this.isSigningInProgress = false;
       const reviewLapsed =
         !!request.reviewGrantKey &&
@@ -2346,6 +2375,7 @@ export class TransactionAuthController {
    * Cancel the current signing process
    */
   public cancel(options: { byUser?: boolean } = {}): void {
+    this.unsubscribeReviewLapse();
     this.userCancelled = options.byUser === true;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = true;
@@ -2396,6 +2426,7 @@ export class TransactionAuthController {
    * Ensures subsequent transactions can start fresh even after an error.
    */
   public resetAfterDismiss(): void {
+    this.unsubscribeReviewLapse();
     this.userCancelled = false;
     this.clearLedgerConnectionTimeout();
     this.ledgerCancelRequested = false;
@@ -2897,6 +2928,7 @@ export class TransactionAuthController {
    * Clean up resources
    */
   public cleanup(): void {
+    this.unsubscribeReviewLapse();
     this.userCancelled = false;
     this.cancelledFlowGeneration += 1;
     this.clearLedgerConnectionTimeout();

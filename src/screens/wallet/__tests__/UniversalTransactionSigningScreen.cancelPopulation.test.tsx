@@ -33,7 +33,8 @@ const routes = [
   'idle',
 ] as const;
 
-// REGRESSION: use the real batch loop for both Ledger and software paths.
+// DEFECT for lapse bounds and alerts; REGRESSION for the other rows.
+// Use the real batch loop for both Ledger and software paths.
 it.each(
   routes.flatMap((route) =>
     [true, false].flatMap((ledger) =>
@@ -125,6 +126,10 @@ it.each(
         'screenLeave',
         'cleanup',
         'replacement',
+        'listenerLapse',
+        'lock',
+        'background',
+        'rotation',
       ].includes(route) && !noSoftwareAction;
     expect(h.onSuccess).not.toHaveBeenCalled();
     if (['listenerLapse', 'lock', 'background', 'rotation'].includes(route)) {
@@ -143,7 +148,7 @@ it.each(
       noSoftwareAction || route === 'rotation' || (!locked && route !== 'lock')
     );
     // Only the entry whose phone prompt was shown can still reach the device
-    // after abort. A lapse without cancel does not abort an entered signer.
+    // after Cancel or a lapse; its signature is discarded.
     h.deviceSign.mockResolvedValue(new Uint8Array([1]));
     await act(async () => {
       if (!(route === 'deviceReject' && ledger)) {
@@ -159,8 +164,13 @@ it.each(
     const lapsed = ['listenerLapse', 'lock', 'background', 'rotation'].includes(
       route
     );
+    // A Ledger loop is aborted before it signals completion; a software batch has
+    // already signed every entry in parallel, so its text is unchanged.
     if (lapsed)
-      expect(h.alert).toHaveBeenCalledWith('Request ended', texts.batch);
+      expect(h.alert).toHaveBeenCalledWith(
+        'Request ended',
+        ledger ? texts.lock : texts.batch
+      );
     else expect(h.alert).not.toHaveBeenCalled();
     expect(SessionKeyVault.isUnlocked()).toBe(
       route === 'rotation' || (!locked && route !== 'lock')
