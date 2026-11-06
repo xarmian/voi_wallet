@@ -1149,3 +1149,21 @@ it.each(['authenticating', 'signing', 'processing'])(
     expect(mockModalProps.visible).toBe(state !== 'authenticating');
   }
 );
+
+// The in-app review (no walletConnect, no caller callback) falls back to the
+// presenting surface's own navigation when rejected.
+it('rejects an in-app review through the presenting navigation', async () => {
+  const sender = makeAccount('in-app-reject').addr.toString();
+  mockAccounts = [walletAccount('In-app account', sender)];
+  const view = await renderScreen({
+    networkId: VOI,
+    entries: [{ txn: b64(pay(VOI, sender, 1000000, 'In-app')) }],
+    approved: [sender],
+    reviewedAccount: { address: sender, label: 'In-app account' },
+    walletConnect: false,
+  });
+  await fireEvent.press(view.getByText('Reject'));
+  expect(
+    (navigationStub as unknown as { navigate: jest.Mock }).navigate
+  ).toHaveBeenCalledWith('Main', { screen: 'Home' });
+});

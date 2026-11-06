@@ -1,4 +1,7 @@
-import { scopedNavigation } from '@/services/navigation/scopedNavigation';
+import {
+  routeReviewBinding,
+  type ReviewBinding,
+} from '@/services/walletconnect/reviewBinding';
 import React, {
   useState,
   useMemo,
@@ -78,18 +81,32 @@ interface Props {
   route: SessionProposalScreenRouteProp;
 }
 
+type ConnectParams = RootStackParamList['WalletConnectSessionProposal'];
+
+/** The route screen: a thin wrapper that binds the review to its router. */
 export default function SessionProposalScreen({ navigation, route }: Props) {
-  const { theme } = useTheme();
-  const styles = useThemedStyles(createStyles);
-  const scoped = useMemo(
-    () => scopedNavigation(navigation, route.key),
+  const binding = useMemo(
+    () => routeReviewBinding(navigation, route.key),
     [navigation, route.key]
   );
+  return <ConnectReview params={route?.params} binding={binding} />;
+}
+
+export function ConnectReview({
+  params,
+  binding,
+}: {
+  params: ConnectParams | undefined;
+  binding: ReviewBinding;
+}) {
+  const { theme } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  const scoped = binding.nav;
 
   // Check for v1 or v2 proposal
-  const proposal = route?.params?.proposal as SessionProposal | undefined;
-  const version = route?.params?.version as number | undefined;
-  const v1SessionRequest = route?.params?.sessionRequest;
+  const proposal = params?.proposal as SessionProposal | undefined;
+  const version = params?.version as number | undefined;
+  const v1SessionRequest = params?.sessionRequest;
 
   // Determine which version we're handling
   const isV1 = version === 1 || !!v1SessionRequest;
@@ -164,14 +181,14 @@ export default function SessionProposalScreen({ navigation, route }: Props) {
   useEffect(() => () => reviewGrant.leave(requestKey), [requestKey]);
   useEffect(
     () =>
-      navigation.addListener('beforeRemove', () => {
+      binding.onLeave(() => {
         reviewGrant.leave(requestKey);
         if (!decidedRef.current && ref) {
           decidedRef.current = true;
           void coordinator.settle(ref, 'abandoned');
         }
       }),
-    [coordinator, ref, navigation, requestKey]
+    [coordinator, ref, binding, requestKey]
   );
 
   useEffect(() => {

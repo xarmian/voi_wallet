@@ -5,7 +5,10 @@ import {
   type RequestRef,
 } from '@/services/walletconnect/requestCoordinator';
 import Toast from 'react-native-toast-message';
-import { scopedNavigation } from '@/services/navigation/scopedNavigation';
+import {
+  routeReviewBinding,
+  type ReviewBinding,
+} from '@/services/walletconnect/reviewBinding';
 import { ReviewEndedError } from '@/services/auth/ReviewEndedError';
 import React, {
   useState,
@@ -312,10 +315,35 @@ function parseBatch(transactionBytes: string[]): {
   return { parsed, decoded };
 }
 
+type ReviewParams = SigningRouteParams & {
+  walletConnect?: WalletConnectRouteParams;
+};
+
+/** The route screen: a thin wrapper that binds the review to its router. */
 export default function UniversalTransactionSigningScreen({
   navigation,
   route,
 }: Props) {
+  const binding = useMemo(
+    () => routeReviewBinding(navigation, route.key),
+    [navigation, route.key]
+  );
+  return (
+    <TransactionReview
+      params={route.params as ReviewParams}
+      binding={binding}
+    />
+  );
+}
+
+export function TransactionReview({
+  params,
+  binding,
+}: {
+  params: ReviewParams;
+  binding: ReviewBinding;
+}) {
+  const { navigation } = binding;
   const {
     transactions,
     onSuccess: directOnSuccess,
@@ -325,9 +353,7 @@ export default function UniversalTransactionSigningScreen({
     networkId,
     chainId,
     walletConnect,
-  } = route.params as SigningRouteParams & {
-    walletConnect?: WalletConnectRouteParams;
-  };
+  } = params;
 
   // DR-15 — the ARC-0001 entries are the single source of truth for a dApp
   // request: the wallet must review and sign exactly the bytes the dApp sent,
@@ -346,17 +372,14 @@ export default function UniversalTransactionSigningScreen({
   // other direction). Coerce to the real shape so display fields (color/label) and
   // the unified request account (which needs `type`/`authAddress` for signer
   // selection) are correctly typed. Behavior-preserving: same runtime object.
-  const account = route.params.account as unknown as AccountMetadata;
+  const account = params.account as unknown as AccountMetadata;
 
   // Get callbacks from registry if callbackId provided, otherwise use direct callbacks
   const registryCallbacks = getNavigationCallbacks(callbackId);
   const onSuccess = registryCallbacks?.onSuccess || directOnSuccess;
   const onReject = registryCallbacks?.onReject || directOnReject;
   const onEnd = registryCallbacks?.onEnd;
-  const callbackNavigation = useMemo(
-    () => scopedNavigation(navigation, route.key),
-    [navigation, route.key]
-  );
+  const callbackNavigation = binding.nav;
   const endedRef = useRef(false);
 
   const { authState } = useAuth();
@@ -560,11 +583,11 @@ export default function UniversalTransactionSigningScreen({
   // replay never reports a departure that did not happen.
   useEffect(
     () =>
-      navigation.addListener('beforeRemove', () => {
+      binding.onLeave(() => {
         reviewGrant.leave(requestKey);
         getNavigationCallbacks(callbackId)?.onDismiss?.();
       }),
-    [navigation, callbackId, requestKey]
+    [binding, callbackId, requestKey]
   );
 
   /**
