@@ -511,7 +511,7 @@ it('DEFECT a lapse after the signer answers -32000 with a fixed message', async 
   await coordinator.settle(ref, 'lapsed');
   expect(EXIT_ANSWERS.lapsed).toEqual({
     code: -32000,
-    message: 'Approval ended before signing finished.',
+    message: 'Request ended.',
   });
   expect(transport.rejectRequestV2).toHaveBeenCalledWith(
     ref.topic,
@@ -773,4 +773,11 @@ it('DEFECT ensureOpen identifies an already closed request as handled', async ()
   await coordinator.settle(ref, 'declined');
   expect(await coordinator.ensureOpen(ref)).toBe('handled');
   expect(calls()).toBe(1);
+});
+
+it('U6 lapsed wire answer makes no assertion about signing', () => {
+  expect(EXIT_ANSWERS.lapsed).toEqual({
+    code: -32000,
+    message: 'Request ended.',
+  });
 });

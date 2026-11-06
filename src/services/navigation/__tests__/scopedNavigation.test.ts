@@ -34,3 +34,27 @@ it.each([
     });
   }
 );
+
+it.each([true, false])(
+  'U6 popOrReplace pops its own route or replaces at root: back=%s',
+  (back) => {
+    const actions: NavigationAction[] = [];
+    const navigation = {
+      dispatch: (thunk: (state: NavigationState) => NavigationAction) =>
+        actions.push(thunk({ key: 'stack' } as NavigationState)),
+      canGoBack: () => back,
+      navigate: jest.fn(),
+    };
+    const scoped = scopedNavigation(navigation);
+    scoped.popOrReplace('Main', { screen: 'Home' });
+    expect(actions).toEqual([
+      {
+        target: 'stack',
+        type: back ? 'POP' : 'REPLACE',
+        payload: back
+          ? { count: 1 }
+          : { name: 'Main', params: { screen: 'Home' } },
+      },
+    ]);
+  }
+);

@@ -533,6 +533,15 @@ describe('remote batch submission ownership (TASK-418)', () => {
     return { controller, request, response };
   }
 
+  it('U6 census remote WalletConnect signer leaves hasEnteredSigner false even after a real signed response', async () => {
+    const { controller, response } = await flow();
+    expect(controller.hasEnteredSigner()).toBe(false);
+    await controller.processRemoteSignerResponse(response);
+    expect(controller.getState().state).toBe('completed');
+    expect(controller.getState().result?.signedTransactions).toHaveLength(1);
+    expect(controller.hasEnteredSigner()).toBe(false);
+  });
+
   function scope() {
     const noop = jest.fn();
     return {

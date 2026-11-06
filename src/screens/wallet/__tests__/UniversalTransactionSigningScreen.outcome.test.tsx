@@ -987,3 +987,26 @@ it.each(['success', 'reject', 'end'] as const)(
     expect(h.goBack).not.toHaveBeenCalled();
   }
 );
+
+it('U6 retained route after signer entry and failed publish never claims nothing was signed', async () => {
+  const h = await openOutcome();
+  expect(h.controller.hasEnteredSigner()).toBe(true);
+  h.onSuccess.mockImplementationOnce(async () => {
+    await coordinator.sendError(mockRequestRef, 'sign-failed');
+  });
+  await h.complete();
+  expect(h.onSuccess).toHaveBeenCalledTimes(1);
+  // Safety net: keep the route mounted as if Error -> Close exposed it.
+  await h.freshUnlock();
+  jest.spyOn(coordinator, 'isLive').mockReturnValue(false);
+  await fireEvent.press(h.signButton());
+  expect(Toast.show).not.toHaveBeenCalledWith(
+    expect.objectContaining({
+      text2: expect.stringContaining('Nothing was signed'),
+    })
+  );
+  expect(h.alert).toHaveBeenCalledWith(
+    'Request ended',
+    'Check the dApp, then try again there if you still need it.'
+  );
+});

@@ -48,7 +48,7 @@ export const EXIT_ANSWERS: Record<
   },
   lapsed: {
     code: -32000,
-    message: 'Approval ended before signing finished.',
+    message: 'Request ended.',
   },
 };
 

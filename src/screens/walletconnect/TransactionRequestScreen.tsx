@@ -1,3 +1,4 @@
+import { scopedNavigation } from '@/services/navigation/scopedNavigation';
 import { SIGNED_THEN_LAPSED_BATCH_MESSAGE } from '@/services/auth/transactionAuthController';
 import { redactError } from '@/utils/logRedaction';
 import {
@@ -97,7 +98,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
   const settledRef = useRef(false);
   const handedOffRef = useRef(false);
   const advancedRef = useRef(false);
-  const navRef = useRef<CallbackNavigation>(navigation);
+  const navRef = useRef<CallbackNavigation>(scopedNavigation(navigation));
 
   const settleExit = (reason: ExitReason) => {
     settledRef.current = true;
@@ -140,6 +141,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         ref,
         requestExpiryOf(requestEvent)
       );
+      if (settledRef.current) return;
       if (state !== 'open') {
         settledRef.current = true;
         if (state === 'expired' || state === 'handled') {
@@ -310,15 +312,15 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         // Register callbacks in the callback registry to avoid serialization warnings
         const callbackId = registerNavigationCallbacks({
           onSuccess: async (result, nav) => {
-            navRef.current = nav ?? navigation;
+            navRef.current = nav ?? scopedNavigation(navigation);
             await handleWalletConnectSuccess(result);
           },
           onReject: async (nav) => {
-            navRef.current = nav ?? navigation;
+            navRef.current = nav ?? scopedNavigation(navigation);
             await handleReject();
           },
           onEnd: async (reason, nav) => {
-            navRef.current = nav ?? navigation;
+            navRef.current = nav ?? scopedNavigation(navigation);
             await endAndAdvance(reason);
           },
           onDismiss: forgetIfAbandoned,
@@ -431,7 +433,7 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
       } catch {
         await coordinator.sendError(ref, 'sign-failed');
         settledRef.current = true;
-        navRef.current.navigate('WalletConnectError', {
+        navRef.current.replace('WalletConnectError', {
           error: 'Failed to record the approval',
         });
         return;
@@ -491,14 +493,14 @@ export default function TransactionRequestScreen({ navigation, route }: Props) {
         );
         const errorMessage =
           error instanceof Error ? error.message : 'Failed to respond to dApp';
-        navRef.current.navigate('WalletConnectError', { error: errorMessage });
+        navRef.current.replace('WalletConnectError', { error: errorMessage });
       }
     } else {
       // Handle signing failure: nothing was sent to the dApp.
       settleExit('sign-failed');
       reviewGrant.revoke();
       const errorMessage = 'Failed to sign transactions';
-      navRef.current.navigate('WalletConnectError', { error: errorMessage });
+      navRef.current.replace('WalletConnectError', { error: errorMessage });
     }
   };
 

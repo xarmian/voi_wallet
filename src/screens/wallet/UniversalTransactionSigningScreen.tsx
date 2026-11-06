@@ -1012,11 +1012,18 @@ export default function UniversalTransactionSigningScreen({
       walletConnect?.ref &&
       !RequestCoordinator.getInstance().isLive(walletConnect.ref)
     ) {
-      Toast.show({
-        type: 'info',
-        text1: 'Request expired',
-        text2: 'Nothing was signed. Try again in the dApp.',
-      });
+      if (!authController.hasEnteredSigner()) {
+        Toast.show({
+          type: 'info',
+          text1: 'Request expired',
+          text2: 'Nothing was signed. Try again in the dApp.',
+        });
+      } else {
+        Alert.alert(
+          'Request ended',
+          'Check the dApp, then try again there if you still need it.'
+        );
+      }
       await endRequest('expired');
       return;
     }

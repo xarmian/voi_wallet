@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { scopedNavigation } from '@/services/navigation/scopedNavigation';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -25,6 +26,7 @@ interface Props {
 export default function WalletConnectErrorScreen({ navigation, route }: Props) {
   const { theme } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const scoped = useMemo(() => scopedNavigation(navigation), [navigation]);
   const errorMessage = route.params?.error || 'Failed to connect';
 
   return (
@@ -34,7 +36,7 @@ export default function WalletConnectErrorScreen({ navigation, route }: Props) {
         showBackButton
         onBackPress={() => {
           if (navigation.canGoBack()) {
-            navigation.goBack();
+            scoped.goBack();
           } else {
             navigation.navigate('Main', { screen: 'Home' });
           }
@@ -49,7 +51,7 @@ export default function WalletConnectErrorScreen({ navigation, route }: Props) {
           style={[styles.button, styles.primaryButton]}
           onPress={() => {
             if (navigation.canGoBack()) {
-              navigation.goBack();
+              scoped.goBack();
             } else {
               navigation.navigate('Main', { screen: 'Home' });
             }

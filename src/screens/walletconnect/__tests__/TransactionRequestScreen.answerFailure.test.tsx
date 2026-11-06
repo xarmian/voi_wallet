@@ -1,6 +1,10 @@
 /** REGRESSION: every exit records its decision before answering through the real coordinator. */
 
 import React from 'react';
+import type {
+  NavigationAction,
+  NavigationState,
+} from '@react-navigation/native';
 import { Alert } from 'react-native';
 import { SIGNED_THEN_LAPSED_BATCH_MESSAGE } from '@/services/auth/transactionAuthController';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
@@ -143,7 +147,7 @@ const TOPIC = 'topic-answer';
 
 const makeNavigation = () => {
   const beforeRemove: (() => void)[] = [];
-  return {
+  const navigation = {
     replace: jest.fn(),
     navigate: jest.fn(),
     goBack: jest.fn(),
@@ -155,9 +159,19 @@ const makeNavigation = () => {
         if (i >= 0) beforeRemove.splice(i, 1);
       };
     }),
+    dispatch: jest.fn((thunk: (state: NavigationState) => NavigationAction) => {
+      const action = thunk({ key: 'request-stack' } as NavigationState);
+      expect(action.target).toBe('request-stack');
+      if (action.type === 'POP') navigation.goBack();
+      else if (action.type === 'REPLACE') {
+        const payload = action.payload as { name: string; params?: object };
+        navigation.replace(payload.name, payload.params);
+      }
+    }),
     /** The screen leaves the stack (OS back, swipe-back, replace). */
     leave: () => [...beforeRemove].forEach((listener) => listener()),
   };
+  return navigation;
 };
 
 /**
@@ -339,11 +353,11 @@ describe('approve', () => {
 
     await approve();
 
-    expect(navigation.navigate).toHaveBeenCalledWith('WalletConnectError', {
+    expect(navigation.replace).toHaveBeenCalledWith('WalletConnectError', {
       error: 'relay down',
     });
     // Unchanged UX: no advance on a failed response.
-    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(navigation.navigate).not.toHaveBeenCalled();
     expect(redeliverySurfaces(21)).toBe(false);
     expectAnswer('sign-failed');
     mockCallbacks!.onDismiss();
@@ -377,13 +391,13 @@ describe('approve', () => {
     mockRespondToRequest.mockResolvedValue(undefined);
     const { navigation } = await handOff(25);
     await enqueueNext(26);
-    navigation.replace.mockImplementation(() => {
+    navigation.replace.mockImplementationOnce(() => {
       throw new Error('replace failed');
     });
 
     await approve();
 
-    expect(navigation.navigate).toHaveBeenCalledWith('WalletConnectError', {
+    expect(navigation.replace).toHaveBeenCalledWith('WalletConnectError', {
       error: 'replace failed',
     });
     // Answered: a redelivery stays suppressed.
@@ -432,7 +446,7 @@ describe('every other exit without an answer settles and keeps the mark', () => 
         await mockCallbacks!.onSuccess({});
       });
 
-      expect(navigation.navigate).toHaveBeenCalledWith('WalletConnectError', {
+      expect(navigation.replace).toHaveBeenCalledWith('WalletConnectError', {
         error: 'Failed to sign transactions',
       });
       expect(mockRespondToRequest).not.toHaveBeenCalled();
@@ -680,7 +694,7 @@ it('DEFECT failed approval record sends sign-failed once despite timer Reject an
   );
   expect(mockRespondToRequest).not.toHaveBeenCalled();
   expectAnswer('sign-failed', false);
-  expect(navigation.navigate).toHaveBeenCalledWith('WalletConnectError', {
+  expect(navigation.replace).toHaveBeenCalledWith('WalletConnectError', {
     error: 'Failed to record the approval',
   });
   expect(coordinator.isOpen(ref)).toBe(false);
@@ -753,7 +767,7 @@ it('DEFECT approval write failure routes error through live navigation', async (
   await act(async () =>
     mockCallbacks!.onSuccess({ signedTransactions: ['placeholder'] }, live)
   );
-  expect(live.navigate).toHaveBeenCalledWith(
+  expect(live.replace).toHaveBeenCalledWith(
     'WalletConnectError',
     expect.anything()
   );
@@ -806,6 +820,29 @@ it.each(['expired', 'handled', 'unavailable', 'duplicate'] as const)(
             : 'Check the dApp before you try again.',
       });
     else expect(Toast.show).not.toHaveBeenCalled();
+  }
+);
+
+it.each(['expired', 'handled', 'open'] as const)(
+  'U6 ensureOpen %s completing after back causes no toast or advance',
+  async (state) => {
+    let finish!: (value: typeof state) => void;
+    jest.spyOn(coordinator, 'ensureOpen').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const { navigation } = await mountOn(609);
+    await act(async () => navigation.leave());
+    await act(async () => {
+      finish(state);
+    });
+    expect(Toast.show).not.toHaveBeenCalled();
+    expect(navigation.dispatch).not.toHaveBeenCalled();
+    expect(navigation.goBack).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(mockGetAllAccounts).not.toHaveBeenCalled();
   }
 );
 

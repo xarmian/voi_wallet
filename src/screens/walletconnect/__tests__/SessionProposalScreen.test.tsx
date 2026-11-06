@@ -1,4 +1,8 @@
 import React from 'react';
+import type {
+  NavigationAction,
+  NavigationState,
+} from '@react-navigation/native';
 import { Alert, AppState, type AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-toast-message';
@@ -148,6 +152,13 @@ const navigationStub = () => {
     navigate: jest.fn(),
     goBack: jest.fn(),
     popTo: jest.fn(),
+    canGoBack: () => true,
+    dispatch: jest.fn((thunk: (state: NavigationState) => NavigationAction) => {
+      const action = thunk({ key: 'proposal-stack' } as NavigationState);
+      expect(action.target).toBe('proposal-stack');
+      expect(action.type).toBe('POP');
+      return action;
+    }),
   };
 };
 
@@ -224,9 +235,6 @@ it('disables approval while probing, shows partial eligibility and errors, and r
   expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
   expect(screen.getByText('Rekeyed')).toBeTruthy();
   expect(screen.getByText('Standard')).toBeTruthy();
-  await fireEvent.press(screen.getByRole('button', { name: 'Connect' }));
-  expect(mockApprove).toHaveBeenCalledWith(proposal, [rekeyed, standard]);
-
   jest.mocked(Keys.getSigningInfo).mockResolvedValue({
     signingAddress: 'RK',
     canSign: true,
@@ -237,12 +245,14 @@ it('disables approval while probing, shows partial eligibility and errors, and r
   expect(Keys.getSigningInfo).toHaveBeenCalledTimes(8);
   expect(screen.queryByText('Only on Voi Network')).toBeNull();
   expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  await fireEvent.press(screen.getByRole('button', { name: 'Connect' }));
+  expect(mockApprove).toHaveBeenCalledWith(proposal, [rekeyed, standard]);
 });
 
 // TASK-518: navigate('Main') pushes a second Main, so Back from Home exposed
-// the already-approved Connect page. Success leaves Connect with popTo('Main')
+// the already-approved Connect page. Success pops its own Connect route
 // BEFORE the alert, and the alert is information only.
-it('leaves the Connect route with popTo before the success alert (TASK-518)', async () => {
+it('U6 pops its own Connect route before the success alert, B untouched', async () => {
   jest
     .mocked(MultiAccountWalletService.getAllAccounts)
     .mockResolvedValue([standard]);
@@ -255,7 +265,16 @@ it('leaves the Connect route with popTo before the success alert (TASK-518)', as
   const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const navigation = navigationStub();
   const order: string[] = [];
-  navigation.popTo.mockImplementation(() => order.push('popTo'));
+  navigation.dispatch.mockImplementation((thunk) => {
+    const action = thunk({ key: 'proposal-stack' } as NavigationState);
+    expect(action).toEqual({
+      type: 'POP',
+      target: 'proposal-stack',
+      payload: { count: 1 },
+    });
+    order.push('pop');
+    return action;
+  });
   alertSpy.mockImplementation(() => {
     order.push('alert');
   });
@@ -271,14 +290,14 @@ it('leaves the Connect route with popTo before the success alert (TASK-518)', as
   await fireEvent.press(screen.getByRole('button', { name: 'Connect' }));
   await waitFor(() => expect(alertSpy).toHaveBeenCalled());
 
-  expect(navigation.popTo).toHaveBeenCalledWith('Main');
+  expect(navigation.dispatch).toHaveBeenCalledWith(expect.any(Function));
   expect(navigation.navigate).not.toHaveBeenCalledWith('Main');
-  expect(order).toEqual(['popTo', 'alert']);
+  expect(order).toEqual(['pop', 'alert']);
   // The alert carries no navigation: nothing runs when it is acknowledged.
   const buttons = alertSpy.mock.calls[0][2];
   buttons?.forEach((button) => button.onPress?.());
   expect(navigation.navigate).not.toHaveBeenCalled();
-  expect(navigation.popTo).toHaveBeenCalledTimes(1);
+  expect(navigation.dispatch).toHaveBeenCalledTimes(1);
   alertSpy.mockRestore();
 });
 
@@ -394,7 +413,7 @@ describe('locked wallet (TASK-438)', () => {
     expect(Keys.getSigningInfo).not.toHaveBeenCalled();
 
     await fireEvent.press(screen.getByText('Reject'));
-    await waitFor(() => expect(navigation.goBack).toHaveBeenCalled());
+    await waitFor(() => expect(navigation.dispatch).toHaveBeenCalled());
     expect(MultiAccountWalletService.getAllAccounts).not.toHaveBeenCalled();
   });
 
@@ -550,7 +569,7 @@ it.each([false, true])(
   async (v1) => {
     const { navigation, screen } = await mountProposal(v1);
     await fireEvent.press(screen.getByText('Reject'));
-    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
     if (v1) {
       expect(rejectProposalV1).toHaveBeenCalledTimes(1);
       expect(answers).toEqual([{ recorded: true, version: 1 }]);
@@ -574,7 +593,7 @@ it('DEFECT locked gate rejection uses the coordinator', async () => {
     const { navigation, screen } = await mountProposal();
     await fireEvent.press(screen.getByText('Reject'));
     expectAnswer('declined');
-    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
   } finally {
     mockLocked = false;
   }
@@ -587,7 +606,7 @@ it('DEFECT already settled rejection still goes back exactly once', async () => 
   });
   await fireEvent.press(screen.getByText('Reject'));
   expectAnswer('declined');
-  expect(navigation.goBack).toHaveBeenCalledTimes(1);
+  expect(navigation.dispatch).toHaveBeenCalledTimes(1);
 });
 
 it.each(['header', 'beforeRemove'])(
@@ -601,7 +620,9 @@ it.each(['header', 'beforeRemove'])(
     await act(async () => navigation.leave());
     await coordinator.settle(ref, 'abandoned');
     expectAnswer('abandoned');
-    expect(navigation.goBack).toHaveBeenCalledTimes(exit === 'header' ? 1 : 0);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(
+      exit === 'header' ? 1 : 0
+    );
   }
 );
 
@@ -624,11 +645,14 @@ it.each([false, true])(
       recorded.push(persisted.isHandled(v1 ? v1Ref : ref));
     });
     const settle = jest.spyOn(coordinator, 'settle');
-    navigation.popTo.mockImplementation(() => navigation.leave());
+    navigation.dispatch.mockImplementation((thunk) => {
+      navigation.leave();
+      return thunk({ key: 'proposal-stack' } as NavigationState);
+    });
     await pressApprove(screen);
     expect(recorded).toEqual([true]);
-    expect(navigation.popTo).toHaveBeenCalledWith('Main');
-    expect(navigation.popTo.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(navigation.dispatch).toHaveBeenCalledWith(expect.any(Function));
+    expect(navigation.dispatch.mock.invocationCallOrder[0]).toBeLessThan(
       jest.mocked(Alert.alert).mock.invocationCallOrder[0]
     );
     expect(settle).not.toHaveBeenCalled();
@@ -639,16 +663,18 @@ it.each([false, true])(
 );
 
 it('DEFECT approval of a ref already closed by expiry never publishes', async () => {
-  // Close before subscribing, to exercise decide(false), independently of the expiry listener.
-  await coordinator.settle(ref, 'expired');
+  // Isolate decide(false) from the external expiry listener. Admission must
+  // finish while open; a proposal closed before mount now leaves on admission.
+  jest.spyOn(coordinator, 'subscribe').mockReturnValue(() => {});
   const { navigation, screen } = await mountProposal();
+  await coordinator.settle(ref, 'expired');
   await pressApprove(screen);
   expect(mockApprove).not.toHaveBeenCalled();
   expect(Alert.alert).toHaveBeenCalledWith(
     'Request ended',
     'Request expired. Try again in the dApp.'
   );
-  expect(navigation.goBack).toHaveBeenCalledTimes(1);
+  expect(navigation.dispatch).toHaveBeenCalledTimes(1);
   await endAgain(navigation, screen);
   expectAnswer('expired');
 });
@@ -664,12 +690,12 @@ it('DEFECT failed decision write leaves approval retryable', async () => {
     'Error',
     'Could not record your approval. Try again.'
   );
-  expect(navigation.goBack).not.toHaveBeenCalled();
+  expect(navigation.dispatch).not.toHaveBeenCalled();
   expect(coordinator.isOpen(ref)).toBe(true);
   expect(store.isHandled(ref)).toBe(false);
   await pressApprove(screen);
   expect(mockApprove).toHaveBeenCalledTimes(1);
-  expect(navigation.popTo).toHaveBeenCalledWith('Main');
+  expect(navigation.dispatch).toHaveBeenCalledWith(expect.any(Function));
   expect(answers).toEqual([]);
 });
 
@@ -685,7 +711,7 @@ it.each([false, true])(
       'Error',
       'No signable accounts available'
     );
-    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
     if (v1) expect(answers).toEqual([{ recorded: true, version: 1 }]);
     else expectAnswer('unsupported-accounts');
     await endAgain(navigation, screen, v1 ? v1Ref : ref);
@@ -703,7 +729,7 @@ it.each([
     mockApprove.mockRejectedValue(new Error(message));
     await pressApprove(screen);
     expect(Alert.alert).toHaveBeenCalledWith('Error', message);
-    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
     await endAgain(navigation, screen);
     if (reason) expectAnswer(reason);
     else expect(answers).toEqual([]);
@@ -715,10 +741,10 @@ it('DEFECT background closes and toasts once; inactive keeps request open', asyn
   await act(async () => changeAppState('inactive'));
   expect(answers).toEqual([]);
   expect(coordinator.isOpen(ref)).toBe(true);
-  expect(navigation.goBack).not.toHaveBeenCalled();
+  expect(navigation.dispatch).not.toHaveBeenCalled();
   await act(async () => changeAppState('background'));
   await waitFor(() => expectAnswer('background'));
-  expect(navigation.goBack).toHaveBeenCalledTimes(1);
+  expect(navigation.dispatch).toHaveBeenCalledTimes(1);
   expect(Toast.show).toHaveBeenCalledWith({
     type: 'info',
     text1: 'Request closed',
@@ -739,7 +765,7 @@ it('DEFECT account load failure answers load-failed and closes', async () => {
       route={{ params: { proposal } } as unknown as ScreenProps['route']}
     />
   );
-  await waitFor(() => expect(navigation.goBack).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(navigation.dispatch).toHaveBeenCalledTimes(1));
   expect(Alert.alert).toHaveBeenCalledWith('Error', 'Failed to load accounts');
   await waitFor(() => expectAnswer('load-failed'));
   await endAgain(navigation, screen);
@@ -759,7 +785,7 @@ it.each(['expired', 'session-ended'] as const)(
         ? 'Request expired. Try again in the dApp.'
         : 'Connection ended. Reconnect in the dApp.'
     );
-    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
     await endAgain(navigation, screen);
     if (reason === 'expired') expectAnswer('expired');
     else expect(answers).toEqual([]);
@@ -773,7 +799,7 @@ it('REGRESSION missing proposal has no answer on any exit', async () => {
   await act(async () => navigation.leave());
   await screen.unmount();
   expect(answers).toEqual([]);
-  expect(navigation.goBack).toHaveBeenCalledTimes(1);
+  expect(navigation.dispatch).toHaveBeenCalledTimes(1);
 });
 
 it('REGRESSION equivalent proposal route params keep the request open', async () => {
@@ -803,20 +829,102 @@ it('REGRESSION any coordinator closure owns subsequent removal', async () => {
   expect(settle).not.toHaveBeenCalled();
   expectAnswer('load-failed');
   expect(Alert.alert).not.toHaveBeenCalled();
-  expect(navigation.goBack).not.toHaveBeenCalled();
+  expect(navigation.dispatch).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(
-  'DEFECT popTo failure after successful approval sends no failure or back (v1: %s)',
+  'DEFECT scoped pop failure after successful approval sends no failure or back (v1: %s)',
   async (v1) => {
     const { navigation, screen } = await mountProposal(v1);
-    navigation.popTo.mockImplementationOnce(() => {
+    navigation.dispatch.mockImplementationOnce(() => {
       throw new Error('navigation failed');
     });
     await pressApprove(screen);
     expect(v1 ? mockV1Approve : mockApprove).toHaveBeenCalledTimes(1);
     expect(Alert.alert).toHaveBeenCalledWith('Error', 'navigation failed');
     expect(answers).toEqual([]);
-    expect(navigation.goBack).not.toHaveBeenCalled();
+    expect(navigation.dispatch).toHaveBeenCalledTimes(1);
+  }
+);
+
+it.each(['expired', 'handled', 'unavailable'] as const)(
+  'U6 proposal admission %s leaves before loading accounts',
+  async (ending) => {
+    jest.spyOn(coordinator, 'ensureOpen').mockResolvedValueOnce(ending);
+    jest.mocked(MultiAccountWalletService.getAllAccounts).mockClear();
+    const navigation = navigationStub();
+    await render(
+      <SessionProposalScreen
+        navigation={navigation as unknown as ScreenProps['navigation']}
+        route={{ params: { proposal } } as unknown as ScreenProps['route']}
+      />
+    );
+    await waitFor(() => expect(navigation.dispatch).toHaveBeenCalledTimes(1));
+    expect(MultiAccountWalletService.getAllAccounts).not.toHaveBeenCalled();
+    if (ending === 'unavailable') expect(Toast.show).not.toHaveBeenCalled();
+    else
+      expect(Toast.show).toHaveBeenCalledWith({
+        type: 'info',
+        text1:
+          ending === 'expired' ? 'Request expired' : 'Request already handled',
+        text2:
+          ending === 'expired'
+            ? 'Try again in the dApp.'
+            : 'Check the dApp before you try again.',
+      });
+  }
+);
+
+it('U6 expired proposal delivered after its deadline never reads accounts', async () => {
+  const navigation = navigationStub();
+  const late = {
+    ...proposal,
+    id: 600,
+    expiryTimestamp: Math.floor(Date.now() / 1000) - 1,
+  };
+  jest.mocked(MultiAccountWalletService.getAllAccounts).mockClear();
+  await render(
+    <SessionProposalScreen
+      navigation={navigation as unknown as ScreenProps['navigation']}
+      route={{ params: { proposal: late } } as unknown as ScreenProps['route']}
+    />
+  );
+  await waitFor(() => expect(navigation.dispatch).toHaveBeenCalledTimes(1));
+  expect(MultiAccountWalletService.getAllAccounts).not.toHaveBeenCalled();
+  expect(Toast.show).toHaveBeenCalledWith({
+    type: 'info',
+    text1: 'Request expired',
+    text2: 'Try again in the dApp.',
+  });
+});
+
+it.each(['background', 'second tap'] as const)(
+  'U6 proposal approval in flight ignores %s',
+  async (event) => {
+    const { screen, navigation } = await mountProposal();
+    let finish!: (won: boolean) => void;
+    const decide = jest.spyOn(coordinator, 'decide').mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        })
+    );
+    let button = screen.getByRole('button', { name: 'Connect' });
+    while (!button.props.onClick) button = button.parent!;
+    const approve = button.props.onClick as () => void;
+    await act(async () => {
+      approve();
+      if (event === 'second tap') approve();
+    });
+    if (event === 'background')
+      await act(async () => changeAppState('background'));
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(answers).toEqual([]);
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(navigation.dispatch).not.toHaveBeenCalled();
+    await act(async () => {
+      finish(true);
+    });
+    expect(mockApprove).toHaveBeenCalledTimes(1);
   }
 );
