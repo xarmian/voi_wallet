@@ -6,6 +6,7 @@
  * The caller can then use this to retrieve private keys and sign transactions.
  */
 
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useEffect, useState } from 'react';
 import {
   Modal,
@@ -56,6 +57,7 @@ export default function SignerAuthModal({
   biometricPromptMessage,
 }: SignerAuthModalProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
 
   const [pin, setPin] = useState('');
@@ -374,7 +376,7 @@ export default function SignerAuthModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       animationType="slide"
       transparent={true}
       onRequestClose={onCancel}

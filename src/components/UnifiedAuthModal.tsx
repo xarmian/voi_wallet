@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Alert,
@@ -75,6 +76,7 @@ export default function UnifiedAuthModal({
   onLedgerRetry,
 }: UnifiedAuthModalProps) {
   const { theme } = useTheme();
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const { authState } = useAuth();
   const [pin, setPin] = useState('');
@@ -451,7 +453,7 @@ export default function UnifiedAuthModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType="fade"
       onRequestClose={() => {

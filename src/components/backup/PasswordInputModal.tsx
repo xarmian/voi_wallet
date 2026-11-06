@@ -1,3 +1,4 @@
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import React, { useState, useCallback } from 'react';
 import {
   Modal,
@@ -39,6 +40,7 @@ export default function PasswordInputModal({
   isSubmitting = false,
   error,
 }: PasswordInputModalProps) {
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
   const [password, setPassword] = useState('');
@@ -102,7 +104,7 @@ export default function PasswordInputModal({
 
   return (
     <Modal
-      visible={visible}
+      visible={visible && !covered}
       transparent
       animationType="fade"
       onRequestClose={onCancel}
