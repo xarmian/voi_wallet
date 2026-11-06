@@ -67,7 +67,7 @@ import {
 } from '@/utils/splashController';
 import { RemoteSignerRequest } from '@/types/remoteSigner';
 import SecuritySetupScreen from '@/screens/onboarding/SecuritySetupScreen';
-import AuthGuard from '@/components/AuthGuard';
+import RootLockBoundary from '@/components/RootLockBoundary';
 import FreshAuthHost from '@/components/FreshAuthHost';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { useNetworkStore } from '@/store/networkStore';
@@ -909,102 +909,6 @@ function MainTabNavigator() {
   // No Friends, Discover, NFTs tabs - no FAB menu
   if (isSignerMode) {
     return (
-      <AuthGuard>
-        <View style={{ flex: 1 }}>
-          <Tab.Navigator
-            screenOptions={({ route }) => ({
-              tabBarIcon: ({ focused, color, size }) => {
-                let iconName: keyof typeof Ionicons.glyphMap;
-
-                if (route.name === 'Home') {
-                  iconName = focused
-                    ? 'shield-checkmark'
-                    : 'shield-checkmark-outline';
-                } else if (route.name === 'Settings') {
-                  iconName = focused ? 'settings' : 'settings-outline';
-                } else {
-                  iconName = 'help-outline';
-                }
-
-                return <Ionicons name={iconName} size={size} color={color} />;
-              },
-              tabBarButton: (props) => {
-                const handlePress = (e: any) => {
-                  if (e?.preventDefault) {
-                    e.preventDefault();
-                  }
-                  if (props.onPress) {
-                    props.onPress(e);
-                  }
-                };
-                return (
-                  <TouchableOpacity
-                    {...(props as TouchableOpacityProps)}
-                    onPress={handlePress}
-                  />
-                );
-              },
-              tabBarActiveTintColor: tabIconActive,
-              tabBarInactiveTintColor: tabIconInactive,
-              tabBarStyle: {
-                backgroundColor: tabBackground,
-                borderTopColor: borderColor,
-              },
-              headerShown: false,
-            })}
-          >
-            <Tab.Screen
-              name="Home"
-              component={AirgapStackNavigator}
-              options={{
-                tabBarLabel: 'Signer',
-              }}
-              listeners={{
-                tabPress: () => updateActivity(),
-              }}
-            />
-            <Tab.Screen
-              name="Settings"
-              component={SettingsStackNavigator}
-              listeners={({ navigation, route }) => ({
-                tabPress: () => {
-                  updateActivity();
-
-                  const state = navigation.getState();
-                  const settingsRoute = state.routes.find(
-                    (r) => r.key === route.key
-                  );
-                  const stackState = settingsRoute?.state as
-                    | {
-                        key: string;
-                        type: string;
-                        index: number;
-                      }
-                    | undefined;
-
-                  if (stackState?.type === 'stack' && stackState.index > 0) {
-                    navigation.dispatch({
-                      ...StackActions.popToTop(),
-                      target: stackState.key,
-                    });
-                  }
-
-                  navigation.navigate('Settings', {
-                    screen: 'SettingsMain',
-                  });
-                },
-              })}
-            />
-          </Tab.Navigator>
-          {/* No FAB menu in signer mode */}
-        </View>
-      </AuthGuard>
-    );
-  }
-
-  // Normal wallet mode - full tab layout
-  return (
-    <AuthGuard>
       <View style={{ flex: 1 }}>
         <Tab.Navigator
           screenOptions={({ route }) => ({
@@ -1012,14 +916,9 @@ function MainTabNavigator() {
               let iconName: keyof typeof Ionicons.glyphMap;
 
               if (route.name === 'Home') {
-                iconName = focused ? 'wallet' : 'wallet-outline';
-              } else if (route.name === 'Friends') {
-                iconName = focused ? 'people' : 'people-outline';
-              } else if (route.name === 'NFTs') {
-                iconName = focused ? 'images' : 'images-outline';
-              } else if (route.name === 'Discover') {
-                // Hidden - FABRadialMenu handles this
-                iconName = 'compass-outline';
+                iconName = focused
+                  ? 'shield-checkmark'
+                  : 'shield-checkmark-outline';
               } else if (route.name === 'Settings') {
                 iconName = focused ? 'settings' : 'settings-outline';
               } else {
@@ -1029,23 +928,14 @@ function MainTabNavigator() {
               return <Ionicons name={iconName} size={size} color={color} />;
             },
             tabBarButton: (props) => {
-              // Wrap all tab buttons in TouchableOpacity to prevent default web anchor behavior
-              // which can cause full page navigation in Chrome extensions
               const handlePress = (e: any) => {
-                // Prevent default browser navigation
                 if (e?.preventDefault) {
                   e.preventDefault();
                 }
-                // Call the original onPress
                 if (props.onPress) {
                   props.onPress(e);
                 }
               };
-
-              if (route.name === 'Discover') {
-                // Invisible placeholder to reserve space for FABRadialMenu
-                return <View style={styles.centerButtonPlaceholder} />;
-              }
               return (
                 <TouchableOpacity
                   {...(props as TouchableOpacityProps)}
@@ -1064,31 +954,10 @@ function MainTabNavigator() {
         >
           <Tab.Screen
             name="Home"
-            component={WalletStackNavigator}
-            listeners={{
-              tabPress: () => updateActivity(),
-            }}
-          />
-          <Tab.Screen
-            name="Friends"
-            component={FriendsStackNavigator}
+            component={AirgapStackNavigator}
             options={{
-              tabBarLabel: 'Friends',
+              tabBarLabel: 'Signer',
             }}
-            listeners={{
-              tabPress: () => updateActivity(),
-            }}
-          />
-          <Tab.Screen
-            name="Discover"
-            component={DiscoverScreen}
-            options={{
-              tabBarLabel: '',
-            }}
-          />
-          <Tab.Screen
-            name="NFTs"
-            component={NFTStackNavigator}
             listeners={{
               tabPress: () => updateActivity(),
             }}
@@ -1126,11 +995,138 @@ function MainTabNavigator() {
             })}
           />
         </Tab.Navigator>
-
-        {/* FAB Radial Menu - rendered as overlay above tab bar */}
-        <FABRadialMenu />
+        {/* No FAB menu in signer mode */}
       </View>
-    </AuthGuard>
+    );
+  }
+
+  // Normal wallet mode - full tab layout
+  return (
+    <View style={{ flex: 1 }}>
+      <Tab.Navigator
+        screenOptions={({ route }) => ({
+          tabBarIcon: ({ focused, color, size }) => {
+            let iconName: keyof typeof Ionicons.glyphMap;
+
+            if (route.name === 'Home') {
+              iconName = focused ? 'wallet' : 'wallet-outline';
+            } else if (route.name === 'Friends') {
+              iconName = focused ? 'people' : 'people-outline';
+            } else if (route.name === 'NFTs') {
+              iconName = focused ? 'images' : 'images-outline';
+            } else if (route.name === 'Discover') {
+              // Hidden - FABRadialMenu handles this
+              iconName = 'compass-outline';
+            } else if (route.name === 'Settings') {
+              iconName = focused ? 'settings' : 'settings-outline';
+            } else {
+              iconName = 'help-outline';
+            }
+
+            return <Ionicons name={iconName} size={size} color={color} />;
+          },
+          tabBarButton: (props) => {
+            // Wrap all tab buttons in TouchableOpacity to prevent default web anchor behavior
+            // which can cause full page navigation in Chrome extensions
+            const handlePress = (e: any) => {
+              // Prevent default browser navigation
+              if (e?.preventDefault) {
+                e.preventDefault();
+              }
+              // Call the original onPress
+              if (props.onPress) {
+                props.onPress(e);
+              }
+            };
+
+            if (route.name === 'Discover') {
+              // Invisible placeholder to reserve space for FABRadialMenu
+              return <View style={styles.centerButtonPlaceholder} />;
+            }
+            return (
+              <TouchableOpacity
+                {...(props as TouchableOpacityProps)}
+                onPress={handlePress}
+              />
+            );
+          },
+          tabBarActiveTintColor: tabIconActive,
+          tabBarInactiveTintColor: tabIconInactive,
+          tabBarStyle: {
+            backgroundColor: tabBackground,
+            borderTopColor: borderColor,
+          },
+          headerShown: false,
+        })}
+      >
+        <Tab.Screen
+          name="Home"
+          component={WalletStackNavigator}
+          listeners={{
+            tabPress: () => updateActivity(),
+          }}
+        />
+        <Tab.Screen
+          name="Friends"
+          component={FriendsStackNavigator}
+          options={{
+            tabBarLabel: 'Friends',
+          }}
+          listeners={{
+            tabPress: () => updateActivity(),
+          }}
+        />
+        <Tab.Screen
+          name="Discover"
+          component={DiscoverScreen}
+          options={{
+            tabBarLabel: '',
+          }}
+        />
+        <Tab.Screen
+          name="NFTs"
+          component={NFTStackNavigator}
+          listeners={{
+            tabPress: () => updateActivity(),
+          }}
+        />
+        <Tab.Screen
+          name="Settings"
+          component={SettingsStackNavigator}
+          listeners={({ navigation, route }) => ({
+            tabPress: () => {
+              updateActivity();
+
+              const state = navigation.getState();
+              const settingsRoute = state.routes.find(
+                (r) => r.key === route.key
+              );
+              const stackState = settingsRoute?.state as
+                | {
+                    key: string;
+                    type: string;
+                    index: number;
+                  }
+                | undefined;
+
+              if (stackState?.type === 'stack' && stackState.index > 0) {
+                navigation.dispatch({
+                  ...StackActions.popToTop(),
+                  target: stackState.key,
+                });
+              }
+
+              navigation.navigate('Settings', {
+                screen: 'SettingsMain',
+              });
+            },
+          })}
+        />
+      </Tab.Navigator>
+
+      {/* FAB Radial Menu - rendered as overlay above tab bar */}
+      <FABRadialMenu />
+    </View>
   );
 }
 
@@ -1153,7 +1149,7 @@ function AppStack() {
   // below) from genuine absence (→ Onboarding) and presence (→ Main) with bounded
   // retry, so the route can NEVER diverge from the fail-closed lock state — e.g.
   // a stale Onboarding route can no longer expose the UN-guarded setup flow after
-  // a recovery Retry or a transient blip (AuthGuard only wraps `Main`). hasWallet
+  // a recovery Retry or a transient blip (the root boundary covers every root route). hasWallet
   // is meaningful only once authChecked is true, which gates the render below.
   const { authState, recheckAuthState } = useAuth();
   // TASK-213 (restore-before-PIN): when the boot verdict is "resume PIN setup"
@@ -1473,7 +1469,9 @@ export default function AppNavigator() {
             linking={linkingConfig}
             documentTitle={{ enabled: false }}
           >
-            <NavigationActivityWrapper />
+            <RootLockBoundary navigationRef={navigationRef}>
+              <NavigationActivityWrapper />
+            </RootLockBoundary>
           </NavigationContainer>
           <FreshAuthHost />
         </BottomSheetModalProvider>
