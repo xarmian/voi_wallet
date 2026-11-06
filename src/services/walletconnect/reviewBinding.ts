@@ -10,8 +10,13 @@ type RouterNavigation = Parameters<typeof scopedNavigation>[0] & {
 
 /**
  * Everything a WalletConnect review body needs from the thing that presents it.
- * A route screen builds one from its router; a host that is not a route builds
- * its own. The review bodies never see a route or a router.
+ * A route screen builds one from its router; a surface that is not a route
+ * builds its own. The bodies themselves take no route or navigation props.
+ *
+ * Not everything they render is router-free: the signing review mounts
+ * UnifiedTransactionAuthModal, whose AnimatedQRScanner calls useFocusEffect and
+ * so needs a navigation context. A surface without a router must provide one
+ * (or that path must stop using it) before it presents TransactionReview.
  */
 export interface ReviewBinding {
   /** Navigation scoped to the presenting surface (see scopedNavigation). */
