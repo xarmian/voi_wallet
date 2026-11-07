@@ -17,6 +17,15 @@ export const S2_REVIEW_ROUTES: readonly string[] = [
   'WalletConnectTransactionRequest',
   'WalletConnectError',
 ];
+// WalletConnect-related root routes that are deliberately NOT exempt in S2, each
+// with the reason. A new WalletConnect root route must be classified in one of
+// these two lists; lockCoverCondition.test.ts fails otherwise.
+export const S2_NOT_EXEMPT_ROUTES: Readonly<Record<string, string>> = {
+  WalletConnectSessions: 'the session list, not a request review',
+  WalletConnectPairing: 'pairing entry, not a request review',
+  UniversalTransactionSigning:
+    'shared with in-app signing, whose review is not gated while locked; a WalletConnect request can reach it in S2 until the entry-point guard refuses it earlier (U4 row)',
+};
 export function shouldCover(
   input: CoverInput,
   focusedRoute: string | null

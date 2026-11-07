@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
+  S2_NOT_EXEMPT_ROUTES,
   S2_REVIEW_ROUTES,
   shouldCover,
   type CoverInput,
@@ -205,4 +206,43 @@ it('DEFECT every S2 review route is a real root route in the census', () => {
   for (const route of S2_REVIEW_ROUTES)
     expect(Object.keys(ROOT_ROUTE_COVERAGE)).toContain(route);
   expect(S2_REVIEW_ROUTES).toHaveLength(3);
+});
+
+// Census: a WalletConnect root route nobody classified for S2 fails here, so a
+// new review route cannot silently fall under the cover (or out of it).
+function unclassified(census: string[]): string[] {
+  return census.filter(
+    (name) =>
+      /^WalletConnect/.test(name) &&
+      !S2_REVIEW_ROUTES.includes(name) &&
+      !(name in S2_NOT_EXEMPT_ROUTES)
+  );
+}
+it('DEFECT every WalletConnect root route is classified for S2, in exactly one list', () => {
+  const census = Object.keys(ROOT_ROUTE_COVERAGE);
+  expect(unclassified(census)).toEqual([]);
+  const wc = census.filter((name) => /^WalletConnect/.test(name));
+  expect(wc.length).toBeGreaterThan(0);
+  for (const name of wc)
+    expect({
+      name,
+      inExactlyOne:
+        S2_REVIEW_ROUTES.includes(name) !== name in S2_NOT_EXEMPT_ROUTES,
+    }).toEqual({ name, inExactlyOne: true });
+  // Both lists name only real root routes, and the shared signing review is
+  // classified on purpose, not by omission.
+  for (const name of [
+    ...S2_REVIEW_ROUTES,
+    ...Object.keys(S2_NOT_EXEMPT_ROUTES),
+  ])
+    expect(census).toContain(name);
+  expect(S2_NOT_EXEMPT_ROUTES).toHaveProperty('UniversalTransactionSigning');
+  for (const reason of Object.values(S2_NOT_EXEMPT_ROUTES))
+    expect(reason.length).toBeGreaterThan(10);
+});
+it('REGRESSION the census matcher reports an unclassified WalletConnect route', () => {
+  expect(unclassified(['Main', 'WalletConnectSessionProposal'])).toEqual([]);
+  expect(unclassified(['Main', 'WalletConnectNewReview'])).toEqual([
+    'WalletConnectNewReview',
+  ]);
 });
