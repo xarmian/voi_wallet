@@ -1150,7 +1150,7 @@ function AppStack() {
   // below) from genuine absence (→ Onboarding) and presence (→ Main) with bounded
   // retry, so the route can NEVER diverge from the fail-closed lock state — e.g.
   // a stale Onboarding route can no longer expose the UN-guarded setup flow after
-  // a recovery Retry or a transient blip (the root boundary covers every root route). hasWallet
+  // a recovery Retry or a transient blip (the root boundary covers the root routes it renders in-view; iOS modal-presented routes are TASK-540). hasWallet
   // is meaningful only once authChecked is true, which gates the render below.
   const { authState, recheckAuthState } = useAuth();
   // TASK-213 (restore-before-PIN): when the boot verdict is "resume PIN setup"
@@ -1464,19 +1464,21 @@ export default function AppNavigator() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
-        <BottomSheetModalProvider>
-          <NavigationContainer
-            ref={navigationRef}
-            linking={linkingConfig}
-            documentTitle={{ enabled: false }}
-          >
-            <RootLockBoundary navigationRef={navigationRef}>
+        <NavigationContainer
+          ref={navigationRef}
+          linking={linkingConfig}
+          documentTitle={{ enabled: false }}
+        >
+          <RootLockBoundary navigationRef={navigationRef}>
+            {/* Inside the boundary: a portalled bottom sheet renders in this
+                provider's host, so it must sit under the cover's hiding. */}
+            <BottomSheetModalProvider>
               <NavigationActivityWrapper />
               <WalletConnectHost />
-            </RootLockBoundary>
-          </NavigationContainer>
-          <FreshAuthHost />
-        </BottomSheetModalProvider>
+            </BottomSheetModalProvider>
+          </RootLockBoundary>
+        </NavigationContainer>
+        <FreshAuthHost />
       </AuthProvider>
     </GestureHandlerRootView>
   );

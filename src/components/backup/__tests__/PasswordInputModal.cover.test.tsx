@@ -23,13 +23,18 @@ jest.mock('@/hooks/useCoverPaused', () => ({
 jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
 }));
-jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+jest.mock('@expo/vector-icons', () => ({
+  Ionicons: ({ name }: { name: string }) =>
+    require('react').createElement(require('react-native').Text, null, name),
+}));
 jest.mock(
   '@/components/common/KeyboardAwareScrollView',
   () => require('react-native').ScrollView
 );
 jest.mock('@/services/backup', () => ({
   validatePasswordStrength: () => ({ isValid: true, feedback: [], score: 4 }),
+  getPasswordStrengthLabel: () => '',
+  getPasswordStrengthColor: () => 'green',
 }));
 
 import PasswordInputModal from '../PasswordInputModal';
@@ -63,11 +68,15 @@ describe('PasswordInputModal lock cover', () => {
     expect(mockModalVisible).toBe(false);
   });
 
-  it('DEFECT: covering and uncovering preserves the open flow without callbacks or reset', async () => {
+  it('DEFECT: typed password is cleared and reveal is hidden across a cover', async () => {
     const view = await render(element());
     await fireEvent.changeText(
       view.getByPlaceholderText('Password'),
       'test-password'
+    );
+    await fireEvent.press(view.getByText('eye'));
+    expect(view.getByPlaceholderText('Password').props.secureTextEntry).toBe(
+      false
     );
     mockCovered = true;
     await view.rerender(element());
@@ -77,12 +86,48 @@ describe('PasswordInputModal lock cover', () => {
     expect(onCancel).not.toHaveBeenCalled();
     mockCovered = false;
     await view.rerender(element());
-    expect(view.getByPlaceholderText('Password').props.value).toBe(
-      'test-password'
+    expect(view.getByPlaceholderText('Password').props.value).toBe('');
+    expect(view.getByPlaceholderText('Password').props.secureTextEntry).toBe(
+      true
+    );
+    await fireEvent.changeText(
+      view.getByPlaceholderText('Password'),
+      'new-password'
     );
     await fireEvent.press(view.getByText('Decrypt'));
     expect(onSuccess).toHaveBeenCalledTimes(1);
-    expect(onSuccess).toHaveBeenCalledWith('test-password');
+    expect(onSuccess).toHaveBeenCalledWith('new-password');
     expect(onCancel).not.toHaveBeenCalled();
   });
+});
+
+it('DEFECT: clears both create-password fields and both reveal controls across cover', async () => {
+  const element = () => (
+    <PasswordInputModal
+      visible
+      mode="create"
+      onConfirm={jest.fn()}
+      onCancel={jest.fn()}
+    />
+  );
+  const view = await render(element());
+  await fireEvent.changeText(
+    view.getByPlaceholderText('Password'),
+    'first-password'
+  );
+  await fireEvent.changeText(
+    view.getByPlaceholderText('Confirm password'),
+    'first-password'
+  );
+  for (const eye of view.getAllByText('eye')) await fireEvent.press(eye);
+  for (const field of ['Password', 'Confirm password'])
+    expect(view.getByPlaceholderText(field).props.secureTextEntry).toBe(false);
+  mockCovered = true;
+  await view.rerender(element());
+  mockCovered = false;
+  await view.rerender(element());
+  for (const field of ['Password', 'Confirm password']) {
+    expect(view.getByPlaceholderText(field).props.value).toBe('');
+    expect(view.getByPlaceholderText(field).props.secureTextEntry).toBe(true);
+  }
 });

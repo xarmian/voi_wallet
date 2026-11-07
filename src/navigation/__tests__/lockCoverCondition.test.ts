@@ -1,6 +1,11 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { shouldCover, type CoverInput } from '../lockCoverCondition';
+import {
+  S2_REVIEW_ROUTES,
+  shouldCover,
+  type CoverInput,
+} from '../lockCoverCondition';
+import { ROOT_ROUTE_COVERAGE } from '../rootRouteCoverage';
 
 // Independent state table: checked, locked, authenticated, PIN, resume, recovery.
 const states: { name: string; flags: boolean[]; routes: boolean[] }[] = [
@@ -164,4 +169,40 @@ it('DEFECT AuthContext feeds the lock signal from the same two fields the cover 
   expect(source).toContain(
     '}, [authState.isAuthenticated, authState.isLocked]);'
   );
+});
+
+// S2 (PIN setup resumed, no PIN): a WalletConnect link can push a review route.
+// The lock screen would ask for a PIN that does not exist, so those routes keep
+// the review's own gate (with Reject) reachable, as before the root boundary.
+it('DEFECT S2 never covers the WalletConnect review routes, in every combination', () => {
+  const s2 = combinations.filter(
+    (input) => input.pinSetupResume && !input.hasPin
+  );
+  expect(s2.length).toBeGreaterThan(0);
+  for (const input of s2)
+    for (const route of S2_REVIEW_ROUTES)
+      expect({ input, route, covered: shouldCover(input, route) }).toEqual({
+        input,
+        route,
+        covered: false,
+      });
+});
+it('DEFECT outside S2 the same routes are covered while locked, and S2 still covers other routes', () => {
+  for (const route of S2_REVIEW_ROUTES) {
+    expect(
+      shouldCover(inputFrom([true, true, false, true, false, false]), route)
+    ).toBe(true);
+    // pinSetupResume with a PIN present is not S2.
+    expect(
+      shouldCover(inputFrom([true, true, false, true, true, false]), route)
+    ).toBe(true);
+  }
+  const s2 = inputFrom([true, true, false, false, true, false]);
+  for (const route of ['Main', 'Onboarding', 'QRScanner'])
+    expect(shouldCover(s2, route)).toBe(true);
+});
+it('DEFECT every S2 review route is a real root route in the census', () => {
+  for (const route of S2_REVIEW_ROUTES)
+    expect(Object.keys(ROOT_ROUTE_COVERAGE)).toContain(route);
+  expect(S2_REVIEW_ROUTES).toHaveLength(3);
 });

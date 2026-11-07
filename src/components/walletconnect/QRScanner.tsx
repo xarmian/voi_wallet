@@ -78,8 +78,9 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
 
   const covered = useCoverPaused();
   const wasCovered = useRef(covered);
+  const scanInFlight = useRef(false);
   useEffect(() => {
-    if (wasCovered.current && !covered) {
+    if (wasCovered.current && !covered && !scanInFlight.current) {
       setScanned(false);
       setIsProcessing(false);
     }
@@ -276,11 +277,13 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
       return;
     }
 
+    scanInFlight.current = true;
     setScanned(true);
     setIsProcessing(true);
 
     const rawValue = typeof data === 'string' ? data.trim() : '';
     if (!rawValue) {
+      scanInFlight.current = false;
       setScanned(false);
       setIsProcessing(false);
       showAlert(
@@ -349,6 +352,8 @@ export default function QRScanner({ onClose, onSuccess }: Props) {
         },
         { text: 'Cancel', style: 'cancel', onPress: onClose },
       ]);
+    } finally {
+      scanInFlight.current = false;
     }
   };
 

@@ -80,6 +80,10 @@ export default function UnifiedAuthModal({
   const styles = useThemedStyles(createStyles);
   const { authState } = useAuth();
   const [pin, setPin] = useState('');
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- The external lock must discard typed input before the Modal reopens.
+    if (covered) setPin('');
+  }, [covered]);
   // The stored credential kind decides the input: numeric keypad for a PIN, a
   // masked text field for a passphrase (PR7). Defaults to 'pin' until the read
   // resolves so existing PIN wallets show the keypad immediately.

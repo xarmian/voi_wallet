@@ -67,7 +67,7 @@ it('DEFECT captured native scan ignores same tick cover and scans after release'
   await act(async () => scan({ type: 'qr', data: 'wc:test' }));
   expect(mockDeepLink).toHaveBeenCalledTimes(1);
 });
-it('DEFECT release resets scanned and processing state after an already completed scan', async () => {
+it('REGRESSION release re-arms scanning when no scan is in flight', async () => {
   const view = await render(tree());
   await act(async () =>
     view
@@ -84,4 +84,35 @@ it('DEFECT release resets scanned and processing state after an already complete
       .props.onBarcodeScanned({ type: 'qr', data: 'wc:test' })
   );
   expect(mockDeepLink).toHaveBeenCalledTimes(2);
+});
+
+it('DEFECT: cover and uncover cannot process a duplicate while the first scan is pending', async () => {
+  let finish!: (handled: boolean) => void;
+  mockDeepLink.mockImplementationOnce(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finish = resolve;
+      })
+  );
+  const view = await render(tree());
+  let pending!: Promise<void>;
+  await act(async () => {
+    pending = view
+      .getByTestId('camera')
+      .props.onBarcodeScanned({ type: 'qr', data: 'wc:test' });
+  });
+  expect(mockDeepLink).toHaveBeenCalledTimes(1);
+  await act(async () => setCovered(true));
+  await act(async () => setCovered(false));
+  await act(async () => {
+    await view
+      .getByTestId('camera')
+      .props.onBarcodeScanned?.({ type: 'qr', data: 'wc:test' });
+  });
+  expect(mockDeepLink).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    finish(true);
+    await pending;
+  });
+  expect(mockDeepLink).toHaveBeenCalledTimes(1);
 });

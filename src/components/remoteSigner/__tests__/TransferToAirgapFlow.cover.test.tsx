@@ -35,13 +35,18 @@ jest.mock('@/services/secure/freshAuth', () => {
   };
 });
 jest.mock('@/utils/keyIdentity', () => ({ keyBelongsToAddress: () => true }));
+const mockExportUri = jest.fn(() => 'arc0300://fixture-qr-payload');
+const mockQrRenders: string[] = [];
 jest.mock('@/utils/arc0300', () => ({
-  generateArc0300AccountExportUri: () => 'arc0300://fixture-qr-payload',
+  generateArc0300AccountExportUri: () => mockExportUri(),
 }));
 jest.mock('@/components/remoteSigner/AnimatedQRCode', () => {
   const { Text } = require('react-native');
   return {
-    AnimatedQRCode: ({ data }: { data: string }) => <Text>{`QR:${data}`}</Text>,
+    AnimatedQRCode: ({ data }: { data: string }) => {
+      mockQrRenders.push(data);
+      return <Text>{`QR:${data}`}</Text>;
+    },
   };
 });
 jest.mock('@/components/remoteSigner/AnimatedQRScanner', () => ({
@@ -78,6 +83,8 @@ const account = {
 const listeners: ((state: AppStateStatus) => void)[] = [];
 
 beforeEach(() => {
+  mockExportUri.mockReset().mockReturnValue('arc0300://fixture-qr-payload');
+  mockQrRenders.length = 0;
   mockAuthFailure = null;
   mockCovered = false;
   mockReveal.mockImplementation(async () => new Uint8Array(64).fill(7));
@@ -188,4 +195,41 @@ it('REGRESSION: without cover the gated QR stays available across rerenders', as
   expect(view.getByText('QR:arc0300://fixture-qr-payload')).toBeTruthy();
   expect(mockReveal).toHaveBeenCalledTimes(1);
   expect(mockAuthSignals[0]?.aborted).toBe(false);
+});
+
+it('REGRESSION: re-entry never renders the previous QR while the next export is pending', async () => {
+  mockExportUri
+    .mockReturnValueOnce('arc0300://fixture-A')
+    .mockReturnValueOnce('arc0300://fixture-B');
+  const view = await render(element());
+  await fireEvent.press(view.getByText('I Understand, Continue'));
+  expect(view.getByText('QR:arc0300://fixture-A')).toBeTruthy();
+  mockQrRenders.length = 0;
+  mockCovered = true;
+  await view.rerender(element());
+  mockCovered = false;
+  await view.rerender(element());
+  expect(view.getByText('I Understand, Continue')).toBeTruthy();
+  let resolve!: (key: Uint8Array<ArrayBuffer>) => void;
+  mockReveal.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      })
+  );
+  await Promise.all([
+    fireEvent.press(view.getByText('I Understand, Continue')),
+    (async () => {
+      await waitFor(() => expect(mockReveal).toHaveBeenCalledTimes(2));
+      expect(view.queryByText(/QR:/)).toBeNull();
+      expect(mockQrRenders).not.toContain('arc0300://fixture-A');
+      await act(async () => {
+        resolve(new Uint8Array(64).fill(8));
+      });
+    })(),
+  ]);
+  expect(mockQrRenders).not.toContain('arc0300://fixture-A');
+  expect(mockQrRenders).toContain('arc0300://fixture-B');
+  expect(view.queryByText('QR:arc0300://fixture-A')).toBeNull();
+  expect(view.getByText('QR:arc0300://fixture-B')).toBeTruthy();
 });

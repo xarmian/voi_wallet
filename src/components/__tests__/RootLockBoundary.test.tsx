@@ -338,3 +338,24 @@ it('REGRESSION uncovered boundary has children and no overlay', async () => {
   expect(view.root?.children).toHaveLength(1);
   expect(content(view).type).toBe('View');
 });
+it('DEFECT S2 on a WalletConnect review route shows no lock screen and keeps the content reachable', async () => {
+  auth = {
+    ...unlocked,
+    isLocked: true,
+    isAuthenticated: false,
+    hasPin: false,
+    pinSetupResume: true,
+  };
+  const nav = navigation('WalletConnectSessionProposal');
+  const view = await render(tree(nav));
+  expect(view.queryByTestId('lock')).toBeNull();
+  const props = content(view).props;
+  expect(props.pointerEvents).toBeUndefined();
+  expect(props.accessibilityElementsHidden).toBeFalsy();
+  expect(handlers.size).toBe(0);
+  // The same route with a PIN present is an ordinary locked wallet: covered.
+  auth = { ...auth, hasPin: true };
+  await view.rerender(tree(nav));
+  expect(view.queryAllByTestId('lock')).toHaveLength(1);
+  expect(content(view).props.pointerEvents).toBe('none');
+});

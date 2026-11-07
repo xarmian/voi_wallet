@@ -127,7 +127,7 @@ it('REGRESSION rootPromptThroughInactiveStillCompletes', async () => {
   expect(mockHaptic).toHaveBeenCalledTimes(1);
   expect(mockHaptic).toHaveBeenCalledWith('success');
 });
-it('DEFECT rootPinResultAfterBackgroundIgnored', async () => {
+it('DEFECT rootPinResultAfterBackgroundClearsEntryAndIgnoresOtherEffects', async () => {
   mockBiometric.mockResolvedValue(false);
   let complete!: (success: boolean) => void;
   mockUnlock.mockImplementationOnce(
@@ -164,7 +164,7 @@ it('DEFECT rootPinResultAfterBackgroundIgnored', async () => {
   await changeAppState('background');
   expect(mockUnlock.mock.calls[0][1]()).toBe(false);
   await act(async () => complete(false));
-  expect(dots()).toHaveLength(6);
+  expect(dots()).toHaveLength(0);
   expect(AccountSecureStorage.getPinThrottleState).toHaveBeenCalledTimes(1);
   expect(mockHaptic).not.toHaveBeenCalled();
 });

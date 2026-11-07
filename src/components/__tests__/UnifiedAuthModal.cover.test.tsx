@@ -66,7 +66,7 @@ describe('UnifiedAuthModal lock cover', () => {
     expect(mockModalVisible).toBe(false);
   });
 
-  it('DEFECT: covering and uncovering preserves the open flow without callbacks or reset', async () => {
+  it('DEFECT: typed PIN is cleared across a cover without cancelling the flow', async () => {
     const view = await render(element());
     await fireEvent.press(view.getByText('1'));
     mockCovered = true;
@@ -80,8 +80,10 @@ describe('UnifiedAuthModal lock cover', () => {
     for (const digit of ['2', '3', '4', '5', '6']) {
       await fireEvent.press(view.getByText(digit));
     }
+    expect(onSuccess).not.toHaveBeenCalled();
+    await fireEvent.press(view.getByText('7'));
     expect(onSuccess).toHaveBeenCalledTimes(1);
-    expect(onSuccess).toHaveBeenCalledWith('123456');
+    expect(onSuccess).toHaveBeenCalledWith('234567');
     expect(onCancel).not.toHaveBeenCalled();
   });
 });

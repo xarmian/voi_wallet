@@ -1,4 +1,5 @@
 import React from 'react';
+import { useCoverPaused } from '@/hooks/useCoverPaused';
 import { restoreConfirmationKeysLine } from '@/services/backup/backupReport';
 import {
   Modal,
@@ -33,6 +34,7 @@ export default function RestoreConfirmationModal({
   onCancel,
   onConfirm,
 }: RestoreConfirmationModalProps) {
+  const covered = useCoverPaused();
   const styles = useThemedStyles(createStyles);
   const colors = useThemeColors();
 
@@ -53,7 +55,7 @@ export default function RestoreConfirmationModal({
   const hasLedgerAccounts = backupInfo.accountTypes.ledger > 0;
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal visible={visible && !covered} transparent animationType="fade">
       <View style={styles.overlay}>
         <View style={styles.modal}>
           <ScrollView showsVerticalScrollIndicator={false}>

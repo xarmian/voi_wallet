@@ -307,8 +307,8 @@ export default function LockScreen() {
       // throttle internally (and returns a plain boolean). We read the resulting
       // lockout/remaining-attempts back via the separate throttle-state query.
       const success = await unlock(enteredPin, () => focus.isFocused());
-      if (!focus.isFocused()) return;
       setPin('');
+      if (!focus.isFocused()) return;
 
       if (success) {
         hapticNotify('success');
