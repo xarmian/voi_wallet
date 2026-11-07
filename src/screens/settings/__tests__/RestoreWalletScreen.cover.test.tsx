@@ -264,9 +264,43 @@ it.each([true, false])(
     await fireEvent.press(view.getByText('Verify old PIN'));
     await fireEvent.press(view.getByText('Select Backup File'));
     await fireEvent.press(view.getByText('Confirm password'));
-    if (endSession) await act(async () => background('background'));
+    expect(mockIsSubmitting).toBe(true);
+    if (endSession) {
+      await act(async () => background('background'));
+      expect(mockIsSubmitting).toBe(false);
+    }
     await act(async () => finish({ accountCount: 1 } as never));
     if (endSession) expect(view.queryByText('Confirm restore')).toBeNull();
     else expect(view.getByText('Confirm restore')).toBeTruthy();
+  }
+);
+
+it.each(['inactive', 'background'] as const)(
+  'REGRESSION: no old-PIN session means %s preserves pending validation and opens confirmation',
+  async (state) => {
+    let background!: (state: AppStateStatus) => void;
+    jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, handler) => {
+        background = handler;
+        return { remove: jest.fn() };
+      });
+    let finish!: (info: never) => void;
+    jest.mocked(BackupService.validateBackupFile).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const view = await render(<RestoreWalletScreen />);
+    await fireEvent.press(view.getByText('Select Backup File'));
+    await fireEvent.press(view.getByText('Confirm password'));
+    expect(mockIsSubmitting).toBe(true);
+    await act(async () => background(state));
+    expect(mockIsSubmitting).toBe(true);
+    expect(mockClearRestoreVault).not.toHaveBeenCalled();
+    await act(async () => finish({ accountCount: 1 } as never));
+    expect(mockIsSubmitting).toBe(false);
+    expect(view.getByText('Confirm restore')).toBeTruthy();
   }
 );

@@ -160,6 +160,7 @@ export class TransactionAuthController {
   private pendingStartAfterReady: boolean = false;
   private pendingPinForStart: string | undefined;
   private hasStartedSigning: boolean = false;
+  private startDeferredByCover = false;
   private ledgerListenersSetup: boolean = false;
   private ledgerVerificationCache: {
     deviceId: string;
@@ -514,6 +515,7 @@ export class TransactionAuthController {
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = false;
+    this.startDeferredByCover = false;
     this.isSigningInProgress = false;
     this.ledgerCancelRequested = false; // Reset cancel flag for new flow
     this.ledgerVerificationCache = null; // Clear cache on new flow
@@ -1405,11 +1407,12 @@ export class TransactionAuthController {
       );
     }
 
+    const generation = this.cancelledFlowGeneration;
     try {
       const isValid = await AccountSecureStorage.verifyPin(pin);
+      if (generation !== this.cancelledFlowGeneration) return false;
 
       if (isValid) {
-        if (!this.canStartAuth()) return false;
         this.reviewFlowEnded = false;
         // Reset attempts and proceed with signing
         // If ledger flow, wait until device is ready to start signing
@@ -1489,7 +1492,6 @@ export class TransactionAuthController {
         if (!result.success) {
           return false;
         }
-        if (!this.canStartAuth()) return false;
         this.reviewFlowEnded = false;
 
         if (this.currentState.ledgerStatus !== 'ready') {
@@ -1519,10 +1521,6 @@ export class TransactionAuthController {
       }
 
       if (outcome.status === 'unlocked') {
-        if (!this.canStartAuth()) {
-          if (!AppLockSignal.isUnlocked()) clearSessionSecurity();
-          return false;
-        }
         this.reviewFlowEnded = false;
         this.updateState({ state: 'signing' });
         try {
@@ -1669,6 +1667,35 @@ export class TransactionAuthController {
     return true;
   }
 
+  private deferSigning(pin?: string): void {
+    this.hasStartedSigning = false;
+    if (this.currentRequest?.reviewGrantKey) {
+      this.settleReviewCapability();
+      this.updateState({
+        state: 'error',
+        error: new ReviewEndedError(
+          'Unlock to review this request again.',
+          'Approval ended'
+        ),
+      });
+      return;
+    }
+    if (this.currentState.state === 'signing') {
+      this.updateState({ state: 'authenticating' });
+    }
+    if (this.currentState.isLedgerFlow) {
+      this.startDeferredByCover = true;
+      this.pendingStartAfterReady = true;
+      this.pendingPinForStart = pin;
+    }
+  }
+
+  public async resumeDeferredStart(): Promise<void> {
+    if (!this.startDeferredByCover) return;
+    this.startDeferredByCover = false;
+    await this.maybeStartSigningIfReady();
+  }
+
   private async startSigning(pin?: string): Promise<void> {
     if (!this.currentRequest) {
       throw new Error('No transaction request to sign');
@@ -1718,6 +1745,11 @@ export class TransactionAuthController {
     if (reviewKey && this.reviewSigningStarted) return;
 
     if (this.refuseWhileSignerAlive()) return;
+
+    if (!this.canStartAuth()) {
+      this.deferSigning(pin);
+      return;
+    }
 
     // Update request with PIN if provided
     if (pin) {
@@ -2466,6 +2498,7 @@ export class TransactionAuthController {
 
     // invalidate current flow; any late async callbacks will be ignored
     this.cancelledFlowGeneration += 1;
+    this.startDeferredByCover = false;
     try {
       ledgerTransportService.cancelConnect();
     } catch {}
@@ -2500,6 +2533,7 @@ export class TransactionAuthController {
     this.pendingStartAfterReady = false;
     this.pendingPinForStart = undefined;
     this.hasStartedSigning = false;
+    this.startDeferredByCover = false;
     this.hasSubmittedToNetwork = false;
     this.ledgerVerificationCache = null;
     this.deviceVerificationInProgress = false;

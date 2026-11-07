@@ -77,6 +77,7 @@ function makeController(initial = idleState()) {
     listeners.forEach((l) => l({ ...state }));
   };
   return {
+    resumeDeferredStart: jest.fn(async () => {}),
     setStartGate: jest.fn<void, [(() => boolean) | null]>(),
     getState: jest.fn(() => ({ ...state })),
     subscribe: jest.fn((fn: (s: unknown) => void) => {
@@ -101,6 +102,8 @@ function makeController(initial = idleState()) {
 }
 
 let mockCovered = false;
+let mockBiometricDisabled: boolean | undefined;
+let mockBiometricPress: (() => Promise<void>) | undefined;
 let mockModalVisible: boolean | undefined;
 jest.mock('@/hooks/useCoverPaused', () => ({
   useCoverPaused: () => mockCovered,
@@ -108,6 +111,20 @@ jest.mock('@/hooks/useCoverPaused', () => ({
 jest.mock('react-native', () => {
   const native = jest.requireActual('react-native');
   const descriptors = Object.getOwnPropertyDescriptors(native);
+  descriptors.TouchableOpacity = {
+    configurable: true,
+    enumerable: true,
+    value: (props: React.ComponentProps<typeof native.TouchableOpacity>) => {
+      if (
+        require('react').isValidElement(props.children) &&
+        props.children.props.name === 'finger-print'
+      ) {
+        mockBiometricDisabled = props.disabled;
+        mockBiometricPress = props.onPress as () => Promise<void>;
+      }
+      return require('react').createElement(native.TouchableOpacity, props);
+    },
+  };
   descriptors.Modal = {
     configurable: true,
     enumerable: true,
@@ -302,7 +319,7 @@ describe('start policy (U3d-9)', () => {
     }
   );
   it.each([true, false])(
-    'DEFECT: pending PIN consults registered cover policy, cover=%s',
+    'DEFECT: registered gate closure returns !isCovered() during pending PIN, cover=%s',
     async (covered) => {
       const controller = makeController(idleState({ state: 'authenticating' }));
       let finish!: () => void;
@@ -354,3 +371,57 @@ it.each([true, false])(
     resetCoverForTests();
   }
 );
+
+it('DEFECT: Ledger deferred start resumes once on a covered-to-uncovered transition', async () => {
+  const controller = makeController(
+    idleState({
+      state: 'authenticating',
+      isLedgerFlow: true,
+      ledgerStatus: 'ready',
+    })
+  );
+  controller.resumeDeferredStart.mockImplementation(async () => {
+    controller._emit(idleState({ state: 'signing', isLedgerFlow: true }));
+  });
+  const { element } = setup(controller);
+  const view = await render(element());
+  expect(controller.resumeDeferredStart).not.toHaveBeenCalled();
+  mockCovered = true;
+  await view.rerender(element());
+  expect(controller.resumeDeferredStart).not.toHaveBeenCalled();
+  mockCovered = false;
+  await view.rerender(element());
+  expect(controller.resumeDeferredStart).toHaveBeenCalledTimes(1);
+  expect(controller.getState().state).toBe('signing');
+  await view.rerender(element());
+  expect(controller.resumeDeferredStart).toHaveBeenCalledTimes(1);
+});
+
+it('DEFECT: pending PIN disables biometric control and its queued handler; after verify it works', async () => {
+  const controller = makeController(
+    idleState({ state: 'authenticating', biometricAvailable: true })
+  );
+  let finish!: (valid: boolean) => void;
+  controller.authenticateWithPin.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+  const { element } = setup(controller);
+  const view = await render(element());
+  for (const digit of ['1', '2', '3', '4', '5', '6'])
+    await fireEvent.press(view.getByText(digit));
+  const icon = view.getByTestId('finger-print');
+  expect(mockBiometricDisabled).toBe(true);
+  await fireEvent.press(icon);
+  expect(controller.authenticateWithBiometrics).not.toHaveBeenCalled();
+  await act(async () => {
+    await mockBiometricPress?.();
+  });
+  expect(controller.authenticateWithBiometrics).not.toHaveBeenCalled();
+  await act(async () => finish(false));
+  expect(mockBiometricDisabled).toBe(false);
+  await fireEvent.press(view.getByTestId('finger-print'));
+  expect(controller.authenticateWithBiometrics).toHaveBeenCalledTimes(1);
+});

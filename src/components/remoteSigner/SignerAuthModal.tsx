@@ -139,8 +139,8 @@ export default function SignerAuthModal({
     ) {
       handleBiometricAuth();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; keyed on visible/biometricAvailable/covered/isLocked. handleBiometricAuth and the isVerifying guard are read at that commit; re-prompting when isVerifying flips is not wanted.
-  }, [visible, biometricAvailable, covered, isLocked]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; keyed on visible/biometricAvailable/covered. handleBiometricAuth, isVerifying and isLocked are read at that commit; verification completion and lockout expiry must not re-prompt.
+  }, [visible, biometricAvailable, covered]);
 
   // Handle lockout timer
   useEffect(() => {

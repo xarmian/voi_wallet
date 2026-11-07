@@ -1284,9 +1284,7 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
       const controller = new TransactionAuthController();
       await initFlow(controller);
       controller.setStartGate(gate === null ? null : () => gate);
-      expect(await controller.authenticateWithPin('123456')).toBe(
-        gate !== false
-      );
+      expect(await controller.authenticateWithPin('123456')).toBe(true);
       expect(mockSignTransaction).toHaveBeenCalledTimes(gate === false ? 0 : 1);
       if (gate === false)
         expect(controller.getState()).toMatchObject({
@@ -1334,9 +1332,6 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
       (controller as any).currentState.ledgerStatus = 'ready';
       let allowed = true;
       controller.setStartGate(() => allowed);
-      const start = jest
-        .spyOn(controller as any, 'startSigning')
-        .mockResolvedValue(undefined);
       if (ledger)
         mockLA.authenticateAsync.mockImplementationOnce(async () => {
           allowed = !cover;
@@ -1348,8 +1343,8 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
           allowed = !cover;
           return { status: 'unlocked' };
         });
-      expect(await controller.authenticateWithBiometrics()).toBe(!cover);
-      expect(start).toHaveBeenCalledTimes(cover ? 0 : 1);
+      expect(await controller.authenticateWithBiometrics()).toBe(true);
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
       expect(controller.getState()).toMatchObject({
         state: cover ? 'authenticating' : 'signing',
         error: null,
@@ -1358,7 +1353,7 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
     }
   );
 
-  it('DEFECT: denied review gate leaves a valid locked-sitting grant unconsumed', async () => {
+  it('REGRESSION: unit-level controller gate denial preserves a grant for a later allowed call', async () => {
     const { reviewGrant } = require('../reviewGrant');
     const { AppLockSignal } = require('@/services/secure/appLockState');
     AppLockSignal.setUnlocked(false);
@@ -1384,4 +1379,253 @@ describe('cover start gate (TASK-518 U3d-9)', () => {
     expect(mockSignTransaction).toHaveBeenCalledTimes(1);
     reviewGrant.revoke();
   });
+});
+
+describe('choke-point cover gate (U3d-10)', () => {
+  it.each([true, false])(
+    'DEFECT: cover=%s during software PIN-presence check defers without retaining PIN; fresh entry signs',
+    async (cover) => {
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      let finish!: (present: boolean) => void;
+      mockASS.hasPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      const pending = controller.authenticateWithPin('123456');
+      await flush();
+      expect(finish).toBeDefined();
+      allowed = !cover;
+      finish(true);
+      await pending;
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      expect(controller.getState()).toMatchObject({
+        state: cover ? 'authenticating' : 'signing',
+        pinAttempts: 0,
+        error: null,
+      });
+      if (cover) {
+        expect((controller as any).currentRequest.pin).toBeUndefined();
+        expect((controller as any).pendingPinForStart).toBeUndefined();
+        allowed = true;
+        await controller.resumeDeferredStart();
+        expect(mockSignTransaction).not.toHaveBeenCalled();
+        await controller.authenticateWithPin('234567');
+        expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+        expect(mockSignTransaction.mock.calls[0][0].pin).toBe('234567');
+      }
+    }
+  );
+
+  it.each([true, false])(
+    'DEFECT: Ledger readiness under cover=%s retries once on uncover with pending flags and PIN',
+    async (cover) => {
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      const internal = controller as any;
+      internal.currentState.isLedgerFlow = true;
+      internal.currentState.ledgerStatus = 'app_required';
+      internal.currentState.ledgerDevice = { id: 'ledger', connected: true };
+      internal.pendingPinForStart = '123456';
+      internal.pendingStartAfterReady = true;
+      internal.ledgerRecoveryReason = 'app_required';
+      jest
+        .spyOn(internal, 'verifyLedgerDeviceReady')
+        .mockResolvedValue(undefined);
+      let allowed = !cover;
+      controller.setStartGate(() => allowed);
+      await internal.runLedgerAutoRecovery();
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      if (cover) {
+        expect(controller.getState().ledgerStatus).toBe('ready');
+        expect(internal.hasStartedSigning).toBe(false);
+        expect(internal.pendingStartAfterReady).toBe(true);
+        expect(internal.pendingPinForStart).toBe('123456');
+        expect(internal.currentRequest.pin).toBeUndefined();
+      }
+      allowed = true;
+      await controller.resumeDeferredStart();
+      expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+      expect(mockSignTransaction.mock.calls[0][0].pin).toBe('123456');
+      await controller.resumeDeferredStart();
+      expect(mockSignTransaction).toHaveBeenCalledTimes(1);
+      controller.cancel();
+    }
+  );
+
+  it.each([true, false])(
+    'DEFECT: consumed review grant with cover=%s at choke point ends approval instead of retrying',
+    async (cover) => {
+      const { reviewGrant } = require('../reviewGrant');
+      const { AppLockSignal } = require('@/services/secure/appLockState');
+      AppLockSignal.setUnlocked(false);
+      expect(await reviewGrant.unlock('topic:choke', { pin: '123456' })).toBe(
+        true
+      );
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      bindReviewedRequest(controller, 'topic:choke');
+      let allowed = true;
+      controller.setStartGate(() => allowed);
+      let finish!: (present: boolean) => void;
+      mockASS.hasPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      const pending = controller.authenticateWithReviewGrant('topic:choke');
+      await flush();
+      expect(reviewGrant.isUnspent('topic:choke')).toBe(false);
+      allowed = !cover;
+      finish(true);
+      await pending;
+      expect(mockSignTransaction).toHaveBeenCalledTimes(cover ? 0 : 1);
+      if (cover) {
+        expect(controller.getState()).toMatchObject({
+          state: 'error',
+          error: { message: 'Unlock to review this request again.' },
+        });
+        expect(controller.hasEndedReviewFlow()).toBe(true);
+        expect(reviewGrant.isUnspent('topic:choke')).toBe(false);
+        expect(
+          (controller as any).currentRequest.reviewGrantKey
+        ).toBeUndefined();
+        allowed = true;
+        await controller.resumeDeferredStart();
+        expect(
+          await controller.authenticateWithReviewGrant('topic:choke')
+        ).toBe(false);
+        expect(mockSignTransaction).not.toHaveBeenCalled();
+      }
+      reviewGrant.revoke();
+    }
+  );
+});
+
+describe('PIN verification belongs to its request (U3d-10)', () => {
+  it.each(['cancel', 'dismiss', 'replace', 'none'])(
+    'DEFECT: pending valid PIN after %s cannot sign a cancelled or replacement request',
+    async (action) => {
+      const controller = new TransactionAuthController();
+      await controller.initializeSigningFlow({
+        ...softwareRequest,
+        reviewGrantKey: undefined,
+        pin: undefined,
+      });
+      let finish!: (valid: boolean) => void;
+      mockASS.verifyPin.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      mockSignTransaction.mockImplementation(async (_request, callbacks) => {
+        const result = { success: true, transactionId: 'verified-request' };
+        callbacks.onComplete(result);
+        return result;
+      });
+      const complete = jest.fn();
+      const unsubscribe = controller.subscribe((state) => {
+        if (state.result) complete(state.result);
+      });
+      const pending = controller.authenticateWithPin('123456');
+      if (action !== 'none') {
+        controller.cancel();
+        controller.resetAfterDismiss();
+        if (action === 'replace')
+          await controller.initializeSigningFlow({
+            ...softwareRequest,
+            reviewGrantKey: undefined,
+            pin: undefined,
+            description: 'request B',
+          });
+      }
+      finish(true);
+      expect(await pending).toBe(action === 'none');
+      expect(mockSignTransaction).toHaveBeenCalledTimes(
+        action === 'none' ? 1 : 0
+      );
+      expect(controller.getState().state).not.toBe('error');
+      expect(complete).toHaveBeenCalledTimes(action === 'none' ? 1 : 0);
+      if (action === 'cancel' || action === 'dismiss')
+        expect((controller as any).currentRequest).toBeNull();
+      if (action === 'replace')
+        expect((controller as any).currentRequest.description).toBe(
+          'request B'
+        );
+      unsubscribe();
+    }
+  );
+  it.each([true, false])(
+    'DEFECT: stale wrong PIN cancelled=%s does not count attempts or arm lockout',
+    async (cancelled) => {
+      jest.useFakeTimers();
+      try {
+        const controller = new TransactionAuthController();
+        await controller.initializeSigningFlow({
+          ...softwareRequest,
+          reviewGrantKey: undefined,
+          pin: undefined,
+        });
+        (controller as any).currentState.pinAttempts = 4;
+        let finish!: (valid: boolean) => void;
+        mockASS.verifyPin.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            })
+        );
+        const pending = controller.authenticateWithPin('000000');
+        if (cancelled) {
+          controller.cancel();
+          controller.resetAfterDismiss();
+        }
+        const before = controller.getState();
+        const timers = jest.getTimerCount();
+        const changes = jest.fn();
+        const unsubscribe = controller.subscribe(changes);
+        changes.mockClear();
+        finish(false);
+        expect(await pending).toBe(false);
+        if (cancelled) {
+          expect(controller.getState()).toEqual(before);
+          expect(changes).not.toHaveBeenCalled();
+          expect(jest.getTimerCount()).toBe(timers);
+          expect((controller as any).currentRequest).toBeNull();
+        } else {
+          expect(controller.getState()).toMatchObject({
+            pinAttempts: 5,
+            isLocked: true,
+          });
+          expect(jest.getTimerCount()).toBe(timers + 1);
+          await jest.advanceTimersByTimeAsync(30000);
+          expect(controller.getState()).toMatchObject({
+            pinAttempts: 0,
+            isLocked: false,
+          });
+        }
+        expect(mockSignTransaction).not.toHaveBeenCalled();
+        unsubscribe();
+      } finally {
+        jest.useRealTimers();
+      }
+    }
+  );
 });

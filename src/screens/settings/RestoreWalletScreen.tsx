@@ -108,12 +108,13 @@ export default function RestoreWalletScreen() {
       // cancel, finishing, the timer) invalidates a PIN check that is still
       // running, so it cannot fill the vault or arm a session when it ends.
       oldPinGeneration.current += 1;
-      validationGeneration.current += 1;
       if (sessionTimer.current) clearTimeout(sessionTimer.current);
       sessionTimer.current = null;
       // Only a verified session has anything to end. A background event on a
       // screen with no session (Settings, or before the PIN) changes nothing.
       if (oldPinEpoch.current === null) return;
+      validationGeneration.current += 1;
+      setIsValidating(false);
       oldPinEpoch.current = null;
       clearRestoreVault();
       if (backTo) {

@@ -391,3 +391,45 @@ it('DEFECT: PIN lockout survives cover/uncover without a biometric prompt', asyn
   await view.unmount();
   resetCoverForTests();
 });
+
+it('DEFECT: lockout expiry never auto-prompts; explicit biometric press after expiry works', async () => {
+  jest.useFakeTimers();
+  try {
+    mockCovered = false;
+    resetCoverForTests();
+    jest.mocked(LocalAuthentication.hasHardwareAsync).mockResolvedValue(true);
+    jest.mocked(LocalAuthentication.isEnrolledAsync).mockResolvedValue(true);
+    jest
+      .mocked(AccountSecureStorage.isBiometricEnabled)
+      .mockResolvedValue(true);
+    jest
+      .mocked(LocalAuthentication.authenticateAsync)
+      .mockResolvedValue({ success: false, error: 'user_cancel' });
+    jest.mocked(AccountSecureStorage.verifyPin).mockResolvedValue(false);
+    const onSuccess = jest.fn();
+    const view = await render(
+      <SignerAuthModal visible onSuccess={onSuccess} onCancel={jest.fn()} />
+    );
+    expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(1);
+    for (let attempt = 0; attempt < 5; attempt += 1)
+      for (const digit of ['1', '2', '3', '4', '5', '6'])
+        await fireEvent.press(view.getByText(digit));
+    expect(view.getByText(/Too many attempts/)).toBeTruthy();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(30000);
+    });
+    expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(1);
+    expect(onSuccess).not.toHaveBeenCalled();
+    jest
+      .mocked(LocalAuthentication.authenticateAsync)
+      .mockResolvedValue({ success: true });
+    await fireEvent.press(view.getByTestId('finger-print'));
+    expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(2);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    await view.unmount();
+  } finally {
+    jest.useRealTimers();
+    jest.mocked(AccountSecureStorage.verifyPin).mockResolvedValue(true);
+    resetCoverForTests();
+  }
+});

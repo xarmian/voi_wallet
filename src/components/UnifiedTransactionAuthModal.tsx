@@ -111,6 +111,14 @@ export default function UnifiedTransactionAuthModal({
     return unsubscribe;
   }, [controller]);
 
+  const wasCoveredRef = useRef(covered);
+  useEffect(() => {
+    if (wasCoveredRef.current && !covered) {
+      void controller.resumeDeferredStart?.();
+    }
+    wasCoveredRef.current = covered;
+  }, [covered, controller]);
+
   // Visibility-transition effect — the SOLE owner of the auth-flow latches
   // (TASK-241). Declared BEFORE the init effect so that on a genuine open the
   // userCancelled latch is already cleared before init reads it.
@@ -234,7 +242,7 @@ export default function UnifiedTransactionAuthModal({
   };
 
   const handleBiometricAuth = async () => {
-    if (isCovered()) return;
+    if (isCovered() || isVerifying) return;
     try {
       await controller.authenticateWithBiometrics(message);
     } catch (error) {
@@ -450,7 +458,9 @@ export default function UnifiedTransactionAuthModal({
                     style={styles.numberButton}
                     onPress={handleBiometricAuth}
                     disabled={
-                      authState.isLocked || authState.state !== 'authenticating'
+                      isVerifying ||
+                      authState.isLocked ||
+                      authState.state !== 'authenticating'
                     }
                   >
                     <Ionicons
