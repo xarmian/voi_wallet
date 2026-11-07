@@ -910,3 +910,110 @@ describe('setup-incomplete refusal', () => {
     expect(mark).toHaveBeenCalledWith(ref, 'failed');
   });
 });
+
+describe('entry guard (setup incomplete)', () => {
+  const refuse = jest.fn(
+    async () =>
+      'setup-incomplete' as Exclude<ExitReason, 'session-ended'> | null
+  );
+
+  beforeEach(() => {
+    refuse.mockReset().mockResolvedValue('setup-incomplete');
+    coordinator.setEntryGuard(refuse);
+  });
+
+  it('DEFECT a refused request is answered once, recorded as handled, and never given a first-seen time or a deadline', async () => {
+    const noteSeen = jest.spyOn(store, 'noteSeen');
+    expect(await coordinator.admit(ref, (now + 900_000) / 1000)).toEqual({
+      action: 'refused',
+      reason: 'setup-incomplete',
+    });
+    expect(noteSeen).not.toHaveBeenCalled();
+    expect(coordinator.describe(ref)).toBeNull();
+    expect(store.isHandled(ref)).toBe(true);
+    expect(coordinator.isOpen(ref)).toBe(false);
+    expect(transport.rejectRequestV2).toHaveBeenCalledTimes(1);
+    expect(transport.rejectRequestV2).toHaveBeenCalledWith(
+      ref.topic,
+      ref.id,
+      EXIT_ANSWERS['setup-incomplete']
+    );
+    expect(calls()).toBe(1);
+  });
+
+  it('DEFECT a refusal is durable: a redelivery is suppressed as handled and not answered again', async () => {
+    await coordinator.admit(ref);
+    refuse.mockResolvedValue(null);
+    expect(await coordinator.admit(ref)).toEqual({
+      action: 'suppressed',
+      reason: 'handled',
+    });
+    expect(calls()).toBe(1);
+    store = new HandledStore({ now: () => now });
+    coordinator = new RequestCoordinator({ store, transport, now: () => now });
+    expect(await coordinator.admit(ref)).toMatchObject({
+      action: 'suppressed',
+      reason: 'handled',
+    });
+  });
+
+  it('DEFECT a duplicate delivered while the guard is still reading is suppressed, answered once in all', async () => {
+    let release!: (value: Exclude<ExitReason, 'session-ended'> | null) => void;
+    refuse.mockImplementation(
+      () =>
+        new Promise<Exclude<ExitReason, 'session-ended'> | null>(
+          (done) => (release = done)
+        )
+    );
+    const first = coordinator.admit(ref);
+    await flush();
+    expect(await coordinator.admit(ref)).toEqual({
+      action: 'suppressed',
+      reason: 'duplicate',
+    });
+    release('setup-incomplete');
+    expect(await first).toEqual({
+      action: 'refused',
+      reason: 'setup-incomplete',
+    });
+    expect(calls()).toBe(1);
+  });
+
+  it.each([
+    [
+      { version: 2, kind: 'proposal', topic: 'pairing', id: 7 },
+      'rejectProposalV2',
+    ],
+    [{ version: 1, kind: 'proposal', topic: 'v1', id: 7 }, 'rejectProposalV1'],
+    [{ version: 1, kind: 'request', topic: 'v1', id: 7 }, 'rejectRequestV1'],
+  ] as const)('DEFECT %j is refused through %s', async (target, method) => {
+    expect(await coordinator.admit(target as RequestRef)).toEqual({
+      action: 'refused',
+      reason: 'setup-incomplete',
+    });
+    expect(transport[method]).toHaveBeenCalledTimes(1);
+    expect(calls()).toBe(1);
+  });
+
+  it('DEFECT no refusal admits normally', async () => {
+    refuse.mockResolvedValue(null);
+    expect(await coordinator.admit(ref)).toMatchObject({ action: 'show' });
+    expect(coordinator.isOpen(ref)).toBe(true);
+    expect(calls()).toBe(0);
+  });
+
+  it('DEFECT a guard that throws admits normally and warns once with a fixed message', async () => {
+    refuse.mockRejectedValue(new Error('storage error with topic test-topic'));
+    expect(await coordinator.admit(ref)).toMatchObject({ action: 'show' });
+    expect(calls()).toBe(0);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.stringify((console.warn as jest.Mock).mock.calls)
+    ).not.toContain('test-topic');
+  });
+
+  it('DEFECT ensureOpen reports a refusal as handled', async () => {
+    expect(await coordinator.ensureOpen(ref)).toBe('handled');
+    expect(coordinator.isOpen(ref)).toBe(false);
+  });
+});

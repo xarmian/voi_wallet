@@ -20,6 +20,8 @@ import {
   requestRefFor,
   v1ProposalRefFor,
 } from '@/services/walletconnect/requestRefs';
+import { markPinSetupPending } from '@/services/secure/pinSetupPending';
+import { setupIncompleteGuard } from '@/services/walletconnect/entryGuard';
 import { EventEmitter } from 'events';
 import type { NavigationContainerRef } from '@react-navigation/native';
 
@@ -640,5 +642,50 @@ describe('DeepLinkService v1 call_request owner (TASK-257)', () => {
     client.emit('call_request', callRequest(5311));
     await flush();
     expect(transport.rejectRequestV1).toHaveBeenCalledTimes(2);
+  });
+  describe('setup incomplete is refused at the entry point (S2)', () => {
+    beforeEach(async () => {
+      coordinator.setEntryGuard(setupIncompleteGuard);
+      await markPinSetupPending();
+    });
+
+    it('DEFECT a v1 request is answered setup-incomplete without a route, and its claim is released', async () => {
+      const client = new FakeV1Client('handshake-s2');
+      service.attachV1CallRequests(
+        client as unknown as Parameters<
+          DeepLinkService['attachV1CallRequests']
+        >[0],
+        'pair-topic'
+      );
+      client.emit('call_request', callRequest(53101));
+      await flush();
+      expect(nav.navigate).not.toHaveBeenCalled();
+      expect(nav.dispatch).not.toHaveBeenCalled();
+      expect(transport.rejectRequestV1).toHaveBeenCalledTimes(1);
+      expect(transport.rejectRequestV1).toHaveBeenCalledWith(
+        53101,
+        'Wallet setup incomplete.'
+      );
+      expect(await TransactionRequestQueue.getAll()).toEqual([]);
+      expect(TransactionRequestQueue.claim(53101, 'handshake-s2')).toBe(true);
+    });
+
+    it('DEFECT a v1 proposal is answered setup-incomplete without a route, and does not block the next link', async () => {
+      const client = installClient();
+      expect(await service.testDeepLink(link('A'))).toBe(true);
+      const sessionRequest = { id: 53102, chainId: 416001 };
+      client.emit('session_request', sessionRequest);
+      await flush();
+      expect(nav.dispatch).not.toHaveBeenCalled();
+      expect(nav.navigate).not.toHaveBeenCalled();
+      expect(transport.rejectProposalV1).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasOpenV1Proposal()).toBe(false);
+      expect(coordinator.isOpen(v1ProposalRefFor(sessionRequest))).toBe(false);
+      expect(await service.testDeepLink(link('B'))).toBe(true);
+      expect(Toast.show).not.toHaveBeenCalledWith({
+        type: 'info',
+        ...V1_BUSY_TOAST,
+      });
+    });
   });
 });

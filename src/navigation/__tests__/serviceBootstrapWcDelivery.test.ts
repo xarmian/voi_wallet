@@ -30,6 +30,10 @@ import { answerDroppedRequests } from '@/services/walletconnect/droppedRequestRe
 
 import { HandledStore } from '@/services/walletconnect/handledStore';
 import {
+  clearPinSetupPending,
+  markPinSetupPending,
+} from '@/services/secure/pinSetupPending';
+import {
   RequestCoordinator,
   CoordinatorTransport,
 } from '@/services/walletconnect/requestCoordinator';
@@ -153,6 +157,7 @@ jest.mock('@/services/ledger/transport', () => ({
 }));
 jest.mock('@/platform/detection', () => ({
   detectPlatform: jest.fn(() => 'mobile'),
+  isMobile: jest.fn(() => true),
 }));
 
 const { createPendingRouteQueue } = jest.requireActual(
@@ -847,4 +852,78 @@ it('U7 a second proposal over focused Connect dispatches PUSH with the proposal 
     })
   );
   expect(mockNav.navigate).not.toHaveBeenCalled();
+});
+
+describe('setup incomplete is refused at the entry point (S2)', () => {
+  const SETUP_INCOMPLETE = {
+    code: -32001,
+    message: 'Wallet setup incomplete.',
+  };
+
+  it('DEFECT a v2 request is answered setup-incomplete before any route or queue, and its claim is released', async () => {
+    await markPinSetupPending();
+    mockReady = true;
+    await boot();
+    const event = request(5301);
+    await emit('session_request', event);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockNav.dispatch).not.toHaveBeenCalled();
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledWith(
+      event.topic,
+      event.id,
+      SETUP_INCOMPLETE
+    );
+    expect(coordinator.isOpen(requestRefFor(event))).toBe(false);
+    expect(TransactionRequestQueue.claim(event.id, event.topic)).toBe(true);
+  });
+
+  it('DEFECT a v2 proposal is answered setup-incomplete before any route', async () => {
+    await markPinSetupPending();
+    mockReady = true;
+    await boot();
+    const proposal = { id: 5302, pairingTopic: 'pairing' };
+    await emit('session_proposal', proposal);
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockNav.dispatch).not.toHaveBeenCalled();
+    expect(mockTransport.rejectProposalV2).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectProposalV2).toHaveBeenCalledWith(
+      proposal.id,
+      proposal.pairingTopic,
+      SETUP_INCOMPLETE
+    );
+  });
+
+  it('DEFECT a refusal waits for no navigation: it is answered while the container is not ready', async () => {
+    await markPinSetupPending();
+    await boot();
+    await emit('session_request', request(5303));
+    await emit('session_proposal', { id: 5304, pairingTopic: 'pairing' });
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectProposalV2).toHaveBeenCalledTimes(1);
+    becomeReady();
+    await flush();
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    expect(mockNav.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('DEFECT once setup completes the next arrival is shown as usual', async () => {
+    await markPinSetupPending();
+    mockReady = true;
+    await boot();
+    await emit('session_request', request(5305));
+    expect(mockNav.navigate).not.toHaveBeenCalled();
+    await clearPinSetupPending();
+    await emit('session_request', request(5306));
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).toHaveBeenCalledTimes(1);
+  });
+
+  it('REGRESSION with no setup pending nothing is refused', async () => {
+    mockReady = true;
+    await boot();
+    await emit('session_request', request(5307));
+    expect(mockNav.navigate).toHaveBeenCalledTimes(1);
+    expect(mockTransport.rejectRequestV2).not.toHaveBeenCalled();
+  });
 });
