@@ -13,6 +13,9 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 jest.mock('@/contexts/AuthContext', () => ({ useAuth: jest.fn() }));
 jest.mock('@/utils/lockCover', () => ({ setCovered: jest.fn() }));
+jest.mock('@/contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
+}));
 jest.mock('@/screens/auth/LockScreen', () => ({
   __esModule: true,
   default: () => null,

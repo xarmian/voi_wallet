@@ -21,6 +21,7 @@ jest.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ reloadTheme: async () => {} }),
 }));
 
+let mockBackupInfo: unknown;
 let mockConfirmRestore: () => Promise<void> = async () => {};
 const mockUnlockForRestore = jest.fn();
 const mockClearRestoreVault = jest.fn();
@@ -69,19 +70,27 @@ jest.mock('@/components/backup/PasswordInputModal', () => {
     onConfirm: (value: string) => void;
   }) {
     return visible ? (
-      <Button title="Confirm password" onPress={() => onConfirm('pw')} />
+      <Button
+        title="Confirm password"
+        onPress={() => {
+          void onConfirm('pw');
+        }}
+      />
     ) : null;
   };
 });
 jest.mock('@/components/backup/RestoreConfirmationModal', () => {
   const { Button } = require('react-native');
   return function Confirm({
+    backupInfo,
     visible,
     onConfirm,
   }: {
     visible: boolean;
+    backupInfo: unknown;
     onConfirm: () => Promise<void>;
   }) {
+    mockBackupInfo = backupInfo;
     mockConfirmRestore = onConfirm;
     return visible ? (
       <Button title="Confirm restore" onPress={onConfirm} />
@@ -151,5 +160,43 @@ it.each([true, false])(
       'pw',
       {}
     );
+  }
+);
+
+it.each([true, false])(
+  'DEFECT: validation pending across cover=%s',
+  async (cover) => {
+    let finish!: (info: never) => void;
+    jest.mocked(BackupService.validateBackupFile).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const view = await render(<RestoreWalletScreen />);
+    await fireEvent.press(view.getByText('Select Backup File'));
+    await fireEvent.press(view.getByText('Confirm password'));
+    expect(BackupService.validateBackupFile).toHaveBeenCalledTimes(1);
+    expect(mockBackupInfo).toBeNull();
+    if (cover) {
+      mockCovered = true;
+      await view.rerender(<RestoreWalletScreen />);
+      mockCovered = false;
+      await view.rerender(<RestoreWalletScreen />);
+    }
+    const info = { accountCount: 1 } as never;
+    await act(async () => finish(info));
+    if (cover) {
+      expect(view.queryByText('Confirm restore')).toBeNull();
+      expect(mockBackupInfo).toBeNull();
+      expect(view.getByText('Confirm password')).toBeTruthy();
+      expect(BackupService.validateBackupFile).toHaveBeenLastCalledWith(
+        'file:///b.voibackup',
+        'pw'
+      );
+      await fireEvent.press(view.getByText('Confirm password'));
+    }
+    expect(view.getByText('Confirm restore')).toBeTruthy();
+    expect(mockBackupInfo).toEqual(info);
   }
 );

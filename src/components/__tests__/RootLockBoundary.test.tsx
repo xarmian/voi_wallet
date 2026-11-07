@@ -10,7 +10,7 @@ import {
   Text as MockText,
   Text,
 } from 'react-native';
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import {
   NavigationContext,
   type NavigationProp,
@@ -27,6 +27,9 @@ import { setCovered } from '@/utils/lockCover';
 
 jest.mock('@/contexts/AuthContext', () => ({ useAuth: jest.fn() }));
 jest.mock('@/utils/lockCover', () => ({ setCovered: jest.fn() }));
+jest.mock('@/contexts/ThemeContext', () => ({
+  useTheme: () => ({ theme: require('@/constants/themes').lightTheme }),
+}));
 let mockMounted = 0;
 let mockMaximum = 0;
 let mockMounts = 0;
@@ -402,4 +405,55 @@ it('DEFECT a covered state with no PIN outside S2 stays hidden with no PIN pad a
   expect(nav.value.resetRoot).not.toHaveBeenCalled();
   expect(content(view).props.pointerEvents).toBe('none');
   expect(StyleSheet.flatten(content(view).props.style)?.opacity).toBe(0);
+});
+// The automatic reset can be refused or outrun, so the no-PIN cover in S2 always
+// offers a visible control that runs the same reset.
+it('DEFECT S2 with a reset that does nothing: the cover is never blank, its control runs the same reset', async () => {
+  auth = {
+    ...unlocked,
+    isLocked: true,
+    isAuthenticated: false,
+    hasPin: false,
+    pinSetupResume: true,
+  };
+  const nav = navigation('UniversalTransactionSigning');
+  nav.value.resetRoot.mockImplementation(() => {});
+  const view = await render(tree(nav));
+  expect(view.queryByTestId('lock')).toBeNull();
+  expect(nav.value.resetRoot).toHaveBeenCalledTimes(1);
+  const control = view.getByRole('button', { name: 'Finish setup' });
+  await fireEvent.press(control);
+  expect(nav.value.resetRoot).toHaveBeenCalledTimes(2);
+  expect(nav.value.resetRoot).toHaveBeenLastCalledWith({
+    index: 0,
+    routes: [{ name: 'SecuritySetup', params: { source: 'restore' } }],
+  });
+  expect(content(view).props.pointerEvents).toBe('none');
+});
+it('DEFECT the control is gone once the reset lands, and never shows with a PIN or outside S2', async () => {
+  auth = {
+    ...unlocked,
+    isLocked: true,
+    isAuthenticated: false,
+    hasPin: false,
+    pinSetupResume: true,
+  };
+  const nav = navigation('Main');
+  const view = await render(tree(nav));
+  expect(nav.value.getCurrentRoute()?.name).toBe('SecuritySetup');
+  expect(view.queryByText('Finish setup')).toBeNull();
+  auth = { ...unlocked, isLocked: true, isAuthenticated: false, hasPin: true };
+  await nav.emit('Main');
+  await view.rerender(tree(nav));
+  expect(view.queryAllByTestId('lock')).toHaveLength(1);
+  expect(view.queryByText('Finish setup')).toBeNull();
+  auth = {
+    ...unlocked,
+    isLocked: true,
+    isAuthenticated: false,
+    hasPin: false,
+    pinSetupResume: false,
+  };
+  await view.rerender(tree(nav));
+  expect(view.queryByText('Finish setup')).toBeNull();
 });

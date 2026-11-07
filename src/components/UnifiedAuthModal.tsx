@@ -1,4 +1,5 @@
 import { useCoverPaused } from '@/hooks/useCoverPaused';
+import { isCovered } from '@/utils/lockCover';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Alert,
@@ -116,18 +117,10 @@ export default function UnifiedAuthModal({
     console.log('UnifiedAuthModal: isProcessing changed to:', isProcessing);
   }, [isProcessing]);
 
-  useEffect(() => {
-    if (visible && shouldUseBiometrics && !biometricAttempted) {
-      promptBiometric();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; fires on the visible/biometric/attempted gates, promptBiometric is read at that commit and must not re-fire on its own identity.
-  }, [visible, shouldUseBiometrics, biometricAttempted]);
-
   // Reset state when modal opens
   useEffect(() => {
-    // Bump on CLOSE only. The auto-prompt effect above runs before this one on
-    // open and has already captured the token, so bumping on open would mark the
-    // genuine result of the new prompt as stale.
+    // Bump on CLOSE only to invalidate results from the previous modal.
+    // Reset before the auto-prompt effect so its attempted flag is retained.
     if (!visible) biometricRunRef.current += 1;
     if (visible) {
       setPin('');
@@ -137,6 +130,13 @@ export default function UnifiedAuthModal({
       setBiometricAuthenticated(false);
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (visible && shouldUseBiometrics && !biometricAttempted && !covered) {
+      promptBiometric();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; fires on the visible/biometric/attempted/covered gates, promptBiometric is read at that commit and must not re-fire on its own identity.
+  }, [visible, shouldUseBiometrics, biometricAttempted, covered]);
 
   // Read the stored credential kind once on mount so the correct input renders.
   useEffect(() => {
@@ -216,6 +216,7 @@ export default function UnifiedAuthModal({
   };
 
   const promptBiometric = async () => {
+    if (isCovered()) return;
     const run = biometricRunRef.current;
     const epoch = coverEpoch.current;
     setBiometricAttempted(true);
@@ -251,7 +252,7 @@ export default function UnifiedAuthModal({
         requireConfirmation: true,
       });
 
-      if (epoch !== coverEpoch.current) {
+      if (epoch !== coverEpoch.current || isCovered()) {
         setPin('');
         setIsAuthenticating(false);
         return;
@@ -295,7 +296,7 @@ export default function UnifiedAuthModal({
     try {
       const isValid = await AccountSecureStorage.verifyPin(enteredPin);
 
-      if (epoch !== coverEpoch.current) {
+      if (epoch !== coverEpoch.current || isCovered()) {
         setPin('');
         setIsAuthenticating(false);
         return;

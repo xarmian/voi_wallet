@@ -210,3 +210,119 @@ it('DEFECT: a completed biometric proof is discarded by cover', async () => {
   expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(2);
   expect(onSuccess).toHaveBeenCalledTimes(1);
 });
+
+import { setCovered, resetCoverForTests } from '@/utils/lockCover';
+
+describe('cover start and synchronous result guards', () => {
+  beforeEach(() => {
+    mockCovered = false;
+    resetCoverForTests();
+    jest.mocked(LocalAuthentication.hasHardwareAsync).mockResolvedValue(true);
+    jest.mocked(LocalAuthentication.isEnrolledAsync).mockResolvedValue(true);
+
+    jest
+      .mocked(LocalAuthentication.authenticateAsync)
+      .mockResolvedValue({ success: false, error: 'user_cancel' });
+  });
+  afterEach(() => resetCoverForTests());
+
+  it('DEFECT: opening under reactive cover defers the auto-prompt until uncover', async () => {
+    const onSuccess = jest.fn();
+    const tree = (visible: boolean) => (
+      <UnifiedAuthModal
+        visible={visible}
+        biometricEnabled
+        onSuccess={onSuccess}
+        onCancel={jest.fn()}
+      />
+    );
+    const view = await render(tree(false));
+    mockCovered = true;
+    await view.rerender(tree(true));
+    expect(LocalAuthentication.authenticateAsync).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+    mockCovered = false;
+    await view.rerender(tree(true));
+    expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(1);
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'DEFECT: direct biometric start with synchronous cover=%s',
+    async (cover) => {
+      const onSuccess = jest.fn();
+      const view = await render(
+        <UnifiedAuthModal
+          visible
+          biometricEnabled
+          onSuccess={onSuccess}
+          onCancel={jest.fn()}
+        />
+      );
+      expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(1);
+      jest.mocked(LocalAuthentication.authenticateAsync).mockClear();
+      jest
+        .mocked(LocalAuthentication.authenticateAsync)
+        .mockResolvedValue({ success: true });
+      const button = view.getByText('Use Biometric');
+      if (cover) setCovered(true);
+      await fireEvent.press(button);
+      expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(
+        cover ? 0 : 1
+      );
+      if (!cover) await fireEvent.press(view.getByText('Confirm'));
+      expect(onSuccess).toHaveBeenCalledTimes(cover ? 0 : 1);
+      expect(view.queryByText('Authenticating...')).toBeNull();
+    }
+  );
+
+  it.each(['PIN', 'biometric'] as const)(
+    'DEFECT: %s result observes cover before its epoch effect',
+    async (kind) => {
+      for (const cover of [true, false]) {
+        resetCoverForTests();
+        let finish!: () => void;
+        if (kind === 'PIN') {
+          jest
+            .mocked(LocalAuthentication.hasHardwareAsync)
+            .mockResolvedValue(false);
+          jest.mocked(AccountSecureStorage.verifyPin).mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                finish = () => resolve(true);
+              })
+          );
+        } else {
+          jest
+            .mocked(LocalAuthentication.authenticateAsync)
+            .mockImplementationOnce(
+              () =>
+                new Promise((resolve) => {
+                  finish = () => resolve({ success: true });
+                })
+            );
+        }
+        const onSuccess = jest.fn();
+        const view = await render(
+          <UnifiedAuthModal
+            visible
+            biometricEnabled={kind === 'biometric'}
+            onSuccess={onSuccess}
+            onCancel={jest.fn()}
+          />
+        );
+        if (kind === 'PIN')
+          for (const digit of ['1', '2', '3', '4', '5', '6'])
+            await fireEvent.press(view.getByText(digit));
+        if (cover) setCovered(true);
+        await act(async () => finish());
+        if (kind === 'biometric') {
+          if (cover) expect(view.queryByText('Confirm')).toBeNull();
+          else await fireEvent.press(view.getByText('Confirm'));
+        }
+        expect(onSuccess).toHaveBeenCalledTimes(cover ? 0 : 1);
+        await view.unmount();
+      }
+    }
+  );
+});

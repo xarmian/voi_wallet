@@ -7,6 +7,7 @@
  */
 
 import { useCoverPaused } from '@/hooks/useCoverPaused';
+import { isCovered } from '@/utils/lockCover';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
@@ -129,11 +130,11 @@ export default function SignerAuthModal({
 
   // Auto-prompt for biometric auth when modal opens
   useEffect(() => {
-    if (visible && biometricAvailable && !isVerifying) {
+    if (visible && biometricAvailable && !isVerifying && !covered) {
       handleBiometricAuth();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; keyed on visible/biometricAvailable. handleBiometricAuth and the isVerifying guard are read at that commit; re-prompting when isVerifying flips is not wanted.
-  }, [visible, biometricAvailable]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- biometric auto-prompt on open; keyed on visible/biometricAvailable/covered. handleBiometricAuth and the isVerifying guard are read at that commit; re-prompting when isVerifying flips is not wanted.
+  }, [visible, biometricAvailable, covered]);
 
   // Handle lockout timer
   useEffect(() => {
@@ -180,7 +181,7 @@ export default function SignerAuthModal({
     try {
       const isValid = await AccountSecureStorage.verifyPin(enteredPin);
 
-      if (epoch !== coverEpoch.current) {
+      if (epoch !== coverEpoch.current || isCovered()) {
         setPin('');
         return;
       }
@@ -221,7 +222,7 @@ export default function SignerAuthModal({
 
   const handleBiometricAuth = async () => {
     const epoch = coverEpoch.current;
-    if (isVerifying) return;
+    if (isCovered() || isVerifying) return;
     setIsVerifying(true);
     setError(null);
 
@@ -234,7 +235,7 @@ export default function SignerAuthModal({
         requireConfirmation: true,
       });
 
-      if (epoch !== coverEpoch.current) {
+      if (epoch !== coverEpoch.current || isCovered()) {
         setPin('');
         return;
       }
