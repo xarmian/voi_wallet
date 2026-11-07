@@ -33,10 +33,22 @@ beforeEach(async () => {
   jest.setSystemTime(now);
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   transport = {
-    rejectRequestV2: jest.fn(async () => {}),
-    rejectRequestV1: jest.fn(async () => {}),
-    rejectProposalV2: jest.fn(async () => {}),
-    rejectProposalV1: jest.fn(async () => {}),
+    rejectRequestV2: jest.fn<
+      Promise<void>,
+      Parameters<CoordinatorTransport['rejectRequestV2']>
+    >(async () => {}),
+    rejectRequestV1: jest.fn<
+      Promise<void>,
+      Parameters<CoordinatorTransport['rejectRequestV1']>
+    >(async () => {}),
+    rejectProposalV2: jest.fn<
+      Promise<void>,
+      Parameters<CoordinatorTransport['rejectProposalV2']>
+    >(async () => {}),
+    rejectProposalV1: jest.fn<
+      Promise<void>,
+      Parameters<CoordinatorTransport['rejectProposalV1']>
+    >(async () => {}),
   };
   coordinator = new RequestCoordinator({
     store: new HandledStore({ now: () => Date.now() }),
